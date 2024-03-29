@@ -7,26 +7,35 @@ project(
     VERSION 0.1.0
     DESCRIPTION "Patchestry is a binary patching framework built with MLIR and Ghidra."
     HOMEPAGE_URL "https://github.com/lifting-bits/patchestry"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 include(cmake/project-is-top-level.cmake)
 include(cmake/variables.cmake)
 
+# ---- Add LLVM ----
+
+find_package(LLVM 17 REQUIRED CONFIG)
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+
 # ---- Declare library ----
 
 add_library(
     patchestry_lib OBJECT
-    source/lib.cpp
+    source/ghidra.cpp
 )
 
 target_include_directories(
     patchestry_lib ${warning_guard}
     PUBLIC
     "\$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/source>"
+    "\$<BUILD_INTERFACE:${LLVM_INCLUDE_DIRS}>"
 )
 
 target_compile_features(patchestry_lib PUBLIC cxx_std_20)
+
+target_link_libraries(patchestry_lib PUBLIC LLVMSupport)
 
 # ---- Declare executable ----
 
