@@ -6,7 +6,7 @@ project(patchestryTests LANGUAGES CXX)
 
 # ---- Tests ----
 
-add_executable(patchestry_test source/patchestry_test.cpp)
+add_executable(patchestry_test source/ghidra.cpp)
 target_link_libraries(patchestry_test PRIVATE patchestry_lib)
 target_compile_features(patchestry_test PRIVATE cxx_std_20)
 
