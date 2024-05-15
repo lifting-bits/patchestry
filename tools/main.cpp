@@ -12,6 +12,11 @@
 #pragma clang diagnostic ignored "-Wshadow"
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #include <llvm/Support/MemoryBuffer.h>
+#include <mlir/IR/Dialect.h>
+#include <mlir/IR/MLIRContext.h>
+#include <mlir/InitAllDialects.h>
+#include <mlir/InitAllPasses.h>
+#include <mlir/Pass/Pass.h>
 #pragma clang diagnostic pop
 
 #include <cstdlib>
@@ -19,7 +24,17 @@
 #include <iostream>
 #include <span>
 
+#include "patchestry/Dialect/Pcode/PcodeDialect.hpp"
+
 #include "ghidra.hpp"
+
+auto init_mlir() -> void {
+    mlir::DialectRegistry registry;
+    // register dialects
+    registry.insert< patchestry::pc::PcodeDialect >();
+    // patchestry register
+    mlir::registerAllDialects(registry);
+}
 
 auto main(int argc, char **argv) -> int {
     const std::span args(argv, static_cast< size_t >(argc));
@@ -50,6 +65,8 @@ auto main(int argc, char **argv) -> int {
         std::cerr << "Failed to parse pcode file: " << llvm::toString(func.takeError()) << '\n';
         return EXIT_FAILURE;
     }
+
+    init_mlir();
 
     std::ofstream ofs(args[2]);
 
