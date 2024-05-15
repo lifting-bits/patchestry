@@ -19,42 +19,17 @@ include(cmake/variables.cmake)
 find_package(LLVM 18.1 REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+include(TableGen)
+include(AddLLVM)
+include(HandleLLVMOptions)
 
 find_package(MLIR ${LLVM_PACKAGE_VERSION} REQUIRED CONFIG)
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 include(AddMLIR)
 
-add_library(
-    patchestry_lib OBJECT
-    source/ghidra.cpp
-)
-
-include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})
-include_directories(${PROJECT_SOURCE_DIR}/include/)
-include_directories(${PROJECT_BINARY_DIR}/include/)
-
-target_include_directories(
-    patchestry_lib ${warning_guard}
-    PUBLIC
-    "\$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/source>"
-    "\$<BUILD_INTERFACE:${LLVM_INCLUDE_DIRS}>"
-)
-
-target_compile_features(patchestry_lib PUBLIC cxx_std_20)
-
-target_link_libraries(patchestry_lib PUBLIC LLVMSupport)
-
-# ---- Declare executable ----
-
-add_executable(patchestry_exe source/main.cpp)
-add_executable(patchestry::exe ALIAS patchestry_exe)
-
-set_property(TARGET patchestry_exe PROPERTY OUTPUT_NAME patchestry)
-
-target_compile_features(patchestry_exe PRIVATE cxx_std_20)
-
-target_link_libraries(patchestry_exe PRIVATE patchestry_lib)
+add_subdirectory(tools)
 
 # ---- Install rules ----
 
