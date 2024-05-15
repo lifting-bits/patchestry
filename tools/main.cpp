@@ -6,18 +6,16 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wconversion"
-#pragma clang diagnostic ignored "-Wold-style-cast"
-#pragma clang diagnostic ignored "-Wshadow"
-#pragma clang diagnostic ignored "-Wunused-parameter"
+#include "patchestry/Util/Warnings.hpp"
+
+PATCHESTRY_RELAX_WARNINGS
 #include <llvm/Support/MemoryBuffer.h>
 #include <mlir/IR/Dialect.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/InitAllDialects.h>
 #include <mlir/InitAllPasses.h>
 #include <mlir/Pass/Pass.h>
-#pragma clang diagnostic pop
+PATCHESTRY_UNRELAX_WARNINGS
 
 #include <cstdlib>
 #include <fstream>

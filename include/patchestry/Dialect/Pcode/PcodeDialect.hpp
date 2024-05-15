@@ -8,7 +8,11 @@
 
 #pragma once
 
+#include "patchestry/Util/Warnings.hpp"
+
+PATCHESTRY_RELAX_WARNINGS
 #include <mlir/IR/Dialect.h>
+PATCHESTRY_UNRELAX_WARNINGS
 
 // Pull in the dialect definition.
 #include "patchestry/Dialect/Pcode/PcodeDialect.h.inc"
