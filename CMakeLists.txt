@@ -26,6 +26,18 @@ include(TableGen)
 include(AddLLVM)
 include(HandleLLVMOptions)
 
+find_package(MLIR 17 REQUIRED CONFIG)
+message(STATUS "Found MLIR ${MLIR_PACKAGE_VERSION}")
+message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+include(AddMLIR)
+
+include_directories(${MLIR_INCLUDE_DIRS})
+include_directories(${PROJECT_SOURCE_DIR}/include/)
+include_directories(${PROJECT_BINARY_DIR}/include/)
+
+add_subdirectory(include)
+add_subdirectory(lib)
 add_subdirectory(tools)
 
 # ---- Install rules ----
