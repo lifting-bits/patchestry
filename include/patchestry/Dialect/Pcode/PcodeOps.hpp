@@ -8,8 +8,12 @@
 
 #pragma once
 
+#include "patchestry/Util/Warnings.hpp"
+
+PATCHESTRY_RELAX_WARNINGS
 #include <mlir/IR/RegionKindInterface.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
+PATCHESTRY_UNRELAX_WARNINGS
 
 #include "patchestry/Dialect/Pcode/PcodeDialect.hpp"
 

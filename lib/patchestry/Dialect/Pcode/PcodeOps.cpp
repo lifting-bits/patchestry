@@ -6,8 +6,11 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-// #include <mlir/Support/LogicalResult.h>
+#include "patchestry/Util/Warnings.hpp"
+
+PATCHESTRY_RELAX_WARNINGS
 #include <mlir/IR/OpImplementation.h>
+PATCHESTRY_UNRELAX_WARNINGS
 
 #include "patchestry/Dialect/Pcode/PcodeOps.hpp"
 
