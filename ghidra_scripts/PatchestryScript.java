@@ -112,7 +112,7 @@ public class PatchestryScript extends GhidraScript {
         final var curFunction = getFunctionContaining(currentAddress);
         final var pInputPath = Files.createTempFile(curFunction.getName() + '.', ".patchestry.json");
         final var pOutputPath = Files.createTempFile(curFunction.getName() + '.', ".patchestry.out");
-        final var pBinaryPath = "/home/surovic/git/patchestry/build/dev/patchestry";
+        final var pBinaryPath = "/home/surovic/git/patchestry/build/dev/tools/patchestry";
 
         final var serializer = new PcodeSerializer(Files.newBufferedWriter(pInputPath));
         serializer.serialize(curFunction).close();
