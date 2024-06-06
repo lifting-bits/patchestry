@@ -14,18 +14,10 @@ namespace patchestry::ghidra {
         return llvm::createStringError(llvm::inconvertibleErrorCode(), msg);
     }
 
-    auto varnode_t::get_kind(std::string_view str) -> kind_t {
-        return llvm::StringSwitch< kind_t >(str)
-            .Case("const", kind_t::constant)
-            .Case("unique", kind_t::unique)
-            .Case("register", kind_t::reg)
-            .Case("ram", kind_t::ram);
-    }
-
     auto varnode_t::from_json(const json_arr &varnode_arr) -> expected< varnode_t > {
-        auto kind = varnode_arr[0].getAsString();
-        if (!kind) {
-            return error("invalid json value for varnode kind");
+        auto address_space = varnode_arr[0].getAsString();
+        if (!address_space) {
+            return error("invalid json value for varnode address_space");
         }
 
         auto address = varnode_arr[1].getAsInteger();
@@ -38,7 +30,9 @@ namespace patchestry::ghidra {
             return error("invalid json value for varnode size");
         }
 
-        return varnode_t{ .kind = get_kind(*kind), .address = *address, .size = *size };
+        return varnode_t{ .address_space = address_space->str(),
+                          .address       = *address,
+                          .size          = *size };
     }
 
     auto pcode_t::from_json(const json_obj &pcode_obj) -> expected< pcode_t > {

@@ -33,11 +33,10 @@ namespace patchestry::ghidra {
         /**
          * @brief Varnode
          */
-        enum class kind_t { constant, unique, reg, ram } kind;
+        std::string address_space;
         int64_t address;
         std::size_t size;
 
-        static auto get_kind(std::string_view str) -> kind_t;
         static auto from_json(const json_arr &varnode_arr) -> expected< varnode_t >;
     };
 
