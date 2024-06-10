@@ -45,4 +45,16 @@ def VarnodeOp
   let assemblyFormat = [{ attr-dict `:` type($result) }];
 }
 
+class UnaryOp< string mnemonic, list< Trait > traits = [] >
+  : Pcode_Op< mnemonic, traits >
+  , Arguments<( ins Builtin_Integer:$op )>
+  , Results<( outs Builtin_Integer:$result )>
+{
+  let assemblyFormat = [{ $op attr-dict `:` functional-type(operands, results) }];
+}
+
+def CopyOp        : UnaryOp < "copy", [SameOperandsAndResultType] >;
+def PopcountOp    : UnaryOp < "popcount" >;
+def BoolNegateOp  : UnaryOp < "bool_negate", [SameOperandsAndResultType] >;
+
 #endif // PCODE_DIALECT_OPS
