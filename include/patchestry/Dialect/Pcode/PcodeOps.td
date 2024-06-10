@@ -9,15 +9,32 @@
 #ifndef PCODE_DIALECT_OPS
 #define PCODE_DIALECT_OPS
 
-include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
+include "mlir/IR/BuiltinAttributes.td"
+include "mlir/IR/BuiltinTypes.td"
 
-def Pcode_ConstOp
-  : Pcode_Op< "constant", [ConstantLike, NoMemoryEffect] >
-  , Results<( outs AnyType:$result )>
+def FuncOp
+  : Pcode_Op< "function" >
+  , Arguments<( ins StrAttr:$name )>
 {
-  let hasFolder = 1;
+  let regions = (region AnyRegion:$blocks);
+  let assemblyFormat = [{ attr-dict `:` $blocks }];
+}
 
-  let assemblyFormat = [{ attr-dict `:` type($result)}];
+def BlockOp
+  : Pcode_Op< "block" >
+  , Arguments<( ins StrAttr:$label )>
+{
+  let regions = (region AnyRegion:$instructions);
+  let assemblyFormat = [{ attr-dict `:` $instructions }];
+}
+
+def InstOp
+  : Pcode_Op< "instruction" >
+  , Arguments<( ins StrAttr:$mnemonic )>
+{
+  let regions = (region AnyRegion:$semantics);
+  let assemblyFormat = [{ attr-dict `:` $semantics }];
 }
 
 #endif // PCODE_DIALECT_OPS
