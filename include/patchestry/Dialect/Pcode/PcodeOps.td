@@ -109,4 +109,23 @@ def ReturnOp
   let assemblyFormat = [{ $varnode attr-dict `:` type(operands) }];
 }
 
+def StoreOp
+  : Pcode_Op< "store" >
+  , Arguments<( ins Builtin_Integer:$addr_space, Builtin_Integer:$addr, Builtin_Integer:$data )>
+{
+  let summary = "Pcode STORE operation";
+  let description = "TODO(surovic)";
+  let assemblyFormat = [{ $addr_space `,` $addr `,` $data attr-dict `:` type(operands) }];
+}
+
+def LoadOp
+  : Pcode_Op< "load" >
+  , Arguments<( ins Builtin_Integer:$addr_space, Builtin_Integer:$addr )>
+  , Results<( outs Builtin_Integer:$result )>
+{
+  let summary = "Pcode LOAD operation";
+  let description = "TODO(surovic)";
+  let assemblyFormat = [{ $addr_space `,` $addr attr-dict `:` functional-type(operands, results) }];
+}
+
 #endif // PCODE_DIALECT_OPS
