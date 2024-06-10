@@ -14,9 +14,7 @@ PATCHESTRY_UNRELAX_WARNINGS
 
 #include "patchestry/Dialect/Pcode/PcodeOps.hpp"
 
-auto patchestry::pc::ConstOp::fold(FoldAdaptor /*adaptor*/) -> mlir::OpFoldResult {
-    return mlir::UnitAttr::get(this->getContext());
-}
-
+PATCHESTRY_RELAX_WARNINGS
 #define GET_OP_CLASSES
 #include "patchestry/Dialect/Pcode/Pcode.cpp.inc"
+PATCHESTRY_UNRELAX_WARNINGS
