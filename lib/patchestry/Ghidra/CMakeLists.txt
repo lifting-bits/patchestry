@@ -2,7 +2,7 @@
 # is licensed in accordance with the terms specified in the LICENSE file found
 # in the root directory of this source tree.
 
-add_library(PatchestryGhidra STATIC Deserialize.cpp)
+add_library(PatchestryGhidra STATIC Codegen.cpp Deserialize.cpp)
 
 target_include_directories(
   PatchestryGhidra ${warning_guard}
