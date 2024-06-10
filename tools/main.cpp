@@ -23,8 +23,7 @@ PATCHESTRY_UNRELAX_WARNINGS
 #include <span>
 
 #include "patchestry/Dialect/Pcode/PcodeDialect.hpp"
-
-#include "ghidra.hpp"
+#include "patchestry/Ghidra/Deserialize.hpp"
 
 auto init_mlir() -> void {
     mlir::DialectRegistry registry;

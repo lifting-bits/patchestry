@@ -12,13 +12,13 @@
  * @brief Ghidra Representations
  */
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wconversion"
-#pragma clang diagnostic ignored "-Wold-style-cast"
-#pragma clang diagnostic ignored "-Wshadow"
-#pragma clang diagnostic ignored "-Wunused-parameter"
+#include "patchestry/Util/Warnings.hpp"
+
+PATCHESTRY_RELAX_WARNINGS
 #include <llvm/Support/JSON.h>
-#pragma clang diagnostic pop
+PATCHESTRY_UNRELAX_WARNINGS
+
+#include <variant>
 
 namespace patchestry::ghidra {
     using json_arr = llvm::json::Array;
@@ -84,4 +84,8 @@ namespace patchestry::ghidra {
 
         static auto from_json(const json_obj &func_obj) -> expected< function_t >;
     };
+
+    using deserialized_t =
+        std::variant< varnode_t, pcode_t, instruction_t, code_block_t, function_t >;
+
 } // namespace patchestry::ghidra

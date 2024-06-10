@@ -6,7 +6,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "ghidra.hpp"
+#include "patchestry/Ghidra/Deserialize.hpp"
 
 namespace patchestry::ghidra {
 
