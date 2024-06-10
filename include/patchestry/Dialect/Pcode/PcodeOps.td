@@ -57,4 +57,20 @@ def CopyOp        : UnaryOp < "copy", [SameOperandsAndResultType] >;
 def PopcountOp    : UnaryOp < "popcount" >;
 def BoolNegateOp  : UnaryOp < "bool_negate", [SameOperandsAndResultType] >;
 
+class BinOp< string mnemonic, list< Trait > traits = [] >
+  : Pcode_Op< mnemonic, traits >
+  , Arguments<( ins Builtin_Integer:$lhs, Builtin_Integer:$rhs )>
+  , Results<( outs Builtin_Integer:$result )>
+{
+  let assemblyFormat = [{ $lhs `,` $rhs attr-dict `:` functional-type(operands, results) }];
+}
+
+def IntAddOp      : BinOp< "int_add" >;
+def IntSubOp      : BinOp< "int_sub" >;
+def IntLessOp     : BinOp< "int_less" >;
+def IntEqualOp    : BinOp< "int_equal" >;
+def IntSBorrowOp  : BinOp< "int_sborrow" >;
+def IntSLessOp    : BinOp< "int_sless" >;
+def IntAndOp      : BinOp< "int_and" >;
+
 #endif // PCODE_DIALECT_OPS
