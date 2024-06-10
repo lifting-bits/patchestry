@@ -37,4 +37,12 @@ def InstOp
   let assemblyFormat = [{ attr-dict `:` $semantics }];
 }
 
+def VarnodeOp
+  : Pcode_Op< "varnode" >
+  , Arguments<( ins StrAttr:$addr_space, I64Attr:$addr,  I8Attr:$size)>
+  , Results<( outs Builtin_Integer:$result )>
+{
+  let assemblyFormat = [{ attr-dict `:` type($result) }];
+}
+
 #endif // PCODE_DIALECT_OPS
