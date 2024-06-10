@@ -73,4 +73,40 @@ def IntSBorrowOp  : BinOp< "int_sborrow" >;
 def IntSLessOp    : BinOp< "int_sless" >;
 def IntAndOp      : BinOp< "int_and" >;
 
+def BranchOp
+  : Pcode_Op< "branch" >
+  , Arguments<( ins Builtin_Integer:$addr )>
+{
+  let summary = "Pcode BRANCH operation";
+  let description = "TODO(surovic)";
+  let assemblyFormat = [{ $addr attr-dict `:` type(operands) }];
+}
+
+def CBranchOp
+  : Pcode_Op< "cbranch" >
+  , Arguments<( ins Builtin_Integer:$addr, Builtin_Integer:$cond )>
+{
+  let summary = "Pcode CBRANCH operation";
+  let description = "TODO(surovic)";
+  let assemblyFormat = [{ $addr `,` $cond attr-dict `:` type(operands) }];
+}
+
+def CallOp
+  : Pcode_Op< "call" >
+  , Arguments<( ins Builtin_Integer:$addr )>
+{
+  let summary = "Pcode CALL operation";
+  let description = "TODO(surovic)";
+  let assemblyFormat = [{ $addr attr-dict `:` type(operands) }];
+}
+
+def ReturnOp
+  : Pcode_Op< "return" >
+  , Arguments<( ins Builtin_Integer:$varnode )>
+{
+  let summary = "Pcode RETURN operation";
+  let description = "TODO(surovic)";
+  let assemblyFormat = [{ $varnode attr-dict `:` type(operands) }];
+}
+
 #endif // PCODE_DIALECT_OPS
