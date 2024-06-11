@@ -9,49 +9,42 @@
 #include "patchestry/Util/Warnings.hpp"
 
 PATCHESTRY_RELAX_WARNINGS
+#include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
-#include <mlir/IR/Dialect.h>
+#include <llvm/Support/raw_ostream.h>
+
 #include <mlir/IR/MLIRContext.h>
+#include <mlir/IR/OwningOpRef.h>
 #include <mlir/InitAllDialects.h>
-#include <mlir/InitAllPasses.h>
-#include <mlir/Pass/Pass.h>
 PATCHESTRY_UNRELAX_WARNINGS
 
 #include <cstdlib>
-#include <fstream>
-#include <iostream>
 #include <span>
 
 #include "patchestry/Dialect/Pcode/PcodeDialect.hpp"
+#include "patchestry/Ghidra/Codegen.hpp"
 #include "patchestry/Ghidra/Deserialize.hpp"
 
-auto init_mlir() -> void {
-    mlir::DialectRegistry registry;
-    // register dialects
-    registry.insert< patchestry::pc::PcodeDialect >();
-    // patchestry register
-    mlir::registerAllDialects(registry);
-}
-
-auto main(int argc, char **argv) -> int {
+auto main(int argc, char **argv) -> int try
+{
     const std::span args(argv, static_cast< size_t >(argc));
 
     if (argc != 3) {
-        std::cerr << "Usage:  " << args[0] << " PCODE_FILE\n";
+        llvm::errs() << "Usage:  " << args[0] << " PCODE_FILE\n";
         return EXIT_FAILURE;
     }
 
     auto ibuf = llvm::MemoryBuffer::getFileOrSTDIN(args[1], /*IsText=*/true);
     if (!ibuf) {
         auto msg = ibuf.getError().message();
-        std::cerr << "Failed to open pcode file: " << msg << '\n';
+        llvm::errs() << "Failed to open pcode file: " << msg << '\n';
         return EXIT_FAILURE;
     }
 
     auto root = llvm::json::parse(ibuf.get()->getBuffer());
     if (!root) {
         auto msg = llvm::toString(root.takeError());
-        std::cerr << "Failed to parse pcode file: " << msg << '\n';
+        llvm::errs() << "Failed to parse pcode file: " << msg << '\n';
         return EXIT_FAILURE;
     }
 
@@ -59,26 +52,31 @@ auto main(int argc, char **argv) -> int {
 
     auto func = patchestry::ghidra::function_t::from_json(*root->getAsObject());
     if (!func) {
-        std::cerr << "Failed to parse pcode file: " << llvm::toString(func.takeError()) << '\n';
+        llvm::errs() << "Failed to parse pcode file: " << llvm::toString(func.takeError())
+                     << '\n';
         return EXIT_FAILURE;
     }
 
-    init_mlir();
+    std::error_code err;
+    llvm::raw_fd_ostream ofs(args[2], err, llvm::sys::fs::OF_Text);
 
-    std::ofstream ofs(args[2]);
+    mlir::DialectRegistry registry;
+    registry.insert< patchestry::pc::PcodeDialect >();
+    mlir::registerAllDialects(registry);
 
-    ofs << "Function name: " << func->name << '\n';
-    ofs << "Number of basic blocks: " << func->basic_blocks.size() << '\n';
+    mlir::MLIRContext ctx(registry, mlir::MLIRContext::Threading::DISABLED);
 
-    const size_t num_insts = [&] {
-        size_t sum = 0;
-        for (const auto &block : func->basic_blocks) {
-            sum += block.instructions.size();
-        }
-        return sum;
-    }();
+    ctx.loadAllAvailableDialects();
 
-    ofs << "Number of instructions: " << num_insts << '\n';
+    auto loc = mlir::UnknownLoc::get(&ctx);
+    auto mod = mlir::OwningOpRef< mlir::ModuleOp >(mlir::ModuleOp::create(loc));
+
+    patchestry::ghidra::mlir_codegen_visitor(*mod).visit(*func);
+
+    ofs << *mod << '\n';
 
     return EXIT_SUCCESS;
+} catch (std::exception &err) {
+    llvm::errs() << "error: " << err.what() << '\n';
+    return EXIT_FAILURE;
 }
