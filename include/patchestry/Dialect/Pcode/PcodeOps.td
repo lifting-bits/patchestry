@@ -14,7 +14,7 @@ include "mlir/IR/BuiltinAttributes.td"
 include "mlir/IR/BuiltinTypes.td"
 
 def FuncOp
-  : Pcode_Op< "function" >
+  : PcodeOp< "function" >
   , Arguments<( ins StrAttr:$name )>
 {
   let regions = (region AnyRegion:$blocks);
@@ -22,7 +22,7 @@ def FuncOp
 }
 
 def BlockOp
-  : Pcode_Op< "block" >
+  : PcodeOp< "block" >
   , Arguments<( ins StrAttr:$label )>
 {
   let regions = (region AnyRegion:$instructions);
@@ -30,7 +30,7 @@ def BlockOp
 }
 
 def InstOp
-  : Pcode_Op< "instruction" >
+  : PcodeOp< "instruction" >
   , Arguments<( ins StrAttr:$mnemonic )>
 {
   let regions = (region AnyRegion:$semantics);
@@ -46,7 +46,7 @@ def VarnodeOp
 }
 
 class UnaryOp< string mnemonic, list< Trait > traits = [] >
-  : Pcode_Op< mnemonic, traits >
+  : PcodeOp< mnemonic, traits >
   , Arguments<( ins Builtin_Integer:$op )>
   , Results<( outs Builtin_Integer:$result )>
 {
@@ -58,7 +58,7 @@ def PopcountOp    : UnaryOp < "popcount" >;
 def BoolNegateOp  : UnaryOp < "bool_negate", [SameOperandsAndResultType] >;
 
 class BinOp< string mnemonic, list< Trait > traits = [] >
-  : Pcode_Op< mnemonic, traits >
+  : PcodeOp< mnemonic, traits >
   , Arguments<( ins Builtin_Integer:$lhs, Builtin_Integer:$rhs )>
   , Results<( outs Builtin_Integer:$result )>
 {
@@ -74,7 +74,7 @@ def IntSLessOp    : BinOp< "int_sless" >;
 def IntAndOp      : BinOp< "int_and" >;
 
 def BranchOp
-  : Pcode_Op< "branch" >
+  : PcodeOp< "branch" >
   , Arguments<( ins Builtin_Integer:$addr )>
 {
   let summary = "Pcode BRANCH operation";
@@ -83,7 +83,7 @@ def BranchOp
 }
 
 def CBranchOp
-  : Pcode_Op< "cbranch" >
+  : PcodeOp< "cbranch" >
   , Arguments<( ins Builtin_Integer:$addr, Builtin_Integer:$cond )>
 {
   let summary = "Pcode CBRANCH operation";
@@ -92,7 +92,7 @@ def CBranchOp
 }
 
 def CallOp
-  : Pcode_Op< "call" >
+  : PcodeOp< "call" >
   , Arguments<( ins Builtin_Integer:$addr )>
 {
   let summary = "Pcode CALL operation";
@@ -101,7 +101,7 @@ def CallOp
 }
 
 def ReturnOp
-  : Pcode_Op< "return" >
+  : PcodeOp< "return" >
   , Arguments<( ins Builtin_Integer:$varnode )>
 {
   let summary = "Pcode RETURN operation";
@@ -110,7 +110,7 @@ def ReturnOp
 }
 
 def StoreOp
-  : Pcode_Op< "store" >
+  : PcodeOp< "store" >
   , Arguments<( ins Builtin_Integer:$addr_space, Builtin_Integer:$addr, Builtin_Integer:$data )>
 {
   let summary = "Pcode STORE operation";
@@ -119,7 +119,7 @@ def StoreOp
 }
 
 def LoadOp
-  : Pcode_Op< "load" >
+  : PcodeOp< "load" >
   , Arguments<( ins Builtin_Integer:$addr_space, Builtin_Integer:$addr )>
   , Results<( outs Builtin_Integer:$result )>
 {
