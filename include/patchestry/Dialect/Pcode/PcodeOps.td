@@ -13,6 +13,8 @@ include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/IR/BuiltinAttributes.td"
 include "mlir/IR/BuiltinTypes.td"
 
+include "patchestry/Dialect/Pcode/PcodeTypes.td"
+
 def FuncOp
   : PcodeOp< "function" >
   , Arguments<( ins StrAttr:$name )>
@@ -37,13 +39,26 @@ def InstOp
   let assemblyFormat = [{ attr-dict `:` $semantics }];
 }
 
-def VarnodeOp
-  : Pcode_Op< "varnode" >
-  , Arguments<( ins StrAttr:$addr_space, I64Attr:$addr,  I8Attr:$size)>
-  , Results<( outs Builtin_Integer:$result )>
+def ConstOp
+  : PcodeOp< "const", [ConstantLike, AllTypesMatch< ["value", "result"] >] >
+  , Arguments<( ins TypedAttrInterface:$value )>
+  , Results<( outs AnyType:$result )>
+{
+  let hasFolder = 1;
+  let assemblyFormat = [{ attr-dict `:` type($result) }];
+}
+
+class VarnodeTypeOp< string mnemonic, list< Trait > traits = [] >
+  : PcodeOp< mnemonic, traits >
+  , Arguments<( ins StrAttr:$addr_space, I64Attr:$addr, I8Attr:$size )>
+  , Results<( outs AnyType:$result )>
 {
   let assemblyFormat = [{ attr-dict `:` type($result) }];
 }
+
+def RegOp : VarnodeTypeOp< "reg" >;
+def MemOp : VarnodeTypeOp< "mem" >;
+def VarOp : VarnodeTypeOp< "var" >;
 
 class UnaryOp< string mnemonic, list< Trait > traits = [] >
   : PcodeOp< mnemonic, traits >
