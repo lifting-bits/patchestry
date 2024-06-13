@@ -16,6 +16,12 @@ def Pcode_Dialect : Dialect {
   let cppNamespace = "::patchestry::pc";
 
   let summary = "Dialect for representing ghidra pcode operations.";
+
+  let extraClassDeclaration = [{
+        void registerTypes();
+  }];
+
+  let useDefaultTypePrinterParser = 1;
 }
 
 class PcodeOp< string mnemonic, list< Trait > traits = [] >

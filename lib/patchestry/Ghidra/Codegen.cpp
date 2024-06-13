@@ -8,12 +8,13 @@
 
 #include "patchestry/Ghidra/Codegen.hpp"
 #include "patchestry/Dialect/Pcode/PcodeOps.hpp"
+#include "patchestry/Dialect/Pcode/PcodeTypes.hpp"
 
 namespace patchestry::ghidra {
 
     using cg = mlir_codegen_visitor;
 
-    auto cg::mk_pcode(string_ref mnemonic, type_t result, values_ref inputs) -> operation_t * {
+    auto cg::mk_pcode(string_ref mnemonic, type_t result, values_ref inputs) -> operation_t {
         auto loc = bld.getUnknownLoc();
 
         auto mk_unary_op = [&]< typename OpTy > {
@@ -51,49 +52,73 @@ namespace patchestry::ghidra {
         return nullptr;
     }
 
-    auto cg::mk_inst(string_ref mnemonic) -> operation_t * {
+    auto cg::mk_inst(string_ref mnemonic) -> operation_t {
         return bld.create< pc::InstOp >(bld.getUnknownLoc(), mnemonic);
     }
 
-    auto cg::mk_block(string_ref label) -> operation_t * {
+    auto cg::mk_block(string_ref label) -> operation_t {
         return bld.create< pc::BlockOp >(bld.getUnknownLoc(), label);
     }
 
-    auto cg::mk_func(string_ref name) -> operation_t * {
+    auto cg::mk_func(string_ref name) -> operation_t {
         return bld.create< pc::FuncOp >(bld.getUnknownLoc(), name);
     }
 
-    auto cg::operator()(const varnode_t &varnode) -> operation_t * {
+    auto cg::mk_varnode(const varnode_t &varnode) -> value_t {
         if (varnode.address_space == "unique") {
-            return tmp();
+            return unique_as[varnode.address];
         }
 
-        auto loc    = bld.getUnknownLoc();
-        auto space  = bld.getStringAttr(varnode.address_space);
-        auto addr   = bld.getI64IntegerAttr(varnode.address);
-        auto size   = bld.getI8IntegerAttr(static_cast< int8_t >(varnode.size));
-        auto result = bld.getIntegerType(static_cast< unsigned >(varnode.size));
+        auto loc = bld.getUnknownLoc();
 
-        return bld.create< pc::VarnodeOp >(loc, result, space, addr, size);
+        if (varnode.address_space == "const") {
+            auto type  = bld.getIntegerType(static_cast< unsigned >(varnode.size));
+            auto value = bld.getIntegerAttr(type, varnode.address);
+            return bld.create< pc::ConstOp >(loc, value);
+        }
+
+        auto addr_space = bld.getStringAttr(varnode.address_space);
+        auto addr       = bld.getI64IntegerAttr(varnode.address);
+        auto size       = bld.getI8IntegerAttr(static_cast< int8_t >(varnode.size));
+
+        if (varnode.address_space == "register") {
+            return bld.create< pc::RegOp >(
+                loc, bld.getType< pc::RegType >(), addr_space, addr, size
+            );
+        }
+
+        if (varnode.address_space == "ram") {
+            return bld.create< pc::MemOp >(
+                loc, bld.getType< pc::MemType >(), addr_space, addr, size
+            );
+        }
+
+        return bld.create< pc::VarOp >(
+            loc, bld.getType< pc::VarType >(), addr_space, addr, size
+        );
     }
 
-    auto cg::operator()(const pcode_t &pcode) -> operation_t * {
+    auto cg::operator()(const pcode_t &pcode) -> operation_t {
         std::vector< mlir::Value > inputs;
         inputs.reserve(pcode.inputs.size());
         for (const auto &input : pcode.inputs) {
-            inputs.push_back(visit(input)->getResult(0));
+            inputs.push_back(mk_varnode(input));
         }
 
         if (pcode.output) {
-            // visit(pcode.output.value());
-            auto bitwidth = static_cast< unsigned >(pcode.output->size * 8);
-            return mk_pcode(pcode.mnemonic, bld.getIntegerType(bitwidth), inputs);
+            auto bitwidth    = static_cast< unsigned >(pcode.output->size * 8);
+            auto type        = bld.getIntegerType(bitwidth);
+            operation_t pcop = mk_pcode(pcode.mnemonic, type, inputs);
+
+            unique_as[pcode.output->address] = pcop->getResult(0);
+
+            return pcop;
         }
 
         return mk_pcode(pcode.mnemonic, bld.getNoneType(), inputs);
     }
 
-    auto cg::operator()(const instruction_t &inst) -> operation_t * {
+    auto cg::operator()(const instruction_t &inst) -> operation_t {
         mlir::OpBuilder::InsertionGuard guard(bld);
         auto *iop = mk_inst(inst.mnemonic);
 
@@ -108,7 +133,7 @@ namespace patchestry::ghidra {
         return iop;
     }
 
-    auto cg::operator()(const code_block_t &blk) -> operation_t * {
+    auto cg::operator()(const code_block_t &blk) -> operation_t {
         mlir::OpBuilder::InsertionGuard guard(bld);
         auto *bop = mk_block(blk.label);
 
@@ -123,7 +148,7 @@ namespace patchestry::ghidra {
         return bop;
     }
 
-    auto cg::operator()(const function_t &func) -> operation_t * {
+    auto cg::operator()(const function_t &func) -> operation_t {
         auto *fop = mk_func(func.name);
 
         if (func.basic_blocks.empty()) {

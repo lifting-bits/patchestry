@@ -11,6 +11,7 @@
 
 namespace patchestry::pc {
     void PcodeDialect::initialize() {
+        registerTypes();
         addOperations<
 #define GET_OP_LIST
 #include "patchestry/Dialect/Pcode/Pcode.cpp.inc"
