@@ -18,7 +18,7 @@ def Pcode_Dialect : Dialect {
   let summary = "Dialect for representing ghidra pcode operations.";
 }
 
-class Pcode_Op< string mnemonic, list< Trait > traits = [] >
+class PcodeOp< string mnemonic, list< Trait > traits = [] >
   : Op< Pcode_Dialect, mnemonic, traits >;
 
 include "PcodeOps.td"
