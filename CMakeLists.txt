@@ -32,6 +32,10 @@ add_library(
     source/ghidra.cpp
 )
 
+include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})
+include_directories(${PROJECT_SOURCE_DIR}/include/)
+include_directories(${PROJECT_BINARY_DIR}/include/)
+
 target_include_directories(
     patchestry_lib ${warning_guard}
     PUBLIC
