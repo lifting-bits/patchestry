@@ -14,7 +14,7 @@ namespace patchestry::ghidra {
 
     using cg = mlir_codegen_visitor;
 
-    auto cg::mk_pcode(string_ref mnemonic, type_t result, values_ref inputs) -> operation_t {
+    auto cg::mk_pcode(string_view mnemonic, type_t result, values_ref inputs) -> operation_t {
         auto loc = bld.getUnknownLoc();
 
         auto mk_unary_op = [&]< typename OpTy > {
@@ -52,15 +52,15 @@ namespace patchestry::ghidra {
         return nullptr;
     }
 
-    auto cg::mk_inst(string_ref mnemonic) -> operation_t {
+    auto cg::mk_inst(string_view mnemonic) -> operation_t {
         return bld.create< pc::InstOp >(bld.getUnknownLoc(), mnemonic);
     }
 
-    auto cg::mk_block(string_ref label) -> operation_t {
+    auto cg::mk_block(string_view label) -> operation_t {
         return bld.create< pc::BlockOp >(bld.getUnknownLoc(), label);
     }
 
-    auto cg::mk_func(string_ref name) -> operation_t {
+    auto cg::mk_func(string_view name) -> operation_t {
         return bld.create< pc::FuncOp >(bld.getUnknownLoc(), name);
     }
 
@@ -98,7 +98,9 @@ namespace patchestry::ghidra {
 
         if (var.address_space == "register") {
             auto rop = mk_var_op.template operator()< pc::RegOp >();
+
             register_as[var.address] = rop.getResult();
+
             return rop;
         }
 
