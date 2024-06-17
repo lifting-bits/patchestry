@@ -73,7 +73,10 @@ auto main(int argc, char **argv) -> int try
 
     patchestry::ghidra::mlir_codegen_visitor(*mod).visit(*func);
 
-    ofs << *mod << '\n';
+    mlir::OpPrintingFlags flags;
+    flags.enableDebugInfo(/* print locations */ false, /* prettyForm */ true);
+
+    mod->print(ofs, flags);
 
     return EXIT_SUCCESS;
 } catch (std::exception &err) {
