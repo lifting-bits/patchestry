@@ -62,8 +62,8 @@ def VarOp : VarnodeTypeOp< "var" >;
 
 class UnaryOp< string op_mnemonic, list< Trait > traits = [] >
   : PcodeOp< op_mnemonic, traits >
-  , Arguments<( ins Builtin_Integer:$op )>
-  , Results<( outs Builtin_Integer:$result )>
+  , Arguments<( ins AnySignlessInteger:$op )>
+  , Results<( outs AnySignlessInteger:$result )>
 {
   let assemblyFormat = [{ $op attr-dict `:` functional-type(operands, results) }];
 }
@@ -74,8 +74,8 @@ def BoolNegateOp  : UnaryOp < "bool_negate", [SameOperandsAndResultType] >;
 
 class BinOp< string op_mnemonic, list< Trait > traits = [] >
   : PcodeOp< op_mnemonic, traits >
-  , Arguments<( ins Builtin_Integer:$lhs, Builtin_Integer:$rhs )>
-  , Results<( outs Builtin_Integer:$result )>
+  , Arguments<( ins AnySignlessInteger:$lhs, AnySignlessInteger:$rhs )>
+  , Results<( outs AnySignlessInteger:$result )>
 {
   let assemblyFormat = [{ $lhs `,` $rhs attr-dict `:` functional-type(operands, results) }];
 }
@@ -90,7 +90,7 @@ def IntAndOp      : BinOp< "int_and" >;
 
 def BranchOp
   : PcodeOp< "branch" >
-  , Arguments<( ins Builtin_Integer:$addr )>
+  , Arguments<( ins AnySignlessInteger:$addr )>
 {
   let summary = "Pcode BRANCH operation";
   let description = "TODO(surovic)";
@@ -99,7 +99,7 @@ def BranchOp
 
 def CBranchOp
   : PcodeOp< "cbranch" >
-  , Arguments<( ins Builtin_Integer:$addr, Builtin_Integer:$cond )>
+  , Arguments<( ins AnySignlessInteger:$addr, AnySignlessInteger:$cond )>
 {
   let summary = "Pcode CBRANCH operation";
   let description = "TODO(surovic)";
@@ -108,7 +108,7 @@ def CBranchOp
 
 def CallOp
   : PcodeOp< "call" >
-  , Arguments<( ins Builtin_Integer:$addr )>
+  , Arguments<( ins AnySignlessInteger:$addr )>
 {
   let summary = "Pcode CALL operation";
   let description = "TODO(surovic)";
@@ -117,7 +117,7 @@ def CallOp
 
 def ReturnOp
   : PcodeOp< "return" >
-  , Arguments<( ins Builtin_Integer:$varnode )>
+  , Arguments<( ins AnySignlessInteger:$varnode )>
 {
   let summary = "Pcode RETURN operation";
   let description = "TODO(surovic)";
@@ -126,7 +126,7 @@ def ReturnOp
 
 def StoreOp
   : PcodeOp< "store" >
-  , Arguments<( ins Builtin_Integer:$addr_space, Builtin_Integer:$addr, Builtin_Integer:$data )>
+  , Arguments<( ins AnySignlessInteger:$addr_space, AnySignlessInteger:$addr, AnySignlessInteger:$data )>
 {
   let summary = "Pcode STORE operation";
   let description = "TODO(surovic)";
@@ -135,8 +135,8 @@ def StoreOp
 
 def LoadOp
   : PcodeOp< "load" >
-  , Arguments<( ins Builtin_Integer:$addr_space, Builtin_Integer:$addr )>
-  , Results<( outs Builtin_Integer:$result )>
+  , Arguments<( ins AnySignlessInteger:$addr_space, AnySignlessInteger:$addr )>
+  , Results<( outs AnySignlessInteger:$result )>
 {
   let summary = "Pcode LOAD operation";
   let description = "TODO(surovic)";
