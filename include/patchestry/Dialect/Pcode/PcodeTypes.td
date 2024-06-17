@@ -11,8 +11,8 @@
 
 include "mlir/IR/OpBase.td"
 
-class PcodeType< string name, string _mnemonic, list< Trait > traits = [] >
-  : TypeDef< Pcode_Dialect, name, traits >
+class PcodeType< string type_name, string _mnemonic, list< Trait > traits = [] >
+  : TypeDef< Pcode_Dialect, type_name, traits >
 {
   let mnemonic = _mnemonic;
 }
