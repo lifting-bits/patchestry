@@ -64,7 +64,7 @@ auto main(int argc, char **argv) -> int try
     registry.insert< patchestry::pc::PcodeDialect >();
     mlir::registerAllDialects(registry);
 
-    mlir::MLIRContext ctx(registry, mlir::MLIRContext::Threading::DISABLED);
+    mlir::MLIRContext ctx(registry);
 
     ctx.loadAllAvailableDialects();
 
