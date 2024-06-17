@@ -168,6 +168,7 @@ namespace patchestry::ghidra {
     }
 
     auto cg::operator()(const function_t &func) -> operation_t {
+        mlir::OpBuilder::InsertionGuard guard(bld);
         operation_t fop = mk_func(func.name);
 
         if (func.basic_blocks.empty()) {
