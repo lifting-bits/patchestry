@@ -17,13 +17,15 @@ project(
 include(cmake/project-is-top-level.cmake)
 include(cmake/variables.cmake)
 
-# ---- Add LLVM ----
-
-find_package(LLVM 17 REQUIRED CONFIG)
+find_package(LLVM 18.1 REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
-# ---- Declare library ----
+find_package(MLIR 18.1 REQUIRED CONFIG)
+message(STATUS "Found MLIR ${MLIR_PACKAGE_VERSION}")
+message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+include(AddMLIR)
 
 add_library(
     patchestry_lib OBJECT
