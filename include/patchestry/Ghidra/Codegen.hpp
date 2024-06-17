@@ -28,7 +28,7 @@ namespace patchestry::ghidra {
         using operation_t = mlir::Operation *;
         using type_t      = mlir::Type;
         using value_t     = mlir::Value;
-        using string_ref  = std::string_view;
+        using string_view = std::string_view;
         using values_ref  = llvm::ArrayRef< value_t >;
 
         std::unordered_map< int64_t, value_t > unique_as;
@@ -50,10 +50,10 @@ namespace patchestry::ghidra {
         }
 
         auto mk_varnode(const varnode_t &var) -> value_t;
-        auto mk_pcode(string_ref mnemonic, type_t result, values_ref inputs) -> operation_t;
-        auto mk_inst(string_ref mnemonic) -> operation_t;
-        auto mk_block(string_ref label) -> operation_t;
-        auto mk_func(string_ref name) -> operation_t;
+        auto mk_pcode(string_view mnemonic, type_t result, values_ref inputs) -> operation_t;
+        auto mk_inst(string_view mnemonic) -> operation_t;
+        auto mk_block(string_view label) -> operation_t;
+        auto mk_func(string_view name) -> operation_t;
 
         auto operator()([[maybe_unused]] const auto &arg) -> operation_t {
             assert(false && "Unexpected ghidra type.");
