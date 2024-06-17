@@ -23,7 +23,7 @@ namespace patchestry::pc {
             #include "patchestry/Dialect/Pcode/PcodeTypes.cpp.inc"
         >();
     }
-}
+} // namespace patchestry::pc
 
 #define GET_TYPEDEF_CLASSES
 #include "patchestry/Dialect/Pcode/PcodeTypes.cpp.inc"
