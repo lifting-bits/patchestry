@@ -32,20 +32,24 @@ namespace patchestry::ghidra {
         using values_ref  = llvm::ArrayRef< value_t >;
 
         std::unordered_map< int64_t, value_t > unique_as;
+        std::unordered_map< int64_t, value_t > register_as;
 
-            explicit mlir_codegen_visitor(mlir::ModuleOp mod)
-            : bld(mod), ctx(bld.getContext()) {
+        explicit mlir_codegen_visitor(mlir::ModuleOp mod) : bld(mod), ctx(bld.getContext()) {
             assert(mod->getNumRegions() > 0 && "Module has no regions.");
             auto &reg = mod->getRegion(0);
             assert(reg.hasOneBlock() && "Region has unexpected blocks.");
             bld.setInsertionPointToStart(&*reg.begin());
         }
 
-        auto visit(const deserialized_t &ref) -> operation_t {
-            return std::visit(*this, ref);
+        auto visit(const deserialized_t &ref) -> operation_t { return std::visit(*this, ref); }
+
+        auto get_type(const varnode_t &var) -> type_t;
+
+        auto get_type(const std::optional< varnode_t > &var) -> type_t {
+            return var ? get_type(*var) : bld.getNoneType();
         }
 
-        auto mk_varnode(const varnode_t &varnode) -> value_t;
+        auto mk_varnode(const varnode_t &var) -> value_t;
         auto mk_pcode(string_ref mnemonic, type_t result, values_ref inputs) -> operation_t;
         auto mk_inst(string_ref mnemonic) -> operation_t;
         auto mk_block(string_ref label) -> operation_t;
