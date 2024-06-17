@@ -9,6 +9,7 @@
 #include "patchestry/Util/Warnings.hpp"
 
 PATCHESTRY_RELAX_WARNINGS
+#include <llvm/ADT/ScopedHashTable.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinOps.h>
 PATCHESTRY_UNRELAX_WARNINGS
@@ -18,6 +19,32 @@ PATCHESTRY_UNRELAX_WARNINGS
 
 #include "patchestry/Ghidra/Deserialize.hpp"
 
+// NOLINTBEGIN(readability-identifier-naming)
+
+namespace llvm {
+    template<>
+    struct DenseMapInfo< std::string >
+    {
+        static inline auto getEmptyKey() -> std::string { return "<<<EMPTY KEY>>>"; }
+
+        static inline auto getTombstoneKey() -> std::string { return "<<<TOMBSTONE KEY>>>"; }
+
+        static auto getHashValue(const std::string &Val) -> unsigned {
+            constexpr uint32_t mask  = 0xFFFFFFFF;
+            constexpr uint32_t shift = 32;
+            std::hash< std::string > str_hash;
+            const uint64_t hash = str_hash(Val);
+            return (hash >> shift) ^ (hash & mask);
+        }
+
+        static auto isEqual(const std::string &LHS, const std::string &RHS) -> bool {
+            return LHS == RHS;
+        }
+    };
+} // namespace llvm
+
+// NOLINTEND(readability-identifier-naming)
+
 namespace patchestry::ghidra {
 
     struct mlir_codegen_visitor
@@ -25,14 +52,16 @@ namespace patchestry::ghidra {
         mlir::OpBuilder bld;
         mlir::MLIRContext *ctx;
 
-        using operation_t = mlir::Operation *;
-        using type_t      = mlir::Type;
-        using value_t     = mlir::Value;
-        using string_view = std::string_view;
-        using values_ref  = llvm::ArrayRef< value_t >;
+        using operation_t  = mlir::Operation *;
+        using type_t       = mlir::Type;
+        using value_t      = mlir::Value;
+        using string_view  = std::string_view;
+        using values_ref   = llvm::ArrayRef< value_t >;
+        using address_t    = std::pair< std::string, int64_t >;
+        using memory_t     = llvm::ScopedHashTable< address_t, value_t >;
+        using memory_scope = llvm::ScopedHashTableScope< address_t, value_t >;
 
-        std::unordered_map< int64_t, value_t > unique_as;
-        std::unordered_map< int64_t, value_t > register_as;
+        memory_t memory;
 
         explicit mlir_codegen_visitor(mlir::ModuleOp mod) : bld(mod), ctx(bld.getContext()) {
             assert(mod->getNumRegions() > 0 && "Module has no regions.");

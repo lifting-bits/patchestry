@@ -84,13 +84,11 @@ namespace patchestry::ghidra {
     }
 
     auto cg::mk_varnode(const varnode_t &var) -> value_t {
-        if (var.address_space == "unique") {
-            return unique_as[var.address];
+        if (value_t val = memory.lookup({ var.address_space, var.address })) {
+            return val;
         }
 
-        if (var.address_space == "register" && register_as.contains(var.address)) {
-            return register_as[var.address];
-        }
+        assert(var.address_space != "unique" && "Undefined unique varnode.");
 
         auto loc  = bld.getUnknownLoc();
         auto type = get_type(var);
@@ -108,12 +106,11 @@ namespace patchestry::ghidra {
 
         if (var.address_space == "register") {
             auto rop = mk_var_op.template operator()< pc::RegOp >();
-
-            register_as[var.address] = rop.getResult();
-
+            memory.insert({ "register", var.address }, rop.getResult());
             return rop;
         }
 
+        // TODO(surovic): Maybe this could be treated the same as "reg"?
         if (var.address_space == "ram") {
             return mk_var_op.template operator()< pc::MemOp >();
         }
@@ -134,38 +131,36 @@ namespace patchestry::ghidra {
             return pcop;
         }
 
-        if (pcode.output->address_space == "unique") {
-            unique_as[pcode.output->address] = pcop->getResult(0);
-        }
+        auto adsp = pcode.output->address_space;
+        auto addr = pcode.output->address;
 
-        if (pcode.output->address_space == "register") {
-            register_as[pcode.output->address] = pcop->getResult(0);
+        if (adsp == "unique" || adsp == "register") {
+            memory.insert({ adsp, addr }, pcop->getResult(0));
         }
 
         return pcop;
     }
 
     auto cg::operator()(const instruction_t &inst) -> operation_t {
-        mlir::OpBuilder::InsertionGuard guard(bld);
+        const mlir::OpBuilder::InsertionGuard guard(bld);
         operation_t iop = mk_inst(inst.mnemonic);
 
         if (inst.semantics.empty()) {
             return iop;
         }
 
+        const memory_scope scope(memory);
+
         bld.createBlock(&iop->getRegion(0));
         for (const auto &pcode : inst.semantics) {
             visit(pcode);
         }
 
-        unique_as.clear();
-        register_as.clear();
-
         return iop;
     }
 
     auto cg::operator()(const code_block_t &blk) -> operation_t {
-        mlir::OpBuilder::InsertionGuard guard(bld);
+        const mlir::OpBuilder::InsertionGuard guard(bld);
         operation_t bop = mk_block(blk.label);
 
         if (blk.instructions.empty()) {
@@ -180,7 +175,7 @@ namespace patchestry::ghidra {
     }
 
     auto cg::operator()(const function_t &func) -> operation_t {
-        mlir::OpBuilder::InsertionGuard guard(bld);
+        const mlir::OpBuilder::InsertionGuard guard(bld);
         operation_t fop = mk_func(func.name);
 
         if (func.basic_blocks.empty()) {
