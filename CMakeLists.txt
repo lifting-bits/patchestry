@@ -25,7 +25,7 @@ include(TableGen)
 include(AddLLVM)
 include(HandleLLVMOptions)
 
-find_package(MLIR 18.1 REQUIRED CONFIG)
+find_package(MLIR ${LLVM_PACKAGE_VERSION} REQUIRED CONFIG)
 message(STATUS "Found MLIR ${MLIR_PACKAGE_VERSION}")
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
