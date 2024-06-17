@@ -17,7 +17,7 @@ include "patchestry/Dialect/Pcode/PcodeTypes.td"
 
 def FuncOp
   : PcodeOp< "function" >
-  , Arguments<( ins StrAttr:$name )>
+  , Arguments<( ins StrAttr:$func_name )>
 {
   let regions = (region AnyRegion:$blocks);
   let assemblyFormat = [{ attr-dict `:` $blocks }];
@@ -25,7 +25,7 @@ def FuncOp
 
 def BlockOp
   : PcodeOp< "block" >
-  , Arguments<( ins StrAttr:$label )>
+  , Arguments<( ins StrAttr:$block_label )>
 {
   let regions = (region AnyRegion:$instructions);
   let assemblyFormat = [{ attr-dict `:` $instructions }];
@@ -33,7 +33,7 @@ def BlockOp
 
 def InstOp
   : PcodeOp< "instruction" >
-  , Arguments<( ins StrAttr:$mnemonic )>
+  , Arguments<( ins StrAttr:$inst_mnemonic )>
 {
   let regions = (region AnyRegion:$semantics);
   let assemblyFormat = [{ attr-dict `:` $semantics }];
@@ -48,8 +48,8 @@ def ConstOp
   let assemblyFormat = [{ attr-dict `:` type($result) }];
 }
 
-class VarnodeTypeOp< string mnemonic, list< Trait > traits = [] >
-  : PcodeOp< mnemonic, traits >
+class VarnodeTypeOp< string varnode_mnemonic, list< Trait > traits = [] >
+  : PcodeOp< varnode_mnemonic, traits >
   , Arguments<( ins StrAttr:$addr_space, I64Attr:$addr, I8Attr:$size )>
   , Results<( outs AnyType:$result )>
 {
@@ -60,8 +60,8 @@ def RegOp : VarnodeTypeOp< "reg" >;
 def MemOp : VarnodeTypeOp< "mem" >;
 def VarOp : VarnodeTypeOp< "var" >;
 
-class UnaryOp< string mnemonic, list< Trait > traits = [] >
-  : PcodeOp< mnemonic, traits >
+class UnaryOp< string op_mnemonic, list< Trait > traits = [] >
+  : PcodeOp< op_mnemonic, traits >
   , Arguments<( ins Builtin_Integer:$op )>
   , Results<( outs Builtin_Integer:$result )>
 {
@@ -72,8 +72,8 @@ def CopyOp        : UnaryOp < "copy", [SameOperandsAndResultType] >;
 def PopcountOp    : UnaryOp < "popcount" >;
 def BoolNegateOp  : UnaryOp < "bool_negate", [SameOperandsAndResultType] >;
 
-class BinOp< string mnemonic, list< Trait > traits = [] >
-  : PcodeOp< mnemonic, traits >
+class BinOp< string op_mnemonic, list< Trait > traits = [] >
+  : PcodeOp< op_mnemonic, traits >
   , Arguments<( ins Builtin_Integer:$lhs, Builtin_Integer:$rhs )>
   , Results<( outs Builtin_Integer:$result )>
 {
