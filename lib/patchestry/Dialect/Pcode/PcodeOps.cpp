@@ -19,7 +19,7 @@ PATCHESTRY_RELAX_WARNINGS
 #include "patchestry/Dialect/Pcode/Pcode.cpp.inc"
 
 auto patchestry::pc::ConstOp::fold([[maybe_unused]] FoldAdaptor adaptor) -> mlir::OpFoldResult {
-    return mlir::UnitAttr::get(this->getContext());
+    return {};
 }
 
 PATCHESTRY_UNRELAX_WARNINGS
