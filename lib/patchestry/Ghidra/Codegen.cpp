@@ -65,12 +65,22 @@ namespace patchestry::ghidra {
     }
 
     auto cg::get_type(const varnode_t &var) -> type_t {
-        auto bitwidth = static_cast< unsigned >(var.size * 8);
-        return llvm::StringSwitch< type_t >(var.address_space)
-            .Cases("unique", "const", bld.getIntegerType(bitwidth))
-            .Case("register", bld.getType< pc::RegType >())
-            .Case("ram", bld.getType< pc::MemType >())
-            .Default(bld.getType< pc::VarType >());
+        auto adsp = var.address_space;
+
+        if (adsp == "unique" || adsp == "const") {
+            auto bitwidth = static_cast< unsigned >(var.size * 8);
+            return bld.getIntegerType(bitwidth);
+        }
+
+        if (adsp == "register") {
+            return bld.getType< pc::RegType >();
+        }
+
+        if (adsp == "ram") {
+            return bld.getType< pc::MemType >();
+        }
+
+        return bld.getType< pc::VarType >();
     }
 
     auto cg::mk_varnode(const varnode_t &var) -> value_t {
