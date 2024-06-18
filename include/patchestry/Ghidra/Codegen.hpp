@@ -30,11 +30,7 @@ namespace llvm {
         static inline auto getTombstoneKey() -> std::string { return "<<<TOMBSTONE KEY>>>"; }
 
         static auto getHashValue(const std::string &Val) -> unsigned {
-            constexpr uint32_t mask  = 0xFFFFFFFF;
-            constexpr uint32_t shift = 32;
-            std::hash< std::string > str_hash;
-            const uint64_t hash = str_hash(Val);
-            return (hash >> shift) ^ (hash & mask);
+            return static_cast< unsigned >(llvm::hash_value(Val));
         }
 
         static auto isEqual(const std::string &LHS, const std::string &RHS) -> bool {
