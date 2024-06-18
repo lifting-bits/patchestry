@@ -94,7 +94,9 @@ namespace patchestry::ghidra {
         auto type = get_type(var);
 
         if (var.address_space == "const") {
-            return bld.create< pc::ConstOp >(loc, bld.getIntegerAttr(type, var.address));
+            auto cop = bld.create< pc::ConstOp >(loc, bld.getIntegerAttr(type, var.address));
+            memory.insert({ var.address_space, var.address }, cop);
+            return cop;
         }
 
         auto mk_var_op = [&]< typename OpTy > {
@@ -106,7 +108,7 @@ namespace patchestry::ghidra {
 
         if (var.address_space == "register") {
             auto rop = mk_var_op.template operator()< pc::RegOp >();
-            memory.insert({ "register", var.address }, rop.getResult());
+            memory.insert({ var.address_space, var.address }, rop);
             return rop;
         }
 
@@ -131,8 +133,8 @@ namespace patchestry::ghidra {
             return pcop;
         }
 
-        auto adsp = pcode.output->address_space;
-        auto addr = pcode.output->address;
+        const auto &adsp = pcode.output->address_space;
+        const auto &addr = pcode.output->address;
 
         if (adsp == "unique" || adsp == "register") {
             memory.insert({ adsp, addr }, pcop->getResult(0));
