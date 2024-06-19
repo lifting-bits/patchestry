@@ -22,7 +22,6 @@ message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
 find_package(MLIR ${LLVM_PACKAGE_VERSION} REQUIRED CONFIG)
-message(STATUS "Found MLIR ${MLIR_PACKAGE_VERSION}")
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 include(AddMLIR)
