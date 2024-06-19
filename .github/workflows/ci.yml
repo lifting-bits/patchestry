@@ -3,43 +3,44 @@ name: Continuous Integration
 on:
   push:
     branches:
-    - master
+      - main
+    tags:
+      - '*'
 
   pull_request:
     branches:
-    - master
+    - '*'
 
 jobs:
   lint:
     runs-on: ubuntu-22.04
+    container:
+      image:
+        ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
 
     steps:
     - uses: actions/checkout@v4
 
     - uses: actions/setup-python@v5
-      with: { python-version: "3.8" }
+      with: { python-version: "3.12" }
 
     - name: Install codespell
       run: pip3 install codespell
 
     - name: Lint
-      run: cmake -D FORMAT_COMMAND=clang-format-14 -P cmake/lint.cmake
+      run: cmake -D FORMAT_COMMAND=clang-format-18 -P cmake/lint.cmake
 
     - name: Spell check
-      if: always()
       run: cmake -P cmake/spell.cmake
 
   coverage:
     needs: [lint]
 
     runs-on: ubuntu-22.04
-
-    # To enable coverage, delete the last line from the conditional below and
-    # edit the "<name>" placeholder to your GitHub name.
-    # If you do not wish to use codecov, then simply delete this job from the
-    # workflow.
-    if: github.repository_owner == '<name>'
-      && false
+    if: github.repository_owner == 'lifting-bits'
+    container:
+      image:
+        ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
 
     steps:
     - uses: actions/checkout@v4
@@ -52,11 +53,11 @@ jobs:
       run: cmake --preset=ci-coverage
 
     - name: Build
-      run: cmake --build build/coverage -j 2
+      run: cmake --build build/coverage -j $(nproc)
 
     - name: Test
       working-directory: build/coverage
-      run: ctest --output-on-failure --no-tests=error -j 2
+      run: ctest --output-on-failure --no-tests=error -j $(nproc)
 
     - name: Process coverage info
       run: cmake --build build/coverage -t coverage
@@ -70,8 +71,11 @@ jobs:
     needs: [lint]
 
     runs-on: ubuntu-22.04
+    container:
+      image:
+        ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
 
-    env: { CXX: clang++-14 }
+    env: { CXX: clang++-18 }
 
     steps:
     - uses: actions/checkout@v4
@@ -80,7 +84,7 @@ jobs:
       run: cmake --preset=ci-sanitize
 
     - name: Build
-      run: cmake --build build/sanitize -j 2
+      run: cmake --build build/sanitize -j $(nproc)
 
     - name: Test
       working-directory: build/sanitize
@@ -91,76 +95,47 @@ jobs:
           strict_init_order=1:\
           detect_leaks=1"
         UBSAN_OPTIONS: print_stacktrace=1
-      run: ctest --output-on-failure --no-tests=error -j 2
+      run: ctest --output-on-failure --no-tests=error -j $(nproc)
 
   test:
     needs: [lint]
 
-    strategy:
-      matrix:
-        os: [macos-12, ubuntu-22.04, windows-2022]
-
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
+    container:
+      image:
+        ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install static analyzers
-      if: matrix.os == 'ubuntu-22.04'
-      run: >-
-        sudo apt-get install clang-tidy-14 cppcheck -y -q
-
-        sudo update-alternatives --install
-        /usr/bin/clang-tidy clang-tidy
-        /usr/bin/clang-tidy-14 140
-
-    - name: Setup MultiToolTask
-      if: matrix.os == 'windows-2022'
-      run: |
-        Add-Content "$env:GITHUB_ENV" 'UseMultiToolTask=true'
-        Add-Content "$env:GITHUB_ENV" 'EnforceProcessCountAcrossBuilds=true'
-
     - name: Configure
       shell: pwsh
-      run: cmake "--preset=ci-$("${{ matrix.os }}".split("-")[0])"
+      run: cmake --preset=ci-ubuntu
 
     - name: Build
-      run: cmake --build build --config Release -j 2
+      run: cmake --build build --config Release -j $(nproc)
 
     - name: Install
       run: cmake --install build --config Release --prefix prefix
 
     - name: Test
       working-directory: build
-      run: ctest --output-on-failure --no-tests=error -C Release -j 2
+      run: ctest --output-on-failure --no-tests=error -C Release -j $(nproc)
 
   docs:
     # Deploy docs only when builds succeed
     needs: [sanitize, test]
 
     runs-on: ubuntu-22.04
-
-    # To enable, first you have to create an orphaned gh-pages branch:
-    #
-    #    git switch --orphan gh-pages
-    #    git commit --allow-empty -m "Initial commit"
-    #    git push -u origin gh-pages
-    #
-    # Edit the <name> placeholder below to your GitHub name, so this action
-    # runs only in your repository and no one else's fork. After these, delete
-    # this comment and the last line in the conditional below.
-    # If you do not wish to use GitHub Pages for deploying documentation, then
-    # simply delete this job similarly to the coverage one.
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/main'
       && github.event_name == 'push'
-      && github.repository_owner == '<name>'
-      && false
+      && github.repository_owner == 'lifting-bits'
 
     steps:
     - uses: actions/checkout@v4
 
     - uses: actions/setup-python@v5
-      with: { python-version: "3.8" }
+      with: { python-version: "3.12" }
 
     - name: Install m.css dependencies
       run: pip3 install jinja2 Pygments
@@ -174,7 +149,7 @@ jobs:
         -P cmake/docs-ci.cmake
 
     - name: Deploy docs
-      uses: peaceiris/actions-gh-pages@v3
+      uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: build/docs/html
