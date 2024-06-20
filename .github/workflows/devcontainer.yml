@@ -24,7 +24,7 @@ jobs:
         contents: read
 
     env:
-      IMAGE_NAME: "ghcr.io/trailofbits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest"
+      IMAGE_NAME: "ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest"
 
     steps:
       - name: Cleanup working directory with container root
