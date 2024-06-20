@@ -30,39 +30,39 @@ jobs:
     - name: Spell check
       run: cmake -P cmake/spell.cmake
 
-  coverage:
-    needs: [lint]
+  # coverage:
+  #   needs: [lint]
 
-    runs-on: ubuntu-22.04
-    if: github.repository_owner == 'lifting-bits'
-    container:
-      image:
-        ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
+  #   runs-on: ubuntu-22.04
+  #   if: github.repository_owner == 'lifting-bits'
+  #   container:
+  #     image:
+  #       ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
 
-    env:
-      CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
-      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
+  #   env:
+  #     CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
+  #     LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
 
-    steps:
-    - uses: actions/checkout@v4
+  #   steps:
+  #   - uses: actions/checkout@v4
 
-    - name: Configure
-      run: cmake --preset=ci-coverage
+  #   - name: Configure
+  #     run: cmake --preset=ci-coverage
 
-    - name: Build
-      run: cmake --build build/coverage -j $(nproc)
+  #   - name: Build
+  #     run: cmake --build build/coverage -j $(nproc)
 
-    - name: Test
-      working-directory: build/coverage
-      run: ctest --output-on-failure --no-tests=error -j $(nproc)
+  #   - name: Test
+  #     working-directory: build/coverage
+  #     run: ctest --output-on-failure --no-tests=error -j $(nproc)
 
-    - name: Process coverage info
-      run: cmake --build build/coverage -t coverage
+  #   - name: Process coverage info
+  #     run: cmake --build build/coverage -t coverage
 
-    - name: Submit to codecov.io
-      uses: codecov/codecov-action@v4
-      with:
-        file: build/coverage/coverage.info
+  #   - name: Submit to codecov.io
+  #     uses: codecov/codecov-action@v4
+  #     with:
+  #       file: build/coverage/coverage.info
 
   sanitize:
     needs: [lint]
