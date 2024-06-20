@@ -39,6 +39,10 @@ jobs:
       image:
         ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
 
+    env:
+      CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
+      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
+
     steps:
     - uses: actions/checkout@v4
 
@@ -68,7 +72,10 @@ jobs:
       image:
         ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
 
-    env: { CXX: clang++-18 }
+    env:
+      CXX: clang++-18
+      CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
+      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
 
     steps:
     - uses: actions/checkout@v4
@@ -98,6 +105,10 @@ jobs:
       image:
         ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
 
+    env:
+      CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
+      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
+
     steps:
     - uses: actions/checkout@v4
 
@@ -122,6 +133,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
       && github.event_name == 'push'
       && github.repository_owner == 'lifting-bits'
+
+    env:
+      CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
+      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
 
     steps:
     - uses: actions/checkout@v4
