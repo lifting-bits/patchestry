@@ -145,12 +145,12 @@ jobs:
     - uses: actions/setup-python@v5
       with: { python-version: "3.12" }
 
-    - name: Build docs
-      run: cmake "-DPROJECT_SOURCE_DIR=$PWD" "-DPROJECT_BINARY_DIR=$PWD/build"
-        -P cmake/docs-ci.cmake
+    # - name: Build docs
+    #   run: cmake "-DPROJECT_SOURCE_DIR=$PWD" "-DPROJECT_BINARY_DIR=$PWD/build" "-CMAKE_PREFIX_PATH=$env{CMAKE_PREFIX_PATH}"
+    #     -P cmake/docs-ci.cmake
 
-    - name: Deploy docs
-      uses: peaceiris/actions-gh-pages@v4
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: build/docs/html
+    # - name: Deploy docs
+    #   uses: peaceiris/actions-gh-pages@v4
+    #   with:
+    #     github_token: ${{ secrets.GITHUB_TOKEN }}
+    #     publish_dir: build/docs/html
