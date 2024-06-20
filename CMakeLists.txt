@@ -14,7 +14,6 @@ project(
   HOMEPAGE_URL "https://github.com/lifting-bits/patchestry"
   LANGUAGES C CXX)
 
-include(cmake/project-is-top-level.cmake)
 include(cmake/variables.cmake)
 
 find_package(LLVM 18.1 REQUIRED CONFIG)
