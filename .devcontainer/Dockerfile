@@ -27,7 +27,7 @@ RUN apt-get update && \
 
 RUN apt-get -y purge llvm-14 clang-14
 
-RUN pip3 install lit
+RUN pip3 install lit codespell jinja2 Pygments
 
 COPY ./install-llvm.sh /tmp/
 RUN chmod +x /tmp/install-llvm.sh && /tmp/install-llvm.sh ${LLVM_VERSION} all
