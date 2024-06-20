@@ -108,6 +108,7 @@ jobs:
     env:
       CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
       LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
+      CMAKE_CXX_CLANG_TIDY: clang-tidy-18
 
     steps:
     - uses: actions/checkout@v4
