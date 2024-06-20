@@ -126,24 +126,24 @@ jobs:
       working-directory: build
       run: ctest --output-on-failure --no-tests=error -C Release -j $(nproc)
 
-  docs:
-    # Deploy docs only when builds succeed
-    needs: [sanitize, test]
+  # docs:
+  #   # Deploy docs only when builds succeed
+  #   needs: [sanitize, test]
 
-    runs-on: ubuntu-22.04
-    if: github.ref == 'refs/heads/main'
-      && github.event_name == 'push'
-      && github.repository_owner == 'lifting-bits'
+  #   runs-on: ubuntu-22.04
+  #   if: github.ref == 'refs/heads/main'
+  #     && github.event_name == 'push'
+  #     && github.repository_owner == 'lifting-bits'
 
-    env:
-      CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
-      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
+  #   env:
+  #     CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
+  #     LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
 
-    steps:
-    - uses: actions/checkout@v4
+  #   steps:
+  #   - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v5
-      with: { python-version: "3.12" }
+  #   - uses: actions/setup-python@v5
+  #     with: { python-version: "3.12" }
 
     # - name: Build docs
     #   run: cmake "-DPROJECT_SOURCE_DIR=$PWD" "-DPROJECT_BINARY_DIR=$PWD/build" "-CMAKE_PREFIX_PATH=$env{CMAKE_PREFIX_PATH}"
