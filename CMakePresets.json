@@ -1,11 +1,20 @@
 {
-  "version": 2,
+  "version": 6,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 14,
+    "minor": 25,
     "patch": 0
   },
   "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "cacheVariables": {
+          "CMAKE_CONFIGURATION_TYPES": "Release;RelWithDebInfo;Debug",
+          "LLVM_EXTERNAL_LIT": "$env{LLVM_EXTERNAL_LIT}",
+          "CMAKE_PREFIX_PATH": "$env{CMAKE_PREFIX_PATH}"
+      }
+    },
     {
       "name": "cmake-pedantic",
       "hidden": true,
@@ -49,7 +58,7 @@
       "hidden": true,
       "cacheVariables": {
         "CMAKE_CXX_EXTENSIONS": "OFF",
-        "CMAKE_CXX_STANDARD": "20",
+        "CMAKE_CXX_STANDARD": "23",
         "CMAKE_CXX_STANDARD_REQUIRED": "ON"
       }
     },
@@ -83,7 +92,7 @@
       "name": "ci-linux",
       "generator": "Unix Makefiles",
       "hidden": true,
-      "inherits": ["flags-gcc-clang", "ci-std"],
+      "inherits": ["flags-gcc-clang", "ci-std", "base"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
@@ -92,7 +101,7 @@
       "name": "ci-darwin",
       "generator": "Unix Makefiles",
       "hidden": true,
-      "inherits": ["flags-appleclang", "ci-std"],
+      "inherits": ["flags-appleclang", "ci-std", "base"],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
