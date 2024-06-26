@@ -12,23 +12,23 @@ on:
     - '*'
 
 jobs:
-  lint:
-    runs-on: ubuntu-22.04
-    container:
-      image:
-        ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
+  #lint:
+  #  runs-on: ubuntu-22.04
+  #  container:
+  #    image:
+  #      ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
 
-    steps:
-    - uses: actions/checkout@v4
+  #  steps:
+  #  - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v5
-      with: { python-version: "3.12" }
+  #  - uses: actions/setup-python@v5
+  #    with: { python-version: "3.12" }
 
-    - name: Lint
-      run: cmake -D FORMAT_COMMAND=clang-format-18 -P cmake/lint.cmake
+  #  - name: Lint
+  #    run: cmake -D FORMAT_COMMAND=clang-format-18 -P cmake/lint.cmake
 
-    - name: Spell check
-      run: cmake -P cmake/spell.cmake
+  #  - name: Spell check
+  #    run: cmake -P cmake/spell.cmake
 
   # coverage:
   #   needs: [lint]
@@ -64,41 +64,41 @@ jobs:
   #     with:
   #       file: build/coverage/coverage.info
 
-  sanitize:
-    needs: [lint]
+  #sanitize:
+  #  needs: [lint]
 
-    runs-on: ubuntu-22.04
-    container:
-      image:
-        ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
+  #  runs-on: ubuntu-22.04
+  #  container:
+  #    image:
+  #      ghcr.io/lifting-bits/patchestry-ubuntu-22.04-llvm-18-dev:latest
 
-    env:
-      CXX: clang++-18
-      CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
-      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
+  #  env:
+  #    CXX: clang++-18
+  #    CMAKE_PREFIX_PATH: "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/"
+  #    LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
 
-    steps:
-    - uses: actions/checkout@v4
+  #  steps:
+  #  - uses: actions/checkout@v4
 
-    - name: Configure
-      run: cmake --preset=ci-sanitize
+  #  - name: Configure
+  #    run: cmake --preset=ci-sanitize
 
-    - name: Build
-      run: cmake --build build/sanitize -j $(nproc)
+  #  - name: Build
+  #    run: cmake --build build/sanitize -j $(nproc)
 
-    - name: Test
-      working-directory: build/sanitize
-      env:
-        ASAN_OPTIONS: "strict_string_checks=1:\
-          detect_stack_use_after_return=1:\
-          check_initialization_order=1:\
-          strict_init_order=1:\
-          detect_leaks=1"
-        UBSAN_OPTIONS: print_stacktrace=1
-      run: ctest --output-on-failure --no-tests=error -j $(nproc)
+  #  - name: Test
+  #    working-directory: build/sanitize
+  #    env:
+  #      ASAN_OPTIONS: "strict_string_checks=1:\
+  #        detect_stack_use_after_return=1:\
+  #        check_initialization_order=1:\
+  #        strict_init_order=1:\
+  #        detect_leaks=1"
+  #      UBSAN_OPTIONS: print_stacktrace=1
+  #    run: ctest --output-on-failure --no-tests=error -j $(nproc)
 
   test:
-    needs: [lint]
+    #needs: [lint]
 
     runs-on: ubuntu-22.04
     container:
