@@ -4,7 +4,9 @@
 
 cmake_minimum_required(VERSION 3.25)
 
-include(cmake/prelude.cmake)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+include(prelude)
 
 project(
   patchestry
