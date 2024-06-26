@@ -39,6 +39,16 @@
       }
     },
     {
+        "name": "default",
+        "displayName": "Default",
+        "binaryDir": "${sourceDir}/builds/${presetName}",
+        "generator": "Ninja Multi-Config",
+        "cacheVariables": {
+            "CMAKE_CONFIGURATION_TYPES": "Release;RelWithDebInfo;Debug",
+            "CMAKE_PREFIX_PATH": "$env{CMAKE_PREFIX_PATH}"
+        }
+    },
+    {
       "name": "cppcheck",
       "hidden": true,
       "cacheVariables": {
@@ -158,6 +168,13 @@
     {
       "name": "ci-windows",
       "inherits": ["ci-build", "ci-win64", "dev-mode"]
+    }
+  ],
+  "buildPresets": [
+    {
+        "name": "default",
+        "hidden": true,
+        "configurePreset": "default"
     }
   ]
 }
