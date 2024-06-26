@@ -175,6 +175,24 @@
         "name": "default",
         "hidden": true,
         "configurePreset": "default"
+    },
+    {
+        "name": "debug",
+        "configurePreset": "default",
+        "displayName": "Debug",
+        "configuration": "Debug"
+    },
+    {
+        "name": "release",
+        "configurePreset": "default",
+        "displayName": "Release",
+        "configuration": "Release"
+    },
+    {
+        "name": "relwithdebinfo",
+        "configurePreset": "default",
+        "displayName": "RelWithDebInfo",
+        "configuration": "RelWithDebInfo"
     }
   ]
 }
