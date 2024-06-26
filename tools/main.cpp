@@ -67,8 +67,19 @@ auto main(int argc, char **argv) -> int try
         return EXIT_FAILURE;
     }
 
-    std::error_code err;
-    llvm::raw_fd_ostream ofs(args[2], err, llvm::sys::fs::OF_Text);
+    auto print_result = [&](auto mod) {
+        mlir::OpPrintingFlags flags;
+        flags.enableDebugInfo(/* print locations */ false, /* prettyForm */ true);
+
+        if (argc < 3) {
+            mod->print(llvm::outs());
+            return;
+        }
+
+        std::error_code err;
+        llvm::raw_fd_ostream ofs(args[2], err, llvm::sys::fs::OF_Text);
+        mod->print(ofs, flags);
+    };
 
     mlir::DialectRegistry registry;
     registry.insert< patchestry::pc::PcodeDialect >();
@@ -83,10 +94,8 @@ auto main(int argc, char **argv) -> int try
 
     patchestry::ghidra::mlir_codegen_visitor(*mod).visit(*func);
 
-    mlir::OpPrintingFlags flags;
-    flags.enableDebugInfo(/* print locations */ false, /* prettyForm */ true);
+    print_result(mod->getOperation());
 
-    mod->print(ofs, flags);
 
     return EXIT_SUCCESS;
 } catch (std::exception &err) {
