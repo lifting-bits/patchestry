@@ -3,6 +3,7 @@
 .vs/
 .vscode/
 build/
+builds/
 cmake-build-*/
 prefix/
 .clangd
