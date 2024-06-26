@@ -19,18 +19,28 @@ PATCHESTRY_RELAX_WARNINGS
 PATCHESTRY_UNRELAX_WARNINGS
 
 #include <cstdlib>
+#include <iostream>
 #include <span>
+#include <string>
 
 #include "patchestry/Dialect/Pcode/PcodeDialect.hpp"
 #include "patchestry/Ghidra/Codegen.hpp"
 #include "patchestry/Ghidra/Deserialize.hpp"
 
+void print_help() {
+    std::stringstream ss;
+    ss << "Usage:\n";
+    ss << "\tPCODE_JSON_FILE\n";
+    ss << "\t[OUTPUT_FILE]\n";
+    std::cout << ss.str();
+}
+
 auto main(int argc, char **argv) -> int try
 {
     const std::span args(argv, static_cast< size_t >(argc));
 
-    if (argc != 3) {
-        llvm::errs() << "Usage:  " << args[0] << " PCODE_FILE\n";
+    if (argc == 1 || std::string(args[1]) == "--help") {
+        print_help();
         return EXIT_FAILURE;
     }
 
