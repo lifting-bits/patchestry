@@ -23,14 +23,15 @@ find_package(LLVM 18.1 REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+
 include(TableGen)
 include(AddLLVM)
 include(HandleLLVMOptions)
 
 find_package(MLIR ${LLVM_PACKAGE_VERSION} REQUIRED CONFIG)
-message(STATUS "Found MLIR ${MLIR_PACKAGE_VERSION}")
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+
 include(AddMLIR)
 
 include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})
