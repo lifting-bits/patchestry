@@ -28,7 +28,6 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 include(prevent_in_source_builds)
-include(project_settings)
 
 project(
   patchestry
@@ -36,10 +35,34 @@ project(
   DESCRIPTION
     "Patchestry is a binary patching framework built with MLIR and Ghidra."
   HOMEPAGE_URL "https://github.com/lifting-bits/patchestry"
-  LANGUAGES C CXX)
+  LANGUAGES C CXX
+)
 
-include(cmake/variables.cmake)
+include(project_settings)
+include(project_utils)
 
+#
+# Setup package version
+#
+setup_package_version_variables(patchestry)
+
+set(PATCHESTRY_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(PATCHESTRY_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
+set(PATCHESTRY_INCLUDE_DIR ${PATCHESTRY_BINARY_DIR}/include)
+
+#
+# CCACHE
+#
+find_program(CCACHE_PROGRAM ccache)
+if (CCACHE_PROGRAM)
+  set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+endif()
+
+FindAndSelectClangCompiler()
+
+#
+# LLVM & MLIR & Clang
+#
 find_package(LLVM 18.1 REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
@@ -55,27 +78,67 @@ list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 
 include(AddMLIR)
 
+set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/bin)
+set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/lib)
+
+include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
 include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})
-include_directories(${PROJECT_SOURCE_DIR}/include/)
-include_directories(${PROJECT_BINARY_DIR}/include/)
+include_directories(${PROJECT_SOURCE_DIR}/include)
+include_directories(${PROJECT_BINARY_DIR}/include)
+add_definitions(${LLVM_DEFINITIONS})
+
+separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
+add_definitions(${LLVM_DEFINITIONS})
+
+if (MLIR_LINK_MLIR_DYLIB)
+  set(MLIR_LIBS MLIR)
+else()
+  get_property(MLIR_DIALECT_LIBS GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+  get_property(MLIR_CONVERSION_LIBS GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
+  get_property(MLIR_EXTENSION_LIBS GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
+  get_property(MLIR_TRANSLATION_LIBS GLOBAL PROPERTY MLIR_TRANSLATION_LIBS)
+
+  set(MLIR_LIBS
+    MLIRAnalysis
+    MLIRDialect
+    MLIRExecutionEngine
+    MLIRIR
+    MLIRParser
+    MLIRPass
+    MLIRSupport
+    MLIRTransforms
+    MLIRTransformUtils
+
+    ${MLIR_DIALECT_LIBS}
+    ${MLIR_CONVERSION_LIBS}
+    ${MLIR_EXTENSION_LIBS}
+    ${MLIR_TRANSLATION_LIBS}
+  )
+endif()
+
+
+add_library(patchestry_settings INTERFACE)
+
+target_include_directories(patchestry_settings INTERFACE
+  $<BUILD_INTERFACE:${PATCHESTRY_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${PATCHESTRY_BINARY_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+
+include(compiler_warnings)
+set_project_warnings(patchestry_settings)
+
+# sanitizer options if supported by compiler
+include(sanitizers)
+enable_sanitizers(patchestry_settings)
 
 add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(tools)
 
-# ---- Install rules ----
+option(PATCHESTRY_ENABLE_TESTING "Enable Test Builds" ON)
 
-if(NOT CMAKE_SKIP_INSTALL_RULES)
-  include(cmake/install-rules.cmake)
+if(PATCHESTRY_ENABLE_TESTING)
+  enable_testing()
+  add_subdirectory(test)
 endif()
-
-# ---- Developer mode ----
-
-if(NOT patchestry_DEVELOPER_MODE)
-  return()
-elseif(NOT PROJECT_IS_TOP_LEVEL)
-  message(
-    AUTHOR_WARNING "Developer mode is intended for developers of patchestry")
-endif()
-
-include(cmake/dev-mode.cmake)
