@@ -7,15 +7,6 @@
   },
   "configurePresets": [
     {
-      "name": "base",
-      "hidden": true,
-      "cacheVariables": {
-          "CMAKE_CONFIGURATION_TYPES": "Release;RelWithDebInfo;Debug",
-          "LLVM_EXTERNAL_LIT": "$env{LLVM_EXTERNAL_LIT}",
-          "CMAKE_PREFIX_PATH": "$env{CMAKE_PREFIX_PATH}"
-      }
-    },
-    {
       "name": "cmake-pedantic",
       "hidden": true,
       "warnings": {
@@ -31,169 +22,154 @@
       }
     },
     {
-      "name": "dev-mode",
-      "hidden": true,
+      "name": "default",
+      "displayName": "Default",
+      "binaryDir": "${sourceDir}/builds/${presetName}",
+      "generator": "Ninja Multi-Config",
       "inherits": "cmake-pedantic",
+      "toolchainFile": "${sourceDir}/cmake/lld.toolchain.cmake",
       "cacheVariables": {
-        "patchestry_DEVELOPER_MODE": "ON"
+          "CMAKE_CONFIGURATION_TYPES": "Release;RelWithDebInfo;Debug",
+          "CMAKE_PREFIX_PATH": "$env{CMAKE_PREFIX_PATH}"
       }
     },
     {
-        "name": "default",
-        "displayName": "Default",
-        "binaryDir": "${sourceDir}/builds/${presetName}",
-        "generator": "Ninja Multi-Config",
-        "toolchainFile": "${sourceDir}/cmake/lld.toolchain.cmake",
-        "cacheVariables": {
-            "CMAKE_CONFIGURATION_TYPES": "Release;RelWithDebInfo;Debug",
-            "CMAKE_PREFIX_PATH": "$env{CMAKE_PREFIX_PATH}"
-        }
-    },
-    {
-      "name": "cppcheck",
-      "hidden": true,
+      "name": "ci",
+      "displayName": "Configure Patchestry for CI",
+      "inherits": "default",
       "cacheVariables": {
-        "CMAKE_CXX_CPPCHECK": "cppcheck;--inline-suppr"
+          "ENABLE_SANITIZER_UNDEFINED_BEHAVIOR": "$env{ENABLE_SANITIZER_UNDEFINED_BEHAVIOR}",
+          "ENABLE_SANITIZER_ADDRESS": "$env{ENABLE_SANITIZER_ADDRESS}",
+          "CMAKE_VERBOSE_MAKEFILE": "True"
       }
-    },
-    {
-      "name": "clang-tidy",
-      "hidden": true,
-      "cacheVariables": {
-        "CMAKE_CXX_CLANG_TIDY": "$env{CMAKE_CXX_CLANG_TIDY};--header-filter=^${sourceDir}/source"
-      }
-    },
-    {
-      "name": "ci-std",
-      "description": "This preset makes sure the project actually builds with at least the specified standard",
-      "hidden": true,
-      "cacheVariables": {
-        "CMAKE_CXX_EXTENSIONS": "OFF",
-        "CMAKE_CXX_STANDARD": "23",
-        "CMAKE_CXX_STANDARD_REQUIRED": "ON"
-      }
-    },
-    {
-      "name": "flags-gcc-clang",
-      "description": "These flags are supported by both GCC and Clang",
-      "hidden": true,
-      "cacheVariables": {
-        "CMAKE_CXX_FLAGS": "-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -D_GLIBCXX_ASSERTIONS=1 -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wcast-qual -Wformat=2 -Wundef -Werror=float-equal -Wshadow -Wcast-align -Wunused -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wextra-semi -Woverloaded-virtual -Wnon-virtual-dtor -Wold-style-cast",
-        "CMAKE_EXE_LINKER_FLAGS": "-Wl,--allow-shlib-undefined,--as-needed,-z,noexecstack,-z,relro,-z,now,-z,nodlopen",
-        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--allow-shlib-undefined,--as-needed,-z,noexecstack,-z,relro,-z,now,-z,nodlopen"
-      }
-    },
-    {
-      "name": "flags-appleclang",
-      "hidden": true,
-      "cacheVariables": {
-        "CMAKE_CXX_FLAGS": "-fstack-protector-strong -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wcast-qual -Wformat=2 -Wundef -Werror=float-equal -Wshadow -Wcast-align -Wunused -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wextra-semi -Woverloaded-virtual -Wnon-virtual-dtor -Wold-style-cast"
-      }
-    },
-    {
-      "name": "flags-msvc",
-      "description": "Note that all the flags after /W4 are required for MSVC to conform to the language standard",
-      "hidden": true,
-      "cacheVariables": {
-        "CMAKE_CXX_FLAGS": "/sdl /guard:cf /utf-8 /diagnostics:caret /w14165 /w44242 /w44254 /w44263 /w34265 /w34287 /w44296 /w44365 /w44388 /w44464 /w14545 /w14546 /w14547 /w14549 /w14555 /w34619 /w34640 /w24826 /w14905 /w14906 /w14928 /w45038 /W4 /permissive- /volatile:iso /Zc:inline /Zc:preprocessor /Zc:enumTypes /Zc:lambda /Zc:__cplusplus /Zc:externConstexpr /Zc:throwingNew /EHsc",
-        "CMAKE_EXE_LINKER_FLAGS": "/machine:x64 /guard:cf"
-      }
-    },
-    {
-      "name": "ci-linux",
-      "generator": "Unix Makefiles",
-      "hidden": true,
-      "inherits": ["flags-gcc-clang", "ci-std", "base"],
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
-      }
-    },
-    {
-      "name": "ci-darwin",
-      "generator": "Unix Makefiles",
-      "hidden": true,
-      "inherits": ["flags-appleclang", "ci-std", "base"],
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
-      }
-    },
-    {
-      "name": "ci-win64",
-      "inherits": ["flags-msvc", "ci-std"],
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
-      "hidden": true
-    },
-    {
-      "name": "coverage-linux",
-      "binaryDir": "${sourceDir}/build/coverage",
-      "inherits": "ci-linux",
-      "hidden": true,
-      "cacheVariables": {
-        "ENABLE_COVERAGE": "ON",
-        "CMAKE_BUILD_TYPE": "Coverage",
-        "CMAKE_CXX_FLAGS_COVERAGE": "-Og -g --coverage",
-        "CMAKE_EXE_LINKER_FLAGS_COVERAGE": "--coverage",
-        "CMAKE_SHARED_LINKER_FLAGS_COVERAGE": "--coverage"
-      }
-    },
-    {
-      "name": "ci-coverage",
-      "inherits": ["coverage-linux", "dev-mode"],
-      "cacheVariables": {
-        "COVERAGE_HTML_COMMAND": ""
-      }
-    },
-    {
-      "name": "ci-sanitize",
-      "binaryDir": "${sourceDir}/build/sanitize",
-      "inherits": ["ci-linux", "dev-mode"],
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Sanitize",
-        "CMAKE_CXX_FLAGS_SANITIZE": "-U_FORTIFY_SOURCE -O2 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-common"
-      }
-    },
-    {
-      "name": "ci-build",
-      "binaryDir": "${sourceDir}/build",
-      "hidden": true
-    },
-    {
-      "name": "ci-macos",
-      "inherits": ["ci-build", "ci-darwin", "dev-mode"]
-    },
-    {
-      "name": "ci-ubuntu",
-      "inherits": ["ci-build", "ci-linux", "clang-tidy", "cppcheck", "dev-mode"]
-    },
-    {
-      "name": "ci-windows",
-      "inherits": ["ci-build", "ci-win64", "dev-mode"]
     }
   ],
   "buildPresets": [
     {
-        "name": "default",
-        "hidden": true,
-        "configurePreset": "default"
+      "name": "default",
+      "hidden": true,
+      "configurePreset": "default"
     },
     {
-        "name": "debug",
-        "configurePreset": "default",
-        "displayName": "Debug",
-        "configuration": "Debug"
+      "name": "debug",
+      "configurePreset": "default",
+      "displayName": "Debug",
+      "configuration": "Debug"
     },
     {
-        "name": "release",
-        "configurePreset": "default",
-        "displayName": "Release",
-        "configuration": "Release"
+      "name": "release",
+      "configurePreset": "default",
+      "displayName": "Release",
+      "configuration": "Release"
     },
     {
-        "name": "relwithdebinfo",
-        "configurePreset": "default",
-        "displayName": "RelWithDebInfo",
-        "configuration": "RelWithDebInfo"
+      "name": "relwithdebinfo",
+      "configurePreset": "default",
+      "displayName": "RelWithDebInfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci"
+    },
+    {
+      "name": "ci-release",
+      "configurePreset": "ci",
+      "displayName": "CI Release",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-debug",
+      "configurePreset": "ci",
+      "displayName": "CI Debug",
+      "configuration": "Debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-base",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "hidden": true,
+      "inherits": "test-base"
+    },
+    {
+      "name": "release",
+      "configurePreset": "default",
+      "inherits": "default",
+      "configuration": "Release"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "default",
+      "inherits": "default",
+      "configuration": "Debug"
+    },
+    {
+      "name": "relwithdebinfo",
+      "configurePreset": "default",
+      "inherits": "default",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+        "name": "ci",
+        "configurePreset": "ci",
+        "inherits": "test-base"
+    }
+  ],
+  "packagePresets": [
+    {
+        "name": "ci",
+        "configurePreset": "ci",
+        "generators": ["TGZ"],
+        "configFile": "${sourceDir}/builds/${presetName}/CPackConfig.cmake"
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "debug",
+      "steps": [
+          {
+            "type": "configure",
+            "name": "default"
+          },
+          {
+            "type": "build",
+            "name": "debug"
+          },
+          {
+            "type": "test",
+            "name": "debug"
+          }
+      ]
+    },
+    {
+      "name": "release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "default"
+        },
+        {
+          "type": "build",
+          "name": "release"
+        },
+        {
+          "type": "test",
+          "name": "release"
+        }
+      ]
     }
   ]
 }

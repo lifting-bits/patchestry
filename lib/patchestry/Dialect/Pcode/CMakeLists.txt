@@ -2,16 +2,18 @@
 # is licensed in accordance with the terms specified in the LICENSE file found
 # in the root directory of this source tree.
 
-add_mlir_dialect_library(
-  MLIRPcode
+add_mlir_dialect_library(MLIRPcode
   PcodeDialect.cpp
   PcodeOps.cpp
   PcodeTypes.cpp
+
   ADDITIONAL_HEADER_DIRS
-  ${PROJECT_SOURCE_DIR}/include/patchestry/Dialect/Pcode
+    ${PROJECT_SOURCE_DIR}/include/patchestry
   DEPENDS
-  MLIRPcodeIncGen
+    MLIRPcodeIncGen
   LINK_LIBS
+    patchestry_settings
   PUBLIC
-  MLIRIR
-  MLIRInferTypeOpInterface)
+    MLIRIR
+    MLIRInferTypeOpInterface
+)
