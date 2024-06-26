@@ -43,6 +43,7 @@
         "displayName": "Default",
         "binaryDir": "${sourceDir}/builds/${presetName}",
         "generator": "Ninja Multi-Config",
+        "toolchainFile": "${sourceDir}/cmake/lld.toolchain.cmake",
         "cacheVariables": {
             "CMAKE_CONFIGURATION_TYPES": "Release;RelWithDebInfo;Debug",
             "CMAKE_PREFIX_PATH": "$env{CMAKE_PREFIX_PATH}"
