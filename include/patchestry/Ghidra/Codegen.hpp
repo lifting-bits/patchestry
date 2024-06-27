@@ -19,6 +19,8 @@ PATCHESTRY_UNRELAX_WARNINGS
 
 #include "patchestry/Ghidra/Deserialize.hpp"
 
+#include "patchestry/Dialect/Pcode/PcodeOps.hpp"
+
 #include "patchestry/Util/Common.hpp"
 
 // NOLINTBEGIN(readability-identifier-naming)
@@ -87,9 +89,23 @@ namespace patchestry::ghidra {
 
         auto mk_varnode(const varnode_t &var) -> mlir_value;
         auto mk_pcode(string_view mnemonic, mlir_type result, values_ref inputs) -> mlir_operation;
-        auto mk_inst(string_view mnemonic) -> mlir_operation;
-        auto mk_block(string_view label) -> mlir_operation;
-        auto mk_func(string_view name) -> mlir_operation;
+
+        template< typename op_t, typename pcode_t >
+        auto mk_with_children(const pcode_t &obj) {
+            const mlir::OpBuilder::InsertionGuard guard(bld);
+            auto op = bld.create< op_t >(bld.getUnknownLoc(), obj.id());
+
+            if (obj.children().empty()) {
+                return op;
+            }
+
+            bld.createBlock(&op->getRegion(0));
+            for (const auto &child : obj.children()) {
+                visit(child);
+            }
+
+            return op;
+        }
 
         auto operator()([[maybe_unused]] const auto &arg) -> mlir_operation {
             assert(false && "Unexpected ghidra type.");
@@ -97,8 +113,17 @@ namespace patchestry::ghidra {
         }
 
         auto operator()(const pcode_t &pcode) -> mlir_operation;
-        auto operator()(const instruction_t &inst) -> mlir_operation;
-        auto operator()(const code_block_t &blk) -> mlir_operation;
-        auto operator()(const function_t &func) -> mlir_operation;
+        auto operator()(const instruction_t &inst) -> mlir_operation {
+            const memory_scope scope(memory);
+            return mk_with_children< pc::InstOp >(inst);
+        }
+
+        auto operator()(const code_block_t &blk) -> mlir_operation {
+            return mk_with_children< pc::BlockOp >(blk);
+        }
+
+        auto operator()(const function_t &func) -> mlir_operation {
+            return mk_with_children< pc::FuncOp >(func);
+        }
     };
 } // namespace patchestry::ghidra
