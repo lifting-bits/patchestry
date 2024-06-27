@@ -7,7 +7,6 @@
  */
 
 #include "patchestry/Ghidra/Codegen.hpp"
-#include "patchestry/Dialect/Pcode/PcodeOps.hpp"
 #include "patchestry/Dialect/Pcode/PcodeTypes.hpp"
 
 namespace patchestry::ghidra {
@@ -50,18 +49,6 @@ namespace patchestry::ghidra {
         assert(it != opcode_to_op.end());
 
         return bld.create(loc, it->second, inputs, { result });
-    }
-
-    auto cg::mk_inst(string_view mnemonic) -> mlir_operation {
-        return bld.create< pc::InstOp >(bld.getUnknownLoc(), mnemonic);
-    }
-
-    auto cg::mk_block(string_view label) -> mlir_operation {
-        return bld.create< pc::BlockOp >(bld.getUnknownLoc(), label);
-    }
-
-    auto cg::mk_func(string_view name) -> mlir_operation {
-        return bld.create< pc::FuncOp >(bld.getUnknownLoc(), name);
     }
 
     auto cg::get_type(const varnode_t &var) -> mlir_type {
@@ -141,53 +128,5 @@ namespace patchestry::ghidra {
         }
 
         return pcop;
-    }
-
-    auto cg::operator()(const instruction_t &inst) -> mlir_operation {
-        const mlir::OpBuilder::InsertionGuard guard(bld);
-        mlir_operation iop = mk_inst(inst.mnemonic);
-
-        if (inst.semantics.empty()) {
-            return iop;
-        }
-
-        const memory_scope scope(memory);
-
-        bld.createBlock(&iop->getRegion(0));
-        for (const auto &pcode : inst.semantics) {
-            visit(pcode);
-        }
-
-        return iop;
-    }
-
-    auto cg::operator()(const code_block_t &blk) -> mlir_operation {
-        const mlir::OpBuilder::InsertionGuard guard(bld);
-        mlir_operation bop = mk_block(blk.label);
-
-        if (blk.instructions.empty()) {
-            return bop;
-        }
-
-        bld.createBlock(&bop->getRegion(0));
-        for (const auto &inst : blk.instructions) {
-            visit(inst);
-        }
-        return bop;
-    }
-
-    auto cg::operator()(const function_t &func) -> mlir_operation {
-        const mlir::OpBuilder::InsertionGuard guard(bld);
-        mlir_operation fop = mk_func(func.name);
-
-        if (func.basic_blocks.empty()) {
-            return fop;
-        }
-
-        bld.createBlock(&fop->getRegion(0));
-        for (const auto &blk : func.basic_blocks) {
-            visit(blk);
-        }
-        return fop;
     }
 } // namespace patchestry::ghidra
