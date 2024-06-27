@@ -14,42 +14,42 @@ namespace patchestry::ghidra {
 
     using cg = mlir_codegen_visitor;
 
+    auto cg::create_translation_map() -> translation_map_t {
+
+        return {
+            { "COPY", op_name< pc::CopyOp >() },
+            { "POPCOUNT", op_name< pc::PopcountOp >() },
+
+            { "BOOL_NEGATE", op_name< pc::BoolNegateOp >() },
+
+            { "INT_LESS", op_name< pc::IntLessOp >() },
+            { "INT_EQUAL", op_name< pc::IntEqualOp >() },
+            { "INT_SLESS", op_name< pc::IntSLessOp >() },
+
+            { "INT_ADD", op_name< pc::IntAddOp >() },
+            { "INT_SUB", op_name< pc::IntSubOp >() },
+
+            { "INT_SBORROW", op_name< pc::IntSBorrowOp>() },
+            { "INT_AND", op_name< pc::IntAndOp >() },
+
+            { "BRANCH", op_name< pc::BranchOp >() },
+            { "CBRANCH", op_name< pc::CBranchOp >() },
+
+            { "CALL", op_name< pc::CallOp >() },
+            { "RETURN", op_name< pc::ReturnOp >() },
+
+            { "STORE", op_name< pc::StoreOp >() },
+            { "LOAD", op_name< pc::LoadOp >() }
+        };
+    }
+
     auto cg::mk_pcode(string_view mnemonic, mlir_type result, values_ref inputs) -> mlir_operation {
         auto loc = bld.getUnknownLoc();
 
-        auto mk_unary_op = [&]< typename OpTy > {
-            return bld.create< OpTy >(loc, result, inputs[0]);
-        };
+        auto it = opcode_to_op.find(mnemonic);
+        assert(it != opcode_to_op.end());
 
-        auto mk_bin_op = [&]< typename OpTy > {
-            return bld.create< OpTy >(loc, result, inputs[0], inputs[1]);
-        };
-
-        // clang-format off
-        if (mnemonic == "COPY")         { return mk_unary_op.template operator()< pc::CopyOp >(); }
-        if (mnemonic == "POPCOUNT")     { return mk_unary_op.template operator()< pc::PopcountOp >(); }
-        if (mnemonic == "BOOL_NEGATE")  { return mk_unary_op.template operator()< pc::BoolNegateOp >(); }
-
-        if (mnemonic == "INT_LESS")     { return mk_bin_op.template operator()< pc::IntLessOp >(); }
-        if (mnemonic == "INT_EQUAL")    { return mk_bin_op.template operator()< pc::IntEqualOp >(); }
-        if (mnemonic == "INT_SLESS")    { return mk_bin_op.template operator()< pc::IntSLessOp >(); }
-        if (mnemonic == "INT_ADD")      { return mk_bin_op.template operator()< pc::IntAddOp >(); }
-        if (mnemonic == "INT_SUB")      { return mk_bin_op.template operator()< pc::IntSubOp >(); }
-        if (mnemonic == "INT_SBORROW")  { return mk_bin_op.template operator()< pc::IntSBorrowOp >(); }
-        if (mnemonic == "INT_AND")      { return mk_bin_op.template operator()< pc::IntAndOp >(); }
-
-        if (mnemonic == "BRANCH")   { return bld.create< pc::BranchOp >(loc, inputs[0]); }
-        if (mnemonic == "CBRANCH")  { return bld.create< pc::CBranchOp >(loc, inputs[0], inputs[1]); }
-        if (mnemonic == "CALL")     { return bld.create< pc::CallOp >(loc, inputs[0]); }
-        if (mnemonic == "RETURN")   { return bld.create< pc::ReturnOp >(loc, inputs[0]); }
-
-        if (mnemonic == "STORE"){ return bld.create< pc::StoreOp >(loc, inputs[0], inputs[1], inputs[2]); }
-        if (mnemonic == "LOAD") { return bld.create< pc::LoadOp >(loc, result, inputs[0], inputs[1]); }
-        // clang-format on
-
-        assert(false && "Unknown pcode operation.");
-
-        return nullptr;
+        return bld.create(loc, it->second, inputs, { result });
     }
 
     auto cg::mk_inst(string_view mnemonic) -> mlir_operation {

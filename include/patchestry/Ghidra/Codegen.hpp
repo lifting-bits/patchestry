@@ -49,6 +49,9 @@ namespace patchestry::ghidra {
     {
         mlir_builder bld;
 
+        using translation_map_t = std::unordered_map< std::string_view, mlir::StringAttr >;
+        translation_map_t opcode_to_op;
+
         using string_view  = std::string_view;
 
         using values_ref   = llvm::ArrayRef< mlir_value >;
@@ -58,11 +61,20 @@ namespace patchestry::ghidra {
 
         memory_t memory;
 
-        explicit mlir_codegen_visitor(mlir::ModuleOp mod) : bld(mod) {
+        explicit mlir_codegen_visitor(mlir::ModuleOp mod)
+            : bld(mod), opcode_to_op(create_translation_map())
+        {
             assert(mod->getNumRegions() > 0 && "Module has no regions.");
             auto &reg = mod->getRegion(0);
             assert(reg.hasOneBlock() && "Region has unexpected blocks.");
             bld.setInsertionPointToStart(&*reg.begin());
+        }
+
+        translation_map_t create_translation_map();
+
+        template< typename op_t >
+        mlir::StringAttr op_name() {
+            return bld.getStringAttr(op_t::getOperationName());
         }
 
         auto visit(const deserialized_t &ref) -> mlir_operation { return std::visit(*this, ref); }
