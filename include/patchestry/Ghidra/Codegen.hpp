@@ -48,7 +48,6 @@ namespace patchestry::ghidra {
     struct mlir_codegen_visitor
     {
         mlir_builder bld;
-        mcontext_t *ctx;
 
         using string_view  = std::string_view;
 
@@ -59,7 +58,7 @@ namespace patchestry::ghidra {
 
         memory_t memory;
 
-        explicit mlir_codegen_visitor(mlir::ModuleOp mod) : bld(mod), ctx(bld.getContext()) {
+        explicit mlir_codegen_visitor(mlir::ModuleOp mod) : bld(mod) {
             assert(mod->getNumRegions() > 0 && "Module has no regions.");
             auto &reg = mod->getRegion(0);
             assert(reg.hasOneBlock() && "Region has unexpected blocks.");
