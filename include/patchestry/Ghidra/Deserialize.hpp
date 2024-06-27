@@ -61,6 +61,9 @@ namespace patchestry::ghidra {
         std::vector< pcode_t > semantics;
 
         static auto from_json(const json_obj &inst_obj) -> expected< instruction_t >;
+
+        const auto &children() const { return semantics; }
+        const auto &id() const { return mnemonic; }
     };
 
     struct code_block_t
@@ -72,6 +75,9 @@ namespace patchestry::ghidra {
         std::vector< instruction_t > instructions;
 
         static auto from_json(const json_obj &block_obj) -> expected< code_block_t >;
+
+        const auto &children() const { return instructions; }
+        const auto &id() const { return label; }
     };
 
     struct function_t
@@ -83,6 +89,9 @@ namespace patchestry::ghidra {
         std::vector< code_block_t > basic_blocks;
 
         static auto from_json(const json_obj &func_obj) -> expected< function_t >;
+
+        const auto &children() const { return basic_blocks; }
+        const auto &id() const { return name; }
     };
 
     using deserialized_t =
