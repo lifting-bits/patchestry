@@ -14,7 +14,7 @@ namespace patchestry::ghidra {
 
     using cg = mlir_codegen_visitor;
 
-    auto cg::mk_pcode(string_view mnemonic, type_t result, values_ref inputs) -> operation_t {
+    auto cg::mk_pcode(string_view mnemonic, mlir_type result, values_ref inputs) -> mlir_operation {
         auto loc = bld.getUnknownLoc();
 
         auto mk_unary_op = [&]< typename OpTy > {
@@ -29,7 +29,7 @@ namespace patchestry::ghidra {
         if (mnemonic == "COPY")         { return mk_unary_op.template operator()< pc::CopyOp >(); }
         if (mnemonic == "POPCOUNT")     { return mk_unary_op.template operator()< pc::PopcountOp >(); }
         if (mnemonic == "BOOL_NEGATE")  { return mk_unary_op.template operator()< pc::BoolNegateOp >(); }
-        
+
         if (mnemonic == "INT_LESS")     { return mk_bin_op.template operator()< pc::IntLessOp >(); }
         if (mnemonic == "INT_EQUAL")    { return mk_bin_op.template operator()< pc::IntEqualOp >(); }
         if (mnemonic == "INT_SLESS")    { return mk_bin_op.template operator()< pc::IntSLessOp >(); }
@@ -37,12 +37,12 @@ namespace patchestry::ghidra {
         if (mnemonic == "INT_SUB")      { return mk_bin_op.template operator()< pc::IntSubOp >(); }
         if (mnemonic == "INT_SBORROW")  { return mk_bin_op.template operator()< pc::IntSBorrowOp >(); }
         if (mnemonic == "INT_AND")      { return mk_bin_op.template operator()< pc::IntAndOp >(); }
-        
+
         if (mnemonic == "BRANCH")   { return bld.create< pc::BranchOp >(loc, inputs[0]); }
         if (mnemonic == "CBRANCH")  { return bld.create< pc::CBranchOp >(loc, inputs[0], inputs[1]); }
         if (mnemonic == "CALL")     { return bld.create< pc::CallOp >(loc, inputs[0]); }
         if (mnemonic == "RETURN")   { return bld.create< pc::ReturnOp >(loc, inputs[0]); }
-        
+
         if (mnemonic == "STORE"){ return bld.create< pc::StoreOp >(loc, inputs[0], inputs[1], inputs[2]); }
         if (mnemonic == "LOAD") { return bld.create< pc::LoadOp >(loc, result, inputs[0], inputs[1]); }
         // clang-format on
@@ -52,19 +52,19 @@ namespace patchestry::ghidra {
         return nullptr;
     }
 
-    auto cg::mk_inst(string_view mnemonic) -> operation_t {
+    auto cg::mk_inst(string_view mnemonic) -> mlir_operation {
         return bld.create< pc::InstOp >(bld.getUnknownLoc(), mnemonic);
     }
 
-    auto cg::mk_block(string_view label) -> operation_t {
+    auto cg::mk_block(string_view label) -> mlir_operation {
         return bld.create< pc::BlockOp >(bld.getUnknownLoc(), label);
     }
 
-    auto cg::mk_func(string_view name) -> operation_t {
+    auto cg::mk_func(string_view name) -> mlir_operation {
         return bld.create< pc::FuncOp >(bld.getUnknownLoc(), name);
     }
 
-    auto cg::get_type(const varnode_t &var) -> type_t {
+    auto cg::get_type(const varnode_t &var) -> mlir_type {
         auto adsp = var.address_space;
 
         if (adsp == "unique" || adsp == "const") {
@@ -83,8 +83,8 @@ namespace patchestry::ghidra {
         return bld.getType< pc::VarType >();
     }
 
-    auto cg::mk_varnode(const varnode_t &var) -> value_t {
-        if (value_t val = memory.lookup({ var.address_space, var.address })) {
+    auto cg::mk_varnode(const varnode_t &var) -> mlir_value {
+        if (auto val = memory.lookup({ var.address_space, var.address })) {
             return val;
         }
 
@@ -120,14 +120,14 @@ namespace patchestry::ghidra {
         return mk_var_op.template operator()< pc::VarOp >();
     }
 
-    auto cg::operator()(const pcode_t &pcode) -> operation_t {
+    auto cg::operator()(const pcode_t &pcode) -> mlir_operation {
         std::vector< mlir::Value > inputs;
         inputs.reserve(pcode.inputs.size());
         for (const auto &input : pcode.inputs) {
             inputs.push_back(mk_varnode(input));
         }
 
-        operation_t pcop = mk_pcode(pcode.mnemonic, get_type(pcode.output), inputs);
+        mlir_operation pcop = mk_pcode(pcode.mnemonic, get_type(pcode.output), inputs);
 
         if (!pcode.output) {
             return pcop;
@@ -143,9 +143,9 @@ namespace patchestry::ghidra {
         return pcop;
     }
 
-    auto cg::operator()(const instruction_t &inst) -> operation_t {
+    auto cg::operator()(const instruction_t &inst) -> mlir_operation {
         const mlir::OpBuilder::InsertionGuard guard(bld);
-        operation_t iop = mk_inst(inst.mnemonic);
+        mlir_operation iop = mk_inst(inst.mnemonic);
 
         if (inst.semantics.empty()) {
             return iop;
@@ -161,9 +161,9 @@ namespace patchestry::ghidra {
         return iop;
     }
 
-    auto cg::operator()(const code_block_t &blk) -> operation_t {
+    auto cg::operator()(const code_block_t &blk) -> mlir_operation {
         const mlir::OpBuilder::InsertionGuard guard(bld);
-        operation_t bop = mk_block(blk.label);
+        mlir_operation bop = mk_block(blk.label);
 
         if (blk.instructions.empty()) {
             return bop;
@@ -176,9 +176,9 @@ namespace patchestry::ghidra {
         return bop;
     }
 
-    auto cg::operator()(const function_t &func) -> operation_t {
+    auto cg::operator()(const function_t &func) -> mlir_operation {
         const mlir::OpBuilder::InsertionGuard guard(bld);
-        operation_t fop = mk_func(func.name);
+        mlir_operation fop = mk_func(func.name);
 
         if (func.basic_blocks.empty()) {
             return fop;

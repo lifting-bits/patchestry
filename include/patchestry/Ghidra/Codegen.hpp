@@ -19,6 +19,8 @@ PATCHESTRY_UNRELAX_WARNINGS
 
 #include "patchestry/Ghidra/Deserialize.hpp"
 
+#include "patchestry/Util/Common.hpp"
+
 // NOLINTBEGIN(readability-identifier-naming)
 
 namespace llvm {
@@ -45,17 +47,15 @@ namespace patchestry::ghidra {
 
     struct mlir_codegen_visitor
     {
-        mlir::OpBuilder bld;
-        mlir::MLIRContext *ctx;
+        mlir_builder bld;
+        mcontext_t *ctx;
 
-        using operation_t  = mlir::Operation *;
-        using type_t       = mlir::Type;
-        using value_t      = mlir::Value;
         using string_view  = std::string_view;
-        using values_ref   = llvm::ArrayRef< value_t >;
+
+        using values_ref   = llvm::ArrayRef< mlir_value >;
         using address_t    = std::pair< std::string, int64_t >;
-        using memory_t     = llvm::ScopedHashTable< address_t, value_t >;
-        using memory_scope = llvm::ScopedHashTableScope< address_t, value_t >;
+        using memory_t     = llvm::ScopedHashTable< address_t, mlir_value >;
+        using memory_scope = llvm::ScopedHashTableScope< address_t, mlir_value >;
 
         memory_t memory;
 
@@ -66,28 +66,28 @@ namespace patchestry::ghidra {
             bld.setInsertionPointToStart(&*reg.begin());
         }
 
-        auto visit(const deserialized_t &ref) -> operation_t { return std::visit(*this, ref); }
+        auto visit(const deserialized_t &ref) -> mlir_operation { return std::visit(*this, ref); }
 
-        auto get_type(const varnode_t &var) -> type_t;
+        auto get_type(const varnode_t &var) -> mlir_type;
 
-        auto get_type(const std::optional< varnode_t > &var) -> type_t {
+        auto get_type(const std::optional< varnode_t > &var) -> mlir_type {
             return var ? get_type(*var) : bld.getNoneType();
         }
 
-        auto mk_varnode(const varnode_t &var) -> value_t;
-        auto mk_pcode(string_view mnemonic, type_t result, values_ref inputs) -> operation_t;
-        auto mk_inst(string_view mnemonic) -> operation_t;
-        auto mk_block(string_view label) -> operation_t;
-        auto mk_func(string_view name) -> operation_t;
+        auto mk_varnode(const varnode_t &var) -> mlir_value;
+        auto mk_pcode(string_view mnemonic, mlir_type result, values_ref inputs) -> mlir_operation;
+        auto mk_inst(string_view mnemonic) -> mlir_operation;
+        auto mk_block(string_view label) -> mlir_operation;
+        auto mk_func(string_view name) -> mlir_operation;
 
-        auto operator()([[maybe_unused]] const auto &arg) -> operation_t {
+        auto operator()([[maybe_unused]] const auto &arg) -> mlir_operation {
             assert(false && "Unexpected ghidra type.");
             return nullptr;
         }
 
-        auto operator()(const pcode_t &pcode) -> operation_t;
-        auto operator()(const instruction_t &inst) -> operation_t;
-        auto operator()(const code_block_t &blk) -> operation_t;
-        auto operator()(const function_t &func) -> operation_t;
+        auto operator()(const pcode_t &pcode) -> mlir_operation;
+        auto operator()(const instruction_t &inst) -> mlir_operation;
+        auto operator()(const code_block_t &blk) -> mlir_operation;
+        auto operator()(const function_t &func) -> mlir_operation;
     };
 } // namespace patchestry::ghidra
