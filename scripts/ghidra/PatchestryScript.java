@@ -45,7 +45,7 @@ public class PatchestryScript extends GhidraScript {
             if (node == null) {
                 return nullValue();
             }
-            
+
             beginArray();
 
             if (node.isConstant())
@@ -58,10 +58,10 @@ public class PatchestryScript extends GhidraScript {
                 value("ram");
             else
                 throw new Exception("Unknown Varnode kind.");
-            
+
             value(node.getOffset());
             value(node.getSize());
-            
+
             return endArray();
         }
 
