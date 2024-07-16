@@ -51,10 +51,6 @@ Create a project and import a binary file.
 
 Run `PatchestryScript.java`.
 
-# Contributing
-
-See the [CONTRIBUTING](CONTRIBUTING.md) document.
-
 # Licensing
 
 Patchestry is licensed according to the [Apache 2.0](LICENSE) license. Patchestry links against and uses Clang and LLVM APIs. Clang is also licensed under Apache 2.0, with [LLVM exceptions](https://github.com/llvm/llvm-project/blob/main/clang/LICENSE.TXT).
