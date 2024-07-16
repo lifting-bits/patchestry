@@ -8,7 +8,29 @@ This is the patchestry project.
 
 # Building and installing
 
-See the [BUILDING](BUILDING.md) document.
+## Dependencies
+
+| Name | Version |
+| ---- | ------- |
+| [CMake](https://cmake.org/) | >= 3.25.0 |
+| [LLVM](http://llvm.org/) | == 18 |
+
+## Ubuntu 22.04
+
+Optionally (re-)install dependecies from their respective official sources.
+
+```sh
+sudo bash .devcontainer/reinstall-cmake.sh "3.29.2"
+sudo bash .devcontainer/install-llvm.sh "18" all
+```
+
+With dependecies installed, we can build in `build/` in the project root. 
+```sh
+# Assuming `/usr/lib/llvm-18/` contains an llvm-18 installation.
+cmake --preset default -DCMAKE_PREFIX_PATH=/usr/lib/llvm-18/lib/cmake/
+# Valid user presets are `debug`, `release`, `relwithdebinfo`.
+cmake --build --preset=debug
+```
 
 # Getting Ghidra
 
