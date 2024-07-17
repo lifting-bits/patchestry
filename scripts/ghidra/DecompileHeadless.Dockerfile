@@ -1,13 +1,13 @@
-FROM openjdk:23-jdk-slim as base
+FROM eclipse-temurin:17 AS base
 
-FROM base as build
+FROM base AS build
 
 # Set environment variables for Ghidra
-ENV GHIDRA_VERSION 11.1.2
-ENV GHIDRA_RELEASE_TAG 20240709
-ENV GHIDRA_PACKAGE ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_RELEASE_TAG}
-ENV GHIDRA_SHA256 219ec130b901645779948feeb7cc86f131dd2da6c36284cf538c3a7f3d44b588
-ENV GHIDRA_REPOSITORY https://github.com/NationalSecurityAgency/ghidra
+ENV GHIDRA_VERSION=11.1.2
+ENV GHIDRA_RELEASE_TAG=20240709
+ENV GHIDRA_PACKAGE=ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_RELEASE_TAG}
+ENV GHIDRA_SHA256=219ec130b901645779948feeb7cc86f131dd2da6c36284cf538c3a7f3d44b588
+ENV GHIDRA_REPOSITORY=https://github.com/NationalSecurityAgency/ghidra
 
 # Update and install necessary packages
 RUN apt-get update && apt-get install -y \
@@ -31,7 +31,7 @@ RUN unzip /tmp/ghidra.zip -d /tmp && \
 RUN apt-get purge -y --auto-remove wget ca-certificates unzip && \
     apt-get clean
 
-FROM base as runtime
+FROM base AS runtime
 
 WORKDIR /ghidra
 
@@ -62,10 +62,10 @@ WORKDIR /home/user/
 COPY .dockerignore .dockerignore
 
 # Set environment variable for Ghidra home directory
-ENV GHIDRA_HOME /ghidra
-ENV GHIDRA_SCRIPTS  ${GHIDRA_HOME}/Ghidra/Features/Decompiler/ghidra_scripts
-ENV GHIDRA_PROJECTS ${GHIDRA_HOME}/projects
-ENV GHIDRA_HEADLESS ${GHIDRA_HOME}/support/analyzeHeadless
+ENV GHIDRA_HOME=/ghidra
+ENV GHIDRA_SCRIPTS=${GHIDRA_HOME}/Ghidra/Features/Decompiler/ghidra_scripts
+ENV GHIDRA_PROJECTS=${GHIDRA_HOME}/projects
+ENV GHIDRA_HEADLESS=${GHIDRA_HOME}/support/analyzeHeadless
 
 # Set the entrypoint
 ENTRYPOINT ["/ghidra/decompile.sh"]
