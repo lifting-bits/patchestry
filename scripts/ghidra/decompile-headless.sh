@@ -18,6 +18,11 @@ FUNCTION_NAME=$2
 # Create docker container and run the decompilation
 docker build -t trailofbits/patchestry-decompilation:latest -f DecompileHeadless.Dockerfile .
 
+if [ $? -ne 0 ]; then
+    echo "Docker build failed"
+    exit 1
+fi
+
 docker run -v $FILE_PATH:/input \
     -v DecompileHeadless.java://ghidra/Ghidra/Features/Decompiler/ghidra_scripts/DecompileHeadless.java \
     trailofbits/patchestry-decompilation:latest \
