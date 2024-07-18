@@ -25,6 +25,5 @@ fi
 
 docker run --rm \
     -v $FILE_PATH:/input \
-    -v DecompileHeadless.java://ghidra/Ghidra/Features/Decompiler/ghidra_scripts/DecompileHeadless.java \
     trailofbits/patchestry-decompilation:latest \
     /input $FUNCTION_NAME

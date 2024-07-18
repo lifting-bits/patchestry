@@ -33,24 +33,8 @@ RUN apt-get purge -y --auto-remove wget ca-certificates unzip && \
 
 FROM base AS runtime
 
-WORKDIR /ghidra
-
-# Copy Ghidra from the build stage
-COPY --from=build /ghidra /ghidra
-
-# Create projects directory
-RUN mkdir /ghidra/projects
-
-# Add a user with no login shell and no login capabilities, then change ownership of /ghidra
-RUN adduser --shell /sbin/nologin --disabled-login --gecos "" user && \
-    chown -R user:user /ghidra
-
-# Copy the Java and script files into the appropriate directories
-# COPY DecompileHeadless.java /ghidra/Ghidra/Features/Decompiler/ghidra_scripts/DecompileHeadless.java
-COPY decompile.sh /ghidra/decompile.sh
-
-# Make the decompile script executable
-RUN chmod +x /ghidra/decompile.sh
+# Add a user with no login shell and no login capabilities
+RUN adduser --shell /sbin/nologin --disabled-login --gecos "" user
 
 # Switch to the newly created user
 USER user
@@ -58,14 +42,29 @@ USER user
 # Set working directory for the user
 WORKDIR /home/user/
 
+# Copy Ghidra from the build stage
+COPY --from=build /ghidra ghidra
+
+# Create projects and scripts directory
+RUN mkdir ghidra_projects ghidra_scripts
+
+# Copy the Java and script files into the appropriate directories
+COPY DecompileHeadless.java ghidra_scripts/
+COPY decompile.sh decompile.sh
+
+# Make the decompile script executable
+USER root
+RUN chmod +x decompile.sh
+USER user
+
 # Copy the .dockerignore file (if necessary)
 COPY .dockerignore .dockerignore
 
 # Set environment variable for Ghidra home directory
-ENV GHIDRA_HOME=/ghidra
-ENV GHIDRA_SCRIPTS=${GHIDRA_HOME}/Ghidra/Features/Decompiler/ghidra_scripts
-ENV GHIDRA_PROJECTS=${GHIDRA_HOME}/projects
+ENV GHIDRA_HOME=/home/user/ghidra
+ENV GHIDRA_SCRIPTS=/home/user/ghidra_scripts
+ENV GHIDRA_PROJECTS=/home/user/ghidra_projects
 ENV GHIDRA_HEADLESS=${GHIDRA_HOME}/support/analyzeHeadless
 
 # Set the entrypoint
-ENTRYPOINT ["/ghidra/decompile.sh"]
+ENTRYPOINT ["/home/user/decompile.sh"]
