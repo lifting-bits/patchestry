@@ -23,7 +23,8 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-docker run -v $FILE_PATH:/input \
+docker run --rm \
+    -v $FILE_PATH:/input \
     -v DecompileHeadless.java://ghidra/Ghidra/Features/Decompiler/ghidra_scripts/DecompileHeadless.java \
     trailofbits/patchestry-decompilation:latest \
     /input $FUNCTION_NAME
