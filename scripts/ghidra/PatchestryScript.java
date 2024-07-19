@@ -22,7 +22,7 @@ import ghidra.program.model.pcode.Varnode;
 import com.google.gson.stream.JsonWriter;
 
 import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.lang.ProcessBuilder;
 
@@ -109,15 +109,24 @@ public class PatchestryScript extends GhidraScript {
         }
     }
 
+    private void serializeToFile(Path file, Function function) throws Exception {
+        final var serializer = new PcodeSerializer(Files.newBufferedWriter(file));
+        println("Serializing function: " + function.getName() + " @ " + function.getEntryPoint());
+        serializer.serialize(function).close();
+    }
+    
     private void runHeadless() throws Exception {
         final var args = getScriptArgs();
-        if (args.length != 1) {
+        if (args.length != 2) {
             println("Usage:");
             println("\tFUNCTION_NAME");
+            println("\tOUTPUT_FILE");
             return;
         }
         
         final var functionName = args[0];
+        final var outputPath = args[1];
+        
         final var functions = getGlobalFunctions(functionName);
         if (functions.isEmpty()) {
             println("Function not found: " + functionName);
@@ -128,30 +137,27 @@ public class PatchestryScript extends GhidraScript {
             println("Found more than one function named: " + functionName);
         }
 
-        final var function = functions.get(0);
-        final var json = Files.createFile(Paths.get("patchestry.json"));
-        final var serializer = new PcodeSerializer(Files.newBufferedWriter(json));
-        println("Serializing function: " + functionName + " @ " + function.getEntryPoint());
-        serializer.serialize(function).close();
+        serializeToFile(Path.of(outputPath), functions.get(0));
     }
 
     private void runGUI() throws Exception {
         final var curFunction = getFunctionContaining(currentAddress);
-        final var pInputPath = Files.createTempFile(curFunction.getName() + '.', ".patchestry.json");
-        final var pOutputPath = Files.createTempFile(curFunction.getName() + '.', ".patchestry.out");
-        final var pBinaryPath = "patchestry";
+        final var functionName = curFunction.getName();
+        final var jsonPath = Files.createTempFile(functionName + '.', ".patchestry.json");
+        
+        serializeToFile(jsonPath, curFunction);
 
-        final var serializer = new PcodeSerializer(Files.newBufferedWriter(pInputPath));
-        serializer.serialize(curFunction).close();
-
+        final var mlirPath = Files.createTempFile(functionName + '.', ".patchestry.out");
+        final var binaryPath = "patchestry";
+        
         final var cmd = new ArrayList<String>();
-        cmd.add(pBinaryPath);
-        cmd.add(pInputPath.toString());
-        cmd.add(pOutputPath.toString());
+        cmd.add(binaryPath);
+        cmd.add(jsonPath.toString());
+        cmd.add(mlirPath.toString());
         println("Calling: " + cmd.toString());
         new ProcessBuilder(cmd).inheritIO().start().waitFor();
 
-        println(Files.readString(pOutputPath));
+        println(Files.readString(mlirPath));
     }
 
     public void run() throws Exception {

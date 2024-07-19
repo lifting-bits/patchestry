@@ -7,13 +7,14 @@
 # the LICENSE file found in the root directory of this source tree.
 #
 
-if [ "$#" -lt 1 ]; then
-    echo "Usage: $0 <file_path> [<function_name>]"
+if [ "$#" -lt 3 ]; then
+    echo "Usage: $0 <input_file> <function_name> <output_file>"
     exit 1
 fi
 
-FILE_PATH=$1
+INPUT_PATH=$1
 FUNCTION_NAME=$2
+OUTPUT_PATH=$3
 
 # Create docker container and run the decompilation
 docker build -t trailofbits/patchestry-decompilation:latest -f DecompileHeadless.Dockerfile .
@@ -23,7 +24,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Make sure $OUTPUT_PATH exists so that it gets properly mounted
+touch $OUTPUT_PATH
+
 docker run --rm \
-    -v $FILE_PATH:/input \
+    -v $INPUT_PATH:/input \
+    -v $OUTPUT_PATH:/output \
     trailofbits/patchestry-decompilation:latest \
-    /input $FUNCTION_NAME
+    /input $FUNCTION_NAME /output
