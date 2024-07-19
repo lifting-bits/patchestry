@@ -21,7 +21,7 @@ FUNCTION_NAME=$2
 ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
     -readOnly -deleteProject \
     -import $FILE_PATH \
-    -postScript DecompileHeadless.java \
+    -postScript PatchestryScript.java \
     $FUNCTION_NAME
 
 # Check if the decompile script was successful

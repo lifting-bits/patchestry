@@ -22,6 +22,7 @@ import ghidra.program.model.pcode.Varnode;
 import com.google.gson.stream.JsonWriter;
 
 import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.lang.ProcessBuilder;
 
@@ -108,7 +109,33 @@ public class PatchestryScript extends GhidraScript {
         }
     }
 
-    public void run() throws Exception {
+    private void runHeadless() throws Exception {
+        final var args = getScriptArgs();
+        if (args.length != 1) {
+            println("Usage:");
+            println("\tFUNCTION_NAME");
+            return;
+        }
+        
+        final var functionName = args[0];
+        final var functions = getGlobalFunctions(functionName);
+        if (functions.isEmpty()) {
+            println("Function not found: " + functionName);
+            return;
+        }
+
+        if (functions.size() > 1) {
+            println("Found more than one function named: " + functionName);
+        }
+
+        final var function = functions.get(0);
+        final var json = Files.createFile(Paths.get("patchestry.json"));
+        final var serializer = new PcodeSerializer(Files.newBufferedWriter(json));
+        println("Serializing function: " + functionName + " @ " + function.getEntryPoint());
+        serializer.serialize(function).close();
+    }
+
+    private void runGUI() throws Exception {
         final var curFunction = getFunctionContaining(currentAddress);
         final var pInputPath = Files.createTempFile(curFunction.getName() + '.', ".patchestry.json");
         final var pOutputPath = Files.createTempFile(curFunction.getName() + '.', ".patchestry.out");
@@ -125,5 +152,13 @@ public class PatchestryScript extends GhidraScript {
         new ProcessBuilder(cmd).inheritIO().start().waitFor();
 
         println(Files.readString(pOutputPath));
+    }
+
+    public void run() throws Exception {
+        if (isRunningHeadless()) {
+            runHeadless();
+        } else {
+            runGUI();
+        }
     }
 }

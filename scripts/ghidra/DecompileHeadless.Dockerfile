@@ -49,7 +49,7 @@ COPY --from=build /ghidra ghidra
 RUN mkdir ghidra_projects ghidra_scripts
 
 # Copy the Java and script files into the appropriate directories
-COPY DecompileHeadless.java ghidra_scripts/
+COPY PatchestryScript.java ghidra_scripts/
 COPY decompile.sh decompile.sh
 
 # Make the decompile script executable
