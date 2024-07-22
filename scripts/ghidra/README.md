@@ -1,3 +1,3 @@
 ```
-./decompile-headless.sh <binary> <function-name>
+./decompile-headless.sh <binary> <function-name> <output-file>
 ```
