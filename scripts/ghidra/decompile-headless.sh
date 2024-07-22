@@ -15,6 +15,7 @@ fi
 INPUT_PATH=$1
 FUNCTION_NAME=$2
 OUTPUT_PATH=$3
+TMP_OUTPUT_PATH="/tmp/patchestry.out.json"
 
 # Create docker container and run the decompilation
 docker build -t trailofbits/patchestry-decompilation:latest -f DecompileHeadless.Dockerfile .
@@ -24,11 +25,13 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Make sure $OUTPUT_PATH exists so that it gets properly mounted
-touch $OUTPUT_PATH
+# Make sure $TMP_OUTPUT_PATH exists so that it gets properly mounted
+touch $TMP_OUTPUT_PATH
 
 docker run --rm \
     -v $INPUT_PATH:/input \
-    -v $OUTPUT_PATH:/output \
+    -v $TMP_OUTPUT_PATH:/output \
     trailofbits/patchestry-decompilation:latest \
     /input $FUNCTION_NAME /output
+
+mv $TMP_OUTPUT_PATH $OUTPUT_PATH
