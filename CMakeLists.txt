@@ -116,9 +116,6 @@ else()
   )
 endif()
 
-add_custom_target(patchestry-doc)
-
-include(AddPatchestry)
 add_library(patchestry_settings INTERFACE)
 
 target_include_directories(patchestry_settings INTERFACE
