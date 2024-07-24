@@ -6,6 +6,8 @@ nav:
     - Build & Run: GettingStarted/build.md
     - Ghidra Integration: GettingStarted/ghidra.md
     - How to contribute: CONTRIBUTING.md
+  - Dialects:
+    - Pcode: dialects/Pcode/Pcode.md
   - Benchmarks:
   - About:
     - 'License': 'statement.md'
