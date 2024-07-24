@@ -8,13 +8,7 @@
 
 name: "Pre Release"
 
-on:
-  workflow_run:
-    workflows: ["Build"]
-    types:
-      - completed
-    branches:
-      - "master"
+on: workflow_dispatch
 
 permissions: write-all
 
