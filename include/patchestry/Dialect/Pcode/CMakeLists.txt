@@ -3,3 +3,4 @@
 # in the root directory of this source tree.
 
 add_mlir_dialect(Pcode pc)
+add_mlir_doc(Pcode PcodeDialect Dialects/ -gen-dialect-doc -dialect=pc)
