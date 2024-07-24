@@ -6,73 +6,10 @@
 
 This is the patchestry project.
 
-# Building and installing
-
-## Dependencies
-
-| Name | Version |
-| ---- | ------- |
-| [CMake](https://cmake.org/) | >= 3.25.0 |
-| [LLVM](http://llvm.org/) | == 18 |
-
-## Ubuntu 22.04
-
-Optionally (re-)install dependecies from their respective official sources.
-
-```sh
-sudo bash .devcontainer/reinstall-cmake.sh "3.29.2"
-sudo bash .devcontainer/install-llvm.sh "18" all
-```
-
-With dependecies installed, we can build in `build/` in the project root. 
-```sh
-# Assuming `/usr/lib/llvm-18/` contains an llvm-18 installation.
-cmake --preset default -DCMAKE_PREFIX_PATH=/usr/lib/llvm-18/lib/cmake/
-# Valid user presets are `debug`, `release`, `relwithdebinfo`.
-cmake --build --preset=debug
-```
-
-# Getting Ghidra
-
-Get Java JDK (x64)
-
-```shell
-wget -c https://download.oracle.com/java/22/latest/jdk-22_linux-x64_bin.tar.gz -O jdk.tar.gz
-tar xvf jdk.tar.gz
-mv jdk-22.0.1 ~/jdk
-echo "export PATH=\$PATH:~/jdk/bin" >> ~/.bashrc
-```
-
-Get Ghidra
-```shell
-wget -c https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.1.1_build/ghidra_11.1.1_PUBLIC_20240614.zip -O ghidra.zip
-unzip ghidra.zip
-mv ghidra_11.1.1_PUBLIC ~/ghidra
-```
-
-# Installing Ghidra Scripts
-
-Link `ghidra_scripts` directory to `$HOME`. We assume that `./patchestry` contains the cloned repository.
-```shell
-ln -s patchestry/ghidra_scripts ~
-```
-
-# Running patchestry via Ghidra GUI
-
-Make sure patchestry is available via PATH
-```shell
-patchestry 
-```
-
-Start Ghidra GUI
-```shell
-~/ghidra/ghidraRun
-```
-
-Create a project and import a binary file.
-
-Run `PatchestryScript.java`.
+For further information check [lifting-bits.github.io/patchestry/](https://lifting-bits.github.io/patchestry/).
 
 # Licensing
 
 Patchestry is licensed according to the [Apache 2.0](LICENSE) license. Patchestry links against and uses Clang and LLVM APIs. Clang is also licensed under Apache 2.0, with [LLVM exceptions](https://github.com/llvm/llvm-project/blob/main/clang/LICENSE.TXT).
+
+This research was developed with funding from the Advanced Research Projects Agency for Health (ARPA-H). The views, opinions and/or findings expressed are those of the author and should not be interpreted as representing the official views or policies of the Department of Defense or the U.S. Government.
