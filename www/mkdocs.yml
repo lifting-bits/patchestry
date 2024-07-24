@@ -1,4 +1,4 @@
-site_name: "Patchestry: MLIR-based binary patching framework"
+site_name: "Patchestry"
 repo_url: https://github.com/lifting-bits/patchestry
 nav:
   - Introduction: README.md
@@ -7,8 +7,7 @@ nav:
     - Ghidra Integration: GettingStarted/ghidra.md
     - How to contribute: CONTRIBUTING.md
   - Dialects:
-    - Pcode: dialects/Pcode/Pcode.md
-  - Benchmarks:
+    - Pcode: Dialects/Pcode.md
   - About:
     - 'License': 'statement.md'
 

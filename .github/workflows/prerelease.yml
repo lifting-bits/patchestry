@@ -9,12 +9,12 @@
 name: "Pre Release"
 
 on:
-  workflow_run:
-    workflows: ["Build"]
-    types:
-      - completed
-    branches:
-      - "master"
+    workflow_run:
+      workflows: ["Build"]
+      types:
+        - completed
+      branches:
+        - "main"
 
 permissions: write-all
 
