@@ -39,7 +39,7 @@ cp -rv $(pwd)/LICENSE $dst/docs
 cp -rv $(pwd)/CONTRIBUTING.md $dst/docs
 
 # Setup auto-generated docs
-cp -rv $build/docs $dst/docs/dialects
+cp -rv $build/docs $dst
 
 # Setup site assets
 cp -rv $(pwd)/www/assets $dst
