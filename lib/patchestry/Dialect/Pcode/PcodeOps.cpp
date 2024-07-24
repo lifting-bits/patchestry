@@ -6,20 +6,13 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "patchestry/Util/Warnings.hpp"
-
-PATCHESTRY_RELAX_WARNINGS
 #include <mlir/IR/OpImplementation.h>
-PATCHESTRY_UNRELAX_WARNINGS
 
 #include "patchestry/Dialect/Pcode/PcodeOps.hpp"
 
-PATCHESTRY_RELAX_WARNINGS
 #define GET_OP_CLASSES
 #include "patchestry/Dialect/Pcode/Pcode.cpp.inc"
 
 auto patchestry::pc::ConstOp::fold([[maybe_unused]] FoldAdaptor adaptor) -> mlir::OpFoldResult {
     return {};
 }
-
-PATCHESTRY_UNRELAX_WARNINGS

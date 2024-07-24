@@ -8,13 +8,9 @@
 
 #pragma once
 
-#include "patchestry/Util/Warnings.hpp"
-
-PATCHESTRY_RELAX_WARNINGS
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/Builders.h>
-PATCHESTRY_UNRELAX_WARNINGS
 
 namespace patchestry {
     using mcontext_t = mlir::MLIRContext;

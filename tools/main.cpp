@@ -6,9 +6,6 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "patchestry/Util/Warnings.hpp"
-
-PATCHESTRY_RELAX_WARNINGS
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
@@ -16,7 +13,6 @@ PATCHESTRY_RELAX_WARNINGS
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/OwningOpRef.h>
 #include <mlir/InitAllDialects.h>
-PATCHESTRY_UNRELAX_WARNINGS
 
 #include <cstdlib>
 #include <iostream>

@@ -6,13 +6,9 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "patchestry/Util/Warnings.hpp"
-
-PATCHESTRY_RELAX_WARNINGS
 #include <llvm/ADT/ScopedHashTable.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinOps.h>
-PATCHESTRY_UNRELAX_WARNINGS
 
 #include <cassert>
 #include <string_view>

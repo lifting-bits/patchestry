@@ -12,11 +12,7 @@
  * @brief Ghidra Representations
  */
 
-#include "patchestry/Util/Warnings.hpp"
-
-PATCHESTRY_RELAX_WARNINGS
 #include <llvm/Support/JSON.h>
-PATCHESTRY_UNRELAX_WARNINGS
 
 #include <variant>
 

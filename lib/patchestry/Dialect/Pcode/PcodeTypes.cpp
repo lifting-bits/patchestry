@@ -6,12 +6,8 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "patchestry/Util/Warnings.hpp"
-
-PATCHESTRY_RELAX_WARNINGS
 #include <llvm/ADT/TypeSwitch.h>
 #include <mlir/IR/DialectImplementation.h>
-PATCHESTRY_UNRELAX_WARNINGS
 
 #include "patchestry/Dialect/Pcode/PcodeDialect.hpp"
 #include "patchestry/Dialect/Pcode/PcodeTypes.hpp"
@@ -27,4 +23,3 @@ namespace patchestry::pc {
 
 #define GET_TYPEDEF_CLASSES
 #include "patchestry/Dialect/Pcode/PcodeTypes.cpp.inc"
-
