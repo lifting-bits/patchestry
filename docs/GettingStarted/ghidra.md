@@ -23,6 +23,6 @@ We support two decompilation modes:
 ## Headless Decompilation
 
 The Headless decompilation uses Docker script to install Ghidra in a container. The docker container runs `decompile.sh` with binary and function name to extract p-code in output file.
-    ```shell
-    ./scripts/ghidra/decompile-headless.sh <binary> <function-name> <output-file>
-    ```
+```
+./scripts/ghidra/decompile-headless.sh <binary> <function-name> <output-file>
+```
