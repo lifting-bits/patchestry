@@ -53,9 +53,9 @@ mv ghidra_11.1.1_PUBLIC ~/ghidra
 
 # Installing Ghidra Scripts
 
-Link `ghidra_scripts` directory to `$HOME`. We assume that `./patchestry` contains the cloned repository.
+Link `scripts/ghidra` directory to `$HOME`. We assume that `./patchestry` contains the cloned repository.
 ```shell
-ln -s patchestry/ghidra_scripts ~
+ln -s patchestry/scripts/ghidra ~/ghidra_scripts
 ```
 
 
