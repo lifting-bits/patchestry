@@ -6,6 +6,7 @@
 # This source code is licensed in accordance with the terms specified in
 # the LICENSE file found in the root directory of this source tree.
 #
+SCRIPTS_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
 if [ "$#" -lt 3 ]; then
     echo "Usage: $0 <input_file> <function_name> <output_file>"
@@ -18,7 +19,10 @@ OUTPUT_PATH=$3
 TMP_OUTPUT_PATH="/tmp/patchestry.out.json"
 
 # Create docker container and run the decompilation
-docker build -t trailofbits/patchestry-decompilation:latest -f DecompileHeadless.Dockerfile .
+docker build \
+    -t trailofbits/patchestry-decompilation:latest \
+    -f ${SCRIPTS_DIR}/DecompileHeadless.Dockerfile \
+    ${SCRIPTS_DIR}
 
 if [ $? -ne 0 ]; then
     echo "Docker build failed"

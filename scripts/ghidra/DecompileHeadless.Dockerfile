@@ -33,8 +33,18 @@ RUN apt-get purge -y --auto-remove wget ca-certificates unzip && \
 
 FROM base AS runtime
 
-# Add a user with no login shell and no login capabilities
-RUN adduser --shell /sbin/nologin --disabled-login --gecos "" user
+RUN apt-get update && apt-get install -y \
+    adduser \
+    sudo \
+    --no-install-recommends && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives
+
+# Add a user with no login shell and no login capabilities and add
+# it to sudo group to fix the permission related issue on binding
+# host directory during docker run on Ubuntu.
+RUN adduser --shell /sbin/nologin --disabled-login --gecos "" user && \
+    adduser user sudo && \
+    echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 # Switch to the newly created user
 USER user
@@ -65,6 +75,7 @@ ENV GHIDRA_HOME=/home/user/ghidra
 ENV GHIDRA_SCRIPTS=/home/user/ghidra_scripts
 ENV GHIDRA_PROJECTS=/home/user/ghidra_projects
 ENV GHIDRA_HEADLESS=${GHIDRA_HOME}/support/analyzeHeadless
+
 
 # Set the entrypoint
 ENTRYPOINT ["/home/user/decompile.sh"]
