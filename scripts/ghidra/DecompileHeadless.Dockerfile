@@ -75,7 +75,7 @@ ENV GHIDRA_HOME=/home/user/ghidra
 ENV GHIDRA_SCRIPTS=/home/user/ghidra_scripts
 ENV GHIDRA_PROJECTS=/home/user/ghidra_projects
 ENV GHIDRA_HEADLESS=${GHIDRA_HOME}/support/analyzeHeadless
-
+ENV USER=user
 
 # Set the entrypoint
 ENTRYPOINT ["/home/user/decompile.sh"]
