@@ -1,3 +1,4 @@
+//CHECK: {{...}}
 struct data
 {
     int a;
