@@ -1,3 +1,4 @@
+// CHECK:  {{...}}
 struct access
 {
     int l;

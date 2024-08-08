@@ -1,5 +1,5 @@
-int
-main()
+// CHECK:  {{...}}
+int main()
 {
 	int x;	
 	x = 4;
