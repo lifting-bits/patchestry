@@ -1,3 +1,4 @@
+// CHECK:  {{...}}
 int argc(int argc, char **argv) {
     return argc;
 }
