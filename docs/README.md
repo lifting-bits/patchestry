@@ -241,3 +241,47 @@ enact the patch process, creating a new version of the binary.
 7. Finally, the developer will load the new version of the binary onto the
 device. How the developer loads the new version of the binary is not part of the
 project.
+
+## Architecture
+
+The Patchestry design places a strong emphasis on modularity and seamless
+developer interaction. The developer plays a key role, providing the binary
+pieces to be patched, a patch description, and instructions on how to apply
+these patches using the meta-programming framework (meta-patches). Contracts are
+similarly specified and applied by instrumentation using the same meta-language.
+Utilizing state-of-the-art tools, we perform decompilation and program analysis.
+
+A significant architectural innovation is the MLIR Tower of IRs, which serves as
+the connecting element. This tower facilitates the association of
+representations between decompiled programs, such as from P-Code and compilable
+and structured representations like LLVM IR. The tower's modularity allows for
+the specification of any DSL for the decompiled program, with the only
+requirement being the translation of this DSL to a layer of the tower. In our
+case, Ghidra's P-Code serves as a suitable starting point layer. However, this
+modular design allows new decompilers to be integrated into Patchestry in the
+future while preserving the rest of the architecture.
+
+Utilizing the same representation (MLIR dialects) for both the decompiled binary
+and the compiled patched version facilitates seamless instrumentation and
+inlining of patches, ultimately producing a patched MLIR (Tower of IRs). The
+tower's various abstraction layers enable precise specification of points of
+interest, surpassing the limitations of a single representation. Additionally,
+the tower abstracts away from the decompiled representation (P-Code),
+facilitating modular design in the future.
+
+Contract handling follows a similar pattern. Described in a C-like language,
+contracts can take the form of static or runtime assertions or error handlers.
+These are inserted into the code while it is in the IR Tower form. Runtime
+checks are then compiled and remain in the patched binary. Static contracts are
+checked using a formal verifier. The flexibility to invent new contract
+mechanisms according to specific needs is a key feature.
+
+In the verification phase, which is the final step, Patchestry is designed to
+accommodate various verification methods. The Tower allows to produce a
+customized representation for the analysis, but it is advisable to stick to the
+same representation as the compilation (such as LLVM IR) to prevent errors
+during translation. Slicing the codebase into independent parts influenced by
+the patch makes LLVM-based static analysis of the representation with contracts
+tractable. We expect that most of the patches being local influence only a small
+part of the program, therefore using the dependency analysis, we can isolate the
+part of the program that needs to be verified.
