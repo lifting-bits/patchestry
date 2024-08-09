@@ -120,3 +120,122 @@ we propose a declarative library designed for describing patches, their
 application. Following the same principle, Patchestry introduces contracts in
 C-like DSL. These contracts serve as constraints guiding both decompilation and
 recompilation, and they must hold at all relevant steps of each process.
+
+## Decompilation Workflow
+
+Patchestry’s technical approach is designed to enable the following seven-step workflow:
+
+1. A developer is tasked with patching a vulnerability in a program binary
+running on a device. How the user acquires a copy of the binary (e.g.
+downloaded from a vendor’s website, extracted from a network capture, extracted
+directly from a device over serial port or JTAG, etc.) is not part of the project.
+
+2. The developer loads the binary into the open-source Ghidra interactive
+decompiler. Developers will be enabled to leverage Ghidra’s features and plugins
+to locate the function(s) to patch, though previous binary analysis expertise is
+not required. We anticipate that developers will apply tools such as BinDiff or
+BSim, rely on symbol names or debug information, or apply reverse engineering
+techniques.
+
+The Patchestry workflow includes Ghidra because it is open-source and actively
+maintained by the National Security Agency and because it supports a wide
+variety of binary file formats (ELF, COFF, PE, etc.) and machine code languages
+used by medical devices. Ghidra also implements a battery of heuristics that act
+as good first guesses as to the locations and references between functions and
+data in the binary. Although perfect identification/recovery of functions, data,
+and data types in a binary is intractable, the value of interactivity in Ghidra
+is that the human developer can fix incorrect conclusions drawn by the
+decompiler’s heuristics.
+
+There are two reasons why Patchestry’s workflow does not allow the developer to
+modify Ghidra’s decompilation output and then re-compile that into a patchable
+representation. First, Ghidra’s decompilation is not guaranteed to be
+syntactically correct or compilable. This can be mitigated through developer
+effort; however, the level of effort increases with the complexity of and number
+of references in the target function(s). Second, Ghidra’s heuristic
+decompilation pipeline has been proven to be unfaithful with respect to the
+execution semantics of the machine code. In the worst case, this could result in
+a developer inadvertently introducing new vulnerabilities into the program
+during the patching process.
+
+Despite Ghidra’s decompilation not being precise enough for recompilation, our
+experience from AMP tells us that Ghidra’s decompilation is good enough to be a
+productivity multiplier for developers trying to locate functions that need
+patching.
+
+Moreover, the modular design of Patchestry affords the flexibility to seamlessly
+integrate more formally rigorous decompilers and their representations in the
+future, as their capabilities align with our technical requirements. Currently,
+the majority of existing tools are predominantly of a research-oriented nature,
+often concentrating on x86 architecture or even just its subset, which is
+not sufficient for the diverse nature of software.
+
+3. After locating the relevant function(s) in Ghidra, the Patchestry plugin will
+present the developer with an editable decompilation of the target function(s).
+Patchestry’s decompilations will be sound and precise with respect to the
+available information in Ghidra’s analysis database. Regardless of how small the
+patch size could be, Patchestry will always formulate the problem at the
+function granularity. There are theoretical and pragmatic reasons why
+Patchestry’s minimum patch recompilation granularity is function-at-a-time.
+
+From a theoretical standpoint, function granularity patches enable Patchestry to
+leverage stronger guarantees about the application binary interface (ABI). It is
+only at the entry and exit points of a compiled function that higher-level,
+human-readable types can be reliably mapped to low level machine locations
+(registers, memory).
+
+Patchestry leverages the open-source Clang compiler, which can already
+target relevant platforms. A restriction in compilers like Clang that
+nonetheless favors our approach is that functions are the smallest compilable
+unit of code. Our task in Patchestry is thus to convert code for recompilation
+into LLVM IR functions, which Clang can convert to machine code.
+
+4. The developer edits the decompiled function(s), enacting the necessary
+changes to patch the vulnerability in the decompiled code. Patchestry’s highest
+level decompiled code (C-like) will look approximately similar, regardless of
+the platform/architecture of the medical device software. This will help improve
+developer productivity. Moreover, the meta-patch library will allow the
+developer to automate the patching process.
+
+At this stage, the binary-level patch has not yet been formulated. What
+particular changes are needed to patch a given vulnerability are beyond the
+scope of the project and require an external tool. Patchestry will, however,
+provide a library of “patch intrinsics” such as “add bounds check.” These will
+be formulated as templates of meta-patches.
+
+A developer can make near arbitrary changes within the body of the decompiled
+code (e.g. add, remove or replace its portions). Although Patchestry aims to
+provide verifiable guarantees about feature- and bug-compatibility of its
+decompilation with respect to the Ghidra database, absent contracts or
+specifications about the intended behavior of the code, Patchestry cannot make
+guarantees about the correctness of the edited decompilation. That is,
+Patchestry cannot prevent a developer from introducing new flaws into the
+binary, nor can it guarantee that a patch comprehensively fixes the root cause
+of the vulnerability.
+
+To mitigate the problem of developer- or decompiler-introduced emergent
+behaviors, Patchestry will allow developers to leverage model- and
+contract-based software verification techniques. These techniques are normally
+challenging to apply to lifting/decompilation due to a lack of end-to-end
+visibility into the lifting process; usually the techniques only apply at the
+very last stage, on the decompiled/lifted result. However, Patchestry’s approach
+to decompilation is multi-level: decompilation progresses through a stage of
+increasingly high-level IRs. By taking a multi-level approach, Patchestry can
+instrument contracts at various stages of the process.
+
+5. Verification of contracts. To ensure the reliability of patched code along
+with associated contracts, Patchestry offers a toolset for generating output
+compatible with both static and dynamic analysis tools. The optimal choice for
+this purpose is LLVM IR, given its verification confirms the fulfillment of
+contracts before its compilation. Patchestry allows for easy integration of
+LLVM-based analysis tools such as KLEE or SeaHorn, automating the verification
+process.
+
+6. Patchestry formulates the patch by compiling developer-edited decompiled
+function(s), and packages the patch for use by a binary patching tool.
+Patchestry will utilize a pre-existing tool, such as Patcherex or OFRAK, to
+enact the patch process, creating a new version of the binary.
+
+7. Finally, the developer will load the new version of the binary onto the
+device. How the developer loads the new version of the binary is not part of the
+project.
