@@ -18,7 +18,7 @@ We support two decompilation modes:
 3. Create a project and import a binary file.
 4. Run `PatchestryScript.java`.
 
-**Note:** Ghidra scripts must be installed. See the [build](GettingStarted/build.md) section for details.
+**Note:** Ghidra scripts must be installed. See the [build](build.md) section for details.
 
 ## Headless Decompilation
 
