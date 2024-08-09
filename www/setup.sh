@@ -46,3 +46,5 @@ cp -rv $(pwd)/www/assets $dst
 cp -rv $(pwd)/www/GettingStarted $dst/docs
 cp -rv $(pwd)/www/img $dst/docs
 cp -rv $(pwd)/www/mkdocs.yml $dst
+
+cp -rv $(pwd)/scripts/ghidra/README.md $dst/docs/GettingStarted/ghidra.md
