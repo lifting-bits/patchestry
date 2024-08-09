@@ -29,6 +29,16 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 include(prevent_in_source_builds)
 
+# check if patchestry is being used directly or via add_subdirectory,
+# but allow overriding
+if(NOT DEFINED PATCHESTRY_MASTER_PROJECT)
+    if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+        set(PATCHESTRY_MASTER_PROJECT ON)
+    else()
+        set(PATCHESTRY_MASTER_PROJECT OFF)
+    endif()
+endif()
+
 project(
   patchestry
   VERSION 0.1.0
