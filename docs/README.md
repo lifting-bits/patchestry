@@ -285,3 +285,110 @@ the patch makes LLVM-based static analysis of the representation with contracts
 tractable. We expect that most of the patches being local influence only a small
 part of the program, therefore using the dependency analysis, we can isolate the
 part of the program that needs to be verified.
+
+## CVE-2021-22156 Patching
+
+An example of patching the CVE-2021-22156 vulnerability, addressing an integer
+overflow within the `calloc()` function of the C standard library. This
+vulnerability affects versions of the BlackBerry QNX Software Development
+Platform (SDP) up to version 6.5.0SP1, QNX OS for Medical up to version 1.1, and
+QNX OS for Safety up to version 1.0.1. A malicious actor could exploit this
+integer overflow issue to execute arbitrary code or initiate a denial of service
+attack.
+
+Consider the vulnerable code snippet below. Here, a user-defined function,
+`get_num_elements()`, is employed to determine the size requirements for a dynamic
+array of long integers assigned to the variable num_elements. During the
+allocation of the buffer using `calloc()`, the variable num_elements is multiplied
+by sizeof(long) to calculate the overall size requirements. If the resulting
+multiplication exceeds the representable range of `size_t`, `calloc()` may allocate
+a zeroed buffer of insufficient size. Subsequently, when data is copied into
+this buffer, an overflow may occur, posing a potential security risk.
+
+A vulnerable code in which the standard library function `calloc()` may allocate
+a zeroed buffer of insufficient size:
+
+```cpp
+size_t num_elements = get_num_elements(); // from the outside environment
+
+long *buffer = (long *)calloc(num_elements, sizeof(long));
+
+if (buffer == NULL) {
+    /* Handle error condition */
+}
+```
+
+The desired result of applying Patchestry to fix the vulnerable code:
+
+```cpp
+size_t num_elements = get_num_elements(); // from the outside environment
+
+/* Patch start */
+if (num_elements > SIZE_MAX/sizeof(long)) {
+    /*  Handle error condition */
+}
+/* Patch end */
+
+long *buffer = (long *)calloc(num_elements, sizeof(long));
+if (buffer == NULL) {
+    /* Handle error condition */
+    return;
+}
+
+```
+
+To create this simple patch, we require two essential components: the patch
+itself and the specific locations where the patch should be applied. In
+Patchestry, we offer developers a library, allowing them to articulate these
+components using familiar C-like syntax:
+
+```cpp
+// 1. Patch in C
+[[CVE-2021-22156]] void patch(size_t num_elements) {
+    if (num_elements > SIZE_MAX/sizeof(long)) {
+            /*  Handle error condition  */
+    }
+}
+
+// 2. Developer-defined meta-patch transformation
+void meta_patch(source_module_t module) {
+	for (const callsite_t &place : module.calls("calloc")) {
+		place.apply_before("CVE-2021-22156::patch", { place.operand(1) });
+	}
+}
+```
+
+Patchestry introduces a metaprogramming interface enabling  developer-defined
+code transformations. Patchestry’s interface supports common patching operations
+such as code insertion, replacement, alteration, and deletion. To obtain the
+source module from the program binary, we leverage state-of-the-art decompilers
+and seamlessly integrate them into the MLIR source representation, as elaborated
+later. Patchestry’s source representation can be modified and queried through
+the metaprogramming API.
+
+The second crucial aspect of Patchestry involves providing assurances regarding
+patches. Similar to the patching process, we empower developers to define
+contracts in our C-like language, and seamlessly embed these checks into the
+binary. Unlike patches, contracts are mandated not to alter program state. There
+are two types of contracts in Patchestry: runtime contracts, addressing
+unexpected states during runtime, and static contracts, exclusively used for
+formal verification without persisting in the compiled binary.
+
+```cpp
+// Contract
+[[CVE-2021-22156]] void contract(size_t num_elements) {
+    assert(num_elements <= SIZE_MAX/sizeof(long));
+}
+// Meta-contract
+void meta_contract(source_module_t module) {
+    for (const callsite_t &place : module.calls("calloc")) {
+		place.apply_before("CVE-2021-22156::contract", { place.operand(1) });
+	}
+}
+
+```
+
+An example of Patchestry contract that defines the expected functionality of the program
+under test written in the C-like Patchestry contracts DSL. A contract is similar
+to a regression test or a behavioral assertion that an analysis tool like KLEE
+would check.
