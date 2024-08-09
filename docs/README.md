@@ -1,3 +1,122 @@
-# Patchestry: MLIR-based decompilation framework
+# MLIR-based binary patching framework
 
-TBD
+Patchestry aims to make the same impact to binary patching as compilers and high
+level languages did to early software development. Its main goal is to enable
+developers without extensive knowledge of the deployment platform of the binary
+to patch the binary. To do this, the developer has to be confident that what
+they're patching is functionally equivalent to what is deployed and also that
+the patch they write will integrate into the deployed binary without issue.
+
+Patchestry leverages MLIR as the foundational technology instead of LLVM IR.
+MLIR is an emerging compiler development technology allowing for the
+specification, transformation, and mixing of IR dialects. The MLIR approach has
+significant industry momentum, and has been adopted by companies such as Google
+(in TensorFlow) and Meta (ClangIR). With MLIR, the decompilation process could
+be stratified into a Tower of IRs (IR dialects). Each IR represents the same
+program, but at a different level of abstraction.
+
+MLIR brings a notable advantage by enabling the creation of representations to
+streamline communication between diverse state-of-the-art tools. For instance,
+one can create an MLIR dialect specifically for P-Code (a program representation
+utilized by Ghidra) to optimize integration with the Ghidra decompiler.
+Alternatively, an LLVM IR dialect can be employed to compile back to the
+executable, and MLIR can support LLVM-based contract validation through a
+symbolic executor such as KLEE. Moreover, MLIR provides flexibility to
+devise our own dialects for representing contracts in specialized logic, such as
+SMT. Finally, our [high-level dialect](https://trailofbits.github.io/vast/),
+developed under DARPA V-SPELLS, captures the intricacies of full-featured C. Our
+compiler stacks empower us to compile C into any of the previously mentioned
+representations, promoting seamless interconnection between them.
+
+## Technical Rationale
+
+Our recent experience on AMP, as well as our performance on other DARPA binary
+analysis programs (PACE, CFAR, LOGAN, CGC, Cyber Fast Track), have led us to
+four guiding principles that we believe patching solutions for legacy software
+must follow in order to be successful.
+
+1. __Fully automated approaches are doomed to failure.__ In general, the process of
+decompilation is an inherently intractable problem. However, developers are
+often capable of distinguishing between decompilation outcomes deemed 'good' or
+'bad', but encoding that kind of heuristic logic into a system invariably yields
+unpredictability and unsoundness.  Hence, we assert that the involvement of
+semi-skilled or skilled human developers is essential in the process. The
+best-case scenario is that a developer can use an existing source code patch as
+a guide. Given this patch, they can locate the corresponding vulnerable machine
+code within a binary using binary function symbol names. The worst-case scenario
+involves the ad hoc application of tools (e.g. BinDiff, BSim) and reverse
+engineering skills to an opaque binary blob that is without symbols or debugging
+information.
+
+2. __Developers must be able to leverage pre-existing software development experience__
+and not have to concern themselves with low level details. That is, they should
+be able to operate as if the original source code and build process/environments
+were available, and not be expected to have expert knowledge of every machine
+code language that may be encountered.
+
+
+3. __From-scratch development efforts do not scale.__ As much as possible,
+pre-existing tooling that already handles the inherent scalability challenges in
+(de)compiling code for such a wide variety of platforms should be leveraged. For
+example the Ghidra decompiler can decompile over 100 machine code languages to
+C, and the Clang compiler can generate machine code for over 20 machine code
+languages. Rolling new solutions from scratch is impractical.
+
+4. __There is no one-size-fits-all way of representing code.__ A “complete”
+solution to machine code decompilation only exists at the end of a long tail of
+special cases. Patchestry aims to provide decompilation to a familiar, C-like
+language. Patchestry will not, however, decompile to C or a specific ISO dialect
+thereof because some machine code constructs have no equivalents in C, while
+others are only loosely equivalent given non-conforming dialect extensions.
+
+## Project Goals
+
+Patchestry accomplishes its goals by integrating various innovative concepts
+guided by the four principles described in [technical rationale](#technical-rationale):
+
+### Unified Tooling Integration
+
+Guided by the third principle—recognizing the limitations of from-scratch
+development efforts—Patchestry seamlessly integrates existing tooling for
+decompilation and recompilation in the binary patching process. Patchestry
+advocates a unified tooling integration approach using an MLIR Tower of
+Intermediate Representations (IRs) as a mediator between tools. This strategy
+enables the incorporation of cutting-edge (de)compiler tools into a cohesive
+system, allowing the utilization of specialized tools for each task and ensuring
+effectiveness and optimal outcomes across all desired functionalities.
+
+### Incremental Decompilation
+
+Patchestry’s innovative approach involves leveraging multiple program
+representations simultaneously across various layers of the Tower of IRs. While
+state-of-the-art decompilers already offer diverse representations, what sets
+the Tower of IRs apart is its capability to create custom user-defined
+abstractions (layers) while preserving relationships between these layers. This
+modular approach facilitates seamless incremental decompilation and
+recompilation processes. This is crucial for effortlessly devising specific
+abstractions tailored to unique platforms.
+
+### Unifying Representations for Contracts, Patches, and Software
+
+The Tower of IRs also aligns with the fourth guiding principle: There is no
+one-size-fits-all way of representing code.  Maintaining multiple
+representations simultaneously in the Tower of IRs allows us to establish
+meaningful relationships between them and innovate in how we connect tools and
+conduct analyses. Additionally, this approach allows us to consolidate all
+necessary components for patching within the same representation: patch
+description, contract description and the software. This unified strategy
+streamlines tooling for analysis and facilitates the recompilation of patched
+software, resulting in a single artifact that can undergo desired formal
+analyses, such as LLVM-based analysis.
+
+
+### Declarative Patching and Contracts Description
+
+To address our second guiding principle, which emphasizes the importance of
+allowing developers to leverage their existing software development experience,
+we mandate that all interactions with patching occur in a language commonly
+understood by developers. Specifically, a C-like language. To facilitate this,
+we propose a declarative library designed for describing patches, their
+application. Following the same principle, Patchestry introduces contracts in
+C-like DSL. These contracts serve as constraints guiding both decompilation and
+recompilation, and they must hold at all relevant steps of each process.
