@@ -38,4 +38,6 @@ docker run --rm \
     trailofbits/patchestry-decompilation:latest \
     /input $FUNCTION_NAME /output
 
-mv $TMP_OUTPUT_PATH $OUTPUT_PATH
+if [ $(dirname $TMP_OUTPUT_PATH) != $OUTPUT_PATH ]; then
+    mv $TMP_OUTPUT_PATH $OUTPUT_PATH
+fi
