@@ -60,6 +60,12 @@ set(PATCHESTRY_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(PATCHESTRY_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 set(PATCHESTRY_INCLUDE_DIR ${PATCHESTRY_BINARY_DIR}/include)
 
+# Configure Patchestry Version.inc file.
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/patchestry/Version.inc.in
+  ${CMAKE_CURRENT_BINARY_DIR}/include/patchestry/Version.inc
+)
+
 #
 # CCACHE
 #
