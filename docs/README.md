@@ -123,6 +123,8 @@ recompilation, and they must hold at all relevant steps of each process.
 
 ## Decompilation Workflow
 
+![Patchestry ls](img/patchestry-workflow.svg)
+
 Patchestry’s technical approach is designed to enable the following seven-step workflow:
 
 1. A developer is tasked with patching a vulnerability in a program binary
