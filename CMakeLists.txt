@@ -132,6 +132,17 @@ else()
   )
 endif()
 
+add_custom_target(patchestry-generic-headers)
+set_target_properties(patchestry-generic-headers PROPERTIES FOLDER "Misc")
+add_custom_target(patchestry-headers)
+set_target_properties(patchestry-headers PROPERTIES FOLDER "Misc")
+add_dependencies(patchestry-headers patchestry-generic-headers)
+add_custom_target(patchestry-tools)
+set_target_properties(patchestry-tools PROPERTIES FOLDER "Misc")
+add_custom_target(patchestry-doc)
+
+define_property(GLOBAL PROPERTY VAST_INSTALL_TARGETS)
+
 add_library(patchestry_settings INTERFACE)
 
 target_include_directories(patchestry_settings INTERFACE
@@ -153,7 +164,92 @@ add_subdirectory(tools)
 
 option(PATCHESTRY_ENABLE_TESTING "Enable Test Builds" ON)
 
-if(PATCHESTRY_ENABLE_TESTING)
+if (PATCHESTRY_ENABLE_TESTING)
   enable_testing()
   add_subdirectory(test)
+endif()
+
+#
+# install settings
+#
+
+option(PATCHESTRY_INSTALL "Generate the install target." ${PATCHESTRY_MASTER_PROJECT})
+
+#
+# packaging support
+#
+
+if (PATCHESTRY_INSTALL)
+  set(PATCHESTRY_CMAKE_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME})
+
+  get_property(PATCHESTRY_INSTALL_TARGETS GLOBAL PROPERTY PATCHESTRY_INSTALL_TARGETS)
+
+  install(DIRECTORY ${PATCHESTRY_INCLUDE_DIR}/patchestry
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    COMPONENT patchestry-headers
+    FILES_MATCHING
+    PATTERN "*.h"
+    PATTERN "*.hpp"
+    PATTERN "*.h.inc"
+    PATTERN "*.hpp.inc"
+    PATTERN "CMakeFiles" EXCLUDE
+  )
+
+  install(DIRECTORY ${PATCHESTRY_SOURCE_DIR}/include/patchestry
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    COMPONENT patchestry-headers
+    FILES_MATCHING
+    PATTERN "*.h"
+    PATTERN "*.hpp"
+    PATTERN "CMakeFiles" EXCLUDE
+  )
+
+  install(TARGETS patchestry_settings EXPORT PATCHESTRYTargets)
+
+  set(PATCHESTRY_EXPORT_NAME PATCHESTRYTargets)
+
+  install(EXPORT PATCHESTRYTargets
+    FILE ${PATCHESTRY_EXPORT_NAME}.cmake
+    NAMESPACE PATCHESTRY::
+    DESTINATION ${PATCHESTRY_CMAKE_INSTALL_DIR}
+  )
+
+  set(CPACK_PACKAGE_VENDOR "Trail of Bits")
+  set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Patchestry: an MLIR-based binary patching framework."
+  )
+  set(CPACK_PACKAGE_VERSION_MAJOR ${CMAKE_PROJECT_VERSION_MAJOR})
+  set(CPACK_PACKAGE_VERSION_MINOR ${CMAKE_PROJECT_VERSION_MINOR})
+  set(CPACK_PACKAGE_VERSION_PATCH ${CMAKE_PROJECT_VERSION_PATCH})
+  set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+  set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+  set(CPACK_OUTPUT_FILE_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/package")
+  set(CPACK_PACKAGE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+  include(CPack)
+
+  set(PATCHESTRY_CONFIG_NAME "${PROJECT_NAME}Config")
+  set(PATCHESTRY_PACKAGE_CONFIG_FILE "${PATCHESTRY_CONFIG_NAME}.cmake")
+  set(PATCHESTRY_PACKAGE_CONFIG_VERSION_FILE "${PATCHESTRY_CONFIG_NAME}Version.cmake")
+
+  include(CMakePackageConfigHelpers)
+
+  configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/${PATCHESTRY_CONFIG_NAME}.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/${PATCHESTRY_PACKAGE_CONFIG_FILE}"
+    INSTALL_DESTINATION ${PATCHESTRY_CMAKE_INSTALL_DIR}
+  )
+
+  write_basic_package_version_file(
+    ${PATCHESTRY_PACKAGE_CONFIG_VERSION_FILE}
+    VERSION ${CPACK_PACKAGE_VERSION}
+    COMPATIBILITY SameMajorVersion
+  )
+
+  install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/${PATCHESTRY_PACKAGE_CONFIG_FILE}"
+    "${CMAKE_CURRENT_BINARY_DIR}/${PATCHESTRY_PACKAGE_CONFIG_VERSION_FILE}"
+    DESTINATION ${PATCHESTRY_CMAKE_INSTALL_DIR}
+  )
+
 endif()
