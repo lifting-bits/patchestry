@@ -43,4 +43,6 @@ cp -rv $build/docs $dst
 
 # Setup site assets
 cp -rv $(pwd)/www/assets $dst
+cp -rv $(pwd)/www/GettingStarted $dst/docs
+cp -rv $(pwd)/www/img $dst/docs
 cp -rv $(pwd)/www/mkdocs.yml $dst
