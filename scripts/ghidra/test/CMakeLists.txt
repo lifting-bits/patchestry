@@ -5,9 +5,6 @@ include(CTest)
 SET(CMAKE_BUILD_TYPE Debug)
 SET(CMAKE_CXX_FLAGS_DEBUG "-g")
 
-# Check for FileCheck
-find_package(LLVM 18.1 REQUIRED CONFIG)
-
 file(GLOB_RECURSE SOURCES "${CMAKE_SOURCE_DIR}/src/*.c")
 
 function(get_function_name filename function)

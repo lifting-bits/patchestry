@@ -4,10 +4,11 @@
 ```
 
 ### Test
+Testing framework uses `FileCheck` verifier to verify the output file. Please make sure it is installed at the path.
 
 #### Using script
 ```
-./decompile-headless-test.sh <llvm-dir>  // llvm-dir argument is optional
+./decompile-headless-test.sh
 ```
 
 #### Using cmake
