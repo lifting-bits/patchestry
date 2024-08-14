@@ -15,32 +15,34 @@ include "mlir/IR/BuiltinTypes.td"
 
 include "patchestry/Dialect/Pcode/PcodeTypes.td"
 
-def FuncOp
-  : PcodeOp< "function" >
-  , Arguments<( ins StrAttr:$func_name )>
+def Pcode_FuncOp
+  : Pcode_Op< "function" >
+  , Arguments<(ins StrAttr:$func_name)>
 {
-  let regions = (region AnyRegion:$blocks);
+  let regions = (region SizedRegion<1>:$blocks);
   let assemblyFormat = [{ attr-dict `:` $blocks }];
 }
 
-def BlockOp
-  : PcodeOp< "block" >
+def Pcode_BlockOp
+  : Pcode_Op< "block" >
   , Arguments<( ins StrAttr:$block_label )>
 {
-  let regions = (region AnyRegion:$instructions);
+  let regions = (region SizedRegion<1>:$instructions);
   let assemblyFormat = [{ attr-dict `:` $instructions }];
 }
 
-def InstOp
-  : PcodeOp< "instruction" >
+def Pcode_InstOp
+  : Pcode_Op< "instruction" >
   , Arguments<( ins StrAttr:$inst_mnemonic )>
 {
-  let regions = (region AnyRegion:$semantics);
+  let regions = (region SizedRegion<1>:$semantics);
   let assemblyFormat = [{ attr-dict `:` $semantics }];
 }
 
-def ConstOp
-  : PcodeOp< "const", [ConstantLike, AllTypesMatch< ["value", "result"] >] >
+def Pcode_ConstOp
+  : Pcode_Op< "const", [
+    ConstantLike, AllTypesMatch< ["value", "result"] >
+  ] >
   , Arguments<( ins TypedAttrInterface:$value )>
   , Results<( outs AnyType:$result )>
 {
@@ -48,99 +50,111 @@ def ConstOp
   let assemblyFormat = [{ attr-dict `:` type($result) }];
 }
 
-class VarnodeTypeOp< string varnode_mnemonic, list< Trait > traits = [] >
-  : PcodeOp< varnode_mnemonic, traits >
+class Pcode_VarnodeTypeOp< string mnemonic, list< Trait > traits = [] >
+  : Pcode_Op< mnemonic, traits >
   , Arguments<( ins StrAttr:$addr_space, I64Attr:$addr, I8Attr:$size )>
   , Results<( outs AnyType:$result )>
 {
   let assemblyFormat = [{ attr-dict `:` type($result) }];
 }
 
-def RegOp : VarnodeTypeOp< "reg" >;
-def MemOp : VarnodeTypeOp< "mem" >;
-def VarOp : VarnodeTypeOp< "var" >;
+def Pcode_RegOp : Pcode_VarnodeTypeOp< "reg" >;
+def Pcode_MemOp : Pcode_VarnodeTypeOp< "mem" >;
+def Pcode_VarOp : Pcode_VarnodeTypeOp< "var" >;
 
-class UnaryOp< string op_mnemonic, list< Trait > traits = [] >
-  : PcodeOp< op_mnemonic, traits >
+class Pcode_UnaryOp< string mnemonic, list< Trait > traits = [] >
+  : Pcode_Op< mnemonic, traits >
   , Arguments<( ins AnySignlessInteger:$op )>
   , Results<( outs AnySignlessInteger:$result )>
 {
-  let assemblyFormat = [{ $op attr-dict `:` functional-type(operands, results) }];
+  let assemblyFormat = [{
+    $op attr-dict `:` functional-type(operands, results)
+  }];
 }
 
-def CopyOp        : UnaryOp < "copy", [SameOperandsAndResultType] >;
-def PopcountOp    : UnaryOp < "popcount" >;
-def BoolNegateOp  : UnaryOp < "bool_negate", [SameOperandsAndResultType] >;
+def Pcode_CopyOp        : Pcode_UnaryOp < "copy", [SameOperandsAndResultType] >;
+def Pcode_PopcountOp    : Pcode_UnaryOp < "popcount" >;
+def Pcode_BoolNegateOp  : Pcode_UnaryOp < "bool_negate", [SameOperandsAndResultType] >;
 
-class BinOp< string op_mnemonic, list< Trait > traits = [] >
-  : PcodeOp< op_mnemonic, traits >
+class Pcode_BinOp< string mnemonic, list< Trait > traits = [] >
+  : Pcode_Op< mnemonic, traits >
   , Arguments<( ins AnySignlessInteger:$lhs, AnySignlessInteger:$rhs )>
   , Results<( outs AnySignlessInteger:$result )>
 {
-  let assemblyFormat = [{ $lhs `,` $rhs attr-dict `:` functional-type(operands, results) }];
+  let assemblyFormat = [{
+    $lhs `,` $rhs attr-dict `:` functional-type(operands, results)
+  }];
 }
 
-def IntAddOp      : BinOp< "int_add" >;
-def IntSubOp      : BinOp< "int_sub" >;
-def IntLessOp     : BinOp< "int_less" >;
-def IntEqualOp    : BinOp< "int_equal" >;
-def IntSBorrowOp  : BinOp< "int_sborrow" >;
-def IntSLessOp    : BinOp< "int_sless" >;
-def IntAndOp      : BinOp< "int_and" >;
+def Pcode_IntAddOp      : Pcode_BinOp< "int_add" >;
+def Pcode_IntSubOp      : Pcode_BinOp< "int_sub" >;
+def Pcode_IntLessOp     : Pcode_BinOp< "int_less" >;
+def Pcode_IntEqualOp    : Pcode_BinOp< "int_equal" >;
+def Pcode_IntSBorrowOp  : Pcode_BinOp< "int_sborrow" >;
+def Pcode_IntSLessOp    : Pcode_BinOp< "int_sless" >;
+def Pcode_IntAndOp      : Pcode_BinOp< "int_and" >;
 
-def BranchOp
-  : PcodeOp< "branch" >
+def Pcode_BranchOp
+  : Pcode_Op< "branch" >
   , Arguments<( ins AnySignlessInteger:$addr )>
 {
   let summary = "Pcode BRANCH operation";
-  let description = "TODO(surovic)";
+  let description = "TBD";
   let assemblyFormat = [{ $addr attr-dict `:` type(operands) }];
 }
 
-def CBranchOp
-  : PcodeOp< "cbranch" >
+def Pcode_CBranchOp
+  : Pcode_Op< "cbranch" >
   , Arguments<( ins AnySignlessInteger:$addr, AnySignlessInteger:$cond )>
 {
   let summary = "Pcode CBRANCH operation";
-  let description = "TODO(surovic)";
+  let description = "TBD";
   let assemblyFormat = [{ $addr `,` $cond attr-dict `:` type(operands) }];
 }
 
-def CallOp
-  : PcodeOp< "call" >
+def Pcode_CallOp
+  : Pcode_Op< "call" >
   , Arguments<( ins AnySignlessInteger:$addr )>
 {
   let summary = "Pcode CALL operation";
-  let description = "TODO(surovic)";
+  let description = "TBD";
   let assemblyFormat = [{ $addr attr-dict `:` type(operands) }];
 }
 
-def ReturnOp
-  : PcodeOp< "return" >
+def Pcode_ReturnOp
+  : Pcode_Op< "return" >
   , Arguments<( ins AnySignlessInteger:$varnode )>
 {
   let summary = "Pcode RETURN operation";
-  let description = "TODO(surovic)";
+  let description = "TBD";
   let assemblyFormat = [{ $varnode attr-dict `:` type(operands) }];
 }
 
-def StoreOp
-  : PcodeOp< "store" >
-  , Arguments<( ins AnySignlessInteger:$addr_space, AnySignlessInteger:$addr, AnySignlessInteger:$data )>
+def Pcode_StoreOp
+  : Pcode_Op< "store" >
+  , Arguments<( ins
+    AnySignlessInteger:$addr_space,
+    AnySignlessInteger:$addr,
+    AnySignlessInteger:$data
+  )>
 {
   let summary = "Pcode STORE operation";
-  let description = "TODO(surovic)";
-  let assemblyFormat = [{ $addr_space `,` $addr `,` $data attr-dict `:` type(operands) }];
+  let description = "TBD";
+  let assemblyFormat = [{
+    $addr_space `,` $addr `,` $data attr-dict `:` type(operands)
+  }];
 }
 
-def LoadOp
-  : PcodeOp< "load" >
+def Pcode_LoadOp
+  : Pcode_Op< "load" >
   , Arguments<( ins AnySignlessInteger:$addr_space, AnySignlessInteger:$addr )>
   , Results<( outs AnySignlessInteger:$result )>
 {
   let summary = "Pcode LOAD operation";
-  let description = "TODO(surovic)";
-  let assemblyFormat = [{ $addr_space `,` $addr attr-dict `:` functional-type(operands, results) }];
+  let description = "TBD";
+  let assemblyFormat = [{
+    $addr_space `,` $addr attr-dict `:` functional-type(operands, results)
+  }];
 }
 
 #endif // PCODE_DIALECT_OPS
