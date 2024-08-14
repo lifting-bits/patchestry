@@ -24,8 +24,8 @@ def Pcode_Dialect : Dialect {
   let useDefaultTypePrinterParser = 1;
 }
 
-class PcodeOp< string op_mnemonic, list< Trait > traits = [] >
-  : Op< Pcode_Dialect, op_mnemonic, traits >;
+class Pcode_Op< string mnemonic, list< Trait > traits = [] >
+  : Op< Pcode_Dialect, mnemonic, traits >;
 
 include "PcodeOps.td"
 include "PcodeTypes.td"
