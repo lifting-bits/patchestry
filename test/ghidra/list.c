@@ -1,3 +1,10 @@
+// UNSUPPORTED: system-windows
+// RUN: %cc %s -o %t
+// RUN %t; if [ "$(uname)" = "Linux" ]; then %decompile-headless %t print_list %t1 fi
+// RUN %t; if [ "$(uname)" = "Darwin" ]; then %decompile-headless %t _print_list %t1 fi
+// RUN %t1; %file-check %s --input-file %t1
+// CHECK: {{...}}
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -6,7 +13,6 @@ typedef struct Node {
     struct Node *next;
 } Node;
 
-// CHECK: {{...}}
 void print_list(Node *head) {
     Node *current = head;
     while (current) {
