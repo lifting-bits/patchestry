@@ -1,7 +1,14 @@
+// UNSUPPORTED: system-windows
+// RUN: %cc %s -o %t
+// RUN %t; if [ "$(uname)" = "Linux" ]; then %decompile-headless %t multiply_matrices %t1 fi
+// RUN %t; if [ "$(uname)" = "Darwin" ]; then %decompile-headless %t _multiply_matrices %t1 fi
+// RUN %t1; %file-check %s --input-file %t1
+// CHECK: {{...}}
+
 #include <stdio.h>
 
 #define SIZE 3
-// CHECK: {{...}}
+
 void multiply_matrices(int a[SIZE][SIZE], int b[SIZE][SIZE], int result[SIZE][SIZE]) {
     for (int i = 0; i < SIZE; ++i) {
         for (int j = 0; j < SIZE; ++j) {

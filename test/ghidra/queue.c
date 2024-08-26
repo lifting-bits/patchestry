@@ -1,3 +1,10 @@
+// UNSUPPORTED: system-windows
+// RUN: %cc %s -o %t
+// RUN %t; if [ "$(uname)" = "Linux" ]; then %decompile-headless %t dequeue %t1 fi
+// RUN %t; if [ "$(uname)" = "Darwin" ]; then %decompile-headless %t _dequeue %t1 fi
+// RUN %t1; %file-check %s --input-file %t1
+// CHECK: {{...}}
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -32,7 +39,6 @@ void enqueue(Queue *q, int value) {
     q->count++;
 }
 
-//CHECK: {{...}}
 int dequeue(Queue *q) {
     if (is_empty(q)) {
         printf("Queue is empty\n");

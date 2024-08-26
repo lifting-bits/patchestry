@@ -16,7 +16,6 @@ fi
 INPUT_PATH=$1
 FUNCTION_NAME=$2
 OUTPUT_PATH=$3
-TMP_OUTPUT_PATH="/tmp/patchestry.out.json"
 
 # Create docker container and run the decompilation
 docker build \
@@ -29,15 +28,15 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Make sure $TMP_OUTPUT_PATH exists so that it gets properly mounted
-touch $TMP_OUTPUT_PATH
+# Make sure $OUTPUT_PATH exists and is empty so that it can be
+# mounted to the container
+if [ ! -f $OUTPUT_PATH ]; then
+    touch $OUTPUT_PATH
+fi
+truncate -s 0 $OUTPUT_PATH
 
 docker run --rm \
     -v $INPUT_PATH:/input \
-    -v $TMP_OUTPUT_PATH:/output \
+    -v $OUTPUT_PATH:/output \
     trailofbits/patchestry-decompilation:latest \
     /input $FUNCTION_NAME /output
-
-if [ $(dirname $TMP_OUTPUT_PATH) != $OUTPUT_PATH ]; then
-    mv $TMP_OUTPUT_PATH $OUTPUT_PATH
-fi

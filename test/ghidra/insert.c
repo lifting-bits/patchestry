@@ -1,7 +1,13 @@
+// UNSUPPORTED: system-windows
+// RUN: %cc %s -o %t
+// RUN %t; if [ "$(uname)" = "Linux" ]; then %decompile-headless %t insert_substring %t1 fi
+// RUN %t; if [ "$(uname)" = "Darwin" ]; then %decompile-headless %t _insert_substring %t1 fi
+// RUN %t1; %file-check %s --input-file %t1
+// CHECK: {{...}}
+
 #include <stdio.h>
 #include <string.h>
 
-// CHECK: {{...}}
 void insert_substring(char *str, char *sub, int pos) {
     char temp[100];
     strncpy(temp, str, pos);
