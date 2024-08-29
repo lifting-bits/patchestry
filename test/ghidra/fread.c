@@ -1,10 +1,10 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t main %t1 && %file-check %s --input-file %t1
+// RUN: %cc %s -o %t && %decompile-headless %t fread_test %t1 && %file-check %s --input-file %t1
 // CHECK: {{...}}
 
 #include <stdio.h>
 
-int main(void) {
+int fread_test(void) {
     FILE *file = fopen("example.txt", "r");
     if (!file) {
         perror("Error opening file");
@@ -20,3 +20,6 @@ int main(void) {
     return 0;
 }
 
+int main(void) {
+    return fread_test();
+}
