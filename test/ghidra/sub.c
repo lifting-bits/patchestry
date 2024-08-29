@@ -1,10 +1,17 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t main %t1 && %file-check %s --input-file %t1
+// RUN: %cc %s -o %t && %decompile-headless %t sub %t1 && %file-check %s --input-file %t1
 // CHECK: {{...}}
 
-int main()
+#include <stdio.h>
+
+int sub()
 {
 	int x;	
 	x = 4;
 	return x - 4;
+}
+
+int main(void) {
+	printf("sub: %d\n", sub());
+	return 0;
 }

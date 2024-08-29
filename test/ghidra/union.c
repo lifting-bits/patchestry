@@ -1,5 +1,5 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t main %t1 && %file-check %s --input-file %t1
+// RUN: %cc %s -o %t && %decompile-headless %t union_test %t1 && %file-check %s --input-file %t1
 // CHECK: {{...}}
 
 struct access
@@ -14,9 +14,13 @@ union data
     struct access s;
 };
 
-int main(int argc, char **argv)
+int union_test(int argc, char **argv)
 {
     union data d;
     d.b = 0xffffffff00000000 + argc;
     return d.s.l;
+}
+
+int main(int argc, char **argv) {
+    return union_test(argc, argv);
 }
