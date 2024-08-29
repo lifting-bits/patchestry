@@ -6,6 +6,11 @@ cmake_minimum_required(VERSION 3.25)
 
 include(CTest)
 
+find_package(Python REQUIRED COMPONENTS Interpreter)
+if (Python_Interpreter_FOUND)
+  set(PYTHON_EXECUTABLE ${Python_EXECUTABLE})
+endif()
+
 # Configure the lit site configuration file
 configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in
@@ -14,15 +19,9 @@ configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py
 )
 
-# Define test dependencies
-set(TEST_DEPS
-  FileCheck
-)
-
 # Add a lit test suite named "PatchestryTest"
 add_lit_testsuite(PatchestryTest "Running Patchestry tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/ghidra
-  DEPENDS ${TEST_DEPS}
 )
 
 # Add a CTest test that runs the lit test suite

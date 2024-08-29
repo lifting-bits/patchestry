@@ -12,11 +12,21 @@ from lit.llvm import llvm_config
 from lit.llvm.subst import ToolSubst
 from lit.llvm.subst import FindTool
 
+# Prefix for function name
+if platform.system() == "Darwin":
+    config.function_prefix = "_"
+else:
+    config.function_prefix = ""
+
+config.debug = True
+
 # Configuration name
 config.name = 'PatchestryTest'
 
 # Set the test format to ShTest (shell-based tests)
-config.test_format = lit.formats.ShTest()
+config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
+
+config.python_executable = config.python_executable if config.python_executable else sys.executable
 
 # Define file suffixes for test files
 config.suffixes = ['.c', '.cpp']
@@ -33,9 +43,10 @@ config.patchestry_script_dir = os.path.join(config.patchestry_src_root, 'scripts
 # Add the Ghidra scripts directory to the substitutions list
 config.substitutions.append(('%PATH%', config.patchestry_script_dir))
 
+config.decompiler_headless_tool = os.path.join(config.patchestry_script_dir, 'decompile-headless.sh')
+
 # Define tool substitutions
 tools = [
-    ToolSubst('%decompile-headless', command='decompile-headless.sh'),
     ToolSubst('%file-check', command=FindTool('FileCheck')),
     ToolSubst('%cc', command=FindTool('clang')),
     ToolSubst('%cxx', command=FindTool('clang++')),
@@ -45,11 +56,6 @@ tools = [
 
 # Process tool substitutions
 for tool in tools:
-    if tool.command == 'decompile-headless.sh':
-        # Set the full path for the decompile-headless.sh script
-        path = [config.patchestry_script_dir]
-        tool.command = os.path.join(*path, tool.command)
-    # Add tool substitutions to LLVM config
     llvm_config.add_tool_substitutions([tool])
 
 # Add test directory to substitutions
@@ -57,3 +63,16 @@ config.substitutions.append(('%test_dir', os.path.join(config.test_source_root, 
 
 # Add PATH to substitutions
 config.substitutions.append(('%PATH%', config.environment['PATH']))
+
+config.substitutions.append(
+    ('%decompile-headless',
+     f"'{config.python_executable}' -c '"
+     f"import subprocess;"
+     f"import sys;"
+     f"args = sys.argv[1:4];"
+     f"print(args);"
+     f"args[1] = \"{config.function_prefix}\" + args[1]; "
+     f"result = subprocess.run([\"{config.decompiler_headless_tool}\"] + args, capture_output=True, text=True); "
+     f"print(result.stdout + result.stderr); "
+     f"sys.exit(result.returncode)' ")
+)

@@ -1,8 +1,5 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t
-// RUN %t; if [ "$(uname)" = "Linux" ]; then %decompile-headless %t multiply_matrices %t1 fi
-// RUN %t; if [ "$(uname)" = "Darwin" ]; then %decompile-headless %t _multiply_matrices %t1 fi
-// RUN %t1; %file-check %s --input-file %t1
+// RUN: %cc %s -o %t && %decompile-headless %t multiply_matrices %t1 && %file-check %s --input-file %t1
 // CHECK: {{...}}
 
 #include <stdio.h>
