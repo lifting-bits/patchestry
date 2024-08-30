@@ -25,9 +25,16 @@ RUN apt-get update && \
     apt-get clean --yes && \
     rm -rf /var/lib/apt/lists/*
 
+# Install Docker
+RUN curl -fsSL https://get.docker.com -o get-docker.sh \
+    && sh get-docker.sh \
+    && rm get-docker.sh
+
 RUN apt-get -y purge llvm-14 clang-14
 
 RUN pip3 install lit codespell jinja2 Pygments
 
 COPY ./install-llvm.sh /tmp/
 RUN chmod +x /tmp/install-llvm.sh && /tmp/install-llvm.sh ${LLVM_VERSION} all
+
+RUN groupadd docker || true && usermod -aG docker root
