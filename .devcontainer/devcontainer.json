@@ -4,8 +4,10 @@
 	"name": "C++",
 	// to run local build of devcontainer
 	"build": { "dockerfile": "./Dockerfile" },
-	"runArgs": ["--cap-add=SYS_PTRACE", "--security-opt", "seccomp=unconfined"],
-
+	"runArgs": ["--cap-add=SYS_PTRACE", "--security-opt", "seccomp=unconfined", "--privileged"],
+    "mounts": [
+        "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+    ],
 	// Configure tool-specific properties.
 	"customizations": {
 		// Configure properties specific to VS Code.
@@ -18,10 +20,15 @@
 		}
 	},
 
-	"remoteUser": "vscode",
+	"remoteUser": "root",
 	"features": {
 		"git": "os-provided",
-		"python": "os-provided"
+		"python": "os-provided",
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {
+			"version": "latest",
+			"moby": true,
+			"dockerDashComposeVersion": "v2"
+		  }
 	},
 	"containerEnv": {
 		"CMAKE_PREFIX_PATH": "/usr/lib/llvm-18/lib/cmake/mlir/;/usr/lib/llvm-18/lib/cmake/clang/",
