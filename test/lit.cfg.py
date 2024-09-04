@@ -51,28 +51,29 @@ tools = [
     ToolSubst('%cc', command=FindTool('clang')),
     ToolSubst('%cxx', command=FindTool('clang++')),
     ToolSubst('%host_cc', command=config.host_cc),
-    ToolSubst('%host_cxx', command=config.host_cxx)
+    ToolSubst('%host_cxx', command=config.host_cxx),
+    ToolSubst('%decompile-headless', command=config.decompiler_headless_tool)
 ]
 
 # Process tool substitutions
 for tool in tools:
     llvm_config.add_tool_substitutions([tool])
 
-# Add test directory to substitutions
-config.substitutions.append(('%test_dir', os.path.join(config.test_source_root, 'ghidra')))
+# # Add test directory to substitutions
+# config.substitutions.append(('%test_dir', os.path.join(config.test_source_root, 'ghidra')))
 
 # Add PATH to substitutions
 config.substitutions.append(('%PATH%', config.environment['PATH']))
 
-config.substitutions.append(
-    ('%decompile-headless',
-     f"'{config.python_executable}' -c '"
-     f"import subprocess;"
-     f"import sys;"
-     f"args = sys.argv[1:4];"
-     f"print(args);"
-     f"args[1] = \"{config.function_prefix}\" + args[1]; "
-     f"result = subprocess.run([\"{config.decompiler_headless_tool}\"] + args, capture_output=True, text=True); "
-     f"print(result.stdout + result.stderr); "
-     f"sys.exit(result.returncode)' ")
-)
+# config.substitutions.append(
+#     ('%decompile-headless', config.decompiler_headless_tool
+#      f"'{config.python_executable}' -c '"
+#      f"import subprocess;"
+#      f"import sys;"
+#      f"args = sys.argv[1:4];"
+#      f"print(args);"
+#      f"args[1] = \"{config.function_prefix}\" + args[1]; "
+#      f"result = subprocess.run([\"{config.decompiler_headless_tool}\"] + args, capture_output=True, text=True); "
+#      f"print(result.stdout + result.stderr); "
+#      f"sys.exit(result.returncode)' ")
+# )

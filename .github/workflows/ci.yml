@@ -35,11 +35,18 @@ jobs:
       image:
         ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
 
+    services:
+      docker:
+        image: docker:20.10-dind
+        options: --privileged
+        ports:
+          - 2375:2375
+
     env:
-        CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
-        LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
-        ENABLE_SANITIZER_UNDEFINED_BEHAVIOR: ${{ matrix.sanitizers }}
-        ENABLE_SANITIZER_ADDRESS: ${{ matrix.sanitizers }}
+      CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
+      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
+      ENABLE_SANITIZER_UNDEFINED_BEHAVIOR: ${{ matrix.sanitizers }}
+      ENABLE_SANITIZER_ADDRESS: ${{ matrix.sanitizers }}
 
     steps:
       - name: Clone the Patchestry repository
@@ -54,59 +61,7 @@ jobs:
       - name: Build ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: cmake --build --preset ci --config ${{ matrix.build-type }} -j $(nproc)
 
-      #- name: Test ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
-      #  run: |
-      #    cmake --preset ci
-      #    ctest --preset ci --build-config ${{ matrix.build-type }}
-  test:
-    needs: build
-    strategy:
-      matrix:
-        llvm-version: [18]
-        image-version: [22.04]
-        build-type: [Release, Debug]
-        sanitizers: [ON, OFF]
-    runs-on: ubuntu-${{ matrix.image-version }}
-    env:
-      CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
-      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
-      ENABLE_SANITIZER_UNDEFINED_BEHAVIOR: ${{ matrix.sanitizers }}
-      ENABLE_SANITIZER_ADDRESS: ${{ matrix.sanitizers }}
-        
-    steps:
-      - name: Clone the Patchestry repository
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-          
-      - name: Install CTest dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            software-properties-common \
-            ninja-build python3-pip \
-            ccache cmake lld lcov \
-            doxygen libzstd-dev
-            
-          curl -fsSL https://get.docker.com -o get-docker.sh \
-            && sh get-docker.sh \
-            && rm get-docker.sh
-        
-          sudo apt-get -y purge llvm-14 clang-14
-          pip3 install lit codespell jinja2 Pygments
-        
-          curl -fsSL https://apt.llvm.org/llvm.sh -o llvm.sh && \
-            chmod +x llvm.sh && \
-            sudo ./llvm.sh ${{ matrix.llvm-version }} all && \
-            rm llvm.sh
-        
-          sudo apt-get install libmlir-${{ matrix.llvm-version }}-dev mlir-${{ matrix.llvm-version }}-tools
-          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++-${{ matrix.llvm-version }} 60
-          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/clang-${{ matrix.llvm-version }} 60
-          sudo ln -s /usr/bin/FileCheck-${{ matrix.llvm-version }} /usr/bin/FileCheck
-        
-      - name: Run CTest
+      - name: Test ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: |
           cmake --preset ci
           ctest --preset ci --build-config ${{ matrix.build-type }}
