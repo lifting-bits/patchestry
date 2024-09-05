@@ -1,6 +1,8 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t struct_test %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function struct_test --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?struct_test}}"
 
 struct data
 {

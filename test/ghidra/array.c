@@ -1,6 +1,8 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t array %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function array --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?array}}"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,4 +28,3 @@ int main(int a, char **argv)
 {
     return array(a, argv);
 }
-

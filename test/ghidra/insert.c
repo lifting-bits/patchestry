@@ -1,6 +1,8 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t insert_substring %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function insert_substring --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?insert_substring}}"
 
 #include <stdio.h>
 #include <string.h>
@@ -21,4 +23,3 @@ int main() {
     printf("After insertion: %s\n", str);
     return 0;
 }
-

@@ -1,6 +1,8 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t union_test %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function union_test --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?union_test}}"
 
 struct access
 {

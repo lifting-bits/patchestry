@@ -1,6 +1,9 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t dequeue %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function dequeue --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?dequeue}}"
+
 
 #include <stdio.h>
 #include <stdlib.h>
