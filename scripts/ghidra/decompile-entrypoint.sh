@@ -13,8 +13,25 @@ if [ "$#" -lt 3 ]; then
 fi
 
 INPUT_PATH=$1
+if [ ! -f $INPUT_PATH ]; then
+    echo "Input file does not exist"
+    exit 1
+fi
+
 FUNCTION_NAME=$2
 OUTPUT_PATH=$3
+if [ ! -f $OUTPUT_PATH ]; then
+    echo "Output file does not exist"
+    exit 1
+fi
+
+if [ ! -w "$OUTPUT_PATH" ]; then
+    sudo chmod 777 "$OUTPUT_PATH" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to change permissions on output file '$OUTPUT_PATH'."
+        exit 1
+    fi
+fi
 
 # Create a new Ghidra project and import the file
 ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
