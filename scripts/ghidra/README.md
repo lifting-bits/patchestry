@@ -21,7 +21,7 @@ To decompile and extract pcode for a specific function from a binary file, use
 the `decompile-headless.sh` script. This script extracts the pcode for the
 specified function and writes the json output to a file named `<output-file>`.
 
-```sh ./decompile-headless.sh <binary> <function-name> <output-file> ```
+```sh ./decompile-headless.sh --input <binary> --function <function-name> --output <output-file> ```
 
 ## Running Patchestry via Ghidra GUI
 

@@ -1,6 +1,6 @@
 // UNSUPPORTED: system-windows
 // RUN: %cc %s -g -o %t.o
-// RUN: %decompile-headless --input %t.o --function is_prime --output %t
+// RUN: %decompile-headless --input %t.o --function is_prime --output %t %ci_output_folder
 // RUN: %file-check -vv %s --input-file %t
 // CHECK: "name":"{{_?is_prime}}"
 
