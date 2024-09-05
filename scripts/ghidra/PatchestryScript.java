@@ -114,7 +114,7 @@ public class PatchestryScript extends GhidraScript {
         println("Serializing function: " + function.getName() + " @ " + function.getEntryPoint());
         serializer.serialize(function).close();
     }
-    
+
     private void runHeadless() throws Exception {
         final var args = getScriptArgs();
         if (args.length != 2) {
@@ -123,10 +123,10 @@ public class PatchestryScript extends GhidraScript {
             println("\tOUTPUT_FILE");
             return;
         }
-        
+
         final var functionName = args[0];
         final var outputPath = args[1];
-        
+
         final var functions = getGlobalFunctions(functionName);
         if (functions.isEmpty()) {
             println("Function not found: " + functionName);
@@ -144,12 +144,12 @@ public class PatchestryScript extends GhidraScript {
         final var curFunction = getFunctionContaining(currentAddress);
         final var functionName = curFunction.getName();
         final var jsonPath = Files.createTempFile(functionName + '.', ".patchestry.json");
-        
+
         serializeToFile(jsonPath, curFunction);
 
         final var mlirPath = Files.createTempFile(functionName + '.', ".patchestry.out");
         final var binaryPath = "patchestry";
-        
+
         final var cmd = new ArrayList<String>();
         cmd.add(binaryPath);
         cmd.add(jsonPath.toString());
