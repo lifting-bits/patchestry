@@ -6,12 +6,6 @@ cmake_minimum_required(VERSION 3.25)
 
 include(CTest)
 
-add_custom_target(decompile_headless_docker
-    COMMAND sh ./scripts/ghidra/build-headless-docker.sh
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Building decompile-headless docker image..."
-)
-
 configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in
   ${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg.py
@@ -22,8 +16,6 @@ configure_lit_site_cfg(
 add_lit_testsuite(headless-ghidra
   "Running headless Ghidra decompilation tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/ghidra
-  DEPENDS
-    decompile_headless_docker
 )
 
 add_test(NAME lit
