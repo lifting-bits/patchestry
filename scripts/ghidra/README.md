@@ -13,14 +13,15 @@ Before running the scripts, make sure you have the following installed:
 
 - **Docker**: The scripts use a Docker container to run Ghidra in headless mode.
 
+To perform headless decompilation, you need to build a Docker container (`decompile-headless.dockerfile`) configured to run Ghidra in headless mode. You can do this by running the `build-headless-docker.sh` script.
+
 ## Running Headless Decompilation Script
 
 To decompile and extract pcode for a specific function from a binary file, use
 the `decompile-headless.sh` script. This script extracts the pcode for the
-specified function and writes the output to a file named `patchestry.out.json`
-in the output directory.
+specified function and writes the json output to a file named `<output-file>`.
 
-```bash ./decompile-headless.sh <binary> <function-name> <output-file> ```
+```sh ./decompile-headless.sh <binary> <function-name> <output-file> ```
 
 ## Running Patchestry via Ghidra GUI
 

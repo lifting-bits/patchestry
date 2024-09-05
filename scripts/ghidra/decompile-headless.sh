@@ -17,17 +17,6 @@ INPUT_PATH=$1
 FUNCTION_NAME=$2
 OUTPUT_PATH=$3
 
-# Create docker container and run the decompilation
-docker build \
-    -t trailofbits/patchestry-decompilation:latest \
-    -f ${SCRIPTS_DIR}/DecompileHeadless.Dockerfile \
-    ${SCRIPTS_DIR}
-
-if [ $? -ne 0 ]; then
-    echo "Docker build failed"
-    exit 1
-fi
-
 # Make sure $OUTPUT_PATH exists and is empty so that it can be
 # mounted to the container
 if [ ! -f $OUTPUT_PATH ]; then

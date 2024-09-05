@@ -6,12 +6,12 @@ cmake_minimum_required(VERSION 3.25)
 
 include(CTest)
 
-find_package(Python REQUIRED COMPONENTS Interpreter)
-if (Python_Interpreter_FOUND)
-  set(PYTHON_EXECUTABLE ${Python_EXECUTABLE})
-endif()
+add_custom_target(decompile_headless_docker
+    COMMAND sh ./scripts/ghidra/build-headless-docker.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Building decompile-headless docker image..."
+)
 
-# Configure the lit site configuration file
 configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in
   ${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg.py
@@ -19,12 +19,14 @@ configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py
 )
 
-# Add a lit test suite named "PatchestryTest"
-add_lit_testsuite(PatchestryTest "Running Patchestry tests"
+add_lit_testsuite(headless-ghidra
+  "Running headless Ghidra decompilation tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/ghidra
+  DEPENDS
+    decompile_headless_docker
 )
 
-# Add a CTest test that runs the lit test suite
 add_test(NAME lit
   COMMAND lit -v "${CMAKE_CURRENT_BINARY_DIR}/ghidra"
-  --param BUILD_TYPE=$<CONFIG>)
+  --param BUILD_TYPE=$<CONFIG>
+)
