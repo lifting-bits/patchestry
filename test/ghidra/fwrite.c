@@ -1,6 +1,8 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t write_file %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function write_file --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?write_file}}"
 
 #include <stdio.h>
 
@@ -19,4 +21,3 @@ int main() {
     write_file(filename, content);
     return 0;
 }
-

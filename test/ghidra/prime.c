@@ -1,6 +1,8 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t is_prime %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function is_prime --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?is_prime}}"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -18,4 +20,3 @@ int main() {
     printf("is prime: %d\n", is_prime(n));
     return 0;
 }
-

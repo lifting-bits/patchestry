@@ -1,12 +1,14 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t sub %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function sub --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?sub}}"
 
 #include <stdio.h>
 
 int sub()
 {
-	int x;	
+	int x;
 	x = 4;
 	return x - 4;
 }

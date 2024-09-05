@@ -1,6 +1,8 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t multiply_matrices %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function multiply_matrices --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?multiply_matrices}}"
 
 #include <stdio.h>
 

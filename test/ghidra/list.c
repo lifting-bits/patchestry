@@ -1,6 +1,8 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t print_list %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function print_list --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?print_list}}"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,4 +43,3 @@ int main(void) {
 
     return 0;
 }
-

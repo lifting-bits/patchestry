@@ -1,6 +1,8 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t string_concat %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function string_concat --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?string_concat}}"
 
 #include <stdio.h>
 #include <string.h>
@@ -16,4 +18,3 @@ int main() {
     printf("%s\n", string_concat(dest, src));
     return 0;
 }
-

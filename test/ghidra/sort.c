@@ -1,16 +1,18 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t && %decompile-headless %t sort_test %t1 && %file-check %s --input-file %t1
-// CHECK: {{...}}
+// RUN: %cc %s -o %t.o
+// RUN: %decompile-headless --input %t.o --function sort_test --output %t
+// RUN: %file-check -vv %s --input-file %t
+// CHECK: "name":"{{_?sort_test}}"
 
 #include <stdio.h>
- 
+
 int sort_test()
 {
   int array[100], n, c, d, swap;
   scanf("%d", &n);
   for (c = 0; c < n; c++)
     scanf("%d", &array[c]);
- 
+
   for (c = 0 ; c < n - 1; c++) {
     for (d = 0 ; d < n - c - 1; d++) {
       if (array[d] > array[d+1]) {
@@ -20,10 +22,10 @@ int sort_test()
       }
     }
   }
- 
+
   for (c = 0; c < n; c++)
      printf("%d\n", array[c]);
- 
+
   return 0;
 }
 
