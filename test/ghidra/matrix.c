@@ -1,5 +1,5 @@
 // UNSUPPORTED: system-windows
-// RUN: %cc %s -o %t.o
+// RUN: %cc %s -g -o %t.o
 // RUN: %decompile-headless --input %t.o --function multiply_matrices --output %t
 // RUN: %file-check -vv %s --input-file %t
 // CHECK: "name":"{{_?multiply_matrices}}"
