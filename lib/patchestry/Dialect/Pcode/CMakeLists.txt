@@ -6,6 +6,7 @@ add_mlir_dialect_library(MLIRPcode
   PcodeDialect.cpp
   PcodeOps.cpp
   PcodeTypes.cpp
+  Deserialize.cpp
 
   ADDITIONAL_HEADER_DIRS
     ${PROJECT_SOURCE_DIR}/include/patchestry
