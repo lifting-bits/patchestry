@@ -9,6 +9,9 @@
 #include <mlir/Tools/mlir-translate/MlirTranslateMain.h>
 #include <mlir/Support/LogicalResult.h>
 
+#include <patchestry/Ghidra/PcodeTranslation.hpp>
+
 int main(int argc, char **argv) {
+    patchestry::ghidra::register_pcode_translation();
     return mlir::failed(mlir::mlirTranslateMain(argc, argv, "P-Code translation driver\n"));
 }
