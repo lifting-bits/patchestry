@@ -2,7 +2,11 @@
 # is licensed in accordance with the terms specified in the LICENSE file found
 # in the root directory of this source tree.
 
-add_library(patchestry_ghidra STATIC Codegen.cpp Deserialize.cpp)
+add_library(patchestry_ghidra STATIC
+  PcodeTranslation.cpp
+)
+
+add_library(patchestry::ghidra ALIAS patchestry_ghidra)
 
 target_link_libraries(patchestry_ghidra
   PUBLIC
