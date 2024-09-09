@@ -15,14 +15,19 @@
 #include <mlir/IR/OwningOpRef.h>
 #include <mlir/Tools/mlir-translate/Translation.h>
 
+#include <llvm/Support/JSON.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 
 namespace patchestry::ghidra {
 
     static mlir::OwningOpRef< mlir_operation > deserialize(
-        const llvm::MemoryBuffer *buffer, mcontext_t * /* mctx */
+        const llvm::MemoryBuffer *buffer, mcontext_t *mctx
     ) {
+        auto json = llvm::json::parse(buffer->getBuffer());
+        if (!json) {
+            mlir::emitError(mlir::UnknownLoc::get(mctx), "failed to parse PCode JSON: ") << toString(json.takeError());
+        }
         return {};
     }
 
@@ -31,7 +36,6 @@ namespace patchestry::ghidra {
             "deserialize-pcode", "translate Ghidra Pcode JSON into Patchestry's Pcode dialect",
             [] (llvm::SourceMgr &smgr, mcontext_t *mctx) {
                 assert(smgr.getNumBuffers() == 1 && "expected one buffer");
-                smgr.
                 return deserialize(smgr.getMemoryBuffer(smgr.getMainFileID()), mctx);
             },
             [] (mlir::DialectRegistry &registry) {
