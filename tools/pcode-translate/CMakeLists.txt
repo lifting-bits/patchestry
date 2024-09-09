@@ -9,4 +9,5 @@ add_executable(pcode-translate
 target_link_libraries(pcode-translate
     PRIVATE
         ${MLIR_LIBS}
+        patchestry::ghidra
 )
