@@ -9,6 +9,7 @@
 #include <patchestry/Ghidra/PcodeTranslation.hpp>
 
 #include <patchestry/Dialect/Pcode/PcodeDialect.hpp>
+#include <patchestry/Dialect/Pcode/Deserialize.hpp>
 
 #include <patchestry/Util/Common.hpp>
 
@@ -28,7 +29,7 @@ namespace patchestry::ghidra {
         if (!json) {
             mlir::emitError(mlir::UnknownLoc::get(mctx), "failed to parse PCode JSON: ") << toString(json.takeError());
         }
-        return {};
+        return pc::deserialize(json.get(), mctx);
     }
 
     void register_pcode_translation() {
