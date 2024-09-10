@@ -18,6 +18,11 @@ add_lit_testsuite(headless-ghidra
   ${CMAKE_CURRENT_SOURCE_DIR}/ghidra
 )
 
+add_lit_testsuite(pcode-translate-tests
+  "Running pcode-translate tests"
+  ${CMAKE_CURRENT_SOURCE_DIR}/pcode-translate
+)
+
 add_test(NAME lit
   COMMAND lit -v "${CMAKE_CURRENT_BINARY_DIR}/ghidra"
   --param BUILD_TYPE=$<CONFIG>
