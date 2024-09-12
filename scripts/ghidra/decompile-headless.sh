@@ -12,13 +12,15 @@ show_help() {
 Usage: $0 [OPTIONS]
 
 Options:
-  -h, --help        Show this help message and exit
-  -i, --input       Path to the input file
-  -f, --function    Name of the function to decompile
-  -o, --output      Path to the output file where results will be saved
-  -v, --verbose     Enable verbose output
-  -t, --interactive Start Docker container in interactive mode
-  -c, --ci          Run in CI mode
+  -h, --help            Show this help message and exit
+  -i, --input           Path to the input file
+  -f, --function        Name of the function to decompile
+  -d, --decompile       Decompile functions to extract pcode
+  -l, --list-functions  List all functions from input file
+  -o, --output          Path to the output file where results will be saved
+  -v, --verbose         Enable verbose output
+  -t, --interactive     Start Docker container in interactive mode
+  -c, --ci              Run in CI mode
 EOF
 }
 
@@ -36,6 +38,14 @@ parse_args() {
             -f|--function)
                 FUNCTION_NAME="$2"
                 shift 2
+                ;;
+            -d|--decompile)
+                DECOMPILE="true";
+                shift
+                ;;
+            -l|--list-functions)
+                LIST_FUNCTIONS="true"
+                shift
                 ;;
             -o|--output)
                 OUTPUT_PATH="$2"
@@ -65,11 +75,6 @@ parse_args() {
 validate_args() {
     if [ -z "$INPUT_PATH" ]; then
         echo "Error: Missing required option: -i, --input <input_file>"
-        exit 1
-    fi
-
-    if [ -z "$FUNCTION_NAME" ]; then
-        echo "Error: Missing required option: -f, --function <function_name>"
         exit 1
     fi
 
@@ -103,8 +108,19 @@ build_docker_command() {
         RUN="docker run --rm \
             -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
             trailofbits/patchestry-decompilation:latest \
-            /mnt/output/$INPUT_PATH \"$FUNCTION_NAME\" /mnt/output/$OUTPUT_PATH"
-    else
+            --input /mnt/output/$INPUT_PATH \
+            --command decompile --function \"$FUNCTION_NAME\" \
+            --output /mnt/output/$OUTPUT_PATH"
+
+    elif [ -n "$LIST_FUNCTIONS" ]; then
+        RUN="docker run --rm \
+            -v \"$INPUT_PATH:/input.o\" \
+            -v \"$OUTPUT_PATH:/output.json\" \
+            trailofbits/patchestry-decompilation:latest \
+            --input /input.o --command list-functions \
+            --output /output.json"
+
+    elif [ -n "$DECOMPILE" ]; then
         RUN="docker run --rm \
             -v \"$INPUT_PATH:/input.o\" \
             -v \"$OUTPUT_PATH:/output.json\" \
@@ -116,8 +132,17 @@ build_docker_command() {
 
         if [ "$INTERACTIVE" = true ]; then
             RUN="${RUN} --entrypoint /bin/bash"
+        elif [ -n "$FUNCTION_NAME" ]; then
+            RUN="${RUN} \
+                --input /input.o \
+                --command decompile \
+                --function \"$FUNCTION_NAME\" \
+                --output /output.json"
         else
-            RUN="${RUN} /input.o \"$FUNCTION_NAME\" /output.json"
+            RUN="${RUN} \
+                --input /input.o \
+                --command decompile-all \
+                --output /output.json"
         fi
     fi
 }

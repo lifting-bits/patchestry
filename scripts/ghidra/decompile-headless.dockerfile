@@ -49,7 +49,8 @@ WORKDIR /home/user/
 RUN mkdir -p /home/user/ghidra_projects /home/user/ghidra_scripts
 
 COPY --from=build /ghidra ghidra
-COPY PatchestryScript.java ghidra_scripts/
+COPY PatchestryListFunctions.java ghidra_scripts/
+COPY PatchestryDecompileFunctions.java ghidra_scripts/
 COPY --chown=user:user --chmod=755 decompile-entrypoint.sh  .
 
 ENV GHIDRA_HOME=/home/user/ghidra
