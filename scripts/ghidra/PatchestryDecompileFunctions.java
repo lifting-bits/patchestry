@@ -29,6 +29,7 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.OutputStreamWriter;
+import java.io.File;
 
 
 import java.nio.file.Files;
@@ -253,9 +254,54 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
     }
 
+    private void decompileSingleFunctionInGUI() throws Exception {
+        String functionNameArg = askString("functionNameArg", "Function name to decompile: ");
+        File outputDirectory = askDirectory("outputFilePath", "Select output directory");
+        File outputFilePath = new File(outputDirectory, "patchestry.json");
+
+        final var functions = getGlobalFunctions(functionNameArg);
+        if (functions.isEmpty()) {
+            println("Function not found: " + functionNameArg);
+            return;
+        }
+
+        if (functions.size() > 1) {
+            println("Warning: Found more than one function named: " + functionNameArg);
+        }
+
+        println("Serializing function: " + functions.get(0).getName() + " @ " + functions.get(0).getEntryPoint());
+
+        // Serialize to the file
+        serializeToFile(outputFilePath.toPath(), functions);
+    }
+
+    private void decompileAllFunctionsInGUI() throws Exception {
+        File outputDirectory = askDirectory("outputFilePath", "Select output directory");
+        File outputFilePath = new File(outputDirectory, "patchestry.json");
+        List<Function> functions = getAllFunctions();
+        if (functions.isEmpty()) {
+            println("No functions found in the current program");
+            return;
+        }
+
+        // Serialize to the file
+        serializeToFile(outputFilePath.toPath(), functions);
+    }
+
     // GUI mode execution
     private void runGUI() throws Exception {
-        println("GUI mode is not implemented yet!");
+        String mode = askString("mode", "Please enter mode:");
+        println("Running in mode: " + mode);
+        switch (mode.toLowerCase()) {
+            case "single":
+                decompileSingleFunctionInGUI();
+                break;
+            case "all":
+                decompileAllFunctionsInGUI();
+                break;
+            default:
+                throw new IllegalArgumentException("Invalid mode: " + mode);
+        }
     }
 
     // Script entry point
