@@ -29,82 +29,104 @@ import ghidra.util.exception.CancelledException;
 
 import com.google.gson.stream.JsonWriter;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.lang.ProcessBuilder;
-import java.io.FileWriter;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.io.OutputStreamWriter;
+import java.io.File;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Collections;
 
 public class PatchestryListFunctions extends GhidraScript {
 
-    private void runHeadless() throws Exception {
-        final var args = getScriptArgs();
-        if (args.length != 1) {
-            println("Usage:\n\tOUTPUT_FILE");
-            return;
+    public class FunctionSerializer extends JsonWriter {
+        public FunctionSerializer(java.io.BufferedWriter writer) {
+            super(writer);
         }
 
-        final var outputPath = args[0];
+        public JsonWriter serialize(Function function) throws Exception {
+            beginObject();
+            name("name").value(function.getName());
+            name("address").value(function.getEntryPoint().toString());
+            name("is_thunk").value(function.isThunk());
+            return endObject();
+        }
 
-        Program program = getCurrentProgram();
-        if (program == null) {
+        public JsonWriter serialize(List<Function> functions) throws Exception {
+            beginObject();
+            name("program").value(currentProgram.getName());
+            name("functions").beginArray();
+            for (Function function : functions) {
+                serialize(function);
+            }
+            return endArray().endObject();
+        }
+    }
+
+    private List<Function> getAllFunctions() {
+        if (currentProgram == null || currentProgram.getFunctionManager() == null) {
+            return Collections.emptyList();
+        }
+        FunctionIterator functionIter = currentProgram.getFunctionManager().getFunctions(true);
+        List<Function> functions = new ArrayList<>();
+        while (functionIter.hasNext() && !monitor.isCancelled()) {
+            functions.add(functionIter.next());
+        }
+        return functions;
+    }
+
+    private void serializeToFile(Path file, List<Function> functions) throws Exception { 
+        if (file == null || functions == null || functions.isEmpty()) {
+            throw new IllegalArgumentException("Invalid file path or empty function list");
+        }
+
+        final var serializer = new FunctionSerializer(Files.newBufferedWriter(file));
+        serializer.serialize(functions).close();
+    }
+
+    private void runHeadless() throws Exception {
+        if (getScriptArgs().length != 1) {
+            throw new IllegalArgumentException("Output file is not specified");
+        }
+
+        if (currentProgram == null) {
             println("Error: No program is currently loaded.");
             return;
         }
-
-        try(PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
-            writer.println("Functions in the binary:");
-            writer.println("========================");
-
-            FunctionIterator functions = program.getFunctionManager().getFunctions(true);
-            for (Function function : functions) {
-                if (monitor.isCancelled()) {
-                    throw new CancelledException();
-                }
-                writer.printf("%s at 0x%s%n", function.getName(), function.getEntryPoint().toString());
-            }
-
-            println("Function list has been written to: " + outputPath);
-
-        } catch(CancelledException e) {
-            println("Operation was cancelled by the user.");
-        } catch(IOException e) {
-            println("Error writing to file: " + e.getMessage());
-        } catch(Exception e) {
-            println("An unexpected error occurred: " + e.getMessage());
-        }
+        
+        final var outputFilePath = getScriptArgs()[0];
+        final var functions = getAllFunctions();
+        serializeToFile(Path.of(outputFilePath), functions);
     }
 
     private void runGUI() throws Exception {
         if (currentProgram == null) {
-            popup("Error: No program is currently loaded.");
+            println("Error: No program is currently loaded.");
             return;
         }
 
-        Listing listing = currentProgram.getListing();
-        FunctionIterator functions = currentProgram.getFunctionManager().getFunctions(true);
-        StringBuilder functionInfo = new StringBuilder();
-
-        for (Function function : functions) {
-            String functionName = function.getName();
-            String functionAddress = function.getEntryPoint().toString();
-            functionInfo.append(String.format("%s at 0x%s%ns\n", functionName, functionAddress));
-        }
-
-        if (functionInfo.length() > 0) {
-            popup(functionInfo.toString());
-        } else {
-            popup("No functions found!");
-        }
+        File outputDirectory = askDirectory("outputDirectory", "Select Output Directory");
+        File outputFilePath = new File(outputDirectory, "functions.json");
+        final var functions = getAllFunctions();
+        serializeToFile(outputFilePath.toPath(), functions);
     }
 
     public void run() throws Exception {
-        if (isRunningHeadless()) {
-            runHeadless();
-        } else {
-            runGUI();
+        try {
+            if (isRunningHeadless()) {
+                runHeadless();
+            } else {
+                runGUI();
+            }
+        } catch (Exception e) {
+            println("Error: " + e.getMessage());
+            e.printStackTrace(new PrintWriter(new OutputStreamWriter(System.err)));
+            throw e;
         }
     }
 }
