@@ -35,9 +35,9 @@ Options:
       Specify the output file to write the results.
 
 Examples:
-  ./decompiler-entrypoint.sh --input /path/to/file --command list-functions --output /path/to/list.out
-  ./decompiler-entrypoint.sh --input /path/to/file --command decompile --function main --output /path/to/output.json
-  ./decompiler-entrypoint.sh --input /path/to/file --command decompile-all --output /path/to/output.json
+  ./decompile-entrypoint.sh --input /path/to/file --command list-functions --output /path/to/output.json
+  ./decompile-entrypoint.sh --input /path/to/file --command decompile --function main --output /path/to/output.json
+  ./decompile-entrypoint.sh --input /path/to/file --command decompile-all --output /path/to/output.json
 EOF
 }
 

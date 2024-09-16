@@ -15,12 +15,16 @@ Options:
   -h, --help            Show this help message and exit
   -i, --input           Path to the input file
   -f, --function        Name of the function to decompile
-  -d, --decompile       Decompile functions to extract pcode
   -l, --list-functions  List all functions from input file
   -o, --output          Path to the output file where results will be saved
   -v, --verbose         Enable verbose output
   -t, --interactive     Start Docker container in interactive mode
   -c, --ci              Run in CI mode
+
+Examples:
+  ./decompile-headless.sh --input /path/to/file --output /path/to/output.json  // Decompile all functions
+  ./decompile-headless.sh --input /path/to/file --function main --output /path/to/output.json // Decompile single function
+  ./decompile-headless.sh --input /path/to/file --list-functions --output /path/to/output.json // List all functions from binary
 EOF
 }
 
@@ -38,10 +42,6 @@ parse_args() {
             -f|--function)
                 FUNCTION_NAME="$2"
                 shift 2
-                ;;
-            -d|--decompile)
-                DECOMPILE="true";
-                shift
                 ;;
             -l|--list-functions)
                 LIST_FUNCTIONS="true"
@@ -120,7 +120,7 @@ build_docker_command() {
             --input /input.o --command list-functions \
             --output /output.json"
 
-    elif [ -n "$DECOMPILE" ]; then
+    else
         RUN="docker run --rm \
             -v \"$INPUT_PATH:/input.o\" \
             -v \"$OUTPUT_PATH:/output.json\" \
