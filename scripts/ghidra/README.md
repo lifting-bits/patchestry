@@ -1,6 +1,8 @@
 # Decompilation Framework
 
-The directory includes a decompilation script that runs Ghidra in headless mode to extract pcode for specific functions from binary files.
+The directory contains a script that runs Ghidra in headless mode to
+decompile binary files, identifying and listing all functions while
+extracting their corresponding pcode.
 
 We support two decompilation modes:
 
@@ -17,11 +19,18 @@ To perform headless decompilation, you need to build a Docker container (`decomp
 
 ## Running Headless Decompilation Script
 
-To decompile and extract pcode for a specific function from a binary file, use
-the `decompile-headless.sh` script. This script extracts the pcode for the
-specified function and writes the json output to a file named `<output-file>`.
+The `decompile-headless.sh` script decompiles a binary file using Ghidra
+in headless mode, extracting pcode for either a specific function or all
+functions by default, and saving the output as json to a specified file `<output-file>`.
+
+To extract P-code for a particular function, use the `--function` flag; otherwise,
+it decompiles all functions if no function name is specified.
 
 ```sh ./decompile-headless.sh --input <binary> --function <function-name> --output <output-file> ```
+
+The script also list all functions in the binary using the `--list-functions` flag.
+
+```sh ./decompile-headless.sh --input <binary> --list-functions --output <output-file> ```
 
 ## Running Patchestry via Ghidra GUI
 
@@ -37,6 +46,8 @@ specified function and writes the json output to a file named `<output-file>`.
 
 3. Create a project and import a binary file.
 
-4. Run `PatchestryScript.java`.
+4. Run `PatchestryDecompileFunctions.java` in `single` or `all` mode to decompile single or all functions from a binary file.
+
+5. Run `PatchestryListFunctions.java` script to list all the functions in a binary file.
 
 **Note:** Ghidra scripts must be installed. See the [build](build.md) section for details.

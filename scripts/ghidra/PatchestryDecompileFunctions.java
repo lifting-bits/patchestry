@@ -204,11 +204,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
     private void decompileSingleFunction() throws Exception {
         if (getScriptArgs().length < 3) {
-            throw new IllegalArgumentException("Insufficient arguments. Expected: <function_name> <output_file>");
+            throw new IllegalArgumentException("Insufficient arguments. Expected: <function_name> <output_file> as argument");
         }
         String functionNameArg = getScriptArgs()[1];
         String outputFilePath = getScriptArgs()[2];
-        println("OutputFilePath: " + outputFilePath);
         final var functions = getGlobalFunctions(functionNameArg);
         if (functions.isEmpty()) {
             println("Function not found: " + functionNameArg);
@@ -274,8 +273,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         if (functions.size() > 1) {
             println("Warning: Found more than one function named: " + functionNameArg);
         }
-
-        println("Serializing function: " + functions.get(0).getName() + " @ " + functions.get(0).getEntryPoint());
 
         // Serialize to the file
         serializeToFile(outputFilePath.toPath(), functions);
