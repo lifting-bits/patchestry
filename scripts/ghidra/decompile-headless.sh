@@ -86,7 +86,6 @@ validate_args() {
 
 prepare_paths() {
     INPUT_PATH=$(realpath "$INPUT_PATH")
-    OUTPUT_PATH=$(realpath "$OUTPUT_PATH")
 
     if [ ! -e "$INPUT_PATH" ]; then
         echo "Error: Input file does not exist: $INPUT_PATH"
@@ -98,6 +97,38 @@ prepare_paths() {
             echo "Creating output file: $OUTPUT_PATH"
         fi
         touch "$OUTPUT_PATH"
+    fi
+    # realpath may fail of OUTPUT_PATH does not exist
+    OUTPUT_PATH=$(realpath "$OUTPUT_PATH")
+}
+
+is_not_absolute_path() {
+    case "$1" in
+        /*)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+validate_paths() {
+    # CI_OUTPUT_FOLDER should be absolute to avoid any issue with mounting locations
+    if [ -n "$CI_OUTPUT_FOLDER" ] && is_not_absolute_path "$CI_OUTPUT_FOLDER"; then
+        echo "$CI_OUTPUT_FOLDER path is not absolute. Exiting!"
+        exit 1
+    fi
+
+    # Expect both input and output file to exist
+    if [! -f "$INPUT_PATH" ]; then
+        echo "Input file $INPUT_PATH doesn't exist. Exiting!"
+        exit 1
+    fi
+
+    if [! -f "$OUTPUT_PATH" ]; then
+        echo "Output file $OUTPUT_PATH doesn't exist. Exiting!"
+        exit 1
     fi
 }
 
@@ -151,6 +182,7 @@ main() {
     parse_args "$@"
     validate_args
     prepare_paths
+    validate_paths
     build_docker_command
 
     if [ "$VERBOSE" = true ]; then

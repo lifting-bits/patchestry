@@ -54,16 +54,21 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             return "unknown";
         }
 
-        return switch (executableFormat.toLowerCase()) {
-            case "pe" -> "windows";
-            case "elf" -> "linux";
-            case "mach-o" -> "macos";
-            default -> "unknown";
-        };
+        executableFormat = executableFormat.toLowerCase();
+        if (executableFormat.contains("pe")) {
+            return "windows";
+        } else if (executableFormat.contains("elf")) {
+            return "linux";
+        } else if (executableFormat.contains("mach-o")) {
+            return "macos";
+        } else {
+            return "unknown";
+        }
     }
 
     private String getOS() throws Exception {
         String executableFormat = currentProgram.getExecutableFormat();
+        println("executableFormat " + executableFormat);
         return inferOSType(executableFormat);
     }
 
@@ -96,13 +101,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
             if (node.isConstant()) {
                 value("const"); 
-            }else if (node.isUnique()) {
+            } else if (node.isUnique()) {
                 value("unique"); 
-            }else if (node.isRegister()) {
+            } else if (node.isRegister()) {
                 value("register"); 
-            }else if (node.isAddress()) {
+            } else if (node.isAddress()) {
                 value("ram"); 
-            }else {
+            } else {
                 throw new Exception("Unknown Varnode kind.");
             }
 
@@ -203,6 +208,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
         String functionNameArg = getScriptArgs()[1];
         String outputFilePath = getScriptArgs()[2];
+        println("OutputFilePath: " + outputFilePath);
         final var functions = getGlobalFunctions(functionNameArg);
         if (functions.isEmpty()) {
             println("Function not found: " + functionNameArg);
