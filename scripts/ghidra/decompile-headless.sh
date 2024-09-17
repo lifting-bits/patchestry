@@ -121,12 +121,12 @@ validate_paths() {
     fi
 
     # Expect both input and output file to exist
-    if [! -f "$INPUT_PATH" ]; then
+    if [ ! -f "$INPUT_PATH" ]; then
         echo "Input file $INPUT_PATH doesn't exist. Exiting!"
         exit 1
     fi
 
-    if [! -f "$OUTPUT_PATH" ]; then
+    if [ ! -f "$OUTPUT_PATH" ]; then
         echo "Output file $OUTPUT_PATH doesn't exist. Exiting!"
         exit 1
     fi
@@ -136,12 +136,28 @@ build_docker_command() {
     if [ -n "$CI_OUTPUT_FOLDER" ]; then
         INPUT_PATH=$(basename "$INPUT_PATH")
         OUTPUT_PATH=$(basename "$OUTPUT_PATH")
-        RUN="docker run --rm \
-            -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
-            trailofbits/patchestry-decompilation:latest \
-            --input /mnt/output/$INPUT_PATH \
-            --command decompile --function \"$FUNCTION_NAME\" \
-            --output /mnt/output/$OUTPUT_PATH"
+        if [ -n "$LIST_FUNCTIONS" ]; then
+            RUN="docker run --rm \
+                -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
+                trailofbits/patchestry-decompilation:latest \
+                --input /mnt/output/$INPUT_PATH \
+                --command list-functions \
+                --output /mnt/output/$OUTPUT_PATH"
+        elif [ -n "$FUNCTION_NAME" ]; then
+            RUN="docker run --rm \
+                -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
+                trailofbits/patchestry-decompilation:latest \
+                --input /mnt/output/$INPUT_PATH \
+                --command decompile --function \"$FUNCTION_NAME\" \
+                --output /mnt/output/$OUTPUT_PATH"
+        else
+            RUN="docker run --rm \
+                -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
+                trailofbits/patchestry-decompilation:latest \
+                --input /mnt/output/$INPUT_PATH \
+                --command decompile-all \
+                --output /mnt/output/$OUTPUT_PATH"
+        fi
 
     elif [ -n "$LIST_FUNCTIONS" ]; then
         RUN="docker run --rm \
