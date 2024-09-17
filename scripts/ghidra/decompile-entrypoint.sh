@@ -27,6 +27,7 @@ Options:
       Specify the command to execute. Available commands are:
         - list-functions: List all functions in the binary.
         - decompile: Decompile a single function.
+        - decompile-all: Decompile all functions in the binary.
 
   --function <FUNCTION_NAME>
       Decompile a specific function to extract pcode. This option is required when using the 'decompile' command.
