@@ -1,0 +1,17 @@
+// RUN: %pcode-translate --deserialize-pcode %s | %file-check %s
+{
+    // CHECK: pc.func @function
+    "name": "function",
+    "basic_blocks": [
+        {
+            // CHECK: pc.block @fisrt_block
+            "label": "fisrt_block",
+            "instructions": []
+        },
+        {
+            // CHECK: pc.block @second_block
+            "label": "second_block",
+            "instructions": []
+        }
+    ]
+}
