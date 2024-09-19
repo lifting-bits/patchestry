@@ -1,8 +1,20 @@
 // UNSUPPORTED: system-windows
 // RUN: %cc %s -g -o %t.o
 // RUN: %decompile-headless --input %t.o --function multiply_matrices --output %t %ci_output_folder
-// RUN: %file-check -vv %s --input-file %t
-// CHECK: "name":"{{_?multiply_matrices}}"
+// RUN: %file-check -vv --check-prefix=DECOMPILES %s --input-file %t
+// DECOMPILES: "name":"{{_?multiply_matrices}}"
+
+// RUN: %decompile-headless --input %t.o --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILEA %s --input-file %t
+// DECOMPILEA: "arch":"{{.*}}","os":"{{.*}}","functions":{{...}}
+// DECOMPILEA-SAME: "name":"{{_?multiply_matrices}}"
+// DECOMPILEA-SAME: "name":"{{_?main}}"
+
+// RUN: %decompile-headless --list-functions --input %t.o --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=LISTFNS %s --input-file %t
+// LISTFNS: "program":"{{.*}}","functions":{{...}}
+// LISTFNS-SAME: "name":"{{_?multiply_matrices}}"
+// LISTFNS-SAME: "name":"{{_?main}}"
 
 #include <stdio.h>
 
