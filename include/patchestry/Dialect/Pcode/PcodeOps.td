@@ -10,25 +10,28 @@
 #define PCODE_DIALECT_OPS
 
 include "mlir/Interfaces/InferTypeOpInterface.td"
+include "mlir/IR/SymbolInterfaces.td"
 include "mlir/IR/BuiltinAttributes.td"
 include "mlir/IR/BuiltinTypes.td"
 
 include "patchestry/Dialect/Pcode/PcodeTypes.td"
 
 def Pcode_FuncOp
-  : Pcode_Op< "function" >
-  , Arguments<(ins StrAttr:$func_name)>
+  : Pcode_Op< "func", [
+      NoTerminator, SymbolTable, Symbol, IsolatedFromAbove
+    ] >
+  , Arguments<( ins SymbolNameAttr:$sym_name )>
 {
   let regions = (region SizedRegion<1>:$blocks);
-  let assemblyFormat = [{ attr-dict `:` $blocks }];
+  let assemblyFormat = [{ $sym_name attr-dict `:` $blocks }];
 }
 
 def Pcode_BlockOp
-  : Pcode_Op< "block" >
-  , Arguments<( ins StrAttr:$block_label )>
+  : Pcode_Op< "block", [NoTerminator] >
+  , Arguments<( ins SymbolNameAttr:$sym_name )>
 {
   let regions = (region SizedRegion<1>:$instructions);
-  let assemblyFormat = [{ attr-dict `:` $instructions }];
+  let assemblyFormat = [{ $sym_name attr-dict `:` $instructions }];
 }
 
 def Pcode_InstOp

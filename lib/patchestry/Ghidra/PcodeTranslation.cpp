@@ -25,11 +25,13 @@ namespace patchestry::ghidra {
     static mlir::OwningOpRef< mlir_operation > deserialize(
         const llvm::MemoryBuffer *buffer, mcontext_t *mctx
     ) {
+        mctx->loadAllAvailableDialects();
+
         auto json = llvm::json::parse(buffer->getBuffer());
         if (!json) {
             mlir::emitError(mlir::UnknownLoc::get(mctx), "failed to parse PCode JSON: ") << toString(json.takeError());
         }
-        return pc::deserialize(json.get(), mctx);
+        return pc::deserialize(*json->getAsObject(), mctx);
     }
 
     void register_pcode_translation() {

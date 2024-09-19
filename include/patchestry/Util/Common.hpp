@@ -19,7 +19,8 @@ namespace patchestry {
     using mlir_type = mlir::Type;
     using mlir_value = mlir::Value;
 
-    using mlir_builder = mlir::OpBuilder;
+    using mlir_builder    = mlir::OpBuilder;
+    using insertion_guard = mlir::OpBuilder::InsertionGuard;
 
     using loc_t = mlir::Location;
 
