@@ -7,12 +7,73 @@
  */
 
 #include <patchestry/Dialect/Pcode/Deserialize.hpp>
+#include <patchestry/Dialect/Pcode/PcodeOps.hpp>
 
 namespace patchestry::pc {
 
-    mlir::OwningOpRef< mlir::ModuleOp > deserialize(llvm::json::Value const &json, mcontext_t *mctx) {
+    mlir::OwningOpRef< mlir::ModuleOp > deserialize(const json_obj &json, mcontext_t *mctx) {
+        // FIXME: use implicit module creation
         auto loc = mlir::UnknownLoc::get(mctx);
-        return mlir::OwningOpRef< mlir::ModuleOp >(mlir::ModuleOp::create(loc));
+        auto mod = mlir::OwningOpRef< mlir::ModuleOp >(mlir::ModuleOp::create(loc));
+
+        deserializer des(mod.get());
+        des.process(json);
+
+        return mod;
+    }
+
+    void deserializer::process(const json_obj &json) {
+        // FIXME: implement multi-function support
+        process_function(json);
+    }
+
+    void deserializer::process_function(const json_obj &json) {
+        if (!json.getString("name")) {
+            mlir::emitError(bld.getUnknownLoc(), "Function JSON missing 'name' field.");
+            return;
+        }
+
+        auto _ = insertion_guard(bld);
+        auto fn = bld.create< pc::FuncOp >(
+            bld.getUnknownLoc(),
+            json.getString("name").value()
+        );
+
+        bld.setInsertionPointToStart(bld.createBlock(&fn.getBlocks()));
+        if (auto blocks = json.getArray("basic_blocks")) {
+            for (const auto &block : *blocks) {
+                process_block(*block.getAsObject());
+            }
+        }
+    }
+
+    void deserializer::process_block(const json_obj &json) {
+        if (!json.getString("label")) {
+            mlir::emitError(bld.getUnknownLoc(), "Block JSON missing 'label' field.");
+            return;
+        }
+
+        auto _ = insertion_guard(bld);
+        auto block = bld.create< pc::BlockOp >(
+            bld.getUnknownLoc(),
+            json.getString("label").value()
+        );
+
+        bld.createBlock(&block.getInstructions());
+
+        const auto *insts = json.getArray("instructions");
+        if (insts == nullptr) {
+            mlir::emitError(bld.getUnknownLoc(), "Block JSON missing 'instructions' field.");
+            return;
+        }
+
+        for (const auto &inst : *insts) {
+            process_instruction(*inst.getAsObject());
+        }
+    }
+
+    void deserializer::process_instruction(const json_obj &json) {
+
     }
 
 } // namespace patchestry::pc

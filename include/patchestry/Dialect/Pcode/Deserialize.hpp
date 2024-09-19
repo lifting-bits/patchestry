@@ -16,5 +16,28 @@
 
 namespace patchestry::pc
 {
-    mlir::OwningOpRef< mlir::ModuleOp > deserialize(llvm::json::Value const &json, mcontext_t *mctx);
+    using json_arr = llvm::json::Array;
+    using json_obj = llvm::json::Object;
+    using json_val = llvm::json::Value;
+
+    struct deserializer {
+        mlir_builder bld;
+
+        explicit deserializer(mlir::ModuleOp mod)
+            : bld(mod)
+        {
+            assert(mod->getNumRegions() > 0 && "Module has no regions.");
+            auto &reg = mod->getRegion(0);
+            assert(reg.hasOneBlock() && "Region has unexpected blocks.");
+            bld.setInsertionPointToStart(&*reg.begin());
+        }
+
+        void process(const json_obj &json);
+        void process_function(const json_obj &json);
+        void process_block(const json_obj &json);
+        void process_instruction(const json_obj &json);
+    };
+
+    mlir::OwningOpRef< mlir::ModuleOp > deserialize(const json_obj &json, mcontext_t *mctx);
+
 } // namespace patchestry::pc
