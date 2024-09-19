@@ -1,8 +1,20 @@
 // UNSUPPORTED: system-windows
 // RUN: %cc %s -g -o %t.o
 // RUN: %decompile-headless --input %t.o --function print_list --output %t %ci_output_folder
-// RUN: %file-check -vv %s --input-file %t
-// CHECK: "name":"{{_?print_list}}"
+// RUN: %file-check -vv --check-prefix=DECOMPILES %s --input-file %t
+// DECOMPILES: "name":"{{_?print_list}}"
+
+// RUN: %decompile-headless --input %t.o --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILEA %s --input-file %t
+// DECOMPILEA: "arch":"{{.*}}","os":"{{.*}}","functions":{{...}}
+// DECOMPILEA-SAME: "name":"{{_?print_list}}"
+// DECOMPILEA-SAME: "name":"{{_?main}}"
+
+// RUN: %decompile-headless --list-functions --input %t.o --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=LISTFNS %s --input-file %t
+// LISTFNS: "program":"{{.*}}","functions":{{...}}
+// LISTFNS-SAME: "name":"{{_?print_list}}"
+// LISTFNS-SAME: "name":"{{_?main}}"
 
 #include <stdio.h>
 #include <stdlib.h>
