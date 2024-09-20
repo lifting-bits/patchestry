@@ -1,8 +1,10 @@
 // RUN: bash %strip-json-comments %s | %pcode-translate --deserialize-pcode | %file-check %s
 {
-    // CHECK: pc.func @function
-    "name": "function",
-    "basic_blocks": [
+    "functions": [
+    {
+        // CHECK: pc.func @function
+        "name": "function",
+        "basic_blocks": [
         {
             // CHECK: pc.block @fisrt_block
             "label": "fisrt_block",
@@ -13,5 +15,7 @@
             "label": "second_block",
             "instructions": []
         }
+        ]
+    }
     ]
 }
