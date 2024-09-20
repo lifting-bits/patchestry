@@ -1,4 +1,4 @@
-// RUN: %pcode-translate --deserialize-pcode %s | %file-check %s
+// RUN: bash %strip-json-comments %s | %pcode-translate --deserialize-pcode | %file-check %s
 {
     // CHECK: pc.func @function
     "name": "function",
