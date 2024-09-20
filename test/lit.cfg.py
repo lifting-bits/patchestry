@@ -33,6 +33,9 @@ config.test_source_root = os.path.join(config.patchestry_src_root, 'test')
 config.patchestry_script_dir = os.path.join(config.patchestry_src_root, 'scripts', 'ghidra')
 config.patchestry_tools_dir = os.path.join(config.patchestry_obj_root, 'tools')
 
+# Set the directory for the test scripts
+config.test_scripts_dir = os.path.join(config.patchestry_src_root, 'test', 'scripts')
+
 # Add the Ghidra scripts directory to the substitutions list
 config.substitutions.append(('%PATH%', config.patchestry_script_dir))
 
@@ -48,6 +51,8 @@ def patchestry_tool_path(tool):
 config.decompiler_headless_tool = os.path.join(config.patchestry_script_dir, 'decompile-headless.sh')
 config.pcode_translate_tool = patchestry_tool_path('pcode-translate')
 
+config.json_strip_comments = os.path.join(config.test_scripts_dir, 'strip-json-comments.sh')
+
 # Define tool substitutions
 tools = [
     ToolSubst('%file-check', command=FindTool('FileCheck')),
@@ -57,6 +62,7 @@ tools = [
     ToolSubst('%host_cxx', command=config.host_cxx),
     ToolSubst('%decompile-headless', command=config.decompiler_headless_tool),
     ToolSubst('%pcode-translate', command=config.pcode_translate_tool),
+    ToolSubst('%strip-json-comments', command=config.json_strip_comments),
 ]
 
 
