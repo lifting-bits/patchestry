@@ -22,8 +22,22 @@ namespace patchestry::pc {
     }
 
     void deserializer::process(const json_obj &json) {
-        // FIXME: implement multi-function support
-        process_function(json);
+        if (auto *functions = json.getArray("functions")) {
+            if (functions->empty()) {
+                mlir::emitError(bld.getUnknownLoc(), "No function to process!");
+                return;
+            }
+
+            for (const auto &func_json : *functions) {
+                if (const auto *func_obj = func_json.getAsObject()) {
+                    process_function(*func_obj);
+                } else {
+                    mlir::emitError(bld.getUnknownLoc(), "Failed to get function object from json input!");
+                }
+            }
+        } else {
+            mlir::emitError(bld.getUnknownLoc(), "Key `functions` is missing or not an array in the JSON input!");
+        }
     }
 
     void deserializer::process_function(const json_obj &json) {
