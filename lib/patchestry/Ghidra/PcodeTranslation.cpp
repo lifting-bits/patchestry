@@ -19,12 +19,15 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 
+#include <iostream>
+
 namespace patchestry::ghidra {
 
     static mlir::OwningOpRef< mlir_operation > deserialize(
         const llvm::MemoryBuffer *buffer, mcontext_t *mctx
     ) {
         mctx->loadAllAvailableDialects();
+        std::cout << buffer->getBuffer().str() << std::endl;
 
         auto json = llvm::json::parse(buffer->getBuffer());
         if (!json) {

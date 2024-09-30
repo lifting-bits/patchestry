@@ -34,7 +34,7 @@ def Pcode_BlockOp
 }
 
 def Pcode_InstOp
-  : Pcode_Op< "instruction" >
+  : Pcode_Op< "instruction", [NoTerminator] >
   , Arguments<( ins StrAttr:$inst_mnemonic )>
 {
   let regions = (region SizedRegion<1>:$semantics);
