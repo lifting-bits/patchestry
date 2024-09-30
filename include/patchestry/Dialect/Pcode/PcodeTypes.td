@@ -16,6 +16,7 @@ class Pcode_Type< string type_name, string _mnemonic, list< Trait > traits = [] 
   let mnemonic = _mnemonic;
 }
 
+def PCode_ConstType : Pcode_Type< "Const", "const" >;
 def Pcode_RegType : Pcode_Type< "Reg", "reg" >;
 def Pcode_MemType : Pcode_Type< "Mem", "mem" >;
 def Pcode_VarType : Pcode_Type< "Var", "var" >;
