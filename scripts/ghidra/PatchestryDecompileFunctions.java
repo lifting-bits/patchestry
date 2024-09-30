@@ -97,24 +97,24 @@ public class PatchestryDecompileFunctions extends GhidraScript {
                 return nullValue();
             }
 
-            beginArray();
+            beginObject();
 
             if (node.isConstant()) {
-                value("const"); 
+                name("type").value("const_");
             } else if (node.isUnique()) {
-                value("unique"); 
+                name("type").value("unique");
             } else if (node.isRegister()) {
-                value("register"); 
+                name("type").value("register_");
             } else if (node.isAddress()) {
-                value("ram"); 
+                name("type").value("ram");
             } else {
                 throw new Exception("Unknown Varnode kind.");
             }
 
-            value(node.getOffset());
-            value(node.getSize());
+            name("offset").value(node.getOffset());
+            name("size").value(node.getSize());
 
-            return endArray();
+            return endObject();
         }
 
         public JsonWriter serialize(PcodeOp op) throws Exception {
