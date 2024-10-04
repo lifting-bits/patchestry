@@ -20,6 +20,7 @@ Options:
   -v, --verbose         Enable verbose output
   -t, --interactive     Start Docker container in interactive mode
   -c, --ci              Run in CI mode
+  --high-pcode          Recover high pcode from input file
 
 Examples:
   ./decompile-headless.sh --input /path/to/file --output /path/to/output.json  // Decompile all functions
@@ -62,6 +63,10 @@ parse_args() {
             -c|--ci)
                 CI_OUTPUT_FOLDER="$2"
                 shift 2
+                ;;
+            --high-pcode)
+                HIGH_PCODE="true"
+                shift 1
                 ;;
             *)
                 echo "Unknown option: $1"
@@ -133,39 +138,30 @@ validate_paths() {
 }
 
 build_docker_command() {
+    local ARGS=
+    if [ -n "$HIGH_PCODE" ]; then
+        ARGS="--high-pcode $ARGS"
+    fi
+
+    if [  -n "$LIST_FUNCTIONS" ]; then
+        ARGS="--command list-functions $ARGS"
+    elif [ -n "$FUNCTION_NAME" ]; then
+        if file "$INPUT_PATH" | grep -q "Mach-O"; then
+            FUNCTION_NAME="_$FUNCTION_NAME"
+        fi
+        ARGS="--command decompile --function \"$FUNCTION_NAME\" $ARGS"
+    else
+        ARGS="--command decompile-all $ARGS"
+    fi
+
     if [ -n "$CI_OUTPUT_FOLDER" ]; then
         INPUT_PATH=$(basename "$INPUT_PATH")
         OUTPUT_PATH=$(basename "$OUTPUT_PATH")
-        if [ -n "$LIST_FUNCTIONS" ]; then
-            RUN="docker run --rm \
-                -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
-                trailofbits/patchestry-decompilation:latest \
-                --input /mnt/output/$INPUT_PATH \
-                --command list-functions \
-                --output /mnt/output/$OUTPUT_PATH"
-        elif [ -n "$FUNCTION_NAME" ]; then
-            RUN="docker run --rm \
-                -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
-                trailofbits/patchestry-decompilation:latest \
-                --input /mnt/output/$INPUT_PATH \
-                --command decompile --function \"$FUNCTION_NAME\" \
-                --output /mnt/output/$OUTPUT_PATH"
-        else
-            RUN="docker run --rm \
-                -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
-                trailofbits/patchestry-decompilation:latest \
-                --input /mnt/output/$INPUT_PATH \
-                --command decompile-all \
-                --output /mnt/output/$OUTPUT_PATH"
-        fi
-
-    elif [ -n "$LIST_FUNCTIONS" ]; then
         RUN="docker run --rm \
-            -v \"$INPUT_PATH:/input.o\" \
-            -v \"$OUTPUT_PATH:/output.json\" \
+            -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
             trailofbits/patchestry-decompilation:latest \
-            --input /input.o --command list-functions \
-            --output /output.json"
+            --input /mnt/output/$INPUT_PATH \
+            $ARGS --output /mnt/output/$OUTPUT_PATH"
 
     else
         RUN="docker run --rm \
@@ -173,23 +169,11 @@ build_docker_command() {
             -v \"$OUTPUT_PATH:/output.json\" \
             trailofbits/patchestry-decompilation:latest"
 
-        if file "$INPUT_PATH" | grep -q "Mach-O"; then
-            FUNCTION_NAME="_$FUNCTION_NAME"
-        fi
-
         if [ "$INTERACTIVE" = true ]; then
             RUN="${RUN} --entrypoint /bin/bash"
-        elif [ -n "$FUNCTION_NAME" ]; then
-            RUN="${RUN} \
-                --input /input.o \
-                --command decompile \
-                --function \"$FUNCTION_NAME\" \
-                --output /output.json"
         else
-            RUN="${RUN} \
-                --input /input.o \
-                --command decompile-all \
-                --output /output.json"
+            RUN="${RUN} --input /input.o \
+                ${ARGS} --output /output.json"
         fi
     fi
 }
