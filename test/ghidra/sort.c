@@ -10,6 +10,17 @@
 // DECOMPILEA-SAME: "name":"{{_?sort_test}}"
 // DECOMPILEA-SAME: "name":"{{_?main}}"
 
+// RUN: %cc %s -g -o %t.o
+// RUN: %decompile-headless --high-pcode --input %t.o --function sort_test --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILEHS %s --input-file %t
+// DECOMPILEHS: "name":"{{_?sort_test}}"
+
+// RUN: %decompile-headless --high-pcode --input %t.o --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILEHA %s --input-file %t
+// DECOMPILEHA: "arch":"{{.*}}","os":"{{.*}}","functions":{{...}}
+// DECOMPILEHA-SAME: "name":"{{_?sort_test}}"
+// DECOMPILEHA-SAME: "name":"{{_?main}}"
+
 // RUN: %decompile-headless --input %t.o --list-functions --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=LISTFNS %s --input-file %t
 // LISTFNS: "program":"{{.*}}","functions":{{...}}
@@ -18,29 +29,28 @@
 
 #include <stdio.h>
 
-int sort_test()
-{
-  int array[100], n, c, d, swap;
-  scanf("%d", &n);
-  for (c = 0; c < n; c++)
-    scanf("%d", &array[c]);
-
-  for (c = 0 ; c < n - 1; c++) {
-    for (d = 0 ; d < n - c - 1; d++) {
-      if (array[d] > array[d+1]) {
-        swap       = array[d];
-        array[d]   = array[d+1];
-        array[d+1] = swap;
-      }
+int sort_test() {
+    int array[100], n, c, d, swap;
+    scanf("%d", &n);
+    for (c = 0; c < n; c++) {
+        scanf("%d", &array[c]);
     }
-  }
 
-  for (c = 0; c < n; c++)
-     printf("%d\n", array[c]);
+    for (c = 0; c < n - 1; c++) {
+        for (d = 0; d < n - c - 1; d++) {
+            if (array[d] > array[d + 1]) {
+                swap         = array[d];
+                array[d]     = array[d + 1];
+                array[d + 1] = swap;
+            }
+        }
+    }
 
-  return 0;
+    for (c = 0; c < n; c++) {
+        printf("%d\n", array[c]);
+    }
+
+    return 0;
 }
 
-int main(void) {
-  return sort_test();
-}
+int main(void) { return sort_test(); }

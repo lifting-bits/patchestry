@@ -10,6 +10,17 @@
 // DECOMPILEA-SAME: "name":"{{_?multiply_matrices}}"
 // DECOMPILEA-SAME: "name":"{{_?main}}"
 
+// RUN: %cc %s -g -o %t.o
+// RUN: %decompile-headless --high-pcode --input %t.o --function multiply_matrices --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILEHS %s --input-file %t
+// DECOMPILEHS: "name":"{{_?multiply_matrices}}"
+
+// RUN: %decompile-headless --high-pcode --input %t.o --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILEHA %s --input-file %t
+// DECOMPILEHA: "arch":"{{.*}}","os":"{{.*}}","functions":{{...}}
+// DECOMPILEHA-SAME: "name":"{{_?multiply_matrices}}"
+// DECOMPILEHA-SAME: "name":"{{_?main}}"
+
 // RUN: %decompile-headless --list-functions --input %t.o --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=LISTFNS %s --input-file %t
 // LISTFNS: "program":"{{.*}}","functions":{{...}}
@@ -32,8 +43,16 @@ void multiply_matrices(int a[SIZE][SIZE], int b[SIZE][SIZE], int result[SIZE][SI
 }
 
 int main(void) {
-    int a[SIZE][SIZE] = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}};
-    int b[SIZE][SIZE] = {{9, 8, 7}, {6, 5, 4}, {3, 2, 1}};
+    int a[SIZE][SIZE] = {
+        { 1, 2, 3 },
+        { 4, 5, 6 },
+        { 7, 8, 9 }
+    };
+    int b[SIZE][SIZE] = {
+        { 9, 8, 7 },
+        { 6, 5, 4 },
+        { 3, 2, 1 }
+    };
     int result[SIZE][SIZE];
 
     multiply_matrices(a, b, result);

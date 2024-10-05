@@ -10,6 +10,17 @@
 // DECOMPILEA-SAME: "name":"{{_?struct_test}}"
 // DECOMPILEA-SAME: "name":"{{_?main}}"
 
+// RUN: %cc %s -g -o %t.o
+// RUN: %decompile-headless --high-pcode --input %t.o --function struct_test --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILEHS %s --input-file %t
+// DECOMPILEHS: "name":"{{_?struct_test}}"
+
+// RUN: %decompile-headless --high-pcode --input %t.o --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILEHA %s --input-file %t
+// DECOMPILEHA: "arch":"{{.*}}","os":"{{.*}}","functions":{{...}}
+// DECOMPILEHA-SAME: "name":"{{_?struct_test}}"
+// DECOMPILEHA-SAME: "name":"{{_?main}}"
+
 // RUN: %decompile-headless --input %t.o --list-functions --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=LISTFNS %s --input-file %t
 // LISTFNS: "program":"{{.*}}","functions":{{...}}
@@ -25,13 +36,9 @@ struct data
     int e;
 };
 
-int struct_test(int argc, char **argv)
-{
+int struct_test(int argc, char **argv) {
     struct data d = { 0, 1, 2, 3, 4 };
     return d.a + d.b + d.c + d.d + d.e;
 }
 
-int main(int argc, char **argv) {
-    return struct_test(argc, argv);
-
-}
+int main(int argc, char **argv) { return struct_test(argc, argv); }
