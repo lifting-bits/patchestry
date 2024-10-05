@@ -10,6 +10,17 @@
 // DECOMPILEA-SAME: "name":"{{_?test}}"
 // DECOMPILEA-SAME: "name":"{{_?main}}"
 
+// RUN: %cc %s -g -o %t.o
+// RUN: %decompile-headless --high-pcode --input %t.o --function test --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILEHS %s --input-file %t
+// DECOMPILEHS: "name":"{{_?test}}"
+
+// RUN: %decompile-headless --high-pcode --input %t.o --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILEHA %s --input-file %t
+// DECOMPILEHA: "arch":"{{.*}}","os":"{{.*}}","functions":{{...}}
+// DECOMPILEHA-SAME: "name":"{{_?test}}"
+// DECOMPILEHA-SAME: "name":"{{_?main}}"
+
 // RUN: %decompile-headless --input %t.o --list-functions --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=LISTFNS %s --input-file %t
 // LISTFNS: "program":"{{.*}}","functions":{{...}}
@@ -19,10 +30,8 @@
 #include <stdio.h>
 
 int test() {
-  printf("Test passed\n");
-  return 0;
+    printf("Test passed\n");
+    return 0;
 }
 
-int main(void) {
-  return test();
-}
+int main(void) { return test(); }

@@ -8,16 +8,8 @@
 
 import ghidra.app.script.GhidraScript;
 
-import ghidra.program.model.block.BasicBlockModel;
-import ghidra.program.model.block.CodeBlock;
-import ghidra.program.model.block.CodeBlockIterator;
-
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
-
-import ghidra.program.model.listing.Instruction;
-import ghidra.program.model.listing.InstructionIterator;
-
 import ghidra.program.model.listing.Program;
 
 import ghidra.program.model.pcode.HighFunction;
@@ -32,22 +24,20 @@ import ghidra.app.decompiler.DecompileOptions;
 
 import com.google.gson.stream.JsonWriter;
 
-import java.util.Iterator;
-import java.util.Map;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.OutputStreamWriter;
 import java.io.File;
 
-
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 import java.util.ArrayList;
-import java.util.List;
 import java.util.Collections;
-
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 
 public class PatchestryDecompileFunctionsHigh extends GhidraScript {
 
@@ -115,8 +105,10 @@ public class PatchestryDecompileFunctionsHigh extends GhidraScript {
                 value("register"); 
             } else if (node.isAddress()) {
                 value("ram"); 
+            } else if (node.getAddress().isStackAddress()) {
+                value("stack");
             } else {
-                throw new Exception("Unknown Varnode kind.");
+                throw new Exception("Unknown Varnode kind: " + node.toString());
             }
 
             value(node.getOffset());

@@ -108,7 +108,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             } else if (node.isAddress()) {
                 value("ram"); 
             } else {
-                throw new Exception("Unknown Varnode kind.");
+                //throw new Exception("Unknown Varnode kind.");
             }
 
             value(node.getOffset());

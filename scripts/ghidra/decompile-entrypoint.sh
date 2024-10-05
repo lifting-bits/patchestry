@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -x
 #
 # Copyright (c) 2024, Trail of Bits, Inc.
 # All rights reserved.
