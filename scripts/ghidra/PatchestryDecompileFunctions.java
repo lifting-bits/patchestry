@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2024, Trail of Bits, Inc.
- * All rights reserved.
  *
  * This source code is licensed in accordance with the terms specified in
  * the LICENSE file found in the root directory of this source tree.
@@ -97,24 +96,24 @@ public class PatchestryDecompileFunctions extends GhidraScript {
                 return nullValue();
             }
 
-            beginArray();
+            beginObject();
 
             if (node.isConstant()) {
-                value("const"); 
+                name("type").value("const");
             } else if (node.isUnique()) {
-                value("unique"); 
+                name("type").value("unique");
             } else if (node.isRegister()) {
-                value("register"); 
+                name("type").value("register");
             } else if (node.isAddress()) {
-                value("ram"); 
+                name("type").value("ram");
             } else {
-                //throw new Exception("Unknown Varnode kind.");
+                throw new Exception("Unknown Varnode kind.");
             }
 
-            value(node.getOffset());
-            value(node.getSize());
+            name("offset").value(node.getOffset());
+            name("size").value(node.getSize());
 
-            return endArray();
+            return endObject();
         }
 
         public JsonWriter serialize(PcodeOp op) throws Exception {
