@@ -11,3 +11,8 @@ CMakeLists.txt.user
 CMakeUserPresets.json
 compile_commands.json
 _site/
+/bin/
+.classpath
+.project
+.settings
+
