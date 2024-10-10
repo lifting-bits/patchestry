@@ -27,9 +27,12 @@ import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Program;
 
 import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.pcode.Varnode;
+
+import ghidra.program.model.symbol.ExternalManager;
 
 import com.google.gson.stream.JsonWriter;
 
@@ -38,7 +41,6 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.OutputStreamWriter;
 import java.io.File;
-
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,24 +52,31 @@ import java.util.Iterator;
 import java.util.Set;
 import java.util.TreeSet;
 
-
 public class PatchestryDecompileFunctions extends GhidraScript {
 	
-    public class PcodeSerializer extends JsonWriter {
+    private class PcodeSerializer extends JsonWriter {
     	private String arch;
+    	private FunctionManager fm;
+    	private ExternalManager em;
     	private DecompInterface ifc;
     	private BasicBlockModel bbm;
     	private List<Function> functions;
+    	private int original_functions_size;
     	private Set<Address> seen_functions;
     	
         public PcodeSerializer(java.io.BufferedWriter writer,
-        					   String arch_, DecompInterface ifc_,
-        					   BasicBlockModel bbm_, List<Function> functions_) {
+        					   String arch_, FunctionManager fm_,
+        					   ExternalManager em_, DecompInterface ifc_,
+        					   BasicBlockModel bbm_,
+        					   List<Function> functions_) {
             super(writer);
             this.arch = arch_;
+            this.fm = fm_;
+            this.em = em_;
             this.ifc = ifc_;
             this.bbm = bbm_;
             this.functions = functions_;
+            this.original_functions_size = functions.size();
             this.seen_functions = new TreeSet<>();
         }
 
@@ -99,55 +108,124 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             endObject();
             return;
         }
+        
+        private static String BlockLabel(PcodeBlock block) throws Exception {
+        	return Integer.toString(block.getIndex());
+        }
 
-        private void serialize(PcodeOp op) throws Exception {
-            beginObject();
-            name("mnemonic").value(op.getMnemonic());
-            name("address").value(op.getSeqnum().getTarget().toString());
-            name("output");
+        // Serialize a direct call. This enqueues the targeted for type lifting
+        // `Function` if it can be resolved.
+        private void serializeDirectCallOp(Address caller_address, PcodeOp op) throws Exception {
+        	Varnode target_address_node = op.getInput(0);
+    		if (!target_address_node.isAddress()) {
+    			throw new Exception("Unexpected non-address input to CALL");
+    		}
+
+    		Address target_address = caller_address.getNewAddress(target_address_node.getOffset());
+    		String target_address_string = target_address.toString();
+    		name("target_address").value(target_address_string);
+    		
+    		Function callee = fm.getFunctionAt(target_address);
+    		
+    		// `target_address` may be a pointer to an external. Figure out
+    		// what we're calling.
+    		if (callee == null) {
+    			
+    		}
+
+    		if (callee != null) {
+    			functions.add(callee);
+    		} else {
+    			println("Could not find function at address " + target_address_string +
+    					" called by " + caller_address.toString());
+    		}
+        }
+        
+        // Serialize a conditional branch. This records the targeted blocks.
+        //
+        // TODO(pag): How does p-code handle delay slots? Are they separate
+        //		      blocks?
+        //
+        // TODO(pag): Ian as previously mentioned how the true/false targets
+        //			  can be reversed. Investigate this.
+        private void serializeCondBranchOp(PcodeBlockBasic block, PcodeOp op) throws Exception {
+        	name("taken_block").value(BlockLabel(block.getTrueOut()));
+        	name("not_taken_block").value(BlockLabel(block.getFalseOut()));
+        }
+        
+        // Serialize a generic multi-input, single-output p-code operation.
+        private void serializeGenericOp(PcodeOp op) throws Exception {
+        	name("output");
             serialize(op.getOutput());
             name("inputs").beginArray();
             for (var input : op.getInputs()) {
                 serialize(input);
             }
-            endArray().endObject();
+            endArray();
         }
 
-        private void serialize(PcodeBlockBasic block) throws Exception {
+        private void serialize(HighFunction function, PcodeBlockBasic block, PcodeOp op) throws Exception {
+        	Address function_address = function.getFunction().getEntryPoint();
+            beginObject();
+            name("mnemonic").value(op.getMnemonic());
+            name("address").value(op.getSeqnum().getTarget().toString());
+            switch (op.getOpcode()) {
+            	case PcodeOp.CALL:
+            		serializeDirectCallOp(function_address, op);
+            		break;
+            	case PcodeOp.CBRANCH:
+            		serializeCondBranchOp(block, op);
+                	break;
+            	default:
+            		serializeGenericOp(op);
+            		break;
+            }
+            endObject();
+        }
+        
+        // Serialize a high p-code basic block. This iterates over the p-code
+        // operations within the block and serializes them individually.
+        private void serialize(HighFunction function, PcodeBlockBasic block) throws Exception {
+        	PcodeBlock parent_block = block.getParent();
+        	if (parent_block != null) {
+        		name("parent_block").value(BlockLabel(parent_block));
+        	}
             name("pcode").beginArray();
             PcodeOp last_op = null;
             Iterator<PcodeOp> op_iterator = block.getIterator();
             while (op_iterator.hasNext()) {
             	last_op = op_iterator.next();
-                serialize(last_op);
+                serialize(function, block, last_op);
             }
             endArray();
-        
-            // TODO(pag): How does P-Code handle delay slots? Are they separate
-            //		      blocks?
-            if (last_op.getOpcode() == PcodeOp.CBRANCH) {
-            	name("taken_block").value(Integer.toString(block.getTrueOut().getIndex()));
-            	name("not_taken_block").value(Integer.toString(block.getFalseOut().getIndex()));
-            }
         }
 
-        private void serialize(
-    		HighFunction high_function, Function function) throws Exception {
+        // Serialize `function`. If we have `high_function` (the decompilation
+        // of function) then we will serialize its type information. Otherwise,
+        // we will serialize the type information of `function`. If
+        // `visit_pcode` is true, then this is a function for which we want to
+        // fully lift, i.e. visit all the high p-code.
+        private void serialize(HighFunction high_function, Function function, boolean visit_pcode) throws Exception {
             
             name("name").value(function.getName());
             
             // If we have a high P-Code function, then serialize the blocks.
             if (high_function != null) {
-                name("basic_blocks").beginObject();
-                for (PcodeBlockBasic block : high_function.getBasicBlocks()) {
-                	name(Integer.toString(block.getIndex())).beginObject();
-                    serialize(block);
-                    endObject();
-                }
-                endObject();
+            	if (visit_pcode) {
+	                name("basic_blocks").beginObject();
+	                for (PcodeBlockBasic block : high_function.getBasicBlocks()) {
+	                	name(BlockLabel(block)).beginObject();
+	                    serialize(high_function, block);
+	                    endObject();
+	                }
+	                endObject();
+            	}
             }
         }
 
+        // Serialize the input function list to JSON. This function will also
+        // serialize type information related to referenced functions and
+        // variables.
         public JsonWriter serialize() throws Exception {
 
             beginObject();
@@ -166,7 +244,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         		HighFunction high_function = res.getHighFunction();
 
         		name(function_address.toString()).beginObject();
-        		serialize(high_function, function);
+        		serialize(high_function, function, i < original_functions_size);
         		endObject();
             }
             return endObject().endObject();
@@ -199,8 +277,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
  
         final var serializer = new PcodeSerializer(
-    		Files.newBufferedWriter(file), getArch(), getDecompilerInterface(),
-    		new BasicBlockModel(currentProgram), functions);
+    		Files.newBufferedWriter(file), getArch(),
+    		currentProgram.getFunctionManager(), currentProgram.getExternalManager(),
+    		getDecompilerInterface(), new BasicBlockModel(currentProgram), functions);
         serializer.serialize().close();
     }
 
