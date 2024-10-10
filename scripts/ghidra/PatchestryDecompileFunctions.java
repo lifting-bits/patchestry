@@ -7,18 +7,27 @@
 
 import ghidra.app.script.GhidraScript;
 
+import ghidra.app.decompiler.DecompInterface;
+import ghidra.app.decompiler.DecompileOptions;
+import ghidra.app.decompiler.DecompileResults;
+
+import ghidra.program.model.address.Address;
+
 import ghidra.program.model.block.BasicBlockModel;
 import ghidra.program.model.block.CodeBlock;
 import ghidra.program.model.block.CodeBlockIterator;
 
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
+import ghidra.program.model.listing.FunctionManager;
 
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
 
 import ghidra.program.model.listing.Program;
 
+import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.pcode.Varnode;
 
@@ -37,63 +46,35 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Collections;
+import java.util.Iterator;
+import java.util.Set;
+import java.util.TreeSet;
 
 
 public class PatchestryDecompileFunctions extends GhidraScript {
-
-    private String getArch() throws Exception {
-        if (currentProgram.getLanguage() == null || currentProgram.getLanguage().getProcessor() == null) {
-            return "unknown";
-        }
-        return currentProgram.getLanguage().getProcessor().toString();
-    }
-
-    private String inferOSType(String executableFormat) throws Exception {
-        if (executableFormat == null) {
-            return "unknown";
-        }
-
-        executableFormat = executableFormat.toLowerCase();
-        if (executableFormat.contains("pe")) {
-            return "windows";
-        } else if (executableFormat.contains("elf")) {
-            return "linux";
-        } else if (executableFormat.contains("mach-o")) {
-            return "macos";
-        } else {
-            return "unknown";
-        }
-    }
-
-    private String getOS() throws Exception {
-        String executableFormat = currentProgram.getExecutableFormat();
-        println("executableFormat " + executableFormat);
-        return inferOSType(executableFormat);
-    }
-
-    private InstructionIterator getInstructions(CodeBlock block) throws Exception {
-        if (block == null || currentProgram.getListing() == null) {
-            throw new IllegalArgumentException("Invalid block");
-        }
-        return currentProgram.getListing().getInstructions(block, true);
-    }
-
-    private CodeBlockIterator getBasicBlocks(Function function) throws Exception {
-        if (function == null) {
-            throw new IllegalArgumentException("Invalid function");
-        }
-        final var model = new BasicBlockModel(currentProgram);
-        return model.getCodeBlocksContaining(function.getBody(), monitor);
-    }
-
+	
     public class PcodeSerializer extends JsonWriter {
-        public PcodeSerializer(java.io.BufferedWriter writer) {
+    	private String arch;
+    	private DecompInterface ifc;
+    	private BasicBlockModel bbm;
+    	private List<Function> functions;
+    	private Set<Address> seen_functions;
+    	
+        public PcodeSerializer(java.io.BufferedWriter writer,
+        					   String arch_, DecompInterface ifc_,
+        					   BasicBlockModel bbm_, List<Function> functions_) {
             super(writer);
+            this.arch = arch_;
+            this.ifc = ifc_;
+            this.bbm = bbm_;
+            this.functions = functions_;
+            this.seen_functions = new TreeSet<>();
         }
 
-        public JsonWriter serialize(Varnode node) throws Exception {
+        private void serialize(Varnode node) throws Exception {
             if (node == null) {
-                return nullValue();
+                nullValue();
+                return;
             }
 
             beginObject();
@@ -106,87 +87,121 @@ public class PatchestryDecompileFunctions extends GhidraScript {
                 name("type").value("register");
             } else if (node.isAddress()) {
                 name("type").value("ram");
+            } else if (node.getAddress().isStackAddress()) {
+                name("type").value("stack");
             } else {
-                throw new Exception("Unknown Varnode kind.");
+                throw new Exception("Unknown Varnode kind: " + node.toString());
             }
 
             name("offset").value(node.getOffset());
             name("size").value(node.getSize());
 
-            return endObject();
+            endObject();
+            return;
         }
 
-        public JsonWriter serialize(PcodeOp op) throws Exception {
+        private void serialize(PcodeOp op) throws Exception {
             beginObject();
             name("mnemonic").value(op.getMnemonic());
+            name("address").value(op.getSeqnum().getTarget().toString());
             name("output");
             serialize(op.getOutput());
             name("inputs").beginArray();
             for (var input : op.getInputs()) {
                 serialize(input);
             }
-            return endArray().endObject();
+            endArray().endObject();
         }
 
-        public JsonWriter serialize(Instruction instruction) throws Exception {
-            beginObject();
-            name("mnemonic").value(instruction.getMnemonicString());
-            name("address").value(instruction.getAddressString(false, false));
+        private void serialize(PcodeBlockBasic block) throws Exception {
             name("pcode").beginArray();
-            for (var curOp : instruction.getPcode()) {
-                serialize(curOp);
+            PcodeOp last_op = null;
+            Iterator<PcodeOp> op_iterator = block.getIterator();
+            while (op_iterator.hasNext()) {
+            	last_op = op_iterator.next();
+                serialize(last_op);
             }
-            return endArray().endObject();
+            endArray();
+        
+            // TODO(pag): How does P-Code handle delay slots? Are they separate
+            //		      blocks?
+            if (last_op.getOpcode() == PcodeOp.CBRANCH) {
+            	name("taken_block").value(Integer.toString(block.getTrueOut().getIndex()));
+            	name("not_taken_block").value(Integer.toString(block.getFalseOut().getIndex()));
+            }
         }
 
-        public JsonWriter serialize(CodeBlock block) throws Exception {
-            beginObject();
-            name("label").value(block.getName());
-            name("instructions").beginArray();
-            for (var curInst : getInstructions(block)) {
-                serialize(curInst);
-            }
-            return endArray().endObject();
-        }
-
-        public JsonWriter serialize(Function function) throws Exception {
-            beginObject();
+        private void serialize(
+    		HighFunction high_function, Function function) throws Exception {
+            
             name("name").value(function.getName());
-            name("basic_blocks").beginArray();
-            for (var curBlock : getBasicBlocks(function)) {
-                serialize(curBlock);
+            
+            // If we have a high P-Code function, then serialize the blocks.
+            if (high_function != null) {
+                name("basic_blocks").beginObject();
+                for (PcodeBlockBasic block : high_function.getBasicBlocks()) {
+                	name(Integer.toString(block.getIndex())).beginObject();
+                    serialize(block);
+                    endObject();
+                }
+                endObject();
             }
-            return endArray().endObject();
         }
 
-        public JsonWriter serialize(List<Function> functions) throws Exception {
+        public JsonWriter serialize() throws Exception {
+
             beginObject();
             name("arch").value(getArch());
-            name("os").value(getOS());
-            name("functions").beginArray();
-            for (Function function : functions) {
-                serialize(function);
+            name("format").value(currentProgram.getExecutableFormat());
+            name("functions").beginObject();
+            
+            for (int i = 0; i < functions.size(); ++i) {
+            	Function function = functions.get(i);
+            	Address function_address = function.getEntryPoint();
+            	if (!seen_functions.add(function_address)) {
+            		continue;
+            	}
+
+        		DecompileResults res = ifc.decompileFunction(function, 30, null);
+        		HighFunction high_function = res.getHighFunction();
+
+        		name(function_address.toString()).beginObject();
+        		serialize(high_function, function);
+        		endObject();
             }
-            return endArray().endObject();
+            return endObject().endObject();
         }
     }
 
-    private void serializeToFile(Path file, Function function) throws Exception {
-        if (file == null || function == null) {
-            throw new IllegalArgumentException("Invalid file path or empty function list");
+    private String getArch() throws Exception {
+        if (currentProgram.getLanguage() == null ||
+		    currentProgram.getLanguage().getProcessor() == null) {
+            return "unknown";
         }
-        try (BufferedWriter writer = Files.newBufferedWriter(file)) {
-            final var serializer = new PcodeSerializer(writer);
-            serializer.serialize(function).close();
-        }
+        return currentProgram.getLanguage().getProcessor().toString();
     }
-
+    
+    private DecompInterface getDecompilerInterface() throws Exception {
+        if (currentProgram == null) {
+            throw new Exception("Unable to initialize decompiler: invalid current program.");
+        }
+        DecompInterface decompiler = new DecompInterface();
+        decompiler.setOptions(new DecompileOptions());
+        if (!decompiler.openProgram(currentProgram)) {
+            throw new Exception("Unable to initialize decompiler: " + decompiler.getLastMessage());
+        }
+        return decompiler;
+    }
+    
     private void serializeToFile(Path file, List<Function> functions) throws Exception {
         if (file == null || functions == null || functions.isEmpty()) {
             throw new IllegalArgumentException("Invalid file path or empty function list");
         }
-        final var serializer = new PcodeSerializer(Files.newBufferedWriter(file));
-        serializer.serialize(functions).close();
+ 
+        final var serializer = new PcodeSerializer(
+    		Files.newBufferedWriter(file), getArch(), getDecompilerInterface(),
+    		new BasicBlockModel(currentProgram), functions);
+        serializer.serialize().close();
     }
 
     private List<Function> getAllFunctions() {
@@ -205,37 +220,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         if (getScriptArgs().length < 3) {
             throw new IllegalArgumentException("Insufficient arguments. Expected: <function_name> <output_file> as argument");
         }
-        String functionNameArg = getScriptArgs()[1];
-        String outputFilePath = getScriptArgs()[2];
-        final var functions = getGlobalFunctions(functionNameArg);
-        if (functions.isEmpty()) {
-            println("Function not found: " + functionNameArg);
-            return;
-        }
-
-        if (functions.size() > 1) {
-            println("Warning: Found more than one function named: " + functionNameArg);
-        }
-
-        println("Serializing function: " + functions.get(0).getName() + " @ " + functions.get(0).getEntryPoint());
-
-        // Serialize to the file
-        serializeToFile(Path.of(outputFilePath), functions);
+        serializeToFile(Path.of(getScriptArgs()[2]), getGlobalFunctions(getScriptArgs()[1]));
     }
 
     private void decompileAllFunctions() throws Exception {
         if (getScriptArgs().length < 2) {
             throw new IllegalArgumentException("Insufficient arguments. Expected: <output_file> as argument");
         }
-        String outputFilePath = getScriptArgs()[1];
-        List<Function> functions = getAllFunctions();
-        if (functions.isEmpty()) {
-            println("No functions found in the current program");
-            return;
-        }
-
-        // Serialize to the file
-        serializeToFile(Path.of(outputFilePath), functions);
+        serializeToFile(Path.of(getScriptArgs()[1]), getAllFunctions());
     }
 
     private void runHeadless() throws Exception {
@@ -259,35 +251,32 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     }
 
     private void decompileSingleFunctionInGUI() throws Exception {
-        String functionNameArg = askString("functionNameArg", "Function name to decompile: ");
+    	List<Function> functions = null;
+    	if (currentProgram != null) {
+	    	FunctionManager manager = currentProgram.getFunctionManager();
+	    	if (manager != null) {
+	        	Function function = manager.getFunctionContaining(currentAddress);
+	        	if (function != null) {
+	        		functions = new ArrayList<>();
+	        		functions.add(function);
+	        	}
+	    	}
+    	}
+    	
+    	if (functions == null) {
+    		String functionNameArg = askString("functionNameArg", "Function name to decompile: ");
+            functions = getGlobalFunctions(functionNameArg);
+    	}
+        
         File outputDirectory = askDirectory("outputFilePath", "Select output directory");
         File outputFilePath = new File(outputDirectory, "patchestry.json");
-
-        final var functions = getGlobalFunctions(functionNameArg);
-        if (functions.isEmpty()) {
-            println("Function not found: " + functionNameArg);
-            return;
-        }
-
-        if (functions.size() > 1) {
-            println("Warning: Found more than one function named: " + functionNameArg);
-        }
-
-        // Serialize to the file
         serializeToFile(outputFilePath.toPath(), functions);
     }
 
     private void decompileAllFunctionsInGUI() throws Exception {
         File outputDirectory = askDirectory("outputFilePath", "Select output directory");
         File outputFilePath = new File(outputDirectory, "patchestry.json");
-        List<Function> functions = getAllFunctions();
-        if (functions.isEmpty()) {
-            println("No functions found in the current program");
-            return;
-        }
-
-        // Serialize to the file
-        serializeToFile(outputFilePath.toPath(), functions);
+        serializeToFile(outputFilePath.toPath(), getAllFunctions());
     }
 
     // GUI mode execution
