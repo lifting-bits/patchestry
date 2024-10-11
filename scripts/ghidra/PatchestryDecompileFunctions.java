@@ -79,6 +79,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             this.original_functions_size = functions.size();
             this.seen_functions = new TreeSet<>();
         }
+        
+        private static String AddressLabel(Address address) throws Exception {
+    		return address.toString(true  /* show address space prefix */);
+        }
+        
+        private static String BlockLabel(PcodeBlock block) throws Exception {
+        	return Integer.toString(block.getIndex());
+        }
 
         private void serialize(Varnode node) throws Exception {
             if (node == null) {
@@ -106,11 +114,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             name("size").value(node.getSize());
 
             endObject();
-            return;
-        }
-        
-        private static String BlockLabel(PcodeBlock block) throws Exception {
-        	return Integer.toString(block.getIndex());
         }
 
         // Serialize a direct call. This enqueues the targeted for type lifting
@@ -122,16 +125,23 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     		}
 
     		Address target_address = caller_address.getNewAddress(target_address_node.getOffset());
-    		String target_address_string = target_address.toString();
-    		name("target_address").value(target_address_string);
-    		
+    		String target_address_string = AddressLabel(target_address);
     		Function callee = fm.getFunctionAt(target_address);
     		
     		// `target_address` may be a pointer to an external. Figure out
     		// what we're calling.
     		if (callee == null) {
-    			
+    			callee = fm.getReferencedFunction(target_address);
+    			if (callee != null) {
+    				target_address = callee.getEntryPoint();
+    				println("Call through " + target_address_string +
+    						" targets " + callee.getName() +
+    						" at " + AddressLabel(target_address));
+    				target_address_string = AddressLabel(target_address);
+    			}
     		}
+    		
+    		name("target_address").value(target_address_string);
 
     		if (callee != null) {
     			functions.add(callee);
@@ -168,7 +178,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	Address function_address = function.getFunction().getEntryPoint();
             beginObject();
             name("mnemonic").value(op.getMnemonic());
-            name("address").value(op.getSeqnum().getTarget().toString());
+            name("address").value(AddressLabel(op.getSeqnum().getTarget()));
             switch (op.getOpcode()) {
             	case PcodeOp.CALL:
             		serializeDirectCallOp(function_address, op);
@@ -226,7 +236,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         // Serialize the input function list to JSON. This function will also
         // serialize type information related to referenced functions and
         // variables.
-        public JsonWriter serialize() throws Exception {
+        public void serialize() throws Exception {
 
             beginObject();
             name("arch").value(getArch());
@@ -243,11 +253,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         		DecompileResults res = ifc.decompileFunction(function, 30, null);
         		HighFunction high_function = res.getHighFunction();
 
-        		name(function_address.toString()).beginObject();
+        		name(AddressLabel(function_address)).beginObject();
         		serialize(high_function, function, i < original_functions_size);
         		endObject();
             }
-            return endObject().endObject();
+            endObject().endObject();
         }
     }
 
@@ -280,7 +290,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     		Files.newBufferedWriter(file), getArch(),
     		currentProgram.getFunctionManager(), currentProgram.getExternalManager(),
     		getDecompilerInterface(), new BasicBlockModel(currentProgram), functions);
-        serializer.serialize().close();
+        serializer.serialize();
+        serializer.close();
     }
 
     private List<Function> getAllFunctions() {
