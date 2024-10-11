@@ -294,14 +294,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	
             PcodeOp op = null;
             Iterator<PcodeOp> op_iterator = block.getIterator();
+            name("operations").beginObject();
             while (op_iterator.hasNext()) {
-            	if (op == null) {
-            		op = op_iterator.next();
-                	name("first_operation").value(label(op));
-                    name("operations").beginObject();
-            	} else {
-            		op = op_iterator.next();
-            	}
+            	op = op_iterator.next();
             	
             	// NOTE(pag): INDIRECTs seem like a good way of modelling may-
             	//		      alias relations, as well as embedding control
@@ -317,9 +312,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             		serialize(function, block, op);
             	}
             }
-            if (op != null) {
-                endObject();
-            }
+            endObject();
             
             // List out the operations in their order.
             op_iterator = block.getIterator();
