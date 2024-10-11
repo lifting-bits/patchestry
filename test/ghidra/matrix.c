@@ -1,17 +1,19 @@
 // UNSUPPORTED: system-windows
 // RUN: %cc %s -g -o %t.o
+/* clang-format off */ 
 // RUN: %decompile-headless --input %t.o --function multiply_matrices --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=DECOMPILES %s --input-file %t
 // DECOMPILES: "name":"{{_?multiply_matrices}}"
 
 // RUN: %decompile-headless --input %t.o --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=DECOMPILEA %s --input-file %t
-// DECOMPILEA: "arch":"{{.*}}","os":"{{.*}}","functions":{{...}}
+// DECOMPILEA: "arch":"{{.*}}","format":"{{.*}}","functions":{{...}}
 // DECOMPILEA-SAME: "name":"{{_?multiply_matrices}}"
 // DECOMPILEA-SAME: "name":"{{_?main}}"
 
 // RUN: %cc %s -g -o %t.o
-// RUN: %decompile-headless --high-pcode --input %t.o --function multiply_matrices --output %t %ci_output_folder
+/* clang-format off */ 
+// RUN: %decompile-headless --high-pcode --input %t.o --function multiply_matrices --output %t %ci_output_folder 
 // RUN: %file-check -vv --check-prefix=DECOMPILEHS %s --input-file %t
 // DECOMPILEHS: "name":"{{_?multiply_matrices}}"
 
