@@ -6,13 +6,13 @@
 
 // RUN: %decompile-headless --input %t.o --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=DECOMPILEA %s --input-file %t
-// DECOMPILEA: "arch":"{{.*}}","os":"{{.*}}","functions":{{...}}
+// DECOMPILEA: "arch":"{{.*}}","format":"{{.*}}","functions":{{...}}
 // DECOMPILEA-SAME: "name":"{{_?structb}}"
 // DECOMPILEA-SAME: "name":"{{_?main}}"
 
 // RUN: %cc %s -g -o %t.o
-// RUN: %decompile-headless --high-pcode --input %t.o --function structb --output %t %ci_output_folder
-// RUN: %file-check -vv --check-prefix=DECOMPILEHS %s --input-file %t
+// RUN: %decompile-headless --high-pcode --input %t.o --function structb --output %t
+// %ci_output_folder RUN: %file-check -vv --check-prefix=DECOMPILEHS %s --input-file %t
 // DECOMPILEHS: "name":"{{_?structb}}"
 
 // RUN: %decompile-headless --high-pcode --input %t.o --output %t %ci_output_folder
