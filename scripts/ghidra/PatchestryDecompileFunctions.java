@@ -30,6 +30,7 @@ import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
+import ghidra.program.model.pcode.SequenceNumber;
 import ghidra.program.model.pcode.Varnode;
 
 import ghidra.program.model.symbol.ExternalManager;
@@ -80,12 +81,18 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             this.seen_functions = new TreeSet<>();
         }
         
-        private static String AddressLabel(Address address) throws Exception {
+        private static String label(Address address) throws Exception {
     		return address.toString(true  /* show address space prefix */);
         }
         
-        private static String BlockLabel(PcodeBlock block) throws Exception {
+        private static String label(PcodeBlock block) throws Exception {
         	return Integer.toString(block.getIndex());
+        }
+
+        private static String label(SequenceNumber sn) throws Exception {
+        	return label(sn.getTarget()) + Address.SEPARATOR +
+        		   Integer.toString(sn.getTime()) + Address.SEPARATOR +
+        		   Integer.toString(sn.getOrder());
         }
 
         private void serialize(Varnode node) throws Exception {
@@ -125,7 +132,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     		}
 
     		Address target_address = caller_address.getNewAddress(target_address_node.getOffset());
-    		String target_address_string = AddressLabel(target_address);
+    		String target_address_string = label(target_address);
     		Function callee = fm.getFunctionAt(target_address);
     		
     		// `target_address` may be a pointer to an external. Figure out
@@ -136,8 +143,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     				target_address = callee.getEntryPoint();
     				println("Call through " + target_address_string +
     						" targets " + callee.getName() +
-    						" at " + AddressLabel(target_address));
-    				target_address_string = AddressLabel(target_address);
+    						" at " + label(target_address));
+    				target_address_string = label(target_address);
     			}
     		}
     		
@@ -159,8 +166,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         // TODO(pag): Ian as previously mentioned how the true/false targets
         //			  can be reversed. Investigate this.
         private void serializeCondBranchOp(PcodeBlockBasic block, PcodeOp op) throws Exception {
-        	name("taken_block").value(BlockLabel(block.getTrueOut()));
-        	name("not_taken_block").value(BlockLabel(block.getFalseOut()));
+        	name("taken_block").value(label(block.getTrueOut()));
+        	name("not_taken_block").value(label(block.getFalseOut()));
         }
         
         // Serialize a generic multi-input, single-output p-code operation.
@@ -178,7 +185,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	Address function_address = function.getFunction().getEntryPoint();
             beginObject();
             name("mnemonic").value(op.getMnemonic());
-            name("address").value(AddressLabel(op.getSeqnum().getTarget()));
+            name("name").value(label(op.getSeqnum()));
             switch (op.getOpcode()) {
             	case PcodeOp.CALL:
             		serializeDirectCallOp(function_address, op);
@@ -198,7 +205,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         private void serialize(HighFunction function, PcodeBlockBasic block) throws Exception {
         	PcodeBlock parent_block = block.getParent();
         	if (parent_block != null) {
-        		name("parent_block").value(BlockLabel(parent_block));
+        		name("parent_block").value(label(parent_block));
         	}
             name("pcode").beginArray();
             PcodeOp last_op = null;
@@ -224,7 +231,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             	if (visit_pcode) {
 	                name("basic_blocks").beginObject();
 	                for (PcodeBlockBasic block : high_function.getBasicBlocks()) {
-	                	name(BlockLabel(block)).beginObject();
+	                	name(label(block)).beginObject();
 	                    serialize(high_function, block);
 	                    endObject();
 	                }
@@ -253,7 +260,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         		DecompileResults res = ifc.decompileFunction(function, 30, null);
         		HighFunction high_function = res.getHighFunction();
 
-        		name(AddressLabel(function_address)).beginObject();
+        		name(label(function_address)).beginObject();
         		serialize(high_function, function, i < original_functions_size);
         		endObject();
             }
