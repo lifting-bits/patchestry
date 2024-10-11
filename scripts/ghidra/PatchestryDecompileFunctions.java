@@ -27,6 +27,7 @@ import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Program;
 
 import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
@@ -84,21 +85,89 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         private static String label(Address address) throws Exception {
     		return address.toString(true  /* show address space prefix */);
         }
-        
-        private static String label(PcodeBlock block) throws Exception {
-        	return Integer.toString(block.getIndex());
-        }
 
         private static String label(SequenceNumber sn) throws Exception {
         	return label(sn.getTarget()) + Address.SEPARATOR +
         		   Integer.toString(sn.getTime()) + Address.SEPARATOR +
         		   Integer.toString(sn.getOrder());
         }
+        
+        private static String label(PcodeBlock block) throws Exception {
+        	return label(block.getStart()) + Address.SEPARATOR +
+        		   Integer.toString(block.getIndex()) + Address.SEPARATOR +
+        		   PcodeBlock.typeToName(block.getType());
+        }
+        
+        private static String label(PcodeOp op) throws Exception {
+        	return label(op.getSeqnum());
+        }
+        
+        // Return the r-value of a varnode.
+        private Varnode rValueOf(Varnode node) throws Exception {
+        	while (true) {
+        		PcodeOp def = node.getDef();
+        		if (def == null) {
+        			break;
+        		}
+        		
+        		if (def.getOpcode() != PcodeOp.INDIRECT) {
+        			break;
+        		}
+        		
+        		Varnode i0 = def.getInput(0);
+        		if (!i0.isConstant()) {
+        			break;
+        		}
+        		
+        		assert i0.getOffset() == 0;
+        		node = def.getInput(1);
+        	}
+        	
+        	return node;
+        }
+        
+        // Return the l-value of a varnode.
+        private HighVariable lValueOf(Varnode node) throws Exception {
+        	HighVariable var = node.getHigh();
+        	while (var == null) {
+        		PcodeOp def = node.getDef();
+        		if (def == null) {
+        			break;
+        		}
+        		
+        		if (def.getOpcode() != PcodeOp.INDIRECT) {
+        			break;
+        		}
+        		
+        		Varnode i0 = def.getInput(0);
+        		
+        		// A constant varnode for input 0 in an INDIRECT op means that
+        		// the referenced operation producing input 1 is the producer
+        		// of the value.
+        		if (i0.isConstant()) {
+        			assert i0.getOffset() == 0;
+        			break;
+        		}
+        		
+        		node = i0;
+        		var = node.getHigh();
+        	}
+        	
+        	return var;
+        }
 
         private void serialize(Varnode node) throws Exception {
             if (node == null) {
+            	assert false;
                 nullValue();
                 return;
+            }
+            
+            // Make sure INDIRECTs don't leak back into our output. We won't
+            // have the ability to reference them.
+            PcodeOp def = node.getDef();
+            if (def != null) {
+            	assert def.getOpcode() != PcodeOp.INDIRECT;
             }
 
             beginObject();
@@ -132,7 +201,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     		}
 
     		Address target_address = caller_address.getNewAddress(target_address_node.getOffset());
-    		String target_address_string = label(target_address);
+    		String target_label = label(target_address);
     		Function callee = fm.getFunctionAt(target_address);
     		
     		// `target_address` may be a pointer to an external. Figure out
@@ -141,21 +210,27 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     			callee = fm.getReferencedFunction(target_address);
     			if (callee != null) {
     				target_address = callee.getEntryPoint();
-    				println("Call through " + target_address_string +
+    				println("Call through " + target_label +
     						" targets " + callee.getName() +
     						" at " + label(target_address));
-    				target_address_string = label(target_address);
+    				target_label = label(target_address);
     			}
     		}
     		
-    		name("target_address").value(target_address_string);
+    		name("target_address").value(target_label);
 
     		if (callee != null) {
     			functions.add(callee);
     		} else {
-    			println("Could not find function at address " + target_address_string +
+    			println("Could not find function at address " + target_label +
     					" called by " + caller_address.toString());
     		}
+        }
+        
+        // Serialize an unconditional branch. This records the targeted block.
+        private void serializeBranchOp(PcodeBlockBasic block, PcodeOp op) throws Exception {
+        	assert block.getOutSize() == 1;
+    		name("target_block").value(label(block.getOut(0)));
         }
         
         // Serialize a conditional branch. This records the targeted blocks.
@@ -163,11 +238,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         // TODO(pag): How does p-code handle delay slots? Are they separate
         //		      blocks?
         //
-        // TODO(pag): Ian as previously mentioned how the true/false targets
-        //			  can be reversed. Investigate this.
+        // XREF(pag): https://github.com/NationalSecurityAgency/ghidra/issues/2736
+        //			  describes how the `op` meaning of the branch, i.e. whether
+        //			  it branches on zero or not zero, can change over the course
+        //			  of simplification, and so the inputs representing the
+        //			  branch targets may not actually represent the `true` or
+        //			  `false` outputs in the traditional sense.
         private void serializeCondBranchOp(PcodeBlockBasic block, PcodeOp op) throws Exception {
         	name("taken_block").value(label(block.getTrueOut()));
         	name("not_taken_block").value(label(block.getFalseOut()));
+        	name("condition");
+        	serialize(rValueOf(op.getInput(1)));
         }
         
         // Serialize a generic multi-input, single-output p-code operation.
@@ -176,7 +257,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             serialize(op.getOutput());
             name("inputs").beginArray();
             for (var input : op.getInputs()) {
-                serialize(input);
+                serialize(rValueOf(input));
             }
             endArray();
         }
@@ -193,6 +274,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             	case PcodeOp.CBRANCH:
             		serializeCondBranchOp(block, op);
                 	break;
+            	case PcodeOp.BRANCH:
+            		serializeBranchOp(block, op);
+                	break;
             	default:
             		serializeGenericOp(op);
             		break;
@@ -207,12 +291,41 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	if (parent_block != null) {
         		name("parent_block").value(label(parent_block));
         	}
-            name("pcode").beginArray();
-            PcodeOp last_op = null;
+        	
+            PcodeOp op = null;
             Iterator<PcodeOp> op_iterator = block.getIterator();
             while (op_iterator.hasNext()) {
-            	last_op = op_iterator.next();
-                serialize(function, block, last_op);
+            	if (op == null) {
+            		op = op_iterator.next();
+                	name("first_operation").value(label(op));
+                    name("operations").beginObject();
+            	} else {
+            		op = op_iterator.next();
+            	}
+            	
+            	// NOTE(pag): INDIRECTs seem like a good way of modelling may-
+            	//		      alias relations, as well as embedding control
+            	//			  dependencies into the dataflow graph, e.g. to
+            	//			  ensure code motion cannot happen from after a CALL
+            	//			  to before a CALL, especially for stuff operating
+            	//			  on stack slots. The idea at the time of this
+            	//			  comment is that we will assume that eventual
+            	//			  codegen also should not do any reordering, though
+            	//			  enforcing that is also tricky.
+            	if (op.getOpcode() != PcodeOp.INDIRECT) {
+            		name(label(op));
+            		serialize(function, block, op);
+            	}
+            }
+            if (op != null) {
+                endObject();
+            }
+            
+            // List out the operations in their order.
+            op_iterator = block.getIterator();
+            name("ordered_operations").beginArray();
+            while (op_iterator.hasNext()) {
+            	value(label(op_iterator.next()));
             }
             endArray();
         }
