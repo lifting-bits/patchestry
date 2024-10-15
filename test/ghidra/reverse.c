@@ -10,17 +10,6 @@
 // DECOMPILEA-SAME: "name":"{{_?reverse_string}}"
 // DECOMPILEA-SAME: "name":"{{_?main}}"
 
-// RUN: %cc %s -g -o %t.o
-// RUN: %decompile-headless --high-pcode --input %t.o --function reverse_string --output %t
-// %ci_output_folder RUN: %file-check -vv --check-prefix=DECOMPILEHS %s --input-file %t
-// DECOMPILEHS: "name":"{{_?reverse_string}}"
-
-// RUN: %decompile-headless --high-pcode --input %t.o --output %t %ci_output_folder
-// RUN: %file-check -vv --check-prefix=DECOMPILEHA %s --input-file %t
-// DECOMPILEHA: "arch":"{{.*}}","os":"{{.*}}","functions":{{...}}
-// DECOMPILEHA-SAME: "name":"{{_?reverse_string}}"
-// DECOMPILEHA-SAME: "name":"{{_?main}}"
-
 // RUN: %decompile-headless --list-functions --input %t.o --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=LISTFNS %s --input-file %t
 // LISTFNS: "program":"{{.*}}","functions":{{...}}

@@ -40,7 +40,6 @@ Examples:
   ./decompile-entrypoint.sh --input /path/to/file --command list-functions --output /path/to/output.json
   ./decompile-entrypoint.sh --input /path/to/file --command decompile --function main --output /path/to/output.json
   ./decompile-entrypoint.sh --input /path/to/file --command decompile-all --output /path/to/output.json
-  ./decompile-entrypoint.sh --input /path/to/file --command decompile-all --high-pcode --output /path/to/output.json
 EOF
 }
 
@@ -89,9 +88,6 @@ function parse_args {
           die "--output requires an argument."
         fi
         ;;
-      --high-pcode)
-        HIGH_PCODE=true
-        ;;
       *)
         die "Invalid option '$1'."
         ;;
@@ -138,12 +134,6 @@ function run_decompile_single {
   echo "Running Ghidra headless script to decompile function..."
   local ghidra_script="PatchestryDecompileFunctions.java"
   
-  if [ -n "$HIGH_PCODE" ]; then
-    local ghidra_script="PatchestryDecompileFunctionsHigh.java"
-  else
-    local ghidra_script="PatchestryDecompileFunctions.java"
-  fi
-  
   ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
     -readOnly -deleteProject \
     -import $INPUT_FILE \
@@ -159,12 +149,7 @@ function run_decompile_single {
 
 function run_decompile_all {
   echo "Running Ghidra headless script to decompile function..."
-  
-  if [ -n "$HIGH_PCODE" ]; then
-    local ghidra_script="PatchestryDecompileFunctionsHigh.java"
-  else
-    local ghidra_script="PatchestryDecompileFunctions.java"
-  fi
+  local ghidra_script="PatchestryDecompileFunctions.java"
 
   ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
     -readOnly -deleteProject \
