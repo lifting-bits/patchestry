@@ -65,6 +65,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     	private List<Function> functions;
     	private int original_functions_size;
     	private Set<Address> seen_functions;
+    	private HighFunction current_function;
+    	private PcodeBlockBasic current_block;
+    	private Set<String> happens_after;
     	
         public PcodeSerializer(java.io.BufferedWriter writer,
         					   String arch_, FunctionManager fm_,
@@ -80,6 +83,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             this.functions = functions_;
             this.original_functions_size = functions.size();
             this.seen_functions = new TreeSet<>();
+            this.current_function = null;
+            this.current_block = null;
+            this.happens_after = new TreeSet<>();
         }
         
         private static String label(Address address) throws Exception {
@@ -102,10 +108,41 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	return label(op.getSeqnum());
         }
         
+        private PcodeOp resolveIndirect(PcodeOp indirect_op, Varnode node) throws Exception {
+    		assert node.isConstant();
+        	SequenceNumber indirect_loc = indirect_op.getSeqnum();
+    		SequenceNumber dependent_loc = new SequenceNumber(
+				indirect_loc.getTarget(), (int) node.getOffset());
+    		return current_function.getPcodeOp(indirect_loc);
+        }
+        
+        // Collect the happens-after relationships implied by `INDIRECT` opcodes.
+        //
+        // TODO(pag): Can these be cyclic?
+        private void collectHappensAfter(PcodeOp def) throws Exception {
+        	
+        	if (def == null) {
+        		return;
+        	}
+
+        	if (def.getOpcode() != PcodeOp.INDIRECT) {
+        		happens_after.add(label(def));
+    			return;
+        	}
+        	
+        	Varnode i0 = def.getInput(0);
+        	if (!i0.isConstant()) {
+        		collectHappensAfter(resolveIndirect(def, i0));
+    		}
+
+        	collectHappensAfter(resolveIndirect(def, def.getInput(1)));
+        }
+        
         // Return the r-value of a varnode.
         private Varnode rValueOf(Varnode node) throws Exception {
         	while (true) {
         		PcodeOp def = node.getDef();
+        		collectHappensAfter(def);
         		if (def == null) {
         			break;
         		}
@@ -113,14 +150,21 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         		if (def.getOpcode() != PcodeOp.INDIRECT) {
         			break;
         		}
-        		
+
         		Varnode i0 = def.getInput(0);
-        		if (!i0.isConstant()) {
-        			break;
+        		if (i0.isConstant()) {
+	        		assert i0.getOffset() == 0;
+	        		node = def.getInput(1);
+
+        		// Documentation reads:
+	        	// A constant varnode (zero) for input0 is used by analysis to
+	        	// indicate that the output of the INDIRECT is produced solely
+	        	// by the p-code operation producing the indirect effect, and
+	        	// there is no possibility that the value existing prior to the
+	        	// operation was used or preserved.
+        		} else {
+        			assert false;
         		}
-        		
-        		assert i0.getOffset() == 0;
-        		node = def.getInput(1);
         	}
         	
         	return node;
@@ -155,7 +199,24 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	
         	return var;
         }
+        
+        private void serializeInput(Varnode node) throws Exception {
+        	assert node.isInput();
+        	assert !node.isFree();
 
+    		PcodeOp def = node.getDef();
+
+            beginObject();
+            name("size").value(node.getSize());
+
+        	if (node.isUnique()) {
+        		assert def != null;
+        		name("kind").value("operation");
+        		name("operation").value(label(def));
+        	}
+            endObject();
+        }
+        
         private void serialize(Varnode node) throws Exception {
             if (node == null) {
             	assert false;
@@ -190,6 +251,24 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             name("size").value(node.getSize());
 
             endObject();
+        }
+        
+        // The address of a `LOAD` or `STORE` is spread across two operands:
+        // the first being a constant representing the address space, and the
+        // second being the actual address.
+        private void serializeLoadStoreAddress(PcodeOp op) throws Exception {
+        	Varnode aspace = op.getInput(0);
+        	assert aspace.isConstant();
+
+        	Varnode address = rValueOf(op.getInput(1));
+        	
+        	beginObject();
+            name("size").value(op.getInput(1).getSize());
+        	if (address.isConstant()) {
+        		
+        	}
+
+        	endObject();
         }
 
         // Serialize a direct call. This enqueues the targeted for type lifting
@@ -228,9 +307,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
         
         // Serialize an unconditional branch. This records the targeted block.
-        private void serializeBranchOp(PcodeBlockBasic block, PcodeOp op) throws Exception {
-        	assert block.getOutSize() == 1;
-    		name("target_block").value(label(block.getOut(0)));
+        private void serializeBranchOp(PcodeOp op) throws Exception {
+        	assert current_block.getOutSize() == 1;
+    		name("target_block").value(label(current_block.getOut(0)));
         }
         
         // Serialize a conditional branch. This records the targeted blocks.
@@ -244,11 +323,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         //			  of simplification, and so the inputs representing the
         //			  branch targets may not actually represent the `true` or
         //			  `false` outputs in the traditional sense.
-        private void serializeCondBranchOp(PcodeBlockBasic block, PcodeOp op) throws Exception {
-        	name("taken_block").value(label(block.getTrueOut()));
-        	name("not_taken_block").value(label(block.getFalseOut()));
+        private void serializeCondBranchOp(PcodeOp op) throws Exception {
+        	name("taken_block").value(label(current_block.getTrueOut()));
+        	name("not_taken_block").value(label(current_block.getFalseOut()));
         	name("condition");
-        	serialize(rValueOf(op.getInput(1)));
+        	serializeInput(rValueOf(op.getInput(1)));
         }
         
         // Serialize a generic multi-input, single-output p-code operation.
@@ -257,13 +336,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             serialize(op.getOutput());
             name("inputs").beginArray();
             for (var input : op.getInputs()) {
-                serialize(rValueOf(input));
+            	serializeInput(rValueOf(input));
             }
             endArray();
         }
 
-        private void serialize(HighFunction function, PcodeBlockBasic block, PcodeOp op) throws Exception {
-        	Address function_address = function.getFunction().getEntryPoint();
+        private void serialize(PcodeOp op) throws Exception {
+    	
+        	Address function_address = current_function.getFunction().getEntryPoint();
             beginObject();
             name("mnemonic").value(op.getMnemonic());
             name("name").value(label(op.getSeqnum()));
@@ -272,21 +352,37 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             		serializeDirectCallOp(function_address, op);
             		break;
             	case PcodeOp.CBRANCH:
-            		serializeCondBranchOp(block, op);
+            		serializeCondBranchOp(op);
                 	break;
             	case PcodeOp.BRANCH:
-            		serializeBranchOp(block, op);
+            		serializeBranchOp(op);
                 	break;
+            	case PcodeOp.LOAD:
+            	case PcodeOp.COPY:
+            	case PcodeOp.CAST:
             	default:
             		serializeGenericOp(op);
             		break;
             }
+
+            // Serialize the list of operations that indirectly affected the
+            // operands of this operation. This operation is said to "happen
+            // after" these other indirect operations.
+            if (!happens_after.isEmpty()) {
+            	name("happens_after").beginArray();
+            	for (String pred_label : happens_after) {
+            		value(pred_label);
+            	}
+            	endArray();
+            	happens_after.clear();
+            }
+
             endObject();
         }
         
         // Serialize a high p-code basic block. This iterates over the p-code
         // operations within the block and serializes them individually.
-        private void serialize(HighFunction function, PcodeBlockBasic block) throws Exception {
+        private void serialize(PcodeBlockBasic block) throws Exception {
         	PcodeBlock parent_block = block.getParent();
         	if (parent_block != null) {
         		name("parent_block").value(label(parent_block));
@@ -307,9 +403,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             	//			  comment is that we will assume that eventual
             	//			  codegen also should not do any reordering, though
             	//			  enforcing that is also tricky.
-            	if (op.getOpcode() != PcodeOp.INDIRECT) {
+            	if (op.getOpcode() != PcodeOp.INDIRECT || true) {
             		name(label(op));
-            		serialize(function, block, op);
+            		current_block = block;
+            		serialize(op);
+            		current_block = null;
             	}
             }
             endObject();
@@ -335,13 +433,23 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             // If we have a high P-Code function, then serialize the blocks.
             if (high_function != null) {
             	if (visit_pcode) {
+            		PcodeBlockBasic first_block = null;
+	                current_function = high_function;
 	                name("basic_blocks").beginObject();
 	                for (PcodeBlockBasic block : high_function.getBasicBlocks()) {
+	                	if (first_block == null) {
+	                		first_block = block;
+	                	}
 	                	name(label(block)).beginObject();
-	                    serialize(high_function, block);
+	                    serialize(block);
 	                    endObject();
 	                }
 	                endObject();
+	                current_function = null;
+	                
+	                if (first_block != null) {
+	                	name("entry_block").value(label(first_block));
+	                }
             	}
             }
         }
