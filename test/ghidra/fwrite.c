@@ -10,17 +10,6 @@
 // DECOMPILEA-SAME: "name":"{{_?write_file}}"
 // DECOMPILEA-SAME: "name":"{{_?main}}"
 
-// RUN: %cc %s -g -o %t.o
-// RUN: %decompile-headless --high-pcode --input %t.o --function write_file --output %t
-// %ci_output_folder RUN: %file-check -vv --check-prefix=DECOMPILEHS %s --input-file %t
-// DECOMPILEHS: "name":"{{_?write_file}}"
-
-// RUN: %decompile-headless --high-pcode --input %t.o --output %t %ci_output_folder
-// RUN: %file-check -vv --check-prefix=DECOMPILEHA %s --input-file %t
-// DECOMPILEHA: "arch":"{{.*}}","os":"{{.*}}","functions":{{...}}
-// DECOMPILEHA-SAME: "name":"{{_?write_file}}"
-// DECOMPILEHA-SAME: "name":"{{_?main}}"
-
 // RUN: %decompile-headless --input %t.o --list-functions --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=LISTFNS %s --input-file %t
 // LISTFNS: "program":"{{.*}}","functions":{{...}}

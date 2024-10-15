@@ -20,7 +20,6 @@ Options:
   -v, --verbose         Enable verbose output
   -t, --interactive     Start Docker container in interactive mode
   -c, --ci              Run in CI mode
-  --high-pcode          Recover high pcode from input file
 
 Examples:
   ./decompile-headless.sh --input /path/to/file --output /path/to/output.json  // Decompile all functions
@@ -63,10 +62,6 @@ parse_args() {
             -c|--ci)
                 CI_OUTPUT_FOLDER="$2"
                 shift 2
-                ;;
-            --high-pcode)
-                HIGH_PCODE="true"
-                shift 1
                 ;;
             *)
                 echo "Unknown option: $1"
@@ -139,10 +134,6 @@ validate_paths() {
 
 build_docker_command() {
     local ARGS=
-    if [ -n "$HIGH_PCODE" ]; then
-        ARGS="--high-pcode $ARGS"
-    fi
-
     if [  -n "$LIST_FUNCTIONS" ]; then
         ARGS="--command list-functions $ARGS"
     elif [ -n "$FUNCTION_NAME" ]; then
