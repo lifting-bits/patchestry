@@ -36,8 +36,23 @@ import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.pcode.SequenceNumber;
 import ghidra.program.model.pcode.Varnode;
 
+import ghidra.program.model.data.AbstractFloatDataType;
+import ghidra.program.model.data.AbstractIntegerDataType;
+import ghidra.program.model.data.Array;
+import ghidra.program.model.data.BooleanDataType;
+import ghidra.program.model.data.Composite;
+import ghidra.program.model.data.CategoryPath;
+import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.DataTypeComponent;
 import ghidra.program.model.data.Enum;
-import ghidra.program.model.data.*;
+import ghidra.program.model.data.FunctionDefinition;
+import ghidra.program.model.data.ParameterDefinition;
+import ghidra.program.model.data.Pointer;
+import ghidra.program.model.data.Structure;
+import ghidra.program.model.data.TypeDef;
+import ghidra.program.model.data.Undefined;
+import ghidra.program.model.data.Union;
+import ghidra.program.model.data.VoidDataType;
 
 import ghidra.program.model.symbol.ExternalManager;
 
@@ -67,7 +82,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
     static final int decompilation_timeout = 30;
 
-    private static HashMap<String, DataType> type_map = new HashMap<>();
+    private HashMap<String, DataType> type_map = new HashMap<>();
 	
     private class PcodeSerializer extends JsonWriter {
     	private String arch;
@@ -78,6 +93,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     	private List<Function> functions;
     	private int original_functions_size;
     	private Set<Address> seen_functions;
+        private Set<String> seen_types;
     	
         public PcodeSerializer(java.io.BufferedWriter writer,
         					   String arch_, FunctionManager fm_,
@@ -93,28 +109,20 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             this.functions = functions_;
             this.original_functions_size = functions.size();
             this.seen_functions = new TreeSet<>();
+            this.seen_types = new HashSet<>();
         }
 
-        private static String id(DataType type) throws Exception {
-            String name = type.getName().replaceAll(" ", "");
+        private static String label(DataType type) throws Exception {
+            String name = type.getName();
             CategoryPath category = type.getCategoryPath();
             String concat_type = category.toString() + name + Integer.toString(type.getLength());
             UniversalID uid = type.getUniversalID();
             if (uid != null) {
-                return Integer.toHexString(concat_type.hashCode()) + ":" + uid.toString();
+                return Integer.toHexString(concat_type.hashCode()) + Address.SEPARATOR + uid.toString();
             }
             return Integer.toHexString(concat_type.hashCode());
         }
 
-        private static String label(DataType type) throws Exception {
-            String type_id = id(type);
-            DataType lookup_type = type_map.get(type_id);
-            if (lookup_type == null) {
-                type_map.put(type_id, type);
-            }
-            return type_id;
-        }
-        
         private static String label(Address address) throws Exception {
     		return address.toString(true  /* show address space prefix */);
         }
@@ -189,7 +197,16 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	return var;
         }
 
-        private void serializePointerType(Pointer data_type, Set<String> new_ids) throws Exception {
+        private String getTypeIds(DataType type) throws Exception {
+            String type_id = label(type);
+            DataType lookup_type = type_map.get(type_id);
+            if (lookup_type == null) {
+                type_map.put(type_id, type);
+            }
+            return type_id;
+        }
+
+        private void serializePointerType(Pointer data_type) throws Exception {
             name("name").value(data_type.getDisplayName().replaceAll(" ", ""));
             name("kind").value("pointer");
             name("size").value(data_type.getLength());
@@ -197,13 +214,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             
             // element data type can be null
             if (elem_type != null) {
-                String elem_type_id = label(elem_type);
+                String elem_type_id = getTypeIds(elem_type);
                 name("element_type").value(elem_type_id);
-                new_ids.add(elem_type_id);
+                seen_types.add(elem_type_id);
             }
         }
 
-        private void serializeTypedefType(TypeDef data_type, Set<String> new_ids) throws Exception {
+        private void serializeTypedefType(TypeDef data_type) throws Exception {
             name("name").value(data_type.getDisplayName().replaceAll(" ", ""));
             name("kind").value("typedef");
             name("size").value(data_type.getLength());
@@ -211,32 +228,32 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
             DataType base_type = data_type.getBaseDataType();
             if (base_type != null) {
-                String base_type_id = label(base_type);
-                new_ids.add(base_type_id);
+                String base_type_id = getTypeIds(base_type);
+                seen_types.add(base_type_id);
                 name("base_type").value(base_type_id);
             }
         }
 
-        private void serializeArrayType(Array arr, Set<String> new_ids) throws Exception {
+        private void serializeArrayType(Array arr) throws Exception {
             name("name").value(arr.getDisplayName().replaceAll(" ", ""));
             name("kind").value("array");
             name("size").value(arr.getLength());
             name("num_elements").value(arr.getNumElements());
             DataType elem_type = arr.getDataType();
             if (elem_type != null) {
-                String elem_type_id = label(elem_type);
-                new_ids.add(elem_type_id);
+                String elem_type_id = getTypeIds(elem_type);
+                seen_types.add(elem_type_id);
                 name("element_type").value(elem_type_id);
             }
         }
             
-        private void serializeGenericType(DataType data_type, String kind, Set<String> new_ids) throws Exception {
+        private void serializeGenericType(DataType data_type, String kind) throws Exception {
             name("name").value(data_type.getDisplayName().replaceAll(" ", ""));
             name("size").value(data_type.getLength());
             name("kind").value(kind);
         }
 
-        private void serializeCompositeType(Composite data_type, String kind, Set<String> new_ids) throws Exception {
+        private void serializeCompositeType(Composite data_type, String kind) throws Exception {
             name("name").value(data_type.getDisplayName().replaceAll(" ", ""));
             name("kind").value(kind);
             name("size").value(data_type.getLength());
@@ -247,8 +264,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
                 DataTypeComponent dtc = data_type.getComponent(i);
                 beginObject();
 
-                String comp_id = label(dtc.getDataType());
-                new_ids.add(comp_id);
+                String comp_id = getTypeIds(dtc.getDataType());
+                seen_types.add(comp_id);
                 name("type").value(comp_id);
                 name("offset").value(dtc.getOffset());
 
@@ -260,51 +277,79 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             endArray();
         }
 
-        private void serialize(DataType data_type, Set<String> new_ids) throws Exception {
+        private void serializeFunctionDefinition(FunctionDefinition fd) throws Exception {
+            name("name").value(fd.getDisplayName());
+            name("kind").value("function");
+            String ret_type_id = getTypeIds(fd.getReturnType());
+            seen_types.add(ret_type_id);
+            name("return_type").value(ret_type_id);
+            name("has_varargs").value(fd.hasVarArgs());
+            ParameterDefinition[] arguments = fd.getArguments();
+            name("parameters").beginArray();
+            for (int i = 0; i < arguments.length; i++) {
+                beginObject();
+                name("name").value(arguments[i].getName());
+                name("size").value(arguments[i].getLength());
+                String param_type_id = getTypeIds(arguments[i].getDataType());
+                seen_types.add(param_type_id);
+                name("type").value(param_type_id);
+                endObject();
+            }
+            endArray();
+        }
+
+        private void serialize(DataType data_type) throws Exception {
             if (data_type == null) {
                 nullValue();
                 return;
             }
 
             if (data_type instanceof Pointer) {
-                serializePointerType((Pointer) data_type, new_ids);
+                serializePointerType((Pointer) data_type);
             } else if (data_type instanceof TypeDef) {
-                serializeTypedefType((TypeDef) data_type, new_ids);
+                serializeTypedefType((TypeDef) data_type);
             } else if (data_type instanceof Array) {
-                serializeArrayType((Array) data_type, new_ids);
+                serializeArrayType((Array) data_type);
             } else if (data_type instanceof Structure) {
-                serializeCompositeType((Composite) data_type, "struct", new_ids);
+                serializeCompositeType((Composite) data_type, "struct");
             } else if (data_type instanceof Union) {
-                serializeCompositeType((Composite) data_type, "union", new_ids);
+                serializeCompositeType((Composite) data_type, "union");
             } else if (data_type instanceof AbstractIntegerDataType){
-                serializeGenericType(data_type, "integer", new_ids);
+                serializeGenericType(data_type, "integer");
             } else if (data_type instanceof AbstractFloatDataType){
-                serializeGenericType(data_type, "float", new_ids);
+                serializeGenericType(data_type, "float");
             } else if (data_type instanceof BooleanDataType){
-                serializeGenericType(data_type, "boolean", new_ids);
+                serializeGenericType(data_type, "boolean");
             } else if (data_type instanceof Enum) {
-                serializeGenericType(data_type, "enum", new_ids);
+                serializeGenericType(data_type, "enum");
+            } else if (data_type instanceof VoidDataType) {
+                serializeGenericType(data_type, "void");
+            } else if (data_type instanceof Undefined || data_type.toString().contains("undefined")) {
+                serializeGenericType(data_type, "undefined");
+            } else if (data_type instanceof FunctionDefinition) {
+                serializeFunctionDefinition((FunctionDefinition) data_type);
+            } else {
+                println("types: " + data_type.toString());
             }
         }
 
         private void serializeTypes(Set<String> type_ids) throws Exception {
             Set<String> serialized_types = new HashSet<>();   // To keep track of already serialized types
-            Set<String> pending_types = new HashSet<>();      // To track types found during serialization
 
             do {
                 serialized_types.addAll(type_ids);  // Add current typeIds to serialized set
-                pending_types.clear();             // Clear the pendingTypes for new iteration
+                seen_types.clear();             // Clear the pendingTypes for new iteration
 
                 for (String id : type_ids) {
                     name(id).beginObject();
                     DataType data_type = type_map.get(id);
-                    serialize(data_type, pending_types);
+                    serialize(data_type);
                     endObject();
                 }
 
-                pending_types.removeAll(serialized_types);
-                type_ids = new HashSet<>(pending_types);
-            } while (!pending_types.isEmpty());
+                seen_types.removeAll(serialized_types);
+                type_ids = new HashSet<>(seen_types);
+            } while (!seen_types.isEmpty());
             println("Total serialized types: " + serialized_types.size());
         }
 
@@ -329,7 +374,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             
             beginObject();
             name("name").value(high_var.getName());
-            name("type").value(label(high_var.getDataType()));
+            name("type").value(getTypeIds(high_var.getDataType()));
             endObject();
         }
 
@@ -358,7 +403,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             if (high_var != null) {
                 name("variable").beginObject();
                 name("name").value(high_var.getName());
-                name("type").value(label(high_var.getDataType()));
+                name("type").value(getTypeIds(high_var.getDataType()));
                 endObject();
             }
             endObject();
