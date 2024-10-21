@@ -588,6 +588,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
         		DecompileResults res = ifc.decompileFunction(function, decompilation_timeout, null);
         		HighFunction high_function = res.getHighFunction();
+                       if (high_function == null) {
+                           continue;
+                       }
                 
         		name(label(function_address)).beginObject();
         		serialize(high_function, function, i < original_functions_size);
