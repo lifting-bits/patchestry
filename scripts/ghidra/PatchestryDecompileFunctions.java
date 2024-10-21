@@ -11,11 +11,19 @@ import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
 
+import ghidra.app.plugin.processors.sleigh.SleighLanguage;
+
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressFactory;
+import ghidra.program.model.address.AddressSpace;
 
 import ghidra.program.model.block.BasicBlockModel;
 import ghidra.program.model.block.CodeBlock;
 import ghidra.program.model.block.CodeBlockIterator;
+
+import ghidra.program.model.data.DataType;
+
+import ghidra.program.model.lang.Language;
 
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
@@ -27,6 +35,7 @@ import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Program;
 
 import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.pcode.HighSymbol;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
@@ -34,7 +43,10 @@ import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.pcode.SequenceNumber;
 import ghidra.program.model.pcode.Varnode;
 
+import ghidra.pcode.pcoderaw.PcodeOpRaw;
+
 import ghidra.program.model.symbol.ExternalManager;
+import ghidra.program.model.symbol.Symbol;
 
 import com.google.gson.stream.JsonWriter;
 
@@ -51,13 +63,48 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.TreeMap;
 
 public class PatchestryDecompileFunctions extends GhidraScript {
 	
+	protected static final int DECLARE_LOCAL_VAR = 1000; 
+	
+	protected class DefinitionVarnode extends Varnode {
+		private PcodeOp def;
+		private HighVariable high;
+		
+		public DefinitionVarnode(Address address, int size) {
+			super(address, size);
+		}
+		
+		public void setDef(HighVariable high, PcodeOp def) {
+			this.def = def;
+			this.high = high;
+		}
+		
+		@Override
+		public PcodeOp getDef() {
+			return def;
+		}
+		
+		@Override
+		public HighVariable getHigh() {
+			return high;
+		}
+		
+		@Override
+		public boolean isInput() {
+			return false;
+		}
+	};
+
     private class PcodeSerializer extends JsonWriter {
     	private String arch;
+    	private AddressSpace constant_space;
+    	private AddressSpace unique_space;
     	private FunctionManager fm;
     	private ExternalManager em;
     	private DecompInterface ifc;
@@ -68,14 +115,27 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     	private HighFunction current_function;
     	private PcodeBlockBasic current_block;
     	private Set<String> happens_after;
-    	
+    	private Set<String> seen_indirects;
+    	private Map<Address, HighSymbol> seen_addresses;
+    	private Map<PcodeOp, String> labels;
+    	private long next_unique;
+    	private int next_seqnum;
+    	private List<PcodeOp> entry_block;
+
         public PcodeSerializer(java.io.BufferedWriter writer,
         					   String arch_, FunctionManager fm_,
         					   ExternalManager em_, DecompInterface ifc_,
         					   BasicBlockModel bbm_,
         					   List<Function> functions_) {
             super(writer);
+
+            Program program = fm_.getProgram();
+            SleighLanguage language = (SleighLanguage) program.getLanguage();
+            AddressFactory address_factory = language.getAddressFactory();
+
             this.arch = arch_;
+            this.constant_space = address_factory.getConstantSpace();
+            this.unique_space = address_factory.getUniqueSpace();
             this.fm = fm_;
             this.em = em_;
             this.ifc = ifc_;
@@ -86,7 +146,16 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             this.current_function = null;
             this.current_block = null;
             this.happens_after = new TreeSet<>();
+            this.seen_indirects = new TreeSet<>();
+            this.seen_addresses = new TreeMap<>();
+            this.next_unique = language.getUniqueBase();
+            this.next_seqnum = 0;
+            this.entry_block = new ArrayList<>();
         }
+        
+//        private PcodeOp representativeOf(Varnode node) throws Exception {
+//        	
+//        }
         
         private static String label(Address address) throws Exception {
     		return address.toString(true  /* show address space prefix */);
@@ -108,12 +177,87 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	return label(op.getSeqnum());
         }
         
-        private PcodeOp resolveIndirect(PcodeOp indirect_op, Varnode node) throws Exception {
-    		assert node.isConstant();
-        	SequenceNumber indirect_loc = indirect_op.getSeqnum();
-    		SequenceNumber dependent_loc = new SequenceNumber(
-				indirect_loc.getTarget(), (int) node.getOffset());
-    		return current_function.getPcodeOp(indirect_loc);
+        // Try to resolve an operand `node` of an `indirect_op` to its definition.
+        // This function is not resoponsible f
+        private PcodeOp resolveIndirect(PcodeOp indirect_op, Varnode node) throws Exception {  	
+        	if (indirect_op == null) {
+        		return null;
+        	}
+        	
+        	if (indirect_op.getOpcode() != PcodeOp.INDIRECT) {
+        		return null;
+        	}
+
+        	if (node == null) {
+        		return null;
+        	}
+
+        	Varnode output = indirect_op.getOutput();
+        	if (output == null) {
+        		return null;
+        	}
+
+        	// If this indirect actually affects a global variable then we
+    		// "don't care", insofar as 
+        	switch (output.getSpace() & AddressSpace.ID_TYPE_MASK) {
+	        	case AddressSpace.TYPE_REGISTER:
+	        	case AddressSpace.TYPE_STACK:
+	        	case AddressSpace.TYPE_JOIN:
+	        	case AddressSpace.TYPE_VARIABLE:
+	        		break;
+        		default:
+        			return null;
+        	}
+
+        	PcodeOp dependent_op = null;
+    		PcodeOp def_of_node = node.getDef();
+        	
+        	// If it's a constant, then the address of the dependent operation
+        	// is the same as `indirect_op`, and `node.getOffset()` encodes
+        	// the "time" of the p-code operation in terms of the sequence
+        	// number. Typically we observe this with `INDIRECT`s that follow
+        	// `CALL`s, where all of the `INDIRECT`s are exposing that the `CALL`
+        	// likely modifies some data.
+        	switch (node.getSpace() & AddressSpace.ID_TYPE_MASK) {
+        		case AddressSpace.TYPE_CONSTANT:
+        			if (node.getOffset() != 0 || indirect_op.getInput(0) != node) {
+			        	SequenceNumber indirect_loc = indirect_op.getSeqnum();
+			    		SequenceNumber dependent_loc = new SequenceNumber(
+							indirect_loc.getTarget(), (int) node.getOffset());
+			    		dependent_op = current_function.getPcodeOp(dependent_loc);
+			    		
+			    		println("=== Resolving " + node.toString());
+			    		println("indirect_op: " + label(indirect_op) + "| " + indirect_op.toString());
+			    		if (dependent_op != null) {
+			    			println("dependent_op: " + label(indirect_op) + "| " + dependent_op.toString());
+			    		}
+			    		if (def_of_node != null) {
+			    			println("def: " + label(def_of_node) + "| " + def_of_node.toString());
+			    		}
+						assert dependent_op != indirect_op;
+	        		}
+					break;
+        		
+        		case AddressSpace.TYPE_UNIQUE:
+    			case AddressSpace.TYPE_REGISTER:
+        		case AddressSpace.TYPE_VARIABLE:
+        			dependent_op = def_of_node;
+        			break;
+    			
+        		case AddressSpace.TYPE_STACK:
+        			println("??? Resolving " + node.toString());
+		    		println("indirect_op: " + label(indirect_op) + "| " + indirect_op.toString());
+		    		if (def_of_node != null) {
+		    			println("def: " + label(def_of_node) + "| " + def_of_node.toString());
+		    		}
+        			break;
+
+        		default:
+        			break;
+        	}
+        	
+    		assert dependent_op != indirect_op;
+    		return dependent_op;
         }
         
         // Collect the happens-after relationships implied by `INDIRECT` opcodes.
@@ -124,82 +268,51 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	if (def == null) {
         		return;
         	}
-
+        	
+        	// There is a cycle in the `INDIRECT`s. This can happen when there's
+        	// a loop.
+        	if (!seen_indirects.add(label(def))) {
+        		return;
+        	}
+        	
+        	// Bottom of recursive case; we've followed indirects to something
+        	// that isn't an indirect.
         	if (def.getOpcode() != PcodeOp.INDIRECT) {
         		happens_after.add(label(def));
     			return;
         	}
         	
-        	Varnode i0 = def.getInput(0);
-        	if (!i0.isConstant()) {
-        		collectHappensAfter(resolveIndirect(def, i0));
-    		}
-
+        	collectHappensAfter(resolveIndirect(def, def.getInput(0)));
         	collectHappensAfter(resolveIndirect(def, def.getInput(1)));
+        }
+        
+        // Resolve to the output of `b` if `a` and `b`'s output share the same
+        // high variable.
+        private static Varnode resolveOutputIfSameHigh(Varnode a, PcodeOp b) {
+        	if (a == null || b == null) {
+        		return null;
+        	}
+        	Varnode b_out = b.getOutput();
+        	if (b_out == null) {
+        		return null;
+        	}
+
+        	return a.getHigh() == b_out.getHigh() ? b_out : null;
         }
         
         // Return the r-value of a varnode.
         private Varnode rValueOf(Varnode node) throws Exception {
-        	while (true) {
-        		PcodeOp def = node.getDef();
-        		collectHappensAfter(def);
-        		if (def == null) {
-        			break;
-        		}
-        		
-        		if (def.getOpcode() != PcodeOp.INDIRECT) {
-        			break;
-        		}
-
-        		Varnode i0 = def.getInput(0);
-        		if (i0.isConstant()) {
-	        		assert i0.getOffset() == 0;
-	        		node = def.getInput(1);
-
-        		// Documentation reads:
-	        	// A constant varnode (zero) for input0 is used by analysis to
-	        	// indicate that the output of the INDIRECT is produced solely
-	        	// by the p-code operation producing the indirect effect, and
-	        	// there is no possibility that the value existing prior to the
-	        	// operation was used or preserved.
-        		} else {
-        			assert false;
-        		}
+        	collectHappensAfter(node.getDef());
+        	
+        	HighVariable high = node.getHigh();
+        	if (high == null) {
+        		return node;
         	}
         	
-        	return node;
+        	Varnode rep = high.getRepresentative();
+        	return rep == null ? node : rep;
         }
-        
-        // Return the l-value of a varnode.
-        private HighVariable lValueOf(Varnode node) throws Exception {
-        	HighVariable var = node.getHigh();
-        	while (var == null) {
-        		PcodeOp def = node.getDef();
-        		if (def == null) {
-        			break;
-        		}
-        		
-        		if (def.getOpcode() != PcodeOp.INDIRECT) {
-        			break;
-        		}
-        		
-        		Varnode i0 = def.getInput(0);
-        		
-        		// A constant varnode for input 0 in an INDIRECT op means that
-        		// the referenced operation producing input 1 is the producer
-        		// of the value.
-        		if (i0.isConstant()) {
-        			assert i0.getOffset() == 0;
-        			break;
-        		}
-        		
-        		node = i0;
-        		var = node.getHigh();
-        	}
-        	
-        	return var;
-        }
-        
+
         private void serializeInput(Varnode node) throws Exception {
         	assert node.isInput();
         	assert !node.isFree();
@@ -253,6 +366,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             endObject();
         }
         
+//        private AddressSpace getAddressSpace(long offset) {
+//        	switch (((int) offset) & AddressSpace.ID_TYPE_MASK) {
+//				case AddressSpace.TYPE_RAM:
+//					return AddressSpace.
+//        	}
+//        }
+        
         // The address of a `LOAD` or `STORE` is spread across two operands:
         // the first being a constant representing the address space, and the
         // second being the actual address.
@@ -261,19 +381,149 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	assert aspace.isConstant();
 
         	Varnode address = rValueOf(op.getInput(1));
-        	
+
         	beginObject();
             name("size").value(op.getInput(1).getSize());
-        	if (address.isConstant()) {
-        		
-        	}
+            println(op.toString());
+            //        	if (address.isConstant()) {
+//        		AddressSpace address_space = null;
+//        		
+//        		Address address = new Address();
+//        	}
 
         	endObject();
+        }
+        
+        private void recordAddress(Address address) {
+        	seen_addresses.put(address, null);
+        }
+        
+        private void recordAddress(Address address, HighVariable var) {
+        	if (!address.isMemoryAddress() && !address.isExternalAddress()) {
+        		println("$$$ high variable " + var.toString() + " at " + address.toString());
+        		return;
+        	}
+        	
+        	HighSymbol symbol = var.getSymbol();
+        	if (symbol == null) {
+        		println("!!! high variable no symbol " + var.toString() +" at " + address.toString());
+        	}
+//        	
+//        	
+//	        	seen_addresses.put(symbol.getPCAddress(), symbol);
+//	        	int offset = var.getOffset();
+//	        	if (-1 == offset) {
+//	        		
+//	        	} else {
+//	        		
+//	        	}
+//        	}
+        }
+        
+        private Address nextUniqueAddress() throws Exception {
+        	Address address = unique_space.getAddress(next_unique);
+        	next_unique += unique_space.getAddressableUnitSize();
+        	return address;
+        }
+        
+        // Creates a pseudo p-code op using a `CALLOTHER` that logically
+        // represents the definition of a local variable.
+        private PcodeOp createLocalVarDecl(HighVariable var) throws Exception {
+        	HighSymbol high_symbol = var.getSymbol();
+        	Address address = nextUniqueAddress();
+        	DefinitionVarnode def = new DefinitionVarnode(address, var.getSize());
+        	Varnode[] ins = new Varnode[2];
+        	SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
+        	PcodeOp op = new PcodeOp(loc, PcodeOp.CALLOTHER, 1, def);
+        	op.insertInput(new Varnode(constant_space.getAddress(DECLARE_LOCAL_VAR), 4), 0);
+        	def.setDef(var, op);
+
+        	Varnode[] instances = var.getInstances();
+        	Varnode[] new_instances = new Varnode[instances.length + 1];
+        	System.arraycopy(instances, 0, new_instances, 1, instances.length);
+        	new_instances[0] = def;
+
+        	var.attachInstances(new_instances, def);
+        	
+        	entry_block.add(op);
+        	
+        	return op;
+        }
+        
+        // Get or create a local variable pseudo definition op for the high
+        // variable `var`.
+        private PcodeOp getOrCreateLocalVariable(HighVariable var) throws Exception {
+        	Varnode representative = var.getRepresentative();
+        	if (representative == null) {
+        		return createLocalVarDecl(var);
+        	}
+        	
+        	PcodeOp def = representative.getDef();
+        	if (def == null) {
+        		return createLocalVarDecl(var);
+        	}
+        	
+        	if (def.getOpcode() != PcodeOp.CALLOTHER) {
+        		return createLocalVarDecl(var);
+        	}
+        	
+        	if (def.getInput(0).getOffset() != DECLARE_LOCAL_VAR) {
+        		return createLocalVarDecl(var);
+        	}
+        	
+        	return def;
+        }
+        
+        // Handles serializing the output, if any, of `op`. 
+        private void serializeOutput(PcodeOp op) throws Exception {
+        	Varnode output = op.getOutput();
+        	if (output == null) {
+        		return;
+        	}
+
+        	name("output").beginObject();
+
+        	HighVariable var = output.getHigh();
+        	if (var != null) {
+        		name("kind").value("local_variable");
+        		name("variable").value(label(getOrCreateLocalVariable(var)));
+        	} else {
+        		
+        	}
+        	endObject();
+//        	
+//    		Varnode representative = var.getRepresentative();
+//    		
+//    		
+//    		if (representative != null) {
+//    			PcodeOp representative_def = representative.getDef();
+//    			if (representative_def != null) {
+//    				if (representative_def == op) {
+//    					name("kind").value("self");
+//    				} else {
+//        				name("kind").value("operation");
+//        				name("operation").value(label(representative_def));
+//    				}
+//    			} else if (representative.isAddress()) {
+//    				recordAddress(representative.getAddress(), var);
+//    				name("kind").value("memory");
+//    				name("address").value(label(output.getAddress()));
+//    				//name("symbol").value(label(representative.get));
+//
+//    			} else {
+//    				println("!!! representative: " + var.toString() + " is node " + representative.toString());
+//    			}
+//    		} else {
+//    			println("!!! representative: " + var.toString());
+//    		}
+//        	
+//        	endObject();
         }
 
         // Serialize a direct call. This enqueues the targeted for type lifting
         // `Function` if it can be resolved.
-        private void serializeDirectCallOp(Address caller_address, PcodeOp op) throws Exception {
+        private void serializeDirectCallOp(PcodeOp op) throws Exception {
+        	Address caller_address = current_function.getFunction().getEntryPoint();
         	Varnode target_address_node = op.getInput(0);
     		if (!target_address_node.isAddress()) {
     			throw new Exception("Unexpected non-address input to CALL");
@@ -332,24 +582,65 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         
         // Serialize a generic multi-input, single-output p-code operation.
         private void serializeGenericOp(PcodeOp op) throws Exception {
-        	name("output");
-            serialize(op.getOutput());
             name("inputs").beginArray();
-            for (var input : op.getInputs()) {
+            for (Varnode input : op.getInputs()) {
             	serializeInput(rValueOf(input));
             }
             endArray();
         }
+        
+        // Serializes a pseudo-op `DECLARE_LOCAL_VAR`, which is actually encoded
+        // as a `CALLOTHER`.
+        private void serializeDeclareLocalVar(PcodeOp op) throws Exception {
+        	name("name").value(op.getOutput().getHigh().getName());
+        }
+        
+        // Serialize a `CALLOTHER`. The first input operand is a constant
+        // representing the user-defined opcode number. In our case, we have
+        // our own user-defined opcodes for making things better mirror the
+        // structure/needs of MLIR.
+        private void serializeCallOtherOp(PcodeOp op) throws Exception {
+        	switch ((int) op.getInput(0).getOffset()) {
+				case DECLARE_LOCAL_VAR:
+					serializeDeclareLocalVar(op);
+					break;
+				default:
+					serializeGenericOp(op);
+					break;
+        	}
+        }
+        
+        // Get the mnemonic for a p-code operation. We have some custom
+        // operations encoded as `CALLOTHER`s, so we get their names manually
+        // here.
+        //
+        // TODO(pag): There is probably a way to register the name of a
+        //			  `CALLOTHER` via `Language.getSymbolTable()` using a
+        //			  `UseropSymbol`. It's not clear if there's really value in
+        //			  doing this, though.
+        private static String mnemonic(PcodeOp op) {
+        	if (op.getOpcode() == PcodeOp.CALLOTHER) {
+        		switch ((int) op.getInput(0).getOffset()) {
+        			case DECLARE_LOCAL_VAR:
+        				return "DECLARE_LOCAL_VAR";
+    				default:
+    					break;
+        		}
+        	}
+        	return op.getMnemonic();
+        }
 
         private void serialize(PcodeOp op) throws Exception {
     	
-        	Address function_address = current_function.getFunction().getEntryPoint();
             beginObject();
-            name("mnemonic").value(op.getMnemonic());
-            name("name").value(label(op.getSeqnum()));
+            name("mnemonic").value(mnemonic(op));
+        	serializeOutput(op);
             switch (op.getOpcode()) {
             	case PcodeOp.CALL:
-            		serializeDirectCallOp(function_address, op);
+            		serializeDirectCallOp(op);
+            		break;
+            	case PcodeOp.CALLOTHER:
+            		serializeCallOtherOp(op);
             		break;
             	case PcodeOp.CBRANCH:
             		serializeCondBranchOp(op);
@@ -376,6 +667,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             	endArray();
             	happens_after.clear();
             }
+        	seen_indirects.clear();
 
             endObject();
         }
@@ -403,7 +695,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             	//			  comment is that we will assume that eventual
             	//			  codegen also should not do any reordering, though
             	//			  enforcing that is also tricky.
-            	if (op.getOpcode() != PcodeOp.INDIRECT || true) {
+            	if (op.getOpcode() != PcodeOp.INDIRECT) {
             		name(label(op));
             		current_block = block;
             		serialize(op);
@@ -420,6 +712,34 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             }
             endArray();
         }
+        
+        // Emit a pseudo entry block to represent
+        private void serializeEntryBlock(PcodeBlockBasic first_block) throws Exception {
+        	name("entry").beginObject();
+        	name("operations").beginObject();
+        	for (PcodeOp pseudo_op : entry_block) {
+        		name(label(pseudo_op));
+        		serialize(pseudo_op);
+        	}
+
+        	// If there is a proper entry block, then invent a branch to it.
+        	if (first_block != null) {
+	        	name("entry.exit").beginObject();
+	        	name("mnemonic").value("BRANCH");
+	        	name("target_block").value(label(first_block));
+	        	endObject();  // End of BRANCH to `first_block`.
+        	}
+
+        	endObject();  // End of operations.
+
+        	name("ordered_operations").beginArray();
+        	for (PcodeOp pseudo_op : entry_block) {
+        		value(label(pseudo_op));
+        	}
+        	value("entry.exit");
+        	endArray();  // End of `ordered_operations`.
+        	endObject();  // End of `entry` block.
+        }
 
         // Serialize `function`. If we have `high_function` (the decompilation
         // of function) then we will serialize its type information. Otherwise,
@@ -431,26 +751,36 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             name("name").value(function.getName());
             
             // If we have a high P-Code function, then serialize the blocks.
-            if (high_function != null) {
-            	if (visit_pcode) {
-            		PcodeBlockBasic first_block = null;
-	                current_function = high_function;
-	                name("basic_blocks").beginObject();
-	                for (PcodeBlockBasic block : high_function.getBasicBlocks()) {
-	                	if (first_block == null) {
-	                		first_block = block;
-	                	}
-	                	name(label(block)).beginObject();
-	                    serialize(block);
-	                    endObject();
-	                }
-	                endObject();
-	                current_function = null;
-	                
-	                if (first_block != null) {
-	                	name("entry_block").value(label(first_block));
-	                }
+            if (high_function == null || !visit_pcode) {
+            	return;
+            }
+    		PcodeBlockBasic first_block = null;
+            current_function = high_function;
+            name("basic_blocks").beginObject();
+            for (PcodeBlockBasic block : high_function.getBasicBlocks()) {
+            	if (first_block == null) {
+            		first_block = block;
             	}
+            	name(label(block)).beginObject();
+                serialize(block);
+                endObject();
+            }
+            
+            // If we created a fake entry block to represent variable
+            // declarations then emit that here.
+            if (!entry_block.isEmpty()) {
+            	serializeEntryBlock(first_block);
+            }
+
+            endObject();
+            current_function = null;
+            
+            if (!entry_block.isEmpty()) {
+        		name("entry_block").value("entry");
+            	entry_block.clear();
+
+            } else if (first_block != null) {
+            	name("entry_block").value(label(first_block));
             }
         }
 
