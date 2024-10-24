@@ -28,6 +28,8 @@ import ghidra.program.model.listing.Program;
 
 import ghidra.program.model.pcode.FunctionPrototype;
 import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.pcode.HighGlobal;
+import ghidra.program.model.pcode.HighLocal;
 import ghidra.program.model.pcode.HighParam;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.PcodeBlock;
@@ -203,12 +205,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         	return var;
         }
 
-        private String getDisplayName(DataType data_type) throws Exception {
-            return data_type.getDisplayName().replaceAll(" ", "");
-        }
-
         private void serializePointerType(Pointer ptr) throws Exception {
-            name("name").value(getDisplayName(ptr));
+            name("name").value(ptr.getDisplayName());
             name("kind").value("pointer");
             name("size").value(ptr.getLength());
             DataType elem_type = ptr.getDataType();
@@ -222,7 +220,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
 
         private void serializeTypedefType(TypeDef typedef) throws Exception {
-            name("name").value(getDisplayName(typedef));
+            name("name").value(typedef.getDisplayName());
             name("kind").value("typedef");
             name("size").value(typedef.getLength());
 
@@ -238,7 +236,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
 
         private void serializeArrayType(Array arr) throws Exception {
-            name("name").value(getDisplayName(arr));
+            name("name").value(arr.getDisplayName());
             name("kind").value("array");
             name("size").value(arr.getLength());
             name("num_elements").value(arr.getNumElements());
@@ -249,16 +247,15 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
             
         private void serializeBuiltinType(DataType data_type, String kind) throws Exception {
-            name("name").value(getDisplayName(data_type));
+            name("name").value(data_type.getDisplayName());
             name("size").value(data_type.getLength());
             name("kind").value(kind);
         }
 
         private void serializeCompositeType(Composite data_type, String kind) throws Exception {
-            name("name").value(getDisplayName(data_type));
+            name("name").value(data_type.getDisplayName());
             name("kind").value(kind);
             name("size").value(data_type.getLength());
-            name("num_fields").value(data_type.getNumComponents());
             name("fields").beginArray();
 
             for (int i = 0; i < data_type.getNumComponents(); i++) {
@@ -280,12 +277,15 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             name("name").value(fd.getDisplayName());
             name("kind").value("function");
             name("return_type").value(label(fd.getReturnType()));
-            name("has_varargs").value(fd.hasVarArgs());
+            name("is_variadic").value(fd.hasVarArgs());
             ParameterDefinition[] arguments = fd.getArguments();
             name("parameters").beginArray();
             for (int i = 0; i < arguments.length; i++) {
                 beginObject();
-                name("name").value(arguments[i].getName());
+                String name = arguments[i].getName();
+                if (name != null && !name.isEmpty()) {
+                    name("name").value(arguments[i].getName());
+                }
                 name("size").value(arguments[i].getLength());
                 name("type").value(label(arguments[i].getDataType()));
                 endObject();
@@ -347,7 +347,18 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
             name("parameters").beginArray();
             for (int i = 0; i < proto.getNumParams(); i++) {
-                serialize(proto.getParam(i).getHighVariable());
+                HighVariable hv = proto.getParam(i).getHighVariable();
+                // Assert if hv is not an instance of HighLocal
+                assert hv instanceof HighLocal;
+                if (hv != null) {
+                    beginObject();
+                    String hv_name = hv.getName();
+                    if (hv_name != null && !hv_name.isEmpty()) {
+                        name("name").value(hv_name);
+                    }
+                    name("type").value(label(hv.getDataType()));
+                    endObject();
+                }
             }
             endArray();
         }
