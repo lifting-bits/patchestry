@@ -28,8 +28,6 @@ import ghidra.program.model.listing.Program;
 
 import ghidra.program.model.pcode.FunctionPrototype;
 import ghidra.program.model.pcode.HighFunction;
-import ghidra.program.model.pcode.HighGlobal;
-import ghidra.program.model.pcode.HighLocal;
 import ghidra.program.model.pcode.HighParam;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.PcodeBlock;
@@ -135,6 +133,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
 
         private String label(DataType type) throws Exception {
+            // In type is null, assign VoidDataType in all cases.
+            // We assume it as void type.
+            if (type == null) {
+                type = VoidDataType.dataType;
+            }
             String name = type.getName();
             CategoryPath category = type.getCategoryPath();
             String concat_type = category.toString() + name + Integer.toString(type.getLength());
@@ -209,30 +212,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             name("name").value(ptr.getDisplayName());
             name("kind").value("pointer");
             name("size").value(ptr.getLength());
-            DataType elem_type = ptr.getDataType();
-            // Pointer element type could be null; assign void type to
-            // element in such case
-            if (elem_type == null) {
-                elem_type = VoidDataType.dataType;
-            }
-
-            name("element_type").value(label(elem_type));
+            name("element_type").value(label(ptr.getDataType()));
         }
 
         private void serializeTypedefType(TypeDef typedef) throws Exception {
             name("name").value(typedef.getDisplayName());
             name("kind").value("typedef");
             name("size").value(typedef.getLength());
-
-            DataType base_type = typedef.getBaseDataType();
-            // If base type is null, raise an exception.
-            // TODO(kumarak): if see cases where base type is null, handle it
-            // by assigning default `void` type.
-            if (base_type == null) {
-                throw new Exception("Typedef base type is null: " + typedef.toString());
-            }
-
-            name("base_type").value(label(base_type));
+            name("base_type").value(label(typedef.getBaseDataType()));
         }
 
         private void serializeArrayType(Array arr) throws Exception {
@@ -240,10 +227,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             name("kind").value("array");
             name("size").value(arr.getLength());
             name("num_elements").value(arr.getNumElements());
-            DataType elem_type = arr.getDataType();
-            if (elem_type != null) {
-                name("element_type").value(label(elem_type));
-            }
+            name("element_type").value(label(arr.getDataType()));
         }
             
         private void serializeBuiltinType(DataType data_type, String kind) throws Exception {
@@ -266,7 +250,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
                 name("offset").value(dtc.getOffset());
 
                 if (dtc.getFieldName() != null) {
-                    name("name").value(dtc.getFieldName().replaceAll(" ", ""));
+                    name("name").value(dtc.getFieldName());
                 }
                 endObject();
             }
@@ -348,8 +332,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             name("parameters").beginArray();
             for (int i = 0; i < proto.getNumParams(); i++) {
                 HighVariable hv = proto.getParam(i).getHighVariable();
-                // Assert if hv is not an instance of HighLocal
-                assert hv instanceof HighLocal;
+                // Assert if hv is not an instance of HighParam
+                assert hv instanceof HighParam;
                 if (hv != null) {
                     beginObject();
                     String hv_name = hv.getName();
