@@ -41,6 +41,7 @@ import ghidra.program.model.pcode.HighLocal;
 import ghidra.program.model.pcode.HighParam;
 import ghidra.program.model.pcode.HighSymbol;
 import ghidra.program.model.pcode.HighVariable;
+import ghidra.program.model.pcode.LocalSymbolMap;
 import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
@@ -100,7 +101,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 	protected static final int DECOMPILATION_TIMEOUT = 30;
 
-	protected static final int DECLARE_LOCAL_VAR = 1000; 
+	protected static final int DECLARE_PARAM_VAR = 1000;
+	protected static final int DECLARE_LOCAL_VAR = 1001;
 
 	protected class DefinitionVarnode extends Varnode {
 		private PcodeOp def;
@@ -530,7 +532,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		// want to make sure that the backing storage for a given variable
 		// *isn't* RAM. Thus, UNIQUE, STACK, CONST, etc. are all in-scope for
 		// locals.
-		private static VariableClassification classifyVariable(HighVariable var) throws Exception {
+		private VariableClassification classifyVariable(HighVariable var) throws Exception {
 			if (var == null) {
 				return VariableClassification.UNKNOWN;
 			}
@@ -551,10 +553,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				}
 			}
 
-			if (var.getHighFunction() != null) {
-				return VariableClassification.FUNCTION;
-			}
-
 			//          Namespace ns = symbol.getNamespace();
 			//          if (ns != null) {
 			//              if (ns.isLibrary()) {
@@ -572,9 +570,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			//              return VariableClassification.GLOBAL;
 			//            }
 			//          }
-
-			assert false;  // Should be a `HighLocal`.
-			return VariableClassification.LOCAL;
+			
+			return VariableClassification.UNKNOWN;
 		}
 		
 		// Serialize an input or output varnode.
@@ -654,12 +651,38 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		}
 
 		// Creates a pseudo p-code op using a `CALLOTHER` that logically
+		// represents the definition of a parameter variable.
+		private PcodeOp createParamVarDecl(HighVariable var) throws Exception {
+			HighParam param = (HighParam) var;
+			HighSymbol high_symbol = var.getSymbol();
+			Address address = nextUniqueAddress();
+			DefinitionVarnode def = new DefinitionVarnode(address, var.getSize());
+			Varnode[] ins = new Varnode[2];
+			SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
+			PcodeOp op = new PcodeOp(loc, PcodeOp.CALLOTHER, 2, def);
+			op.insertInput(new Varnode(constant_space.getAddress(DECLARE_PARAM_VAR), 4), 0);
+			op.insertInput(new Varnode(constant_space.getAddress(param.getSlot()), 4), 1);
+			def.setDef(var, op);
+
+			Varnode[] instances = var.getInstances();
+			Varnode[] new_instances = new Varnode[instances.length + 1];
+			System.arraycopy(instances, 0, new_instances, 1, instances.length);
+			new_instances[0] = def;
+
+			var.attachInstances(new_instances, def);
+
+			entry_block.add(op);
+
+			return op;
+		}
+
+		// Creates a pseudo p-code op using a `CALLOTHER` that logically
 		// represents the definition of a local variable.
 		private PcodeOp createLocalVarDecl(HighVariable var) throws Exception {
 			HighSymbol high_symbol = var.getSymbol();
 			Address address = nextUniqueAddress();
 			DefinitionVarnode def = new DefinitionVarnode(address, var.getSize());
-			Varnode[] ins = new Varnode[2];
+			Varnode[] ins = new Varnode[1];
 			SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
 			PcodeOp op = new PcodeOp(loc, PcodeOp.CALLOTHER, 1, def);
 			op.insertInput(new Varnode(constant_space.getAddress(DECLARE_LOCAL_VAR), 4), 0);
@@ -693,9 +716,20 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (def.getOpcode() != PcodeOp.CALLOTHER) {
 				return createLocalVarDecl(var);
 			}
-
-			if (def.getInput(0).getOffset() != DECLARE_LOCAL_VAR) {
-				return createLocalVarDecl(var);
+			
+			switch (classifyVariable(var)) {
+				case VariableClassification.PARAMETER:
+					if (def.getInput(0).getOffset() != DECLARE_PARAM_VAR) {
+						return createParamVarDecl(var);
+					}
+					break;
+				case VariableClassification.LOCAL:
+					if (def.getInput(0).getOffset() != DECLARE_LOCAL_VAR) {
+						return createLocalVarDecl(var);
+					}
+					break;
+				default:
+					break;
 			}
 
 			return def;
@@ -841,10 +875,23 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			endArray();
 		}
 
+		// Serializes a pseudo-op `DECLARE_PARAM_VAR`, which is actually encoded
+		// as a `CALLOTHER`.
+		private void serializeDeclareParamVar(PcodeOp op) throws Exception {
+			HighVariable var = op.getOutput().getHigh();
+			name("name").value(var.getName());
+			name("type").value(label(var.getDataType()));
+			if (var instanceof HighParam) {
+				name("index").value(((HighParam) var).getSlot());
+			}
+		}
+
 		// Serializes a pseudo-op `DECLARE_LOCAL_VAR`, which is actually encoded
 		// as a `CALLOTHER`.
 		private void serializeDeclareLocalVar(PcodeOp op) throws Exception {
-			name("name").value(op.getOutput().getHigh().getName());
+			HighVariable var = op.getOutput().getHigh();
+			name("name").value(var.getName());
+			name("type").value(label(var.getDataType()));
 		}
 
 		// Serialize a `CALLOTHER`. The first input operand is a constant
@@ -853,10 +900,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		// structure/needs of MLIR.
 		private void serializeCallOtherOp(PcodeOp op) throws Exception {
 			switch ((int) op.getInput(0).getOffset()) {
+			case DECLARE_PARAM_VAR:
+				serializeDeclareParamVar(op);
+				break;
 			case DECLARE_LOCAL_VAR:
 				serializeDeclareLocalVar(op);
 				break;
 			default:
+				serializeOutput(op);
 				serializeGenericOp(op);
 				break;
 			}
@@ -873,6 +924,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		private static String mnemonic(PcodeOp op) {
 			if (op.getOpcode() == PcodeOp.CALLOTHER) {
 				switch ((int) op.getInput(0).getOffset()) {
+				case DECLARE_PARAM_VAR:
+					return "DECLARE_PARAM_VAR";
 				case DECLARE_LOCAL_VAR:
 					return "DECLARE_LOCAL_VAR";
 				default:
@@ -886,26 +939,28 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			beginObject();
 			name("mnemonic").value(mnemonic(op));
-			serializeOutput(op);
+			
 			switch (op.getOpcode()) {
-			case PcodeOp.CALL:
-				serializeDirectCallOp(op);
-				break;
-			case PcodeOp.CALLOTHER:
-				serializeCallOtherOp(op);
-				break;
-			case PcodeOp.CBRANCH:
-				serializeCondBranchOp(op);
-				break;
-			case PcodeOp.BRANCH:
-				serializeBranchOp(op);
-				break;
-			case PcodeOp.LOAD:
-			case PcodeOp.COPY:
-			case PcodeOp.CAST:
-			default:
-				serializeGenericOp(op);
-				break;
+				case PcodeOp.CALL:
+					serializeOutput(op);
+					serializeDirectCallOp(op);
+					break;
+				case PcodeOp.CALLOTHER:
+					serializeCallOtherOp(op);
+					break;
+				case PcodeOp.CBRANCH:
+					serializeCondBranchOp(op);
+					break;
+				case PcodeOp.BRANCH:
+					serializeBranchOp(op);
+					break;
+				case PcodeOp.LOAD:
+				case PcodeOp.COPY:
+				case PcodeOp.CAST:
+				default:
+					serializeOutput(op);
+					serializeGenericOp(op);
+					break;
 			}
 
 			// Serialize the list of operations that indirectly affected the
@@ -1005,8 +1060,26 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			// If we have a high P-Code function, then serialize the blocks.
 			if (high_function != null) {
 				proto = high_function.getFunctionPrototype();
-				
+
+				name("type").beginObject();
+				if (proto != null) {
+					serializePrototype(proto);
+				} else {
+					FunctionSignature signature = function.getSignature();
+					serializePrototype(signature);
+				}
+				endObject();  // End `prototype`.
+
 				if (visit_pcode) {
+					
+					// Fill in the parameters first so that they are the first
+					// things added to `entry_block`.
+					LocalSymbolMap symbols = high_function.getLocalSymbolMap();
+					for (int i = 0; i < symbols.getNumParams(); ++i) {
+						HighParam param = symbols.getParam(i);
+						createParamVarDecl(param);
+					}
+					
 					PcodeBlockBasic first_block = null;
 					current_function = high_function;
 
@@ -1039,14 +1112,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					}
 				}
 			}
-
-			name("type").beginObject();
-			if (proto != null) {
-				serializePrototype(proto);
-			} else {
-				serializePrototype(function.getSignature());
-			}
-			endObject();  // End `prototype`.
 		}
 
 		// Serialize the input function list to JSON. This function will also
