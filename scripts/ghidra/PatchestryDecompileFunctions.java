@@ -492,13 +492,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 		// Return the r-value of a varnode.
 		private Varnode rValueOf(Varnode node) throws Exception {
-			HighVariable high = node.getHigh();
-			if (high == null) {
-				return node;
-			}
-
-			Varnode rep = high.getRepresentative();
-			return rep == null ? node : rep;
+			return node;
+//			HighVariable high = node.getHigh();
+//			if (high == null) {
+//				return node;
+//			}
+//
+//			Varnode rep = high.getRepresentative();
+//			return rep == null ? node : rep;
 		}
 		
 		private enum VariableClassification {
@@ -573,11 +574,18 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			switch (classifyVariable(var)) {
 				case VariableClassification.UNKNOWN:
 					if (def != null && !node.isInput() && def == op) {
-						name("kind").value("self");
+						if (node.isUnique() || node.getLoneDescend() != null) {
+							name("kind").value("temporary");
+						
+						// TODO(pag): Figure this out.
+						} else {
+							assert false;
+							name("kind").value("unknown");
+						}
 	
-					} else if (node.isUnique()) {
+					} else if (node.isUnique() || (def != null && node.getLoneDescend() != null)) {
 						assert def != null;
-						name("kind").value("operation");
+						name("kind").value("temporary");
 						name("operation").value(label(def));
 					
 					} else if (node.isConstant()) {
@@ -586,6 +594,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 					} else {
 						name("kind").value("unknown");
+						println("!!! Unclassified node " + label(op));
+						println(op.toString());
+						println(node.toString());
+						println(var != null ? var.getName() : "no var");
 					}
 					break;
 				case VariableClassification.PARAMETER:
@@ -794,38 +806,50 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 		// Serialize a direct call. This enqueues the targeted for type lifting
 		// `Function` if it can be resolved.
-		private void serializeDirectCallOp(PcodeOp op) throws Exception {
+		private void serializeCallOp(PcodeOp op) throws Exception {
 			Address caller_address = current_function.getFunction().getEntryPoint();
-			Varnode target_address_node = op.getInput(0);
-			if (!target_address_node.isAddress()) {
-				throw new Exception("Unexpected non-address input to CALL");
-			}
+			Varnode target_node = op.getInput(0);
+			Function callee = null;
 
-			Address target_address = caller_address.getNewAddress(target_address_node.getOffset());
-			String target_label = label(target_address);
-			Function callee = fm.getFunctionAt(target_address);
-
-			// `target_address` may be a pointer to an external. Figure out
-			// what we're calling.
-			if (callee == null) {
-				callee = fm.getReferencedFunction(target_address);
-				if (callee != null) {
-					target_address = callee.getEntryPoint();
-					println("Call through " + target_label +
-							" targets " + callee.getName() +
-							" at " + label(target_address));
-					target_label = label(target_address);
+			if (target_node.isAddress()) {
+				Address target_address = caller_address.getNewAddress(target_node.getOffset());
+				String target_label = label(target_address);
+				callee = fm.getFunctionAt(target_address);
+	
+				// `target_address` may be a pointer to an external. Figure out
+				// what we're calling.
+	
+				if (callee == null) {
+					callee = fm.getReferencedFunction(target_address);
+					if (callee != null) {
+						target_address = callee.getEntryPoint();
+						println("Call through " + target_label +
+								" targets " + callee.getName() +
+								" at " + label(target_address));
+						target_label = label(target_address);
+					}	
 				}
 			}
 
-			name("target_address").value(target_label);
-
+			name("target");
 			if (callee != null) {
 				functions.add(callee);
+
+				beginObject();
+				name("kind").value("function");
+				name("function").value(label(callee));
+				endObject();
+
 			} else {
-				println("Could not find function at address " + target_label +
-						" called by " + caller_address.toString());
+				serialize(op, rValueOf(target_node));
 			}
+			
+			name("arguments").beginArray();			
+			Varnode[] inputs = op.getInputs();
+			for (int i = 1; i < inputs.length; ++i) {
+				serialize(op, rValueOf(inputs[i]));
+			}
+			endArray();
 		}
 
 		// Serialize an unconditional branch. This records the targeted block.
@@ -928,8 +952,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			
 			switch (op.getOpcode()) {
 				case PcodeOp.CALL:
+				case PcodeOp.CALLIND:
 					serializeOutput(op);
-					serializeDirectCallOp(op);
+					serializeCallOp(op);
 					break;
 				case PcodeOp.CALLOTHER:
 					serializeCallOtherOp(op);
