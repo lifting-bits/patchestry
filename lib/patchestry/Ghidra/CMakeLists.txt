@@ -5,6 +5,7 @@
 
 add_library(patchestry_ghidra STATIC
   PcodeTranslation.cpp
+  JsonDeserialize.cpp
 )
 
 add_library(patchestry::ghidra ALIAS patchestry_ghidra)
