@@ -80,7 +80,7 @@ FindAndSelectClangCompiler()
 #
 # LLVM & MLIR & Clang
 #
-find_package(LLVM 18.1 REQUIRED CONFIG)
+find_package(LLVM 19.1 REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
@@ -94,6 +94,10 @@ message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 
 include(AddMLIR)
+
+find_package(Clang ${LLVM_PACKAGE_VERSION} CONFIG REQUIRED)
+message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 
 set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/bin)
 set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/lib)
