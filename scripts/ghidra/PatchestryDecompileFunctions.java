@@ -579,7 +579,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 						assert def != null;
 						name("kind").value("operation");
 						name("operation").value(label(def));
-	
+					
+					} else if (node.isConstant()) {
+						name("kind").value("constant");
+						name("value").value(node.getOffset());
+
 					} else {
 						name("kind").value("unknown");
 					}
@@ -949,7 +953,37 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			endObject();
 		}
+		
+		// Returns `true` if we can elide a `MULTIEQUAL` operation. If all
+		// inputs are of the identical `HighVariable`, then we can elide.
+		private static boolean canElideMultiEqual(PcodeOp op) throws Exception {
+			Varnode output = op.getOutput();
+			if (output == null) {
+				assert false;
+				return false;
+			}
 
+			HighVariable high = output.getHigh();
+			if (high == null) {
+				return false;
+			}
+
+			for (Varnode node : op.getInputs()) {
+
+				// TODO(pag): What about `isAddress()`? How do `MULTIEQUAL`s
+				//			  interact with global variables in RAM?
+				if (node.isConstant() || node.isHash()) {
+					return false;
+				}
+				
+				if (high != node.getHigh()) {
+					return false;
+				}
+			}
+			
+			return true;
+		}
+		
 		// Serialize a high p-code basic block. This iterates over the p-code
 		// operations within the block and serializes them individually.
 		private void serialize(PcodeBlockBasic block) throws Exception {
@@ -963,21 +997,34 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			name("operations").beginObject();
 			while (op_iterator.hasNext()) {
 				op = op_iterator.next();
+				
+				switch (op.getOpcode()) {
+					// NOTE(pag): INDIRECTs seem like a good way of modelling may-
+					//            alias relations, as well as embedding control
+					//            dependencies into the dataflow graph, e.g. to
+					//            ensure code motion cannot happen from after a CALL
+					//            to before a CALL, especially for stuff operating
+					//            on stack slots. The idea at the time of this
+					//            comment is that we will assume that eventual
+					//            codegen also should not do any reordering, though
+					//            enforcing that is also tricky.
+					case PcodeOp.INDIRECT:
+						break;
+					
+					// MULTIEQUALs are Ghidra's form of SSA-form PHI nodes.
+					case PcodeOp.MULTIEQUAL:
+						if (canElideMultiEqual(op)) {
+							break;
+						}
+						
+						// Fall-through.
 
-				// NOTE(pag): INDIRECTs seem like a good way of modelling may-
-				//            alias relations, as well as embedding control
-				//            dependencies into the dataflow graph, e.g. to
-				//            ensure code motion cannot happen from after a CALL
-				//            to before a CALL, especially for stuff operating
-				//            on stack slots. The idea at the time of this
-				//            comment is that we will assume that eventual
-				//            codegen also should not do any reordering, though
-				//            enforcing that is also tricky.
-				if (op.getOpcode() != PcodeOp.INDIRECT) {
-					name(label(op));
-					current_block = block;
-					serialize(op);
-					current_block = null;
+					default:
+						name(label(op));
+						current_block = block;
+						serialize(op);
+						current_block = null;
+						break;
 				}
 			}
 			endObject();
