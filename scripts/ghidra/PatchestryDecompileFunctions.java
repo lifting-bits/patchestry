@@ -148,7 +148,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		private List<DataType> types_to_serialize;
 		private HighFunction current_function;
 		private PcodeBlockBasic current_block;
-		private Set<String> happens_after;
 		private Set<String> seen_indirects;
 		private Map<Address, HighSymbol> seen_addresses;
 		private Map<PcodeOp, String> labels;
@@ -181,7 +180,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			this.types_to_serialize = new ArrayList<>();
 			this.current_function = null;
 			this.current_block = null;
-			this.happens_after = new TreeSet<>();
 			this.seen_indirects = new TreeSet<>();
 			this.seen_addresses = new TreeMap<>();
 			this.next_unique = language.getUniqueBase();
@@ -399,8 +397,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		}
 		
 		// Try to resolve an operand `node` of an `indirect_op` to its definition.
-		// This function is not resoponsible f
-		private PcodeOp resolveIndirect(PcodeOp indirect_op, Varnode node) throws Exception {   
+		private PcodeOp resolveIndirect(PcodeOp indirect_op, Varnode node) throws Exception {
 			if (indirect_op == null) {
 				return null;
 			}
@@ -412,6 +409,18 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (node == null) {
 				return null;
 			}
+			
+			// Check early to see if we can get it mapped to a variable
+			HighVariable var = node.getHigh();
+			if (var != null) {
+				switch (classifyVariable(var)) {
+					case VariableClassification.PARAMETER:
+					case VariableClassification.LOCAL:
+						return getOrCreateLocalVariable(var);
+					default:
+						break;
+				}
+			}
 
 			Varnode output = indirect_op.getOutput();
 			if (output == null) {
@@ -421,13 +430,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			// If this indirect actually affects a global variable then we
 			// "don't care", insofar as 
 			switch (output.getSpace() & AddressSpace.ID_TYPE_MASK) {
-			case AddressSpace.TYPE_REGISTER:
-			case AddressSpace.TYPE_STACK:
-			case AddressSpace.TYPE_JOIN:
-			case AddressSpace.TYPE_VARIABLE:
-				break;
-			default:
-				return null;
+				case AddressSpace.TYPE_REGISTER:
+				case AddressSpace.TYPE_STACK:
+				case AddressSpace.TYPE_JOIN:
+				case AddressSpace.TYPE_VARIABLE:
+					break;
+				default:
+					return null;
 			}
 
 			PcodeOp dependent_op = null;
@@ -440,77 +449,49 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			// `CALL`s, where all of the `INDIRECT`s are exposing that the `CALL`
 			// likely modifies some data.
 			switch (node.getSpace() & AddressSpace.ID_TYPE_MASK) {
-			case AddressSpace.TYPE_CONSTANT:
-				if (node.getOffset() != 0 || indirect_op.getInput(0) != node) {
-					SequenceNumber indirect_loc = indirect_op.getSeqnum();
-					SequenceNumber dependent_loc = new SequenceNumber(
-							indirect_loc.getTarget(), (int) node.getOffset());
-					dependent_op = current_function.getPcodeOp(dependent_loc);
-
-					println("=== Resolving " + node.toString());
-					println("indirect_op: " + label(indirect_op) + "| " + indirect_op.toString());
-					if (dependent_op != null) {
-						println("dependent_op: " + label(indirect_op) + "| " + dependent_op.toString());
+				case AddressSpace.TYPE_CONSTANT:
+					if (node.getOffset() != 0 || indirect_op.getInput(0) != node) {
+						SequenceNumber indirect_loc = indirect_op.getSeqnum();
+						SequenceNumber dependent_loc = new SequenceNumber(
+								indirect_loc.getTarget(), (int) node.getOffset());
+						dependent_op = current_function.getPcodeOp(dependent_loc);
+	
+						println("=== Resolving " + node.toString());
+						println("indirect_op: " + label(indirect_op) + "| " + indirect_op.toString());
+						if (dependent_op != null) {
+							println("dependent_op: " + label(indirect_op) + "| " + dependent_op.toString());
+						}
+						if (def_of_node != null) {
+							println("def: " + label(def_of_node) + "| " + def_of_node.toString());
+						}
+						assert dependent_op != indirect_op;
 					}
+					break;
+	
+				case AddressSpace.TYPE_UNIQUE:
+				case AddressSpace.TYPE_REGISTER:
+				case AddressSpace.TYPE_VARIABLE:
+					dependent_op = def_of_node;
+					break;
+	
+				case AddressSpace.TYPE_STACK:
+					println("??? Resolving " + node.toString());
+					println("indirect_op: " + label(indirect_op) + "| " + indirect_op.toString());
 					if (def_of_node != null) {
 						println("def: " + label(def_of_node) + "| " + def_of_node.toString());
 					}
-					assert dependent_op != indirect_op;
-				}
-				break;
-
-			case AddressSpace.TYPE_UNIQUE:
-			case AddressSpace.TYPE_REGISTER:
-			case AddressSpace.TYPE_VARIABLE:
-				dependent_op = def_of_node;
-				break;
-
-			case AddressSpace.TYPE_STACK:
-				println("??? Resolving " + node.toString());
-				println("indirect_op: " + label(indirect_op) + "| " + indirect_op.toString());
-				if (def_of_node != null) {
-					println("def: " + label(def_of_node) + "| " + def_of_node.toString());
-				}
-				break;
-
-			default:
-				break;
+					break;
+	
+				default:
+					break;
 			}
 
 			assert dependent_op != indirect_op;
 			return dependent_op;
 		}
 
-		// Collect the happens-after relationships implied by `INDIRECT` opcodes.
-		//
-		// TODO(pag): Can these be cyclic?
-		private void collectHappensAfter(PcodeOp def) throws Exception {
-
-			if (def == null) {
-				return;
-			}
-
-			// There is a cycle in the `INDIRECT`s. This can happen when there's
-			// a loop.
-			if (!seen_indirects.add(label(def))) {
-				return;
-			}
-
-			// Bottom of recursive case; we've followed indirects to something
-			// that isn't an indirect.
-			if (def.getOpcode() != PcodeOp.INDIRECT) {
-				happens_after.add(label(def));
-				return;
-			}
-
-			collectHappensAfter(resolveIndirect(def, def.getInput(0)));
-			collectHappensAfter(resolveIndirect(def, def.getInput(1)));
-		}
-
 		// Return the r-value of a varnode.
 		private Varnode rValueOf(Varnode node) throws Exception {
-			collectHappensAfter(node.getDef());
-
 			HighVariable high = node.getHigh();
 			if (high == null) {
 				return node;
@@ -582,10 +563,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			HighVariable var = node.getHigh();
 
 			beginObject();
-			name("size").value(node.getSize());
 			
 			if (var != null) {
 				name("type").value(label(var.getDataType()));
+			} else {
+				name("size").value(node.getSize());
 			}
 
 			switch (classifyVariable(var)) {
@@ -963,17 +945,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					break;
 			}
 
-			// Serialize the list of operations that indirectly affected the
-			// operands of this operation. This operation is said to "happen
-			// after" these other indirect operations.
-			if (!happens_after.isEmpty()) {
-				name("happens_after").beginArray();
-				for (String pred_label : happens_after) {
-					value(pred_label);
-				}
-				endArray();
-				happens_after.clear();
-			}
 			seen_indirects.clear();
 
 			endObject();
