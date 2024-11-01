@@ -5,168 +5,502 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include "patchestry/Ghidra/Pcode.hpp"
+#include <memory>
 #include <optional>
 #include <unordered_map>
 
+#include <llvm/Support/FormatVariadic.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 
 namespace patchestry::ghidra {
 
-    std::optional< program > json_parser::parse_program(const json_obj &root) {
-        program program;
+    void __attribute__((unused)) breakpoint(void) {}
+
+    std::optional< Program > JsonParser::deserialize_program(const JsonObject &root) {
+        Program program;
         program.arch   = root.getString("arch").value_or("");
         program.format = root.getString("format").value_or("");
 
-        // Process types from the serialized json
+        // Check if root object has types array; if yes then deserialize types
         if (const auto *types_array = root.getObject("types")) {
-            for (const auto &type : *types_array) {
-                auto type_label = type.first;
-                if (const auto *type_obj = type.second.getAsObject()) {
-                    auto var_type = parse_type(*type_obj);
-                    if (var_type.has_value()) {
-                        program.types.emplace(std::pair(type_label.str(), var_type.value()));
-                    }
-                }
-            }
+            deserialize_types(*types_array, program.serialized_types);
         }
 
-        llvm::outs() << "No of types recovered: " << program.types.size();
+        llvm::outs() << "No of types recovered: " << program.serialized_types.size() << "\n";
 
         if (const auto *function_array = root.getObject("functions")) {
-            for (const auto &function : *function_array) {
-                auto addr = function.first;
-                llvm::outs() << addr.str();
-                if (const auto *func_obj = function.second.getAsObject()) {
-                    if (auto parsed_func = parse_function(*func_obj)) {
-                        program.functions.push_back(*parsed_func);
-                    }
-                }
-            }
+            deserialize_functions(*function_array, program.serialized_functions);
         }
+
+        llvm::outs() << "No of functions recovered: " << program.serialized_functions.size()
+                     << "\n";
 
         return program;
     }
 
+    // Create varnode type from the json object
+    std::shared_ptr< VarnodeType > JsonParser::create_vnode_type(const JsonObject &type_obj) {
+        auto name = type_obj.getString("name").value_or("").str();
+        auto size = static_cast< uint32_t >(type_obj.getInteger("size").value_or(0));
+        auto kind = VarnodeType::convertToKind(type_obj.getString("kind").value_or("").str());
+        switch (kind) {
+            case VarnodeType::Kind::VT_INVALID: {
+                assert(false); // assert if invalid type is found
+                return std::make_shared< VarnodeType >(name, kind, size);
+            }
+            case VarnodeType::Kind::VT_BOOLEAN:
+            case VarnodeType::Kind::VT_INTEGER:
+            case VarnodeType::Kind::VT_FLOAT:
+            case VarnodeType::Kind::VT_CHAR:
+                return std::make_shared< BuiltinType >(name, kind, size);
+            case VarnodeType::Kind::VT_ARRAY:
+                return std::make_shared< ArrayType >(name, kind, size);
+            case VarnodeType::Kind::VT_POINTER:
+                return std::make_shared< PointerType >(name, kind, size);
+            case VarnodeType::Kind::VT_FUNCTION:
+                return std::make_shared< FunctionType >(name, kind, size);
+            case VarnodeType::Kind::VT_STRUCT:
+            case VarnodeType::Kind::VT_UNION:
+                return std::make_shared< CompositeType >(name, kind, size);
+            case VarnodeType::Kind::VT_ENUM:
+                return std::make_shared< EnumType >(name, kind, size);
+            case VarnodeType::VT_TYPEDEF:
+                return std::make_shared< TypedefType >(name, kind, size);
+            case VarnodeType::VT_UNDEFINED:
+                return std::make_shared< UndefinedType >(name, kind, size);
+            case VarnodeType::Kind::VT_VOID:
+                return std::make_shared< BuiltinType >(name, kind, size);
+        }
+    }
+
+    // Deserialize types
+    void JsonParser::deserialize_types(const JsonObject &type_obj, TypeMap &serialized_types) {
+        if (type_obj.size() == 0) {
+            llvm::errs() << "No type objects to deserialize\n";
+            return;
+        }
+
+        std::unordered_map< std::string, const JsonValue & > types_value_map;
+
+        for (const auto &type : type_obj) {
+            auto key = type.getFirst().str();
+            if (key == "4351469f") {
+                breakpoint();
+            }
+            const auto &value = type.getSecond();
+            auto vnode_type   = create_vnode_type(*value.getAsObject());
+            if (!vnode_type) {
+                llvm::errs() << "Failed to create varnode type\n";
+                assert(false);
+                continue;
+            }
+
+            // Set type key for map lookup at later point
+            vnode_type->set_key(key);
+            serialized_types.emplace(key, std::move(vnode_type));
+            types_value_map.emplace(key, value);
+        }
+
+        llvm::errs() << "Number of entry in serialized types: " << serialized_types.size()
+                     << "\n";
+        // Post process varnodes from the map and resolve recursive references of labels
+        for (const auto &[key, vnode_type] : serialized_types) {
+            auto iter = types_value_map.find(key);
+            if (iter == types_value_map.end()) {
+                assert(false);
+                continue;
+            }
+            const auto &json_value = iter->second;
+            switch (vnode_type->kind) {
+                case VarnodeType::Kind::VT_BOOLEAN:
+                case VarnodeType::Kind::VT_INTEGER:
+                case VarnodeType::Kind::VT_FLOAT:
+                case VarnodeType::Kind::VT_CHAR:
+                case VarnodeType::Kind::VT_VOID:
+                    deserialize_buildin(
+                        *dynamic_cast< BuiltinType * >(vnode_type.get()),
+                        *json_value.getAsObject(), serialized_types
+                    );
+                    break;
+                case VarnodeType::Kind::VT_ARRAY: {
+                    deserialize_array(
+                        *dynamic_cast< ArrayType * >(vnode_type.get()),
+                        json_value.getAsObject(), serialized_types
+                    );
+                    break;
+                }
+                case VarnodeType::Kind::VT_POINTER: {
+                    deserialize_pointer(
+                        *dynamic_cast< PointerType * >(vnode_type.get()),
+                        *json_value.getAsObject(), serialized_types
+                    );
+                    break;
+                }
+                case VarnodeType::Kind::VT_FUNCTION: {
+                    deserialize_function_type(
+                        *dynamic_cast< FunctionType * >(vnode_type.get()),
+                        *json_value.getAsObject(), serialized_types
+                    );
+                    break;
+                }
+                case VarnodeType::Kind::VT_STRUCT:
+                case VarnodeType::Kind::VT_UNION: {
+                    deserialize_composite(
+                        *dynamic_cast< CompositeType * >(vnode_type.get()),
+                        *json_value.getAsObject(), serialized_types
+                    );
+                    break;
+                }
+                case VarnodeType::Kind::VT_ENUM: {
+                    deserialize_enum(
+                        *dynamic_cast< EnumType * >(vnode_type.get()),
+                        *json_value.getAsObject(), serialized_types
+                    );
+                    break;
+                }
+                case VarnodeType::Kind::VT_TYPEDEF: {
+                    deserialize_typedef(
+                        *dynamic_cast< TypedefType * >(vnode_type.get()),
+                        *json_value.getAsObject(), serialized_types
+                    );
+                    break;
+                }
+                case VarnodeType::Kind::VT_UNDEFINED:
+                    deserialize_undefined_type(
+                        *dynamic_cast< UndefinedType * >(vnode_type.get()),
+                        *json_value.getAsObject(), serialized_types
+                    );
+                    break;
+                case VarnodeType::Kind::VT_INVALID:
+                    break;
+            }
+        }
+    }
+
     void
-    json_parser::process_serialized_types(std::unordered_map< std::string, varnode_type > &types
+    JsonParser::deserialize_buildin(BuiltinType &varnode, const JsonObject &, const TypeMap &) {
+        assert(
+            varnode.kind == VarnodeType::Kind::VT_BOOLEAN
+            || varnode.kind == VarnodeType::Kind::VT_INTEGER
+            || varnode.kind == VarnodeType::Kind::VT_CHAR
+            || varnode.kind == VarnodeType::Kind::VT_FLOAT
+            || varnode.kind == VarnodeType::Kind::VT_VOID
+        );
+        (void) varnode;
+    }
+
+    void JsonParser::deserialize_array(
+        ArrayType &varnode, const JsonObject *array_obj, const TypeMap &serialized_types
     ) {
-        for (auto &[key, type] : types) {
-            switch (type.type_kind) {
-                case varnode_type::vt_pointer:
-                    break;
-                case varnode_type::vt_typedef:
-                    break;
-                default:
-                    break;
+        auto element_label = array_obj->getString("element_type").value_or("").str();
+        if (element_label.empty()) {
+            llvm::errs() << "Element type of an array is empty. key: " << varnode.key << "\n";
+            assert(false);
+            return;
+        }
+
+        auto iter = serialized_types.find(element_label);
+        if (iter == serialized_types.end()) {
+            llvm::errs() << "Element type key " << element_label
+                         << " not found in serialized types."
+                         << " deserializing array with key " << varnode.key << "\n";
+            assert(false);
+            return;
+        }
+
+        varnode.set_element_type(iter->second);
+        auto num_elem =
+            static_cast< uint32_t >(array_obj->getInteger("num_elements").value_or(0));
+        varnode.set_element_count(num_elem);
+    }
+
+    void JsonParser::deserialize_pointer(
+        PointerType &varnode, const JsonObject &pointer_obj, const TypeMap &serialized_types
+    ) {
+        auto pointee_key = pointer_obj.getString("element_type").value_or("").str();
+        if (pointee_key.empty()) {
+            llvm::errs() << "Pointer type with empty pointee key. pointer key: " << varnode.key
+                         << "\n";
+            assert(false);
+            return;
+        }
+
+        // Check for the pointee label in serialized types
+        auto iter = serialized_types.find(pointee_key);
+        if (iter == serialized_types.end()) {
+            llvm::errs() << "Pointee type is not availe in serialized types. Pointer key: "
+                         << varnode.key << "\n";
+            assert(false);
+            return;
+        }
+
+        varnode.set_pointee_type(iter->second);
+    }
+
+    void JsonParser::deserialize_typedef(
+        TypedefType &varnode, const JsonObject &typedef_obj, const TypeMap &serialized_types
+    ) {
+        auto base_key = typedef_obj.getString("base_type").value_or("").str();
+        if (base_key.empty()) {
+            llvm::errs() << "Base type for the tyepdef is not set. key: " << varnode.key
+                         << "\n";
+            assert(false);
+            return;
+        }
+
+        auto iter = serialized_types.find(base_key);
+        if (iter == serialized_types.end()) {
+            llvm::errs() << "Base type key is not found in serialized types " << base_key
+                         << " for typedef key " << varnode.key << "\n";
+            assert(false);
+            return;
+        }
+
+        varnode.set_base_type(iter->second);
+    }
+
+    void JsonParser::deserialize_composite(
+        CompositeType &varnode, const JsonObject &composite_obj, const TypeMap &serialized_types
+    ) {
+        const auto *field_array = composite_obj.getArray("fields");
+        for (const auto &field : *field_array) {
+            const auto *field_obj = field.getAsObject();
+            auto field_label      = field_obj->getString("type").value_or("").str();
+            if (field_label.empty()) {
+                continue;
             }
+
+            auto iter = serialized_types.find(field_label);
+            if (iter == serialized_types.end()) {
+                llvm::errs() << "Field component is not found on serialized types";
+                continue;
+            }
+
+            auto field_type   = iter->second;
+            auto field_offset = field_obj->getInteger("offset").value_or(-1);
+            if (field_offset < 0) {
+                continue;
+            }
+
+            auto field_name = field_obj->getString("name").value_or("").str();
+            varnode.add_components(
+                field_name, *field_type, static_cast< uint32_t >(field_offset)
+            );
         }
     }
 
-    std::optional< varnode > json_parser::parse_varnode(const json_obj &var_obj) {
-        varnode variable;
-        auto type_label = var_obj.getString("type").value_or("");
-        if (!type_label.empty()) {
-            // assign type to variables
-        }
-
-        auto type_size = var_obj.getInteger("size").value_or(0);
-        variable.size  = static_cast< uint32_t >(type_size);
-
-        auto var_kind     = var_obj.getString("kind").value_or("");
-        variable.var_kind = varnode::convert_to_kind(var_kind.str());
-        return variable;
+    void JsonParser::deserialize_enum(
+        EnumType &varnode, const JsonObject &enum_obj, const TypeMap &serialized_types
+    ) {
+        assert(varnode.kind == VarnodeType::Kind::VT_ENUM);
+        (void) serialized_types;
+        (void) varnode;
+        (void) enum_obj;
     }
 
-    std::optional< pcode > json_parser::parse_pcode(const json_obj &pcode_obj) {
-        pcode operation;
-        operation.mnemonic = pcode_obj.getString("mnemonic").value_or("");
-        operation.name     = pcode_obj.getString("name").value_or("");
-
-        if (auto maybe_output = pcode_obj.getObject("output")) {
-            auto maybe_varnode = parse_varnode(*maybe_output);
-            if (maybe_varnode) {
-                operation.output.push_back(*maybe_varnode);
-            }
-        }
-
-        if (auto input_array = pcode_obj.getArray("input")) {
-            for (auto input : *input_array) {
-                auto maybe_varnode = parse_varnode(*input.getAsObject());
-                if (maybe_varnode) {
-                    operation.inputs.emplace_back(*maybe_varnode);
-                }
-            }
-        }
-
-        return operation;
+    void JsonParser::deserialize_function_type(
+        FunctionType &varnode, const JsonObject &func_obj, const TypeMap &serialized_types
+    ) {
+        assert(varnode.kind == VarnodeType::Kind::VT_FUNCTION);
+        (void) serialized_types;
+        (void) varnode;
+        (void) func_obj;
     }
 
-    std::optional< basic_block > json_parser::parse_basic_block(const json_obj &block_obj) {
-        basic_block block;
-
-        if (const auto *ordered_operations = block_obj.getArray("ordered_operations")) {
-            for (const auto &operation : *ordered_operations) {
-                auto operation_label = operation.getAsString();
-                llvm::outs() << "operations label " << operation_label->str();
-                if (auto operation_obj = block_obj.getObject(*operation_label)) {
-                    auto ops = parse_pcode(*operation_obj);
-                    block.ops.push_back(*ops);
-                }
-            }
-        }
-
-        return block;
+    void JsonParser::deserialize_undefined_type(
+        UndefinedType &varnode, const JsonObject &undef_obj, const TypeMap &serialized_types
+    ) {
+        assert(varnode.kind == VarnodeType::Kind::VT_UNDEFINED);
+        (void) serialized_types;
+        (void) varnode;
+        (void) undef_obj;
     }
 
-    std::optional< function > json_parser::parse_function(const json_obj &func_obj) {
-        function func;
+    // Deserialize operations
+    std::optional< Varnode > JsonParser::create_varnode(const JsonObject &var_obj) {
+        auto type_key = var_obj.getString("type").value_or("").str();
+        if (type_key.empty()) {
+            llvm::errs() << "Invalid type key for the varnode\n";
+            return std::nullopt;
+        }
+
+        auto size = var_obj.getInteger("size").value_or(0);
+        auto kind = var_obj.getString("kind").value_or("");
+        return Varnode(
+            Varnode::convertToKind(kind.str()), static_cast< uint32_t >(size), type_key
+        );
+    }
+
+    std::optional< Function > JsonParser::create_function(const JsonObject &func_obj) {
+        Function func;
         func.name = func_obj.getString("name").value_or("");
-        if (const auto *proto_obj = func_obj.getObject("prototype")) {
-            if (auto maybe_prototype = parse_function_prototype(*proto_obj)) {
+        if (const auto *proto_obj = func_obj.getObject("type")) {
+            if (auto maybe_prototype = create_function_prototype(*proto_obj)) {
                 func.prototype = *maybe_prototype;
             }
         }
 
         if (const auto *blocks_array = func_obj.getObject("basic_blocks")) {
-            for (const auto &block : *blocks_array) {
-                auto block_label = block.first.str();
-                llvm::outs() << "block label: " << block_label;
-                const auto *block_obj = block.second.getAsObject();
-                if (auto maybe_block = parse_basic_block(*block_obj)) {
-                    func.basic_blocks.push_back(*maybe_block);
-                }
-            }
+            deserialize_blocks(*blocks_array, func.basic_blocks);
+        }
+
+        auto entry_block = func_obj.getString("entry_block");
+        if (entry_block && !entry_block->empty()) {
+            func.entry_block = entry_block->str();
         }
 
         return func;
     }
 
-    std::optional< function_prototype >
-    json_parser::parse_function_prototype(const json_obj &proto_obj) {
-        function_prototype proto;
-        auto parameters = proto_obj.getArray("parameters");
-        for (auto param : *parameters) {
-            auto param_name = param.getAsObject()->getString("name").value_or("");
-            auto param_type = param.getAsObject()->getString("type");
-            (void) param_name;
-            (void) param_type;
+    std::optional< Operation > JsonParser::create_operation(const JsonObject &pcode_obj) {
+        auto mnemonic = pcode_obj.getString("mnemonic").value_or("").str();
+        if (mnemonic.empty()) {
+            llvm::errs() << "Operation pcode with empty mnemonic\n";
+            assert(false);
+            return std::nullopt;
         }
+
+        Operation operation;
+        operation.mnemonic = patchestry::ghidra::from_string(mnemonic);
+
+        if (const auto *maybe_output = pcode_obj.getObject("output")) {
+            if (auto maybe_varnode = create_varnode(*maybe_output)) {
+                operation.output.push_back(*maybe_varnode);
+            }
+        }
+
+        if (const auto *input_array = pcode_obj.getArray("input")) {
+            for (auto input : *input_array) {
+                if (auto maybe_varnode = create_varnode(*input.getAsObject())) {
+                    operation.inputs.emplace_back(*maybe_varnode);
+                }
+            }
+        }
+
+        auto target_address = pcode_obj.getString("target_address");
+        if (target_address && !target_address->empty()) {
+            operation.target_address = target_address->str();
+        }
+
+        auto target_block = pcode_obj.getString("target_block");
+        if (target_block && !target_block->empty()) {
+            operation.target_block = target_block->str();
+        }
+
+        auto variable = pcode_obj.getString("variable");
+        if (variable && !variable->empty()) {
+            operation.variable = variable->str();
+        }
+
+        auto name = pcode_obj.getString("name");
+        if (name && !name->empty()) {
+            operation.name = name->str();
+        }
+
+        auto type = pcode_obj.getString("type");
+        if (type && !type->empty()) {
+            operation.type = type->str();
+        }
+
+        auto index = pcode_obj.getInteger("index");
+        if (index) {
+            operation.index = static_cast< uint32_t >(*index);
+        }
+
+        return operation;
+    }
+
+    std::optional< BasicBlock > JsonParser::create_basic_block(const JsonObject &block_obj) {
+        if (const auto *operations = block_obj.getObject("operations")) {
+            BasicBlock block;
+
+            for (const auto &operation : *operations) {
+                auto operation_key           = operation.getFirst().str();
+                const auto *operation_object = operation.getSecond().getAsObject();
+                if (auto maybe_operation = create_operation(*operation_object)) {
+                    maybe_operation->key = operation_key;
+                    block.operations.emplace(operation_key, *maybe_operation);
+                }
+            }
+
+            if (const auto *ordered_operations = block_obj.getArray("ordered_operations")) {
+                for (const auto &operation : *ordered_operations) {
+                    auto operation_label = operation.getAsString();
+                    if (operation_label && !operation_label->empty()) {
+                        block.ordered_operations.push_back(operation_label->str());
+                    }
+                }
+            }
+
+            return block;
+        }
+        return std::nullopt;
+    }
+
+    std::optional< FunctionPrototype >
+    JsonParser::create_function_prototype(const JsonObject &proto_obj) {
+        FunctionPrototype proto;
+        const auto return_type = proto_obj.getString("return_type").value_or("").str();
+        if (return_type.empty()) {
+            llvm::errs() << "FunctionProtoType return type is empty\n";
+            assert(false);
+            return std::nullopt;
+        }
+
+        proto.rttype_key = return_type;
+
+        proto.is_variadic = proto_obj.getBoolean("is_variadic").value_or(false);
+        proto.is_noreturn = proto_obj.getBoolean("is_noreturn").value_or(false);
+
+        if (const auto *parameters = proto_obj.getArray("parameter_types")) {
+            for (const auto &parameter : *parameters) {
+                auto parameter_key = parameter.getAsString();
+                if (parameter_key && !parameter_key->empty()) {
+                    proto.parameters.push_back(parameter_key->str());
+                }
+            }
+        }
+
         return proto;
     }
 
-    std::optional< varnode_type > json_parser::parse_type(const json_obj &type_obj) {
-        varnode_type type;
-        auto type_name = type_obj.getString("name").value_or("");
-        auto type_kind =
-            varnode_type::convert_to_kind(type_obj.getString("kind").value_or("").str());
-        auto type_size = type_obj.getInteger("size").value_or(0);
+    void JsonParser::deserialize_functions(
+        const JsonObject &function_array, FunctionMap &serialized_functions
+    ) {
+        if (function_array.size() == 0) {
+            llvm::errs() << "No functions to deserialize";
+            return;
+        }
 
-        type.name      = type_name;
-        type.type_kind = type_kind;
-        type.size      = static_cast< uint32_t >(type_size);
-        return type;
+        for (const auto &func_obj : function_array) {
+            auto function_key = func_obj.getFirst().str();
+            auto function     = create_function(*func_obj.getSecond().getAsObject());
+            if (!function) {
+                llvm::errs() << "Failed to get function for the key " << function_key << "\n";
+                continue;
+            }
+            serialized_functions.emplace(function_key, *function);
+        }
+    }
+
+    void JsonParser::deserialize_blocks(
+        const JsonObject &blocks_array, BasicBlockMap &serialized_blocks
+    ) {
+        if (blocks_array.empty()) {
+            llvm::errs() << "No blocks in function\n";
+            return;
+        }
+
+        for (const auto &block : blocks_array) {
+            auto block_key        = block.getFirst().str();
+            const auto *block_obj = block.getSecond().getAsObject();
+            if (auto maybe_block = create_basic_block(*block_obj)) {
+                serialized_blocks.emplace(block_key, *maybe_block);
+            }
+        }
     }
 
 } // namespace patchestry::ghidra

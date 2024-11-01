@@ -1,0 +1,103 @@
+/*
+ * Copyright (c) 2024, Trail of Bits, Inc.
+ *
+ * This source code is licensed in accordance with the terms specified in
+ * the LICENSE file found in the root directory of this source tree.
+ */
+
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <patchestry/Ghidra/Pcode.hpp>
+#include <patchestry/Ghidra/PcodeTypes.hpp>
+
+namespace patchestry::ghidra {
+    struct Varnode;
+    struct Operation;
+    struct BasicBlock;
+    struct FunctionPrototype;
+    struct Function;
+    struct Program;
+
+} // namespace patchestry::ghidra
+
+namespace patchestry::ghidra {
+    using TypeMap = std::unordered_map< std::string, std::shared_ptr< VarnodeType > >;
+
+    using FunctionMap = std::unordered_map< std::string, Function >;
+
+    using BasicBlockMap = std::unordered_map< std::string, BasicBlock >;
+
+    struct Varnode
+    {
+        enum Kind { VARNODE_UNKNOWN = 0, VARNODE_GLOBAL, VARNODE_LOCAL, VARNODE_PARAM };
+
+        static Varnode::Kind convertToKind(const std::string &kdd) {
+            static const std::unordered_map< std::string, Varnode::Kind > kind_map = {
+                { "global", VARNODE_GLOBAL },
+                {  "local",  VARNODE_LOCAL },
+                {  "param",  VARNODE_PARAM }
+            };
+
+            // if kind is not present in the map, return varnode_unknown
+            auto iter = kind_map.find(kdd);
+            return iter != kind_map.end() ? iter->second : VARNODE_UNKNOWN;
+        }
+
+        Kind kind;
+        uint32_t size;
+        std::string type_key;
+    };
+
+    struct Operation
+    {
+        Mnemonic mnemonic;
+        std::string name;
+        std::string type;
+        uint32_t index;
+        std::string key;
+        std::vector< Varnode > output;
+        std::vector< Varnode > inputs;
+        std::string target_address;
+        std::string target_block;
+        std::string variable;
+    };
+
+    struct BasicBlock
+    {
+        std::shared_ptr< BasicBlock > parent;
+        std::string key;
+        std::unordered_map< std::string, Operation > operations;
+        std::vector< std::string > ordered_operations;
+    };
+
+    struct FunctionPrototype
+    {
+        std::vector< std::string > parameters;
+        std::string rttype_key;
+        bool is_variadic;
+        bool is_noreturn;
+    };
+
+    struct Function
+    {
+        std::string name;
+        FunctionPrototype prototype;
+        std::string key;
+        std::string entry_block;
+        std::unordered_map< std::string, BasicBlock > basic_blocks;
+    };
+
+    struct Program
+    {
+        std::string arch;
+        std::string format;
+        std::unordered_map< std::string, Function > serialized_functions;
+        std::unordered_map< std::string, std::shared_ptr< VarnodeType > > serialized_types;
+    };
+} // namespace patchestry::ghidra

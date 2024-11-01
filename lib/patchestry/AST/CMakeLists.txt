@@ -3,7 +3,7 @@
 # in the root directory of this source tree.
 
 add_library(patchestry_ast STATIC
-  ASTBuilder.cpp
+  ASTConsumer.cpp
 )
 
 add_library(patchestry::ast ALIAS patchestry_ast)
