@@ -11,7 +11,6 @@
 
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/FileManager.h"
-#include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/TargetOptions.h"
 #include "clang/Frontend/CompilerInstance.h"
@@ -23,10 +22,11 @@
 #include <clang/AST/ASTConsumer.h>
 #include <clang/AST/ASTContext.h>
 #include <llvm/Support/JSON.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
 
-#include <patchestry/AST/ASTBuilder.hpp>
+#include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 
 const llvm::cl::opt< std::string > input_filename(
@@ -86,15 +86,54 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    auto program = patchestry::ghidra::json_parser().parse_program(*json->getAsObject());
+    auto program = patchestry::ghidra::JsonParser().deserialize_program(*json->getAsObject());
     if (!program.has_value()) {
         llvm::errs() << "Failed to process json object" << json.takeError();
         return EXIT_FAILURE;
     }
 
-    clang::ASTContext &context = create_ast_context();
-    patchestry::ast::ast_builder ast_builder(context);
-    ast_builder.build_ast(program.value());
+    clang::CompilerInstance ci;
+    ci.createDiagnostics();
+    if (!ci.hasDiagnostics()) {
+        llvm::errs() << "Failed to initialize diagnostics.\n";
+        return EXIT_FAILURE;
+    }
+
+    clang::CompilerInvocation &invocation        = ci.getInvocation();
+    clang::TargetOptions &invocation_target_opts = invocation.getTargetOpts();
+
+    invocation_target_opts.Triple = llvm::sys::getDefaultTargetTriple();
+    llvm::outs() << "Target triple: " << invocation_target_opts.Triple << "\n";
+
+    std::shared_ptr< clang::TargetOptions > target_options =
+        std::make_shared< clang::TargetOptions >();
+    target_options->Triple = llvm::sys::getDefaultTargetTriple();
+    ci.setTarget(clang::TargetInfo::CreateTargetInfo(ci.getDiagnostics(), target_options));
+
+    ci.getPreprocessorOpts().addRemappedFile(
+        "dummy.cpp", llvm::MemoryBuffer::getMemBuffer("").release()
+    );
+    ci.getFrontendOpts().Inputs.push_back(
+        clang::FrontendInputFile("dummy.cpp", clang::Language::C)
+    );
+
+    ci.getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
+    // Setup file manager and source manager
+    ci.createFileManager();
+    ci.createSourceManager(ci.getFileManager());
+
+    // Create the preprocessor and AST context
+    ci.createPreprocessor(clang::TU_Complete);
+    ci.createASTContext();
+
+    auto &ast_context = ci.getASTContext();
+
+    std::unique_ptr< patchestry::ast::PcodeASTConsumer > consumer =
+        std::make_unique< patchestry::ast::PcodeASTConsumer >(ast_context, program.value());
+    ci.setASTConsumer(std::move(consumer));
+
+    auto &ast_consumer = ci.getASTConsumer();
+    ast_consumer.HandleTranslationUnit(ast_context);
 
     return EXIT_SUCCESS;
 }
