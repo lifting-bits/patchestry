@@ -1153,13 +1153,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				beginObject();
 				name("kind").value("function");
 				name("function").value(label(callee));
+				name("is_noreturn").value(callee.hasNoReturn());
 				endObject();
 
 			} else {
 				serializeInput(op, rValueOf(target_node));
 			}
 			
-			name("arguments").beginArray();			
+			name("inputs").beginArray();			
 			Varnode[] inputs = op.getInputs();
 			for (int i = 1; i < inputs.length; ++i) {
 				serializeInput(op, rValueOf(inputs[i]));
@@ -1206,6 +1207,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			HighVariable var = variableOf(op);
 			name("name").value(var.getName());
 			name("type").value(label(var.getDataType()));
+			name("kind").value("parameter");  // So that it also looks like an input/output.
 			if (var instanceof HighParam) {
 				name("index").value(((HighParam) var).getSlot());
 			}
@@ -1216,6 +1218,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		private void serializeDeclareLocalVar(PcodeOp op) throws Exception {
 			HighVariable var = variableOf(op);
 			HighSymbol sym = var.getSymbol();
+			name("kind").value("local");  // So that it also looks like an input/output.
 			if (sym != null && var.getOffset() == -1 && var.getName().equals("UNNAMED")) {
 				name("name").value(sym.getName());
 				name("type").value(label(sym.getDataType()));
@@ -1242,7 +1245,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			} else {
 				name("name").value(var.getName());
 			}
-			
+
+			name("kind").value("register");  // So that it also looks like an input/output.
 			name("type").value(label(var.getDataType()));
 			
 			// NOTE(pag): The same register might appear multiple times, though
@@ -1291,9 +1295,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (op.getOpcode() == PcodeOp.CALLOTHER) {
 				switch ((int) op.getInput(0).getOffset()) {
 				case DECLARE_PARAM_VAR:
-					return "DECLARE_PARAM_VAR";
+					return "DECLARE_PARAMETER";
 				case DECLARE_LOCAL_VAR:
-					return "DECLARE_LOCAL_VAR";
+					return "DECLARE_LOCAL";
 				case DECLARE_REGISTER:
 					return "DECLARE_REGISTER";
 				default:
@@ -1342,6 +1346,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (high == null) {
 				return false;
 			}
+			
+			if (high.getName().equals("local_118")) {
+				println("MULTIEQUAL");
+				println("  " + op.toString());
+			}
 
 			for (Varnode node : op.getInputs()) {
 
@@ -1354,9 +1363,37 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				if (high != variableOf(node)) {
 					return false;
 				}
+				
+				if (high.getName().equals("local_118")) {
+					println("  " + node.toString());
+				}
 			}
 			
 			return true;
+		}
+		
+		// Returns `true` if we can elide a copy operation. This only happens
+		// when we copy a variable into itself.
+		//
+		// NOTE(pag): I think this comes about as a sort of "pre-PHI" operation.
+		//
+		// TODO(pag): This is toally unsafe if there's an intervening write to
+		//			  relevant variable. Probably should investigate this case.
+		private boolean canElideCopy(PcodeOp op) throws Exception {
+			HighVariable high = variableOf(op);
+			return high != null && high == variableOf(op.getInput(0));
+		}
+		
+		// Returns `true` if `op` is a branch operator.
+		private static boolean isBranch(PcodeOp op) throws Exception {
+			switch (op.getOpcode()) {
+				case PcodeOp.BRANCH:
+				case PcodeOp.CBRANCH:
+				case PcodeOp.BRANCHIND:
+					return true;
+				default:
+					return false;
+			}
 		}
 		
 		// Serialize a high p-code basic block. This iterates over the p-code
@@ -1366,52 +1403,80 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (parent_block != null) {
 				name("parent_block").value(label(parent_block));
 			}
-
-			PcodeOp op = null;
+			
+			boolean last_is_branch = false;
 			Iterator<PcodeOp> op_iterator = block.getIterator();
+			ArrayList<PcodeOp> ordered_operations = new ArrayList<>();
 			name("operations").beginObject();
 			while (op_iterator.hasNext()) {
-				op = op_iterator.next();
+				PcodeOp op = op_iterator.next();
 				
 				switch (op.getOpcode()) {
-					// NOTE(pag): INDIRECTs seem like a good way of modelling may-
-					//            alias relations, as well as embedding control
-					//            dependencies into the dataflow graph, e.g. to
-					//            ensure code motion cannot happen from after a CALL
-					//            to before a CALL, especially for stuff operating
-					//            on stack slots. The idea at the time of this
-					//            comment is that we will assume that eventual
-					//            codegen also should not do any reordering, though
-					//            enforcing that is also tricky.
+					// NOTE(pag): INDIRECTs seem like a good way of modelling
+					//            may- alias relations, as well as embedding
+					//            control dependencies into the dataflow graph,
+					//            e.g. to ensure code motion cannot happen from
+					//            after a CALL to before a CALL, especially for
+					//            stuff operating on stack slots. The idea at
+					//            the time of this comment is that we will
+					//            assume that eventual codegen also should not
+					//            do any reordering, though enforcing that is
+					//			  also tricky.
 					case PcodeOp.INDIRECT:
-						break;
+						continue;
 					
 					// MULTIEQUALs are Ghidra's form of SSA-form PHI nodes.
 					case PcodeOp.MULTIEQUAL:
 						if (canElideMultiEqual(op)) {
-							break;
+							continue;
 						}
-						
-						// Fall-through.
+						break;
+					
+					// Some copies end up imlpementing the kind of forward edge
+					// of a phi node (i.e. `MULTIEQUAL`) and can be elided.
+					case PcodeOp.COPY:
+						if (canElideCopy(op)) {
+							continue;
+						}
+						break;
 
 					default:
-						name(label(op));
-						current_block = block;
-						serialize(op);
-						current_block = null;
 						break;
 				}
+				
+				ordered_operations.add(op);
+				name(label(op));
+				current_block = block;
+				serialize(op);
+				last_is_branch = isBranch(op);
+				current_block = null;
 			}
+			
+			// Synthesize a fake `BRANCH` operation to the fall-through block.
+			// We'll have a fall-through if we don't already end in a branch,
+			// and if the last operation isn't a `RETURN` or a `CALL*` to a
+			// `noreturn`-attributed function.
+			String fall_through_label = "";
+			if (!last_is_branch && block.getOutSize() == 1) {
+				fall_through_label = label(block) + ".exit";
+				name(fall_through_label).beginObject();
+				name("mnemonic").value("BRANCH");
+				name("target_block").value(label(block.getOut(0)));
+				endObject();  // End of BRANCH to `first_block`.	
+			}
+			
 			endObject();
 
 			// List out the operations in their order.
-			op_iterator = block.getIterator();
 			name("ordered_operations").beginArray();
-			while (op_iterator.hasNext()) {
-				beginArray();
-				value(mnemonic(op));
-				value(label(op_iterator.next()));
-				endArray();
+			for (PcodeOp op : ordered_operations) {
+//				beginArray();
+//				value(mnemonic(op));
+				value(label(op));
+//				endArray();
+			}
+			if (!fall_through_label.equals("")) {
+				value(fall_through_label);
 			}
 			endArray();
 		}
@@ -1471,7 +1536,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					FunctionSignature signature = function.getSignature();
 					serializePrototype(signature);
 				}
-				endObject();  // End `prototype`.
+				endObject();  // End `type`.
 
 				if (visit_pcode && createMissingLocals(high_function)) {
 					
@@ -1506,6 +1571,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 						name("entry_block").value(label(first_block));
 					}
 				}
+			} else {
+				name("type").beginObject();
+				serializePrototype(function.getSignature());
+				endObject();  // End `type`.
 			}
 		}
 
