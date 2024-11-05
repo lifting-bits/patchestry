@@ -79,27 +79,28 @@ def render_input(data: Dict, operations: Dict[str, Dict], functions: Dict[str, D
         case "constant":
             print(data["value"], end='')
         case "temporary":
-            print('(', end='')
-            render_op(operations[data["operation"]], operations, functions, types, True)
-            print(')', end='')
+            source = operations[data["operation"]]
+            if "name" in source:
+                print(var_name(source), end='')
+            else:
+                print('(', end='')
+                render_op(source, operations, functions, types, True)
+                print(')', end='')
         case "local":
             print(var_name(operations[data["operation"]]), end='')
         case "parameter":
             print(var_name(operations[data["operation"]]), end='')
-        case "register":
-            print(var_name(operations[data["operation"]]), end='')
         case "global":
             print("?GLOBAL?", end='')
         case "function":
-            func_name = functions[data["function"]]["name"]
-            print(f"<I>{func_name}</I>", end='')
+            print(functions[data["function"]]["name"], end='')
         case _:
             print("?INPUT?", end='')
 
 
 def var_name(data: Dict) -> str:
     name = data["name"]
-    if data["kind"] == "register":
+    if data["kind"] == "temporary":
         name += "_" + str(ID[data["address"]])
     return name
 
@@ -126,7 +127,7 @@ def render_op(data: Dict, operations: Dict[str, Dict], functions: Dict[str, Dict
         render_input(data["target"], operations, functions, types)
         print("(")
     else:
-        print(f"<B>{mnemonic}</B>&nbsp;", end=" ")
+        print(mnemonic, end=" ")
 
     sep = ""
 
