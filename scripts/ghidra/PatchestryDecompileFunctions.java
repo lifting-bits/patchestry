@@ -112,7 +112,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 	protected static final int MIN_CALLOTHER = 1000;
 	protected static final int DECLARE_PARAM_VAR = MIN_CALLOTHER + 0;
 	protected static final int DECLARE_LOCAL_VAR = MIN_CALLOTHER + 1;
-	protected static final int DECLARE_REGISTER = MIN_CALLOTHER + 2;
+	protected static final int DECLARE_TEMP_VAR = MIN_CALLOTHER + 2;
 	
 	// A custom `Varnode` used to represent the output of a `CALLOTHER` that
 	// we have invented.
@@ -226,11 +226,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		
 		// Maps `HighVariables` (really, `HighOther`s) that are attached to
 		// register `Varnode`s to the `PcodeOp` containing those nodes. We
-		// The same-named register may be associated with many such independent
-		// `HighVariable`s, so to distinguish them to downstream readers of the
-		// JSON, we want to 'version' the register variables by their initial
-		// user.
-		private Map<HighVariable, PcodeOp> register_address;
+		// The same-named temporary/register may be associated with many such
+		// independent `HighVariable`s, so to distinguish them to downstream
+		// readers of the JSON, we want to 'version' the register variables by
+		// their initial user.
+		private Map<HighVariable, PcodeOp> temporary_address;
 
 		public PcodeSerializer(java.io.BufferedWriter writer,
 				String arch_, FunctionManager fm_,
@@ -265,7 +265,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			this.stack_pointer = program.getCompilerSpec().getStackPointer();
 			this.missing_locals = new HashMap<>();
 			this.old_locals = new HashMap<>();
-			this.register_address = new HashMap<>();
+			this.temporary_address = new HashMap<>();
 		}
 
 		private static String label(HighFunction function) throws Exception {
@@ -493,7 +493,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			UNKNOWN,
 			PARAMETER,
 			LOCAL,
-			REGISTER,
+			NAMED_TEMPORARY,
 			TEMPORARY,
 			GLOBAL,
 			FUNCTION,
@@ -571,68 +571,23 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					return VariableClassification.PARAMETER;
 				}
 			}
-			
-			if (var instanceof HighOther) {
-				Varnode rep = originalRepresentativeOf(var);
 
-//				println("OTHER var: " + var.toString());
-//				for (Varnode inst : var.getInstances()) {
-//					if (inst.isInput()) {
-//						println("  -- input: " + inst.toString());
-//					} else {
-//						println("  -- output: " + inst.toString());
-//						PcodeOp op = inst.getDef();
-//						if (op != null) {
-//							println("     -> " + op.toString() + " at " + label(op));
-//						}
-//					}
-//				}
+			Varnode rep = originalRepresentativeOf(var);
+			if (rep != null) {
 
-				if (rep != null) {
-					if (rep.isRegister()) {
-						return VariableClassification.REGISTER;
-
-					// TODO(pag): Consider checking if all uses of the unique
-					//			  belong to the same block. We don't want to
-					//			  introduce a kind of code motion risk into the
-					//			  lifted representation.
-					} else if (rep.isUnique()) {
-						
-						PcodeOp def = rep.getDef();
-						if (def != null && def.getOpcode() == PcodeOp.PTRSUB &&
-								def.getInput(0).isRegister()) {
-							println("Unique-def: " + label(def));
-							println(def.toString());
-							
-							Function func = current_function.getFunction();
-							StackFrame frame = func.getStackFrame();
-							HighVariable v = variableOf(def);
-							if (v != null) {
-								println("  output high: " + v.toString() + " " + v.getName());
-							}
-							
-							v = def.getInput(0).getHigh();
-							if (v != null) {
-								println("  reg high: " + v.toString() + " " + v.getName());
-							}
-
-							v = def.getInput(1).getHigh();
-							if (v != null) {
-								println("  offset high: " + v.toString() + " " + v.getName());
-								println("  offset value: " + Long.toString(v.getRepresentative().getOffset()));
-								HighConstant x;
-								Variable ov = frame.getVariableContaining(v.getOffset());
-								if (ov != null) {
-									println("    offset var: " + ov.toString());
-								}
-							}
-						}
-						
+				// TODO(pag): Consider checking if all uses of the unique
+				//			  belong to the same block. We don't want to
+				//			  introduce a kind of code motion risk into the
+				//			  lifted representation.
+				if (rep.isRegister() || rep.isUnique() || var instanceof HighOther) {
+					if (rep.getLoneDescend() != null) {
 						return VariableClassification.TEMPORARY;
+					} else {
+						return VariableClassification.NAMED_TEMPORARY;
 					}
 				}
 			}
-
+			
 			return VariableClassification.UNKNOWN;
 		}
 		
@@ -690,12 +645,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					name("kind").value("local");
 					name("operation").value(label(getOrCreateLocalVariable(var, op)));
 					break;
-				case VariableClassification.REGISTER:
-					name("kind").value("register");
+				case VariableClassification.NAMED_TEMPORARY:
+					name("kind").value("temporary");
 					name("operation").value(label(getOrCreateLocalVariable(var, op)));
 					break;
 				case VariableClassification.TEMPORARY:
-					assert def != null;
 					assert def != null;
 					name("kind").value("temporary");
 					name("operation").value(label(def));
@@ -964,7 +918,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			switch (klass) {
 				case VariableClassification.PARAMETER:
 				case VariableClassification.LOCAL:
-				case VariableClassification.REGISTER:
+				case VariableClassification.NAMED_TEMPORARY:
 				case VariableClassification.GLOBAL:
 					break;
 				default:
@@ -978,8 +932,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			} else if (klass == VariableClassification.LOCAL) {
 				name("kind").value("local");
 				name("operation").value(label(getOrCreateLocalVariable(var, op)));				
-			} else if (klass == VariableClassification.REGISTER) {
-				name("kind").value("register");
+			} else if (klass == VariableClassification.NAMED_TEMPORARY) {
+				name("kind").value("temporary");
 				name("operation").value(label(getOrCreateLocalVariable(var, op)));
 			} else if (klass == VariableClassification.GLOBAL) {
 				name("kind").value("global");
@@ -1069,7 +1023,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 		// Creates a pseudo p-code op using a `CALLOTHER` that logically
 		// represents the definition of a variable that stands in for a register.
-		private PcodeOp createRegisterDecl(
+		private PcodeOp createNamedTemporaryDecl(
 				HighVariable var, PcodeOp user_op) throws Exception {
 			Varnode rep = originalRepresentativeOf(var);
 			assert rep.isRegister();
@@ -1079,7 +1033,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			Varnode[] ins = new Varnode[1];
 			SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
 			PcodeOp op = new PcodeOp(loc, PcodeOp.CALLOTHER, 1, def);
-			op.insertInput(new Varnode(constant_space.getAddress(DECLARE_REGISTER), 4), 0);
+			op.insertInput(new Varnode(constant_space.getAddress(DECLARE_TEMP_VAR), 4), 0);
 			def.setDef(var, op);
 
 			Varnode[] instances = var.getInstances();
@@ -1090,7 +1044,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			var.attachInstances(new_instances, def);
 
 			entry_block.add(op);
-			register_address.put(var, user_op);
+			temporary_address.put(var, user_op);
 
 			return op;
 		}
@@ -1113,8 +1067,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					return createParamVarDecl(var);
 				case VariableClassification.LOCAL:
 					return createLocalVarDecl(var);
-				case VariableClassification.REGISTER:
-					return createRegisterDecl(var, user_op);
+				case VariableClassification.NAMED_TEMPORARY:
+					return createNamedTemporaryDecl(var, user_op);
 				default:
 					break;
 			}
@@ -1228,12 +1182,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 		}
 		
-		private void serializeDeclareRegister(PcodeOp op) throws Exception {
+		private void serializeDeclareNamedTemporary(PcodeOp op) throws Exception {
 			HighVariable var = variableOf(op);
 			Varnode rep = originalRepresentativeOf(var);
-			assert rep.isRegister();
-			
-			Register reg = language.getRegister(rep.getAddress(), 0);
 
 			// NOTE(pag): In practice, the `HighOther`s name associated with
 			//			  this register is probably `UNNAMED`, which happens in
@@ -1241,12 +1192,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			// 			  only canonicalize on the register name if the name
 			//			  it is the default.
 			if (var.getName().equals("UNNAMED")) {
-				name("name").value(reg.getName());
+				if (rep.isRegister()) {
+					Register reg = language.getRegister(rep.getAddress(), 0);
+					name("name").value(reg.getName());
+				} else {
+					name("name").value("temp");
+				}
 			} else {
 				name("name").value(var.getName());
 			}
 
-			name("kind").value("register");  // So that it also looks like an input/output.
+			name("kind").value("temporary");  // So that it also looks like an input/output.
 			name("type").value(label(var.getDataType()));
 			
 			// NOTE(pag): The same register might appear multiple times, though
@@ -1255,7 +1211,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			//            the operation using the original register as a kind of
 			//			  SSA-like version number downstream, e.g. in a Clang
 			//			  AST.
-			PcodeOp user_op = register_address.get(var);
+			PcodeOp user_op = temporary_address.get(var);
 			if (user_op != null) {
 				name("address").value(label(user_op));
 			}
@@ -1273,8 +1229,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			case DECLARE_LOCAL_VAR:
 				serializeDeclareLocalVar(op);
 				break;
-			case DECLARE_REGISTER:
-				serializeDeclareRegister(op);
+			case DECLARE_TEMP_VAR:
+				serializeDeclareNamedTemporary(op);
 				break;
 			default:
 				serializeOutput(op);
@@ -1298,8 +1254,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					return "DECLARE_PARAMETER";
 				case DECLARE_LOCAL_VAR:
 					return "DECLARE_LOCAL";
-				case DECLARE_REGISTER:
-					return "DECLARE_REGISTER";
+				case DECLARE_TEMP_VAR:
+					return "DECLARE_TEMPORARY";
 				default:
 					break;
 				}
@@ -1518,7 +1474,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				HighFunction high_function, Function function,
 				boolean visit_pcode) throws Exception {
 			
-			register_address.clear();
+			temporary_address.clear();
 			old_locals.clear();
 			missing_locals.clear();
 
