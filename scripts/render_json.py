@@ -119,7 +119,7 @@ def render_op(data: Dict, operations: Dict[str, Dict], functions: Dict[str, Dict
             print(f"{decl}<BR />", end='')
         return
 
-    is_call = mnemonic.startswith("CALL")
+    is_call = mnemonic in ("CALL", "CALLIND")
     if "output" in data:
         render_output(data["output"], operations)
 
