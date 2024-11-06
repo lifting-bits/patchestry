@@ -1302,11 +1302,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (high == null) {
 				return false;
 			}
-			
-			if (high.getName().equals("local_118")) {
-				println("MULTIEQUAL");
-				println("  " + op.toString());
-			}
 
 			for (Varnode node : op.getInputs()) {
 
@@ -1318,10 +1313,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				
 				if (high != variableOf(node)) {
 					return false;
-				}
-				
-				if (high.getName().equals("local_118")) {
-					println("  " + node.toString());
 				}
 			}
 			
