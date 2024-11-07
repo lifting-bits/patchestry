@@ -25,6 +25,7 @@ import ghidra.program.model.block.BasicBlockModel;
 import ghidra.program.model.block.CodeBlock;
 import ghidra.program.model.block.CodeBlockIterator;
 
+import ghidra.program.model.data.BitFieldDataType;
 import ghidra.program.model.data.DataType;
 
 import ghidra.program.model.lang.CompilerSpec;
@@ -55,6 +56,7 @@ import ghidra.program.model.pcode.HighParam;
 import ghidra.program.model.pcode.HighSymbol;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.LocalSymbolMap;
+import ghidra.program.model.pcode.PartialUnion;
 import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
@@ -65,6 +67,7 @@ import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.data.AbstractFloatDataType;
 import ghidra.program.model.data.AbstractIntegerDataType;
 import ghidra.program.model.data.Array;
+import ghidra.program.model.data.ArrayStringable;
 import ghidra.program.model.data.BooleanDataType;
 import ghidra.program.model.data.BuiltIn;
 import ghidra.program.model.data.Composite;
@@ -80,6 +83,7 @@ import ghidra.program.model.data.TypeDef;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.data.Union;
 import ghidra.program.model.data.VoidDataType;
+import ghidra.program.model.data.WideCharDataType;
 
 import ghidra.program.model.symbol.ExternalManager;
 import ghidra.program.model.symbol.Namespace;
@@ -375,7 +379,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			for (int i = 0; i < data_type.getNumComponents(); i++) {
 				DataTypeComponent dtc = data_type.getComponent(i);
 				beginObject();
-
 				name("type").value(label(dtc.getDataType()));
 				name("offset").value(dtc.getOffset());
 
@@ -395,31 +398,55 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			if (data_type instanceof Pointer) {
 				serializePointerType((Pointer) data_type);
+
 			} else if (data_type instanceof TypeDef) {
 				serializeTypedefType((TypeDef) data_type);
+
 			} else if (data_type instanceof Array) {
 				serializeArrayType((Array) data_type);
+
 			} else if (data_type instanceof Structure) {
 				serializeCompositeType((Composite) data_type, "struct");
+
 			} else if (data_type instanceof Union) {
 				serializeCompositeType((Composite) data_type, "union");
+
 			} else if (data_type instanceof AbstractIntegerDataType){
 				serializeBuiltinType(data_type, "integer");
+
 			} else if (data_type instanceof AbstractFloatDataType){
 				serializeBuiltinType(data_type, "float");
+
 			} else if (data_type instanceof BooleanDataType){
 				serializeBuiltinType(data_type, "boolean");
+
 			} else if (data_type instanceof Enum) {
 				serializeBuiltinType(data_type, "enum");
+
 			} else if (data_type instanceof VoidDataType) {
 				serializeBuiltinType(data_type, "void");
+
 			} else if (data_type instanceof Undefined || data_type.toString().contains("undefined")) {
 				serializeBuiltinType(data_type, "undefined");
+
 			} else if (data_type instanceof FunctionDefinition) {
 				name("kind").value("function");
 				serializePrototype((FunctionSignature) data_type);
+
+			} else if (data_type instanceof PartialUnion) {
+				name("kind").value("todo");  // TODO(pag): Implement this
+				name("size").value(data_type.getLength());
+
+			} else if (data_type instanceof BitFieldDataType) {
+				name("kind").value("todo");  // TODO(pag): Implement this
+				name("size").value(data_type.getLength());
+				
+			} else if (data_type instanceof WideCharDataType) {
+				name("kind").value("todo");  // TODO(pag): Implement this
+				name("size").value(data_type.getLength());
+				
 			} else {
-				throw new Exception("Unhandled type: " + data_type.toString());
+				throw new Exception("Unhandled type: " + data_type.getClass().getName());
 			}
 		}
 
@@ -748,15 +775,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			int frame_size = frame.getFrameSize();
 			int var_offset = (int) offset_node.getOffset();
-			
-			// Given a stack pointer offset, e.g. `-0x118`, go find the low
-			// `Variable` representing `local_118`.
-			Variable var = frame.getVariableContaining(var_offset);
-			if (var == null) {
-				return false;
-			}
-			
-			// println("Found variable use " + var.toString() + " at offset " + var_offset + " rel to " + Integer.toString(var.getStackOffset()));
+			int adjust_offset = 0;
 			
 			// Given the local symbol mapping for the high function, go find
 			// a `HighSymbol` corresponding to `local_118`. This high symbol
@@ -764,7 +783,21 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			// and confusingly won't have a corresponding `HighVariable`.
 			LocalSymbolMap symbols = high_function.getLocalSymbolMap();
 			Address pc = op.getSeqnum().getTarget();
-			HighSymbol sym = symbols.findLocal(var.getVariableStorage(), pc);
+			
+			// Given a stack pointer offset, e.g. `-0x118`, go find the low
+			// `Variable` representing `local_118`.
+			Variable var = frame.getVariableContaining(var_offset);
+			Address stack_address = stack_space.getAddress(var_offset);
+			HighSymbol sym = null;
+			if (var != null) {
+				sym = symbols.findLocal(var.getVariableStorage(), pc);
+				stack_address = stack_space.getAddress(var.getStackOffset());
+				
+			} else {
+				sym = symbols.findLocal(stack_address, pc);
+			}
+			
+			// println("Found variable use " + var.toString() + " at offset " + var_offset + " rel to " + Integer.toString(var.getStackOffset()));
 
 			if (sym == null) {
 				return false;
@@ -772,8 +805,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			Varnode var_node = op.getInput(0);
 			UseVarnode new_var_node = new UseVarnode(
-					stack_space.getAddress(var.getStackOffset()),
-					sym.getDataType().getLength());
+					stack_address, sym.getDataType().getLength());
 
 			// We've already got a high variable for this missing local.
 			HighVariable new_var = sym.getHighVariable();
@@ -805,6 +837,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				}
 				new_var = local_var;
 			}
+
+			int new_var_offset = new_var.getOffset() == -1 ? 0 : new_var.getOffset();
+			if (var != null) {
+				adjust_offset = (var_offset - var.getStackOffset()) + new_var_offset;
+			}
 			
 			// println("  Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
 
@@ -813,8 +850,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			op.setInput(new_var_node, 0);
 			
 			// Rewrite the offset.
-			int new_var_offset = new_var.getOffset() == -1 ? 0 : new_var.getOffset();
-			int adjust_offset = (var_offset - var.getStackOffset()) + new_var_offset;
 			op.setInput(new Varnode(constant_space.getAddress(adjust_offset), offset_node.getSize()), 1);
 
 			// println("  to: " + op.toString());
@@ -978,7 +1013,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 								return false;
 							}
 							break;
-							
+						case PcodeOp.MULTIEQUAL:
+							if (canElideMultiEqual(op)) {
+								continue;
+							}
+							// Fall-through.
 						default:
 							if (referencesStackPointer(op) != -1) {
 								println("Unsupported stack pointer reference at " + label(op) + ": " + op.toString());
@@ -1431,13 +1470,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 
 			for (Varnode node : op.getInputs()) {
-
-				// TODO(pag): What about `isAddress()`? How do `MULTIEQUAL`s
-				//			  interact with global variables in RAM?
-				if (node.isConstant() || node.isHash()) {
-					return false;
-				}
-				
 				if (high != variableOf(node)) {
 					return false;
 				}

@@ -193,7 +193,7 @@ def render_function(func_key: str, functions: Dict[str, Dict], types: Dict[str, 
     # Extract parameter names from the entry block.
     param_types: List[str] = data["type"]["parameter_types"]
     param_names: List[str] = [""] * len(param_types)
-    print(func_key)
+
     for op in entry_block.get("operations", EMPTY).values():
         if op["mnemonic"] == "DECLARE_PARAMETER":
             param_names[op["index"]] = op["name"]
