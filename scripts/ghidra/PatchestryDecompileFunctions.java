@@ -434,17 +434,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			println("Total serialized types: " + types_to_serialize.size());
 		}
 		
-		private void serializePrototype() throws Exception {
+		private int serializePrototype() throws Exception {
 			name("return_type").value(label((DataType) null));
 			name("is_variadic").value(false);
 			name("is_variadic").value(false);
 			name("parameter_types").beginArray().endArray();
+			return 0;
 		}
 
-		private void serializePrototype(FunctionPrototype proto) throws Exception {
+		private int serializePrototype(FunctionPrototype proto) throws Exception {
 			if (proto == null) {
-				serializePrototype();
-				return;
+				return serializePrototype();
 			}
 
 			name("return_type").value(label(proto.getReturnType()));
@@ -452,16 +452,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			name("is_noreturn").value(proto.hasNoReturn());
 			
 			name("parameter_types").beginArray();
-			for (int i = 0; i < proto.getNumParams(); i++) {
+			int num_params = proto.getNumParams();
+			for (int i = 0; i < num_params; i++) {
 				value(label(proto.getParam(i).getDataType()));
 			}
 			endArray();  // End of `parameter_types`.
+			return num_params;
 		}
 		
-		private void serializePrototype(FunctionSignature proto) throws Exception {
+		private int serializePrototype(FunctionSignature proto) throws Exception {
 			if (proto == null) {
-				serializePrototype();
-				return;
+				return serializePrototype();
 			}
 
 			name("return_type").value(label(proto.getReturnType()));
@@ -471,10 +472,12 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			
 			ParameterDefinition[] arguments = proto.getArguments();
 			name("parameter_types").beginArray();
-			for (int i = 0; i < arguments.length; i++) {
+			int num_params = (int) arguments.length;
+			for (int i = 0; i < num_params; i++) {
 				value(label(arguments[i].getDataType()));
 			}
 			endArray();  // End of `parameter_types`.
+			return num_params;
 		}
 
 		private void serialize(HighVariable high_var) throws Exception {
@@ -753,7 +756,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				return false;
 			}
 			
-			println("Found variable use " + var.toString() + " at offset " + var_offset + " rel to " + Integer.toString(var.getStackOffset()));
+			// println("Found variable use " + var.toString() + " at offset " + var_offset + " rel to " + Integer.toString(var.getStackOffset()));
 			
 			// Given the local symbol mapping for the high function, go find
 			// a `HighSymbol` corresponding to `local_118`. This high symbol
@@ -792,7 +795,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 							sym.getDataType(), new_var_node, null, pc, sym);
 					missing_locals.put(sym_name, local_var);
 
-					println("Created " + local_var.getName() + " with type " + local_var.getDataType().toString());
+					// println("Created " + local_var.getName() + " with type " + local_var.getDataType().toString());
 
 					// Remap old-to-new.
 					if (new_var != null) {
@@ -803,7 +806,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				new_var = local_var;
 			}
 			
-			println("  Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
+			// println("  Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
 
 			// Rewrite the stack reference to point to the `HighVariable`.
 			new_var_node.setHigh(new_var);
@@ -814,7 +817,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			int adjust_offset = (var_offset - var.getStackOffset()) + new_var_offset;
 			op.setInput(new Varnode(constant_space.getAddress(adjust_offset), offset_node.getSize()), 1);
 
-			println("  to: " + op.toString());
+			// println("  to: " + op.toString());
 			
 			return true;
 		}
@@ -847,8 +850,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (high_sym == null) {
 				return false;
 			}
-			
-			println("Found variable use " + high_sym.getName());
+
+			// println("Found variable use " + high_sym.getName());
 			
 			Address address = ram_space.getAddress(offset_node.getOffset());
 			Symbol sym = high_sym.getSymbol();
@@ -871,7 +874,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				missing_globals.put(address, global_var);
 			}
 
-			println("  Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
+			// println("  Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
 
 			// Rewrite the global reference to point to the `HighVariable`.
 			new_var_node.setHigh(global_var);
@@ -883,7 +886,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			op.setInput(new Varnode(constant_space.getAddress(sub_offset), offset_node.getSize()), 1);
 			
-			println("  to: " + op.toString());
+			// println("  to: " + op.toString());
 			
 			return true;
 		}
@@ -916,17 +919,20 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		//
 		// NOTE(pag): This function is very much inspired by the `MakeStackRefs`
 		//		      script embedded in the Ghidra source.
-		private boolean fixupOperations(HighFunction high_function) throws Exception {
+		private boolean fixupOperations(
+				HighFunction high_function, int num_params) throws Exception {
 			Function function = high_function.getFunction();
+			FunctionSignature signature = function.getSignature();
 			FunctionPrototype proto = high_function.getFunctionPrototype();
-
+			LocalSymbolMap symbols = high_function.getLocalSymbolMap();
+			
 			// Fill in the parameters first so that they are the first
 			// things added to `entry_block`.
-			LocalSymbolMap symbols = high_function.getLocalSymbolMap();
-			for (int i = 0; i < symbols.getNumParams(); ++i) {
+			for (int i = 0; i < num_params; ++i) {
 				HighParam param = symbols.getParam(i);
 				if (param == null) {
 					HighSymbol param_sym = proto.getParam(i);
+					println("Inventing HighParam for " + param_sym.getName() + " in " + function.getName());
 					param = new HighParam(param_sym.getDataType(), null, null, i, param_sym);
 					missing_locals.put(param.getName(), param);
 				}
@@ -1184,6 +1190,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			switch (classifyVariable(var)) {
 				case VariableClassification.PARAMETER:
+					println("Creating late parameter for " + label(user_op) + ": " + user_op.toString());
 					return createParamVarDecl(var);
 				case VariableClassification.LOCAL:
 					return createLocalVarDecl(var);
@@ -1588,6 +1595,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			temporary_address.clear();
 			old_locals.clear();
 			missing_locals.clear();
+			entry_block.clear();
 
 			FunctionPrototype proto = null;
 			name("name").value(function.getName());
@@ -1597,15 +1605,16 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				proto = high_function.getFunctionPrototype();
 
 				name("type").beginObject();
+				
+				int num_params = 0;
 				if (proto != null) {
-					serializePrototype(proto);
+					num_params = serializePrototype(proto);
 				} else {
-					FunctionSignature signature = function.getSignature();
-					serializePrototype(signature);
+					num_params = serializePrototype(function.getSignature());
 				}
 				endObject();  // End `type`.
 
-				if (visit_pcode && fixupOperations(high_function)) {
+				if (visit_pcode && fixupOperations(high_function, num_params)) {
 					
 					PcodeBlockBasic first_block = null;
 					current_function = high_function;
@@ -1632,7 +1641,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					
 					if (!entry_block.isEmpty()) {
 						name("entry_block").value("entry");
-						entry_block.clear();
 
 					} else if (first_block != null) {
 						name("entry_block").value(label(first_block));

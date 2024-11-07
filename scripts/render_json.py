@@ -68,10 +68,14 @@ def render_typed_var(var: str, type_key: str, types: Dict[str, Dict]) -> str:
 
 
 def render_output(data: Dict[str, str], operations: Dict[str, Dict]):
-    assert "operation" in data
-    data = operations[data["operation"]]
-    assert data["mnemonic"].startswith("DECLARE_")
-    print(var_name(data), end=" = ")
+    assert "kind" in data
+    if data["kind"] == "global":
+        print("?GLOBAL?", end=" = ")
+    else:
+        assert "operation" in data
+        data = operations[data["operation"]]
+        assert data["mnemonic"].startswith("DECLARE_")
+        print(var_name(data), end=" = ")
 
 
 def render_input(data: Dict, operations: Dict[str, Dict], functions: Dict[str, Dict], types: Dict[str, Dict]):
@@ -189,6 +193,7 @@ def render_function(func_key: str, functions: Dict[str, Dict], types: Dict[str, 
     # Extract parameter names from the entry block.
     param_types: List[str] = data["type"]["parameter_types"]
     param_names: List[str] = [""] * len(param_types)
+    print(func_key)
     for op in entry_block.get("operations", EMPTY).values():
         if op["mnemonic"] == "DECLARE_PARAMETER":
             param_names[op["index"]] = op["name"]
@@ -196,7 +201,7 @@ def render_function(func_key: str, functions: Dict[str, Dict], types: Dict[str, 
     func_name: str = data["name"]
 
     param_str: str = ", ".join(render_typed_var(n, t, types) for n, t in zip(param_names, param_types))
-    print(f"f{key} [label=\"{func_name}({param_str})\"];")
+    print(f"f{key} [label=<<TABLE cellpadding=\"0\" cellspacing=\"0\" border=\"1\"><TR><TD>{func_name}({param_str})</TD></TR><TR><TD>{func_key}</TD></TR></TABLE>>];")
 
     if not entry_block_name:
         return
