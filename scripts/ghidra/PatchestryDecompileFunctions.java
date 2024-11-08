@@ -185,6 +185,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 	private class PcodeSerializer extends JsonWriter {
 		private Program program;
 		private String arch;
+		private AddressSpace extern_space;
 		private AddressSpace ram_space;
 		private AddressSpace stack_space;
 		private AddressSpace constant_space;
@@ -193,11 +194,28 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		private ExternalManager em;
 		private DecompInterface ifc;
 		private BasicBlockModel bbm;
+		
+		// Tracks which functions to recover. The size of `functions` is
+		// monotonically non-decreasing, with newly discovered functions
+		// added to the end. The first `original_functions_size` functions in
+		// `functions` are meant to have their definitions (i.e. high p-code)
+		// serialized to JSON.
 		private List<Function> functions;
 		private int original_functions_size;
 		private Set<Address> seen_functions;
+
+		// The seen globals.
+		private Map<Address, HighVariable> seen_globals;
+
+		// The seen types. The size of `types_to_serialize` is monotonically
+		// non-decreasing, so that as we add new things to `seen_types`, we add
+		// to the end of `types_to_serialize`. This lets us properly handle
+		// tracking what recursive types need to be serialized.
 		private Set<String> seen_types;
 		private List<DataType> types_to_serialize;
+		
+		// Current function being serialized, and current block within that
+		// function being serialized.
 		private HighFunction current_function;
 		private PcodeBlockBasic current_block;
 		
@@ -238,9 +256,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		private Map<String, HighLocal> missing_locals;
 		private Map<HighVariable, HighLocal> old_locals;
 		
-		// Maps addresses to missing global variables.
-		private Map<Address, HighGlobal> missing_globals;
-		
 		// Maps `HighVariables` (really, `HighOther`s) that are attached to
 		// register `Varnode`s to the `PcodeOp` containing those nodes. We
 		// The same-named temporary/register may be associated with many such
@@ -262,6 +277,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			AddressFactory address_factory = program.getAddressFactory();
 
 			this.arch = arch_;
+			this.extern_space = address_factory.getAddressSpace("extern");
 			this.ram_space = address_factory.getAddressSpace("ram");
 			this.stack_space = address_factory.getStackSpace();
 			this.constant_space = address_factory.getConstantSpace();
@@ -274,6 +290,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			this.original_functions_size = functions.size();
 			this.seen_functions = new TreeSet<>();
 			this.seen_types = new HashSet<>();
+			this.seen_globals = new HashMap<>();
 			this.types_to_serialize = new ArrayList<>();
 			this.current_function = null;
 			this.current_block = null;
@@ -281,7 +298,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			this.next_seqnum = 0;
 			this.entry_block = new ArrayList<>();
 			this.stack_pointer = program.getCompilerSpec().getStackPointer();
-			this.missing_globals = new HashMap<>();
 			this.missing_locals = new HashMap<>();
 			this.old_locals = new HashMap<>();
 			this.temporary_address = new HashMap<>();
@@ -588,6 +604,27 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			
 			return instances[1];
 		}
+		
+		// Return the address of a high global variable.
+		private Address addressOfGlobal(HighVariable var) throws Exception {
+			HighSymbol sym = var.getSymbol();
+			if (sym != null && sym.isGlobal()) {
+				SymbolEntry entry = sym.getFirstWholeMap();
+				return entry.getStorage().getMinAddress();
+			}
+			
+			Varnode rep = var.getRepresentative();
+			int type = AddressSpace.ID_TYPE_MASK & rep.getSpace();
+			if (type == AddressSpace.TYPE_RAM) {
+				return ram_space.getAddress(rep.getOffset());
+
+			} else if (type == AddressSpace.TYPE_EXTERNAL) {
+				return extern_space.getAddress(rep.getOffset());
+			}
+			
+			println("Could not get address of variable " + var.toString());
+			return null;
+		}
 
 		// Try to distinguish "local" variables from global ones. Roughly, we
 		// want to make sure that the backing storage for a given variable
@@ -608,13 +645,16 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				return VariableClassification.CONSTANT;
 			
 			} else if (var instanceof HighGlobal) {
+				seen_globals.put(addressOfGlobal(var), var);
 				return VariableClassification.GLOBAL;
 			}
 
 			HighSymbol symbol = var.getSymbol();
 			if (symbol != null) {
 				if (symbol.isGlobal()) {
+					seen_globals.put(addressOfGlobal(var), var);
 					return VariableClassification.GLOBAL;
+
 				} else if (symbol.isParameter() || symbol.isThisPointer()) {
 					return VariableClassification.PARAMETER;
 				}
@@ -718,7 +758,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					break;
 				case VariableClassification.GLOBAL:
 					name("kind").value("global");
-					// TODO(pag): Fill this in.
+					name("global").value(label(addressOfGlobal(var)));
 					break;
 				case VariableClassification.FUNCTION:
 					name("kind").value("function");
@@ -920,16 +960,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			UseVarnode new_var_node = new UseVarnode(
 					address, high_sym.getDataType().getLength());
 
-			HighGlobal global_var = missing_globals.get(address);
+			HighVariable global_var = seen_globals.get(address);
 			if (global_var == null) {
-				HighVariable maybe_global_var = high_sym.getHighVariable();
-				if (maybe_global_var instanceof HighGlobal) {
-					global_var = (HighGlobal) maybe_global_var;
-				} else {
+				global_var = high_sym.getHighVariable();
+				if (global_var == null) {
 					global_var = new HighGlobal(high_sym, new_var_node, null);
 				}
-				
-				missing_globals.put(address, global_var);
+
+				seen_globals.put(address, global_var);
 			}
 
 			// println("Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
@@ -1143,7 +1181,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				name("operation").value(label(getOrCreateLocalVariable(var, op)));
 			} else if (klass == VariableClassification.GLOBAL) {
 				name("kind").value("global");
-				// TODO(pag): Global refs.
+				name("global").value(label(addressOfGlobal(var)));
 			} else {
 				assert false;
 			}
@@ -1745,6 +1783,32 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 		}
 		
+		// Serialize the global variable declarations.
+		private void serializeGlobals() throws Exception {
+			for (Map.Entry<Address, HighVariable> entry : seen_globals.entrySet()) {
+				Address address = entry.getKey();
+				HighVariable global = entry.getValue();
+				
+				// Try to get the global's name.
+				String name = global.getName();
+				if (name == null || (name.equals("UNNAMED") && global.getOffset() == -1)) {
+					HighSymbol sym = global.getSymbol();
+					if (sym != null) {
+						name = sym.getName();
+					}
+				}
+
+				name(label(address)).beginObject();
+				name("name").value(name);
+				name("size").value(Integer.toString(global.getSize()));
+				name("type").value(label(global.getDataType()));
+				endObject();
+			}
+
+			println("Total serialized globals: " + Integer.toString(seen_globals.size()));
+		}
+
+		// Don't try to decompile some functions.
 		private static final Set<String> IGNORED_NAMES = Set.of(
 			"_start", "__libc_csu_fini", "__libc_csu_init", "__libc_start_main",
             "__data_start", "__dso_handle", "_IO_stdin_used",
@@ -1784,10 +1848,32 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             "longjmp", "siglongjmp", "setjmp", "sigsetjmp",
             "__register_frame_info_bases", "__assert_fail"
 		);
+		
+		// Serialize all functions.
+		//
+		// NOTE(pag): As we serialize functions, we might discover references
+		//			  to other functions, causing `functions` will grow over
+		// 			  time.
+		private void serializeFunctions() throws Exception {
+			for (int i = 0; i < functions.size(); ++i) {
+				Function function = functions.get(i);
+				Address function_address = function.getEntryPoint();
+				if (!seen_functions.add(function_address)) {
+					continue;
+				}
+				
+				boolean visit_pcode = i < original_functions_size &&
+									  !IGNORED_NAMES.contains(function.getName());
 
-		// Don't try to recover the definitions of some functions.
-		private static boolean ignoreFunction(String name) {
-			return IGNORED_NAMES.contains(name);
+				DecompileResults res = ifc.decompileFunction(function, DECOMPILATION_TIMEOUT, null);
+				HighFunction high_function = res.getHighFunction();
+				
+				name(label(function)).beginObject();
+				serialize(high_function, function, visit_pcode);
+				endObject();
+			}
+
+			println("Total serialized functions: " + Integer.toString(functions.size()));
 		}
 
 		// Serialize the input function list to JSON. This function will also
@@ -1798,27 +1884,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			beginObject();
 			name("arch").value(getArch());
 			name("format").value(currentProgram.getExecutableFormat());
+
 			name("functions").beginObject();
-
-			for (int i = 0; i < functions.size(); ++i) {
-				Function function = functions.get(i);
-				Address function_address = function.getEntryPoint();
-				if (!seen_functions.add(function_address)) {
-					continue;
-				}
-
-				DecompileResults res = ifc.decompileFunction(function, DECOMPILATION_TIMEOUT, null);
-				HighFunction high_function = res.getHighFunction();
-				name(label(function)).beginObject();
-				serialize(
-						high_function,
-						function,
-						(i < original_functions_size &&
-								!ignoreFunction(function.getName())));
-				endObject();
-			}
-
+			serializeFunctions();
 			endObject();  // End of functions.
+			
+			name("globals").beginObject();
+			serializeGlobals();
+			endObject();  // End of globals.
 
 			name("types").beginObject();
 			serializeTypes();
