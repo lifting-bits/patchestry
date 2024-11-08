@@ -39,6 +39,7 @@ import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.FunctionSignature;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
+import ghidra.program.model.listing.Parameter;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.listing.StackFrame;
 import ghidra.program.model.listing.Variable;
@@ -603,6 +604,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			} else if (var instanceof HighConstant) {
 				return VariableClassification.CONSTANT;
+			
+			} else if (var instanceof HighGlobal) {
+				return VariableClassification.GLOBAL;
 			}
 
 			HighSymbol symbol = var.getSymbol();
@@ -797,8 +801,28 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				sym = symbols.findLocal(stack_address, pc);
 			}
 			
-			// println("Found variable use " + var.toString() + " at offset " + var_offset + " rel to " + Integer.toString(var.getStackOffset()));
-
+			// Try to recover by locating the parameter containing the stack
+			// address.
+			if (sym == null) {
+				for (Variable param : frame.getParameters()) {
+					VariableStorage storage = param.getVariableStorage();
+					if (!storage.contains(stack_address)) {
+						continue;
+					}
+			
+					int index = ((Parameter) param).getOrdinal();
+					if (index >= symbols.getNumParams()) {
+						break;
+					}
+					
+					sym = symbols.getParamSymbol(index);
+					break;
+				}
+			}
+			
+			// This is usually for one of a few reasons:
+			//		- Trying to lift `_start`
+			//		- Trying to lift a variadic function using `va_list`.
 			if (sym == null) {
 				return false;
 			}
@@ -944,6 +968,24 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			return true;
 		}
+		
+//		// Look for `PTRADD SP, -1, 1` or something like it that is used to
+//		// calculate the return address location.
+//		private boolean markPtrAddForElision(
+//				HighFunction high_function, PcodeOp op) {
+//			int sp_index = referencesStackPointer(op);
+//			if (sp_index != 0) {
+//				return true;
+//			}
+//			
+//			if (op.getInput(2).getOffset() != 1) {
+//				return false;
+//			}
+//			
+//			Function function = high_function.getFunction();
+//			StackFrame frame = function.getStackFrame();
+//
+//		}
 
 		// Create missing local variables. High p-code still includes things
 		// like `PTRSUB SP, -offset` instead of treating the unrecognized data
@@ -967,7 +1009,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				HighParam param = symbols.getParam(i);
 				if (param == null) {
 					HighSymbol param_sym = proto.getParam(i);
-					println("Inventing HighParam for " + param_sym.getName() + " in " + function.getName());
+					// println("Inventing HighParam for " + param_sym.getName() + " in " + function.getName());
 					param = new HighParam(param_sym.getDataType(), null, null, i, param_sym);
 					missing_locals.put(param.getName(), param);
 				}
@@ -1013,6 +1055,12 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 								return false;
 							}
 							break;
+//						case PcodeOp.PTRADD:
+//							if (!markPtrAddForElision(high_function, op)) {
+//								println("Unsupported PTRADD at " + label(op) + ": " + op.toString());
+//								return false;
+//							}
+//							break;
 						case PcodeOp.MULTIEQUAL:
 							if (canElideMultiEqual(op)) {
 								continue;
@@ -1684,6 +1732,51 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				endObject();  // End `type`.
 			}
 		}
+		
+		private static final Set<String> IGNORED_NAMES = Set.of(
+			"_start", "__libc_csu_fini", "__libc_csu_init", "__libc_start_main",
+            "__data_start", "__dso_handle", "_IO_stdin_used",
+            "_dl_relocate_static_pie", "__DTOR_END__", "__ashlsi3",
+            "__ashldi3", "__ashlti3", "__ashrsi3", "__ashrdi3", "__ashrti3",
+            "__divsi3", "__divdi3", "__divti3", "__lshrsi3", "__lshrdi3",
+            "__lshrti3", "__modsi3", "__moddi3", "__modti3", "__mulsi3",
+            "__muldi3", "__multi3", "__negdi2", "__negti2", "__udivsi3",
+            "__udivdi3", "__udivti3", "__udivmoddi4", "__udivmodti4",
+            "__umodsi3", "__umoddi3", "__umodti3", "__cmpdi2", "__cmpti2",
+            "__ucmpdi2", "__ucmpti2", "__absvsi2", "__absvdi2", "__addvsi3",
+            "__addvdi3", "__mulvsi3", "__mulvdi3", "__negvsi2", "__negvdi2",
+            "__subvsi3", "__subvdi3", "__clzsi2", "__clzdi2", "__clzti2",
+            "__ctzsi2", "__ctzdi2", "__ctzti2", "__ffsdi2", "__ffsti2",
+            "__paritysi2", "__paritydi2", "__parityti2", "__popcountsi2",
+            "__popcountdi2", "__popcountti2", "__bswapsi2", "__bswapdi2",
+            "frame_dummy", "call_frame_dummy", "__do_global_dtors",
+            "__do_global_dtors_aux", "call___do_global_dtors_aux",
+            "__do_global_ctors", "__do_global_ctors_1", "__do_global_ctors_aux",
+            "call___do_global_ctors_aux", "__gmon_start__", "_init_proc",
+            ".init_proc", "_term_proc", ".term_proc", "__uClibc_main",
+            "abort", "exit", "_Exit", "panic", "terminate",
+            "_Jv_RegisterClasses",
+            "__deregister_frame_info_bases", "__deregister_frame_info",
+            "__register_frame_info", "__cxa_throw", "__cxa_finalize",
+            "__cxa_allocate_exception", "__cxa_free_exception",
+            "__cxa_begin_catch", "__cxa_end_catch", "__cxa_new_handler",
+            "__cxa_get_globals", "__cxa_get_globals_fast",
+            "__cxa_current_exception_type", "__cxa_rethrow", "__cxa_bad_cast",
+            "__cxa_bad_typeid", "__allocate_exception", "__throw",
+            "__free_exception",
+            "__Unwind_RaiseException", "_Unwind_RaiseException", "_Unwind_Resume",
+            "_Unwind_DeleteException", "_Unwind_GetGR", "_Unwind_SetGR",
+            "_Unwind_GetIP", "_Unwind_SetIP", "_Unwind_GetRegionStart",
+            "_Unwind_GetLanguageSpecificData", "_Unwind_ForcedUnwind",
+            "__unw_getcontext", 
+            "longjmp", "siglongjmp", "setjmp", "sigsetjmp",
+            "__register_frame_info_bases", "__assert_fail"
+		);
+
+		// Don't try to recover the definitions of some functions.
+		private static boolean ignoreFunction(String name) {
+			return IGNORED_NAMES.contains(name);
+		}
 
 		// Serialize the input function list to JSON. This function will also
 		// serialize type information related to referenced functions and
@@ -1705,7 +1798,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				DecompileResults res = ifc.decompileFunction(function, DECOMPILATION_TIMEOUT, null);
 				HighFunction high_function = res.getHighFunction();
 				name(label(function)).beginObject();
-				serialize(high_function, function, i < original_functions_size);
+				serialize(
+						high_function,
+						function,
+						(i < original_functions_size &&
+								!ignoreFunction(function.getName())));
 				endObject();
 			}
 
