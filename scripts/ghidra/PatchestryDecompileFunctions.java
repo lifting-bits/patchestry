@@ -19,6 +19,8 @@ import ghidra.program.database.symbol.CodeSymbol;
 
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
+import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.AddressSpace;
 
 import ghidra.program.model.block.BasicBlockModel;
@@ -911,12 +913,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 
 			// println("Found variable use " + high_sym.getName());
-			
-			Address address = ram_space.getAddress(offset_node.getOffset());
-			Symbol sym = high_sym.getSymbol();
-			if (sym != null) {
-				address = sym.getAddress();
-			}
+
+			SymbolEntry entry = high_sym.getFirstWholeMap();
+			Address address = entry.getStorage().getMinAddress();
 
 			UseVarnode new_var_node = new UseVarnode(
 					address, high_sym.getDataType().getLength());
@@ -933,7 +932,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				missing_globals.put(address, global_var);
 			}
 
-			// println("  Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
+			// println("Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
 
 			// Rewrite the global reference to point to the `HighVariable`.
 			new_var_node.setHigh(global_var);
