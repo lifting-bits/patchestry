@@ -1451,6 +1451,16 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				break;
 			}
 		}
+		
+		// Serialize a `RETURN N[, val]` as logically being `RETURN val`.
+		private void serializeReturnOp(PcodeOp op) throws Exception {
+			Varnode inputs[] = op.getInputs();
+			name("inputs").beginArray();
+			if (inputs.length == 2) {
+				serializeInput(op, rValueOf(inputs[1]));
+			}
+			endArray();
+		}
 
 		// Get the mnemonic for a p-code operation. We have some custom
 		// operations encoded as `CALLOTHER`s, so we get their names manually
@@ -1495,6 +1505,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					break;
 				case PcodeOp.BRANCH:
 					serializeBranchOp(op);
+					break;
+				case PcodeOp.RETURN:
+					serializeReturnOp(op);
 					break;
 				case PcodeOp.LOAD:
 				case PcodeOp.COPY:
