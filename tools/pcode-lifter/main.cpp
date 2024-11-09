@@ -7,6 +7,7 @@
  */
 
 #include <cstdlib>
+#include <llvm/Support/FileSystem.h>
 #include <memory>
 
 #include "clang/Basic/DiagnosticOptions.h"
@@ -35,6 +36,17 @@ const llvm::cl::opt< std::string > input_filename(
 
 const llvm::cl::opt< bool >
     verbose("v", llvm::cl::desc("Enable debug logs"), llvm::cl::init(false));
+
+const llvm::cl::opt< bool > pprint(
+    "pretty-print", llvm::cl::desc("Pretty print translation unit"), llvm::cl::init(false)
+);
+
+const llvm::cl::opt< std::string > output_filename(
+    "output", // The command-line option flag, e.g., `-output <filename>`
+    llvm::cl::desc("Specify output filename"), // Description displayed in the help message
+    llvm::cl::value_desc("filename"),          // Description for the value itself
+    llvm::cl::init("/tmp/output.c")            // Default value
+);
 
 clang::ASTContext &create_ast_context(void) {
     clang::CompilerInstance compiler;
@@ -118,9 +130,20 @@ int main(int argc, char **argv) {
     );
 
     ci.getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
+
+    ci.getLangOpts().C99 = true;
     // Setup file manager and source manager
     ci.createFileManager();
     ci.createSourceManager(ci.getFileManager());
+
+    auto &sm = ci.getSourceManager();
+
+    std::unique_ptr< llvm::MemoryBuffer > filebuffer =
+        llvm::MemoryBuffer::getMemBuffer("// patchestry content\n");
+
+    clang::FileID file_id = sm.createFileID(std::move(filebuffer), clang::SrcMgr::C_User);
+
+    sm.setMainFileID(file_id);
 
     // Create the preprocessor and AST context
     ci.createPreprocessor(clang::TU_Complete);
@@ -128,9 +151,20 @@ int main(int argc, char **argv) {
 
     auto &ast_context = ci.getASTContext();
 
+    std::error_code ec;
+    auto out =
+        std::make_unique< llvm::raw_fd_ostream >(output_filename, ec, llvm::sys::fs::OF_Text);
+
+    auto out_ast = std::make_unique< llvm::raw_fd_ostream >(
+        output_filename + ".ast", ec, llvm::sys::fs::OF_None
+    );
+
     std::unique_ptr< patchestry::ast::PcodeASTConsumer > consumer =
-        std::make_unique< patchestry::ast::PcodeASTConsumer >(ast_context, program.value());
+        std::make_unique< patchestry::ast::PcodeASTConsumer >(
+            ci, program.value(), *out.get(), *out_ast.get()
+        );
     ci.setASTConsumer(std::move(consumer));
+    ci.createSema(clang::TU_Complete, nullptr);
 
     auto &ast_consumer = ci.getASTConsumer();
     ast_consumer.HandleTranslationUnit(ast_context);

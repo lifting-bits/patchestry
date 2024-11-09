@@ -99,6 +99,13 @@ find_package(Clang ${LLVM_PACKAGE_VERSION} CONFIG REQUIRED)
 message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 
+find_package(VAST CONFIG REQUIRED)
+message(STATUS "Using VASTConfig.cmake in: ${VAST_DIR}")
+
+
+find_package(gap CONFIG REQUIRED)
+message(STATUS "Using gapConfig.cmake in: ${gap_DIR}")
+
 set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/bin)
 set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/lib)
 

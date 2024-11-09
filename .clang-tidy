@@ -15,7 +15,8 @@ Checks: "*,\
   -modernize-use-trailing-return-type,\
   -readability-convert-member-functions-to-static, \
   -misc-no-recursion, \
-  -google-build-using-namespace"
+  -google-build-using-namespace, \
+  -cppcoreguidelines-owning-memory"
 WarningsAsErrors: ''
 CheckOptions:
   - key: 'bugprone-argument-comment.StrictMode'
@@ -105,7 +106,7 @@ CheckOptions:
   - key: 'readability-identifier-naming.MemberCase'
     value: 'lower_case'
   - key: 'readability-identifier-naming.MethodCase'
-    value: 'lower_case'
+    value: 'camelBack'
   - key: 'readability-identifier-naming.NamespaceCase'
     value: 'lower_case'
   - key: 'readability-identifier-naming.ParameterCase'

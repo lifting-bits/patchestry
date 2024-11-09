@@ -6,29 +6,94 @@
  */
 
 #include "patchestry/Ghidra/Pcode.hpp"
+#include "patchestry/Ghidra/PcodeOperations.hpp"
+#include "patchestry/Ghidra/PcodeTypes.hpp"
 #include <cassert>
 
+#include "clang/AST/Attr.h"
+#include "clang/Serialization/ASTWriter.h"
+#include "clang/Serialization/InMemoryModuleCache.h"
+#include "clang/Serialization/ModuleFileExtension.h"
+#include "llvm/Bitstream/BitstreamWriter.h"
+#include "llvm/Support/raw_ostream.h"
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Attrs.inc>
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Stmt.h>
 #include <clang/AST/Type.h>
+#include <clang/Basic/AttrKinds.h>
 #include <clang/Basic/ExceptionSpecificationType.h>
 #include <clang/Basic/LLVM.h>
+#include <clang/Basic/LangOptions.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/Specifiers.h>
+#include <llvm-18/llvm/ADT/SmallVector.h>
 #include <llvm/Support/Casting.h>
 
+#include <memory>
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
+#include <sstream>
+#include <unordered_map>
 
 namespace patchestry::ast {
 
+    namespace {
+
+        std::vector< std::string > __attribute__((unused))
+        get_keys(const std::unordered_map< std::string, BasicBlock > &map) {
+            std::vector< std::string > keys;
+            keys.reserve(map.size());
+
+            for (auto &[key, _] : map) {
+                keys.push_back(key);
+            }
+
+            std::sort(keys.begin(), keys.end());
+            return keys;
+        }
+
+        std::vector< std::shared_ptr< Operation > > __attribute__((unused))
+        get_parameter_operations(const Function &function) {
+            auto entry_block_key = function.entry_block;
+            if (entry_block_key.empty() && (function.basic_blocks.size() == 0)) {
+                return {};
+            }
+
+            auto iter = function.basic_blocks.find(entry_block_key);
+            if (iter == function.basic_blocks.end()) {
+                llvm::errs() << "Function entry block " << entry_block_key
+                             << " not present in basic block list\n";
+                assert(false);
+                return {};
+            }
+
+            std::vector< std::shared_ptr< Operation > > ops_vec;
+            auto entry_block = iter->second;
+            for (const auto &operation_key : entry_block.ordered_operations) {
+                auto iter = entry_block.operations.find(operation_key);
+                if (iter != entry_block.operations.end()) {
+                    auto operation = iter->second;
+                    if (operation.mnemonic == Mnemonic::OP_DECLARE_PARAMETER) {
+                        ops_vec.push_back(std::make_shared< Operation >(operation));
+                    }
+                }
+            }
+            return ops_vec;
+        }
+    } // namespace
+
     void PcodeASTConsumer::HandleTranslationUnit(clang::ASTContext &ctx) {
         if (get_program().serialized_types.size() > 0) {
-            create_types(ctx, get_program().serialized_types);
+            type_builder->create_types(ctx, get_program().serialized_types);
+        }
+
+        if (get_program().serialized_globals.size() > 0) {
+            create_globals(ctx, get_program().serialized_globals);
         }
 
         if (get_program().serialized_functions.size() > 0) {
@@ -37,214 +102,27 @@ namespace patchestry::ast {
             );
         }
 
-        // TODO: Create Operation node for ASTs
+        llvm::errs() << "Print AST dump\n";
+        ctx.getTranslationUnitDecl()->dumpColor();
+
+        ctx.getTranslationUnitDecl()->print(out, ctx.getPrintingPolicy(), 0);
+
+        llvm::errs() << "Generate mlir\n";
+        std::error_code ec;
+        llvm::raw_fd_ostream file_os("/tmp/lifted.mlir", ec);
+        codegen->generate_source_ir(ctx, file_os);
     }
 
-    void PcodeASTConsumer::create_types(clang::ASTContext &ctx, TypeMap &type_map) {
-        for (auto &[key, vnode_type] : type_map) {
-            serialized_types_clang.emplace(key, create_type(ctx, vnode_type));
-        }
-
-        // Traverse through serialized_types_clang and complete definitions
-        for (auto &[key, decl] : incomplete_definition) {
-            if (const auto *record_decl = llvm::dyn_cast< clang::RecordDecl >(decl)) {
-                auto iter = type_map.find(key);
-                if (iter == type_map.end()) {
-                    llvm::errs() << "Key not found in type map\n";
-                    assert(false);
-                    continue;
-                }
-                auto vnode_type = iter->second;
-                create_record_definition(
-                    ctx, dynamic_cast< CompositeType & >(*vnode_type), decl,
-                    serialized_types_clang
-                );
-            }
-        }
-    }
-
-    clang::QualType PcodeASTConsumer::create_type(
-        clang::ASTContext &ctx, const std::shared_ptr< VarnodeType > &vnode_type
-    ) {
-        switch (vnode_type->kind) {
-            case VarnodeType::VT_INVALID:
-                return ctx.CharTy;
-            case VarnodeType::VT_BOOLEAN:
-                return ctx.BoolTy;
-            case VarnodeType::VT_INTEGER:
-                return ctx.IntTy;
-            case VarnodeType::VT_CHAR:
-                return ctx.CharTy;
-            case VarnodeType::VT_FLOAT:
-                return ctx.FloatTy;
-            case VarnodeType::VT_ARRAY:
-                return create_array_type(ctx, dynamic_cast< const ArrayType & >(*vnode_type));
-            case VarnodeType::VT_POINTER:
-                return create_pointer_type(
-                    ctx, dynamic_cast< const PointerType & >(*vnode_type)
-                );
-            case VarnodeType::Kind::VT_FUNCTION:
-                return ctx.VoidPtrTy;
-            case VarnodeType::VT_STRUCT:
-            case VarnodeType::VT_UNION:
-                return create_composite_type(ctx, *vnode_type);
-            case VarnodeType::VT_ENUM:
-                return create_enum_type(ctx, dynamic_cast< const EnumType & >(*vnode_type));
-            case VarnodeType::VT_TYPEDEF:
-                return create_typedef_type(
-                    ctx, dynamic_cast< const TypedefType & >(*vnode_type)
-                );
-            case VarnodeType::VT_UNDEFINED:
-                return ctx.VoidTy;
-            case VarnodeType::VT_VOID: {
-                return ctx.VoidTy;
-            }
-        }
-    }
-
-    clang::QualType PcodeASTConsumer::create_typedef_type(
-        clang::ASTContext &ctx, const TypedefType &typedef_type
-    ) {
-        auto &identifier = ctx.Idents.get(typedef_type.name);
-        auto base_type   = typedef_type.get_base_type();
-        if (!base_type) {
-            llvm::errs() << "Base Type of a typedef shouldn't be empty. key: "
-                         << typedef_type.key << "\n";
-            assert(false);
-            return clang::QualType();
-        }
-
-        if (base_type->key == typedef_type.key) {
-            llvm::errs() << "Base Type of typedef is pointing to itself. key: "
-                         << typedef_type.key << "\n";
-            assert(false);
-            return clang::QualType();
-        }
-
-        auto underlying_type = create_type(ctx, base_type);
-        auto *tinfo          = ctx.getTrivialTypeSourceInfo(underlying_type);
-        auto *typedef_decl   = clang::TypedefDecl::Create(
-            ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(), clang::SourceLocation(),
-            &identifier, tinfo
-        );
-
-        return ctx.getTypedefType(typedef_decl);
-    }
-
-    clang::QualType PcodeASTConsumer::create_pointer_type(
-        clang::ASTContext &ctx, const PointerType &pointer_type
-    ) {
-        auto pointee = pointer_type.get_pointee_type();
-        if (!pointee) {
-            llvm::errs() << "No pointee type in pointer with key " << pointer_type.key << "\n";
-            assert(false);
-            return ctx.VoidPtrTy;
-        }
-        if (pointee->key == pointer_type.key) {
-            llvm::errs() << "Pointer type shouldn't have itself as pointee. key: "
-                         << pointer_type.key << "\n";
-            assert(false);
-            return clang::QualType();
-        }
-
-        auto pointee_type = create_type(ctx, pointee);
-        return ctx.getPointerType(pointee_type);
-    }
-
-    clang::QualType
-    PcodeASTConsumer::create_array_type(clang::ASTContext &ctx, const ArrayType &array_type) {
-        auto element = array_type.get_element_type();
-        if (!element) {
-            llvm::errs() << "No element types for array\n";
-            assert(false);
-            return clang::QualType();
-        }
-
-        // If element key is same as array_type key, it will lead to infinite recursive. If it
-        // happens something is wrong and need to check ghidra scripts
-        if (element->key != array_type.key) {
-            auto element_type = create_type(ctx, element);
-            auto size         = array_type.get_element_count();
-            auto num_bits     = 32u;
-            return ctx.getConstantArrayType(
-                element_type, llvm::APInt(num_bits, size), nullptr,
-                clang::ArraySizeModifier::Normal, 0
-            );
-        }
-        assert(false);
-        return clang::QualType();
-    }
-
-    clang::QualType PcodeASTConsumer::create_composite_type(
-        clang::ASTContext &ctx, const VarnodeType &composite_type
-    ) {
-        auto &identifier = ctx.Idents.get(composite_type.name);
-        auto tag_kind    = [&] -> clang::TagDecl::TagKind {
-            switch (composite_type.kind) {
-                case VarnodeType::Kind::VT_STRUCT:
-                    return clang::TagDecl::TagKind::Struct;
-                case VarnodeType::Kind::VT_UNION:
-                    return clang::TagDecl::TagKind::Union;
-                default:
-                    assert(false);
-                    return clang::TagDecl::TagKind::Struct;
-            }
-        }();
-        auto *decl = clang::RecordDecl::Create(
-            ctx, tag_kind, ctx.getTranslationUnitDecl(), clang::SourceLocation(),
-            clang::SourceLocation(), &identifier
-        );
-        incomplete_definition.emplace(composite_type.key, decl);
-        return ctx.getRecordType(decl);
-    }
-
-    clang::QualType
-    PcodeASTConsumer::create_enum_type(clang::ASTContext &ctx, const EnumType &enum_type) {
-        auto &identifier = ctx.Idents.get(enum_type.name);
-        auto *enum_decl  = clang::EnumDecl::Create(
-            ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(), clang::SourceLocation(),
-            &identifier, nullptr, true, false, false
-        );
-        return ctx.getEnumType(enum_decl);
-    }
-
-    void PcodeASTConsumer::create_record_definition(
-        clang::ASTContext &ctx, const CompositeType &varnode, clang::Decl *prev_decl,
-        const ASTTypeMap &clang_types
-    ) {
-        auto &identifier  = ctx.Idents.get(varnode.name);
-        auto *record_decl = clang::RecordDecl::Create(
-            ctx, clang::TagDecl::TagKind::Struct, ctx.getTranslationUnitDecl(),
-            clang::SourceLocation(), clang::SourceLocation(), &identifier,
-            llvm::dyn_cast< clang::RecordDecl >(prev_decl)
-        );
-        record_decl->completeDefinition();
-        auto components = varnode.get_components();
-        for (auto &comp : components) {
-            auto type_key = comp.type->key;
-            auto iter     = clang_types.find(type_key);
-            if (iter == clang_types.end()) {
-                assert(false);
-                continue;
-            }
-
-            auto field_type  = iter->second;
-            auto *field_decl = clang::FieldDecl::Create(
-                ctx, record_decl, clang::SourceLocation(), clang::SourceLocation(),
-                &ctx.Idents.get(comp.name), field_type, nullptr, nullptr, false,
-                clang::ICIS_NoInit
-            );
-            record_decl->addDecl(field_decl);
-        }
-        record_decl->dump();
+    void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) {
+        get_sema().CurContext = dc;
     }
 
     clang::QualType PcodeASTConsumer::create_function_prototype(
-        clang::ASTContext &ctx, FunctionPrototype &proto
+        clang::ASTContext &ctx, const FunctionPrototype &proto
     ) {
         auto return_key = proto.rttype_key;
-        auto iter       = serialized_types_clang.find(return_key);
-        if (iter == serialized_types_clang.end()) {
+        auto iter       = type_builder->get_serialized_types().find(return_key);
+        if (iter == type_builder->get_serialized_types().end()) {
             llvm::errs() << "Function return type is not found\n";
             assert(false);
             return clang::QualType();
@@ -253,8 +131,8 @@ namespace patchestry::ast {
 
         std::vector< clang::QualType > args_vec;
         for (const auto &param : proto.parameters) {
-            auto param_iter = serialized_types_clang.find(param);
-            if (param_iter == serialized_types_clang.end()) {
+            auto param_iter = type_builder->get_serialized_types().find(param);
+            if (param_iter == type_builder->get_serialized_types().end()) {
                 assert(false);
             }
             args_vec.push_back(param_iter->second);
@@ -268,126 +146,254 @@ namespace patchestry::ast {
         return ctx.getFunctionType(rttype, args_vec, proto_info);
     }
 
+    std::vector< clang::ParmVarDecl * > PcodeASTConsumer::create_default_paramaters(
+        clang::ASTContext &ctx, clang::FunctionDecl *func_decl, const FunctionPrototype &proto
+    ) {
+        if (proto.parameters.empty()) {
+            return {};
+        }
+
+        std::vector< clang::ParmVarDecl * > params;
+        int index = 0;
+        for (const auto &param_key : proto.parameters) {
+            auto param_type = type_builder->get_serialized_types().at(param_key);
+            std::stringstream ss;
+            ss << "param_" << index++;
+            auto param_name  = ss.str();
+            auto *param_decl = clang::ParmVarDecl::Create(
+                ctx, func_decl, clang::SourceLocation(), clang::SourceLocation(),
+                &ctx.Idents.get(param_name), param_type,
+                ctx.getTrivialTypeSourceInfo(param_type, clang::SourceLocation()),
+                clang::SC_None, nullptr
+            );
+            params.emplace_back(param_decl);
+        }
+
+        return params;
+    }
+
     void PcodeASTConsumer::create_functions(
         clang::ASTContext &ctx, FunctionMap &serialized_functions, TypeMap &serialized_types
     ) {
-        for (auto &[key, function] : serialized_functions) {
-            auto function_name = function.name;
-            auto proto_type    = create_function_prototype(ctx, function.prototype);
-            auto *func_decl    = clang::FunctionDecl::Create(
-                ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(),
-                clang::SourceLocation(), &ctx.Idents.get(function_name), proto_type, nullptr,
-                clang::SC_None
-            );
-
-            auto entry_block_key = function.entry_block;
-            auto iter            = function.basic_blocks.find(entry_block_key);
-            if (iter == function.basic_blocks.end()) {
-                assert(false);
+        for (const auto &[key, function] : serialized_functions) {
+            auto *function_decl = create_function_declaration(ctx, function);
+            if (function_decl != nullptr) {
+                function_declarations.emplace(key, function_decl);
             }
-            auto entry_block = iter->second;
-            create_function_parameters(ctx, func_decl, entry_block);
 
-            for (auto &op_key : entry_block.ordered_operations) {
-                auto op_iter = entry_block.operations.find(op_key);
-                if (op_iter == entry_block.operations.end()) {
-                    llvm::errs() << "Operation with key " << op_key
-                                 << " is not found in entry block.\n";
-                    // assert(false); // disable assert because it is getting hit because of
-                    // missing operations from entry block.
-                    continue;
-                }
-                auto operation = op_iter->second;
-                switch (operation.mnemonic) {
-                    case patchestry::ghidra::Mnemonic::OP_DECLARE_LOCAL_VAR: {
-                        auto variable_name = operation.name;
-                        auto variable_type =
-                            serialized_types_clang.find(operation.type)->second;
-                        clang::VarDecl *var_decl = clang::VarDecl::Create(
-                            ctx, func_decl, clang::SourceLocation(), clang::SourceLocation(),
-                            &ctx.Idents.get(variable_name), variable_type, nullptr,
-                            clang::SC_None
-                        );
+            // TODO: Create global variables
+        }
 
-                        func_decl->setBody(clang::CompoundStmt::Create(
-                            ctx, { create_decl_stmt(ctx, var_decl) },
-                            clang::FPOptionsOverride(), clang::SourceLocation(),
-                            clang::SourceLocation()
-                        ));
-                        break;
-                    }
-                    case patchestry::ghidra::Mnemonic::OP_DECLARE_PARAM_VAR: {
-                        break;
-                    }
-                    case patchestry::ghidra::Mnemonic::OP_COPY: {
-                        auto output_vnode = operation.output.front();
-
-                        break;
-                    }
-                    default:
-                        break;
-                }
+        // Create definition for declared functions
+        for (const auto &[key, decl] : function_declarations) {
+            auto iter = serialized_functions.find(key);
+            assert(iter != serialized_functions.end());
+            const auto &parsed_function = iter->second;
+            auto *func_def              = create_function_definition(ctx, parsed_function);
+            if (func_def != nullptr) {
+                func_def->setPreviousDecl(decl);
             }
-            func_decl->dump();
         }
         (void) serialized_types;
     }
 
-    void PcodeASTConsumer::create_function_parameters(
-        clang::ASTContext &ctx, clang::FunctionDecl *func_decl, const BasicBlock &entry
+    clang::FunctionDecl *PcodeASTConsumer::create_function_declaration(
+        clang::ASTContext &ctx, const Function &function, bool is_definition
     ) {
-        std::vector< clang::ParmVarDecl * > params;
-        for (const auto &order_key : entry.ordered_operations) {
-            auto iter = entry.operations.find(order_key);
-            if (iter == entry.operations.end()) {
-                continue;
-            }
-            auto operation = iter->second;
-            if (operation.mnemonic == Mnemonic::OP_DECLARE_PARAM_VAR) {
-                auto &identifier = ctx.Idents.get(operation.name);
-                auto type_iter   = serialized_types_clang.find(operation.type);
+        if (function.name.empty()) {
+            llvm::errs() << "Function name is empty. function key " << function.key << "\n";
+            return nullptr;
+        }
 
-                auto *param_decl = clang::ParmVarDecl::Create(
-                    ctx, func_decl, clang::SourceLocation(), clang::SourceLocation(),
-                    &identifier, type_iter->second, nullptr, clang::SC_None, nullptr
-                );
-                params.push_back(param_decl);
+        auto function_type = create_function_prototype(ctx, function.prototype);
+        auto *func_decl    = clang::FunctionDecl::Create(
+            ctx, ctx.getTranslationUnitDecl(), source_location_from_key(ctx, function.key),
+            source_location_from_key(ctx, function.key), &ctx.Idents.get(function.name),
+            function_type, nullptr, clang::SC_None
+        );
+
+        // Add function declaration to tralsation unit
+        ctx.getTranslationUnitDecl()->addDecl(func_decl);
+
+        // Set asm label attribute to symbol name
+        if (!is_definition) {
+            auto *asm_attr = clang::AsmLabelAttr::Create(
+                ctx, function.name, true, func_decl->getSourceRange()
+            );
+            if (asm_attr != nullptr) {
+                func_decl->addAttr(asm_attr);
             }
         }
 
-        if (func_decl->getNumParams() != params.size()) {
-            llvm::errs() << "Number of params decl does not match with function prototype\n";
+        // Create parameters for function declarations;
+        auto num_params           = function.prototype.parameters.size();
+        auto parameter_operations = get_parameter_operations(function);
+        if (parameter_operations.size() == num_params) {
+            std::vector< clang::ParmVarDecl * > params;
+            for (const auto &param_op : parameter_operations) {
+                auto type_iter = type_builder->get_serialized_types().find(param_op->type);
+                assert(type_iter != type_builder->get_serialized_types().end());
+
+                auto *param_decl = clang::ParmVarDecl::Create(
+                    ctx, func_decl, source_location_from_key(ctx, param_op->key),
+                    source_location_from_key(ctx, param_op->key),
+                    &ctx.Idents.get(param_op->name), type_iter->second, nullptr, clang::SC_None,
+                    nullptr
+                );
+                params.push_back(param_decl);
+                local_variable_declarations.emplace(param_op->key, param_decl);
+            }
+
+            func_decl->setParams(params);
+            return func_decl;
+        }
+
+        func_decl->setParams(create_default_paramaters(ctx, func_decl, function.prototype));
+        return func_decl;
+    }
+
+    clang::FunctionDecl *PcodeASTConsumer::create_function_definition(
+        clang::ASTContext &ctx, const Function &function
+    ) {
+        if (function.name.empty()) {
+            assert(false);
+            return nullptr;
+        }
+
+        if (function.basic_blocks.size() == 0) {
+            return nullptr;
+        }
+
+        function_operation_stmts.clear();
+        local_variable_declarations.clear();
+        basic_block_stmts.clear();
+
+        auto *func_def = create_function_declaration(ctx, function, true);
+        if (func_def != nullptr) {
+            set_sema_context(func_def);
+            auto body_vec = create_function_body(ctx, function);
+            func_def->setBody(clang::CompoundStmt::Create(
+                ctx, body_vec, clang::FPOptionsOverride(), clang::SourceLocation(),
+                clang::SourceLocation()
+            ));
+        }
+
+        return func_def;
+    }
+
+    std::vector< clang::Stmt * >
+    PcodeASTConsumer::create_function_body(clang::ASTContext &ctx, const Function &function) {
+        if (function.basic_blocks.empty()) {
+            llvm::errs() << "Function " << function.name << " doesn't have body\n";
+            return {};
+        }
+
+        // Create label decl for all basic blocks
+        create_label_for_basic_blocks(ctx, function);
+
+        std::vector< clang::Stmt * > stmts;
+
+        // If function has entry block, create it first to ensure we have local variables and
+        // parameter variables declared
+        if (!function.entry_block.empty()) {
+            auto iter = function.basic_blocks.find(function.entry_block);
+            assert(iter != function.basic_blocks.end());
+            auto entry_stmts = create_basic_block(ctx, function, iter->second);
+            stmts.insert(stmts.end(), entry_stmts.begin(), entry_stmts.end());
+        }
+
+        // get lexicographically sorted keys for basic blocks
+        auto block_keys = get_keys(function.basic_blocks);
+        for (const auto &block_key : block_keys) {
+            llvm::errs() << "Processing basic block with key " << block_key << "\n";
+            const auto &bb = function.basic_blocks.at(block_key);
+            if (bb.is_entry_block) {
+                continue;
+            }
+
+            auto block_stmts = create_basic_block(ctx, function, bb);
+            basic_block_stmts.emplace(block_key, block_stmts);
+        }
+
+        for (auto &[key, block_stmts] : basic_block_stmts) {
+            if (!block_stmts.empty()) {
+                auto *label_stmt = new (ctx) clang::LabelStmt(
+                    clang::SourceLocation(), basic_block_labels.at(key), block_stmts[0]
+                );
+                // replace first stmt of block with label stmts
+                block_stmts[0] = label_stmt;
+                stmts.insert(stmts.end(), block_stmts.begin(), block_stmts.end());
+            }
+        }
+
+        return stmts;
+    }
+
+    void PcodeASTConsumer::create_label_for_basic_blocks(
+        clang::ASTContext &ctx, const Function &function
+    ) {
+        if (function.basic_blocks.empty()) {
+            llvm::errs() << "Function " << function.name << " does not have any basic block\n";
             return;
         }
 
-        func_decl->setParams(params);
+        for (const auto &[key, block] : function.basic_blocks) {
+            // entry block is custom added to each function; we don't need to make labels for
+            // entry block;
+            if (block.is_entry_block) {
+                continue;
+            }
+
+            auto *label_decl = clang::LabelDecl::Create(
+                ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(),
+                &ctx.Idents.get(label_name_from_key(key))
+            );
+            basic_block_labels.emplace(key, label_decl);
+        }
     }
 
-    clang::VarDecl *PcodeASTConsumer::create_variable_decl(
-        clang::ASTContext &ctx, clang::DeclContext &dc, const std::string &var_name,
-        clang::QualType var_type
+    std::vector< clang::Stmt * > PcodeASTConsumer::create_basic_block(
+        clang::ASTContext &ctx, const Function &function, const BasicBlock &block
     ) {
-        auto &identifier = ctx.Idents.get(var_name);
-        return clang::VarDecl::Create(
-            ctx, &dc, clang::SourceLocation(), clang::SourceLocation(), &identifier, var_type,
-            nullptr, clang::SC_None
-        );
+        std::vector< clang::Stmt * > stmt_vec;
+        for (const auto &operation_key : block.ordered_operations) {
+            auto iter = block.operations.find(operation_key);
+            if (iter == block.operations.end()) {
+                assert(false);
+                continue;
+            }
+            auto operation                    = iter->second;
+            auto [stmt, should_merge_to_next] = create_operation(ctx, function, operation);
+            if (stmt != nullptr) {
+                function_operation_stmts.emplace(operation.key, stmt);
+                if (!should_merge_to_next) {
+                    stmt_vec.push_back(stmt);
+                }
+            }
+        }
+
+        return stmt_vec;
     }
 
-    clang::BinaryOperator *PcodeASTConsumer::create_assignment_stmt(
-        clang::ASTContext &ctx, clang::Expr *lhs, clang::Expr *rhs
+    void PcodeASTConsumer::create_globals(
+        clang::ASTContext &ctx, VariableMap &serialized_variables
     ) {
-        return clang::BinaryOperator::Create(
-            ctx, lhs, rhs, clang::BO_Assign, lhs->getType(), clang::VK_PRValue,
-            clang::OK_Ordinary, clang::SourceLocation(), clang::FPOptions()
-        );
-    }
+        for (auto &[key, variable] : serialized_variables) {
+            if (variable.name.empty() || variable.type.empty()) {
+                continue;
+            }
 
-    clang::DeclStmt *
-    PcodeASTConsumer::create_decl_stmt(clang::ASTContext &ctx, clang::Decl *decl) {
-        auto decl_group = clang::DeclGroupRef(decl);
-        return new (ctx)
-            clang::DeclStmt(decl_group, clang::SourceLocation(), clang::SourceLocation());
+            auto var_type = type_builder->get_serialized_types().at(variable.type);
+
+            auto *var_decl = clang::VarDecl::Create(
+                ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(),
+                clang::SourceLocation(), &ctx.Idents.get(variable.name), var_type,
+                ctx.getTrivialTypeSourceInfo(var_type), clang::SC_Static
+            );
+
+            ctx.getTranslationUnitDecl()->addDecl(var_decl);
+            global_variable_declarations.emplace(variable.key, var_decl);
+        }
     }
 
 } // namespace patchestry::ast
