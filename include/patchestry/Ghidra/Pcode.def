@@ -68,5 +68,10 @@
         X(INT2FLOAT) \
         X(FLOAT2FLOAT) \
         X(TRUNC) \
-        X(DECLARE_PARAM_VAR) \
-        X(DECLARE_LOCAL_VAR)
+        X(PTRSUB) \
+        X(PTRADD) \
+        X(CAST) \
+        X(DECLARE_PARAMETER) \
+        X(DECLARE_LOCAL) \
+        X(DECLARE_TEMPORARY) \
+        X(ADDRESS_OF)

@@ -68,7 +68,8 @@ namespace patchestry::ghidra {
         );
 
         // Function to parse Basic Blocks
-        std::optional< BasicBlock > create_basic_block(const JsonObject &block_obj);
+        std::optional< BasicBlock >
+        create_basic_block(const std::string &block_key, const JsonObject &block_obj);
 
         // Function to parse Pcode
         std::optional< Operation > create_operation(const JsonObject &pcode_obj);
@@ -78,8 +79,14 @@ namespace patchestry::ghidra {
             const JsonObject &function_array, FunctionMap &serialized_functions
         );
 
+        void deserialize_blocks(
+            const JsonObject &blocks_array, BasicBlockMap &serialized_blocks,
+            std::string &entry_block
+        );
+
+        // Deserialize globals
         void
-        deserialize_blocks(const JsonObject &blocks_array, BasicBlockMap &serialized_blocks);
+        deserialize_globals(const JsonObject &global_array, VariableMap &serialized_globals);
     };
 
 } // namespace patchestry::ghidra

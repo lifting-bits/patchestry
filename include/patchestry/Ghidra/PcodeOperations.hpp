@@ -18,6 +18,7 @@
 
 namespace patchestry::ghidra {
     struct Varnode;
+    struct Variable;
     struct Operation;
     struct BasicBlock;
     struct FunctionPrototype;
@@ -33,15 +34,29 @@ namespace patchestry::ghidra {
 
     using BasicBlockMap = std::unordered_map< std::string, BasicBlock >;
 
+    using VariableMap = std::unordered_map< std::string, Variable >;
+
     struct Varnode
     {
-        enum Kind { VARNODE_UNKNOWN = 0, VARNODE_GLOBAL, VARNODE_LOCAL, VARNODE_PARAM };
+        enum Kind {
+            VARNODE_UNKNOWN = 0,
+            VARNODE_GLOBAL,
+            VARNODE_LOCAL,
+            VARNODE_PARAM,
+            VARNODE_FUNCTION,
+            VARNODE_TEMPORARY,
+            VARNODE_CONSTANT
+        };
 
         static Varnode::Kind convertToKind(const std::string &kdd) {
             static const std::unordered_map< std::string, Varnode::Kind > kind_map = {
-                { "global", VARNODE_GLOBAL },
-                {  "local",  VARNODE_LOCAL },
-                {  "param",  VARNODE_PARAM }
+                {   "unknown",   VARNODE_UNKNOWN },
+                {    "global",    VARNODE_GLOBAL },
+                {     "local",     VARNODE_LOCAL },
+                { "parameter",     VARNODE_PARAM },
+                {  "function",  VARNODE_FUNCTION },
+                { "temporary", VARNODE_TEMPORARY },
+                {  "constant",  VARNODE_CONSTANT }
             };
 
             // if kind is not present in the map, return varnode_unknown
@@ -52,6 +67,27 @@ namespace patchestry::ghidra {
         Kind kind;
         uint32_t size;
         std::string type_key;
+
+        std::optional< std::string > operation;
+        std::optional< std::string > function;
+        std::optional< uint32_t > value;
+        std::optional< std::string > global;
+    };
+
+    struct Variable
+    {
+        std::string name;
+        std::string type;
+        uint32_t size;
+        std::string key;
+    };
+
+    struct OperationTarget
+
+    {
+        std::string kind;
+        std::string function_key;
+        bool is_noreturn;
     };
 
     struct Operation
@@ -66,6 +102,13 @@ namespace patchestry::ghidra {
         std::string target_address;
         std::string target_block;
         std::string variable;
+        std::optional< OperationTarget > target;
+        std::string parent_block_key;
+
+        std::optional< std::string > taken_block;
+        std::optional< std::string > not_taken_block;
+        std::optional< Varnode > condition;
+        std::optional< std::string > address;
     };
 
     struct BasicBlock
@@ -74,6 +117,7 @@ namespace patchestry::ghidra {
         std::string key;
         std::unordered_map< std::string, Operation > operations;
         std::vector< std::string > ordered_operations;
+        bool is_entry_block;
     };
 
     struct FunctionPrototype
@@ -99,5 +143,6 @@ namespace patchestry::ghidra {
         std::string format;
         std::unordered_map< std::string, Function > serialized_functions;
         std::unordered_map< std::string, std::shared_ptr< VarnodeType > > serialized_types;
+        std::unordered_map< std::string, Variable > serialized_globals;
     };
 } // namespace patchestry::ghidra

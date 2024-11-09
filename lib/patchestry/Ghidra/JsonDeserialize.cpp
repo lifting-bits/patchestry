@@ -6,6 +6,7 @@
  */
 
 #include "patchestry/Ghidra/Pcode.hpp"
+#include "patchestry/Ghidra/PcodeOperations.hpp"
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -36,6 +37,13 @@ namespace patchestry::ghidra {
         }
 
         llvm::outs() << "No of functions recovered: " << program.serialized_functions.size()
+                     << "\n";
+
+        if (const auto *globals = root.getObject("globals")) {
+            deserialize_globals(*globals, program.serialized_globals);
+        }
+
+        llvm::outs() << "No of globals recovered: " << program.serialized_globals.size()
                      << "\n";
 
         return program;
@@ -86,10 +94,7 @@ namespace patchestry::ghidra {
         std::unordered_map< std::string, const JsonValue & > types_value_map;
 
         for (const auto &type : type_obj) {
-            auto key = type.getFirst().str();
-            if (key == "4351469f") {
-                breakpoint();
-            }
+            auto key          = type.getFirst().str();
             const auto &value = type.getSecond();
             auto vnode_type   = create_vnode_type(*value.getAsObject());
             if (!vnode_type) {
@@ -322,16 +327,31 @@ namespace patchestry::ghidra {
     // Deserialize operations
     std::optional< Varnode > JsonParser::create_varnode(const JsonObject &var_obj) {
         auto type_key = var_obj.getString("type").value_or("").str();
-        if (type_key.empty()) {
-            llvm::errs() << "Invalid type key for the varnode\n";
-            return std::nullopt;
+        auto size     = var_obj.getInteger("size").value_or(0);
+        auto kind     = Varnode::convertToKind(var_obj.getString("kind").value_or("").str());
+
+        Varnode vnode(kind, static_cast< uint32_t >(size), type_key);
+        auto operation_key = var_obj.getString("operation").value_or("").str();
+        if (!operation_key.empty()) {
+            vnode.operation = operation_key;
         }
 
-        auto size = var_obj.getInteger("size").value_or(0);
-        auto kind = var_obj.getString("kind").value_or("");
-        return Varnode(
-            Varnode::convertToKind(kind.str()), static_cast< uint32_t >(size), type_key
-        );
+        auto function_key = var_obj.getString("function");
+        if (function_key && !function_key->empty()) {
+            vnode.function = function_key->str();
+        }
+
+        auto value = var_obj.getInteger("value");
+        if (value) {
+            vnode.value = static_cast< uint32_t >(*value);
+        }
+
+        auto global_key = var_obj.getString("global");
+        if (global_key && !global_key->empty()) {
+            vnode.global = global_key->str();
+        }
+
+        return vnode;
     }
 
     std::optional< Function > JsonParser::create_function(const JsonObject &func_obj) {
@@ -343,13 +363,13 @@ namespace patchestry::ghidra {
             }
         }
 
-        if (const auto *blocks_array = func_obj.getObject("basic_blocks")) {
-            deserialize_blocks(*blocks_array, func.basic_blocks);
-        }
-
         auto entry_block = func_obj.getString("entry_block");
         if (entry_block && !entry_block->empty()) {
             func.entry_block = entry_block->str();
+        }
+
+        if (const auto *blocks_array = func_obj.getObject("basic_blocks")) {
+            deserialize_blocks(*blocks_array, func.basic_blocks, func.entry_block);
         }
 
         return func;
@@ -365,6 +385,15 @@ namespace patchestry::ghidra {
 
         Operation operation;
         operation.mnemonic = patchestry::ghidra::from_string(mnemonic);
+        if (operation.mnemonic == Mnemonic::OP_CALL) {
+            if (const auto *maybe_target = pcode_obj.getObject("target")) {
+                OperationTarget target;
+                target.kind         = maybe_target->getString("kind").value_or("");
+                target.function_key = maybe_target->getString("function").value_or("");
+                target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
+                operation.target    = target;
+            }
+        }
 
         if (const auto *maybe_output = pcode_obj.getObject("output")) {
             if (auto maybe_varnode = create_varnode(*maybe_output)) {
@@ -372,7 +401,7 @@ namespace patchestry::ghidra {
             }
         }
 
-        if (const auto *input_array = pcode_obj.getArray("input")) {
+        if (const auto *input_array = pcode_obj.getArray("inputs")) {
             for (auto input : *input_array) {
                 if (auto maybe_varnode = create_varnode(*input.getAsObject())) {
                     operation.inputs.emplace_back(*maybe_varnode);
@@ -410,10 +439,34 @@ namespace patchestry::ghidra {
             operation.index = static_cast< uint32_t >(*index);
         }
 
+        auto address = pcode_obj.getString("address");
+        if (address && !address->empty()) {
+            operation.address = address->str();
+        }
+
+        if (operation.mnemonic == Mnemonic::OP_CBRANCH) {
+            auto taken_block = pcode_obj.getString("taken_block");
+            if (taken_block && !taken_block->empty()) {
+                operation.taken_block = taken_block->str();
+            }
+
+            auto not_taken_block = pcode_obj.getString("not_taken_block");
+            if (not_taken_block && !not_taken_block->empty()) {
+                operation.not_taken_block = not_taken_block->str();
+            }
+
+            if (const auto *maybe_output = pcode_obj.getObject("condition")) {
+                if (auto maybe_varnode = create_varnode(*maybe_output)) {
+                    operation.condition = *maybe_varnode;
+                }
+            }
+        }
+
         return operation;
     }
 
-    std::optional< BasicBlock > JsonParser::create_basic_block(const JsonObject &block_obj) {
+    std::optional< BasicBlock >
+    JsonParser::create_basic_block(const std::string &block_key, const JsonObject &block_obj) {
         if (const auto *operations = block_obj.getObject("operations")) {
             BasicBlock block;
 
@@ -421,7 +474,8 @@ namespace patchestry::ghidra {
                 auto operation_key           = operation.getFirst().str();
                 const auto *operation_object = operation.getSecond().getAsObject();
                 if (auto maybe_operation = create_operation(*operation_object)) {
-                    maybe_operation->key = operation_key;
+                    maybe_operation->key              = operation_key;
+                    maybe_operation->parent_block_key = block_key;
                     block.operations.emplace(operation_key, *maybe_operation);
                 }
             }
@@ -482,12 +536,14 @@ namespace patchestry::ghidra {
                 llvm::errs() << "Failed to get function for the key " << function_key << "\n";
                 continue;
             }
+            function->key = function_key;
             serialized_functions.emplace(function_key, *function);
         }
     }
 
     void JsonParser::deserialize_blocks(
-        const JsonObject &blocks_array, BasicBlockMap &serialized_blocks
+        const JsonObject &blocks_array, BasicBlockMap &serialized_blocks,
+        std::string &entry_block
     ) {
         if (blocks_array.empty()) {
             llvm::errs() << "No blocks in function\n";
@@ -497,9 +553,37 @@ namespace patchestry::ghidra {
         for (const auto &block : blocks_array) {
             auto block_key        = block.getFirst().str();
             const auto *block_obj = block.getSecond().getAsObject();
-            if (auto maybe_block = create_basic_block(*block_obj)) {
+            if (auto maybe_block = create_basic_block(block_key, *block_obj)) {
+                if (block_key == entry_block) {
+                    maybe_block->is_entry_block = true;
+                }
+                maybe_block->key = block_key;
                 serialized_blocks.emplace(block_key, *maybe_block);
             }
+        }
+    }
+
+    void JsonParser::deserialize_globals(
+        const JsonObject &global_array, VariableMap &serialized_globals
+    ) {
+        if (global_array.empty()) {
+            llvm::errs() << "No global variable to serialize\n";
+            return;
+        }
+        for (const auto &global : global_array) {
+            Variable variable;
+            variable.key           = global.getFirst().str();
+            const auto *global_obj = global.getSecond().getAsObject();
+            if (auto maybe_name = global_obj->getString("name")) {
+                variable.name = *maybe_name;
+            }
+            if (auto maybe_type = global_obj->getString("type")) {
+                variable.type = *maybe_type;
+            }
+            if (auto maybe_size = global_obj->getInteger("size")) {
+                variable.size = static_cast< uint32_t >(*maybe_size);
+            }
+            serialized_globals.emplace(variable.key, variable);
         }
     }
 
