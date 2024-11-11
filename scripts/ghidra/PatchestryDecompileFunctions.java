@@ -125,6 +125,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 	protected static final int DECLARE_PARAM_VAR = MIN_CALLOTHER + 0;
 	protected static final int DECLARE_LOCAL_VAR = MIN_CALLOTHER + 1;
 	protected static final int DECLARE_TEMP_VAR = MIN_CALLOTHER + 2;
+	protected static final int ADDRESS_OF = MIN_CALLOTHER + 3;
 	
 	// A custom `Varnode` used to represent the output of a `CALLOTHER` that
 	// we have invented.
@@ -263,6 +264,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		// readers of the JSON, we want to 'version' the register variables by
 		// their initial user.
 		private Map<HighVariable, PcodeOp> temporary_address;
+		
+		// Replacement operations.
+		private Map<PcodeOp, PcodeOp> replacement_operations;
 
 		public PcodeSerializer(java.io.BufferedWriter writer,
 				String arch_, FunctionManager fm_,
@@ -301,6 +305,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			this.missing_locals = new HashMap<>();
 			this.old_locals = new HashMap<>();
 			this.temporary_address = new HashMap<>();
+			this.replacement_operations = new HashMap<>();
 		}
 
 		private static String label(HighFunction function) throws Exception {
@@ -563,11 +568,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		
 		// Returns `true` if a given representative is an original
 		// representative.
-		private static boolean isOriginalRepresentative(Varnode node) {
+		private boolean isOriginalRepresentative(Varnode node) {
 			if (node.isInput()) {
 				return true;
 			}
-
+			
+			// NOTE(pag): Don't use `resolveOp` here because that screws up the
+			//			  variable creation logic.
 			PcodeOp op = node.getDef();
 			if (op == null) {
 				return true;
@@ -583,11 +590,24 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			
 			return false;
 		}
+		
+		// Resolve an operation to a replacement operation, if any.
+		private PcodeOp resolveOp(PcodeOp op) {
+			if (op == null) {
+				return null;
+			}
+
+			PcodeOp replacement_op = replacement_operations.get(op);
+			if (replacement_op != null) {
+				return replacement_op;
+			}
+			return op;
+		}
 
 		// Get the representative of a `HighVariable`, or if we've re-written
 		// the representative with a `CALLOTHER`, then get the original
 		// representative.
-		private static Varnode originalRepresentativeOf(HighVariable var) {
+		private Varnode originalRepresentativeOf(HighVariable var) {
 			if (var == null) {
 				return null;
 			}
@@ -684,7 +704,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			assert !node.isFree();
 			assert node.isInput();
 
-			PcodeOp def = node.getDef();
+			PcodeOp def = resolveOp(node.getDef());
 			HighVariable var = variableOf(node.getHigh());
 
 			beginObject();
@@ -808,6 +828,25 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			return -1;
 		}
 		
+		// Given a `PTRSUB SP, offset` that resolves to the base of a local
+		// variable, or a `PTRSUB 0, addr` that resolves to the address of a
+		// global variable, generate and `ADDRESS_OF var`.
+		private boolean createAddressOf(PcodeOp original_op, Varnode input_var) {
+			SequenceNumber loc = original_op.getSeqnum();
+			Address address = loc.getTarget();
+			Varnode original_def = original_op.getOutput();
+
+			Varnode inputs[] = new Varnode[2];
+			inputs[0] = new Varnode(constant_space.getAddress(ADDRESS_OF), 4);
+			inputs[1] = input_var;
+			
+			PcodeOp op = new PcodeOp(
+					loc, PcodeOp.CALLOTHER, inputs, original_def);
+
+			replacement_operations.put(original_op, op);
+			return true;
+		}
+		
 		// Given a `PTRSUB SP, offset`, try to invent a local variable at
 		// `offset` in a similar way to how the decompiler would.
 		private boolean createLocalForPtrSubcomponent(
@@ -908,11 +947,15 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (var != null) {
 				adjust_offset = (var_offset - var.getStackOffset()) + new_var_offset;
 			}
+
+			new_var_node.setHigh(new_var);
+			if (adjust_offset == 0) {
+				return createAddressOf(op, new_var_node);
+			}
 			
 			// println("  Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
 
 			// Rewrite the stack reference to point to the `HighVariable`.
-			new_var_node.setHigh(new_var);
 			op.setInput(new_var_node, 0);
 			
 			// Rewrite the offset.
@@ -970,16 +1013,19 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				seen_globals.put(address, global_var);
 			}
 
-			// println("Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
-
-			// Rewrite the global reference to point to the `HighVariable`.
-			new_var_node.setHigh(global_var);
-			op.setInput(new_var_node, 0);
-			
 			// Rewrite the offset.
 			Address offset_as_address = address.getAddressSpace().getAddress(offset_node.getOffset());
 			int sub_offset = (int) offset_as_address.subtract(address);
 
+			new_var_node.setHigh(global_var);
+			if (sub_offset == 0) {
+				return createAddressOf(op, new_var_node);
+			}
+			
+			// println("Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
+
+			// Rewrite the global reference to point to the `HighVariable`.
+			op.setInput(new_var_node, 0);
 			op.setInput(new Varnode(constant_space.getAddress(sub_offset), offset_node.getSize()), 1);
 			
 			// println("  to: " + op.toString());
@@ -1303,10 +1349,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		// variable `var`.
 		private PcodeOp getOrCreateLocalVariable(
 				HighVariable var, PcodeOp user_op) throws Exception {
+			
 			Varnode representative = var.getRepresentative();
 			PcodeOp def = null;
 			if (representative != null) {
-				def = representative.getDef();			
+				def = resolveOp(representative.getDef());			
 				if (!isOriginalRepresentative(representative)) {
 					return def;
 				}
@@ -1467,6 +1514,16 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				name("address").value(label(user_op));
 			}
 		}
+		
+		// Serialize an `ADDRESS_OF`, used to the get the address of a local or
+		// global variable. These are created from `PTRSUB` nodes.
+		private void serializeAddressOp(PcodeOp op) throws Exception {
+			serializeOutput(op);
+			serializeGenericOp(op);
+			name("inputs").beginArray();
+			serializeInput(op, rValueOf(op.getInputs()[1]));
+			endArray();
+		}
 
 		// Serialize a `CALLOTHER`. The first input operand is a constant
 		// representing the user-defined opcode number. In our case, we have
@@ -1482,6 +1539,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				break;
 			case DECLARE_TEMP_VAR:
 				serializeDeclareNamedTemporary(op);
+				break;
+			case ADDRESS_OF:
+				serializeAddressOp(op);
 				break;
 			default:
 				serializeOutput(op);
@@ -1517,6 +1577,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					return "DECLARE_LOCAL";
 				case DECLARE_TEMP_VAR:
 					return "DECLARE_TEMPORARY";
+				case ADDRESS_OF:
+					return "ADDRESS_OF";
 				default:
 					break;
 				}
@@ -1613,8 +1675,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			ArrayList<PcodeOp> ordered_operations = new ArrayList<>();
 			name("operations").beginObject();
 			while (op_iterator.hasNext()) {
-				PcodeOp op = op_iterator.next();
-				
+				PcodeOp op = resolveOp(op_iterator.next());
+
 				switch (op.getOpcode()) {
 					// NOTE(pag): INDIRECTs seem like a good way of modelling
 					//            may- alias relations, as well as embedding
@@ -1726,6 +1788,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			old_locals.clear();
 			missing_locals.clear();
 			entry_block.clear();
+			replacement_operations.clear();
 
 			FunctionPrototype proto = null;
 			name("name").value(function.getName());
