@@ -30,7 +30,7 @@ def should_render(data: Dict) -> bool:
     if "output" in data:
         return True
     mnemonic = data['mnemonic']
-    if mnemonic == "DECLARE_PARAMETER":
+    if mnemonic in ("DECLARE_PARAMETER", "ADDRESS_OF"):
         return False
     if mnemonic.startswith("DECLARE_"):
         return True
