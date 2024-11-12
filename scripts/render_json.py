@@ -37,7 +37,7 @@ def should_render(data: Dict) -> bool:
     if "target" in data:
         if "is_noreturn" in data["target"]:
             return data["target"]["is_noreturn"]
-    return mnemonic in ("BRANCH", "CBRANCH", "BRANCHIND", "RETURN")
+    return mnemonic in ("BRANCH", "CBRANCH", "BRANCHIND", "RETURN", "STORE")
 
 
 def render_typed_var(var: str, type_key: str, types: Dict[str, Dict]) -> str:
