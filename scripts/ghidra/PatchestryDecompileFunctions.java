@@ -9,6 +9,8 @@ import ghidra.app.script.GhidraScript;
 
 import ghidra.app.cmd.function.CallDepthChangeInfo;
 
+import ghidra.app.decompiler.component.DecompilerUtils;
+
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
@@ -29,6 +31,8 @@ import ghidra.program.model.block.CodeBlockIterator;
 
 import ghidra.program.model.data.BitFieldDataType;
 import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.DataTypeManager;
+import ghidra.program.model.data.StringDataType;
 
 import ghidra.program.model.lang.CompilerSpec;
 import ghidra.program.model.lang.Language;
@@ -182,6 +186,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			return true;
 		}
 	};
+	
+	// A manually-created temporary variable with a single use.
+	protected class HighTemporary extends HighOther {
+		public HighTemporary(DataType type, Varnode vn, Varnode[] inst, Address pc, HighFunction func) {
+			super(type, vn, inst, pc, func);
+		}
+	}
 
 	private class PcodeSerializer extends JsonWriter {
 		private Program program;
@@ -265,8 +276,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		// their initial user.
 		private Map<HighVariable, PcodeOp> temporary_address;
 		
-		// Replacement operations.
+		// Replacement operations. Sometimes we have something that we actually
+		// need to replace, and so this mapping allows us to do that without
+		// having to aggressively rewrite things, especially output operands.
 		private Map<PcodeOp, PcodeOp> replacement_operations;
+		
+		// Sometimes we need to arrange for some operations to exist prior to
+		// another one, e.g. if there is a `CALL foo, SP` that decompiles to
+		// `foo(&local_x)`, then we really want to be able to represent `SP`,
+		// the stack pointer, as a reference to the address of `local_x`, rather
+		// than whatever it is.
+		private Map<PcodeOp, List<PcodeOp>> prefix_operations;
 
 		public PcodeSerializer(java.io.BufferedWriter writer,
 				String arch_, FunctionManager fm_,
@@ -306,6 +326,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			this.old_locals = new HashMap<>();
 			this.temporary_address = new HashMap<>();
 			this.replacement_operations = new HashMap<>();
+			this.prefix_operations = new HashMap<>();
 		}
 
 		private static String label(HighFunction function) throws Exception {
@@ -466,6 +487,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				name("size").value(data_type.getLength());
 				
 			} else if (data_type instanceof WideCharDataType) {
+				name("kind").value("todo");  // TODO(pag): Implement this
+				name("size").value(data_type.getLength());
+				
+			} else if (data_type instanceof StringDataType) {
 				name("kind").value("todo");  // TODO(pag): Implement this
 				name("size").value(data_type.getLength());
 				
@@ -667,6 +692,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			} else if (var instanceof HighGlobal) {
 				seen_globals.put(addressOfGlobal(var), var);
 				return VariableClassification.GLOBAL;
+			
+			} else if (var instanceof HighTemporary) {
+				return VariableClassification.TEMPORARY;
 			}
 
 			HighSymbol symbol = var.getSymbol();
@@ -710,6 +738,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			beginObject();
 			
 			if (var != null) {
+				if (def == null) {
+					def = var.getRepresentative().getDef();
+				}
+
 				name("type").value(label(var.getDataType()));
 			} else {
 				name("size").value(node.getSize());
@@ -800,11 +832,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		
 		// Returns the index of the first input `Varnode` referncing the stack
 		// pointer, or `-1` if no direct references are found.
-		private int referencesStackPointer(PcodeOp op) {
+		private int referencesStackPointer(PcodeOp op) throws Exception {
 			int input_index = 0;
 			for (Varnode node : op.getInputs()) {
 				if (node.isRegister()) {
 					Register reg = language.getRegister(node.getAddress(), 0);
+					if (reg == null) {
+						continue;
+					}
 					
 					// TODO(pag): This doesn't seem to work? All `typeFlags` for
 					// 			  all registers seem to be zero, at least for
@@ -831,35 +866,21 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		// Given a `PTRSUB SP, offset` that resolves to the base of a local
 		// variable, or a `PTRSUB 0, addr` that resolves to the address of a
 		// global variable, generate and `ADDRESS_OF var`.
-		private boolean createAddressOf(PcodeOp original_op, Varnode input_var) {
-			SequenceNumber loc = original_op.getSeqnum();
-			Address address = loc.getTarget();
-			Varnode original_def = original_op.getOutput();
-
+		private PcodeOp createAddressOf(
+				Varnode def, SequenceNumber loc, Varnode input_var) {
 			Varnode inputs[] = new Varnode[2];
 			inputs[0] = new Varnode(constant_space.getAddress(ADDRESS_OF), 4);
 			inputs[1] = input_var;
-			
-			PcodeOp op = new PcodeOp(
-					loc, PcodeOp.CALLOTHER, inputs, original_def);
-
-			replacement_operations.put(original_op, op);
-			return true;
+			return new PcodeOp(loc, PcodeOp.CALLOTHER, inputs, def);
 		}
-		
-		// Given a `PTRSUB SP, offset`, try to invent a local variable at
-		// `offset` in a similar way to how the decompiler would.
-		private boolean createLocalForPtrSubcomponent(
-				HighFunction high_function, PcodeOp op) {
+
+		private Varnode[] createStackPointerVarnodes(
+				HighFunction high_function, PcodeOp op, int var_offset) {
+			
 			Function function = high_function.getFunction();
 			StackFrame frame = function.getStackFrame();
-			Varnode offset_node = op.getInput(1);
-			if (!offset_node.isConstant()) {
-				return false;
-			}
 
 			int frame_size = frame.getFrameSize();
-			int var_offset = (int) offset_node.getOffset();
 			int adjust_offset = 0;
 			
 			// Given the local symbol mapping for the high function, go find
@@ -905,7 +926,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			//		- Trying to lift `_start`
 			//		- Trying to lift a variadic function using `va_list`.
 			if (sym == null) {
-				return false;
+				return null;
 			}
 
 			Varnode var_node = op.getInput(0);
@@ -943,23 +964,50 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				new_var = local_var;
 			}
 
+			new_var_node.setHigh(new_var);
+
 			int new_var_offset = new_var.getOffset() == -1 ? 0 : new_var.getOffset();
 			if (var != null) {
 				adjust_offset = (var_offset - var.getStackOffset()) + new_var_offset;
 			}
-
-			new_var_node.setHigh(new_var);
-			if (adjust_offset == 0) {
-				return createAddressOf(op, new_var_node);
+			
+			Varnode[] nodes = new Varnode[2];
+			nodes[0] = new_var_node;
+			nodes[1] = new Varnode(constant_space.getAddress(adjust_offset),
+								   ram_space.getSize() / 8);
+			return nodes;
+		}
+		
+		// Given a `PTRSUB SP, offset`, try to invent a local variable at
+		// `offset` in a similar way to how the decompiler would.
+		private boolean createLocalForPtrSubcomponent(
+				HighFunction high_function, PcodeOp op) {
+			
+			Varnode offset = op.getInput(1);
+			if (!offset.isConstant()) {
+				return false;
+			}
+			
+			Varnode[] nodes = createStackPointerVarnodes(
+					high_function, op, (int) offset.getOffset());
+			if (nodes == null) {
+				return false;
+			}
+			
+			if (nodes[1].getOffset() == 0) {
+				PcodeOp new_op = createAddressOf(
+						op.getOutput(), op.getSeqnum(), nodes[0]);
+				replacement_operations.put(op, new_op);
+				return true;
 			}
 			
 			// println("  Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
 
 			// Rewrite the stack reference to point to the `HighVariable`.
-			op.setInput(new_var_node, 0);
+			op.setInput(nodes[0], 0);
 			
 			// Rewrite the offset.
-			op.setInput(new Varnode(constant_space.getAddress(adjust_offset), offset_node.getSize()), 1);
+			op.setInput(nodes[1], 1);
 
 			// println("  to: " + op.toString());
 			
@@ -1019,7 +1067,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			new_var_node.setHigh(global_var);
 			if (sub_offset == 0) {
-				return createAddressOf(op, new_var_node);
+				PcodeOp new_op = createAddressOf(
+						op.getOutput(), op.getSeqnum(), new_var_node);
+				replacement_operations.put(op, new_op);
+				return true;
 			}
 			
 			// println("Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
@@ -1035,7 +1086,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		
 		// Try to rewrite/mutate a `PTRSUB`.
 		private boolean rewritePtrSubcomponent(
-				HighFunction high_function, PcodeOp op) {
+				HighFunction high_function, PcodeOp op) throws Exception {
 
 			// Look for `PTRSUB SP, offset` and convert into `PTRSUB local_N, M`.
 			if (referencesStackPointer(op) == 0) {
@@ -1069,6 +1120,91 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 //			StackFrame frame = function.getStackFrame();
 //
 //		}
+		
+		// Try to fixup direct stack pointer references in `op`.
+		private boolean tryFixupStackVarnode(
+				HighFunction high_function, PcodeOp op,
+				CallDepthChangeInfo cdci) throws Exception {
+
+			int offset = referencesStackPointer(op);
+			if (offset == -1) {
+				return true;
+			}
+			
+			// Figure out what stack offset is pointed to by `SP`.
+			Address op_loc = op.getSeqnum().getTarget();
+			int stack_offset = cdci.getDepth(op_loc);
+			if (stack_offset == Function.UNKNOWN_STACK_DEPTH_CHANGE) {
+				
+				Function function = high_function.getFunction();
+				StackFrame frame = function.getStackFrame();
+				Variable[] stack_vars = frame.getStackVariables();
+				if (stack_vars == null || stack_vars.length == 0) {
+					return false;
+				}
+
+				if (frame.growsNegative()) {
+					stack_offset = stack_vars[0].getStackOffset();
+				} else {
+					stack_offset = stack_vars[stack_vars.length - 1].getStackOffset();
+				}
+			}
+
+			Varnode sp_ref = op.getInput(offset);
+			Varnode[] nodes = createStackPointerVarnodes(
+					high_function, op, stack_offset);
+			if (nodes == null) {
+				return false;
+			}
+
+			if (nodes[1].getOffset() != 0) {
+				return false;
+			}
+			
+			List<PcodeOp> ops = prefix_operations.get(op);
+			if (ops == null) {
+				ops = new ArrayList<PcodeOp>();
+				prefix_operations.put(op, ops);
+			}
+			
+			// Figure out the tye of the pointer to the local variable being
+			// referenced.
+			DataTypeManager dtm = program.getDataTypeManager();
+			DataType var_type = nodes[0].getHigh().getDataType();
+			DataType node_type = dtm.getPointer(var_type);
+			
+			// Create a unique address for this `Varnode`.
+			Address address = nextUniqueAddress();
+			SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
+			
+			// Make the `Varnode` instances.
+			DefinitionVarnode def = new DefinitionVarnode(
+					address, node_type.getLength());
+			UseVarnode use = new UseVarnode(address, def.getSize());
+			
+			// Create a prefix `ADDRESS_OF` for the local variable.
+			PcodeOp address_of = this.createAddressOf(def, loc, nodes[0]);
+			ops.add(address_of);
+			
+			// Track the logical value using a `HighOther`.
+			Varnode[] instances = new Varnode[2];
+			instances[0] = address_of.getOutput();
+			instances[1] = use;
+			HighVariable tracker = new HighTemporary(
+					node_type, instances[0], instances, op_loc, high_function);
+
+			def.setDef(tracker, address_of);
+			use.setHigh(tracker);
+			
+			// println("Rewriting " + label(op));
+			// println("  From: " + op.toString());
+			
+			op.setInput(instances[1], offset);
+			
+			// println("    To: " + op.toString());
+
+			return tryFixupStackVarnode(high_function, op, cdci);
+		}
 
 		// Create missing local variables. High p-code still includes things
 		// like `PTRSUB SP, -offset` instead of treating the unrecognized data
@@ -1085,6 +1221,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			FunctionSignature signature = function.getSignature();
 			FunctionPrototype proto = high_function.getFunctionPrototype();
 			LocalSymbolMap symbols = high_function.getLocalSymbolMap();
+			CallDepthChangeInfo cdci = null;
 			
 			// Fill in the parameters first so that they are the first
 			// things added to `entry_block`.
@@ -1150,7 +1287,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 							}
 							// Fall-through.
 						default:
-							if (referencesStackPointer(op) != -1) {
+							if (cdci == null) {
+								cdci = new CallDepthChangeInfo(function);
+							}
+							if (!tryFixupStackVarnode(high_function, op, cdci)) {
 								println("Unsupported stack pointer reference at " + label(op) + ": " + op.toString());
 								return false;
 							}
@@ -1158,10 +1298,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					}
 				}
 			}
-			
-			// Need to go and invent these.
-//			Variable[] missing = (Variable[]) seen_vars.toArray();
-			
+
 			return true;
 		}
 		
@@ -1214,7 +1351,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				default:
 					return;
 			}
-			
+
 			name("output").beginObject();
 			if (klass == VariableClassification.PARAMETER) {
 				name("kind").value("parameter");
@@ -1238,21 +1375,37 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		// the first being a constant representing the address space, and the
 		// second being the actual address.
 		private void serializeLoadStoreAddress(PcodeOp op) throws Exception {
+			Varnode address = rValueOf(op.getInput(1));
+			if (!address.isConstant()) {
+				serializeInput(op, address);
+				return;
+			}
+			
 			Varnode aspace = op.getInput(0);
 			assert aspace.isConstant();
 
-			Varnode address = rValueOf(op.getInput(1));
-
 			beginObject();
 			name("size").value(op.getInput(1).getSize());
-			println(op.toString());
-			//          if (address.isConstant()) {
-			//            AddressSpace address_space = null;
-			//            
-			//            Address address = new Address();
-			//          }
-
+			println("!!! " + label(op) + ": " + op.toString());
 			endObject();
+		}
+		
+		// Serialize a `LOAD space, address` op, eliding the address space.
+		private void serializeLoadOp(PcodeOp op) throws Exception {
+			serializeOutput(op);
+			name("inputs").beginArray();
+			serializeLoadStoreAddress(op);
+			endArray();
+		}
+		
+		// Serialize a `STORE space, address, value` op, eliditing the address
+		// space.
+		private void serializeStoreOp(PcodeOp op) throws Exception {
+			serializeOutput(op);
+			name("inputs").beginArray();
+			serializeLoadStoreAddress(op);
+			
+			endArray();
 		}
 		
 		// Product a new address in the `UNIQUE` address space.
@@ -1492,7 +1645,12 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (var.getName().equals("UNNAMED")) {
 				if (rep.isRegister()) {
 					Register reg = language.getRegister(rep.getAddress(), 0);
-					name("name").value(reg.getName());
+					if (reg != null) {
+						name("name").value(reg.getName());
+					} else {
+						name("name").value("reg" + Address.SEPARATOR +
+										   Long.toHexString(rep.getOffset()));
+					}
 				} else {
 					name("name").value("temp");
 				}
@@ -1610,6 +1768,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					serializeReturnOp(op);
 					break;
 				case PcodeOp.LOAD:
+					serializeLoadOp(op);
+					break;
+				case PcodeOp.STORE:
+					serializeStoreOp(op);
+					break;
 				case PcodeOp.COPY:
 				case PcodeOp.CAST:
 				default:
@@ -1673,10 +1836,20 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			boolean last_is_branch = false;
 			Iterator<PcodeOp> op_iterator = block.getIterator();
 			ArrayList<PcodeOp> ordered_operations = new ArrayList<>();
-			name("operations").beginObject();
+			
 			while (op_iterator.hasNext()) {
 				PcodeOp op = resolveOp(op_iterator.next());
-
+				
+				// Inject the prefix operations into the ordered operations
+				// list. These are to handle things like stack pointer
+				// references flowing into `CALL` arguments.
+				List<PcodeOp> prefix_ops = prefix_operations.get(op);
+				if (prefix_ops != null) {
+					for (PcodeOp prefix_op : prefix_ops) {
+						ordered_operations.add(prefix_op);
+					}
+				}
+				
 				switch (op.getOpcode()) {
 					// NOTE(pag): INDIRECTs seem like a good way of modelling
 					//            may- alias relations, as well as embedding
@@ -1705,12 +1878,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 							continue;
 						}
 						break;
-
+	
 					default:
 						break;
 				}
-				
+
 				ordered_operations.add(op);
+			}
+			
+			// Serialize the operations.
+			name("operations").beginObject();
+			for (PcodeOp op : ordered_operations) {
 				name(label(op));
 				current_block = block;
 				serialize(op);
@@ -1731,20 +1909,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				endObject();  // End of BRANCH to `first_block`.	
 			}
 			
-			endObject();
+			endObject();  // End of `operations`.
 
 			// List out the operations in their order.
 			name("ordered_operations").beginArray();
 			for (PcodeOp op : ordered_operations) {
-//				beginArray();
-//				value(mnemonic(op));
 				value(label(op));
-//				endArray();
 			}
 			if (!fall_through_label.equals("")) {
 				value(fall_through_label);
 			}
-			endArray();
+			endArray();  // End of `ordered_operations`.
 		}
 
 		// Emit a pseudo entry block to represent
@@ -1789,6 +1964,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			missing_locals.clear();
 			entry_block.clear();
 			replacement_operations.clear();
+			prefix_operations.clear();
 
 			FunctionPrototype proto = null;
 			name("name").value(function.getName());
@@ -1976,8 +2152,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		if (currentProgram == null) {
 			throw new Exception("Unable to initialize decompiler: invalid current program.");
 		}
+
+		DecompileOptions options = DecompilerUtils.getDecompileOptions(state.getTool(), currentProgram);
 		DecompInterface decompiler = new DecompInterface();
-		decompiler.setOptions(new DecompileOptions());
+
+		decompiler.setOptions(options);
+		decompiler.toggleCCode(false);
+		decompiler.toggleSyntaxTree(true);
+		decompiler.toggleJumpLoads(true);
+		decompiler.toggleParamMeasures(false);
+		decompiler.setSimplificationStyle("decompile");
+
 		if (!decompiler.openProgram(currentProgram)) {
 			throw new Exception("Unable to initialize decompiler: " + decompiler.getLastMessage());
 		}
