@@ -36,7 +36,10 @@ def should_render(data: Dict) -> bool:
         return True
     if "target" in data:
         if "is_noreturn" in data["target"]:
-            return data["target"]["is_noreturn"]
+            if data["target"]["is_noreturn"]:
+                return True
+        if "has_return_value" in data:
+            return not data["has_return_value"]
     return mnemonic in ("BRANCH", "CBRANCH", "BRANCHIND", "RETURN", "STORE")
 
 
