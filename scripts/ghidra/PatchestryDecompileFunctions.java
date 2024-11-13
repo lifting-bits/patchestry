@@ -2238,7 +2238,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             "_Unwind_GetLanguageSpecificData", "_Unwind_ForcedUnwind",
             "__unw_getcontext", 
             "longjmp", "siglongjmp", "setjmp", "sigsetjmp",
-            "__register_frame_info_bases", "__assert_fail"
+            "__register_frame_info_bases", "__assert_fail",
+            "_init", "_fini", "_ITM_registerTMCloneTable",
+            "_ITM_deregisterTMCloneTable", "register_tm_clones",
+            "deregister_tm_clones"
 		);
 		
 		// Serialize all functions.
