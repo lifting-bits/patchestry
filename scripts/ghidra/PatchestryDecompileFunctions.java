@@ -848,10 +848,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					if (reg == null) {
 						continue;
 					}
-					
+
 					// TODO(pag): This doesn't seem to work? All `typeFlags` for
 					// 			  all registers seem to be zero, at least for
 					//			  x86.
+					//
+					// NOTE(pag): NCC group blog post on "earlyremoval" also
+					//			  notes this curiosity.
 					if ((reg.getTypeFlags() & Register.TYPE_SP) != 0) {
 						return input_index;
 					}
@@ -881,9 +884,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			inputs[1] = input_var;
 			return new PcodeOp(loc, PcodeOp.CALLOTHER, inputs, def);
 		}
-
+		
+		// Given an offset `var_offset` from the stack pointer in `op`, return
+		// two `Varnode`s, the first referencing the relevant `HighVariable`
+		// that contains the byte at that stack offset, and the second being
+		// a constant byte displacement from the base of the stack variable.
 		private Varnode[] createStackPointerVarnodes(
-				HighFunction high_function, PcodeOp op, int var_offset) {
+				HighFunction high_function, PcodeOp op,
+				int var_offset) throws Exception {
 			
 			Function function = high_function.getFunction();
 			StackFrame frame = function.getStackFrame();
@@ -974,9 +982,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			new_var_node.setHigh(new_var);
 
-			int new_var_offset = new_var.getOffset() == -1 ? 0 : new_var.getOffset();
 			if (var != null) {
-				adjust_offset = (var_offset - var.getStackOffset()) + new_var_offset;
+				adjust_offset = (var_offset - var.getStackOffset());
 			}
 			
 			Varnode[] nodes = new Varnode[2];
@@ -986,11 +993,64 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			return nodes;
 		}
 		
+		// Update a `PTRSUB 0, addr` or a `PTRSUB SP, offset` to be prefixed
+		// by an `ADDRESS_OF`, then operate on the `ADDRESS_OF` in the first
+		// input, and use a modified offset in the second input.
+		private boolean prefixPtrSubcomponentWithAddressOf(
+				HighFunction high_function, PcodeOp op,
+				Varnode[] nodes) throws Exception {
+
+			Address op_loc = op.getSeqnum().getTarget();
+			List<PcodeOp> ops = getOrCreatePrefixOperations(op);
+			
+			// Figure out the tye of the pointer to the local variable being
+			// referenced.
+			DataTypeManager dtm = program.getDataTypeManager();
+			DataType var_type = nodes[0].getHigh().getDataType();
+			DataType node_type = dtm.getPointer(var_type);
+			
+			// Create a unique address for this `Varnode`.
+			Address address = nextUniqueAddress();
+			SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
+			
+			// Make the `Varnode` instances.
+			DefinitionVarnode def = new DefinitionVarnode(
+					address, node_type.getLength());
+			UseVarnode use = new UseVarnode(address, def.getSize());
+			
+			// Create a prefix `ADDRESS_OF` for the local variable.
+			PcodeOp address_of = this.createAddressOf(def, loc, nodes[0]);
+			ops.add(address_of);
+			
+			// Track the logical value using a `HighOther`.
+			Varnode[] instances = new Varnode[2];
+			instances[0] = address_of.getOutput();
+			instances[1] = use;
+			HighVariable tracker = new HighTemporary(
+					node_type, instances[0], instances, op_loc, high_function);
+
+			def.setDef(tracker, address_of);
+			use.setHigh(tracker);
+			
+			println(label(op));
+			println("  Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
+
+			// Rewrite the stack reference to point to the `HighVariable`.
+			op.setInput(use, 0);
+			
+			// Rewrite the offset.
+			op.setInput(nodes[1], 1);
+
+			println("  to: " + op.toString());
+			
+			return true;
+		}
+		
 		// Given a `PTRSUB SP, offset`, try to invent a local variable at
 		// `offset` in a similar way to how the decompiler would.
 		private boolean createLocalForPtrSubcomponent(
 				HighFunction high_function, PcodeOp op,
-				CallDepthChangeInfo cdci) {
+				CallDepthChangeInfo cdci) throws Exception {
 			
 			Varnode offset = op.getInput(1);
 			if (!offset.isConstant()) {
@@ -1003,6 +1063,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				return false;
 			}
 			
+			// We can replace the `PTRSUB SP, offset` with an
+			// `ADDRESS_OF local`.
 			if (nodes[1].getOffset() == 0) {
 				PcodeOp new_op = createAddressOf(
 						op.getOutput(), op.getSeqnum(), nodes[0]);
@@ -1010,17 +1072,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				return true;
 			}
 			
-			// println("  Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
-
-			// Rewrite the stack reference to point to the `HighVariable`.
-			op.setInput(nodes[0], 0);
-			
-			// Rewrite the offset.
-			op.setInput(nodes[1], 1);
-
-			// println("  to: " + op.toString());
-			
-			return true;
+			// We need to get the `ADDRESS_OF local`, then pass that to a
+			// fixed-up `PTRSUB`.
+			return prefixPtrSubcomponentWithAddressOf(high_function, op, nodes);
 		}
 		
 		// Return the next referenced address after `start`, or the maximum
@@ -1136,15 +1190,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				return true;
 			}
 			
-			// println("Rewriting " + op.getSeqnum().toString() + ": " + op.toString());
-
-			// Rewrite the global reference to point to the `HighVariable`.
-			op.setInput(new_var_node, 0);
-			op.setInput(new Varnode(constant_space.getAddress(sub_offset), offset_node.getSize()), 1);
+			Varnode[] nodes = new Varnode[2];
+			nodes[0] = new_var_node;
+			nodes[1] = new Varnode(constant_space.getAddress(sub_offset),
+								   offset_node.getSize());
 			
-			// println("  to: " + op.toString());
-			
-			return true;
+			// We need to get the `ADDRESS_OF global`, then pass that to a
+			// fixed-up `PTRSUB`.
+			return prefixPtrSubcomponentWithAddressOf(high_function, op, nodes);
 		}
 		
 		// Try to rewrite/mutate a `PTRSUB`.
@@ -1167,24 +1220,18 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			return true;
 		}
 		
-//		// Look for `PTRADD SP, -1, 1` or something like it that is used to
-//		// calculate the return address location.
-//		private boolean markPtrAddForElision(
-//				HighFunction high_function, PcodeOp op) {
-//			int sp_index = referencesStackPointer(op);
-//			if (sp_index != 0) {
-//				return true;
-//			}
-//			
-//			if (op.getInput(2).getOffset() != 1) {
-//				return false;
-//			}
-//			
-//			Function function = high_function.getFunction();
-//			StackFrame frame = function.getStackFrame();
-//
-//		}
-		
+		// Get or create a prefix operations list. These are operations that
+		// will precede `op` in our serialization, regardless of whether or
+		// not `op` is elided.
+		private List<PcodeOp> getOrCreatePrefixOperations(PcodeOp op) {
+			List<PcodeOp> ops = prefix_operations.get(op);
+			if (ops == null) {
+				ops = new ArrayList<PcodeOp>();
+				prefix_operations.put(op, ops);
+			}
+			return ops;
+		}
+
 		// Try to fixup direct stack pointer references in `op`.
 		private boolean tryFixupStackVarnode(
 				HighFunction high_function, PcodeOp op,
@@ -1225,12 +1272,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				printf("??? " + Long.toHexString(nodes[1].getOffset()));
 				return false;
 			}
-			
-			List<PcodeOp> ops = prefix_operations.get(op);
-			if (ops == null) {
-				ops = new ArrayList<PcodeOp>();
-				prefix_operations.put(op, ops);
-			}
+
+			List<PcodeOp> ops = getOrCreatePrefixOperations(op);
 			
 			// Figure out the tye of the pointer to the local variable being
 			// referenced.
@@ -1269,6 +1312,61 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			// println("    To: " + op.toString());
 
 			return tryFixupStackVarnode(high_function, op, cdci);
+		}
+		
+		// The data model of high P-CODE is fundamentally value based. Lets
+		// focus on the following example:
+		//
+		//		extern int do_with_int(int *);
+		//
+		//		int main() {
+		//		  int x;
+		//		  return do_with_int(&x);
+		//		}
+		//
+		// Ignoring `INDIRECT`s, we might expect to see the following high
+		// P-CODE for the above C code:
+		//
+		//		(unique res) CALL do_with_in (register RSP)
+		//		--- RETURN 0 (unique res)
+		//
+		// Or:
+		//
+		//		(unique addr_of_x) PTRSUB (register RSP) (const NNN)
+		//		(unique res) CALL do_with_in (unique addr_of_x)
+		//		--- RETURN 0 (unique res)
+		//
+		// At first this is confusing: why not reference `x`? Why instead go
+		// through the stack pointer register, `RSP`? The reason is that there
+		// are no uses of the *value of x* in this code. Operations such as
+		// `PTRSUB` operate on the address of things, and P-CODE doesn't
+		// natively have an `ADDRESS_OF` operation (though we add one).
+		//
+		// The purpose of this method is to go and find the "real" `HighVariable`
+		// if it exists by way of mining them from `MULTIEQUAL`, `COPY`, and
+		// `INDIRECT`` operations, which exist to encode SSA form, as well as to
+		// represent control-flow barriers in terms of data flow dependencies.
+		private void mineForVarNodes(PcodeOp op) {
+			for (Varnode node : op.getInputs()) {
+				HighVariable var = node.getHigh();
+				if (var == null || !(var instanceof HighLocal)) {
+					continue;
+				}
+
+				HighSymbol symbol = var.getSymbol();
+				String var_name = var.getName();
+				if (var_name == null || var_name.equals("UNNAMED")) {
+					if (symbol != null) {
+						var_name = symbol.getName();
+					}
+				}
+
+				if (var_name == null || var_name.equals("UNNAMED")) {
+					continue;
+				}
+				
+				missing_locals.put(var_name, (HighLocal) var);
+			}
 		}
 
 		// Create missing local variables. High p-code still includes things
@@ -1328,8 +1426,19 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 //							}
 //							break;
 						case PcodeOp.MULTIEQUAL:
-							if (canElideMultiEqual(op)) {
-								continue;
+							if (!canElideMultiEqual(op)) {
+								println("Unsupported MULTIEQUAL at " + label(op) + ": " + op.toString());
+								return false;
+							}
+							// Fall-through.
+						case PcodeOp.INDIRECT:
+							mineForVarNodes(op);
+							break;
+
+						case PcodeOp.COPY:
+							if (canElideCopy(op)) {
+								mineForVarNodes(op);
+								break;
 							}
 							// Fall-through.
 						default:
@@ -1576,7 +1685,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			Address caller_address = current_function.getFunction().getEntryPoint();
 			Varnode target_node = op.getInput(0);
 			Function callee = null;
-
+			
+			name("has_return_value").value(op.getOutput() != null);
+			
 			if (target_node.isAddress()) {
 				Address target_address = caller_address.getNewAddress(target_node.getOffset());
 				String target_label = label(target_address);
