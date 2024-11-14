@@ -226,6 +226,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 		// The seen globals.
 		private Map<Address, HighVariable> seen_globals;
+		private Map<HighVariable, Address> address_of_global;
 
 		// The seen types. The size of `types_to_serialize` is monotonically
 		// non-decreasing, so that as we add new things to `seen_types`, we add
@@ -295,9 +296,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		// the stack pointer, as a reference to the address of `local_x`, rather
 		// than whatever it is.
 		private Map<PcodeOp, List<PcodeOp>> prefix_operations;
-		
-		// Calculated addresses of global variables.
-		private Map<HighVariable, Address> address_of_global;
 
 		public PcodeSerializer(java.io.BufferedWriter writer,
 				String arch_, FunctionManager fm_,
@@ -770,7 +768,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 
 			switch (classifyVariable(var)) {
-				case VariableClassification.UNKNOWN:
+				case UNKNOWN:
 					if (def != null && !node.isInput() && def == op) {
 						if (node.isUnique()) {
 							name("kind").value("temporary");
@@ -799,32 +797,32 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 						name("kind").value("unknown");
 					}
 					break;
-				case VariableClassification.PARAMETER:
+				case PARAMETER:
 					name("kind").value("parameter");
 					name("operation").value(label(getOrCreateLocalVariable(var, op)));
 					break;
-				case VariableClassification.LOCAL:
+				case LOCAL:
 					name("kind").value("local");
 					name("operation").value(label(getOrCreateLocalVariable(var, op)));
 					break;
-				case VariableClassification.NAMED_TEMPORARY:
+				case NAMED_TEMPORARY:
 					name("kind").value("temporary");
 					name("operation").value(label(getOrCreateLocalVariable(var, op)));
 					break;
-				case VariableClassification.TEMPORARY:
+				case TEMPORARY:
 					assert def != null;
 					name("kind").value("temporary");
 					name("operation").value(label(def));
 					break;
-				case VariableClassification.GLOBAL:
+				case GLOBAL:
 					name("kind").value("global");
 					name("global").value(label(addressOfGlobal(var)));
 					break;
-				case VariableClassification.FUNCTION:
+				case FUNCTION:
 					name("kind").value("function");
 					name("function").value(label(var.getHighFunction()));
 					break;
-				case VariableClassification.CONSTANT:
+				case CONSTANT:
 					if (node.isConstant()) {
 						name("kind").value("constant");
 						name("value").value(node.getOffset());
@@ -1495,10 +1493,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			//			  ensure no code motion happens.
 			VariableClassification klass = classifyVariable(var);
 			switch (klass) {
-				case VariableClassification.PARAMETER:
-				case VariableClassification.LOCAL:
-				case VariableClassification.NAMED_TEMPORARY:
-				case VariableClassification.GLOBAL:
+				case PARAMETER:
+				case LOCAL:
+				case NAMED_TEMPORARY:
+				case GLOBAL:
 					break;
 				default:
 					return;
@@ -1665,12 +1663,12 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 
 			switch (classifyVariable(var)) {
-				case VariableClassification.PARAMETER:
+				case PARAMETER:
 					println("Creating late parameter for " + label(user_op) + ": " + user_op.toString());
 					return createParamVarDecl(var);
-				case VariableClassification.LOCAL:
+				case LOCAL:
 					return createLocalVarDecl(var);
-				case VariableClassification.NAMED_TEMPORARY:
+				case NAMED_TEMPORARY:
 					return createNamedTemporaryDecl(var, user_op);
 				default:
 					break;
