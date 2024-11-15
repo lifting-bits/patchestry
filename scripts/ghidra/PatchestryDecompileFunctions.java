@@ -2074,8 +2074,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		}
 
 		// Emit a pseudo entry block to represent
-		private void serializeEntryBlock(PcodeBlockBasic first_block) throws Exception {
-			name("entry").beginObject();
+		private void serializeEntryBlock(
+				String label, PcodeBlockBasic first_block) throws Exception {
+			name(label).beginObject();
 			name("operations").beginObject();
 			for (PcodeOp pseudo_op : entry_block) {
 				name(label(pseudo_op));
@@ -2136,6 +2137,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 				if (visit_pcode && fixupOperations(high_function, num_params)) {
 					
+					String entry_label = null;
 					PcodeBlockBasic first_block = null;
 					current_function = high_function;
 
@@ -2153,14 +2155,15 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					// If we created a fake entry block to represent variable
 					// declarations then emit that here.
 					if (!entry_block.isEmpty()) {
-						serializeEntryBlock(first_block);
+						entry_label = entryBlockLabel();
+						serializeEntryBlock(entry_label, first_block);
 					}
 					
 					endObject();  // End of `basic_blocks`.
 					current_function = null;
 					
-					if (!entry_block.isEmpty()) {
-						name("entry_block").value("entry");
+					if (entry_label != null) {
+						name("entry_block").value(entry_label);
 
 					} else if (first_block != null) {
 						name("entry_block").value(label(first_block));
@@ -2171,6 +2174,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				serializePrototype(function.getSignature());
 				endObject();  // End `type`.
 			}
+		}
+		
+		private String entryBlockLabel() throws Exception {
+			return label(current_function) +  Address.SEPARATOR + "entry";
 		}
 		
 		// Serialize the global variable declarations.
