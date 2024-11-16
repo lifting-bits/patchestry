@@ -8,6 +8,9 @@
 #pragma once
 
 #include <clang/AST/ASTContext.h>
+#include <clang/Frontend/CompilerInstance.h>
+#include <vast/Frontend/FrontendAction.hpp>
+#include <vast/Frontend/Options.hpp>
 
 namespace llvm {
     class raw_fd_ostream;
@@ -17,16 +20,19 @@ namespace patchestry::ast {
     class CodeGenerator
     {
       public:
-        CodeGenerator() = default;
+        explicit CodeGenerator(clang::CompilerInstance &ci) : opts(vast::cc::options(ci)) {}
 
-        CodeGenerator(const CodeGenerator &)                = default;
-        CodeGenerator &operator=(const CodeGenerator &)     = default;
-        CodeGenerator(CodeGenerator &&) noexcept            = default;
-        CodeGenerator &operator=(CodeGenerator &&) noexcept = default;
+        CodeGenerator(const CodeGenerator &)                = delete;
+        CodeGenerator &operator=(const CodeGenerator &)     = delete;
+        CodeGenerator(CodeGenerator &&) noexcept            = delete;
+        CodeGenerator &operator=(CodeGenerator &&) noexcept = delete;
 
         virtual ~CodeGenerator() {}
 
         void generate_source_ir(clang::ASTContext &ctx, llvm::raw_fd_ostream &os);
+
+      private:
+        vast::cc::action_options opts;
     };
 
 } // namespace patchestry::ast

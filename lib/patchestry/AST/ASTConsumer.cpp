@@ -5,18 +5,13 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "patchestry/Ghidra/Pcode.hpp"
-#include "patchestry/Ghidra/PcodeOperations.hpp"
-#include "patchestry/Ghidra/PcodeTypes.hpp"
 #include <cassert>
+#include <memory>
+#include <sstream>
+#include <unordered_map>
 
-#include "clang/AST/Attr.h"
-#include "clang/Serialization/ASTWriter.h"
-#include "clang/Serialization/InMemoryModuleCache.h"
-#include "clang/Serialization/ModuleFileExtension.h"
-#include "llvm/Bitstream/BitstreamWriter.h"
-#include "llvm/Support/raw_ostream.h"
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Attr.h>
 #include <clang/AST/Attrs.inc>
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclBase.h>
@@ -30,15 +25,14 @@
 #include <clang/Basic/LangOptions.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/Specifiers.h>
-#include <llvm-18/llvm/ADT/SmallVector.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/Support/raw_ostream.h>
 
-#include <memory>
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
-#include <sstream>
-#include <unordered_map>
+#include <patchestry/Ghidra/Pcode.hpp>
+#include <patchestry/Ghidra/PcodeOperations.hpp>
 
 namespace patchestry::ast {
 
@@ -49,7 +43,7 @@ namespace patchestry::ast {
             std::vector< std::string > keys;
             keys.reserve(map.size());
 
-            for (auto &[key, _] : map) {
+            for (const auto &[key, _] : map) {
                 keys.push_back(key);
             }
 
@@ -60,7 +54,7 @@ namespace patchestry::ast {
         std::vector< std::shared_ptr< Operation > > __attribute__((unused))
         get_parameter_operations(const Function &function) {
             auto entry_block_key = function.entry_block;
-            if (entry_block_key.empty() && (function.basic_blocks.size() == 0)) {
+            if (entry_block_key.empty() && function.basic_blocks.empty()) {
                 return {};
             }
 
@@ -88,34 +82,41 @@ namespace patchestry::ast {
     } // namespace
 
     void PcodeASTConsumer::HandleTranslationUnit(clang::ASTContext &ctx) {
-        if (get_program().serialized_types.size() > 0) {
+        if (!get_program().serialized_types.empty()) {
             type_builder->create_types(ctx, get_program().serialized_types);
         }
 
-        if (get_program().serialized_globals.size() > 0) {
+        if (!get_program().serialized_globals.empty()) {
             create_globals(ctx, get_program().serialized_globals);
         }
 
-        if (get_program().serialized_functions.size() > 0) {
+        if (!get_program().serialized_functions.empty()) {
             create_functions(
                 ctx, get_program().serialized_functions, get_program().serialized_types
             );
         }
 
+        std::error_code ec;
+        auto out =
+            std::make_unique< llvm::raw_fd_ostream >(outfile, ec, llvm::sys::fs::OF_Text);
+
         llvm::errs() << "Print AST dump\n";
         ctx.getTranslationUnitDecl()->dumpColor();
 
-        ctx.getTranslationUnitDecl()->print(out, ctx.getPrintingPolicy(), 0);
+        ctx.getTranslationUnitDecl()->print(
+            *llvm::dyn_cast< llvm::raw_ostream >(out), ctx.getPrintingPolicy(), 0
+        );
 
         llvm::errs() << "Generate mlir\n";
-        std::error_code ec;
-        llvm::raw_fd_ostream file_os("/tmp/lifted.mlir", ec);
+        llvm::raw_fd_ostream file_os(outfile + ".mlir", ec);
         codegen->generate_source_ir(ctx, file_os);
     }
 
     void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) {
         get_sema().CurContext = dc;
     }
+
+    void PcodeASTConsumer::write_to_file(void) {}
 
     clang::QualType PcodeASTConsumer::create_function_prototype(
         clang::ASTContext &ctx, const FunctionPrototype &proto
@@ -213,6 +214,7 @@ namespace patchestry::ast {
         );
 
         // Add function declaration to tralsation unit
+        func_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
         // Set asm label attribute to symbol name
@@ -231,14 +233,14 @@ namespace patchestry::ast {
         if (parameter_operations.size() == num_params) {
             std::vector< clang::ParmVarDecl * > params;
             for (const auto &param_op : parameter_operations) {
-                auto type_iter = type_builder->get_serialized_types().find(param_op->type);
+                auto type_iter = type_builder->get_serialized_types().find(*param_op->type);
                 assert(type_iter != type_builder->get_serialized_types().end());
 
                 auto *param_decl = clang::ParmVarDecl::Create(
                     ctx, func_decl, source_location_from_key(ctx, param_op->key),
                     source_location_from_key(ctx, param_op->key),
-                    &ctx.Idents.get(param_op->name), type_iter->second, nullptr, clang::SC_None,
-                    nullptr
+                    &ctx.Idents.get(*param_op->name), type_iter->second, nullptr,
+                    clang::SC_None, nullptr
                 );
                 params.push_back(param_decl);
                 local_variable_declarations.emplace(param_op->key, param_decl);
@@ -255,12 +257,7 @@ namespace patchestry::ast {
     clang::FunctionDecl *PcodeASTConsumer::create_function_definition(
         clang::ASTContext &ctx, const Function &function
     ) {
-        if (function.name.empty()) {
-            assert(false);
-            return nullptr;
-        }
-
-        if (function.basic_blocks.size() == 0) {
+        if (function.name.empty() || function.basic_blocks.empty()) {
             return nullptr;
         }
 
@@ -271,7 +268,7 @@ namespace patchestry::ast {
         auto *func_def = create_function_declaration(ctx, function, true);
         if (func_def != nullptr) {
             set_sema_context(func_def);
-            auto body_vec = create_function_body(ctx, function);
+            auto body_vec = create_function_body(ctx, func_def, function);
             func_def->setBody(clang::CompoundStmt::Create(
                 ctx, body_vec, clang::FPOptionsOverride(), clang::SourceLocation(),
                 clang::SourceLocation()
@@ -281,15 +278,16 @@ namespace patchestry::ast {
         return func_def;
     }
 
-    std::vector< clang::Stmt * >
-    PcodeASTConsumer::create_function_body(clang::ASTContext &ctx, const Function &function) {
+    std::vector< clang::Stmt * > PcodeASTConsumer::create_function_body(
+        clang::ASTContext &ctx, clang::FunctionDecl *func_decl, const Function &function
+    ) {
         if (function.basic_blocks.empty()) {
             llvm::errs() << "Function " << function.name << " doesn't have body\n";
             return {};
         }
 
         // Create label decl for all basic blocks
-        create_label_for_basic_blocks(ctx, function);
+        create_label_for_basic_blocks(ctx, func_decl, function);
 
         std::vector< clang::Stmt * > stmts;
 
@@ -330,7 +328,7 @@ namespace patchestry::ast {
     }
 
     void PcodeASTConsumer::create_label_for_basic_blocks(
-        clang::ASTContext &ctx, const Function &function
+        clang::ASTContext &ctx, clang::FunctionDecl *func_decl, const Function &function
     ) {
         if (function.basic_blocks.empty()) {
             llvm::errs() << "Function " << function.name << " does not have any basic block\n";
@@ -345,9 +343,15 @@ namespace patchestry::ast {
             }
 
             auto *label_decl = clang::LabelDecl::Create(
-                ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(),
+                ctx, func_decl, clang::SourceLocation(),
                 &ctx.Idents.get(label_name_from_key(key))
             );
+
+            label_decl->setDeclContext(func_decl);
+            if (clang::DeclContext *dc = label_decl->getLexicalDeclContext()) {
+                dc->addDecl(label_decl);
+            }
+
             basic_block_labels.emplace(key, label_decl);
         }
     }
@@ -391,6 +395,7 @@ namespace patchestry::ast {
                 ctx.getTrivialTypeSourceInfo(var_type), clang::SC_Static
             );
 
+            var_decl->setDeclContext(ctx.getTranslationUnitDecl());
             ctx.getTranslationUnitDecl()->addDecl(var_decl);
             global_variable_declarations.emplace(variable.key, var_decl);
         }

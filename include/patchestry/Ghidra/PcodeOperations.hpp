@@ -50,13 +50,13 @@ namespace patchestry::ghidra {
 
         static Varnode::Kind convertToKind(const std::string &kdd) {
             static const std::unordered_map< std::string, Varnode::Kind > kind_map = {
-                {   "unknown",   VARNODE_UNKNOWN },
-                {    "global",    VARNODE_GLOBAL },
-                {     "local",     VARNODE_LOCAL },
-                { "parameter",     VARNODE_PARAM },
-                {  "function",  VARNODE_FUNCTION },
-                { "temporary", VARNODE_TEMPORARY },
-                {  "constant",  VARNODE_CONSTANT }
+                {  "unknown",   VARNODE_UNKNOWN},
+                {   "global",    VARNODE_GLOBAL},
+                {    "local",     VARNODE_LOCAL},
+                {"parameter",     VARNODE_PARAM},
+                { "function",  VARNODE_FUNCTION},
+                {"temporary", VARNODE_TEMPORARY},
+                { "constant",  VARNODE_CONSTANT}
             };
 
             // if kind is not present in the map, return varnode_unknown
@@ -85,26 +85,33 @@ namespace patchestry::ghidra {
     struct OperationTarget
 
     {
-        std::string kind;
-        std::string function_key;
+        Varnode::Kind kind;
+        std::optional< std::string > function;
+        std::optional< std::string > operation;
         bool is_noreturn;
     };
 
     struct Operation
     {
         Mnemonic mnemonic;
-        std::string name;
-        std::string type;
-        uint32_t index;
-        std::string key;
-        std::vector< Varnode > output;
+        std::optional< Varnode > output;
         std::vector< Varnode > inputs;
-        std::string target_address;
-        std::string target_block;
-        std::string variable;
-        std::optional< OperationTarget > target;
+
+        std::string key;
         std::string parent_block_key;
 
+        // Parameter/variable declaration
+        std::optional< std::string > name;
+        std::optional< std::string > type;
+        std::optional< uint32_t > index;
+
+        // Call Operation
+        std::optional< OperationTarget > target;
+
+        // Branch Operation
+        std::optional< std::string > target_block;
+
+        // Cond Branch
         std::optional< std::string > taken_block;
         std::optional< std::string > not_taken_block;
         std::optional< Varnode > condition;

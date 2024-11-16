@@ -7,12 +7,7 @@
 
 #pragma once
 
-#include "patchestry/Ghidra/PcodeOperations.hpp"
-#include "patchestry/Ghidra/PcodeTypes.hpp"
-#include <clang/Basic/SourceLocation.h>
-#include <clang/Sema/Sema.h>
 #include <functional>
-#include <llvm-18/llvm/Support/raw_ostream.h>
 #include <memory>
 #include <unordered_map>
 
@@ -22,12 +17,16 @@
 #include <clang/AST/Expr.h>
 #include <clang/AST/Stmt.h>
 #include <clang/AST/Type.h>
+#include <clang/Basic/SourceLocation.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/FrontendAction.h>
+#include <clang/Sema/Sema.h>
+#include <llvm/Support/raw_ostream.h>
 
 #include <patchestry/AST/Codegen.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
+#include <patchestry/Ghidra/PcodeOperations.hpp>
 
 namespace patchestry::ast {
     using namespace patchestry::ghidra;
@@ -39,20 +38,20 @@ namespace patchestry::ast {
     {
       public:
         explicit PcodeASTConsumer(
-            clang::CompilerInstance &ci, Program &prog, llvm::raw_ostream &out,
-            llvm::raw_ostream &ast_out
+            clang::CompilerInstance &ci, Program &prog, std::string &outfile
         )
             : program(prog)
             , ci(ci)
-            , out(out)
-            , ast_out(ast_out)
-            , codegen(std::make_unique< CodeGenerator >())
+            , outfile(outfile)
+            , codegen(std::make_unique< CodeGenerator >(ci))
             , type_builder(std::make_unique< TypeBuilder >(ci.getASTContext())) {}
 
         void HandleTranslationUnit(clang::ASTContext &ctx) override;
 
       private:
         void set_sema_context(clang::DeclContext *dc);
+
+        void write_to_file(void);
 
         void create_globals(clang::ASTContext &ctx, VariableMap &serialized_variables);
 
@@ -75,10 +74,13 @@ namespace patchestry::ast {
         clang::FunctionDecl *
         create_function_definition(clang::ASTContext &ctx, const Function &function);
 
-        std::vector< clang::Stmt * >
-        create_function_body(clang::ASTContext &ctx, const Function &function);
+        std::vector< clang::Stmt * > create_function_body(
+            clang::ASTContext &ctx, clang::FunctionDecl *func_decl, const Function &function
+        );
 
-        void create_label_for_basic_blocks(clang::ASTContext &ctx, const Function &function);
+        void create_label_for_basic_blocks(
+            clang::ASTContext &ctx, clang::FunctionDecl *func_decl, const Function &function
+        );
 
         std::vector< clang::Stmt * > create_basic_block(
             clang::ASTContext &ctx, const Function &function, const BasicBlock &block
@@ -97,7 +99,31 @@ namespace patchestry::ast {
             clang::ASTContext &ctx, const Function &function, const Operation &ret_op
         );
 
+        clang::QualType get_varnode_type(clang::ASTContext &ctx, const Varnode &vnode);
+
         clang::Stmt *create_varnode(
+            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+            bool is_input = true
+        );
+
+        clang::Stmt *create_function(
+            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+            bool is_input = true
+        );
+
+        clang::Stmt *create_local(
+            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+            bool is_input = true
+        );
+
+        clang::Stmt *create_constant(clang::ASTContext &ctx, const Varnode &vnode);
+
+        clang::Stmt *create_parameter(
+            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+            bool is_input = true
+        );
+
+        clang::Stmt *create_global(
             clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
             bool is_input = true
         );
@@ -202,24 +228,6 @@ namespace patchestry::ast {
         std::pair< clang::Stmt *, bool >
         create_int_2comp(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
-        std::pair< clang::Stmt *, bool > create_int_negative(
-            clang::ASTContext &ctx, const Function &function, const Operation &op
-        );
-
-        std::pair< clang::Stmt *, bool >
-        create_int_xor(clang::ASTContext &ctx, const Function &function, const Operation &op);
-
-        std::pair< clang::Stmt *, bool >
-        create_int_and(clang::ASTContext &ctx, const Function &function, const Operation &op);
-        std::pair< clang::Stmt *, bool >
-        create_int_or(clang::ASTContext &ctx, const Function &function, const Operation &op);
-        std::pair< clang::Stmt *, bool >
-        create_int_left(clang::ASTContext &ctx, const Function &function, const Operation &op);
-        std::pair< clang::Stmt *, bool >
-        create_int_right(clang::ASTContext &ctx, const Function &function, const Operation &op);
-        std::pair< clang::Stmt *, bool > create_int_sright(
-            clang::ASTContext &ctx, const Function &function, const Operation &op
-        );
         std::pair< clang::Stmt *, bool >
         create_int_mult(clang::ASTContext &ctx, const Function &function, const Operation &op);
         std::pair< clang::Stmt *, bool >
@@ -314,14 +322,11 @@ namespace patchestry::ast {
 
         std::reference_wrapper< Program > program;
         std::reference_wrapper< clang::CompilerInstance > ci;
-        std::reference_wrapper< llvm::raw_ostream > out;
-        std::reference_wrapper< llvm::raw_ostream > ast_out;
 
+        std::string outfile;
         std::unique_ptr< CodeGenerator > codegen;
-
         std::unique_ptr< TypeBuilder > type_builder;
 
-        std::unordered_map< std::string, clang::Decl * > incomplete_definition;
         std::unordered_map< std::string, clang::FunctionDecl * > function_declarations;
 
         /* Map of basic block label decls and stmt for creating branch instructions */
