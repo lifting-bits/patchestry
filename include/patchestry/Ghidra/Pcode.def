@@ -50,6 +50,7 @@
         X(INT_SREM) \
         X(BOOL_NEGATE) \
         X(BOOL_OR) \
+        X(BOOL_AND) \
         X(FLOAT_EQUAL) \
         X(FLOAT_NOTEQUAL) \
         X(FLOAT_LESS) \

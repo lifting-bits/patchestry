@@ -5,17 +5,18 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include <clang/AST/OperationKinds.h>
-#include <clang/AST/Type.h>
-#include <clang/Basic/LangOptions.h>
 #include <optional>
+#include <utility>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/NestedNameSpecifier.h>
+#include <clang/AST/OperationKinds.h>
 #include <clang/AST/Stmt.h>
+#include <clang/AST/Type.h>
 #include <clang/Basic/LLVM.h>
+#include <clang/Basic/LangOptions.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/Specifiers.h>
 #include <clang/Sema/Sema.h>
@@ -26,7 +27,6 @@
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
-#include <utility>
 
 namespace patchestry::ast {
 
@@ -76,14 +76,14 @@ namespace patchestry::ast {
         }
 
         // Get type of the declared variable
-        auto type_iter = type_builder->get_serialized_types().find(op.type);
+        auto type_iter = type_builder->get_serialized_types().find(*op.type);
         assert(
             (type_iter != type_builder->get_serialized_types().end())
             && "Failed to find type for declared variable."
         );
 
         auto *var_decl = create_variable_decl(
-            ctx, ctx.getTranslationUnitDecl(), op.name, type_iter->second,
+            ctx, get_sema().CurContext, *op.name, type_iter->second,
             source_location_from_key(ctx, op.key)
         );
 
@@ -102,14 +102,14 @@ namespace patchestry::ast {
         }
 
         // Get type of the declared variable
-        auto type_iter = type_builder->get_serialized_types().find(op.type);
+        auto type_iter = type_builder->get_serialized_types().find(*op.type);
         assert(
             (type_iter != type_builder->get_serialized_types().end())
             && "Failed to find type for declared variable."
         );
 
         auto *var_decl = create_variable_decl(
-            ctx, ctx.getTranslationUnitDecl(), op.name, type_iter->second,
+            ctx, get_sema().CurContext, *op.name, type_iter->second,
             source_location_from_key(ctx, op.key)
         );
 
@@ -136,12 +136,33 @@ namespace patchestry::ast {
 
         // Copy operation does not have output varnode. Create stmt that will be merged to next
         // operation
-        if (op.output.size() == 0U) {
+        auto *input_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs.front()));
+        if (!op.output) {
             assert((op.inputs.size() == 1) && "Invalid input for copy operation");
-            return std::make_pair(create_varnode(ctx, function, op.inputs.front()), true);
+            return std::make_pair(input_expr, true);
         }
 
-        return std::make_pair(nullptr, false);
+        auto *output_expr = clang::dyn_cast< clang::Expr >(
+            create_varnode(ctx, function, *op.output, /*is_input=*/false)
+        );
+
+        if (clang::dyn_cast< clang::Expr >(input_expr)->getType() != output_expr->getType()) {
+            auto cast_result = get_sema().BuildCStyleCastExpr(
+                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(output_expr->getType()),
+                clang::SourceLocation(), clang::dyn_cast< clang::Expr >(input_expr)
+            );
+
+            assert(!cast_result.isInvalid() && "Invalid cstyle cast to output expr");
+            input_expr = cast_result.getAs< clang::Expr >();
+        }
+
+        auto assign_result = get_sema().CreateBuiltinBinOp(
+            source_location_from_key(ctx, op.key), clang::BO_Assign, output_expr, input_expr
+        );
+        assert(!assign_result.isInvalid());
+
+        return std::make_pair(assign_result.getAs< clang::Stmt >(), false);
     }
 
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_load(
@@ -152,7 +173,7 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
 
         auto *input0_expr = create_varnode(ctx, function, op.inputs[0]);
         assert(input0_expr != nullptr);
@@ -166,10 +187,14 @@ namespace patchestry::ast {
             return std::make_pair(deref_result.getAs< clang::Expr >(), merge_to_next);
         }
 
-        auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.output[0]));
-
         auto *result_expr = deref_result.getAs< clang::Expr >();
+        // auto is_lvalue    = result_expr->isLValue();
+
+        auto *output_expr = clang::dyn_cast< clang::Expr >(
+            create_varnode(ctx, function, *op.output, /*is_input=*/false)
+        );
+
+        // auto *result_expr = deref_result.getAs< clang::Expr >();
 
         if (result_expr->getType() != output_expr->getType()) {
             auto cast_result = get_sema().BuildCStyleCastExpr(
@@ -243,8 +268,8 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        assert(!op.target_block.empty());
-        auto iter = basic_block_labels.find(op.target_block);
+        assert(op.target_block);
+        auto iter = basic_block_labels.find(*op.target_block);
         assert(iter != basic_block_labels.end());
 
         (void) function;
@@ -252,7 +277,7 @@ namespace patchestry::ast {
         return std::make_pair(
             new (ctx) clang::GotoStmt(
                 iter->second, source_location_from_key(ctx, op.key),
-                source_location_from_key(ctx, op.target_block)
+                source_location_from_key(ctx, *op.target_block)
             ),
             false
         );
@@ -279,7 +304,7 @@ namespace patchestry::ast {
 
             taken_stmt = new (ctx) clang::GotoStmt(
                 label_iter->second, source_location_from_key(ctx, op.key),
-                source_location_from_key(ctx, op.target_block)
+                source_location_from_key(ctx, *op.target_block)
             );
         } else {
             taken_stmt = new (ctx) clang::NullStmt(clang::SourceLocation(), false);
@@ -292,7 +317,7 @@ namespace patchestry::ast {
 
             not_taken_stmt = new (ctx) clang::GotoStmt(
                 label_iter->second, source_location_from_key(ctx, op.key),
-                source_location_from_key(ctx, op.target_block)
+                source_location_from_key(ctx, *op.target_block)
             );
         } else {
             not_taken_stmt = new (ctx) clang::NullStmt(clang::SourceLocation(), false);
@@ -329,11 +354,12 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        auto function_key = call_target->function_key;
-        auto iter         = function_declarations.find(function_key);
-        if (iter == function_declarations.end()) {
+        if (!call_target->function && !call_target->operation) {
+            assert(false);
             return std::make_pair(nullptr, false);
         }
+
+        clang::Expr *call_expr = nullptr;
 
         std::vector< clang::Expr * > arguments;
         for (const auto &input : op.inputs) {
@@ -342,15 +368,33 @@ namespace patchestry::ast {
             arguments.push_back(clang::dyn_cast< clang::Expr >(arg_expr));
         }
 
-        auto *call_expr = create_function_call(ctx, iter->second, arguments);
-        if (op.output.empty() || iter->second->getReturnType()->isVoidType()) {
-            return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
+        if (call_target->function) {
+            auto iter = function_declarations.find(call_target->function.value());
+            if (iter == function_declarations.end()) {
+                return std::make_pair(nullptr, false);
+            }
+            call_expr = create_function_call(ctx, iter->second, arguments);
+            if (!op.output || iter->second->getReturnType()->isVoidType()) {
+                return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
+            }
+
+        } else if (call_target->operation) {
+            auto op        = operation_from_key(function, call_target->operation.value());
+            auto [stmt, _] = create_operation(ctx, function, op.value());
+            auto result    = get_sema().ActOnCallExpr(
+                nullptr, clang::dyn_cast< clang::Expr >(stmt), clang::SourceLocation(),
+                arguments, clang::SourceLocation()
+            );
+            call_expr = result.getAs< clang::Expr >();
+            if (!op->output) {
+                return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
+            }
         }
 
-        auto *out_expr = create_varnode(ctx, function, op.output[0]);
+        auto *out_expr = create_varnode(ctx, function, *op.output, false);
         set_sema_context(ctx.getTranslationUnitDecl());
 
-        auto rty_type = type_builder->get_serialized_types().at(op.type);
+        auto rty_type = type_builder->get_serialized_types().at(*op.type);
 
         auto cast_result =
             get_sema().ImpCastExprToType(call_expr, rty_type, clang::CastKind::CK_BitCast);
@@ -366,8 +410,58 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_callind(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return std::make_pair(nullptr, true);
+        if (op.mnemonic != Mnemonic::OP_CALLIND) {
+            assert(false);
+            return std::make_pair(nullptr, false);
+        }
+
+        auto call_target = op.target;
+        if (!call_target.has_value()) {
+            return std::make_pair(nullptr, false);
+        }
+        clang::Expr *call_expr = nullptr;
+
+        std::vector< clang::Expr * > arguments;
+        for (const auto &input : op.inputs) {
+            auto *arg_expr = create_varnode(ctx, function, input);
+            assert(arg_expr != nullptr);
+            arguments.push_back(clang::dyn_cast< clang::Expr >(arg_expr));
+        }
+
+        if (call_target->function) {
+            auto iter = function_declarations.find(call_target->function.value());
+            if (iter == function_declarations.end()) {
+                return std::make_pair(nullptr, false);
+            }
+            call_expr = create_function_call(ctx, iter->second, arguments);
+            if (!op.output || iter->second->getReturnType()->isVoidType()) {
+                return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
+            }
+        } else if (call_target->operation) {
+            auto op        = operation_from_key(function, call_target->operation.value());
+            auto [stmt, _] = create_operation(ctx, function, op.value());
+            auto result    = get_sema().ActOnCallExpr(
+                nullptr, clang::dyn_cast< clang::Expr >(stmt), clang::SourceLocation(),
+                arguments, clang::SourceLocation()
+            );
+            call_expr = result.getAs< clang::Expr >();
+            if (!op->output) {
+                return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
+            }
+        }
+
+        auto *out_expr = create_varnode(ctx, function, *op.output, /*is_input=*/false);
+        auto rty_type  = type_builder->get_serialized_types().at(*op.type);
+
+        auto cast_result =
+            get_sema().ImpCastExprToType(call_expr, rty_type, clang::CastKind::CK_BitCast);
+
+        auto out_result = get_sema().CreateBuiltinBinOp(
+            source_location_from_key(ctx, op.key), clang::BO_Assign,
+            clang::dyn_cast< clang::Expr >(out_expr), cast_result.getAs< clang::Expr >()
+        );
+
+        return std::make_pair(out_result.getAs< clang::Expr >(), false);
     }
 
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_userdefined(
@@ -387,7 +481,7 @@ namespace patchestry::ast {
 
         // Assert if number
         // assert(ret_op.inputs.size() < 2);
-        if (op.inputs.size() > 0) {
+        if (!op.inputs.empty()) {
             auto varnode   = op.inputs.size() == 1 ? op.inputs.front() : op.inputs.at(1);
             auto *ret_expr = create_varnode(ctx, function, varnode);
             return std::make_pair(
@@ -398,7 +492,9 @@ namespace patchestry::ast {
                 false
             );
         }
-        return std::make_pair(clang::ReturnStmt::CreateEmpty(ctx, false), false);
+        return std::make_pair(
+            clang::ReturnStmt::Create(ctx, clang::SourceLocation(), nullptr, nullptr), false
+        );
     }
 
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_piece(
@@ -409,9 +505,9 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
 
-        unsigned low_width = 8u;
+        unsigned low_width = 8U;
 
         auto *shift_value = clang::IntegerLiteral::Create(
             ctx, llvm::APInt(32, low_width), ctx.IntTy, clang::SourceLocation()
@@ -423,7 +519,6 @@ namespace patchestry::ast {
         auto *input1_expr = create_varnode(ctx, function, op.inputs[1]);
         assert(input1_expr != nullptr);
 
-        set_sema_context(ctx.getTranslationUnitDecl());
         auto shifted_high_result = get_sema().CreateBuiltinBinOp(
             source_location_from_key(ctx, op.key), clang::BO_Shl,
             clang::dyn_cast< clang::Expr >(input0_expr),
@@ -450,7 +545,7 @@ namespace patchestry::ast {
             return std::make_pair(or_result.getAs< clang::Expr >(), merge_to_next);
         }
 
-        auto *output_expr = create_varnode(ctx, function, op.output[0]);
+        auto *output_expr = create_varnode(ctx, function, *op.output, /*is_input=*/false);
         auto out_result   = get_sema().CreateBuiltinBinOp(
             source_location_from_key(ctx, op.key), clang::BO_Assign,
             clang::dyn_cast< clang::Expr >(output_expr), or_result.getAs< clang::Expr >()
@@ -472,7 +567,7 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
         assert(op.inputs.size() == 2);
 
         auto *shift_value = create_varnode(ctx, function, op.inputs[1]);
@@ -486,7 +581,6 @@ namespace patchestry::ast {
             clang::dyn_cast< clang::Expr >(expr)
         );
 
-        set_sema_context(ctx.getTranslationUnitDecl());
         auto shifted_result = get_sema().CreateBuiltinBinOp(
             source_location_from_key(ctx, op.key), clang::BO_Shr,
             clang::dyn_cast< clang::Expr >(expr_with_paren),
@@ -525,7 +619,7 @@ namespace patchestry::ast {
             return std::make_pair(result_expr, merge_to_next);
         }
 
-        auto *out_expr  = create_varnode(ctx, function, op.output[0]);
+        auto *out_expr  = create_varnode(ctx, function, *op.output, /*is_input=*/false);
         auto out_result = get_sema().CreateBuiltinBinOp(
             source_location_from_key(ctx, op.key), clang::BO_Assign,
             clang::dyn_cast< clang::Expr >(out_expr), result_expr
@@ -546,19 +640,8 @@ namespace patchestry::ast {
             assert(false);
             return std::make_pair(nullptr, false);
         }
-        auto merge_to_next = op.output.empty();
-        assert(op.inputs.size() == 2);
 
-        auto *lhs = create_varnode(ctx, function, op.inputs[0]);
-        auto *rhs = create_varnode(ctx, function, op.inputs[1]);
-
-        get_sema().CurContext = ctx.getTranslationUnitDecl();
-        auto result           = get_sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BinaryOperatorKind::BO_EQ,
-            clang::dyn_cast< clang::Expr >(lhs), clang::dyn_cast< clang::Expr >(rhs)
-        );
-
-        return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
+        return create_binary_operation< clang::BinaryOperatorKind::BO_EQ >(ctx, function, op);
     }
 
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_notequal(
@@ -569,34 +652,7 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        auto merge_to_next = op.output.empty();
-        assert(op.inputs.size() == 2);
-
-        auto *lhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
-        auto *rhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
-
-        if (lhs->getType() != rhs->getType()) {
-            auto cast_lhs = get_sema().BuildCStyleCastExpr(
-                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(ctx.IntTy),
-                clang::SourceLocation(), lhs
-            );
-            assert(!cast_lhs.isInvalid());
-            lhs = cast_lhs.getAs< clang::Expr >();
-
-            auto cast_rhs = get_sema().BuildCStyleCastExpr(
-                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(ctx.IntTy),
-                clang::SourceLocation(), lhs
-            );
-            assert(!cast_rhs.isInvalid());
-            rhs = cast_rhs.getAs< clang::Expr >();
-        }
-
-        auto result = get_sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BinaryOperatorKind::BO_NE,
-            clang::dyn_cast< clang::Expr >(lhs), clang::dyn_cast< clang::Expr >(rhs)
-        );
-
-        return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
+        return create_binary_operation< clang::BinaryOperatorKind::BO_NE >(ctx, function, op);
     }
 
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_less(
@@ -651,11 +707,11 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, true);
         }
 
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
         auto *input_expr   = create_varnode(ctx, function, op.inputs[0]);
         assert(input_expr != nullptr);
 
-        auto target_type = type_builder->get_serialized_types().at(op.type);
+        auto target_type = type_builder->get_serialized_types().at(*op.type);
 
         auto result = get_sema().BuildCStyleCastExpr(
             clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(target_type),
@@ -671,7 +727,7 @@ namespace patchestry::ast {
             return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
         }
 
-        auto *out_expr  = create_varnode(ctx, function, op.output[0]);
+        auto *out_expr  = create_varnode(ctx, function, *op.output, /*is_input=*/false);
         auto out_result = get_sema().CreateBuiltinBinOp(
             source_location_from_key(ctx, op.key), clang::BO_Assign,
             clang::dyn_cast< clang::Expr >(out_expr), result.getAs< clang::Expr >()
@@ -688,13 +744,12 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, true);
         }
 
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
         auto *input_expr   = create_varnode(ctx, function, op.inputs[0]);
         assert(input_expr != nullptr);
 
-        auto target_type = type_builder->get_serialized_types().at(op.type);
+        auto target_type = type_builder->get_serialized_types().at(*op.type);
 
-        set_sema_context(ctx.getTranslationUnitDecl());
         auto result = get_sema().BuildCStyleCastExpr(
             clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(target_type),
             clang::SourceLocation(), clang::dyn_cast< clang::Expr >(input_expr)
@@ -709,7 +764,7 @@ namespace patchestry::ast {
             return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
         }
 
-        auto *out_expr  = create_varnode(ctx, function, op.output[0]);
+        auto *out_expr  = create_varnode(ctx, function, *op.output, /*is_input=*/false);
         auto out_result = get_sema().CreateBuiltinBinOp(
             source_location_from_key(ctx, op.key), clang::BO_Assign,
             clang::dyn_cast< clang::Expr >(out_expr), result.getAs< clang::Expr >()
@@ -768,143 +823,35 @@ namespace patchestry::ast {
         return std::make_pair(nullptr, true);
     }
 
-    std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_negative(
+    template std::pair< clang::Stmt *, bool >
+    PcodeASTConsumer::create_unary_operation< clang::UO_LNot >(
         clang::ASTContext &ctx, const Function &function, const Operation &op
-    ) {
-        if (op.mnemonic != Mnemonic::OP_INT_NEGATE) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
-        return create_unary_operation< clang::UO_LNot >(ctx, function, op);
-    }
+    );
 
-    std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_xor(
+    template std::pair< clang::Stmt *, bool >
+    PcodeASTConsumer::create_binary_operation< clang::BO_Xor >(
         clang::ASTContext &ctx, const Function &function, const Operation &op
-    ) {
-        if (op.mnemonic != Mnemonic::OP_INT_XOR) {
-            assert(false && "Invalid int_add operation");
-            return std::make_pair(nullptr, false);
-        }
+    );
 
-        return create_binary_operation< clang::BO_Xor >(ctx, function, op);
-    }
-
-    std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_and(
+    template std::pair< clang::Stmt *, bool >
+    PcodeASTConsumer::create_binary_operation< clang::BO_And >(
         clang::ASTContext &ctx, const Function &function, const Operation &op
-    ) {
-        if (op.mnemonic != Mnemonic::OP_INT_AND) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
+    );
 
-        auto merge_to_next = op.output.empty();
-        assert(op.inputs.size() == 2);
-
-        auto *lhs = create_varnode(ctx, function, op.inputs[0]);
-        assert(lhs != nullptr);
-
-        auto *rhs = create_varnode(ctx, function, op.inputs[1]);
-        assert(rhs != nullptr);
-
-        auto result = get_sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BinaryOperatorKind::BO_And,
-            clang::dyn_cast< clang::Expr >(lhs), clang::dyn_cast< clang::Expr >(rhs)
-        );
-
-        if (merge_to_next) {
-            return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
-        }
-
-        auto *output_expr = create_varnode(ctx, function, op.output[0]);
-        assert(output_expr != nullptr);
-
-        auto output_result = get_sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BO_Assign,
-            clang::dyn_cast< clang::Expr >(output_expr), result.getAs< clang::Expr >()
-        );
-
-        if (output_result.isInvalid()) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
-
-        return std::make_pair(output_result.getAs< clang::Expr >(), merge_to_next);
-    }
-
-    std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_or(
+    template std::pair< clang::Stmt *, bool >
+    PcodeASTConsumer::create_binary_operation< clang::BO_Or >(
         clang::ASTContext &ctx, const Function &function, const Operation &op
-    ) {
-        if (op.mnemonic != Mnemonic::OP_INT_OR) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
+    );
 
-        auto merge_to_next = op.output.empty();
-        assert(op.inputs.size() == 2);
-
-        auto *lhs = create_varnode(ctx, function, op.inputs[0]);
-        assert(lhs != nullptr);
-
-        auto *rhs = create_varnode(ctx, function, op.inputs[1]);
-        assert(rhs != nullptr);
-
-        auto result = get_sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BinaryOperatorKind::BO_Or,
-            clang::dyn_cast< clang::Expr >(lhs), clang::dyn_cast< clang::Expr >(rhs)
-        );
-
-        if (merge_to_next) {
-            return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
-        }
-
-        auto *output_expr = create_varnode(ctx, function, op.output[0]);
-        assert(output_expr != nullptr);
-
-        auto output_result = get_sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BO_Assign,
-            clang::dyn_cast< clang::Expr >(output_expr), result.getAs< clang::Expr >()
-        );
-
-        if (output_result.isInvalid()) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
-
-        return std::make_pair(output_result.getAs< clang::Expr >(), merge_to_next);
-    }
-
-    std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_left(
+    template std::pair< clang::Stmt *, bool >
+    PcodeASTConsumer::create_binary_operation< clang::BO_Shl >(
         clang::ASTContext &ctx, const Function &function, const Operation &op
-    ) {
-        if (op.mnemonic != Mnemonic::OP_INT_LEFT) {
-            assert(false && "Invalid int_add operation");
-            return std::make_pair(nullptr, false);
-        }
+    );
 
-        return create_binary_operation< clang::BO_Shl >(ctx, function, op);
-    }
-
-    std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_right(
+    template std::pair< clang::Stmt *, bool >
+    PcodeASTConsumer::create_binary_operation< clang::BO_Shr >(
         clang::ASTContext &ctx, const Function &function, const Operation &op
-    ) {
-        if (op.mnemonic != Mnemonic::OP_INT_RIGHT) {
-            assert(false && "Invalid int_add operation");
-            return std::make_pair(nullptr, false);
-        }
-
-        return create_binary_operation< clang::BO_Shr >(ctx, function, op);
-    }
-
-    std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_sright(
-        clang::ASTContext &ctx, const Function &function, const Operation &op
-    ) {
-        if (op.mnemonic != Mnemonic::OP_INT_SRIGHT) {
-            assert(false && "Invalid int_add operation");
-            return std::make_pair(nullptr, false);
-        }
-
-        return create_binary_operation< clang::BO_Shr >(ctx, function, op);
-    }
+    );
 
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_mult(
         clang::ASTContext &ctx, const Function &function, const Operation &op
@@ -931,8 +878,12 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_rem(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return std::make_pair(nullptr, true);
+        if (op.mnemonic != Mnemonic::OP_INT_REM) {
+            assert(false);
+            return std::make_pair(nullptr, false);
+        }
+
+        return create_binary_operation< clang::BO_Rem >(ctx, function, op);
     }
 
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_sdiv(
@@ -943,73 +894,7 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        auto merge_to_next = op.output.empty();
-        assert(op.inputs.size() == 2);
-
-        auto *lhs = create_varnode(ctx, function, op.inputs[0]);
-        assert(lhs != nullptr);
-
-        auto rhs = create_varnode(ctx, function, op.inputs[1]);
-        assert(rhs != nullptr);
-
-        set_sema_context(ctx.getTranslationUnitDecl());
-        auto result = get_sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BinaryOperatorKind::BO_Div,
-            clang::dyn_cast< clang::Expr >(lhs), clang::dyn_cast< clang::Expr >(rhs)
-        );
-
-        if (result.isInvalid()) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
-
-        if (merge_to_next) {
-            return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
-        }
-
-        // If output varnode is there, assign result to output varnode;
-        auto out_expr = create_varnode(ctx, function, op.output[0]);
-        assert(out_expr != nullptr);
-
-        auto out_result = get_sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BO_Assign,
-            clang::dyn_cast< clang::Expr >(out_expr), result.getAs< clang::Expr >()
-        );
-
-        if (out_result.isInvalid()) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
-
-        return std::make_pair(out_result.getAs< clang::Stmt >(), merge_to_next);
-    }
-
-    std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int_srem(
-        clang::ASTContext &ctx, const Function &function, const Operation &op
-    ) {
-        (void) ctx, (void) function, (void) op;
-        return std::make_pair(nullptr, true);
-    }
-
-    std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_bool_negate(
-        clang::ASTContext &ctx, const Function &function, const Operation &op
-    ) {
-        if (op.mnemonic != Mnemonic::OP_BOOL_NEGATE) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
-        return create_unary_operation< clang::UO_LNot >(ctx, function, op);
-    }
-
-    std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_bool_or(
-        clang::ASTContext &ctx, const Function &function, const Operation &op
-    ) {
-        if (op.mnemonic != Mnemonic::OP_BOOL_OR) {
-            assert(false && "Invalid int_add operation");
-            return std::make_pair(nullptr, false);
-        }
-
-        return create_binary_operation< clang::BO_Or >(ctx, function, op);
+        return create_binary_operation< clang::BO_Div >(ctx, function, op);
     }
 
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_float_equal(
@@ -1064,8 +949,12 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_float_div(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return std::make_pair(nullptr, true);
+        if (op.mnemonic != Mnemonic::OP_FLOAT_DIV) {
+            assert(false);
+            return std::make_pair(nullptr, false);
+        }
+
+        return create_binary_operation< clang::BO_Div >(ctx, function, op);
     }
 
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_float_neg(
@@ -1120,8 +1009,36 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_int2float(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return std::make_pair(nullptr, true);
+        if (op.mnemonic != Mnemonic::OP_INT2FLOAT) {
+            assert(false && "Invalid int2float operation");
+            return std::make_pair(nullptr, false);
+        }
+
+        auto type_iter = type_builder->get_serialized_types().find(*op.type);
+        assert(type_iter != type_builder->get_serialized_types().end());
+
+        auto *lhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        auto result = get_sema().BuildCStyleCastExpr(
+            clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(type_iter->second),
+            clang::SourceLocation(), lhs
+        );
+        assert(!result.isInvalid() && "Invalid cast expr result");
+
+        if (!op.output) {
+            return std::make_pair(result.getAs< clang::Stmt >(), true);
+        }
+
+        auto *output = clang::dyn_cast< clang::Expr >(
+            create_varnode(ctx, function, *op.output, /*is_input=*/false)
+        );
+
+        auto output_result = get_sema().CreateBuiltinBinOp(
+            source_location_from_key(ctx, op.key), clang::BO_Assign, output,
+            result.getAs< clang::Expr >()
+        );
+        assert(!output_result.isInvalid() && "Invalid assignment result");
+
+        return std::make_pair(output_result.getAs< clang::Expr >(), false);
     }
 
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_float2float(
@@ -1139,10 +1056,10 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
         assert(op.inputs.size() == 1u);
 
-        auto type_iter = type_builder->get_serialized_types().find(op.type);
+        auto type_iter = type_builder->get_serialized_types().find(*op.type);
         assert(type_iter != type_builder->get_serialized_types().end());
 
         auto *src_expr = create_varnode(ctx, function, op.inputs[0]);
@@ -1163,7 +1080,7 @@ namespace patchestry::ast {
         }
 
         // If output varnode is avaiable
-        auto *dest_expr = create_varnode(ctx, function, op.output[0]);
+        auto *dest_expr = create_varnode(ctx, function, *op.output, /*is_input=*/false);
         auto out_result = get_sema().CreateBuiltinBinOp(
             source_location_from_key(ctx, op.key), clang::BO_Assign,
             clang::dyn_cast< clang::Expr >(dest_expr), result.getAs< clang::Expr >()
@@ -1180,9 +1097,9 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
         auto *input0_expr  = create_varnode(ctx, function, op.inputs[0]);
-        auto type_iter     = type_builder->get_serialized_types().find(op.type);
+        auto type_iter     = type_builder->get_serialized_types().find(*op.type);
         assert(type_iter != type_builder->get_serialized_types().end());
         auto ptr_type = type_iter->second;
 
@@ -1215,7 +1132,7 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, true);
         }
 
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
         assert(op.inputs.size() == 3U);
 
         auto *base =
@@ -1238,7 +1155,7 @@ namespace patchestry::ast {
             return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
         }
 
-        auto *output_stmt = create_varnode(ctx, function, op.output[0]);
+        auto *output_stmt = create_varnode(ctx, function, *op.output, /*is_input=*/false);
         if (output_stmt->getStmtClass() == clang::Stmt::DeclStmtClass) {
             auto *decl     = clang::dyn_cast< clang::DeclStmt >(output_stmt)->getSingleDecl();
             auto *ref_expr = clang::DeclRefExpr::Create(
@@ -1277,10 +1194,10 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, true);
         }
 
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
         assert(op.inputs.size() == 1U);
 
-        auto type_iter = type_builder->get_serialized_types().find(op.type);
+        auto type_iter = type_builder->get_serialized_types().find(*op.type);
         assert(type_iter != type_builder->get_serialized_types().end());
 
         auto *input_expr = create_varnode(ctx, function, op.inputs[0]);
@@ -1288,9 +1205,7 @@ namespace patchestry::ast {
             clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(type_iter->second),
             clang::SourceLocation(), clang::dyn_cast< clang::Expr >(input_expr)
         );
-        if (result.isInvalid()) {
-            return std::make_pair(nullptr, false);
-        }
+        assert(!result.isInvalid());
 
         return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
     }
@@ -1303,7 +1218,7 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
         auto *input_expr   = create_varnode(ctx, function, op.inputs[0]);
         assert(input_expr != nullptr);
 
@@ -1311,17 +1226,13 @@ namespace patchestry::ast {
             clang::SourceLocation(), clang::UO_AddrOf,
             clang::dyn_cast< clang::Expr >(input_expr)
         );
-
-        if (result.isInvalid()) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
+        assert(!result.isInvalid());
 
         if (merge_to_next) {
             return std::make_pair(result.getAs< clang::Expr >(), merge_to_next);
         }
 
-        auto *output_expr = create_varnode(ctx, function, op.output[0]);
+        auto *output_expr = create_varnode(ctx, function, *op.output, /*is_input=*/false);
 
         auto *result_expr = result.getAs< clang::Expr >();
         auto output_type  = clang::dyn_cast< clang::Expr >(output_expr)->getType();
@@ -1340,11 +1251,7 @@ namespace patchestry::ast {
             source_location_from_key(ctx, op.key), clang::BO_Assign,
             clang::dyn_cast< clang::Expr >(output_expr), result_expr
         );
-
-        if (output_result.isInvalid()) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
+        assert(!output_result.isInvalid());
 
         return std::make_pair(output_result.getAs< clang::Expr >(), merge_to_next);
     }
@@ -1353,41 +1260,35 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_binary_operation(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        auto merge_to_next = op.output.empty();
+        auto merge_to_next = !op.output.has_value();
         assert(op.inputs.size() == 2 && "Insufficient input operators");
 
-        auto *lhs = create_varnode(ctx, function, op.inputs[0]);
-        assert(lhs != nullptr);
+        auto *lhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        auto *rhs = create_varnode(ctx, function, op.inputs[1]);
-        assert(rhs != nullptr);
+        auto *rhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
 
         auto result = get_sema().CreateBuiltinBinOp(
             source_location_from_key(ctx, op.key), Kind, clang::dyn_cast< clang::Expr >(lhs),
             clang::dyn_cast< clang::Expr >(rhs)
         );
 
-        if (result.isInvalid()) {
-            assert(false && "Invalid result from binary operation");
-            return std::make_pair(nullptr, false);
-        }
+        assert(!result.isInvalid() && "Invalid result from binary operation");
 
         if (merge_to_next) {
             return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
         }
 
-        auto *output_expr = create_varnode(ctx, function, op.output[0]);
-        assert(output_expr != nullptr);
+        auto *output_expr = clang::dyn_cast< clang::Expr >(
+            create_varnode(ctx, function, *op.output, /*is_input=*/false)
+        );
 
         auto output_result = get_sema().CreateBuiltinBinOp(
             source_location_from_key(ctx, op.key), clang::BO_Assign,
             clang::dyn_cast< clang::Expr >(output_expr), result.getAs< clang::Expr >()
         );
-
-        if (output_result.isInvalid()) {
-            assert(false && "Invalid result from assignment operation");
-            return std::make_pair(nullptr, false);
-        }
+        assert(
+            !output_result.isInvalid() && "Invalid assignment operation after binary operator"
+        );
 
         return std::make_pair(output_result.getAs< clang::Expr >(), merge_to_next);
     }
@@ -1396,30 +1297,27 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > PcodeASTConsumer::create_unary_operation(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        auto merge_to_next = op.output.empty();
-        auto *input_expr =
+        // If output varnode is emptry, the stmt will get merged to next operation.
+        auto merge_to_next = !op.output.has_value();
+        auto *input =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        auto result = get_sema().CreateBuiltinUnaryOp(
-            clang::SourceLocation(), clang::UO_LNot, input_expr
-        );
-
-        if (result.isInvalid()) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
+        auto result = get_sema().CreateBuiltinUnaryOp(clang::SourceLocation(), Kind, input);
+        assert(!result.isInvalid() && "Invalid unary operation");
 
         if (merge_to_next) {
+            // merge to next operation
             return std::make_pair(result.getAs< clang::Stmt >(), merge_to_next);
         }
 
-        auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.output[0]));
+        auto *output = clang::dyn_cast< clang::Expr >(
+            create_varnode(ctx, function, *op.output, /*is_input=*/false)
+        );
 
         auto *result_expr = result.getAs< clang::Expr >();
-        if (result_expr->getType() != output_expr->getType()) {
+        if (result_expr->getType() != output->getType()) {
             auto cast_result = get_sema().BuildCStyleCastExpr(
-                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(output_expr->getType()),
+                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(output->getType()),
                 clang::SourceLocation(), result_expr
             );
 
@@ -1428,10 +1326,10 @@ namespace patchestry::ast {
         }
 
         auto output_result = get_sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BO_Assign, output_expr, result_expr
+            source_location_from_key(ctx, op.key), clang::BO_Assign, output, result_expr
         );
-
         assert(!output_result.isInvalid());
+
         return std::make_pair(output_result.getAs< clang::Expr >(), false);
     }
 

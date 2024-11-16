@@ -5,8 +5,9 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "patchestry/Ghidra/Pcode.hpp"
-#include "patchestry/Ghidra/PcodeOperations.hpp"
+#include <clang/AST/Type.h>
+#include <optional>
+
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
@@ -16,11 +17,13 @@
 #include <clang/Basic/LLVM.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/Specifiers.h>
-#include <llvm-18/llvm/ADT/APFloat.h>
-#include <llvm-18/llvm/ADT/APInt.h>
-#include <llvm-18/llvm/Support/Casting.h>
-#include <optional>
+#include <llvm/ADT/APFloat.h>
+#include <llvm/ADT/APInt.h>
+#include <llvm/Support/Casting.h>
+
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/Ghidra/Pcode.hpp>
+#include <patchestry/Ghidra/PcodeOperations.hpp>
 
 namespace patchestry::ast {
 
@@ -30,9 +33,10 @@ namespace patchestry::ast {
 
     std::optional< Operation >
     operation_from_key(const Function &function, const std::string &lookup_key) {
-        if (function.basic_blocks.size() == 0) {
+        if (function.basic_blocks.empty()) {
             return std::nullopt;
         }
+
         for (const auto &[_, block] : function.basic_blocks) {
             for (const auto &[operation_key, operation] : block.operations) {
                 if (operation_key == lookup_key) {
@@ -92,23 +96,21 @@ namespace patchestry::ast {
             case Mnemonic::OP_SUBPIECE:
                 return create_subpiece(ctx, function, op);
             case Mnemonic::OP_INT_EQUAL:
-                return create_int_equal(ctx, function, op);
+                return create_binary_operation< clang::BO_EQ >(ctx, function, op);
             case Mnemonic::OP_INT_NOTEQUAL:
-                return create_int_notequal(ctx, function, op);
+                return create_binary_operation< clang::BO_NE >(ctx, function, op);
             case Mnemonic::OP_INT_LESS:
-                return create_int_less(ctx, function, op);
             case Mnemonic::OP_INT_SLESS:
-                return create_int_sless(ctx, function, op);
+                return create_binary_operation< clang::BO_LT >(ctx, function, op);
             case Mnemonic::OP_INT_LESSEQUAL:
-                return create_int_lessequal(ctx, function, op);
             case Mnemonic::OP_INT_SLESSEQUAL:
-                return create_int_slessequal(ctx, function, op);
+                return create_binary_operation< clang::BO_LE >(ctx, function, op);
             case Mnemonic::OP_INT_ZEXT:
                 return create_int_zext(ctx, function, op);
             case Mnemonic::OP_INT_SEXT:
                 return create_int_sext(ctx, function, op);
             case Mnemonic::OP_INT_ADD:
-                return create_int_add(ctx, function, op);
+                return create_binary_operation< clang::BO_Add >(ctx, function, op);
             case Mnemonic::OP_INT_SUB:
                 return create_int_sub(ctx, function, op);
             case Mnemonic::OP_INT_CARRY:
@@ -120,33 +122,33 @@ namespace patchestry::ast {
             case Mnemonic::OP_INT_2COMP:
                 return create_int_2comp(ctx, function, op);
             case Mnemonic::OP_INT_NEGATE:
-                return create_int_negative(ctx, function, op);
+                return create_unary_operation< clang::UO_LNot >(ctx, function, op);
             case Mnemonic::OP_INT_XOR:
-                return create_int_xor(ctx, function, op);
+                return create_binary_operation< clang::BO_Xor >(ctx, function, op);
             case Mnemonic::OP_INT_AND:
-                return create_int_and(ctx, function, op);
+                return create_binary_operation< clang::BO_And >(ctx, function, op);
             case Mnemonic::OP_INT_OR:
-                return create_int_or(ctx, function, op);
+                return create_binary_operation< clang::BO_Or >(ctx, function, op);
             case Mnemonic::OP_INT_LEFT:
-                return create_int_left(ctx, function, op);
+                return create_binary_operation< clang::BO_Shl >(ctx, function, op);
             case Mnemonic::OP_INT_RIGHT:
-                return create_int_right(ctx, function, op);
             case Mnemonic::OP_INT_SRIGHT:
-                return create_int_sright(ctx, function, op);
+                return create_binary_operation< clang::BO_Shr >(ctx, function, op);
             case Mnemonic::OP_INT_MULT:
-                return create_int_mult(ctx, function, op);
+                return create_binary_operation< clang::BO_Mul >(ctx, function, op);
             case Mnemonic::OP_INT_DIV:
-                return create_int_div(ctx, function, op);
+                return create_binary_operation< clang::BO_Div >(ctx, function, op);
             case Mnemonic::OP_INT_REM:
-                return create_int_rem(ctx, function, op);
+                return create_binary_operation< clang::BO_Rem >(ctx, function, op);
             case Mnemonic::OP_INT_SDIV:
-                return create_int_sdiv(ctx, function, op);
+                return create_binary_operation< clang::BO_Div >(ctx, function, op);
             case Mnemonic::OP_INT_SREM:
-                return create_int_srem(ctx, function, op);
+                return create_binary_operation< clang::BO_Rem >(ctx, function, op);
             case Mnemonic::OP_BOOL_NEGATE:
-                return create_bool_negate(ctx, function, op);
+                return create_unary_operation< clang::UO_LNot >(ctx, function, op);
             case Mnemonic::OP_BOOL_OR:
-                return create_bool_or(ctx, function, op);
+                return create_binary_operation< clang::BO_Or >(ctx, function, op);
+            case Mnemonic::OP_BOOL_AND:
             case Mnemonic::OP_FLOAT_EQUAL:
                 return create_float_equal(ctx, function, op);
             case Mnemonic::OP_FLOAT_NOTEQUAL:
@@ -217,8 +219,8 @@ namespace patchestry::ast {
         if (!call_target.has_value()) {
             return nullptr;
         }
-        auto function_key = call_target->function_key;
-        auto iter         = function_declarations.find(function_key);
+        auto function_key = call_target->function;
+        auto iter         = function_declarations.find(function_key.value());
         if (iter == function_declarations.end()) {
             return nullptr;
         }
@@ -226,130 +228,87 @@ namespace patchestry::ast {
         return create_function_call(ctx, func_decl);
     }
 
+    clang::QualType
+    PcodeASTConsumer::get_varnode_type(clang::ASTContext &ctx, const Varnode &vnode) {
+        if (!vnode.type_key.empty()) {
+            auto iter = type_builder->get_serialized_types().find(vnode.type_key);
+            assert(iter != type_builder->get_serialized_types().end());
+            return iter->second;
+        }
+
+        if (vnode.size != 0U) {
+            return get_type_for_size(ctx, vnode.size, /*is_signed=*/false, /*is_integer=*/true);
+        }
+
+        return clang::QualType();
+    }
+
     clang::Stmt *PcodeASTConsumer::create_varnode(
         clang::ASTContext &ctx, const Function &function, const Varnode &vnode, bool is_input
     ) {
-        clang::QualType type;
-        auto vnode_type_key = vnode.type_key;
-        if (!vnode_type_key.empty()) {
-            auto iter = type_builder->get_serialized_types().find(vnode_type_key);
-            if (iter == type_builder->get_serialized_types().end()) {
-                assert(false);
-            }
-            type = iter->second;
-        } else if (vnode.size != 0u) {
-            type = get_type_for_size(ctx, vnode.size, /*is_signed=*/false, /*is_integer=*/true);
-        }
-
         switch (vnode.kind) {
             case Varnode::VARNODE_UNKNOWN:
-            case Varnode::VARNODE_GLOBAL: {
-                if (vnode.global) {
-                    auto iter = global_variable_declarations.find(vnode.global.value());
-                    assert(
-                        iter != local_variable_declarations.end()
-                        && "Failed to find global variable declaration"
-                    );
-                    auto *var_decl = clang::dyn_cast< clang::VarDecl >(iter->second);
-                    return clang::DeclRefExpr::Create(
-                        ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl,
-                        false, clang::SourceLocation(), var_decl->getType(), clang::VK_LValue
-                    );
-                }
                 break;
-            }
-            case Varnode::VARNODE_PARAM: {
-                if (vnode.operation) {
-                    auto iter = local_variable_declarations.find(vnode.operation.value());
-                    assert(
-                        iter != local_variable_declarations.end()
-                        && "Failed to find parameter variable declaration"
-                    );
-                    auto *param_decl = clang::dyn_cast< clang::ParmVarDecl >(iter->second);
-                    return clang::DeclRefExpr::Create(
-                        ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
-                        param_decl, false, clang::SourceLocation(), param_decl->getType(),
-                        clang::VK_PRValue
-                    );
-                }
-                assert(false && "Failed to create varnode for parameters");
-                break;
-            }
-            case Varnode::VARNODE_FUNCTION: {
-                if (vnode.function) {
-                    auto iter = function_declarations.find(vnode.function.value());
-                    assert(
-                        iter != function_declarations.end()
-                        && "Failed to find function declaration"
-                    );
-                    auto *func_decl = clang::dyn_cast< clang::FunctionDecl >(iter->second);
-                    return clang::DeclRefExpr::Create(
-                        ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
-                        func_decl, false, clang::SourceLocation(), func_decl->getType(),
-                        clang::VK_PRValue
-                    );
-                }
-                break;
-            }
-            case Varnode::VARNODE_LOCAL: {
-                // Varnode is accessing local variable. Need to get the decl reference expr
-                // from the variable decl;
-                if (vnode.operation) {
-                    auto iter = local_variable_declarations.find(vnode.operation.value());
-                    if (iter != local_variable_declarations.end()) {
-                        assert(iter != local_variable_declarations.end());
-                        auto *var_decl = clang::dyn_cast< clang::VarDecl >(iter->second);
-                        return clang::DeclRefExpr::Create(
-                            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
-                            var_decl, false, clang::SourceLocation(), var_decl->getType(),
-                            clang::VK_LValue
-                        );
-                    }
-                    auto maybe_operation =
-                        operation_from_key(function, vnode.operation.value());
-                    if (maybe_operation) {
-                        auto [stmt, _] = create_operation(ctx, function, *maybe_operation);
-                        return stmt;
-                    }
-                }
-                break;
-            }
+            case Varnode::VARNODE_GLOBAL:
+                return create_global(ctx, function, vnode, is_input);
+            case Varnode::VARNODE_PARAM:
+                return create_parameter(ctx, function, vnode, is_input);
+            case Varnode::VARNODE_FUNCTION:
+                return create_function(ctx, function, vnode);
+            case Varnode::VARNODE_LOCAL:
+                return create_local(ctx, function, vnode, is_input);
             case Varnode::VARNODE_TEMPORARY:
                 return create_temporary(ctx, function, vnode, is_input);
-            case Varnode::VARNODE_CONSTANT: {
-                if (type->isIntegerType()) {
-                    auto value = vnode.value;
-                    return new (ctx) clang::IntegerLiteral(
-                        ctx,
-                        llvm::APInt(static_cast< uint32_t >(ctx.getTypeSize(type)), *value),
-                        type, clang::SourceLocation()
-                    );
-                } else if (type->isVoidType()) {
-                    auto value    = vnode.value;
-                    auto *literal = new (ctx) clang::IntegerLiteral(
-                        ctx, llvm::APInt(32U, *value), ctx.IntTy, clang::SourceLocation()
-                    );
-                    return clang::CStyleCastExpr::Create(
-                        ctx, type, clang::VK_PRValue, clang::CK_ToVoid, literal, nullptr,
-                        clang::FPOptionsOverride(), ctx.getTrivialTypeSourceInfo(type),
-                        clang::SourceLocation(), clang::SourceLocation()
-                    );
-                } else if (type->isPointerType()) {
-                    auto value    = vnode.value;
-                    auto *literal = new (ctx) clang::IntegerLiteral(
-                        ctx, llvm::APInt(32U, *value), ctx.IntTy, clang::SourceLocation()
-                    );
-                    return clang::CStyleCastExpr::Create(
-                        ctx, type, clang::VK_PRValue, clang::CK_IntegralToPointer, literal,
-                        nullptr, clang::FPOptionsOverride(), ctx.getTrivialTypeSourceInfo(type),
-                        clang::SourceLocation(), clang::SourceLocation()
-                    );
-                }
-                break;
-            }
+            case Varnode::VARNODE_CONSTANT:
+                return create_constant(ctx, vnode);
         }
 
         return nullptr;
+    }
+
+    clang::Stmt *PcodeASTConsumer::create_parameter(
+        clang::ASTContext &ctx, const Function &function, const Varnode &vnode, bool is_input
+    ) {
+        if (!vnode.operation || vnode.kind != Varnode::VARNODE_PARAM) {
+            assert(false && "Invalid parameter varnode");
+            return nullptr;
+        }
+
+        auto iter = local_variable_declarations.find(vnode.operation.value());
+        assert(
+            iter != local_variable_declarations.end()
+            && "Failed to find parameter variable declaration"
+        );
+        auto *param_decl = clang::dyn_cast< clang::ParmVarDecl >(iter->second);
+        return clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), param_decl, false,
+            clang::SourceLocation(), param_decl->getType(),
+            is_input ? clang::VK_PRValue : clang::VK_LValue
+        );
+        (void) function;
+    }
+
+    clang::Stmt *PcodeASTConsumer::create_global(
+        clang::ASTContext &ctx, const Function &function, const Varnode &vnode, bool is_input
+    ) {
+        if (!vnode.global || vnode.kind != Varnode::VARNODE_GLOBAL) {
+            assert(false && "Invalid global varnode");
+            return nullptr;
+        }
+
+        auto iter = global_variable_declarations.find(vnode.global.value());
+        assert(
+            iter != global_variable_declarations.end()
+            && "Failed to find global variable declaration"
+        );
+
+        auto *var_decl = clang::dyn_cast< clang::VarDecl >(iter->second);
+        return clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
+            clang::SourceLocation(), var_decl->getType(),
+            is_input ? clang::VK_PRValue : clang::VK_LValue
+        );
+        (void) function;
     }
 
     clang::Stmt *PcodeASTConsumer::create_temporary(
@@ -370,7 +329,7 @@ namespace patchestry::ast {
             return clang::DeclRefExpr::Create(
                 ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_iter->second,
                 false, clang::SourceLocation(), var_iter->second->getType(),
-                is_input ? clang::VK_LValue : clang::VK_PRValue
+                is_input ? clang::VK_PRValue : clang::VK_LValue
             );
         }
 
@@ -386,6 +345,103 @@ namespace patchestry::ast {
         }
 
         assert(false && "Failed to get operation for key");
+        return nullptr;
+    }
+
+    clang::Stmt *PcodeASTConsumer::create_function(
+        clang::ASTContext &ctx, const Function &function, const Varnode &vnode, bool is_input
+    ) {
+        if (!vnode.function || vnode.kind != Varnode::VARNODE_FUNCTION) {
+            assert(false && "Invalid function varnode");
+            return nullptr;
+        }
+
+        auto iter = function_declarations.find(vnode.function.value());
+        assert(iter != function_declarations.end() && "Failed to find function declaration");
+        auto *func_decl = clang::dyn_cast< clang::FunctionDecl >(iter->second);
+        return clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), func_decl, false,
+            clang::SourceLocation(), func_decl->getType(), clang::VK_PRValue
+        );
+        (void) function, is_input;
+    }
+
+    clang::Stmt *PcodeASTConsumer::create_local(
+        clang::ASTContext &ctx, const Function &function, const Varnode &vnode, bool is_input
+    ) {
+        if (!vnode.operation || vnode.kind != Varnode::VARNODE_LOCAL) {
+            assert(false && "Invalid local varnode");
+            return nullptr;
+        }
+
+        auto iter = local_variable_declarations.find(vnode.operation.value());
+        if (iter != local_variable_declarations.end()) {
+            assert(iter != local_variable_declarations.end());
+            auto *var_decl = clang::dyn_cast< clang::VarDecl >(iter->second);
+            return clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
+                clang::SourceLocation(), var_decl->getType(),
+                is_input ? clang::VK_PRValue : clang::VK_LValue
+            );
+        }
+
+        auto maybe_operation = operation_from_key(function, vnode.operation.value());
+        if (maybe_operation) {
+            auto [stmt, _] = create_operation(ctx, function, *maybe_operation);
+            return stmt;
+        }
+
+        return nullptr;
+    }
+
+    clang::Stmt *
+    PcodeASTConsumer::create_constant(clang::ASTContext &ctx, const Varnode &vnode) {
+        if (vnode.kind != Varnode::VARNODE_CONSTANT) {
+            assert(false && "Invalid constant varnode");
+            return nullptr;
+        }
+
+        clang::QualType type = get_varnode_type(ctx, vnode);
+
+        if (type->isIntegerType()) {
+            auto value = vnode.value;
+            return new (ctx) clang::IntegerLiteral(
+                ctx, llvm::APInt(static_cast< uint32_t >(ctx.getTypeSize(type)), *value), type,
+                clang::SourceLocation()
+            );
+        }
+
+        if (type->isVoidType()) {
+            auto value    = vnode.value;
+            auto *literal = new (ctx) clang::IntegerLiteral(
+                ctx, llvm::APInt(32U, *value), ctx.IntTy, clang::SourceLocation()
+            );
+            return clang::CStyleCastExpr::Create(
+                ctx, type, clang::VK_PRValue, clang::CK_ToVoid, literal, nullptr,
+                clang::FPOptionsOverride(), ctx.getTrivialTypeSourceInfo(type),
+                clang::SourceLocation(), clang::SourceLocation()
+            );
+        }
+
+        if (type->isPointerType()) {
+            auto value    = vnode.value;
+            auto *literal = new (ctx) clang::IntegerLiteral(
+                ctx, llvm::APInt(32U, *value), ctx.IntTy, clang::SourceLocation()
+            );
+            return clang::CStyleCastExpr::Create(
+                ctx, type, clang::VK_PRValue, clang::CK_IntegralToPointer, literal, nullptr,
+                clang::FPOptionsOverride(), ctx.getTrivialTypeSourceInfo(type),
+                clang::SourceLocation(), clang::SourceLocation()
+            );
+        }
+
+        if (type->isFloatingType()) {
+            auto value = static_cast< double >(*vnode.value);
+            return clang::FloatingLiteral::Create(
+                ctx, llvm::APFloat(value), true, type, clang::SourceLocation()
+            );
+        }
+
         return nullptr;
     }
 

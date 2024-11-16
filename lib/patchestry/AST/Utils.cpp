@@ -14,10 +14,9 @@
 namespace patchestry::ast {
 
     clang::SourceLocation source_location_from_key(clang::ASTContext &ctx, std::string key) {
-        auto &sm     = ctx.getSourceManager();
-        auto buffer  = llvm::MemoryBuffer::getMemBuffer("", key);
-        auto file_id = sm.createFileID(std::move(buffer), clang::SrcMgr::C_User);
-        return sm.getLocForStartOfFile(file_id);
+        (void) key;
+        (void)ctx;
+        return clang::SourceLocation();
     }
 
     clang::QualType get_type_for_size(

@@ -7,7 +7,6 @@
  */
 
 #include <cstdlib>
-#include <llvm/Support/FileSystem.h>
 #include <memory>
 
 #include "clang/Basic/DiagnosticOptions.h"
@@ -22,6 +21,7 @@
 #include "llvm/Support/VirtualFileSystem.h"
 #include <clang/AST/ASTConsumer.h>
 #include <clang/AST/ASTContext.h>
+#include <llvm/Support/FileSystem.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
@@ -42,46 +42,14 @@ const llvm::cl::opt< bool > pprint(
 );
 
 const llvm::cl::opt< std::string > output_filename(
-    "output", // The command-line option flag, e.g., `-output <filename>`
-    llvm::cl::desc("Specify output filename"), // Description displayed in the help message
-    llvm::cl::value_desc("filename"),          // Description for the value itself
-    llvm::cl::init("/tmp/output.c")            // Default value
+    "output", llvm::cl::desc("Specify output filename"), llvm::cl::value_desc("filename"),
+    llvm::cl::init("/tmp/output.c")
 );
-
-clang::ASTContext &create_ast_context(void) {
-    clang::CompilerInstance compiler;
-
-    compiler.createDiagnostics();
-    if (!compiler.hasDiagnostics()) {
-        llvm::errs() << "Failed to initialize diagnostics.\n";
-    }
-
-    std::shared_ptr< clang::TargetOptions > target_options =
-        std::make_shared< clang::TargetOptions >();
-    target_options->Triple = llvm::sys::getDefaultTargetTriple();
-    compiler.setTarget(
-        clang::TargetInfo::CreateTargetInfo(compiler.getDiagnostics(), target_options)
-    );
-
-    // Set up file manager and source manager
-    compiler.createFileManager();
-    compiler.createSourceManager(compiler.getFileManager());
-
-    // Create the preprocessor and AST context
-    compiler.createPreprocessor(clang::TU_Complete);
-    compiler.createASTContext();
-
-    return compiler.getASTContext();
-}
 
 int main(int argc, char **argv) {
     llvm::cl::ParseCommandLineOptions(
         argc, argv, "pcode-lifter to lift high pcode into clang ast\n"
     );
-
-    if (verbose) {
-        llvm::outs() << "Enable debug logs";
-    }
 
     llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
         llvm::MemoryBuffer::getFile(input_filename);
@@ -111,37 +79,28 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    clang::CompilerInvocation &invocation        = ci.getInvocation();
-    clang::TargetOptions &invocation_target_opts = invocation.getTargetOpts();
-
-    invocation_target_opts.Triple = llvm::sys::getDefaultTargetTriple();
-    llvm::outs() << "Target triple: " << invocation_target_opts.Triple << "\n";
+    clang::CompilerInvocation &invocation = ci.getInvocation();
+    clang::TargetOptions &inv_target_opts = invocation.getTargetOpts();
+    inv_target_opts.Triple                = llvm::sys::getDefaultTargetTriple();
 
     std::shared_ptr< clang::TargetOptions > target_options =
         std::make_shared< clang::TargetOptions >();
     target_options->Triple = llvm::sys::getDefaultTargetTriple();
     ci.setTarget(clang::TargetInfo::CreateTargetInfo(ci.getDiagnostics(), target_options));
 
-    ci.getPreprocessorOpts().addRemappedFile(
-        "dummy.cpp", llvm::MemoryBuffer::getMemBuffer("").release()
-    );
-    ci.getFrontendOpts().Inputs.push_back(
-        clang::FrontendInputFile("dummy.cpp", clang::Language::C)
-    );
-
     ci.getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
-
-    ci.getLangOpts().C99 = true;
+    ci.getLangOpts().C99               = true;
     // Setup file manager and source manager
     ci.createFileManager();
     ci.createSourceManager(ci.getFileManager());
 
-    auto &sm = ci.getSourceManager();
-
-    std::unique_ptr< llvm::MemoryBuffer > filebuffer =
-        llvm::MemoryBuffer::getMemBuffer("// patchestry content\n");
-
-    clang::FileID file_id = sm.createFileID(std::move(filebuffer), clang::SrcMgr::C_User);
+    auto &sm              = ci.getSourceManager();
+    std::string file_data = "/patchestry";
+    llvm::ErrorOr< clang::FileEntryRef > file_entry_ref_or_err =
+        ci.getFileManager().getVirtualFileRef("/tmp/patchestry", file_data.size(), 0);
+    clang::FileID file_id = sm.createFileID(
+        *file_entry_ref_or_err, clang::SourceLocation(), clang::SrcMgr::C_User, 0
+    );
 
     sm.setMainFileID(file_id);
 
@@ -151,18 +110,9 @@ int main(int argc, char **argv) {
 
     auto &ast_context = ci.getASTContext();
 
-    std::error_code ec;
-    auto out =
-        std::make_unique< llvm::raw_fd_ostream >(output_filename, ec, llvm::sys::fs::OF_Text);
-
-    auto out_ast = std::make_unique< llvm::raw_fd_ostream >(
-        output_filename + ".ast", ec, llvm::sys::fs::OF_None
-    );
-
+    std::string outfile = output_filename.getValue();
     std::unique_ptr< patchestry::ast::PcodeASTConsumer > consumer =
-        std::make_unique< patchestry::ast::PcodeASTConsumer >(
-            ci, program.value(), *out.get(), *out_ast.get()
-        );
+        std::make_unique< patchestry::ast::PcodeASTConsumer >(ci, program.value(), outfile);
     ci.setASTConsumer(std::move(consumer));
     ci.createSema(clang::TU_Complete, nullptr);
 

@@ -18,7 +18,16 @@
 
 namespace patchestry::ghidra {
 
-    void __attribute__((unused)) breakpoint(void) {}
+    template< typename ObjectType >
+    constexpr std::optional< std::string >
+    get_string_if_valid(ObjectType &obj, const char *field) {
+        if (auto value = (obj.getString)(field)) {
+            if (!value->empty()) {
+                return value->str();
+            }
+        }
+        return std::nullopt;
+    }
 
     std::optional< Program > JsonParser::deserialize_program(const JsonObject &root) {
         Program program;
@@ -56,7 +65,7 @@ namespace patchestry::ghidra {
         auto kind = VarnodeType::convertToKind(type_obj.getString("kind").value_or("").str());
         switch (kind) {
             case VarnodeType::Kind::VT_INVALID: {
-                assert(false); // assert if invalid type is found
+                // assert(false); // assert if invalid type is found
                 return std::make_shared< VarnodeType >(name, kind, size);
             }
             case VarnodeType::Kind::VT_BOOLEAN:
@@ -375,29 +384,63 @@ namespace patchestry::ghidra {
         return func;
     }
 
+    void JsonParser::deserialize_call_operation(const JsonObject &call_obj, Operation &op) {
+        if (const auto *maybe_target = call_obj.getObject("target")) {
+            OperationTarget target;
+            target.kind =
+                Varnode::convertToKind(maybe_target->getString("kind").value_or("").str());
+
+            auto function = maybe_target->getString("function");
+            if (function.has_value() && !function->empty()) {
+                target.function = function->str();
+            }
+            auto call_op = maybe_target->getString("operation");
+            if (call_op.has_value() && !call_op->empty()) {
+                target.operation = call_op->str();
+            }
+
+            target.is_noreturn = maybe_target->getBoolean("is_noreturn").value_or(false);
+            op.target          = target;
+        }
+    }
+
+    void JsonParser::deserialize_branch_operation(const JsonObject &branch_obj, Operation &op) {
+        auto target_block = branch_obj.getString("target_block");
+        if (target_block && !target_block->empty()) {
+            op.target_block = target_block->str();
+        }
+
+        auto taken_block = branch_obj.getString("taken_block");
+        if (taken_block && !taken_block->empty()) {
+            op.taken_block = taken_block->str();
+        }
+
+        auto not_taken_block = branch_obj.getString("not_taken_block");
+        if (not_taken_block && !not_taken_block->empty()) {
+            op.not_taken_block = not_taken_block->str();
+        }
+
+        if (const auto *maybe_output = branch_obj.getObject("condition")) {
+            if (auto maybe_varnode = create_varnode(*maybe_output)) {
+                op.condition = *maybe_varnode;
+            }
+        }
+    }
+
     std::optional< Operation > JsonParser::create_operation(const JsonObject &pcode_obj) {
-        auto mnemonic = pcode_obj.getString("mnemonic").value_or("").str();
-        if (mnemonic.empty()) {
-            llvm::errs() << "Operation pcode with empty mnemonic\n";
+        auto mnemonic =
+            patchestry::ghidra::from_string(pcode_obj.getString("mnemonic").value_or("").str());
+        if (mnemonic == Mnemonic::OP_UNKNOWN) {
+            llvm::errs() << "Pcode with unknown operation\n";
             assert(false);
             return std::nullopt;
         }
 
         Operation operation;
-        operation.mnemonic = patchestry::ghidra::from_string(mnemonic);
-        if (operation.mnemonic == Mnemonic::OP_CALL) {
-            if (const auto *maybe_target = pcode_obj.getObject("target")) {
-                OperationTarget target;
-                target.kind         = maybe_target->getString("kind").value_or("");
-                target.function_key = maybe_target->getString("function").value_or("");
-                target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
-                operation.target    = target;
-            }
-        }
-
+        operation.mnemonic = mnemonic;
         if (const auto *maybe_output = pcode_obj.getObject("output")) {
             if (auto maybe_varnode = create_varnode(*maybe_output)) {
-                operation.output.push_back(*maybe_varnode);
+                operation.output = *maybe_varnode;
             }
         }
 
@@ -409,57 +452,27 @@ namespace patchestry::ghidra {
             }
         }
 
-        auto target_address = pcode_obj.getString("target_address");
-        if (target_address && !target_address->empty()) {
-            operation.target_address = target_address->str();
+        switch (operation.mnemonic) {
+            case Mnemonic::OP_CALL:
+            case Mnemonic::OP_CALLIND:
+                deserialize_call_operation(pcode_obj, operation);
+                break;
+            case Mnemonic::OP_CBRANCH:
+            case Mnemonic::OP_BRANCH:
+            case Mnemonic::OP_BRANCHIND:
+                deserialize_branch_operation(pcode_obj, operation);
+                break;
+            default:
+                break;
         }
 
-        auto target_block = pcode_obj.getString("target_block");
-        if (target_block && !target_block->empty()) {
-            operation.target_block = target_block->str();
-        }
-
-        auto variable = pcode_obj.getString("variable");
-        if (variable && !variable->empty()) {
-            operation.variable = variable->str();
-        }
-
-        auto name = pcode_obj.getString("name");
-        if (name && !name->empty()) {
-            operation.name = name->str();
-        }
-
-        auto type = pcode_obj.getString("type");
-        if (type && !type->empty()) {
-            operation.type = type->str();
-        }
+        operation.name    = get_string_if_valid(pcode_obj, "name");
+        operation.type    = get_string_if_valid(pcode_obj, "type");
+        operation.address = get_string_if_valid(pcode_obj, "address");
 
         auto index = pcode_obj.getInteger("index");
         if (index) {
             operation.index = static_cast< uint32_t >(*index);
-        }
-
-        auto address = pcode_obj.getString("address");
-        if (address && !address->empty()) {
-            operation.address = address->str();
-        }
-
-        if (operation.mnemonic == Mnemonic::OP_CBRANCH) {
-            auto taken_block = pcode_obj.getString("taken_block");
-            if (taken_block && !taken_block->empty()) {
-                operation.taken_block = taken_block->str();
-            }
-
-            auto not_taken_block = pcode_obj.getString("not_taken_block");
-            if (not_taken_block && !not_taken_block->empty()) {
-                operation.not_taken_block = not_taken_block->str();
-            }
-
-            if (const auto *maybe_output = pcode_obj.getObject("condition")) {
-                if (auto maybe_varnode = create_varnode(*maybe_output)) {
-                    operation.condition = *maybe_varnode;
-                }
-            }
         }
 
         return operation;
@@ -524,7 +537,7 @@ namespace patchestry::ghidra {
     void JsonParser::deserialize_functions(
         const JsonObject &function_array, FunctionMap &serialized_functions
     ) {
-        if (function_array.size() == 0) {
+        if (function_array.empty()) {
             llvm::errs() << "No functions to deserialize";
             return;
         }

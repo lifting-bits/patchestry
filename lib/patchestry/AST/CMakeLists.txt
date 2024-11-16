@@ -5,7 +5,7 @@
 add_library(patchestry_ast STATIC
   ASTConsumer.cpp
   Codegen.cpp
-  Stmt.cpp
+  OperationBuilder.cpp
   OperationStmt.cpp
   TypeBuilder.cpp
   Utils.cpp

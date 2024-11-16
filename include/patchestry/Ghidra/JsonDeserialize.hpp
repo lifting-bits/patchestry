@@ -60,6 +60,10 @@ namespace patchestry::ghidra {
             UndefinedType &varnode, const JsonObject &undef_obj, const TypeMap &serialized_types
         );
 
+        void deserialize_call_operation(const JsonObject &call_obj, Operation &op);
+
+        void deserialize_branch_operation(const JsonObject &branch_obj, Operation &op);
+
         std::optional< Varnode > create_varnode(const JsonObject &var_obj);
 
         std::optional< Function > create_function(const JsonObject &func_obj);
