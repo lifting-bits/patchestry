@@ -87,6 +87,7 @@ import ghidra.program.model.data.Composite;
 import ghidra.program.model.data.CategoryPath;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeComponent;
+import ghidra.program.model.data.DefaultDataType;
 import ghidra.program.model.data.Enum;
 import ghidra.program.model.data.FunctionDefinition;
 import ghidra.program.model.data.ParameterDefinition;
@@ -296,6 +297,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		// the stack pointer, as a reference to the address of `local_x`, rather
 		// than whatever it is.
 		private Map<PcodeOp, List<PcodeOp>> prefix_operations;
+		
+		// A mapping of `CALLOTHER` locations operating with named intrinsics to
+		// the `PcodeOp`s representing those `CALLOTHER`s.
+		private List<PcodeOp> callother_uses;
 
 		public PcodeSerializer(java.io.BufferedWriter writer,
 				String arch_, FunctionManager fm_,
@@ -337,6 +342,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			this.replacement_operations = new HashMap<>();
 			this.prefix_operations = new HashMap<>();
 			this.address_of_global = new HashMap<>();
+			this.callother_uses = new ArrayList<>();
 		}
 
 		private static String label(HighFunction function) throws Exception {
@@ -353,14 +359,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 		private static String label(SequenceNumber sn) throws Exception {
 			return label(sn.getTarget()) + Address.SEPARATOR +
-					Integer.toString(sn.getTime()) + Address.SEPARATOR +
-					Integer.toString(sn.getOrder());
+				   Integer.toString(sn.getTime()) + Address.SEPARATOR +
+				   Integer.toString(sn.getOrder());
 		}
 
 		private static String label(PcodeBlock block) throws Exception {
 			return label(block.getStart()) + Address.SEPARATOR +
-					Integer.toString(block.getIndex()) + Address.SEPARATOR +
-					PcodeBlock.typeToName(block.getType());
+				   Integer.toString(block.getIndex()) + Address.SEPARATOR +
+				   PcodeBlock.typeToName(block.getType());
 		}
 
 		private static String label(PcodeOp op) throws Exception {
@@ -373,6 +379,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (type == null) {
 				type = VoidDataType.dataType;
 			}
+
 			String name = type.getName();
 			CategoryPath category = type.getCategoryPath();
 			String concat_type = category.toString() + name + Integer.toString(type.getLength());
@@ -387,6 +394,35 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				types_to_serialize.add(type);
 			}
 			return type_id;
+		}
+		
+		// Figure out the return type of an intrinsic op.
+		private DataType intrinsicReturnType(PcodeOp op) {
+			DataType ret_type = null;
+			Varnode ret_val = op.getOutput();
+			if (ret_val == null) {
+				return VoidDataType.dataType;
+			}
+
+			HighVariable var = ret_val.getHigh();
+			if (var != null) {
+				return var.getDataType();
+			}
+		
+			return Undefined.getUndefinedDataType(ret_val.getSize());
+		}
+		
+		// Return the label of an intrinsic with `CALLOTHER`. This is based
+		// off of the return value.
+		private String intrinsicLabel(PcodeOp op) throws Exception {
+			int index = (int) op.getInput(0).getOffset();
+			String name = language.getUserDefinedOpName(index);
+			return intrinsicLabel(name, intrinsicReturnType(op));
+		}
+		
+		private String intrinsicLabel(
+				String name, DataType ret_type) throws Exception {
+			return name + Address.SEPARATOR + label(ret_type);
 		}
 
 		private void serializePointerType(Pointer ptr) throws Exception {
@@ -409,11 +445,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			name("element_type").value(label(arr.getDataType()));
 		}
 
-		private void serializeBuiltinType(DataType data_type, String kind) throws Exception {
+		private void serializeBuiltinType(
+				DataType data_type, String kind) throws Exception {
 			
 			String display_name = null;
 			if (data_type instanceof AbstractIntegerDataType) {
-				display_name = ((AbstractIntegerDataType) data_type).getCDeclaration();
+				AbstractIntegerDataType adt = (AbstractIntegerDataType) data_type;
+				display_name = adt.getCDeclaration();
 			}
 			
 			if (display_name == null) {
@@ -425,7 +463,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			name("kind").value(kind);
 		}
 
-		private void serializeCompositeType(Composite data_type, String kind) throws Exception {
+		private void serializeCompositeType(
+				Composite data_type, String kind) throws Exception {
 			name("name").value(data_type.getDisplayName());
 			name("kind").value(kind);
 			name("size").value(data_type.getLength());
@@ -481,7 +520,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			} else if (data_type instanceof VoidDataType) {
 				serializeBuiltinType(data_type, "void");
 
-			} else if (data_type instanceof Undefined || data_type.toString().contains("undefined")) {
+			} else if (data_type instanceof Undefined || data_type instanceof DefaultDataType) {
 				serializeBuiltinType(data_type, "undefined");
 
 			} else if (data_type instanceof FunctionDefinition) {
@@ -523,7 +562,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		private int serializePrototype() throws Exception {
 			name("return_type").value(label((DataType) null));
 			name("is_variadic").value(false);
-			name("is_variadic").value(false);
+			name("is_noreturn").value(false);
 			name("parameter_types").beginArray().endArray();
 			return 0;
 		}
@@ -1407,8 +1446,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					switch (op.getOpcode()) {
 						case PcodeOp.CALLOTHER:
 							if (op.getInput(0).getOffset() < MIN_CALLOTHER) {
-								println("Unsupported CALLOTHER at " + label(op) + ": " + op.toString());
-								return false;
+								int index = (int) op.getInput(0).getOffset();
+								String name = language.getUserDefinedOpName(index);
+								if (name != null) {
+									callother_uses.add(op);
+								} else {
+									println("Unsupported CALLOTHER at " + label(op) + ": " + op.toString());
+									return false;
+								}
 							}
 							break;
 						case PcodeOp.PTRSUB:
@@ -1710,6 +1755,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				beginObject();
 				name("kind").value("function");
 				name("function").value(label(callee));
+				name("is_variadic").value(callee.hasVarArgs());
 				name("is_noreturn").value(callee.hasNoReturn());
 				endObject();
 
@@ -1833,6 +1879,25 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			serializeInput(op, rValueOf(op.getInputs()[1]));
 			endArray();
 		}
+		
+		// Serialize a `CALLOTHER` as a call to an intrinsic.
+		private void serializeIntrinsicCallOp(PcodeOp op) throws Exception {
+			serializeOutput(op);
+			
+			name("target").beginObject();
+			name("kind").value("intrinsic");
+			name("function").value(intrinsicLabel(op));
+			name("is_variadic").value(true);
+			name("is_noreturn").value(false);
+			endObject();  // End of `target`.
+			
+			name("inputs").beginArray();			
+			Varnode[] inputs = op.getInputs();
+			for (int i = 1; i < inputs.length; ++i) {
+				serializeInput(op, rValueOf(inputs[i]));
+			}
+			endArray();
+		}
 
 		// Serialize a `CALLOTHER`. The first input operand is a constant
 		// representing the user-defined opcode number. In our case, we have
@@ -1853,8 +1918,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				serializeAddressOfOp(op);
 				break;
 			default:
-				serializeOutput(op);
-				serializeGenericOp(op);
+				serializeIntrinsicCallOp(op);
 				break;
 			}
 		}
@@ -2120,6 +2184,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			FunctionPrototype proto = null;
 			name("name").value(function.getName());
+			name("is_intrinsic").value(false);
 
 			// If we have a high P-Code function, then serialize the blocks.
 			if (high_function != null) {
@@ -2249,6 +2314,37 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             "deregister_tm_clones"
 		);
 		
+		// Serialize all `CALLOTHER` intrinsics.
+		private void serializeIntrinsics() throws Exception {
+			Set<String> seen_intrinsics = new HashSet<>();
+			int num_intrinsics = 0;
+			
+			for (PcodeOp op : callother_uses) {
+				int index = (int) op.getInput(0).getOffset();
+				String name = language.getUserDefinedOpName(index);
+				DataType ret_type = intrinsicReturnType(op);
+				String label = intrinsicLabel(name, ret_type);
+				if (!seen_intrinsics.add(label)) {
+					continue;
+				}
+				
+				name(label).beginObject();
+				name("name").value(name);
+				name("is_intrinsic").value(true);
+				name("type").beginObject();
+				name("return_type").value(label(ret_type));
+				name("is_variadic").value(true);
+				name("is_noreturn").value(false);
+				name("parameter_types").beginArray().endArray();
+				endObject();  // End of `type`.
+				endObject();
+				
+				++num_intrinsics;
+			}
+			
+			println("Total serialized intrinsics: " + Integer.toString(num_intrinsics));
+		}
+		
 		// Serialize all functions.
 		//
 		// NOTE(pag): As we serialize functions, we might discover references
@@ -2274,6 +2370,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 
 			println("Total serialized functions: " + Integer.toString(functions.size()));
+			
+			if (!callother_uses.isEmpty()) {
+				serializeIntrinsics();
+			}
 		}
 
 		// Serialize the input function list to JSON. This function will also
