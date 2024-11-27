@@ -223,7 +223,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		// serialized to JSON.
 		private List<Function> functions;
 		private int original_functions_size;
-		private Set<Address> seen_functions;
+		private Set<String> seen_functions;
 
 		// The seen globals.
 		private Map<Address, HighVariable> seen_globals;
@@ -345,11 +345,19 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			this.callother_uses = new ArrayList<>();
 		}
 
-		private static String label(HighFunction function) throws Exception {
+		private String label(HighFunction function) throws Exception {
 			return label(function.getFunction());
 		}
 
-		private static String label(Function function) throws Exception {
+		private String label(Function function) throws Exception {
+			
+			// NOTE(pag): This full dethunking works in collaboration with
+			//			  `seen_functions` checking in `serializeFunctions` to
+			//			  deduplicate thunk functions.
+			if (function.isThunk()) {
+				function = function.getThunkedFunction(true);
+			}
+
 			return label(function.getEntryPoint());
 		}
 
@@ -1732,24 +1740,20 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			name("has_return_value").value(op.getOutput() != null);
 			
 			if (target_node.isAddress()) {
-				Address target_address = caller_address.getNewAddress(target_node.getOffset());
-				String target_label = label(target_address);
+				Address target_address = caller_address.getNewAddress(
+						target_node.getOffset());
 				callee = fm.getFunctionAt(target_address);
 	
 				// `target_address` may be a pointer to an external. Figure out
 				// what we're calling.
-	
 				if (callee == null) {
-					callee = fm.getReferencedFunction(target_address);
-					if (callee != null) {
-						target_address = callee.getEntryPoint();
-						target_label = label(target_address);
-					}	
+					callee = fm.getReferencedFunction(target_address);	
 				}
 			}
 
 			name("target");
 			if (callee != null) {
+
 				functions.add(callee);
 
 				beginObject();
@@ -2313,7 +2317,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             "_ITM_deregisterTMCloneTable", "register_tm_clones",
             "deregister_tm_clones"
 		);
-		
+
 		// Serialize all `CALLOTHER` intrinsics.
 		private void serializeIntrinsics() throws Exception {
 			Set<String> seen_intrinsics = new HashSet<>();
@@ -2353,18 +2357,19 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		private void serializeFunctions() throws Exception {
 			for (int i = 0; i < functions.size(); ++i) {
 				Function function = functions.get(i);
-				Address function_address = function.getEntryPoint();
-				if (!seen_functions.add(function_address)) {
+				String function_label = label(function);
+				if (!seen_functions.add(function_label)) {
 					continue;
 				}
 				
 				boolean visit_pcode = i < original_functions_size &&
+									  !function.isThunk() &&
 									  !IGNORED_NAMES.contains(function.getName());
 
 				DecompileResults res = ifc.decompileFunction(function, DECOMPILATION_TIMEOUT, null);
 				HighFunction high_function = res.getHighFunction();
 				
-				name(label(function)).beginObject();
+				name(function_label).beginObject();
 				serialize(high_function, function, visit_pcode);
 				endObject();
 			}
