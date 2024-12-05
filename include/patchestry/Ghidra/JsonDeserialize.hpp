@@ -21,11 +21,11 @@ namespace patchestry::ghidra {
         std::optional< Program > deserialize_program(const JsonObject &root);
 
       private:
-        // Create varnode type for each type object
-        std::shared_ptr< VarnodeType > create_vnode_type(const JsonObject &type_obj);
-
         // Process types from Json object
         void deserialize_types(const JsonObject &type_obj, TypeMap &serialized_types);
+
+        // Create varnode type for each type object
+        std::shared_ptr< VarnodeType > create_vnode_type(const JsonObject &type_obj);
 
         void deserialize_buildin(
             BuiltinType &varnode, const JsonObject &builtin_obj, const TypeMap &serialized_types
@@ -60,10 +60,7 @@ namespace patchestry::ghidra {
             UndefinedType &varnode, const JsonObject &undef_obj, const TypeMap &serialized_types
         );
 
-        void deserialize_call_operation(const JsonObject &call_obj, Operation &op);
-
-        void deserialize_branch_operation(const JsonObject &branch_obj, Operation &op);
-
+        // Handle pcode operations
         std::optional< Varnode > create_varnode(const JsonObject &var_obj);
 
         std::optional< Function > create_function(const JsonObject &func_obj);
@@ -71,24 +68,29 @@ namespace patchestry::ghidra {
         std::optional< FunctionPrototype > create_function_prototype(const JsonObject &proto_obj
         );
 
-        // Function to parse Basic Blocks
+        // Create basic block object from deserialized json object
         std::optional< BasicBlock >
         create_basic_block(const std::string &block_key, const JsonObject &block_obj);
 
-        // Function to parse Pcode
+        // Create operation from the deserialized pcode json object
         std::optional< Operation > create_operation(const JsonObject &pcode_obj);
 
-        // Deserialize functions
+        void deserialize_call_operation(const JsonObject &call_obj, Operation &op);
+
+        void deserialize_branch_operation(const JsonObject &branch_obj, Operation &op);
+
+        // Deserialize functions from serialized json
         void deserialize_functions(
             const JsonObject &function_array, FunctionMap &serialized_functions
         );
 
+        // Deserialize basic blocks for functions from serialized json
         void deserialize_blocks(
             const JsonObject &blocks_array, BasicBlockMap &serialized_blocks,
             std::string &entry_block
         );
 
-        // Deserialize globals
+        // Deserialize global variables from serialized json
         void
         deserialize_globals(const JsonObject &global_array, VariableMap &serialized_globals);
     };

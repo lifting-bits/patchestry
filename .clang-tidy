@@ -16,7 +16,9 @@ Checks: "*,\
   -readability-convert-member-functions-to-static, \
   -misc-no-recursion, \
   -google-build-using-namespace, \
-  -cppcoreguidelines-owning-memory"
+  -cppcoreguidelines-owning-memory, \
+  -readability-identifier-length, \
+  -readability-function-cognitive-complexity "
 WarningsAsErrors: ''
 CheckOptions:
   - key: 'bugprone-argument-comment.StrictMode'
