@@ -29,6 +29,7 @@
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
+#include <patchestry/Util/Log.hpp>
 
 const llvm::cl::opt< std::string > input_filename(
     llvm::cl::Positional, llvm::cl::desc("<input JSON file>"), llvm::cl::Required
@@ -46,36 +47,42 @@ const llvm::cl::opt< std::string > output_filename(
     llvm::cl::init("/tmp/output.c")
 );
 
+bool debug_mode = false;
+
 int main(int argc, char **argv) {
     llvm::cl::ParseCommandLineOptions(
         argc, argv, "pcode-lifter to lift high pcode into clang ast\n"
     );
 
+    if (verbose) {
+        debug_mode = true;
+    }
+
     llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
         llvm::MemoryBuffer::getFile(input_filename);
 
     if (std::error_code error_code = file_or_err.getError()) {
-        llvm::errs() << "Error reading json file : " << error_code.message() << "\n";
+        LOG(ERROR) << "Error reading json file : " << error_code.message() << "\n";
         return EXIT_FAILURE;
     }
 
     std::unique_ptr< llvm::MemoryBuffer > buffer = std::move(file_or_err.get());
     auto json                                    = llvm::json::parse(buffer->getBuffer());
     if (!json) {
-        llvm::errs() << "Failed to parse pcode JSON: " << json.takeError();
+        LOG(ERROR) << "Failed to parse pcode JSON: " << json.takeError();
         return EXIT_FAILURE;
     }
 
     auto program = patchestry::ghidra::JsonParser().deserialize_program(*json->getAsObject());
     if (!program.has_value()) {
-        llvm::errs() << "Failed to process json object" << json.takeError();
+        LOG(ERROR) << "Failed to process json object" << json.takeError();
         return EXIT_FAILURE;
     }
 
     clang::CompilerInstance ci;
     ci.createDiagnostics();
     if (!ci.hasDiagnostics()) {
-        llvm::errs() << "Failed to initialize diagnostics.\n";
+        LOG(ERROR) << "Failed to initialize diagnostics.\n";
         return EXIT_FAILURE;
     }
 
