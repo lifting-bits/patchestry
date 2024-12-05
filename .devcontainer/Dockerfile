@@ -41,6 +41,10 @@ COPY ./install-llvm.sh /tmp/
 RUN chmod +x /tmp/install-llvm.sh && \
     /tmp/install-llvm.sh ${LLVM_VERSION} all
 
+COPY ./install-vast.sh /tmp/
+RUN chmod +x /tmp/install-vast.sh && \
+    /tmp/install-vast.sh
+
 # Add docker group and add root to it
 RUN groupadd docker || true && \
     usermod -aG docker root

@@ -146,8 +146,8 @@ namespace patchestry::ghidra {
 
     struct Program
     {
-        std::string arch;
-        std::string format;
+        std::optional< std::string > arch;
+        std::optional< std::string > format;
         std::unordered_map< std::string, Function > serialized_functions;
         std::unordered_map< std::string, std::shared_ptr< VarnodeType > > serialized_types;
         std::unordered_map< std::string, Variable > serialized_globals;
