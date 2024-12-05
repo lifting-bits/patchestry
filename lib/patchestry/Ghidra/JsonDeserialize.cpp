@@ -21,7 +21,7 @@ namespace patchestry::ghidra {
 
     template< typename ObjectType >
     constexpr std::optional< std::string >
-    get_string_if_valid(ObjectType &obj, const char *field) {
+    get_string_if_valid(const ObjectType &obj, const char *field) {
         if (auto value = (obj.getString)(field)) {
             if (!value->empty()) {
                 return value->str();
@@ -31,8 +31,8 @@ namespace patchestry::ghidra {
     }
 
     template< typename ObjectType >
-    constexpr std::string
-    get_string(ObjectType &obj, const char *field, std::string default_value = "") {
+    std::string
+    get_string(const ObjectType &obj, const char *field, std::string default_value = "") {
         if (auto value = (obj.getString)(field)) {
             if (!value->empty()) {
                 return value->str();
@@ -170,9 +170,10 @@ namespace patchestry::ghidra {
 
     // Create varnode type from the json object
     std::shared_ptr< VarnodeType > JsonParser::create_vnode_type(const JsonObject &type_obj) {
-        auto name = get_string(type_obj, "name");
-        auto size = static_cast< uint32_t >(type_obj.getInteger("size").value_or(0));
-        auto kind = VarnodeType::convertToKind(get_string(type_obj, "kind"));
+        auto name     = get_string(type_obj, "name");
+        auto size     = static_cast< uint32_t >(type_obj.getInteger("size").value_or(0));
+        auto kind_str = get_string(type_obj, "kind");
+        auto kind     = VarnodeType::convertToKind(kind_str);
         switch (kind) {
             case VarnodeType::Kind::VT_INVALID: {
                 LOG(ERROR) << "Invalid varnode type: " << name << "\n";

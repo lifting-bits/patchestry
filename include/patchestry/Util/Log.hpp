@@ -11,14 +11,10 @@
 
 enum LogLevel { INFO, WARNING, ERROR };
 
-extern bool debug_mode;
-
 #define LOG(level) \
-    (!debug_mode) \
-        ? llvm::nulls() \
-        : (((level) == INFO)          ? llvm::outs() << "[INFO] " \
-               : ((level) == WARNING) ? llvm::outs() << "[WARNING] " \
-               : ((level) == ERROR)   ? llvm::errs() << "[ERROR] " \
-                                      : llvm::outs() \
-          ) << "(" \
-            << __FILE__ << ":" << __LINE__ << ") "
+    (((level) == INFO)          ? llvm::outs() << "[INFO] " \
+         : ((level) == WARNING) ? llvm::outs() << "[WARNING] " \
+         : ((level) == ERROR)   ? llvm::errs() << "[ERROR] " \
+                                : llvm::outs() \
+    ) << "(" \
+      << __FILE__ << ":" << __LINE__ << ") "

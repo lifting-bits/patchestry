@@ -37,18 +37,18 @@ namespace patchestry::ghidra {
 
         static VarnodeType::Kind convertToKind(const std::string &kind) {
             static const std::unordered_map< std::string, VarnodeType::Kind > kind_map = {
-                {      "bool",   VT_BOOLEAN },
-                {   "integer",   VT_INTEGER },
-                {     "float",     VT_FLOAT },
-                {   "pointer",   VT_POINTER },
-                {  "function",  VT_FUNCTION },
-                {     "array",     VT_ARRAY },
-                {    "struct",    VT_STRUCT },
-                {     "union",     VT_UNION },
-                {      "enum",      VT_ENUM },
-                {   "typedef",   VT_TYPEDEF },
-                { "undefined", VT_UNDEFINED },
-                {      "void",      VT_VOID }
+                {     "bool",   VT_BOOLEAN},
+                {  "integer",   VT_INTEGER},
+                {    "float",     VT_FLOAT},
+                {  "pointer",   VT_POINTER},
+                { "function",  VT_FUNCTION},
+                {    "array",     VT_ARRAY},
+                {   "struct",    VT_STRUCT},
+                {    "union",     VT_UNION},
+                {     "enum",      VT_ENUM},
+                {  "typedef",   VT_TYPEDEF},
+                {"undefined", VT_UNDEFINED},
+                {     "void",      VT_VOID}
             };
 
             // if kind is not present in the map, return vt_invalid
@@ -67,7 +67,7 @@ namespace patchestry::ghidra {
         VarnodeType &operator=(VarnodeType &&) noexcept = default;
         virtual ~VarnodeType()                          = default;
 
-        void set_key(std::string &key) { this->key = key; }
+        void set_key(const std::string &key) { this->key = key; }
 
         Kind kind{};
         uint32_t size{};
