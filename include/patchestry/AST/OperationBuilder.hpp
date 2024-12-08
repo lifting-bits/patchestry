@@ -1,0 +1,189 @@
+/*
+ * Copyright (c) 2024, Trail of Bits, Inc.
+ *
+ * This source code is licensed in accordance with the terms specified in
+ * the LICENSE file found in the root directory of this source tree.
+ */
+
+#pragma once
+
+#include <clang/Basic/SourceLocation.h>
+#include <functional>
+
+#include "patchestry/AST/FunctionBuilder.hpp"
+#include "patchestry/AST/TypeBuilder.hpp"
+#include <clang/AST/ASTContext.h>
+
+#include <patchestry/Ghidra/JsonDeserialize.hpp>
+
+namespace patchestry::ast {
+    using namespace patchestry::ghidra;
+
+    class OpBuilder
+    {
+      public:
+        OpBuilder(
+            clang::ASTContext &ctx, const std::shared_ptr< FunctionBuilder > &func_builder
+        )
+            : context(ctx), builder(func_builder) {}
+
+        OpBuilder(const OpBuilder &)            = default;
+        OpBuilder &operator=(const OpBuilder &) = default;
+
+        OpBuilder(const OpBuilder &&)            = delete;
+        OpBuilder &operator=(const OpBuilder &&) = delete;
+
+        virtual ~OpBuilder() = default;
+
+        std::pair< clang::Stmt *, bool >
+        create_copy(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_load(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_store(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_branch(clang::ASTContext &ctx, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_cbranch(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_branchind(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_call(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_callind(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool > create_userdefined(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+        std::pair< clang::Stmt *, bool >
+        create_return(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_piece(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_subpiece(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_int_zext(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_int_carry(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool > create_int_scarry(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+        std::pair< clang::Stmt *, bool > create_int_sborrow(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+        std::pair< clang::Stmt *, bool >
+        create_int_2comp(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_int_sext(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool > create_unary_operation(
+            clang::ASTContext &ctx, const Function &function, const Operation &op,
+            clang::UnaryOperatorKind kind
+        );
+
+        std::pair< clang::Stmt *, bool > create_binary_operation(
+            clang::ASTContext &ctx, const Function &function, const Operation &op,
+            clang::BinaryOperatorKind kind
+        );
+
+        std::pair< clang::Stmt *, bool >
+        create_float_abs(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool > create_float_sqrt(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+        std::pair< clang::Stmt *, bool > create_float_floor(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+        std::pair< clang::Stmt *, bool > create_float_ceil(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+        std::pair< clang::Stmt *, bool > create_float_round(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+        std::pair< clang::Stmt *, bool >
+        create_int2float(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_float_nan(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool > create_float2float(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+        std::pair< clang::Stmt *, bool >
+        create_trunc(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_ptrsub(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_ptradd(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_cast(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_declare_local(clang::ASTContext &ctx, const Operation &op);
+
+        std::pair< clang::Stmt *, bool > create_declare_parameter(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+      private:
+        clang::Stmt *create_assign_operation(
+            clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
+            clang::SourceLocation location
+        );
+
+        clang::Stmt *
+        create_varnode(clang::ASTContext &ctx, const Function &function, const Varnode &vnode);
+
+        clang::Stmt *create_parameter(clang::ASTContext &ctx, const Varnode &vnode);
+
+        clang::Stmt *create_global(clang::ASTContext &ctx, const Varnode &vnode);
+
+        clang::Stmt *create_temporary(
+            clang::ASTContext &ctx, const Function &function, const Varnode &vnode
+        );
+
+        clang::Stmt *create_function(clang::ASTContext &ctx, const Varnode &vnode);
+
+        clang::Stmt *
+        create_local(clang::ASTContext &ctx, const Function &function, const Varnode &vnode);
+
+        clang::Stmt *create_constant(clang::ASTContext &ctx, const Varnode &vnode);
+
+        clang::QualType get_varnode_type(clang::ASTContext &ctx, const Varnode &vnode);
+
+        TypeBuilder &type_builder(void) { return builder->type_builder.get(); }
+
+        FunctionBuilder &function_builder(void) { return *builder; }
+
+        clang::Sema &sema(void) { return function_builder().sema(); }
+
+        std::reference_wrapper< const clang::ASTContext > context;
+        std::shared_ptr< FunctionBuilder > builder;
+    };
+
+} // namespace patchestry::ast
