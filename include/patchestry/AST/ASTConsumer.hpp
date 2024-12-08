@@ -91,61 +91,22 @@ namespace patchestry::ast {
 
         clang::DeclStmt *create_decl_stmt(clang::ASTContext &ctx, clang::Decl *decl);
 
-        clang::Stmt *create_call_stmt(clang::ASTContext &ctx, const Operation &op);
-
         clang::Stmt *create_branch_stmt(clang::ASTContext &ctx, const Operation &branch);
 
         clang::Stmt *create_return_stmt(
             clang::ASTContext &ctx, const Function &function, const Operation &ret_op
         );
 
-        clang::QualType get_varnode_type(clang::ASTContext &ctx, const Varnode &vnode);
-
-        clang::Stmt *create_varnode(
-            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-            bool is_input = true
-        );
-
-        clang::Stmt *create_function(
-            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-            bool is_input = true
-        );
-
-        clang::Stmt *create_local(
-            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-            bool is_input = true
-        );
-
-        clang::Stmt *create_constant(clang::ASTContext &ctx, const Varnode &vnode);
-
-        clang::Stmt *create_parameter(
-            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-            bool is_input = true
-        );
-
-        clang::Stmt *create_global(
-            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-            bool is_input = true
-        );
-
-        clang::Stmt *create_temporary(
-            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-            bool is_input = true
+        clang::Expr *copy_exprression(
+            clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
+            clang::SourceLocation location
         );
 
         // List of functions to generate AST node for Pcode operations
+        std::pair< clang::Stmt *, bool >
+        create_local(clang::ASTContext &ctx, const Operation &op);
 
-        // OP_DECLARE_LOCAL
-        std::pair< clang::Stmt *, bool > create_declare_local(
-            clang::ASTContext &ctx, const Function &function, const Operation &op
-        );
-
-        // OP_DECLARE_PARAMETER
         std::pair< clang::Stmt *, bool > create_declare_parameter(
-            clang::ASTContext &ctx, const Function &function, const Operation &op
-        );
-
-        std::pair< clang::Stmt *, bool > create_declare_temporary(
             clang::ASTContext &ctx, const Function &function, const Operation &op
         );
 
@@ -229,10 +190,6 @@ namespace patchestry::ast {
         create_int_2comp(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
         std::pair< clang::Stmt *, bool >
-        create_int_mult(clang::ASTContext &ctx, const Function &function, const Operation &op);
-        std::pair< clang::Stmt *, bool >
-        create_int_div(clang::ASTContext &ctx, const Function &function, const Operation &op);
-        std::pair< clang::Stmt *, bool >
         create_int_rem(clang::ASTContext &ctx, const Function &function, const Operation &op);
         std::pair< clang::Stmt *, bool >
         create_int_sdiv(clang::ASTContext &ctx, const Function &function, const Operation &op);
@@ -244,6 +201,9 @@ namespace patchestry::ast {
         );
         std::pair< clang::Stmt *, bool >
         create_bool_or(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        std::pair< clang::Stmt *, bool >
+        create_bool_and(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
         std::pair< clang::Stmt *, bool > create_float_equal(
             clang::ASTContext &ctx, const Function &function, const Operation &op
@@ -318,7 +278,7 @@ namespace patchestry::ast {
 
         Program &get_program(void) const { return program.get(); }
 
-        clang::Sema &get_sema(void) const { return ci.get().getSema(); }
+        clang::Sema &sema(void) const { return ci.get().getSema(); }
 
         std::reference_wrapper< Program > program;
         std::reference_wrapper< clang::CompilerInstance > ci;

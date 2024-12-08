@@ -301,7 +301,7 @@ namespace patchestry::ast {
      * This function creates and finalizes the definition of a `clang::RecordDecl`
      * for a composite type. It iterates through the components of the composite type,
      * adding fields to the record declaration using the corresponding types from
-     * the provided `ASTTypeMap`.
+     * the provided `SerializedTypeMap`.
      *
      * @param ctx The `clang::ASTContext` used for AST node creation.
      * @param varnode Metadata representing the composite type, including its name

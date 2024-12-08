@@ -13,9 +13,8 @@
 
 namespace patchestry::ast {
 
-    clang::SourceLocation source_location_from_key(clang::ASTContext &ctx, std::string key) {
-        (void) key;
-        (void)ctx;
+    clang::SourceLocation
+    source_location_from_key(clang::ASTContext & /*unused*/, std::string /*unused*/) {
         return clang::SourceLocation();
     }
 

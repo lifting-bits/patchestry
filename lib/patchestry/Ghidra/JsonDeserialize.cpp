@@ -222,7 +222,7 @@ namespace patchestry::ghidra {
         ArrayType &varnode, const JsonObject *array_obj, const TypeMap &serialized_types
     ) {
         auto element_key = get_string_if_valid(*array_obj, "element_type");
-        if (element_key) {
+        if (!element_key) {
             LOG(ERROR) << "Element type of an array is empty. key: " << varnode.key << "\n";
             return;
         }
