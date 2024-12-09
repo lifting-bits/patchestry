@@ -151,6 +151,19 @@ namespace patchestry::ast {
         create_undefined(clang::ASTContext &ctx, const UndefinedType &undefined_type);
 
         /**
+         * @brief Creates a `clang::QualType` for undefined array.
+         *
+         * @param ctx Reference to the `clang::ASTContext`.
+         * @param undefined_type The metadata representing the undefined type, including
+         *                       its size (in bytes) and name.
+         *
+         * @return A `clang::QualType` representing the newly created undefined array
+         */
+        clang::QualType create_type_for_undefined_array(
+            clang::ASTContext &ctx, const ArrayType &undefined_array
+        );
+
+        /**
          * @brief Completes the definition of a composite type (e.g., struct) in the AST.
          *
          * @param ctx The `clang::ASTContext` used for AST node creation.

@@ -70,6 +70,50 @@ namespace patchestry::ast {
 
     } // namespace
 
+    /**
+     * Performs an implicit and explicit cast of an expression to a specified type,
+     * falling back to a manual pointer-based cast if necessary.
+     */
+    clang::Expr *OpBuilder::perform_explicit_cast(
+        clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type
+    ) {
+        if (expr == nullptr || to_type.isNull()) {
+            LOG(ERROR) << "Invalid expr of type to perform explicit cast";
+            return {};
+        }
+
+        auto from_type = expr->getType();
+        if (ctx.hasSameUnqualifiedType(from_type, to_type)) {
+            return expr;
+        }
+
+        // Perform implicit conversion first, if that fails then create explicit cast
+        auto implicit_cast =
+            sema().PerformImplicitConversion(expr, to_type, clang::Sema::AA_Converting);
+        if (!implicit_cast.isInvalid()) {
+            return implicit_cast.getAs< clang::Expr >();
+        }
+
+        // Fallback to Explicit cast
+        auto addr_of_expr =
+            sema().CreateBuiltinUnaryOp(clang::SourceLocation(), clang::UO_AddrOf, expr);
+        assert(!addr_of_expr.isInvalid());
+
+        auto to_pointer_type = ctx.getPointerType(to_type);
+        auto casted_expr     = sema().BuildCStyleCastExpr(
+            clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(to_pointer_type),
+            clang::SourceLocation(), addr_of_expr.getAs< clang::Expr >()
+        );
+        assert(!casted_expr.isInvalid());
+
+        auto derefed_expr = sema().CreateBuiltinUnaryOp(
+            clang::SourceLocation(), clang::UO_Deref, casted_expr.getAs< clang::Expr >()
+        );
+        assert(!derefed_expr.isInvalid());
+
+        return derefed_expr.getAs< clang::Expr >();
+    }
+
     clang::Stmt *OpBuilder::create_assign_operation(
         clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
         clang::SourceLocation location
@@ -461,34 +505,40 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_piece(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if (op.mnemonic != Mnemonic::OP_PIECE) {
-            assert(false);
-            return std::make_pair(nullptr, false);
+        if (op.inputs.size() != 2U || op.mnemonic != Mnemonic::OP_PIECE) {
+            LOG(ERROR) << "PIECE Operation with invalid input operands or invalid "
+                          "operation. key: "
+                       << op.key;
+            return {};
         }
 
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "PIECE Operation type is not serialized. key: " << op.key;
+            return {};
+        }
+
+        auto *input0_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        auto *input1_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+
+        // TODO(kumarak): It should be the size of input1 field in bits; At the moment consider
+        // it as 4 bytes but should be fixed.
+        unsigned low_width = 32U;
+
         auto merge_to_next = !op.output.has_value();
-
-        unsigned low_width = 8U;
-
-        auto *shift_value = clang::IntegerLiteral::Create(
+        auto *shift_value  = clang::IntegerLiteral::Create(
             ctx, llvm::APInt(32, low_width), ctx.IntTy, clang::SourceLocation()
         );
 
-        auto *input0_expr = create_varnode(ctx, function, op.inputs[0]);
-        assert(input0_expr != nullptr);
-
-        auto *input1_expr = create_varnode(ctx, function, op.inputs[1]);
-        assert(input1_expr != nullptr);
-
         auto shifted_high_result = sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BO_Shl,
-            clang::dyn_cast< clang::Expr >(input0_expr),
+            source_location_from_key(ctx, op.key), clang::BO_Shl, input0_expr,
             clang::dyn_cast< clang::Expr >(shift_value)
         );
 
         if (shifted_high_result.isInvalid()) {
-            assert(false);
-            return std::make_pair(nullptr, false);
+            LOG(ERROR) << "PIECE Operation invalid shifted high result.\n";
+            return {};
         }
 
         auto or_result = sema().CreateBuiltinBinOp(
@@ -496,57 +546,49 @@ namespace patchestry::ast {
             shifted_high_result.getAs< clang::Expr >(),
             clang::dyn_cast< clang::Expr >(input1_expr)
         );
-
-        if (or_result.isInvalid()) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
+        assert(!or_result.isInvalid());
 
         if (merge_to_next) {
             return std::make_pair(or_result.getAs< clang::Expr >(), merge_to_next);
         }
 
         auto *output_expr = create_varnode(ctx, function, *op.output);
-        auto out_result   = sema().CreateBuiltinBinOp(
-            source_location_from_key(ctx, op.key), clang::BO_Assign,
-            clang::dyn_cast< clang::Expr >(output_expr), or_result.getAs< clang::Expr >()
-        );
-
-        if (out_result.isInvalid()) {
-            assert(false);
-            return std::make_pair(nullptr, false);
-        }
-
-        return std::make_pair(out_result.getAs< clang::Stmt >(), merge_to_next);
+        return { create_assign_operation(
+                     ctx, or_result.getAs< clang::Expr >(),
+                     clang::dyn_cast< clang::Expr >(output_expr),
+                     source_location_from_key(ctx, op.key)
+                 ),
+                 false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_subpiece(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if (op.mnemonic != Mnemonic::OP_SUBPIECE) {
-            assert(false);
-            return std::make_pair(nullptr, false);
+        if (op.inputs.size() != 2U || op.mnemonic != Mnemonic::OP_SUBPIECE) {
+            LOG(ERROR) << "SUBPIECE Operation with invalid input operands or invalid "
+                          "operation. key: "
+                       << op.key;
+            return {};
         }
 
-        auto merge_to_next = !op.output.has_value();
-        assert(op.inputs.size() == 2);
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "SUBPIECE Operation type is not serialized. key: " << op.key;
+            return {};
+        }
 
-        auto type_iter = type_builder().get_serialized_types().find(*op.type);
-        assert(type_iter != type_builder().get_serialized_types().end());
+        auto merge_to_next  = !op.output.has_value();
+        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
 
-        auto *shift_value = create_varnode(ctx, function, op.inputs[1]);
-        assert(shift_value != nullptr);
+        auto *shift_value =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
 
         auto *expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        if (expr->getType()->isPointerType()) {
-            auto cast_result = sema().BuildCStyleCastExpr(
-                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(type_iter->second),
-                clang::SourceLocation(), expr
-            );
-            assert(!cast_result.isInvalid());
-            expr = cast_result.getAs< clang::Expr >();
+        if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
+            if (auto *casted_expr = perform_explicit_cast(ctx, expr, op_type)) {
+                expr = casted_expr;
+            }
         }
 
         auto *expr_with_paren = new (ctx) clang::ParenExpr(

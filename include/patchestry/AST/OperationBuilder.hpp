@@ -7,13 +7,14 @@
 
 #pragma once
 
-#include <clang/Basic/SourceLocation.h>
 #include <functional>
 
-#include "patchestry/AST/FunctionBuilder.hpp"
-#include "patchestry/AST/TypeBuilder.hpp"
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Type.h>
+#include <clang/Basic/SourceLocation.h>
 
+#include <patchestry/AST/FunctionBuilder.hpp>
+#include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 
 namespace patchestry::ast {
@@ -154,6 +155,21 @@ namespace patchestry::ast {
         clang::Stmt *create_assign_operation(
             clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
             clang::SourceLocation location
+        );
+
+        /**
+         * @brief Performs an implicit and explicit cast of an expression to a specified type,
+         * falling back to a manual pointer-based cast if necessary.
+         *
+         * @param ctx Reference to clang ASTContext.
+         * @param expr The input expression to be cast.
+         * @param to_type The target type to which the expression should be cast.
+         *
+         * @return Pointer to casted `Expr`. null if `to_type` is null, or an invalid cast
+         * occurs.
+         */
+        clang::Expr *perform_explicit_cast(
+            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type
         );
 
         clang::Stmt *
