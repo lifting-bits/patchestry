@@ -175,7 +175,6 @@ namespace patchestry::ast {
                 param_type, nullptr, clang::SC_None, nullptr
             );
             parameter_vec.push_back(param_decl);
-            LOG(ERROR) << "DEBUG: " << param_op->key << "\t" << param_decl << "\n";
             local_variables.emplace(param_op->key, param_decl);
         }
 
@@ -244,6 +243,22 @@ namespace patchestry::ast {
         return ctx.getFunctionType(rttype, args_vector, ext_proto_info);
     }
 
+    /**
+     * @brief Creates default parameter declarations for a function based on a given prototype.
+     *
+     * This function generates a list of parameter declarations (`clang::ParmVarDecl`)
+     * for a function declaration (`clang::FunctionDecl`) based on the provided function
+     * prototype (`FunctionPrototype`).
+     *
+     * @param ctx The `clang::ASTContext` used to create AST nodes.
+     * @param func_decl The `clang::FunctionDecl` representing the function to which
+     *                  the parameters will be added.
+     * @param proto The `FunctionPrototype` containing the parameter type keys to
+     *              determine the parameter types.
+     *
+     * @return A vector of pointers to `clang::ParmVarDecl` representing the
+     *         parameters for the function.
+     */
     std::vector< clang::ParmVarDecl * > FunctionBuilder::create_default_paramaters(
         clang::ASTContext &ctx, clang::FunctionDecl *func_decl, const FunctionPrototype &proto
     ) {

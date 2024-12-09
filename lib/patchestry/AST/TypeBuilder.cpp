@@ -5,8 +5,11 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <sstream>
+
 #include <clang/AST/Type.h>
 
+#include <clang/Basic/SourceLocation.h>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/PcodeTypes.hpp>
@@ -97,9 +100,17 @@ namespace patchestry::ast {
                     /*is_integer=*/false
                 );
 
-            case VarnodeType::VT_ARRAY:
+            case VarnodeType::VT_ARRAY: {
+                auto array = dynamic_cast< const ArrayType & >(*vnode_type);
+                if (array.get_element_type()
+                    && array.get_element_type()->kind == VarnodeType::VT_UNDEFINED)
+                {
+                    return create_type_for_undefined_array(
+                        ctx, dynamic_cast< const ArrayType & >(*vnode_type)
+                    );
+                }
                 return create_array(ctx, dynamic_cast< const ArrayType & >(*vnode_type));
-
+            }
             case VarnodeType::VT_POINTER:
                 return create_pointer(ctx, dynamic_cast< const PointerType & >(*vnode_type));
 
@@ -236,19 +247,6 @@ namespace patchestry::ast {
         return ctx.getPointerType(pointee_type);
     }
 
-    clang::QualType TypeBuilder::fix_type_for_undefined_array(
-        clang::ASTContext &ctx, const ArrayType &array_type
-    ) {
-        auto element = array_type.get_element_type();
-        if (element->kind != VarnodeType::VT_UNDEFINED) {
-            return {};
-        }
-
-        auto pointee_type = create_type(ctx, element);
-        serialized_types.emplace(element->key, pointee_type);
-        return ctx.getPointerType(pointee_type);
-    }
-
     /**
      * @brief Creates a `clang::QualType` for an array type.
      *
@@ -274,10 +272,6 @@ namespace patchestry::ast {
         }
 
         const auto &element = array_type.get_element_type();
-        if (element->kind == VarnodeType::VT_UNDEFINED) {
-            return fix_type_for_undefined_array(ctx, array_type);
-        }
-
         if (element->key == array_type.key) {
             LOG(ERROR) << "Element key is same as array key. Key " << element->key << "\n";
             return {};
@@ -361,7 +355,6 @@ namespace patchestry::ast {
      *
      * @return A `clang::QualType` representing the composite type.
      */
-
     clang::QualType
     TypeBuilder::create_composite(clang::ASTContext &ctx, const VarnodeType &composite_type) {
         auto tag_kind = [&]() -> clang::TagDecl::TagKind {
@@ -406,7 +399,6 @@ namespace patchestry::ast {
      *
      * @return A `clang::QualType` representing the enumeration type.
      */
-
     clang::QualType
     TypeBuilder::create_enum(clang::ASTContext &ctx, const EnumType &enum_type) {
         auto *enum_decl = clang::EnumDecl::Create(
@@ -437,7 +429,6 @@ namespace patchestry::ast {
      *
      * @note Updates the `ASTContext` with a new `TypedefDecl` for the undefined type.
      */
-
     clang::QualType
     TypeBuilder::create_undefined(clang::ASTContext &ctx, const UndefinedType &undefined_type) {
         auto base_type = get_type_for_size(
@@ -459,6 +450,50 @@ namespace patchestry::ast {
         ctx.getTranslationUnitDecl()->addDecl(typedef_decl);
 
         return ctx.getTypedefType(typedef_decl);
+    }
+
+    /**
+     * @brief Creates a `clang::QualType` for an undefined array type.
+     *
+     * This function generates a struct type wrapping the undefined array.
+     *
+     * @param ctx Reference to the `clang::ASTContext` for type creation.
+     * @param undefined_type The metadata representing the undefined type, including
+     *                       its size (in bytes) and name.
+     *
+     * @return A `clang::QualType` representing the newly created type for undefined array.
+     */
+    clang::QualType TypeBuilder::create_type_for_undefined_array(
+        clang::ASTContext &ctx, const ArrayType &undefined_array
+    ) {
+        auto undef_array = create_array(ctx, undefined_array);
+        if (undef_array.isNull()) {
+            return {};
+        }
+
+        std::stringstream ss;
+        ss << "struct_undefined" << undefined_array.size;
+
+        // Create a RecordDecl for the composite type.
+        auto *decl = clang::RecordDecl::Create(
+            ctx, clang::TagDecl::TagKind::Struct, ctx.getTranslationUnitDecl(),
+            clang::SourceLocation(), clang::SourceLocation(), &ctx.Idents.get(ss.str())
+        );
+
+        decl->completeDefinition();
+
+        // Create a field decl with type `undef_array`
+        auto *field_decl = clang::FieldDecl::Create(
+            ctx, decl, clang::SourceLocation(), clang::SourceLocation(),
+            &ctx.Idents.get("undefined"), undef_array, nullptr, nullptr, false,
+            clang::ICIS_NoInit
+        );
+
+        decl->addDecl(field_decl);
+        decl->setDeclContext(ctx.getTranslationUnitDecl());
+        ctx.getTranslationUnitDecl()->addDecl(decl);
+
+        return ctx.getRecordType(decl);
     }
 
 } // namespace patchestry::ast
