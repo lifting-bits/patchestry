@@ -34,7 +34,8 @@ namespace patchestry::ast {
         FunctionBuilder(
             clang::CompilerInstance &ci, const Function &function, TypeBuilder &type_builder,
             std::unordered_map< std::string, clang::FunctionDecl * > &functions,
-            std::unordered_map< std::string, clang::VarDecl * > &globals
+            std::unordered_map< std::string, clang::VarDecl * > &globals,
+            std::unordered_map< void *, std::string > &locations
         );
 
         // copy operations
@@ -115,6 +116,8 @@ namespace patchestry::ast {
             function_list;
         std::reference_wrapper< std::unordered_map< std::string, clang::VarDecl * > >
             global_var_list;
+
+        std::reference_wrapper< std::unordered_map< void *, std::string > > location_map;
 
         std::unordered_map< std::string, clang::VarDecl * > local_variables;
         std::unordered_map< std::string, clang::LabelDecl * > labels_declaration;
