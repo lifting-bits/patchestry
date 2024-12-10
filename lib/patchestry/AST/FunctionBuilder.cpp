@@ -75,7 +75,8 @@ namespace patchestry::ast {
     FunctionBuilder::FunctionBuilder(
         clang::CompilerInstance &ci, const Function &function, TypeBuilder &type_builder,
         std::unordered_map< std::string, clang::FunctionDecl * > &functions,
-        std::unordered_map< std::string, clang::VarDecl * > &globals
+        std::unordered_map< std::string, clang::VarDecl * > &globals,
+        std::unordered_map< void *, std::string > &locations
     )
         : prev_decl(nullptr)
         , cii(ci)
@@ -84,6 +85,7 @@ namespace patchestry::ast {
         , op_builder(nullptr)
         , function_list(functions)
         , global_var_list(globals)
+        , location_map(locations)
         , local_variables({}) {
         if (!function.key.empty()) {
             if (auto *function_decl = create_declaration(ci.getASTContext())) {
@@ -91,9 +93,6 @@ namespace patchestry::ast {
                 function_list.get().emplace(function.key, prev_decl);
             }
         }
-
-        // Initialize `op_builder` after the `FunctionBuilder` is fully constructed
-        // op_builder = std::make_shared< OpBuilder >(ci.getASTContext(), shared_from_this());
     }
 
     void FunctionBuilder::initialize_op_builder(void) {
