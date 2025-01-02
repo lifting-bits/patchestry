@@ -64,26 +64,37 @@ namespace patchestry::ast {
     }
 
     clang::Stmt *OpBuilder::create_varnode(
-        clang::ASTContext &ctx, const Function &function, const Varnode &vnode
+        clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+        const std::string &op_key
     ) {
-        switch (vnode.kind) {
-            case Varnode::VARNODE_UNKNOWN:
-                break;
-            case Varnode::VARNODE_GLOBAL:
-                return create_global(ctx, vnode);
-            case Varnode::VARNODE_PARAM:
-                return create_parameter(ctx, vnode);
-            case Varnode::VARNODE_FUNCTION:
-                return create_function(ctx, vnode);
-            case Varnode::VARNODE_LOCAL:
-                return create_local(ctx, function, vnode);
-            case Varnode::VARNODE_TEMPORARY:
-                return create_temporary(ctx, function, vnode);
-            case Varnode::VARNODE_CONSTANT:
-                return create_constant(ctx, vnode);
+        auto varnode_operation = [&](clang::ASTContext &ctx, const Function &function,
+                                     const Varnode &vnode) -> clang::Stmt * {
+            switch (vnode.kind) {
+                case Varnode::VARNODE_UNKNOWN:
+                    break;
+                case Varnode::VARNODE_GLOBAL:
+                    return create_global(ctx, vnode);
+                case Varnode::VARNODE_PARAM:
+                    return create_parameter(ctx, vnode);
+                case Varnode::VARNODE_FUNCTION:
+                    return create_function(ctx, vnode);
+                case Varnode::VARNODE_LOCAL:
+                    return create_local(ctx, function, vnode);
+                case Varnode::VARNODE_TEMPORARY:
+                    return create_temporary(ctx, function, vnode);
+                case Varnode::VARNODE_CONSTANT:
+                    return create_constant(ctx, vnode);
+            }
+
+            return nullptr;
+        };
+
+        if (auto *expr = varnode_operation(ctx, function, vnode)) {
+            function_builder().set_location_key(expr, op_key);
+            return expr;
         }
 
-        return nullptr;
+        return {};
     }
 
     clang::Stmt *OpBuilder::create_parameter(clang::ASTContext &ctx, const Varnode &vnode) {
@@ -142,6 +153,9 @@ namespace patchestry::ast {
 
         if (auto maybe_operation = operation_from_key(function, vnode.operation.value())) {
             auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
+            if (stmt != nullptr) {
+                function_builder().location_map.get().emplace(stmt, maybe_operation->key);
+            }
             return stmt;
         }
 
@@ -157,10 +171,12 @@ namespace patchestry::ast {
 
         if (function_builder().function_list.get().contains(*vnode.function)) {
             auto *function_decl = function_builder().function_list.get().at(*vnode.function);
-            return clang::DeclRefExpr::Create(
+            auto *function_ref  = clang::DeclRefExpr::Create(
                 ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), function_decl,
                 false, clang::SourceLocation(), function_decl->getType(), clang::VK_PRValue
             );
+            function_builder().set_location_key(function_ref, *vnode.function);
+            return function_ref;
         }
 
         return {};

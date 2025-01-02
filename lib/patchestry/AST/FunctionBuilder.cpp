@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <sstream>
+#include <unordered_map>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Attr.h>
@@ -20,7 +21,6 @@
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeTypes.hpp>
 #include <patchestry/Util/Log.hpp>
-#include <unordered_map>
 
 namespace patchestry::ast {
 
@@ -91,6 +91,7 @@ namespace patchestry::ast {
             if (auto *function_decl = create_declaration(ci.getASTContext())) {
                 prev_decl = function_decl;
                 function_list.get().emplace(function.key, prev_decl);
+                location_map.get().emplace(prev_decl, function.key);
             }
         }
     }
@@ -175,6 +176,7 @@ namespace patchestry::ast {
             );
             parameter_vec.push_back(param_decl);
             local_variables.emplace(param_op->key, param_decl);
+            location_map.get().emplace(param_decl, param_op->key);
         }
 
         func_decl->setParams(parameter_vec);
@@ -294,6 +296,15 @@ namespace patchestry::ast {
         return parameter_vec;
     }
 
+    /**
+     * @brief Creates a `clang::FunctionDecl` representing the definition of a function,
+     * including its body.
+     *
+     * @param ctx The `clang::ASTContext` used to create AST nodes.
+     * @return A pointer to the created `clang::FunctionDecl` representing the function
+     * definition. Returns `nullptr` if the function name is empty, the function has no basic
+     * blocks, or if the function definition cannot be created.
+     */
     clang::FunctionDecl *FunctionBuilder::create_definition(clang::ASTContext &ctx) {
         if (function.get().name.empty() || function.get().basic_blocks.empty()) {
             LOG(ERROR) << "Can't create function definition. Missing function name or has no "
@@ -328,6 +339,12 @@ namespace patchestry::ast {
         return function_def;
     }
 
+    /**
+     * @brief Creates and registers label declarations for basic blocks in a function.
+     *
+     * @param ctx The Clang ASTContext used to create label declarations.
+     * @param func_decl The Clang function declaration to which the labels belong.
+     */
     void
     FunctionBuilder::create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl) {
         if (function.get().basic_blocks.empty()) {
@@ -357,9 +374,24 @@ namespace patchestry::ast {
             }
 
             labels_declaration.emplace(key, label_decl);
+            location_map.get().emplace(label_decl, key);
         }
     }
 
+    /**
+     * @brief Creates the body of a function in the form of a vector of Clang statements.
+     *
+     * This method constructs the Abstract Syntax Tree (AST) for a function body based on
+     * its basic blocks. It processes the function's entry block first, then processes
+     * remaining basic blocks, assigning labels to each block and appending the generated
+     * statements in sequence.
+     *
+     * @param ctx The ASTContext object used for managing AST nodes.
+     * @param func_decl The function declaration associated with the function body.
+     *
+     * @return A vector of Clang statements representing the function body.
+     *         Returns an empty vector if the function has no basic blocks.
+     */
     std::vector< clang::Stmt * > FunctionBuilder::create_function_body(
         clang::ASTContext &ctx, clang::FunctionDecl *func_decl
     ) {
@@ -406,6 +438,20 @@ namespace patchestry::ast {
         return stmt_vec;
     }
 
+    /**
+     * @brief Generates a vector of `clang::Stmt*` representing the operations in a basic block.
+     *
+     * This function iterates over the `ordered_operations` of a `BasicBlock` object to create
+     * corresponding `clang::Stmt` objects. Each statement is created using the
+     * `create_operation` method and added to the vector `stmt_vec` unless the operation is
+     * flagged to merge with the next.
+     *
+     * @param ctx The Clang ASTContext used for creating statements.
+     * @param block The BasicBlock containing the operations to be processed.
+     *
+     * @return A vector of `clang::Stmt*` representing the operations in the basic block.
+     *
+     */
     std::vector< clang::Stmt * >
     FunctionBuilder::create_basic_block(clang::ASTContext &ctx, const BasicBlock &block) {
         if (block.ordered_operations.empty()) {
@@ -424,6 +470,7 @@ namespace patchestry::ast {
             const auto &operation = block.operations.at(operation_key);
             if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
                 operation_stmts.emplace(operation.key, stmt);
+                location_map.get().emplace(stmt, operation.key);
                 if (!should_merge_to_next) {
                     stmt_vec.push_back(stmt);
                 }
@@ -433,6 +480,18 @@ namespace patchestry::ast {
         return stmt_vec;
     }
 
+    /**
+     * @brief Creates a Clang AST representation of a given operation based on its mnemonic.
+     *
+     * This function takes an operation and generates the corresponding Clang AST node,
+     * which represents the operation in the target AST.
+     *
+     * @param ctx The Clang ASTContext for creating AST nodes.
+     * @param op The operation to be translated into a Clang AST node.
+     * @return A pair consisting of:
+     *         - A pointer to the generated Clang Stmt representing the operation.
+     *         - A boolean indicating if stmt should be merged with previous one.
+     */
     std::pair< clang::Stmt *, bool >
     FunctionBuilder::create_operation(clang::ASTContext &ctx, const Operation &op) {
         if (op.mnemonic == Mnemonic::OP_UNKNOWN) {

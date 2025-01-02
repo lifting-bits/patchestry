@@ -99,39 +99,79 @@ namespace patchestry::ast {
 
     struct MetaGen final : vast::cg::meta_generator
     {
-        MetaGen(clang::ASTContext *actx, mlir::MLIRContext *mctx) : actx(actx), mctx(mctx) {}
+        MetaGen(clang::ASTContext *actx, mlir::MLIRContext *mctx, const LocationMap &locs)
+            : actx(actx), mctx(mctx), locations(locs) {}
+
+        void *raw_pointer(const clang::Decl *decl) const {
+            return static_cast< void * >(const_cast< clang::Decl * >(decl));
+        }
+
+        void *raw_pointer(const clang::Stmt *stmt) const {
+            return static_cast< void * >(const_cast< clang::Stmt * >(stmt));
+        }
+
+        void *raw_pointer(const clang::Expr *expr) const {
+            return static_cast< void * >(const_cast< clang::Expr * >(expr));
+        }
 
         mlir::Location location(const clang::Decl *decl) const override {
-            return location(decl->getLocation());
+            return location(raw_pointer(decl), decl->getLocation());
         }
 
         mlir::Location location(const clang::Stmt *stmt) const override {
-            return location(stmt->getBeginLoc());
+            return location(raw_pointer(stmt), stmt->getBeginLoc());
         }
 
         mlir::Location location(const clang::Expr *expr) const override {
-            return location(expr->getExprLoc());
+            return location(raw_pointer(expr), expr->getExprLoc());
         }
 
       private:
-        mlir::Location location(const clang::SourceLocation &loc) const {
+        uint64_t address_from_location(const std::string &str, char delimiter) const {
+            std::stringstream ss(str);
+            std::string token;
+            int count = 0;
+
+            while (std::getline(ss, token, delimiter)) {
+                ++count;
+                if (count == 2) {
+                    return std::stoi(token, nullptr, 16);
+                }
+            }
+
+            return 0;
+        }
+
+        mlir::Location location(void *data, const clang::SourceLocation &loc) const {
             (void) loc;
             (void) actx;
-            auto attr = vast::meta::IdentifierAttr::get(mctx, 0);
-            return mlir::FusedLoc::get({}, attr, mctx);
+            if (locations.contains(data)) {
+                const auto &location_str      = locations.at(data);
+                mlir::StringAttr string_attr  = mlir::StringAttr::get(mctx, location_str);
+                mlir::DictionaryAttr metadata = mlir::DictionaryAttr::get(
+                    mctx,
+                    {
+                        {mlir::StringAttr::get(mctx, "pcode"), string_attr}
+                }
+                );
+                return mlir::FusedLoc::get({}, metadata, mctx);
+            }
+            return mlir::UnknownLoc::get(mctx);
         }
 
         clang::ASTContext *actx;
         mlir::MLIRContext *mctx;
+        const LocationMap &locations;
     };
 
     namespace {
 
-        std::optional< vast::owning_mlir_module_ref >
-        create_module(clang::ASTContext &ctx, vast::cc::action_options &opts) {
+        std::optional< vast::owning_mlir_module_ref > create_module(
+            clang::ASTContext &ctx, const LocationMap &locations, vast::cc::action_options &opts
+        ) {
             auto &mctx = kMLIR.context();
             auto bld   = vast::cg::mk_codegen_builder(mctx);
-            auto mg    = std::make_shared< MetaGen >(&ctx, &mctx);
+            auto mg    = std::make_shared< MetaGen >(&ctx, &mctx, locations);
             auto sg =
                 std::make_shared< vast::cg::default_symbol_generator >(ctx.createMangleContext()
                 );
@@ -159,8 +199,10 @@ namespace patchestry::ast {
         }
     } // namespace
 
-    void CodeGenerator::generate_source_ir(clang::ASTContext &ctx, llvm::raw_fd_ostream &os) {
-        auto mod   = create_module(ctx, opts);
+    void CodeGenerator::generate_source_ir(
+        clang::ASTContext &ctx, const LocationMap &locations, llvm::raw_fd_ostream &os
+    ) {
+        auto mod   = create_module(ctx, locations, opts);
         auto flags = mlir::OpPrintingFlags();
         flags.enableDebugInfo(true, false);
         (*mod)->print(os, flags);

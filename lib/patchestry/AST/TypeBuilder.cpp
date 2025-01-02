@@ -8,8 +8,8 @@
 #include <sstream>
 
 #include <clang/AST/Type.h>
-
 #include <clang/Basic/SourceLocation.h>
+
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/PcodeTypes.hpp>

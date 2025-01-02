@@ -15,12 +15,6 @@
 
 namespace patchestry::pc {
 
-    struct program;
-    struct function;
-    struct basic_block;
-    struct instruction;
-    struct pcode;
-
     using json_arr = llvm::json::Array;
     using json_obj = llvm::json::Object;
     using json_val = llvm::json::Value;
@@ -36,14 +30,10 @@ namespace patchestry::pc {
             bld.setInsertionPointToStart(&*reg.begin());
         }
 
-        void process(const program &prog);
-        void process_function(const function &func);
-        void process_block(const basic_block &block);
-        void process_instruction(const instruction &inst);
-        void process_pcode(const pcode &code);
-
-        mlir_operation create_int_const(uint32_t offset, uint32_t size);
-        mlir_operation create_varnode(std::string type, uint32_t offset, uint32_t size);
+        void process(const json_obj &json);
+        void process_function(const json_obj &json);
+        void process_block(const json_obj &json);
+        void process_instruction(const json_obj &json);
     };
 
     mlir::OwningOpRef< mlir::ModuleOp > deserialize(const json_obj &json, mcontext_t *mctx);
