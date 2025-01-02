@@ -7,8 +7,11 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include <clang/AST/ASTContext.h>
 #include <clang/Frontend/CompilerInstance.h>
+
 #include <vast/Frontend/FrontendAction.hpp>
 #include <vast/Frontend/Options.hpp>
 
@@ -17,6 +20,9 @@ namespace llvm {
 }
 
 namespace patchestry::ast {
+
+    using LocationMap = std::unordered_map< void *, std::string >;
+
     class CodeGenerator
     {
       public:
@@ -29,7 +35,9 @@ namespace patchestry::ast {
 
         virtual ~CodeGenerator() {}
 
-        void generate_source_ir(clang::ASTContext &ctx, llvm::raw_fd_ostream &os);
+        void generate_source_ir(
+            clang::ASTContext &ctx, const LocationMap &locations, llvm::raw_fd_ostream &os
+        );
 
       private:
         vast::cc::action_options opts;

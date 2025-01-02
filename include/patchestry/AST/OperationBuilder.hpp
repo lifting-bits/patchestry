@@ -154,7 +154,7 @@ namespace patchestry::ast {
       private:
         clang::Stmt *create_assign_operation(
             clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
-            clang::SourceLocation location
+            const std::string &location_key
         );
 
         /**
@@ -172,8 +172,10 @@ namespace patchestry::ast {
             clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type
         );
 
-        clang::Stmt *
-        create_varnode(clang::ASTContext &ctx, const Function &function, const Varnode &vnode);
+        clang::Stmt *create_varnode(
+            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+            const std::string &op_key = ""
+        );
 
         clang::Stmt *create_parameter(clang::ASTContext &ctx, const Varnode &vnode);
 

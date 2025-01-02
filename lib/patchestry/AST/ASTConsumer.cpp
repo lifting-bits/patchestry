@@ -64,7 +64,7 @@ namespace patchestry::ast {
 
         llvm::errs() << "Generate mlir\n";
         llvm::raw_fd_ostream file_os(outfile + ".mlir", ec);
-        codegen->generate_source_ir(ctx, file_os);
+        codegen->generate_source_ir(ctx, location_map, file_os);
     }
 
     void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
@@ -111,6 +111,7 @@ namespace patchestry::ast {
             var_decl->setDeclContext(ctx.getTranslationUnitDecl());
             ctx.getTranslationUnitDecl()->addDecl(var_decl);
             global_variable_declarations.emplace(variable.key, var_decl);
+            location_map.emplace(var_decl, variable.key);
         }
     }
 

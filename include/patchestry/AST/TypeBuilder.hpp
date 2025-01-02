@@ -7,8 +7,10 @@
 
 #pragma once
 
-#include <clang/AST/ASTContext.h>
 #include <functional>
+
+#include <clang/AST/ASTContext.h>
+
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 
 namespace patchestry::ast {

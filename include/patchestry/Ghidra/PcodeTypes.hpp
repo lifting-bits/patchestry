@@ -9,7 +9,7 @@
 
 #include <memory>
 
-#include "llvm/Support/JSON.h"
+#include <llvm/Support/JSON.h>
 
 namespace patchestry::ghidra {
     using JsonArray  = llvm::json::Array;

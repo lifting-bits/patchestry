@@ -7,8 +7,8 @@
 
 #include <patchestry/Ghidra/PcodeTranslation.hpp>
 
-#include <patchestry/Dialect/Pcode/PcodeDialect.hpp>
 #include <patchestry/Dialect/Pcode/Deserialize.hpp>
+#include <patchestry/Dialect/Pcode/PcodeDialect.hpp>
 
 #include <patchestry/Util/Common.hpp>
 
@@ -19,19 +19,16 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 
-#include <iostream>
-
 namespace patchestry::ghidra {
 
-    static mlir::OwningOpRef< mlir_operation > deserialize(
-        const llvm::MemoryBuffer *buffer, mcontext_t *mctx
-    ) {
+    static mlir::OwningOpRef< mlir_operation >
+    deserialize(const llvm::MemoryBuffer *buffer, mcontext_t *mctx) {
         mctx->loadAllAvailableDialects();
-        std::cout << buffer->getBuffer().str() << std::endl;
 
         auto json = llvm::json::parse(buffer->getBuffer());
         if (!json) {
-            mlir::emitError(mlir::UnknownLoc::get(mctx), "failed to parse PCode JSON: ") << toString(json.takeError());
+            mlir::emitError(mlir::UnknownLoc::get(mctx), "failed to parse PCode JSON: ")
+                << toString(json.takeError());
         }
         return pc::deserialize(*json->getAsObject(), mctx);
     }
@@ -39,11 +36,11 @@ namespace patchestry::ghidra {
     void register_pcode_translation() {
         mlir::TranslateToMLIRRegistration(
             "deserialize-pcode", "translate Ghidra Pcode JSON into Patchestry's Pcode dialect",
-            [] (llvm::SourceMgr &smgr, mcontext_t *mctx) {
+            [](llvm::SourceMgr &smgr, mcontext_t *mctx) {
                 assert(smgr.getNumBuffers() == 1 && "expected one buffer");
                 return deserialize(smgr.getMemoryBuffer(smgr.getMainFileID()), mctx);
             },
-            [] (mlir::DialectRegistry &registry) {
+            [](mlir::DialectRegistry &registry) {
                 registry.insert< patchestry::pc::PcodeDialect >();
             }
         );

@@ -7,17 +7,18 @@
 
 #pragma once
 
-#include "patchestry/AST/TypeBuilder.hpp"
+#include <functional>
+#include <memory>
+#include <unordered_map>
+
+#include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclBase.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Sema/Sema.h>
-#include <functional>
 
-#include <clang/AST/ASTContext.h>
-#include <memory>
+#include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
-#include <unordered_map>
 
 namespace patchestry::ast {
     class OpBuilder;
@@ -87,6 +88,13 @@ namespace patchestry::ast {
         );
 
         clang::FunctionDecl *create_definition(clang::ASTContext &ctx);
+
+        template< typename T >
+        void set_location_key(T *pointer, const std::string &key) {
+            if (!location_map.get().contains(pointer)) {
+                location_map.get().emplace(pointer, key);
+            }
+        }
 
       private:
         void create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl);
