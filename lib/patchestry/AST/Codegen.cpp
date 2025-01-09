@@ -26,6 +26,9 @@ VAST_RELAX_WARNINGS
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/Verifier.h>
 #include <mlir/InitAllDialects.h>
+#include <mlir/InitAllPasses.h>
+#include <mlir/Pass/Pass.h>
+#include <mlir/Pass/PassManager.h>
 VAST_UNRELAX_WARNINGS
 
 #define GAP_ENABLE_COROUTINES
@@ -51,8 +54,8 @@ VAST_UNRELAX_WARNINGS
 #include <vast/Frontend/Options.hpp>
 
 #include <vast/CodeGen/AttrVisitorProxy.hpp>
-#include <vast/CodeGen/DefaultCodeGenPolicy.hpp>
 #include <vast/CodeGen/DefaultMetaGenerator.hpp>
+#include <vast/Tower/Tower.hpp>
 #include <vast/Util/Common.hpp>
 #include <vast/Util/DataLayout.hpp>
 
@@ -69,22 +72,27 @@ namespace patchestry::ast {
 
     class MLIRInitializer
     {
-      private:
+      public:
+        MLIRInitializer(const MLIRInitializer &)                = delete;
+        MLIRInitializer &operator=(const MLIRInitializer &)     = delete;
+        MLIRInitializer(MLIRInitializer &&) noexcept            = delete;
+        MLIRInitializer &operator=(MLIRInitializer &&) noexcept = delete;
+
         MLIRInitializer(void) = delete;
 
-        mlir::DialectRegistry registry;
-        MLIRRegistryInitializer registry_initializer;
-        mutable mlir::MLIRContext ctx;
-
-      public:
-        explicit MLIRInitializer(int);
+        explicit MLIRInitializer(int /*unused*/);
 
         inline mlir::MLIRContext &context(void) const noexcept { return ctx; }
 
         ~MLIRInitializer(void);
+
+      private:
+        mlir::DialectRegistry registry;
+        MLIRRegistryInitializer registry_initializer;
+        mutable mlir::MLIRContext ctx;
     };
 
-    MLIRInitializer::MLIRInitializer(int)
+    MLIRInitializer::MLIRInitializer(int /*unused*/)
         : registry()
         , registry_initializer(registry)
         , ctx(registry, mlir::MLIRContext::Threading::ENABLED) {
@@ -95,7 +103,7 @@ namespace patchestry::ast {
 
     MLIRInitializer::~MLIRInitializer(void) { ctx.disableMultithreading(); }
 
-    static const MLIRInitializer kMLIR(0);
+    static const MLIRInitializer k_mlir(0);
 
     struct MetaGen final : vast::cg::meta_generator
     {
@@ -169,7 +177,7 @@ namespace patchestry::ast {
         std::optional< vast::owning_mlir_module_ref > create_module(
             clang::ASTContext &ctx, const LocationMap &locations, vast::cc::action_options &opts
         ) {
-            auto &mctx = kMLIR.context();
+            auto &mctx = k_mlir.context();
             auto bld   = vast::cg::mk_codegen_builder(mctx);
             auto mg    = std::make_shared< MetaGen >(&ctx, &mctx, locations);
             auto sg =
@@ -206,5 +214,14 @@ namespace patchestry::ast {
         auto flags = mlir::OpPrintingFlags();
         flags.enableDebugInfo(true, false);
         (*mod)->print(os, flags);
+
+        // Add support for tower of IRs
+        mlir::PassManager pm(&k_mlir.context());
+        vast::tw::location_info_t location_info;
+        auto tower       = vast::tw::tower(k_mlir.context(), location_info, std::move(*mod));
+        auto link        = tower.apply(tower.top(), location_info, pm);
+        auto llvm        = link->parent();
+        auto llvm_module = llvm.mod;
+        llvm_module->dump();
     }
 } // namespace patchestry::ast

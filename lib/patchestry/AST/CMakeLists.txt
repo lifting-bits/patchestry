@@ -23,6 +23,7 @@ set(VAST_LIBS
   VAST::VASTSymbolTableInterface
   VAST::VASTSymbolRefInterface
   VAST::VASTTypeDefinitionInterface
+  VAST::VASTTower
 )
 
 add_library(patchestry::ast ALIAS patchestry_ast)

@@ -25,6 +25,7 @@
 #include <llvm/TargetParser/Host.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/AST/Codegen.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Util/Log.hpp>
 
@@ -44,16 +45,10 @@ const llvm::cl::opt< std::string > output_filename(
     llvm::cl::init("/tmp/output.c")
 );
 
-bool debug_mode = false;
-
 int main(int argc, char **argv) {
     llvm::cl::ParseCommandLineOptions(
         argc, argv, "pcode-lifter to lift high pcode into clang ast\n"
     );
-
-    if (verbose) {
-        debug_mode = true;
-    }
 
     llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
         llvm::MemoryBuffer::getFile(input_filename);
@@ -122,6 +117,15 @@ int main(int argc, char **argv) {
 
     auto &ast_consumer = ci.getASTConsumer();
     ast_consumer.HandleTranslationUnit(ast_context);
+
+    auto *pcode_consumer = dynamic_cast< patchestry::ast::PcodeASTConsumer * >(&ast_consumer);
+    if (pcode_consumer != nullptr) {
+        std::error_code ec;
+        const auto &locations = pcode_consumer->locations();
+        auto codegen          = std::make_unique< patchestry::ast::CodeGenerator >(ci);
+        llvm::raw_fd_ostream file_os(outfile + ".mlir", ec);
+        codegen->generate_source_ir(ast_context, locations, file_os);
+    }
 
     return EXIT_SUCCESS;
 }

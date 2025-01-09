@@ -48,6 +48,10 @@ namespace patchestry::ast {
 
         void HandleTranslationUnit(clang::ASTContext &ctx) override;
 
+        const std::unordered_map< void *, std::string > &locations(void) const {
+            return location_map;
+        }
+
       private:
         void set_sema_context(clang::DeclContext *dc);
 

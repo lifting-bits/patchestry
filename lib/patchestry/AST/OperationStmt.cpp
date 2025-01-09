@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include "patchestry/AST/TypeBuilder.hpp"
 #include <optional>
 #include <utility>
 
@@ -866,13 +867,37 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_abs(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return {};
+        if (op.inputs.size() != 1U) {
+            LOG(ERROR) << "Skipping, unary operation with insufficient input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        // TODO(kumarak): Implement using conditional operator
+        return create_unary_operation(ctx, function, op, clang::UO_Minus);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_sqrt(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
+        if (op.inputs.size() != 1U) {
+            LOG(ERROR) << "Skipping, sqrt operation with insufficient input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "Skipping, sqrt operation type is not serialized. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        /*auto op_type = type_builder().get_serialized_types().at(*op.type);
+        unsigned buildin;
+        if (op_type->isFloatingType()) {
+            buildin = ctx.BuiltinInfo.getBuiltinID()
+        }*/
+
         (void) ctx, (void) function, (void) op;
         return {};
     }

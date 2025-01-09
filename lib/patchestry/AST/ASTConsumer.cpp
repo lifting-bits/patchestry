@@ -57,14 +57,9 @@ namespace patchestry::ast {
 
         llvm::errs() << "Print AST dump\n";
         ctx.getTranslationUnitDecl()->dumpColor();
-
         ctx.getTranslationUnitDecl()->print(
             *llvm::dyn_cast< llvm::raw_ostream >(out), ctx.getPrintingPolicy(), 0
         );
-
-        llvm::errs() << "Generate mlir\n";
-        llvm::raw_fd_ostream file_os(outfile + ".mlir", ec);
-        codegen->generate_source_ir(ctx, location_map, file_os);
     }
 
     void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
