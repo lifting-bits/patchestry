@@ -23,7 +23,6 @@
 #include <clang/Sema/Sema.h>
 #include <llvm/Support/raw_ostream.h>
 
-#include <patchestry/AST/Codegen.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
@@ -43,7 +42,6 @@ namespace patchestry::ast {
             : program(prog)
             , ci(ci)
             , outfile(outfile)
-            , codegen(std::make_unique< CodeGenerator >(ci))
             , type_builder(std::make_unique< TypeBuilder >(ci.getASTContext())) {}
 
         void HandleTranslationUnit(clang::ASTContext &ctx) override;
@@ -71,7 +69,6 @@ namespace patchestry::ast {
         std::reference_wrapper< clang::CompilerInstance > ci;
 
         std::string outfile;
-        std::unique_ptr< CodeGenerator > codegen;
         std::unique_ptr< TypeBuilder > type_builder;
 
         std::unordered_map< std::string, clang::FunctionDecl * > function_declarations;

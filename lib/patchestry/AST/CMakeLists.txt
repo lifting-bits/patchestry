@@ -4,7 +4,6 @@
 
 add_library(patchestry_ast STATIC
   ASTConsumer.cpp
-  Codegen.cpp
   FunctionBuilder.cpp
   OperationBuilder.cpp
   OperationStmt.cpp

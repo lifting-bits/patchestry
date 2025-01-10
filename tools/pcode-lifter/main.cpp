@@ -25,7 +25,7 @@
 #include <llvm/TargetParser/Host.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
-#include <patchestry/AST/Codegen.hpp>
+#include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Util/Log.hpp>
 
@@ -122,9 +122,9 @@ int main(int argc, char **argv) {
     if (pcode_consumer != nullptr) {
         std::error_code ec;
         const auto &locations = pcode_consumer->locations();
-        auto codegen          = std::make_unique< patchestry::ast::CodeGenerator >(ci);
+        auto codegen          = std::make_unique< patchestry::codegen::CodeGenerator >(ci);
         llvm::raw_fd_ostream file_os(outfile + ".mlir", ec);
-        codegen->generate_source_ir(ast_context, locations, file_os);
+        codegen->create_tower_ir(ast_context, locations, file_os);
     }
 
     return EXIT_SUCCESS;
