@@ -79,7 +79,7 @@ FindAndSelectClangCompiler()
 #
 # LLVM & MLIR & Clang
 #
-find_package(LLVM 18.1 REQUIRED CONFIG)
+find_package(LLVM 19.1 REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")

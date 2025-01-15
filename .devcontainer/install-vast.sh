@@ -31,19 +31,18 @@ install_gap() {
     git clone --recursive "$GAP_REPO" "$GAP_BUILD"
     cd "$GAP_BUILD"
     mkdir -p build && cd build
-    cmake -G Ninja .. -DGAP_ENABLE_MLIR=ON -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" -DMLIR_DIR="/usr/lib/llvm-18/lib/cmake/mlir"
+    cmake -G Ninja .. -DGAP_ENABLE_MLIR=ON -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" -DMLIR_DIR="/usr/lib/llvm-19/lib/cmake/mlir"
     ninja && sudo ninja install
 }
 
 build_vast() {    
     echo "Cloning VAST repository..."
-    git clone --branch v0.0.33 --recursive "$VAST_REPO" "$BUILD_DIR"
+    git clone --branch  v0.0.66 --recursive "$VAST_REPO" "$BUILD_DIR"
 
     echo "Installing VAST..."
     cd "$BUILD_DIR" && mkdir -p build && cd build
-    cmake -G Ninja .. -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" -DCMAKE_LINKER_TYPE=LLD -DMLIR_DIR="/usr/lib/llvm-18/lib/cmake/mlir"
+    cmake -G Ninja .. -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" -DCMAKE_LINKER_TYPE=LLD -DMLIR_DIR="/usr/lib/llvm-19/lib/cmake/mlir"
     cmake --build . && sudo cmake --install .
-    cat CMakeCache.txt
 }
 
 clean_up() {
