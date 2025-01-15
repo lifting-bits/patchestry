@@ -41,7 +41,7 @@ namespace patchestry::ast {
         // Traverse through missing type definition for a composite type and create the complete
         // definition for them
         for (auto &[key, decl] : missing_type_definition) {
-            if (const auto *record_decl = llvm::dyn_cast< clang::RecordDecl >(decl)) {
+            if (llvm::isa< clang::RecordDecl >(decl)) {
                 auto iter = lifted_types.find(key);
                 // if type key does not exist in the lifted types, it could be a bug in create
                 // types.
