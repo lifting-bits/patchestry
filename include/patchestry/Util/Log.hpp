@@ -9,6 +9,8 @@
 
 #include <llvm/Support/raw_ostream.h>
 
+#define ENABLE_DEBUG
+
 enum LogLevel { INFO, WARNING, ERROR };
 
 #define LOG(level) \

@@ -9,16 +9,18 @@ set(LLVM_LINK_COMPONENTS
 )
 
 
-add_executable(pcode-lifter
+add_executable(patche-front
     main.cpp
 )
 
-llvm_update_compile_flags(pcode-lifter)
-target_link_libraries(pcode-lifter
-    PRIVATE
-        patchestry::ghidra
-        patchestry::ast
-        clangFrontend
+llvm_update_compile_flags(patche-front)
+
+target_link_libraries(patche-front
+  PRIVATE
+    patchestry::ghidra
+    patchestry::ast
+    patchestry::codegen
+    clangFrontend
 )
 
-mlir_check_link_libraries(pcode-lifter)
+mlir_check_link_libraries(patche-front)

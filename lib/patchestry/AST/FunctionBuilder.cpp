@@ -367,7 +367,7 @@ namespace patchestry::ast {
                            << "\n";
                 continue;
             }
-
+            set_location_key(label_decl, key);
             label_decl->setDeclContext(func_decl);
             if (clang::DeclContext *dc = label_decl->getLexicalDeclContext()) {
                 dc->addDecl(label_decl);
@@ -428,6 +428,7 @@ namespace patchestry::ast {
                 auto *label_stmt = new (ctx) clang::LabelStmt(
                     clang::SourceLocation(), labels_declaration.at(key), block_stmts[0]
                 );
+                set_location_key(label_stmt, key);
 
                 // replace first stmt of block with label stmts
                 block_stmts[0] = label_stmt;

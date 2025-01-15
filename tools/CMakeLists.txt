@@ -4,4 +4,4 @@
 # LICENSE file found in the root directory of this source tree.
 
 add_subdirectory(pcode-translate)
-add_subdirectory(pcode-lifter)
+add_subdirectory(patche-front)
