@@ -10,9 +10,7 @@
 
 VAST_RELAX_WARNINGS
 #include <clang/AST/ASTContext.h>
-#include <clang/Tooling/Tooling.h>
 #include <llvm/Support/raw_ostream.h>
-#include <mlir/Bytecode/BytecodeWriter.h>
 #include <mlir/IR/AsmState.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
@@ -22,7 +20,6 @@ VAST_RELAX_WARNINGS
 #include <mlir/IR/Verifier.h>
 #include <mlir/InitAllDialects.h>
 #include <mlir/InitAllPasses.h>
-#include <mlir/Pass/Pass.h>
 #include <mlir/Pass/PassManager.h>
 #include <mlir/Pass/PassRegistry.h>
 
@@ -48,17 +45,13 @@ VAST_UNRELAX_WARNINGS
 #include <vast/CodeGen/SymbolGenerator.hpp>
 #include <vast/CodeGen/TypeCachingProxy.hpp>
 #include <vast/CodeGen/UnsupportedVisitor.hpp>
-#include <vast/Conversion/Passes.hpp>
-#include <vast/Dialect/Dialects.hpp>
 #include <vast/Dialect/HighLevel/Passes.hpp>
 #include <vast/Dialect/LowLevel/Passes.hpp>
 #include <vast/Dialect/Meta/MetaAttributes.hpp>
 #include <vast/Frontend/FrontendAction.hpp>
-#include <vast/Frontend/Options.hpp>
 #include <vast/Frontend/Pipelines.hpp>
 #include <vast/Target/LLVMIR/Convert.hpp>
 #include <vast/Tower/Tower.hpp>
-#include <vast/Util/Common.hpp>
 #include <vast/Util/DataLayout.hpp>
 
 #include <patchestry/AST/ASTConsumer.hpp>

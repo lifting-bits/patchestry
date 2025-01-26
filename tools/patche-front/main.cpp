@@ -6,7 +6,6 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "patchestry/Util/Options.hpp"
 #include <cstdlib>
 #include <fstream>
 #include <memory>
@@ -33,6 +32,7 @@
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Util/Log.hpp>
+#include <patchestry/Util/Options.hpp>
 
 /*************************/
 // Command line options
