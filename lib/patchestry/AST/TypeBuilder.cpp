@@ -202,7 +202,7 @@ namespace patchestry::ast {
             ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(), clang::SourceLocation(),
             &ctx.Idents.get(typedef_type.name), tinfo
         );
-
+        set_location_key(typedef_decl, typedef_type.key);
         typedef_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(typedef_decl);
 
@@ -317,6 +317,7 @@ namespace patchestry::ast {
         );
 
         record_decl->completeDefinition();
+        set_location_key(record_decl, varnode.key);
 
         auto components = varnode.get_components();
         for (auto &component : components) {
@@ -333,8 +334,8 @@ namespace patchestry::ast {
                 &ctx.Idents.get(component.name), iter->second, nullptr, nullptr, false,
                 clang::ICIS_NoInit
             );
-
             record_decl->addDecl(field_decl);
+            set_location_key(field_decl, varnode.key);
         }
 
         record_decl->setDeclContext(ctx.getTranslationUnitDecl());
@@ -376,7 +377,7 @@ namespace patchestry::ast {
             source_location_from_key(ctx, composite_type.key),
             &ctx.Idents.get(composite_type.name)
         );
-
+        set_location_key(decl, composite_type.key);
         decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(decl);
 
@@ -406,7 +407,7 @@ namespace patchestry::ast {
             source_location_from_key(ctx, enum_type.key), &ctx.Idents.get(enum_type.name),
             nullptr, true, false, false
         );
-
+        set_location_key(enum_decl, enum_type.key);
         enum_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(enum_decl);
 
@@ -445,6 +446,7 @@ namespace patchestry::ast {
             ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(), clang::SourceLocation(),
             &ctx.Idents.get(undefined_type.name), ctx.getTrivialTypeSourceInfo(base_type)
         );
+        set_location_key(typedef_decl, undefined_type.key);
 
         typedef_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(typedef_decl);
@@ -479,7 +481,7 @@ namespace patchestry::ast {
             ctx, clang::TagDecl::TagKind::Struct, ctx.getTranslationUnitDecl(),
             clang::SourceLocation(), clang::SourceLocation(), &ctx.Idents.get(ss.str())
         );
-
+        set_location_key(decl, undefined_array.key);
         decl->completeDefinition();
 
         // Create a field decl with type `undef_array`
@@ -488,7 +490,7 @@ namespace patchestry::ast {
             &ctx.Idents.get("undefined"), undef_array, nullptr, nullptr, false,
             clang::ICIS_NoInit
         );
-
+        set_location_key(field_decl, undefined_array.key);
         decl->addDecl(field_decl);
         decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(decl);

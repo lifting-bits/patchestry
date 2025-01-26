@@ -169,7 +169,8 @@ namespace patchestry::ast {
          * occurs.
          */
         clang::Expr *perform_explicit_cast(
-            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type
+            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+            const std::string &location_key
         );
 
         clang::Stmt *create_varnode(
