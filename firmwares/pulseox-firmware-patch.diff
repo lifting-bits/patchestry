@@ -1,0 +1,26 @@
+diff --git a/ld/stm32f030f4p6.ld b/ld/stm32f030f4p6.ld
+index 554697c..d4d1378 100644
+--- a/ld/stm32f030f4p6.ld
++++ b/ld/stm32f030f4p6.ld
+@@ -1,6 +1,6 @@
+ MEMORY
+ {
+-  rom (rx) : ORIGIN = 0x08000000, LENGTH = 16K
++  rom (rx) : ORIGIN = 0x08000000, LENGTH = 32K
+   ram (xrw) : ORIGIN = 0x20000000, LENGTH = 4K
+ }
+ 
+Submodule libopencm3 contains modified content
+diff --git a/libopencm3/Makefile b/libopencm3/Makefile
+index ea51f6d9..2cc5b536 100644
+--- a/libopencm3/Makefile
++++ b/libopencm3/Makefile
+@@ -25,7 +25,7 @@ STYLECHECKFLAGS := --no-tree -f --terse --mailback
+ 
+ space:=
+ space+=
+-SRCLIBDIR:= $(subst $(space),\$(space),$(realpath lib))
++SRCLIBDIR:= $(subst $(space),$(space),$(realpath lib))
+ 
+ TARGETS := stm32/f0 stm32/f1 stm32/f2 stm32/f3 stm32/f4 stm32/f7
+ TARGETS += stm32/l0 stm32/l1 stm32/l4
