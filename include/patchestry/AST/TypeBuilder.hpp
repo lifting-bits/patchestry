@@ -25,7 +25,10 @@ namespace patchestry::ast {
         static constexpr uint32_t num_bits_in_byte = 8U;
         static constexpr uint32_t num_bits_uint    = 32U;
 
-        explicit TypeBuilder(clang::ASTContext &ctx) : context(ctx), serialized_types({}) {}
+        explicit TypeBuilder(
+            clang::ASTContext &ctx, std::unordered_map< void *, std::string > &locations
+        )
+            : location_map(locations), context(ctx), serialized_types({}) {}
 
         TypeBuilder &operator=(const TypeBuilder &)  = delete;
         TypeBuilder(const TypeBuilder &)             = delete;
@@ -33,6 +36,13 @@ namespace patchestry::ast {
         TypeBuilder(const TypeBuilder &&)            = delete;
 
         virtual ~TypeBuilder() = default;
+
+        template< typename T >
+        void set_location_key(T *pointer, const std::string &key) {
+            if (!location_map.get().contains(pointer)) {
+                location_map.get().emplace(pointer, key);
+            }
+        }
 
         /**
          * @brief Provides access to the serialized type map.
@@ -198,6 +208,8 @@ namespace patchestry::ast {
         clang::ASTContext &ast_context(void) { return context.get(); }
 
         std::unordered_map< std::string, clang::Decl * > missing_type_definition;
+
+        std::reference_wrapper< std::unordered_map< void *, std::string > > location_map;
 
         std::reference_wrapper< clang::ASTContext > context;
         SerializedTypeMap serialized_types;

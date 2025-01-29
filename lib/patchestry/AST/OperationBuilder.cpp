@@ -251,6 +251,14 @@ namespace patchestry::ast {
             );
         }
 
+        if (vnode_type->isEnumeralType()) {
+            // TODO: Create enum constant instead of inter literal
+            return new (ctx) clang::IntegerLiteral(
+                ctx, llvm::APInt(static_cast< uint32_t >(32U), *vnode.value), vnode_type,
+                clang::SourceLocation()
+            );
+        }
+
         return {};
     }
 

@@ -33,10 +33,13 @@
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
+#include <patchestry/Util/Options.hpp>
 
 namespace patchestry::ast {
 
     void PcodeASTConsumer::HandleTranslationUnit(clang::ASTContext &ctx) {
+        // Create type builder
+        type_builder = std::make_unique< TypeBuilder >(ci.get().getASTContext(), location_map);
         if (!get_program().serialized_types.empty()) {
             type_builder->create_types(ctx, get_program().serialized_types);
         }
@@ -51,20 +54,18 @@ namespace patchestry::ast {
             );
         }
 
-        std::error_code ec;
-        auto out =
-            std::make_unique< llvm::raw_fd_ostream >(outfile, ec, llvm::sys::fs::OF_Text);
+        if (options.print_tu) {
+            ctx.getTranslationUnitDecl()->dumpColor();
 
-        llvm::errs() << "Print AST dump\n";
-        ctx.getTranslationUnitDecl()->dumpColor();
+            std::error_code ec;
+            auto out = std::make_unique< llvm::raw_fd_ostream >(
+                options.output_file + ".c", ec, llvm::sys::fs::OF_Text
+            );
 
-        ctx.getTranslationUnitDecl()->print(
-            *llvm::dyn_cast< llvm::raw_ostream >(out), ctx.getPrintingPolicy(), 0
-        );
-
-        llvm::errs() << "Generate mlir\n";
-        llvm::raw_fd_ostream file_os(outfile + ".mlir", ec);
-        codegen->generate_source_ir(ctx, location_map, file_os);
+            ctx.getTranslationUnitDecl()->print(
+                *llvm::dyn_cast< llvm::raw_ostream >(out), ctx.getPrintingPolicy(), 0
+            );
+        }
     }
 
     void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }

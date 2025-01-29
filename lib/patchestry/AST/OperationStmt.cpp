@@ -10,7 +10,7 @@
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
-#include <clang/AST/Expr.h>
+#include <clang/AST/ExprCXX.h>
 #include <clang/AST/NestedNameSpecifier.h>
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Stmt.h>
@@ -19,6 +19,7 @@
 #include <clang/Basic/LangOptions.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/Specifiers.h>
+#include <clang/Sema/Overload.h>
 #include <clang/Sema/Sema.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/Support/Casting.h>
@@ -75,7 +76,8 @@ namespace patchestry::ast {
      * falling back to a manual pointer-based cast if necessary.
      */
     clang::Expr *OpBuilder::perform_explicit_cast(
-        clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type
+        clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+        const std::string &location_key
     ) {
         if (expr == nullptr || to_type.isNull()) {
             LOG(ERROR) << "Invalid expr of type to perform explicit cast";
@@ -88,16 +90,23 @@ namespace patchestry::ast {
         }
 
         // Perform implicit conversion first, if that fails then create explicit cast
-        auto implicit_cast =
-            sema().PerformImplicitConversion(expr, to_type, clang::Sema::AA_Converting);
-        if (!implicit_cast.isInvalid()) {
-            return implicit_cast.getAs< clang::Expr >();
+        if (try_implicit_cast(ctx, expr, to_type)) {
+            auto implicit_cast = sema().PerformImplicitConversion(
+                expr, to_type, clang::Sema::AA_Converting, true
+            );
+            if (!implicit_cast.isInvalid()) {
+                function_builder().set_location_key(
+                    implicit_cast.getAs< clang::Expr >(), location_key
+                );
+                return implicit_cast.getAs< clang::Expr >();
+            }
         }
 
         // Fallback to Explicit cast
         auto addr_of_expr =
             sema().CreateBuiltinUnaryOp(clang::SourceLocation(), clang::UO_AddrOf, expr);
         assert(!addr_of_expr.isInvalid());
+        function_builder().set_location_key(addr_of_expr.getAs< clang::Expr >(), location_key);
 
         auto to_pointer_type = ctx.getPointerType(to_type);
         auto casted_expr     = sema().BuildCStyleCastExpr(
@@ -105,13 +114,31 @@ namespace patchestry::ast {
             clang::SourceLocation(), addr_of_expr.getAs< clang::Expr >()
         );
         assert(!casted_expr.isInvalid());
+        function_builder().set_location_key(casted_expr.getAs< clang::Expr >(), location_key);
 
         auto derefed_expr = sema().CreateBuiltinUnaryOp(
             clang::SourceLocation(), clang::UO_Deref, casted_expr.getAs< clang::Expr >()
         );
         assert(!derefed_expr.isInvalid());
+        function_builder().set_location_key(derefed_expr.getAs< clang::Expr >(), location_key);
 
         return derefed_expr.getAs< clang::Expr >();
+    }
+
+    bool OpBuilder::try_implicit_cast(
+        clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type
+    ) {
+        if (expr == nullptr) {
+            return false;
+        }
+
+        (void) ctx;
+
+        auto ics = sema().TryImplicitConversion(
+            expr, to_type, false, clang::Sema::AllowedExplicit::Conversions, false, true, false
+        );
+
+        return ics.isStandard();
     }
 
     clang::Stmt *OpBuilder::create_assign_operation(
@@ -144,6 +171,9 @@ namespace patchestry::ast {
                 input_expr, output_type, clang::Sema::AA_Converting
             );
             assert(!casted_expr.isInvalid());
+            function_builder().set_location_key(
+                casted_expr.getAs< clang::Expr >(), location_key
+            );
 
             auto assign_operation = sema().CreateBuiltinBinOp(
                 source_location_from_key(ctx, location_key), clang::BO_Assign, output_expr,
@@ -196,6 +226,10 @@ namespace patchestry::ast {
                 );
                 return assign_operation.getAs< clang::Stmt >();
             }
+
+            function_builder().set_location_key(
+                implicit_cast.getAs< clang::Expr >(), location_key
+            );
         }
 
         // Fallback to Explicit cast fallback
@@ -617,7 +651,7 @@ namespace patchestry::ast {
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0], op.key));
 
         if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
-            if (auto *casted_expr = perform_explicit_cast(ctx, expr, op_type)) {
+            if (auto *casted_expr = perform_explicit_cast(ctx, expr, op_type, op.key)) {
                 expr = casted_expr;
             }
         }
@@ -976,11 +1010,21 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0], op.key));
 
-        auto implicit_cast =
-            sema().PerformImplicitConversion(input_expr, op_type, clang::Sema::AA_Converting);
-        assert(!implicit_cast.isInvalid());
+        auto classify = input_expr->Classify(ctx);
+        if (classify.isRValue()) {
+            input_expr = new (ctx) clang::MaterializeTemporaryExpr(
+                input_expr->getType(), input_expr, /*BoundToLValue=*/true
+            );
+        }
 
-        auto *ptr_expr = implicit_cast.getAs< clang::Expr >();
+        auto *explicit_cast = perform_explicit_cast(ctx, input_expr, op_type, op.key);
+
+        /*auto implicit_cast = sema().PerformImplicitConversion(
+            input_expr, op_type, clang::Sema::AA_Converting, true
+        );
+        assert(!implicit_cast.isInvalid());
+*/
+        auto *ptr_expr = explicit_cast; // implicit_cast.getAs< clang::Expr >();
 
         auto *byte_offset =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1], op.key));
