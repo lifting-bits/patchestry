@@ -21,23 +21,18 @@ SHELL [ "/bin/bash", "-o", "pipefail", "-c" ]
 WORKDIR /firmware
 COPY . /firmware
 
-RUN git clone https://github.com/IRNAS/pulseox-firmware.git && \
-    cd /firmware/pulseox-firmware && \
-    git submodule init && \
-    git submodule update && \
+RUN git clone --depth=1  --recursive https://github.com/IRNAS/pulseox-firmware.git && \
+    cd pulseox-firmware && \
     patch -s -p1 < ../pulseox-firmware-patch.diff && \
-    mkdir -p build && cd build && \
-    cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/toolchains/arm-none-eabi.cmake .. && \
-    make
+    cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake && \
+    cmake --build build -j$(nproc)
 
 WORKDIR /firmware
 
-RUN git clone https://github.com/CodethinkLabs/bloodlight-firmware.git && \
-    cd /firmware/bloodlight-firmware && \
-    git submodule init && \
-    git submodule update && \
+RUN git clone --depth=1 --recursive https://github.com/CodethinkLabs/bloodlight-firmware.git && \
+    cd bloodlight-firmware && \
     make -C firmware/libopencm3 && \
-    make -C firmware
+    make -C firmware -j$(nproc)
 
 FROM ${IMAGE}
 COPY --from=builder /firmware/pulseox-firmware/build/src/firmware.elf /output/pulseox-firmware.elf
