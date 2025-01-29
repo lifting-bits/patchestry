@@ -1,4 +1,7 @@
-// RUN: bash %strip-json-comments %s | %pcode-lifter 
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %pcode-lifter %t.json -output %t
+// RUN: %file-check --input-file %t --check-prefix=EXISTS < /dev/null
+// CHECK-EMPTY:
 {
   "arch": "ARM",
   "format": "Executable and Linking Format (ELF)",
