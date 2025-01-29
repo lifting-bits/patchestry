@@ -226,22 +226,28 @@ namespace patchestry::ast {
             auto *literal = new (ctx) clang::IntegerLiteral(
                 ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
             );
-            return clang::CStyleCastExpr::Create(
-                ctx, vnode_type, clang::VK_PRValue, clang::CK_ToVoid, literal, nullptr,
-                clang::FPOptionsOverride(), ctx.getTrivialTypeSourceInfo(vnode_type),
-                clang::SourceLocation(), clang::SourceLocation()
+
+            auto result = sema().BuildCStyleCastExpr(
+                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
+                clang::SourceLocation(), literal
             );
+
+            assert(!result.isInvalid());
+            return result.getAs< clang::Expr >();
         }
 
         if (vnode_type->isPointerType()) {
             auto *literal = new (ctx) clang::IntegerLiteral(
                 ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
             );
-            return clang::CStyleCastExpr::Create(
-                ctx, vnode_type, clang::VK_PRValue, clang::CK_IntegralToPointer, literal,
-                nullptr, clang::FPOptionsOverride(), ctx.getTrivialTypeSourceInfo(vnode_type),
-                clang::SourceLocation(), clang::SourceLocation()
+
+            auto result = sema().BuildCStyleCastExpr(
+                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
+                clang::SourceLocation(), literal
             );
+
+            assert(!result.isInvalid());
+            return result.getAs< clang::Expr >();
         }
 
         if (vnode_type->isFloatingType()) {
@@ -249,6 +255,21 @@ namespace patchestry::ast {
                 ctx, llvm::APFloat(static_cast< double >(*vnode.value)), true, vnode_type,
                 clang::SourceLocation()
             );
+        }
+
+        if (vnode_type->isEnumeralType()) {
+            // TODO: enums are lifted as integral constant. Can we lift it as EnumConstant??
+            auto *literal = new (ctx) clang::IntegerLiteral(
+                ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
+            );
+
+            auto result = sema().BuildCStyleCastExpr(
+                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
+                clang::SourceLocation(), literal
+            );
+
+            assert(!result.isInvalid());
+            return result.getAs< clang::Expr >();
         }
 
         return {};

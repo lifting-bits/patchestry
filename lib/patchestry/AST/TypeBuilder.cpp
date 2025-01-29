@@ -410,6 +410,17 @@ namespace patchestry::ast {
         enum_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(enum_decl);
 
+        // TODO: Ghidra script does not recover enum constants and need to be fixed. Instead of
+        // having it as forward declaration, we complete the definition here with new type and
+        // promotional type as integer.
+        auto new_enum_type = get_type_for_size(
+            ctx, enum_type.size * TypeBuilder::num_bits_in_byte, /*is_signed=*/false,
+            /*is_integer=*/true
+        );
+        enum_decl->completeDefinition(
+            new_enum_type, new_enum_type, enum_type.size * TypeBuilder::num_bits_in_byte, 0U
+        );
+
         return ctx.getEnumType(enum_decl);
     }
 
