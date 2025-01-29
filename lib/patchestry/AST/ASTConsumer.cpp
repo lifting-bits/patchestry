@@ -33,6 +33,7 @@
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
+#include <patchestry/Util/Log.hpp>
 
 namespace patchestry::ast {
 
@@ -51,19 +52,21 @@ namespace patchestry::ast {
             );
         }
 
+        if (options.print_tu) {
+#ifdef ENABLE_DEBUG
+            ctx.getTranslationUnitDecl()->dumpColor();
+#endif
+            std::error_code ec;
+            auto out = std::make_unique< llvm::raw_fd_ostream >(
+                options.output_file + ".c", ec, llvm::sys::fs::OF_Text
+            );
+            ctx.getTranslationUnitDecl()->print(
+                *llvm::dyn_cast< llvm::raw_ostream >(out), ctx.getPrintingPolicy(), 0
+            );
+        }
+
         std::error_code ec;
-        auto out =
-            std::make_unique< llvm::raw_fd_ostream >(outfile, ec, llvm::sys::fs::OF_Text);
-
-        llvm::errs() << "Print AST dump\n";
-        ctx.getTranslationUnitDecl()->dumpColor();
-
-        ctx.getTranslationUnitDecl()->print(
-            *llvm::dyn_cast< llvm::raw_ostream >(out), ctx.getPrintingPolicy(), 0
-        );
-
-        llvm::errs() << "Generate mlir\n";
-        llvm::raw_fd_ostream file_os(outfile + ".mlir", ec);
+        llvm::raw_fd_ostream file_os(options.output_file + ".mlir", ec);
         codegen->generate_source_ir(ctx, location_map, file_os);
     }
 
