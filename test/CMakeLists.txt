@@ -24,6 +24,11 @@ add_lit_testsuite(pcode-translate-tests
   ${CMAKE_CURRENT_SOURCE_DIR}/pcode-translate
 )
 
+add_lit_testsuite(pcode-lifter-tests
+  "Running pcode-lifter tests"
+  ${CMAKE_CURRENT_SOURCE_DIR}/pcode-lifter
+)
+
 add_test(NAME lit
   COMMAND lit -v "${CMAKE_CURRENT_BINARY_DIR}/ghidra"
   --param BUILD_TYPE=$<CONFIG>
