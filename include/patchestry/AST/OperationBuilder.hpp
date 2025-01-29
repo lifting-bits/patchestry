@@ -173,6 +173,9 @@ namespace patchestry::ast {
             const std::string &location_key
         );
 
+        bool
+        try_implicit_cast(clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type);
+
         clang::Stmt *create_varnode(
             clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
             const std::string &op_key = ""
