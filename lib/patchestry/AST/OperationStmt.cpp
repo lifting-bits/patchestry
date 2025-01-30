@@ -390,7 +390,7 @@ namespace patchestry::ast {
             taken_stmt = new (ctx) clang::GotoStmt(
                 function_builder().labels_declaration.at(*op.taken_block),
                 source_location_from_key(ctx, op.key),
-                source_location_from_key(ctx, *op.target_block)
+                source_location_from_key(ctx, *op.taken_block)
             );
         } else {
             taken_stmt = new (ctx) clang::NullStmt(clang::SourceLocation(), false);
@@ -402,7 +402,7 @@ namespace patchestry::ast {
             not_taken_stmt = new (ctx) clang::GotoStmt(
                 function_builder().labels_declaration.at(*op.not_taken_block),
                 source_location_from_key(ctx, op.key),
-                source_location_from_key(ctx, *op.target_block)
+                source_location_from_key(ctx, *op.not_taken_block)
             );
         } else {
             not_taken_stmt = new (ctx) clang::NullStmt(clang::SourceLocation(), false);
