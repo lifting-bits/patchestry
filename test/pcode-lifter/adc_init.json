@@ -1,6 +1,6 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %pcode-lifter -input %t.json -output %t
-// RUN: test -e %t
+// RUN: %pcode-lifter -input %t.json -print-tu -output %t >> /dev/null 2>&1
+// RUN: test -e %t.c
 {
   "arch": "ARM",
   "format": "Executable and Linking Format (ELF)",
