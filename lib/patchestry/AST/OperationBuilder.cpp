@@ -216,12 +216,18 @@ namespace patchestry::ast {
 
         // Note: EnumDecl has promotional type as int and an enum type is also identified
         // as integer.
-        if (vnode_type->isIntegerType() && !vnode_type->isEnumeralType()) {
-            return new (ctx) clang::IntegerLiteral(
-                ctx,
-                llvm::APInt(static_cast< uint32_t >(ctx.getTypeSize(vnode_type)), *vnode.value),
-                vnode_type, clang::SourceLocation()
+        if (vnode_type->isIntegerType() || vnode_type->isEnumeralType()) {
+            auto *literal = new (ctx) clang::IntegerLiteral(
+                ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
             );
+
+            auto result = sema().BuildCStyleCastExpr(
+                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
+                clang::SourceLocation(), literal
+            );
+
+            assert(!result.isInvalid());
+            return result.getAs< clang::Expr >();
         }
 
         if (vnode_type->isVoidType()) {
@@ -257,21 +263,6 @@ namespace patchestry::ast {
                 ctx, llvm::APFloat(static_cast< double >(*vnode.value)), true, vnode_type,
                 clang::SourceLocation()
             );
-        }
-
-        if (vnode_type->isEnumeralType()) {
-            // TODO: enums are lifted as integral constant. Can we lift it as EnumConstant??
-            auto *literal = new (ctx) clang::IntegerLiteral(
-                ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
-            );
-
-            auto result = sema().BuildCStyleCastExpr(
-                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
-                clang::SourceLocation(), literal
-            );
-
-            assert(!result.isInvalid());
-            return result.getAs< clang::Expr >();
         }
 
         return {};
