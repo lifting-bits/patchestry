@@ -29,6 +29,7 @@
 #include <llvm/TargetParser/Host.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/Util/Options.hpp>
@@ -203,6 +204,17 @@ int main(int argc, char **argv) {
 
     auto &ast_consumer = ci.getASTConsumer();
     ast_consumer.HandleTranslationUnit(ast_context);
+
+    auto *pcode_consumer = dynamic_cast< patchestry::ast::PcodeASTConsumer * >(&ast_consumer);
+    if (pcode_consumer != nullptr) {
+        auto codegen          = std::make_unique< patchestry::codegen::CodeGenerator >(ci);
+        const auto &locations = pcode_consumer->locations();
+        if (options.emit_tower) {
+            codegen->emit_tower(ast_context, locations, options);
+        } else {
+            codegen->emit_source_ir(ast_context, locations, options);
+        }
+    }
 
     return EXIT_SUCCESS;
 }
