@@ -1,7 +1,7 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %pcode-lifter -input %t.json -emit-mlir -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
-// RUN %file-check -input %t.mlir -check-prefix=HL
+// RUN %file-check --input-file %t.mlir -check-prefix=HL
 // HL: hl.func @"\01adc_init"
 {
   "arch": "ARM",

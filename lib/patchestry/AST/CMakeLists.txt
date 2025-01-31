@@ -19,5 +19,4 @@ target_link_libraries(patchestry_ast
   PRIVATE
     LLVMSupport
     patchestry_settings
-    ${VAST_LIBS}
 )
