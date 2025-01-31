@@ -4,5 +4,6 @@
 # LICENSE file found in the root directory of this source tree.
 
 add_subdirectory(AST)
+add_subdirectory(Codegen)
 add_subdirectory(Dialect)
 add_subdirectory(Ghidra)

@@ -18,3 +18,9 @@ enum LogLevel { INFO, WARNING, ERROR };
                                 : llvm::outs() \
     ) << "(" \
       << __FILE__ << ":" << __LINE__ << ") "
+
+#define UNIMPLEMENTED(...) \
+    do { \
+        LOG(ERROR) << __VA_ARGS__; \
+        llvm_unreachable(nullptr); \
+    } while (0)

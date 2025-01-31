@@ -18,6 +18,7 @@ target_link_libraries(pcode-lifter
     PRIVATE
         patchestry::ghidra
         patchestry::ast
+        patchestry::codegen
         clangFrontend
 )
 

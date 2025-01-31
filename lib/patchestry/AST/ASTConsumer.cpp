@@ -64,10 +64,6 @@ namespace patchestry::ast {
                 *llvm::dyn_cast< llvm::raw_ostream >(out), ctx.getPrintingPolicy(), 0
             );
         }
-
-        std::error_code ec;
-        llvm::raw_fd_ostream file_os(options.output_file + ".mlir", ec);
-        codegen->generate_source_ir(ctx, location_map, file_os);
     }
 
     void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }

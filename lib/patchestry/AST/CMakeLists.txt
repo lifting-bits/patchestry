@@ -4,25 +4,11 @@
 
 add_library(patchestry_ast STATIC
   ASTConsumer.cpp
-  Codegen.cpp
   FunctionBuilder.cpp
   OperationBuilder.cpp
   OperationStmt.cpp
   TypeBuilder.cpp
   Utils.cpp
-)
-
-set(VAST_LIBS
-  VAST::VASTTargetLLVMIR
-  VAST::VASTToLLVMConversionPasses
-  VAST::VASTAliasTypeInterface
-  VAST::VASTElementTypeInterface
-  VAST::VASTCodeGen
-  VAST::VASTFrontend
-  VAST::VASTSymbolInterface
-  VAST::VASTSymbolTableInterface
-  VAST::VASTSymbolRefInterface
-  VAST::VASTTypeDefinitionInterface
 )
 
 add_library(patchestry::ast ALIAS patchestry_ast)
