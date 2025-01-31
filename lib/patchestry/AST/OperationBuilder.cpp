@@ -216,7 +216,7 @@ namespace patchestry::ast {
 
         // Note: EnumDecl has promotional type as int and an enum type is also identified
         // as integer.
-        if (vnode_type->isIntegerType() || vnode_type->isEnumeralType()) {
+        if (vnode_type->isIntegralOrUnscopedEnumerationType()) {
             auto *literal = new (ctx) clang::IntegerLiteral(
                 ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
             );
