@@ -36,13 +36,9 @@
 
 namespace {
 
-    const llvm::cl::opt< patchestry::EmitMLIRType > emit_mlir( // NOLINT(cert-err58-cpp)
-        "emit-mlir", llvm::cl::desc("MLIR Emission Type"),
-        llvm::cl::values(
-            clEnumVal(patchestry::EmitMLIRType::hl, "High-Level VAST MLIR Representation"),
-            clEnumVal(patchestry::EmitMLIRType::cir, "ClangIR representation")
-        ),
-        llvm::cl::init(patchestry::EmitMLIRType::hl)
+    const llvm::cl::opt< bool > emit_mlir( // NOLINT(cert-err58-cpp)
+        "emit-mlir", llvm::cl::desc("Emit High-level MLIR representation"),
+        llvm::cl::init(false)
     );
 
     // NOTE: Option field is there to test vast tower api. Will be removed in future.
@@ -104,7 +100,7 @@ namespace {
 
         auto pipeline_stages = split_pipelines(pipelines.getValue());
         return {
-            .emit_mlir   = true, // It is set to true by default
+            .emit_mlir   = emit_mlir.getValue(), // It is set to true by default
             .emit_llvm   = emit_llvm.getValue(),
             .emit_asm    = emit_asm.getValue(),
             .emit_obj    = emit_obj.getValue(),

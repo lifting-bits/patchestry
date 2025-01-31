@@ -214,7 +214,9 @@ namespace patchestry::ast {
 
         clang::QualType vnode_type = get_varnode_type(ctx, vnode);
 
-        if (vnode_type->isIntegerType()) {
+        // Note: EnumDecl has promotional type as int and an enum type is also identified
+        // as integer.
+        if (vnode_type->isIntegerType() && !vnode_type->isEnumeralType()) {
             return new (ctx) clang::IntegerLiteral(
                 ctx,
                 llvm::APInt(static_cast< uint32_t >(ctx.getTypeSize(vnode_type)), *vnode.value),
