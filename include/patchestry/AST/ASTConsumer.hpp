@@ -23,10 +23,10 @@
 #include <clang/Sema/Sema.h>
 #include <llvm/Support/raw_ostream.h>
 
-#include <patchestry/AST/Codegen.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
+#include <patchestry/Util/Options.hpp>
 
 namespace patchestry::ast {
     using namespace patchestry::ghidra;
@@ -38,15 +38,18 @@ namespace patchestry::ast {
     {
       public:
         explicit PcodeASTConsumer(
-            clang::CompilerInstance &ci, Program &prog, std::string &outfile
+            clang::CompilerInstance &ci, Program &prog, patchestry::Options &opts
         )
             : program(prog)
             , ci(ci)
-            , outfile(outfile)
-            , codegen(std::make_unique< CodeGenerator >(ci))
+            , options(opts)
             , type_builder(std::make_unique< TypeBuilder >(ci.getASTContext())) {}
 
         void HandleTranslationUnit(clang::ASTContext &ctx) override;
+
+        const std::unordered_map< void *, std::string > &locations(void) const {
+            return location_map;
+        }
 
       private:
         void set_sema_context(clang::DeclContext *dc);
@@ -66,8 +69,7 @@ namespace patchestry::ast {
         std::reference_wrapper< Program > program;
         std::reference_wrapper< clang::CompilerInstance > ci;
 
-        std::string outfile;
-        std::unique_ptr< CodeGenerator > codegen;
+        const patchestry::Options &options; // NOLINT
         std::unique_ptr< TypeBuilder > type_builder;
 
         std::unordered_map< std::string, clang::FunctionDecl * > function_declarations;

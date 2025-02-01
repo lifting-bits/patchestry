@@ -214,34 +214,48 @@ namespace patchestry::ast {
 
         clang::QualType vnode_type = get_varnode_type(ctx, vnode);
 
-        if (vnode_type->isIntegerType()) {
-            return new (ctx) clang::IntegerLiteral(
-                ctx,
-                llvm::APInt(static_cast< uint32_t >(ctx.getTypeSize(vnode_type)), *vnode.value),
-                vnode_type, clang::SourceLocation()
+        // Note: EnumDecl has promotional type as int and an enum type is also identified
+        // as integer.
+        if (vnode_type->isIntegralOrUnscopedEnumerationType()) {
+            auto *literal = new (ctx) clang::IntegerLiteral(
+                ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
             );
+
+            auto result = sema().BuildCStyleCastExpr(
+                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
+                clang::SourceLocation(), literal
+            );
+
+            assert(!result.isInvalid());
+            return result.getAs< clang::Expr >();
         }
 
         if (vnode_type->isVoidType()) {
             auto *literal = new (ctx) clang::IntegerLiteral(
                 ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
             );
-            return clang::CStyleCastExpr::Create(
-                ctx, vnode_type, clang::VK_PRValue, clang::CK_ToVoid, literal, nullptr,
-                clang::FPOptionsOverride(), ctx.getTrivialTypeSourceInfo(vnode_type),
-                clang::SourceLocation(), clang::SourceLocation()
+
+            auto result = sema().BuildCStyleCastExpr(
+                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
+                clang::SourceLocation(), literal
             );
+
+            assert(!result.isInvalid());
+            return result.getAs< clang::Expr >();
         }
 
         if (vnode_type->isPointerType()) {
             auto *literal = new (ctx) clang::IntegerLiteral(
                 ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
             );
-            return clang::CStyleCastExpr::Create(
-                ctx, vnode_type, clang::VK_PRValue, clang::CK_IntegralToPointer, literal,
-                nullptr, clang::FPOptionsOverride(), ctx.getTrivialTypeSourceInfo(vnode_type),
-                clang::SourceLocation(), clang::SourceLocation()
+
+            auto result = sema().BuildCStyleCastExpr(
+                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
+                clang::SourceLocation(), literal
             );
+
+            assert(!result.isInvalid());
+            return result.getAs< clang::Expr >();
         }
 
         if (vnode_type->isFloatingType()) {

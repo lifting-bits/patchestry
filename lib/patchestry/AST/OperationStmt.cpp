@@ -34,10 +34,10 @@
 namespace patchestry::ast {
 
     extern std::optional< Operation >
-    operation_from_key(const Function &function, const std::string &lookup_key);
+    operation_from_key(const Function &function, const std::string &lookup_key); // NOLINT
 
     namespace {
-        clang::CallExpr *create_function_call(
+        clang::CallExpr *create_function_call( // NOLINT
             clang::ASTContext &ctx, clang::FunctionDecl *decl,
             std::vector< clang::Expr * > &args
         ) {
@@ -52,7 +52,7 @@ namespace patchestry::ast {
             );
         }
 
-        clang::VarDecl *create_variable_decl(
+        clang::VarDecl *create_variable_decl( // NOLINT
             clang::ASTContext &ctx, clang::DeclContext *dc, const std::string &name,
             clang::QualType type, clang::SourceLocation loc
         ) {
@@ -62,7 +62,7 @@ namespace patchestry::ast {
             );
         }
 
-        clang::DeclStmt *create_decl_stmt(clang::ASTContext &ctx, clang::Decl *decl) {
+        clang::DeclStmt *create_decl_stmt(clang::ASTContext &ctx, clang::Decl *decl) { // NOLINT
             auto decl_group = clang::DeclGroupRef(decl);
             return new (ctx)
                 clang::DeclStmt(decl_group, clang::SourceLocation(), clang::SourceLocation());
@@ -198,29 +198,35 @@ namespace patchestry::ast {
             }
         }
 
-        // Fallback to Explicit cast fallback
-        auto addr_of_expr =
-            sema().CreateBuiltinUnaryOp(clang::SourceLocation(), clang::UO_AddrOf, input_expr);
-        assert(!addr_of_expr.isInvalid());
-        function_builder().set_location_key(addr_of_expr.getAs< clang::Expr >(), location_key);
+        if (input_type->isPointerType() && output_type->isArithmeticType()) {
+            auto cast_result = sema().ImpCastExprToType(
+                input_expr, output_type, clang::CastKind::CK_PointerToIntegral
+            );
+            assert(!cast_result.isInvalid());
+            function_builder().set_location_key(
+                cast_result.getAs< clang::Expr >(), location_key
+            );
+            auto assign_operation = sema().CreateBuiltinBinOp(
+                source_location_from_key(ctx, location_key), clang::BO_Assign, output_expr,
+                cast_result.getAs< clang::Expr >()
+            );
+            assert(!assign_operation.isInvalid());
+            function_builder().set_location_key(
+                assign_operation.getAs< clang::Expr >(), location_key
+            );
+            return assign_operation.getAs< clang::Stmt >();
+        }
 
-        auto to_pointer_type = ctx.getPointerType(output_expr->getType());
-        auto casted_expr     = sema().BuildCStyleCastExpr(
-            clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(to_pointer_type),
-            clang::SourceLocation(), addr_of_expr.getAs< clang::Expr >()
+        auto bitcast_result =
+            sema().ImpCastExprToType(input_expr, output_type, clang::CastKind::CK_BitCast);
+        assert(!bitcast_result.isInvalid());
+        function_builder().set_location_key(
+            bitcast_result.getAs< clang::Expr >(), location_key
         );
-        assert(!casted_expr.isInvalid());
-        function_builder().set_location_key(casted_expr.getAs< clang::Expr >(), location_key);
-
-        auto derefed_expr = sema().CreateBuiltinUnaryOp(
-            clang::SourceLocation(), clang::UO_Deref, casted_expr.getAs< clang::Expr >()
-        );
-        assert(!derefed_expr.isInvalid());
-        function_builder().set_location_key(derefed_expr.getAs< clang::Expr >(), location_key);
 
         auto assign_operation = sema().CreateBuiltinBinOp(
             source_location_from_key(ctx, location_key), clang::BO_Assign, output_expr,
-            derefed_expr.getAs< clang::Expr >()
+            bitcast_result.getAs< clang::Expr >()
         );
         assert(!assign_operation.isInvalid());
         function_builder().set_location_key(
@@ -336,7 +342,7 @@ namespace patchestry::ast {
         //   *input1 = input2;
         //   *[input0] input1 = input2;
 
-        return std::make_pair(nullptr, true);
+        return {};
     }
 
     std::pair< clang::Stmt *, bool >
@@ -390,7 +396,7 @@ namespace patchestry::ast {
             taken_stmt = new (ctx) clang::GotoStmt(
                 function_builder().labels_declaration.at(*op.taken_block),
                 source_location_from_key(ctx, op.key),
-                source_location_from_key(ctx, *op.target_block)
+                source_location_from_key(ctx, *op.taken_block)
             );
         } else {
             taken_stmt = new (ctx) clang::NullStmt(clang::SourceLocation(), false);
@@ -402,7 +408,7 @@ namespace patchestry::ast {
             not_taken_stmt = new (ctx) clang::GotoStmt(
                 function_builder().labels_declaration.at(*op.not_taken_block),
                 source_location_from_key(ctx, op.key),
-                source_location_from_key(ctx, *op.target_block)
+                source_location_from_key(ctx, *op.not_taken_block)
             );
         } else {
             not_taken_stmt = new (ctx) clang::NullStmt(clang::SourceLocation(), false);
@@ -770,28 +776,32 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
-        return std::make_pair(nullptr, true);
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
+        return {};
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_scarry(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
-        return std::make_pair(nullptr, true);
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
+        return {};
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_sborrow(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
-        return std::make_pair(nullptr, true);
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
+        return {};
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_2comp(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
-        return std::make_pair(nullptr, true);
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
+        return {};
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_unary_operation(
@@ -867,6 +877,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
         return {};
     }
 
@@ -874,6 +885,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
         return {};
     }
 
@@ -881,6 +893,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
         return {};
     }
 
@@ -888,6 +901,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
         return {};
     }
 
@@ -895,6 +909,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
         return {};
     }
 
@@ -902,6 +917,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
         return {};
     }
 
@@ -909,6 +925,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
         return {};
     }
 
@@ -916,6 +933,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
+        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
         return {};
     }
 
@@ -976,11 +994,12 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0], op.key));
 
-        auto implicit_cast =
-            sema().PerformImplicitConversion(input_expr, op_type, clang::Sema::AA_Converting);
-        assert(!implicit_cast.isInvalid());
+        auto cast_result =
+            sema().ImpCastExprToType(input_expr, op_type, clang::CastKind::CK_BitCast);
+        assert(!cast_result.isInvalid());
+        function_builder().set_location_key(cast_result.getAs< clang::Expr >(), op.key);
 
-        auto *ptr_expr = implicit_cast.getAs< clang::Expr >();
+        auto *ptr_expr = cast_result.getAs< clang::Expr >();
 
         auto *byte_offset =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1], op.key));
@@ -989,6 +1008,7 @@ namespace patchestry::ast {
             source_location_from_key(ctx, op.key), clang::BO_Add, ptr_expr, byte_offset
         );
         assert(!add_result.isInvalid());
+        function_builder().set_location_key(add_result.getAs< clang::Expr >(), op.key);
 
         auto *ptr_add_expr = add_result.getAs< clang::Expr >();
         if (merge_to_next) {

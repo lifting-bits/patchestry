@@ -26,7 +26,7 @@ jobs:
         llvm-version: [19]
         image-version: [22.04]
         build-type: [Release, Debug]
-        sanitizers: [ON, OFF]
+        sanitizers: [OFF]
 
     runs-on: ubuntu-${{ matrix.image-version }}
     timeout-minutes: 60

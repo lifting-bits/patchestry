@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <llvm/Support/FormatVariadic.h>
 #include <llvm/Support/raw_ostream.h>
 
 enum LogLevel { INFO, WARNING, ERROR };
@@ -18,3 +19,9 @@ enum LogLevel { INFO, WARNING, ERROR };
                                 : llvm::outs() \
     ) << "(" \
       << __FILE__ << ":" << __LINE__ << ") "
+
+#define UNIMPLEMENTED(...) \
+    do { \
+        LOG(ERROR) << llvm::formatv(__VA_ARGS__); \
+        llvm_unreachable(nullptr); \
+    } while (0)
