@@ -976,11 +976,14 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0], op.key));
 
-        auto implicit_cast =
-            sema().PerformImplicitConversion(input_expr, op_type, clang::Sema::AA_Converting);
-        assert(!implicit_cast.isInvalid());
+        auto cast_result = sema().BuildBuiltinBitCastExpr(
+            clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(op_type), input_expr,
+            clang::SourceLocation()
+        );
 
-        auto *ptr_expr = implicit_cast.getAs< clang::Expr >();
+        assert(!cast_result.isInvalid());
+
+        auto *ptr_expr = cast_result.getAs< clang::Expr >();
 
         auto *byte_offset =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1], op.key));
