@@ -193,24 +193,23 @@ namespace patchestry::ast {
         return {};
     }
 
-    clang::Stmt *OpBuilder::create_constant(
-        clang::ASTContext &ctx, const Varnode &vnode, clang::SourceLocation loc
-    ) {
+    clang::Stmt *OpBuilder::create_constant(clang::ASTContext &ctx, const Varnode &vnode) {
         if (vnode.kind != Varnode::VARNODE_CONSTANT) {
             LOG(ERROR) << "Varnode is not constant, invalid varnode.\n";
             return {};
         }
 
         clang::QualType vnode_type = get_varnode_type(ctx, vnode);
+        auto location              = sourceLocation(ctx.getSourceManager(), vnode.type_key);
 
         // Note: EnumDecl has promotional type as int and an enum type is also identified
         // as integer.
         if (vnode_type->isIntegralOrUnscopedEnumerationType()) {
             auto *literal = new (ctx)
-                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, loc);
+                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
 
             auto result = sema().BuildCStyleCastExpr(
-                loc, ctx.getTrivialTypeSourceInfo(vnode_type), loc, literal
+                location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
             );
 
             assert(!result.isInvalid());
@@ -219,10 +218,10 @@ namespace patchestry::ast {
 
         if (vnode_type->isVoidType()) {
             auto *literal = new (ctx)
-                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, loc);
+                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
 
             auto result = sema().BuildCStyleCastExpr(
-                loc, ctx.getTrivialTypeSourceInfo(vnode_type), loc, literal
+                location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
             );
 
             assert(!result.isInvalid());
