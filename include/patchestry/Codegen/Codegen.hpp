@@ -16,7 +16,6 @@
 #include <clang/CIR/CIRGenerator.h>
 #include <clang/Frontend/CompilerInstance.h>
 
-#include <patchestry/Codegen/SourceLocationVisitor.hpp>
 #include <patchestry/Util/Options.hpp>
 #include <vector>
 
