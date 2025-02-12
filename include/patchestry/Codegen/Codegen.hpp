@@ -7,15 +7,18 @@
 
 #pragma once
 
-#include <unordered_map>
+#include <llvm/Support/VirtualFileSystem.h>
+#include <memory>
+#include <mlir/IR/BuiltinOps.h>
+#include <string>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/CIR/CIRGenerator.h>
 #include <clang/Frontend/CompilerInstance.h>
 
-#include <vast/Frontend/FrontendAction.hpp>
-#include <vast/Frontend/Options.hpp>
-
+#include <patchestry/Codegen/SourceLocationVisitor.hpp>
 #include <patchestry/Util/Options.hpp>
+#include <vector>
 
 namespace llvm {
     class raw_fd_ostream;
@@ -23,46 +26,17 @@ namespace llvm {
 
 namespace patchestry::codegen {
 
-    using LocationMap = std::unordered_map< void *, std::string >;
-
-    class MLIRRegistry
-    {
-      public:
-        explicit MLIRRegistry(mlir::DialectRegistry &registry);
-    };
-
-    class CodegenInitializer
-    {
-      public:
-        // Delete copy and move constructors and assignment operators
-        CodegenInitializer(const CodegenInitializer &)                = delete;
-        CodegenInitializer &operator=(const CodegenInitializer &)     = delete;
-        CodegenInitializer(CodegenInitializer &&) noexcept            = delete;
-        CodegenInitializer &operator=(CodegenInitializer &&) noexcept = delete;
-
-        // Public static method to access the singleton instance
-        static CodegenInitializer &getInstance() {
-            static CodegenInitializer instance(0);
-            return instance;
-        }
-
-        inline mlir::MLIRContext &context() const noexcept { return ctx; }
-
-        ~CodegenInitializer();
-
-      private:
-        explicit CodegenInitializer(int /*unused*/);
-
-        // Members
-        mlir::DialectRegistry registry;
-        MLIRRegistry registry_initializer;
-        mutable mlir::MLIRContext ctx;
-    };
+    using LocationMap = std::vector< std::string >;
 
     class CodeGenerator
     {
       public:
-        explicit CodeGenerator(clang::CompilerInstance &ci) : opts(vast::cc::options(ci)) {}
+        explicit CodeGenerator(clang::CompilerInstance &ci) : ci(ci) {
+            cirdriver = std::make_shared< cir::CIRGenerator >(
+                ci.getDiagnostics(), llvm::vfs::getRealFileSystem(), ci.getCodeGenOpts()
+            );
+            cirdriver->Initialize(ci.getASTContext());
+        }
 
         CodeGenerator(const CodeGenerator &)                = delete;
         CodeGenerator &operator=(const CodeGenerator &)     = delete;
@@ -71,10 +45,7 @@ namespace patchestry::codegen {
 
         virtual ~CodeGenerator() = default;
 
-        void emit_source_ir(
-            clang::ASTContext &actx, const LocationMap &locations,
-            const patchestry::Options &options
-        );
+        void emit_cir(clang::ASTContext &actx, const patchestry::Options &options);
 
         void emit_tower(
             clang::ASTContext &actx, const LocationMap &locations,
@@ -82,10 +53,17 @@ namespace patchestry::codegen {
         );
 
       private:
-        std::optional< vast::owning_mlir_module_ref >
-        emit_mlir_module(clang::ASTContext &ctx, const LocationMap &locations);
+        std::optional< mlir::ModuleOp > emit_mlir_module(clang::ASTContext &ctx);
 
-        vast::cc::action_options opts;
+        std::optional< mlir::ModuleOp > emit_after_pipeline(
+            clang::ASTContext &ctx, mlir::ModuleOp mod,
+            const std::vector< std::string > &pipelines
+        );
+
+        void visit_locations(clang::ASTContext &ctx);
+
+        clang::CompilerInstance &ci;
+        std::shared_ptr< cir::CIRGenerator > cirdriver;
     };
 
 } // namespace patchestry::codegen

@@ -8,8 +8,8 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <llvm/Support/VirtualFileSystem.h>
 #include <memory>
-#include <ranges>
 #include <string_view>
 
 #include <clang/AST/ASTConsumer.h>
@@ -33,12 +33,17 @@
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/Util/Options.hpp>
+#include <sys/_types/_off_t.h>
 
 namespace {
 
     const llvm::cl::opt< bool > emit_mlir( // NOLINT(cert-err58-cpp)
         "emit-mlir", llvm::cl::desc("Emit High-level MLIR representation"),
         llvm::cl::init(false)
+    );
+
+    const llvm::cl::opt< bool > emit_cir( // NOLINT(cert-err58-cpp)
+        "emit-cir", llvm::cl::desc("Emit CIR MLIR representation"), llvm::cl::init(false)
     );
 
     // NOTE: Option field is there to test vast tower api. Will be removed in future.
@@ -100,7 +105,9 @@ namespace {
 
         auto pipeline_stages = split_pipelines(pipelines.getValue());
         return {
+            .emit_cir    = emit_cir.getValue(),
             .emit_mlir   = emit_mlir.getValue(), // It is set to true by default
+            .emit_tower  = emit_tower.getValue(),
             .emit_llvm   = emit_llvm.getValue(),
             .emit_asm    = emit_asm.getValue(),
             .emit_obj    = emit_obj.getValue(),
@@ -126,7 +133,9 @@ namespace {
         std::string file_name = "/tmp/patchestry";
         std::ofstream(file_name) << data;
         llvm::ErrorOr< clang::FileEntryRef > file_entry_ref_or_err =
-            ci.getFileManager().getVirtualFileRef(file_name, data.size(), 0);
+            ci.getFileManager().getVirtualFileRef(
+                file_name, static_cast< off_t >(data.size()), 0
+            );
         clang::FileID file_id = sm.createFileID(
             *file_entry_ref_or_err, clang::SourceLocation(), clang::SrcMgr::C_User, 0
         );
@@ -167,15 +176,17 @@ int main(int argc, char **argv) {
     }
 
     clang::CompilerInstance ci;
-    ci.createDiagnostics();
+    clang::CompilerInvocation &invocation = ci.getInvocation();
+    clang::TargetOptions &inv_target_opts = invocation.getTargetOpts();
+    inv_target_opts.Triple                = llvm::sys::getDefaultTargetTriple();
+
+    ci.createDiagnostics(*llvm::vfs::getRealFileSystem());
+    ci.getDiagnostics().setClient(new clang::IgnoringDiagConsumer());
     if (!ci.hasDiagnostics()) {
         LOG(ERROR) << "Failed to initialize diagnostics.\n";
         return EXIT_FAILURE;
     }
-
-    clang::CompilerInvocation &invocation = ci.getInvocation();
-    clang::TargetOptions &inv_target_opts = invocation.getTargetOpts();
-    inv_target_opts.Triple                = llvm::sys::getDefaultTargetTriple();
+    createSourceManager(ci);
 
     std::shared_ptr< clang::TargetOptions > target_options =
         std::make_shared< clang::TargetOptions >();
@@ -185,7 +196,6 @@ int main(int argc, char **argv) {
     ci.getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
     ci.getLangOpts().C99               = true;
 
-    createSourceManager(ci);
     setCodegenOptions(ci);
 
     // Create the preprocessor and AST context
@@ -203,13 +213,9 @@ int main(int argc, char **argv) {
 
     auto *pcode_consumer = dynamic_cast< patchestry::ast::PcodeASTConsumer * >(&ast_consumer);
     if (pcode_consumer != nullptr) {
-        auto codegen          = std::make_unique< patchestry::codegen::CodeGenerator >(ci);
-        const auto &locations = pcode_consumer->locations();
-        if (options.emit_tower) {
-            codegen->emit_tower(ast_context, locations, options);
-        } else {
-            codegen->emit_source_ir(ast_context, locations, options);
-        }
+        auto codegen = std::make_unique< patchestry::codegen::CodeGenerator >(ci);
+        LOG(INFO) << "Emitting mlir\n";
+        codegen->emit_cir(ast_context, options);
     }
 
     return EXIT_SUCCESS;

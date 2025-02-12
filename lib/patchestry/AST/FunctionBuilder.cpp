@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <clang/Basic/SourceLocation.h>
 #include <memory>
 #include <sstream>
 #include <unordered_map>
@@ -42,7 +43,7 @@ namespace patchestry::ast {
          *
          */
 
-        std::vector< std::shared_ptr< Operation > > get_parameters(const Function &function) {
+        std::vector< std::shared_ptr< Operation > > getParameters(const Function &function) {
             if (function.entry_block.empty() && function.basic_blocks.empty()) {
                 return {};
             }
@@ -75,8 +76,7 @@ namespace patchestry::ast {
     FunctionBuilder::FunctionBuilder(
         clang::CompilerInstance &ci, const Function &function, TypeBuilder &type_builder,
         std::unordered_map< std::string, clang::FunctionDecl * > &functions,
-        std::unordered_map< std::string, clang::VarDecl * > &globals,
-        std::unordered_map< void *, std::string > &locations
+        std::unordered_map< std::string, clang::VarDecl * > &globals
     )
         : prev_decl(nullptr)
         , cii(ci)
@@ -85,13 +85,11 @@ namespace patchestry::ast {
         , op_builder(nullptr)
         , function_list(functions)
         , global_var_list(globals)
-        , location_map(locations)
         , local_variables({}) {
         if (!function.key.empty()) {
             if (auto *function_decl = create_declaration(ci.getASTContext())) {
                 prev_decl = function_decl;
                 function_list.get().emplace(function.key, prev_decl);
-                location_map.get().emplace(prev_decl, function.key);
             }
         }
     }
@@ -125,10 +123,9 @@ namespace patchestry::ast {
         }
 
         auto function_type = create_function_type(ctx, function.get().prototype);
+        auto location      = clang::SourceLocation();
         auto *func_decl    = clang::FunctionDecl::Create(
-            ctx, ctx.getTranslationUnitDecl(),
-            source_location_from_key(ctx, function.get().key),
-            source_location_from_key(ctx, function.get().key),
+            ctx, ctx.getTranslationUnitDecl(), location, location,
             &ctx.Idents.get(function.get().name), function_type, nullptr, clang::SC_None
         );
 
@@ -151,7 +148,7 @@ namespace patchestry::ast {
             }
         }
 
-        auto parameters     = get_parameters(function);
+        auto parameters     = getParameters(function);
         auto num_parameters = function.get().prototype.parameters.size();
         if (parameters.size() != num_parameters) {
             // If there is mismatch between number of parameters in function prototype and
@@ -168,15 +165,16 @@ namespace patchestry::ast {
         for (const auto &param_op : parameters) {
             const auto &param_type =
                 type_builder.get().get_serialized_types().at(*param_op->type);
+            auto location = sourceLocation(ctx.getSourceManager(), param_op->key);
 
             auto *param_decl = clang::ParmVarDecl::Create(
-                ctx, func_decl, source_location_from_key(ctx, param_op->key),
-                source_location_from_key(ctx, param_op->key), &ctx.Idents.get(*param_op->name),
+                ctx, func_decl, location, location, &ctx.Idents.get(*param_op->name),
                 param_type, nullptr, clang::SC_None, nullptr
             );
             parameter_vec.push_back(param_decl);
-            local_variables.emplace(param_op->key, param_decl);
-            location_map.get().emplace(param_decl, param_op->key);
+            if (is_definition) {
+                local_variables.emplace(param_op->key, param_decl);
+            }
         }
 
         func_decl->setParams(parameter_vec);
@@ -283,7 +281,8 @@ namespace patchestry::ast {
 
             auto param_type  = type_builder.get().get_serialized_types().at(param_key);
             auto *param_decl = clang::ParmVarDecl::Create(
-                ctx, func_decl, clang::SourceLocation(), clang::SourceLocation(),
+                ctx, func_decl, sourceLocation(ctx.getSourceManager(), param_key),
+                sourceLocation(ctx.getSourceManager(), param_key),
                 &ctx.Idents.get(parameter_name(index++)), param_type,
                 ctx.getTrivialTypeSourceInfo(param_type, clang::SourceLocation()),
                 clang::SC_None, nullptr
@@ -359,7 +358,7 @@ namespace patchestry::ast {
             }
 
             auto *label_decl = clang::LabelDecl::Create(
-                ctx, func_decl, clang::SourceLocation(),
+                ctx, func_decl, sourceLocation(ctx.getSourceManager(), key),
                 &ctx.Idents.get(label_name_from_key(key))
             );
             if (label_decl == nullptr) {
@@ -374,7 +373,6 @@ namespace patchestry::ast {
             }
 
             labels_declaration.emplace(key, label_decl);
-            location_map.get().emplace(label_decl, key);
         }
     }
 
@@ -425,9 +423,9 @@ namespace patchestry::ast {
 
         for (auto &[key, block_stmts] : bb_stmts) {
             if (!block_stmts.empty()) {
-                auto *label_stmt = new (ctx) clang::LabelStmt(
-                    clang::SourceLocation(), labels_declaration.at(key), block_stmts[0]
-                );
+                auto loc = sourceLocation(ctx.getSourceManager(), key);
+                auto *label_stmt =
+                    new (ctx) clang::LabelStmt(loc, labels_declaration.at(key), block_stmts[0]);
 
                 // replace first stmt of block with label stmts
                 block_stmts[0] = label_stmt;
@@ -470,7 +468,6 @@ namespace patchestry::ast {
             const auto &operation = block.operations.at(operation_key);
             if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
                 operation_stmts.emplace(operation.key, stmt);
-                location_map.get().emplace(stmt, operation.key);
                 if (!should_merge_to_next) {
                     stmt_vec.push_back(stmt);
                 }

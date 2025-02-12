@@ -7,7 +7,9 @@
 
 #include <fstream>
 
+#include <llvm/IR/Module.h>
 #include <llvm/Support/SourceMgr.h>
+#include <llvm/Support/raw_ostream.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/Parser/Parser.h>
@@ -25,6 +27,16 @@ namespace patchestry::codegen {
 
         std::string module_string = Serializer::convertModuleToString(mod);
         outfile << module_string;
+        outfile.close();
+        return true;
+    }
+
+    bool Serializer::serializeToFile(llvm::Module *mod, const std::string &filename) {
+        std::string mod_string;
+        llvm::raw_string_ostream os(mod_string);
+        mod->print(os, nullptr);
+        std::ofstream outfile(filename, std::ios::binary);
+        outfile << mod_string;
         outfile.close();
         return true;
     }

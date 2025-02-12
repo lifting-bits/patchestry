@@ -4,24 +4,29 @@
 
 add_library(patchestry_codegen STATIC
   Codegen.cpp
-  Initializer.cpp
-  MetaGenerator.cpp
+  #Initializer.cpp
+  #MetaGenerator.cpp
+  PassManager.cpp
   Serializer.cpp
+  SourceLocationVisitor.cpp
 )
 
 set(VAST_LIBS
-  VAST::VASTTargetLLVMIR
-  VAST::VASTToLLVMConversionPasses
-  VAST::VASTAliasTypeInterface
-  VAST::VASTElementTypeInterface
-  VAST::VASTCodeGen
-  VAST::VASTFrontend
-  VAST::VASTSymbolInterface
-  VAST::VASTSymbolTableInterface
-  VAST::VASTSymbolRefInterface
-  VAST::VASTTypeDefinitionInterface
-  VAST::VASTTower
-  VAST::VASTDeclStorageInterface
+  clangCIR
+  clangCIRLoweringDirectToLLVM
+  clangCIRLoweringThroughMLIR
+#  VAST::VASTTargetLLVMIR
+#  VAST::VASTToLLVMConversionPasses
+#  VAST::VASTAliasTypeInterface
+#  VAST::VASTElementTypeInterface
+#  VAST::VASTCodeGen
+#  VAST::VASTFrontend
+#  VAST::VASTSymbolInterface
+#  VAST::VASTSymbolTableInterface
+#  VAST::VASTSymbolRefInterface
+#  VAST::VASTTypeDefinitionInterface
+#  VAST::VASTTower
+#  VAST::VASTDeclStorageInterface
 )
 
 add_library(patchestry::codegen ALIAS patchestry_codegen)

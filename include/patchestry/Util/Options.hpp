@@ -19,6 +19,7 @@ namespace patchestry {
 
     struct Options
     {
+        bool emit_cir   = false;
         bool emit_mlir  = false;
         bool emit_tower = false;
         bool emit_llvm  = false;

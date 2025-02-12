@@ -5,6 +5,8 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <algorithm>
+#include <llvm/ADT/StringRef.h>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -16,8 +18,18 @@
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
 #include <patchestry/Util/Log.hpp>
+#include <vector>
 
 namespace patchestry::ghidra {
+
+    std::optional< std::string > stripNull(std::optional< llvm::StringRef > stref) {
+        if (stref && !stref->empty()) {
+            auto str = stref->str();
+            str.erase(std::remove(str.begin(), str.end(), '\0'), str.end());
+            return str;
+        }
+        return std::nullopt;
+    }
 
     template< typename ObjectType >
     constexpr std::optional< std::string >
@@ -380,7 +392,7 @@ namespace patchestry::ghidra {
     }
 
     std::optional< Function > JsonParser::create_function(const JsonObject &func_obj) {
-        const auto &function_name = func_obj.getString("name");
+        const auto function_name = stripNull(func_obj.getString("name"));
         if (!function_name || function_name->empty()) {
             LOG(ERROR) << "Missing function name from the object.\n";
             return std::nullopt;
@@ -388,7 +400,7 @@ namespace patchestry::ghidra {
 
         Function function;
 
-        function.name = function_name->str();
+        function.name = *function_name;
         if (const auto *proto_obj = func_obj.getObject("type")) {
             if (auto maybe_prototype = create_function_prototype(*proto_obj)) {
                 function.prototype = *maybe_prototype;
