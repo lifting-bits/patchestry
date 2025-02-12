@@ -6,7 +6,6 @@
  */
 
 #include "patchestry/Codegen/Codegen.hpp"
-#include "patchestry/Codegen/SourceLocationVisitor.hpp"
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/DeclGroup.h>
