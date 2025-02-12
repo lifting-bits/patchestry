@@ -492,6 +492,25 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			endArray();
 		}
 
+		private void serializeEnumType(Enum data_type, String kind) throws Exception {
+			name("name").value(data_type.getDisplayName());
+			name("kind").value(kind);
+			name("size").value(data_type.getLength());	
+			int num_entries = data_type.getCount();
+			name("num_entries").value(num_entries);
+			name("entries").beginArray();
+			for (int i = 0; i < num_entries; i++) {
+				String entry_name = data_type.getName(i);
+				if (entry_name != null) {
+					beginObject();
+					name("name").value(entry_name);
+					name("value").value(data_type.getValue(entry_name));
+					endObject();
+				}
+			}
+			endArray();
+		}
+
 		private void serialize(DataType data_type) throws Exception {
 			if (data_type == null) {
 				nullValue();
@@ -523,7 +542,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				serializeBuiltinType(data_type, "boolean");
 
 			} else if (data_type instanceof Enum) {
-				serializeBuiltinType(data_type, "enum");
+				serializeEnumType((Enum) data_type, "enum");
 
 			} else if (data_type instanceof VoidDataType) {
 				serializeBuiltinType(data_type, "void");

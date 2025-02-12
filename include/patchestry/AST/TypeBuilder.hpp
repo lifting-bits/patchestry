@@ -198,7 +198,6 @@ namespace patchestry::ast {
         clang::ASTContext &ast_context(void) { return context.get(); }
 
         std::unordered_map< std::string, clang::Decl * > missing_type_definition;
-
         std::reference_wrapper< clang::ASTContext > context;
         SerializedTypeMap serialized_types;
     };

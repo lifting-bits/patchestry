@@ -40,16 +40,9 @@ namespace patchestry::ast {
         explicit PcodeASTConsumer(
             clang::CompilerInstance &ci, Program &prog, patchestry::Options &opts
         )
-            : program(prog)
-            , ci(ci)
-            , options(opts)
-            , type_builder(std::make_unique< TypeBuilder >(ci.getASTContext())) {}
+            : program(prog), ci(ci), options(opts), type_builder(nullptr) {}
 
         void HandleTranslationUnit(clang::ASTContext &ctx) override;
-
-        const std::unordered_map< void *, std::string > &locations(void) const {
-            return location_map;
-        }
 
       private:
         void set_sema_context(clang::DeclContext *dc);
@@ -74,8 +67,6 @@ namespace patchestry::ast {
 
         std::unordered_map< std::string, clang::FunctionDecl * > function_declarations;
         std::unordered_map< std::string, clang::VarDecl * > global_variable_declarations;
-
-        std::unordered_map< void *, std::string > location_map;
     };
 
 } // namespace patchestry::ast
