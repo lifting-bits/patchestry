@@ -157,7 +157,7 @@ namespace patchestry::ast {
 
         if (function_builder().function_list.get().contains(*vnode.function)) {
             auto *function_decl = function_builder().function_list.get().at(*vnode.function);
-            auto location       = clang::SourceLocation();
+            auto location       = sourceLocation(ctx.getSourceManager(), *vnode.function);
             auto *function_ref  = clang::DeclRefExpr::Create(
                 ctx, clang::NestedNameSpecifierLoc(), location, function_decl, false, location,
                 function_decl->getType(), clang::VK_PRValue
@@ -178,9 +178,10 @@ namespace patchestry::ast {
 
         if (function_builder().local_variables.contains(*vnode.operation)) {
             auto *var_decl = function_builder().local_variables.at(*vnode.operation);
+            auto op_loc    = sourceLocation(ctx.getSourceManager(), *vnode.operation);
             return clang::DeclRefExpr::Create(
                 ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
-                clang::SourceLocation(), var_decl->getType(), clang::VK_LValue
+                op_loc, var_decl->getType(), clang::VK_LValue
             );
         }
 
@@ -192,23 +193,24 @@ namespace patchestry::ast {
         return {};
     }
 
-    clang::Stmt *OpBuilder::create_constant(clang::ASTContext &ctx, const Varnode &vnode) {
+    clang::Stmt *OpBuilder::create_constant(
+        clang::ASTContext &ctx, const Varnode &vnode, clang::SourceLocation loc
+    ) {
         if (vnode.kind != Varnode::VARNODE_CONSTANT) {
             LOG(ERROR) << "Varnode is not constant, invalid varnode.\n";
             return {};
         }
 
         clang::QualType vnode_type = get_varnode_type(ctx, vnode);
-        auto location              = sourceLocation(ctx.getSourceManager(), vnode.type_key);
 
         // Note: EnumDecl has promotional type as int and an enum type is also identified
         // as integer.
         if (vnode_type->isIntegralOrUnscopedEnumerationType()) {
             auto *literal = new (ctx)
-                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
+                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, loc);
 
             auto result = sema().BuildCStyleCastExpr(
-                location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
+                loc, ctx.getTrivialTypeSourceInfo(vnode_type), loc, literal
             );
 
             assert(!result.isInvalid());
@@ -217,10 +219,10 @@ namespace patchestry::ast {
 
         if (vnode_type->isVoidType()) {
             auto *literal = new (ctx)
-                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
+                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, loc);
 
             auto result = sema().BuildCStyleCastExpr(
-                location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
+                loc, ctx.getTrivialTypeSourceInfo(vnode_type), loc, literal
             );
 
             assert(!result.isInvalid());
