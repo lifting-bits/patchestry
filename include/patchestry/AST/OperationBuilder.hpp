@@ -154,7 +154,7 @@ namespace patchestry::ast {
       private:
         clang::Stmt *create_assign_operation(
             clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
-            const std::string &location_key
+            clang::SourceLocation loc = clang::SourceLocation()
         );
 
         /**

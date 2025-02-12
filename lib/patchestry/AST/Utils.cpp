@@ -13,12 +13,16 @@
 
 namespace patchestry::ast {
 
-    clang::SourceLocation
-    source_location_from_key(clang::ASTContext & /*unused*/, std::string /*unused*/) {
-        return clang::SourceLocation();
+    clang::SourceLocation sourceLocation(clang::SourceManager &sm, std::string key) {
+        auto &fm = sm.getFileManager();
+        auto fe  = fm.getVirtualFileRef(key, static_cast< int >(key.size()), 0);
+        std::unique_ptr< llvm::MemoryBuffer > buffer = llvm::MemoryBuffer::getMemBuffer(key);
+        sm.overrideFileContents(fe, std::move(buffer));
+        auto fid = sm.createFileID(fe, clang::SourceLocation(), clang::SrcMgr::C_User, 0);
+        return sm.getLocForStartOfFile(fid);
     }
 
-    clang::QualType get_type_for_size(
+    clang::QualType getTypeFromSize(
         clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer
     ) {
         if (is_integer) {

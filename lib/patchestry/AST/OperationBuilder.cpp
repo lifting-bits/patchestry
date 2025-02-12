@@ -23,18 +23,18 @@
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/OperationBuilder.hpp>
+#include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
 #include <patchestry/Util/Log.hpp>
 
 namespace patchestry::ast {
 
-    extern clang::QualType get_type_for_size(
-        clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer
-    );
+    extern clang::QualType
+    getTypeFromSize(clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer);
 
     std::optional< Operation >
-    operation_from_key(const Function &function, const std::string &lookup_key) {
+    operationFromKey(const Function &function, const std::string &lookup_key) {
         if (function.basic_blocks.empty()) {
             return std::nullopt;
         }
@@ -49,18 +49,6 @@ namespace patchestry::ast {
 
         assert(false); // assert if failed to find operation
         return std::nullopt;
-    }
-
-    clang::CallExpr *create_function_call(clang::ASTContext &ctx, clang::FunctionDecl *decl) {
-        auto *ref_expr = clang::DeclRefExpr::Create(
-            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), decl, false,
-            clang::SourceLocation(), decl->getType(), clang::VK_LValue
-        );
-
-        return clang::CallExpr::Create(
-            ctx, ref_expr, {}, decl->getReturnType(), clang::VK_PRValue,
-            clang::SourceLocation(), clang::FPOptionsOverride()
-        );
     }
 
     clang::Stmt *OpBuilder::create_varnode(
@@ -90,9 +78,10 @@ namespace patchestry::ast {
         };
 
         if (auto *expr = varnode_operation(ctx, function, vnode)) {
-            function_builder().set_location_key(expr, op_key);
             return expr;
         }
+
+        (void) op_key;
 
         return {};
     }
@@ -151,11 +140,8 @@ namespace patchestry::ast {
             return function_builder().operation_stmts.at(*vnode.operation);
         }
 
-        if (auto maybe_operation = operation_from_key(function, vnode.operation.value())) {
+        if (auto maybe_operation = operationFromKey(function, vnode.operation.value())) {
             auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
-            if (stmt != nullptr) {
-                function_builder().location_map.get().emplace(stmt, maybe_operation->key);
-            }
             return stmt;
         }
 
@@ -171,11 +157,11 @@ namespace patchestry::ast {
 
         if (function_builder().function_list.get().contains(*vnode.function)) {
             auto *function_decl = function_builder().function_list.get().at(*vnode.function);
+            auto location       = clang::SourceLocation();
             auto *function_ref  = clang::DeclRefExpr::Create(
-                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), function_decl,
-                false, clang::SourceLocation(), function_decl->getType(), clang::VK_PRValue
+                ctx, clang::NestedNameSpecifierLoc(), location, function_decl, false, location,
+                function_decl->getType(), clang::VK_PRValue
             );
-            function_builder().set_location_key(function_ref, *vnode.function);
             return function_ref;
         }
 
@@ -198,7 +184,7 @@ namespace patchestry::ast {
             );
         }
 
-        if (auto maybe_operation = operation_from_key(function, vnode.operation.value())) {
+        if (auto maybe_operation = operationFromKey(function, vnode.operation.value())) {
             auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
             return stmt;
         }
@@ -213,17 +199,16 @@ namespace patchestry::ast {
         }
 
         clang::QualType vnode_type = get_varnode_type(ctx, vnode);
+        auto location              = sourceLocation(ctx.getSourceManager(), vnode.type_key);
 
         // Note: EnumDecl has promotional type as int and an enum type is also identified
         // as integer.
         if (vnode_type->isIntegralOrUnscopedEnumerationType()) {
-            auto *literal = new (ctx) clang::IntegerLiteral(
-                ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
-            );
+            auto *literal = new (ctx)
+                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
 
             auto result = sema().BuildCStyleCastExpr(
-                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
-                clang::SourceLocation(), literal
+                location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
             );
 
             assert(!result.isInvalid());
@@ -231,13 +216,11 @@ namespace patchestry::ast {
         }
 
         if (vnode_type->isVoidType()) {
-            auto *literal = new (ctx) clang::IntegerLiteral(
-                ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
-            );
+            auto *literal = new (ctx)
+                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
 
             auto result = sema().BuildCStyleCastExpr(
-                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
-                clang::SourceLocation(), literal
+                location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
             );
 
             assert(!result.isInvalid());
@@ -245,13 +228,11 @@ namespace patchestry::ast {
         }
 
         if (vnode_type->isPointerType()) {
-            auto *literal = new (ctx) clang::IntegerLiteral(
-                ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, clang::SourceLocation()
-            );
+            auto *literal = new (ctx)
+                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
 
             auto result = sema().BuildCStyleCastExpr(
-                clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(vnode_type),
-                clang::SourceLocation(), literal
+                location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
             );
 
             assert(!result.isInvalid());
@@ -261,7 +242,7 @@ namespace patchestry::ast {
         if (vnode_type->isFloatingType()) {
             return clang::FloatingLiteral::Create(
                 ctx, llvm::APFloat(static_cast< double >(*vnode.value)), true, vnode_type,
-                clang::SourceLocation()
+                location
             );
         }
 
@@ -293,7 +274,7 @@ namespace patchestry::ast {
             return type_builder().get_serialized_types().at(vnode.type_key);
         }
 
-        return get_type_for_size(ctx, vnode.size, /*is_signed=*/false, /*is_integer=*/true);
+        return getTypeFromSize(ctx, vnode.size, /*is_signed=*/false, /*is_integer=*/true);
     }
 
 } // namespace patchestry::ast

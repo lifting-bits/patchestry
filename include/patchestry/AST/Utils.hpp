@@ -8,13 +8,13 @@
 #pragma once
 
 #include <clang/AST/ASTContext.h>
+#include <clang/Basic/SourceLocation.h>
 
 namespace patchestry::ast {
-    clang::SourceLocation source_location_from_key(clang::ASTContext &ctx, std::string key);
+    clang::SourceLocation sourceLocation(clang::SourceManager &sm, std::string key);
 
-    clang::QualType get_type_for_size(
-        clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer
-    );
+    clang::QualType
+    getTypeFromSize(clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer);
 
     std::string label_name_from_key(std::string key);
 

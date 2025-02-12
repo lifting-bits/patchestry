@@ -38,6 +38,7 @@
 namespace patchestry::ast {
 
     void PcodeASTConsumer::HandleTranslationUnit(clang::ASTContext &ctx) {
+        type_builder = std::make_unique< TypeBuilder >(ci.get().getASTContext());
         if (!get_program().serialized_types.empty()) {
             type_builder->create_types(ctx, get_program().serialized_types);
         }
@@ -77,7 +78,7 @@ namespace patchestry::ast {
         for (const auto &[key, function] : serialized_functions) {
             auto builder = std::make_shared< FunctionBuilder >(
                 ci.get(), function, *type_builder, function_declarations,
-                global_variable_declarations, location_map
+                global_variable_declarations
             );
 
             builder->initialize_op_builder();
@@ -99,18 +100,16 @@ namespace patchestry::ast {
                 continue;
             }
 
-            auto var_type = type_builder->get_serialized_types().at(variable.type);
-
+            auto var_type  = type_builder->get_serialized_types().at(variable.type);
+            auto location  = sourceLocation(ctx.getSourceManager(), key);
             auto *var_decl = clang::VarDecl::Create(
-                ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(),
-                clang::SourceLocation(), &ctx.Idents.get(variable.name), var_type,
+                ctx, ctx.getTranslationUnitDecl(), location, location,
+                &ctx.Idents.get(variable.name), var_type,
                 ctx.getTrivialTypeSourceInfo(var_type), clang::SC_Static
             );
-
             var_decl->setDeclContext(ctx.getTranslationUnitDecl());
             ctx.getTranslationUnitDecl()->addDecl(var_decl);
             global_variable_declarations.emplace(variable.key, var_decl);
-            location_map.emplace(var_decl, variable.key);
         }
     }
 

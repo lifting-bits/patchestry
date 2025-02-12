@@ -10,12 +10,18 @@
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/MLIRContext.h>
 
+namespace llvm {
+    class Module;
+}
+
 namespace patchestry::codegen {
 
     class Serializer
     {
       public:
         static bool serializeToFile(mlir::ModuleOp mod, const std::string &filename);
+
+        static bool serializeToFile(llvm::Module *mod, const std::string &filename);
 
         static mlir::ModuleOp
         deserializeFromFile(mlir::MLIRContext *mctx, const std::string &filename);
