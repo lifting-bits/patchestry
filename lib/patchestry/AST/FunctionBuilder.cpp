@@ -172,6 +172,8 @@ namespace patchestry::ast {
                 param_type, nullptr, clang::SC_None, nullptr
             );
             parameter_vec.push_back(param_decl);
+
+            // If this is for definition
             if (is_definition) {
                 local_variables.emplace(param_op->key, param_decl);
             }

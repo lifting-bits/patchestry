@@ -48,10 +48,11 @@ namespace patchestry::ast {
             );
         }
 
-        clang::DeclStmt *create_decl_stmt(clang::ASTContext &ctx, clang::Decl *decl) { // NOLINT
+        clang::DeclStmt *create_decl_stmt(
+            clang::ASTContext &ctx, clang::Decl *decl, clang::SourceLocation loc
+        ) { // NOLINT
             auto decl_group = clang::DeclGroupRef(decl);
-            return new (ctx)
-                clang::DeclStmt(decl_group, clang::SourceLocation(), clang::SourceLocation());
+            return new (ctx) clang::DeclStmt(decl_group, loc, loc);
         }
 
     } // namespace
@@ -61,7 +62,8 @@ namespace patchestry::ast {
      * falling back to a manual pointer-based cast if necessary.
      */
     clang::Expr *OpBuilder::perform_explicit_cast(
-        clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type
+        clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+        clang::SourceLocation loc
     ) {
         if (expr == nullptr || to_type.isNull()) {
             LOG(ERROR) << "Invalid expr of type to perform explicit cast";
@@ -82,19 +84,18 @@ namespace patchestry::ast {
         }
 
         // Fallback to Explicit cast
-        auto addr_of_expr =
-            sema().CreateBuiltinUnaryOp(clang::SourceLocation(), clang::UO_AddrOf, expr);
+        auto addr_of_expr = sema().CreateBuiltinUnaryOp(loc, clang::UO_AddrOf, expr);
         assert(!addr_of_expr.isInvalid());
 
         auto to_pointer_type = ctx.getPointerType(to_type);
         auto casted_expr     = sema().BuildCStyleCastExpr(
-            clang::SourceLocation(), ctx.getTrivialTypeSourceInfo(to_pointer_type),
-            clang::SourceLocation(), addr_of_expr.getAs< clang::Expr >()
+            loc, ctx.getTrivialTypeSourceInfo(to_pointer_type), loc,
+            addr_of_expr.getAs< clang::Expr >()
         );
         assert(!casted_expr.isInvalid());
 
         auto derefed_expr = sema().CreateBuiltinUnaryOp(
-            clang::SourceLocation(), clang::UO_Deref, casted_expr.getAs< clang::Expr >()
+            loc, clang::UO_Deref, casted_expr.getAs< clang::Expr >()
         );
         assert(!derefed_expr.isInvalid());
 
@@ -361,7 +362,7 @@ namespace patchestry::ast {
                 function_builder().labels_declaration.at(*op.taken_block), loc, ll
             );
         } else {
-            taken_stmt = new (ctx) clang::NullStmt(clang::SourceLocation(), false);
+            taken_stmt = new (ctx) clang::NullStmt(loc, false);
         }
 
         if (op.not_taken_block && !op.not_taken_block->empty()
@@ -372,7 +373,7 @@ namespace patchestry::ast {
                 function_builder().labels_declaration.at(*op.not_taken_block), loc, ll
             );
         } else {
-            not_taken_stmt = new (ctx) clang::NullStmt(clang::SourceLocation(), false);
+            not_taken_stmt = new (ctx) clang::NullStmt(loc, false);
         }
 
         return std::make_pair(
@@ -407,6 +408,7 @@ namespace patchestry::ast {
             return {};
         }
 
+        auto op_loc            = sourceLocation(ctx.getSourceManager(), op.key);
         clang::Expr *call_expr = nullptr;
         std::vector< clang::Expr * > arguments;
         for (const auto &input : op.inputs) {
@@ -426,14 +428,12 @@ namespace patchestry::ast {
 
             auto *call_ref_expr = clang::DeclRefExpr::Create(
                 ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), call_target,
-                false, clang::SourceLocation(), ctx.getPointerType(call_target->getType()),
-                clang::VK_PRValue
+                false, op_loc, ctx.getPointerType(call_target->getType()), clang::VK_PRValue
             );
 
             auto result = sema().BuildCallExpr(
-                nullptr, clang::dyn_cast< clang::Expr >(call_ref_expr),
-                sourceLocation(ctx.getSourceManager(), op.key), arguments,
-                clang::SourceLocation()
+                nullptr, clang::dyn_cast< clang::Expr >(call_ref_expr), op_loc, arguments,
+                op_loc
             );
             assert(!result.isInvalid());
             call_expr = result.getAs< clang::Expr >();
@@ -445,9 +445,7 @@ namespace patchestry::ast {
             auto operation = operationFromKey(function, *op.target->operation);
             auto [stmt, _] = function_builder().create_operation(ctx, *operation);
             auto result    = sema().BuildCallExpr(
-                nullptr, clang::dyn_cast< clang::Expr >(stmt),
-                sourceLocation(ctx.getSourceManager(), op.key), arguments,
-                sourceLocation(ctx.getSourceManager(), op.key)
+                nullptr, clang::dyn_cast< clang::Expr >(stmt), op_loc, arguments, op_loc
             );
             assert(!result.isInvalid());
             call_expr = result.getAs< clang::Expr >();
@@ -466,8 +464,7 @@ namespace patchestry::ast {
         assert(!casted_result.isInvalid());
 
         auto result = sema().CreateBuiltinBinOp(
-            sourceLocation(ctx.getSourceManager(), op.key), clang::BO_Assign, output_expr,
-            casted_result.getAs< clang::Expr >()
+            op_loc, clang::BO_Assign, output_expr, casted_result.getAs< clang::Expr >()
         );
         assert(!result.isInvalid());
         return { result.getAs< clang::Expr >(), false };
@@ -589,14 +586,13 @@ namespace patchestry::ast {
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0], op.key));
 
         if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
-            if (auto *casted_expr = perform_explicit_cast(ctx, expr, op_type)) {
+            if (auto *casted_expr = perform_explicit_cast(ctx, expr, op_type, op_location)) {
                 expr = casted_expr;
             }
         }
 
-        auto *expr_with_paren = new (ctx) clang::ParenExpr(
-            op_location, clang::SourceLocation(), clang::dyn_cast< clang::Expr >(expr)
-        );
+        auto *expr_with_paren = new (ctx)
+            clang::ParenExpr(op_location, op_location, clang::dyn_cast< clang::Expr >(expr));
 
         auto shifted_result = sema().CreateBuiltinBinOp(
             op_location, clang::BO_Shr, clang::dyn_cast< clang::Expr >(expr_with_paren),
@@ -1089,14 +1085,13 @@ namespace patchestry::ast {
         }
 
         const auto &var_type = type_builder().get_serialized_types()[*op.type];
-        auto *var_decl       = create_variable_decl(
-            ctx, sema().CurContext, *op.name, var_type,
-            sourceLocation(ctx.getSourceManager(), op.key)
-        );
+        auto op_loc          = sourceLocation(ctx.getSourceManager(), op.key);
+        auto *var_decl =
+            create_variable_decl(ctx, sema().CurContext, *op.name, var_type, op_loc);
 
         // add variable declaration to list for future references
         function_builder().local_variables.emplace(op.key, var_decl);
-        return std::make_pair(create_decl_stmt(ctx, var_decl), false);
+        return std::make_pair(create_decl_stmt(ctx, var_decl, op_loc), false);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_declare_parameter(

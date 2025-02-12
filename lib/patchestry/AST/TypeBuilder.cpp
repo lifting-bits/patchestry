@@ -148,14 +148,15 @@ namespace patchestry::ast {
      * @return A `clang::QualType` representing the invalid type.
      */
 
-    clang::QualType TypeBuilder::
-        create_invalid(clang::ASTContext &ctx, const std::shared_ptr< VarnodeType > &) {
+    clang::QualType TypeBuilder::create_invalid(
+        clang::ASTContext &ctx, const std::shared_ptr< VarnodeType > &vnode_type
+    ) {
         // An invalid type is defined as typedef of a void type
         auto underlying_type = ctx.VoidTy;
-
-        auto *typedef_decl = clang::TypedefDecl::Create(
-            ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(), clang::SourceLocation(),
-            &ctx.Idents.get("invalid_type"), ctx.getTrivialTypeSourceInfo(underlying_type)
+        auto ty_loc          = sourceLocation(ctx.getSourceManager(), vnode_type->key);
+        auto *typedef_decl   = clang::TypedefDecl::Create(
+            ctx, ctx.getTranslationUnitDecl(), ty_loc, ty_loc, &ctx.Idents.get("invalid_type"),
+            ctx.getTrivialTypeSourceInfo(underlying_type)
         );
 
         typedef_decl->setDeclContext(ctx.getTranslationUnitDecl());
@@ -198,14 +199,14 @@ namespace patchestry::ast {
         serialized_types.emplace(base_type->key, underlying_type);
 
         auto *tinfo        = ctx.getTrivialTypeSourceInfo(underlying_type);
+        auto tydef_loc     = sourceLocation(ctx.getSourceManager(), typedef_type.key);
         auto *typedef_decl = clang::TypedefDecl::Create(
-            ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(), clang::SourceLocation(),
+            ctx, ctx.getTranslationUnitDecl(), tydef_loc, tydef_loc,
             &ctx.Idents.get(typedef_type.name), tinfo
         );
 
         typedef_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(typedef_decl);
-
         return ctx.getTypedefType(typedef_decl);
     }
 
