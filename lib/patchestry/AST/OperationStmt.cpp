@@ -431,12 +431,26 @@ namespace patchestry::ast {
                 false, op_loc, ctx.getPointerType(call_target->getType()), clang::VK_PRValue
             );
 
-            auto result = sema().BuildCallExpr(
-                nullptr, clang::dyn_cast< clang::Expr >(call_ref_expr), op_loc, arguments,
-                op_loc
-            );
-            assert(!result.isInvalid());
-            call_expr = result.getAs< clang::Expr >();
+            auto *proto       = call_target->getType()->getAs< clang::FunctionProtoType >();
+            auto num_params   = proto->getNumParams();
+            unsigned min_args = call_target->getMinRequiredArguments();
+            if (arguments.size() > num_params) {
+                arguments.resize(num_params);
+            }
+            if (arguments.size() <= num_params && arguments.size() >= min_args) {
+                auto result = sema().BuildCallExpr(
+                    nullptr, clang::dyn_cast< clang::Expr >(call_ref_expr), op_loc, arguments,
+                    op_loc
+                );
+                assert(!result.isInvalid());
+                call_expr = result.getAs< clang::Expr >();
+            } else {
+                call_expr = clang::CallExpr::Create(
+                    ctx, clang::dyn_cast< clang::Expr >(call_ref_expr), arguments,
+                    call_target->getReturnType(), clang::VK_PRValue, clang::SourceLocation(),
+                    clang::FPOptionsOverride()
+                );
+            }
             if (!op.output || call_target->getReturnType()->isVoidType()) {
                 return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
             }
@@ -1088,6 +1102,8 @@ namespace patchestry::ast {
         auto op_loc          = sourceLocation(ctx.getSourceManager(), op.key);
         auto *var_decl =
             create_variable_decl(ctx, sema().CurContext, *op.name, var_type, op_loc);
+        // Mark all local variable used to avoid warning about unused variable
+        var_decl->setIsUsed();
 
         // add variable declaration to list for future references
         function_builder().local_variables.emplace(op.key, var_decl);
