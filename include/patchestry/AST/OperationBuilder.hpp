@@ -178,6 +178,11 @@ namespace patchestry::ast {
             const std::string &op_key = ""
         );
 
+        void extend_callexpr_agruments(
+            clang::ASTContext &ctx, clang::FunctionDecl *fndecl,
+            std::vector< clang::Expr * > &arguments
+        );
+
         clang::Stmt *create_parameter(clang::ASTContext &ctx, const Varnode &vnode);
 
         clang::Stmt *create_global(clang::ASTContext &ctx, const Varnode &vnode);
