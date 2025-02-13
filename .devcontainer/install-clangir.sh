@@ -29,17 +29,18 @@ build_clangir() {
 
     echo "Installing Clangir..."
     mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
-    cmake -G Ninja "$CLANGIR_DIR/llvm" \
+    CXXFLAGS="-g0" \
+    CCFLAGS="-g0" \
+    cmake -G Ninja \
+        "$CLANGIR_DIR/llvm" \
         -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
         -DCMAKE_BUILD_TYPE=Release \
         -DLLVM_ENABLE_PROJECTS="clang;mlir" \
-        -DLLVM_ENABLE_ASSERTIONS=ON \
         -DCLANG_ENABLE_CIR=ON \
-        -DLLVM_ENABLE_RTTI=ON \
         -DLLVM_TARGETS_TO_BUILD="host" \
         -DCMAKE_C_COMPILER=/usr/bin/clang \
         -DCMAKE_CXX_COMPILER=/usr/bin/clang++
-    cmake --build . && sudo cmake --install .
+    ninja install .
 }
 
 clean_up() {
