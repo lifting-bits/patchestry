@@ -2,7 +2,6 @@
 
 # [Choice] Debian / Ubuntu version (use Debian 11, Ubuntu 18.04/22.04 on local arm64/Apple Silicon): debian-11, debian-10, ubuntu-22.04, ubuntu-20.04, ubuntu-18.04
 ARG IMAGE="ubuntu-22.04"
-ARG LLVM_VERSION="19"
 
 FROM mcr.microsoft.com/vscode/devcontainers/cpp:${IMAGE}
 ARG LLVM_VERSION
@@ -31,19 +30,15 @@ RUN curl -fsSL https://get.docker.com -o get-docker.sh && \
     sh get-docker.sh && \
     rm get-docker.sh
 
-# Remove old versions of LLVM and Clang
-RUN apt-get -y purge llvm-14 clang-14
-
 # Install Python packages
 RUN pip3 install lit codespell jinja2 Pygments
 
-COPY ./install-llvm.sh /tmp/
-RUN chmod +x /tmp/install-llvm.sh && \
-    /tmp/install-llvm.sh ${LLVM_VERSION} all
+COPY ./install-clangir.sh /tmp/
+RUN chmod +x /tmp/install-clangir.sh && \
+    /tmp/install-clangir.sh
 
-COPY ./install-vast.sh /tmp/
-RUN chmod +x /tmp/install-vast.sh && \
-    /tmp/install-vast.sh
+# Remove old versions of LLVM and Clang
+RUN apt-get -y purge llvm-14 clang-14
 
 # Add docker group and add root to it
 RUN groupadd docker || true && \
