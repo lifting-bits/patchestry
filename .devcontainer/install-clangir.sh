@@ -25,11 +25,11 @@ install_dependencies() {
 
 build_clangir() {    
     echo "Cloning Clangir repository..."
-    git clone --branch patche-clangir-20 --recursive "$CLANGIR_REPO" "$CLANGIR_DIR"
+    git clone --branch patche-clangir-20 "$CLANGIR_REPO" "$CLANGIR_DIR"
 
     echo "Installing Clangir..."
     mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
-    cmake -G Ninja $CLANGIR_DIR \
+    cmake -G Ninja "$CLANGIR_DIR/llvm" \
         -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
         -DCMAKE_BUILD_TYPE=Release \
         -DLLVM_ENABLE_PROJECTS="clang;mlir" \
