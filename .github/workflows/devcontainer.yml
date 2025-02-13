@@ -16,7 +16,6 @@ jobs:
         llvm-version: [20]
         image-version: [22.04]
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
 
     permissions:
         packages: write
