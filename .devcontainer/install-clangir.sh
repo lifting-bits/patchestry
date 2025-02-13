@@ -20,6 +20,7 @@ install_dependencies() {
         python3-pip \
         git \
         lld \
+        clang
 }
 
 build_clangir() {    
