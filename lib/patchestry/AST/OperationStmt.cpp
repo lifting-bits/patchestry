@@ -55,6 +55,34 @@ namespace patchestry::ast {
             return new (ctx) clang::DeclStmt(decl_group, loc, loc);
         }
 
+        clang::Expr *createDefaultArgument(clang::ASTContext &ctx, clang::ParmVarDecl *param) {
+            if (param == nullptr) {
+                return nullptr;
+            }
+
+            auto param_type = param->getType();
+            if (param_type->isIntegerType()) {
+                return new (ctx) clang::IntegerLiteral(
+                    ctx, llvm::APInt(32U, 0), param_type, clang::SourceLocation()
+                );
+            } else if (param_type->isFloatingType()) {
+                llvm::APFloat value(llvm::APFloat::IEEEdouble(), "0.0");
+                return clang::FloatingLiteral::Create(
+                    ctx, value, false, param_type, clang::SourceLocation()
+                );
+            } else if (param_type->isPointerType()) {
+                return new (ctx) clang::IntegerLiteral(
+                    ctx, llvm::APInt(32U, 0), param_type, clang::SourceLocation()
+                );
+            } else if (param_type->isBooleanType()) {
+                return new (ctx)
+                    clang::CXXBoolLiteralExpr(true, param_type, clang::SourceLocation());
+            } else {
+                LOG(ERROR) << "Failed to create default value for paramer\n";
+                return nullptr;
+            }
+        }
+
     } // namespace
 
     /**
@@ -208,8 +236,8 @@ namespace patchestry::ast {
         }
 
         if (!op.output) {
-            // if copy operation has no output, return input expression that will get merged to
-            // next operation.
+            // if copy operation has no output, return input expression that will get merged
+            // to next operation.
             return { input_expr, true };
         }
 
@@ -296,9 +324,8 @@ namespace patchestry::ast {
                      false };
         }
 
-        // TODO(kumarak): A pointer can come with space id and offset part. We don't handle such
-        // cases yet.
-        // Parameters           Description
+        // TODO(kumarak): A pointer can come with space id and offset part. We don't handle
+        // such cases yet. Parameters           Description
         //   input0(special)    Constant ID of space to storeinto.
         //   input1             Varnode containing pointer offset of destination.
         //   input2             Varnode containing data to be stored.
@@ -394,6 +421,17 @@ namespace patchestry::ast {
         return {};
     }
 
+    void OpBuilder::extend_callexpr_agruments(
+        clang::ASTContext &ctx, clang::FunctionDecl *fndecl,
+        std::vector< clang::Expr * > &arguments
+    ) {
+        auto minargs = fndecl->getMinRequiredArguments();
+        for (unsigned i = static_cast< unsigned >(arguments.size()); i < minargs; i++) {
+            auto *param = fndecl->getParamDecl(i);
+            arguments.emplace_back(createDefaultArgument(ctx, param));
+        }
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_call(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -445,6 +483,7 @@ namespace patchestry::ast {
                 assert(!result.isInvalid());
                 call_expr = result.getAs< clang::Expr >();
             } else {
+                extend_callexpr_agruments(ctx, call_target, arguments);
                 call_expr = clang::CallExpr::Create(
                     ctx, clang::dyn_cast< clang::Expr >(call_ref_expr), arguments,
                     call_target->getReturnType(), clang::VK_PRValue, clang::SourceLocation(),
@@ -471,17 +510,10 @@ namespace patchestry::ast {
         auto *output_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output, op.key));
 
-        auto rty_type = type_builder().get_serialized_types().at(*op.type);
-
-        auto casted_result =
-            sema().ImpCastExprToType(call_expr, rty_type, clang::CastKind::CK_BitCast);
-        assert(!casted_result.isInvalid());
-
-        auto result = sema().CreateBuiltinBinOp(
-            op_loc, clang::BO_Assign, output_expr, casted_result.getAs< clang::Expr >()
-        );
-        assert(!result.isInvalid());
-        return { result.getAs< clang::Expr >(), false };
+        return { create_assign_operation(
+                     ctx, call_expr, clang::dyn_cast< clang::Expr >(output_expr), op_loc
+                 ),
+                 false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_callind(
@@ -538,8 +570,8 @@ namespace patchestry::ast {
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1], op.key));
         auto location = sourceLocation(ctx.getSourceManager(), op.key);
 
-        // TODO(kumarak): It should be the size of input1 field in bits; At the moment consider
-        // it as 4 bytes but should be fixed.
+        // TODO(kumarak): It should be the size of input1 field in bits; At the moment
+        // consider it as 4 bytes but should be fixed.
         unsigned low_width = 32U;
 
         auto merge_to_next = !op.output.has_value();
