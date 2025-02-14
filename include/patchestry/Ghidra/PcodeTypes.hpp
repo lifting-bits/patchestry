@@ -37,6 +37,7 @@ namespace patchestry::ghidra {
 
         static VarnodeType::Kind convertToKind(const std::string &kind) {
             static const std::unordered_map< std::string, VarnodeType::Kind > kind_map = {
+                {  "invalid",   VT_INVALID},
                 {     "bool",   VT_BOOLEAN},
                 {  "integer",   VT_INTEGER},
                 {    "float",     VT_FLOAT},

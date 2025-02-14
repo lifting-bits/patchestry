@@ -8,7 +8,6 @@
 
 #include <cstdlib>
 #include <fstream>
-#include <llvm/Support/VirtualFileSystem.h>
 #include <memory>
 #include <string_view>
 
@@ -25,6 +24,7 @@
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/VirtualFileSystem.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
 
@@ -33,7 +33,6 @@
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/Util/Options.hpp>
-#include <sys/_types/_off_t.h>
 
 namespace {
 
