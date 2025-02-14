@@ -46,11 +46,6 @@ namespace {
         "emit-cir", llvm::cl::desc("Emit CIR MLIR representation"), llvm::cl::init(false)
     );
 
-    // NOTE: Option field is there to test vast tower api. Will be removed in future.
-    const llvm::cl::opt< bool > emit_tower( // NOLINT(cert-err58-cpp)
-        "emit-tower", llvm::cl::desc("Emit MLIR tower representation"), llvm::cl::init(false)
-    );
-
     const llvm::cl::opt< bool > emit_llvm( // NOLINT(cert-err58-cpp)
         "emit-llvm", llvm::cl::desc("Emit LLVM IR Representation"), llvm::cl::init(false)
     );
@@ -107,7 +102,6 @@ namespace {
         return {
             .emit_cir    = emit_cir.getValue(),
             .emit_mlir   = emit_mlir.getValue(), // It is set to true by default
-            .emit_tower  = emit_tower.getValue(),
             .emit_llvm   = emit_llvm.getValue(),
             .emit_asm    = emit_asm.getValue(),
             .emit_obj    = emit_obj.getValue(),

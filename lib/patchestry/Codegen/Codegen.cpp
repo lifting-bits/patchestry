@@ -63,7 +63,7 @@ namespace patchestry::codegen {
             Serializer::serializeToFile(*maybe_mod, options.output_file + ".cir");
         }
 
-        if (options.emit_tower) {
+        if (options.emit_mlir) {
             auto cloned_mod = maybe_mod->clone();
             auto mctx       = cirdriver->takeContext();
             PassManagerBuilder bld(mctx.get());
