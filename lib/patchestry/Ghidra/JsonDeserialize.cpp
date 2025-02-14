@@ -214,6 +214,8 @@ namespace patchestry::ghidra {
             case VarnodeType::Kind::VT_VOID:
                 return std::make_shared< BuiltinType >(name, kind, size);
         }
+
+        return nullptr;
     }
 
     void JsonParser::deserialize_buildin(
