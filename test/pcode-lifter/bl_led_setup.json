@@ -1,10 +1,12 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %pcode-lifter -input %t.json -emit-cir -emit-mlir -print-tu -output %t >> /dev/null 2>&1
+// RUN: %pcode-lifter -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
 // RUN %file-check --input-file %t.cir -check-prefix=CIR
 // CIR: cir.func @bl_led_setup
 // RUN %file-check --input-file %t.mlir -check-prefix=MLIR
 // MLIR: llvm.func @bl_led_setup
+// RUN %file-check --input-file %t.ll -check-prefix=LL
+// LL: define i32 @bl_led_setup(i16 %0)
 {
   "arch": "ARM",
   "format": "Executable and Linking Format (ELF)",

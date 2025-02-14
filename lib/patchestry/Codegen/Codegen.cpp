@@ -65,8 +65,8 @@ namespace patchestry::codegen {
 
         if (options.emit_mlir) {
             auto cloned_mod = maybe_mod->clone();
-            auto mctx       = cirdriver->takeContext();
-            PassManagerBuilder bld(mctx.get());
+            auto *mctx      = cloned_mod.getContext();
+            PassManagerBuilder bld(mctx);
             auto pm = bld.build();
             cir::direct::populateCIRToLLVMPasses(*pm, true);
             auto result = pm->run(cloned_mod);
