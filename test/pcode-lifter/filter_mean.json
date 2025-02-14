@@ -1,10 +1,12 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %pcode-lifter -input %t.json -emit-cir -emit-mlir -print-tu -output %t >> /dev/null 2>&1
+// RUN: %pcode-lifter -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
 // RUN %file-check -input %t.cir -check-prefix=CIR
 // CIR: cir.func @filter_mean
 // RUN %file-check -input %t.mlir -check-prefix=MLIR
 // MLIR: llvm.func @filter_mean
+// RUN %file-check --input-file %t.ll -check-prefix=LL
+// LL: define void @filter_mean(i32 %0, float %1, i32 %2)
 {
   "arch": "ARM",
   "format": "Executable and Linking Format (ELF)",
