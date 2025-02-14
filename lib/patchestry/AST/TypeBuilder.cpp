@@ -136,6 +136,8 @@ namespace patchestry::ast {
                 return ctx.VoidTy;
             }
         }
+
+        return clang::QualType();
     }
 
     /**
