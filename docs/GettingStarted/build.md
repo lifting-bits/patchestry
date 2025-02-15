@@ -95,3 +95,46 @@ Use `debug` preset for debug build.
 ```
 ctest --preset debug
 ```
+
+# MacOS
+
+To build on MacOS, you'll need to set up the development environment first:
+
+1. Install Xcode from the App Store and set up the command line tools:
+   ```
+   xcode-select --install
+   ```
+
+2. Install the required dependencies using Homebrew:
+   ```
+   brew install colima docker docker-buildx docker-credential-helper cmake
+   ```
+
+3. Configure Docker BuildX to work with Colima:
+   ```
+   mkdir -p ~/.docker/cli-plugins
+   ln -s $(which docker-buildx) ~/.docker/cli-plugins/docker-buildx
+   colima restart
+   docker buildx version
+   ```
+
+4. Log into Docker Hub:
+   ```
+   docker login -u <username>
+   ```
+
+5. For building ClangIR, clone the project and compile with the following CMake configuration:
+   ```
+   cmake -G Ninja ../llvm \
+       -DCMAKE_INSTALL_PREFIX="/path/to/installdir" \
+       -DCMAKE_BUILD_TYPE=Debug \
+       -DLLVM_ENABLE_PROJECTS="clang;mlir" \
+       -DLLVM_ENABLE_ASSERTIONS=ON \
+       -DCLANG_ENABLE_CIR=ON \
+       -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+       -DLLVM_ENABLE_RTTI=ON \
+       -DLLVM_TARGETS_TO_BUILD="host"
+   ```
+
+This setup provides a complete development environment for building and running the project on MacOS. The configuration uses Colima as a Docker backend, which provides better performance and resource management compared to Docker Desktop on MacOS.
+
