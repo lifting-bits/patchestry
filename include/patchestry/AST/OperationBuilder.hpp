@@ -10,12 +10,14 @@
 #include <functional>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
+#include <patchestry/Ghidra/PcodeOperations.hpp>
 
 namespace patchestry::ast {
     using namespace patchestry::ghidra;
@@ -152,6 +154,10 @@ namespace patchestry::ast {
         );
 
       private:
+        clang::Expr *build_callexpr_from_function(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
         clang::Stmt *create_assign_operation(
             clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
             clang::SourceLocation loc = clang::SourceLocation()
@@ -168,14 +174,24 @@ namespace patchestry::ast {
          * @return Pointer to casted `Expr`. null if `to_type` is null, or an invalid cast
          * occurs.
          */
-        clang::Expr *perform_explicit_cast(
+        clang::Expr *make_cast(
             clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
             clang::SourceLocation loc
         );
 
+        clang::Expr *make_explicit_cast(
+            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+            clang::SourceLocation loc
+        );
+
+        clang::Expr *make_implicit_cast(
+            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+            clang::CastKind kind
+        );
+
         clang::Stmt *create_varnode(
             clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-            const std::string &op_key = ""
+            clang::SourceLocation = clang::SourceLocation()
         );
 
         void extend_callexpr_agruments(

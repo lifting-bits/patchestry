@@ -8,6 +8,7 @@
 #pragma once
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/OperationKinds.h>
 #include <clang/Basic/SourceLocation.h>
 
 namespace patchestry::ast {
@@ -16,6 +17,10 @@ namespace patchestry::ast {
     clang::QualType
     getTypeFromSize(clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer);
 
-    std::string label_name_from_key(std::string key);
+    std::string labelNameFromKey(std::string key);
+
+    clang::CastKind getCastKind(
+        clang::ASTContext &ctx, const clang::QualType &from_type, const clang::QualType &to_type
+    );
 
 } // namespace patchestry::ast

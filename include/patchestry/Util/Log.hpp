@@ -25,3 +25,9 @@ enum LogLevel { INFO, WARNING, ERROR };
         LOG(ERROR) << llvm::formatv(__VA_ARGS__); \
         llvm_unreachable(nullptr); \
     } while (0)
+
+#define UNREACHABLE(...) \
+    do { \
+        LOG(ERROR) << llvm::formatv(__VA_ARGS__); \
+        llvm_unreachable(nullptr); \
+    } while (0)

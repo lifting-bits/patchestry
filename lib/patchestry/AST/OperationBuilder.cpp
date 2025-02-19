@@ -53,7 +53,7 @@ namespace patchestry::ast {
 
     clang::Stmt *OpBuilder::create_varnode(
         clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-        const std::string &op_key
+        clang::SourceLocation loc
     ) {
         auto varnode_operation = [&](clang::ASTContext &ctx, const Function &function,
                                      const Varnode &vnode) -> clang::Stmt * {
@@ -81,7 +81,7 @@ namespace patchestry::ast {
             return expr;
         }
 
-        (void) op_key;
+        (void) loc;
 
         return {};
     }
@@ -241,10 +241,8 @@ namespace patchestry::ast {
         }
 
         if (vnode_type->isFloatingType()) {
-            return clang::FloatingLiteral::Create(
-                ctx, llvm::APFloat(static_cast< double >(*vnode.value)), true, vnode_type,
-                location
-            );
+            llvm::APFloat value(llvm::APFloat::IEEEsingle(), *vnode.value);
+            return clang::FloatingLiteral::Create(ctx, value, true, vnode_type, location);
         }
 
         return {};

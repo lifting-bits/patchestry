@@ -12,11 +12,6 @@
 
 namespace patchestry {
 
-    enum class EmitMLIRType : int {
-        hl,  // Vast High-level dialects
-        cir, // Clang IR dialects
-    };
-
     struct Options
     {
         bool emit_cir  = false;
@@ -32,7 +27,6 @@ namespace patchestry {
         bool print_tu = false;
 
         std::vector< std::string > pipelines = {};
-        EmitMLIRType mlir_type               = EmitMLIRType::hl;
     };
 
 } // namespace patchestry
