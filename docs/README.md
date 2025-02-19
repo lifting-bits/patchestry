@@ -3,9 +3,43 @@
 Patchestry aims to make the same impact to binary patching as compilers and high
 level languages did to early software development. Its main goal is to enable
 developers without extensive knowledge of the deployment platform of the binary
-to patch the binary. To do this, the developer has to be confident that what
-they're patching is functionally equivalent to what is deployed and also that
-the patch they write will integrate into the deployed binary without issue.
+to patch the binary, with a particular focus on medical device firmware.
+
+## Current Technical Approach
+
+Patchestry leverages MLIR and ClangIR as its foundational technologies. The project has evolved from its initial design to take advantage of emerging compiler technologies:
+
+1. **High-Level P-Code to Clang AST**: We map Ghidra's high-level P-Code directly to Clang ASTs, providing a more direct path to LLVM IR. This approach leverages Ghidra's mature decompilation capabilities while benefiting from Clang's robust type system and optimization pipeline.
+
+2. **ClangIR Integration**: We are migrating to use ClangIR, which is now directly supported by the LLVM project. This provides better integration with the LLVM ecosystem and more reliable compilation paths.
+
+3. **LLVM IR Generation**: The Clang IR will be lowered to LLVM IR, enabling use of LLVM's extensive optimization and analysis capabilities.
+
+4. **Binary Generation**: Finally, LLVM IR is compiled to target machine code using LLVM's backend. The new binary can be used to make an assembly/binary level patch versus the original target.
+
+## Current Challenges and Roadmap
+
+Several key challenges are being actively addressed:
+
+1. **ClangIR Maturity**: 
+   - ClangIR does not yet have complete C/C++ support
+   - Binary ABI support is limited - currently supports arm64 and x86-64, but needs ARMv7 and MIPS
+   - [Track ClangIR progress](https://github.com/lifting-bits/patchestry/issues/34)
+
+2. **Pipeline Validation**:
+   - Need to quantify and reduce errors at each transformation step
+   - Working to establish formal verification of transformations
+   - [Track validation efforts](https://github.com/lifting-bits/patchestry/issues/57)
+
+3. **Target Support**:
+   - Expanding architecture support for medical device targets
+   - [Track architecture support](https://github.com/lifting-bits/patchestry/issues/58)
+
+## References
+
+- [ClangIR Project](https://clang.llvm.org/docs/ClangIR.html)
+- [Ghidra's High P-Code](https://github.com/NationalSecurityAgency/ghidra/discussions/4944)
+- [Project Tracking Board](https://github.com/orgs/lifting-bits/projects/1)
 
 Patchestry leverages MLIR as the foundational technology instead of LLVM IR.
 MLIR is an emerging compiler development technology allowing for the
@@ -62,7 +96,7 @@ example the Ghidra decompiler can decompile over 100 machine code languages to
 C, and the Clang compiler can generate machine code for over 20 machine code
 languages. Rolling new solutions from scratch is impractical.
 
-4. __There is no one-size-fits-all way of representing code.__ A “complete”
+4. __There is no one-size-fits-all way of representing code.__ A "complete"
 solution to machine code decompilation only exists at the end of a long tail of
 special cases. Patchestry aims to provide decompilation to a familiar, C-like
 language. Patchestry will not, however, decompile to C or a specific ISO dialect
@@ -87,7 +121,7 @@ effectiveness and optimal outcomes across all desired functionalities.
 
 ### Incremental Decompilation
 
-Patchestry’s innovative approach involves leveraging multiple program
+Patchestry's innovative approach involves leveraging multiple program
 representations simultaneously across various layers of the Tower of IRs. While
 state-of-the-art decompilers already offer diverse representations, what sets
 the Tower of IRs apart is its capability to create custom user-defined
@@ -125,15 +159,15 @@ recompilation, and they must hold at all relevant steps of each process.
 
 ![Patchestry ls](img/patchestry-workflow.svg)
 
-Patchestry’s technical approach is designed to enable the following seven-step workflow:
+Patchestry's technical approach is designed to enable the following seven-step workflow:
 
 1. A developer is tasked with patching a vulnerability in a program binary
 running on a device. How the user acquires a copy of the binary (e.g.
-downloaded from a vendor’s website, extracted from a network capture, extracted
+downloaded from a vendor's website, extracted from a network capture, extracted
 directly from a device over serial port or JTAG, etc.) is not part of the project.
 
 2. The developer loads the binary into the open-source Ghidra interactive
-decompiler. Developers will be enabled to leverage Ghidra’s features and plugins
+decompiler. Developers will be enabled to leverage Ghidra's features and plugins
 to locate the function(s) to patch, though previous binary analysis expertise is
 not required. We anticipate that developers will apply tools such as BinDiff or
 BSim, rely on symbol names or debug information, or apply reverse engineering
@@ -147,21 +181,21 @@ as good first guesses as to the locations and references between functions and
 data in the binary. Although perfect identification/recovery of functions, data,
 and data types in a binary is intractable, the value of interactivity in Ghidra
 is that the human developer can fix incorrect conclusions drawn by the
-decompiler’s heuristics.
+decompiler's heuristics.
 
-There are two reasons why Patchestry’s workflow does not allow the developer to
-modify Ghidra’s decompilation output and then re-compile that into a patchable
-representation. First, Ghidra’s decompilation is not guaranteed to be
+There are two reasons why Patchestry's workflow does not allow the developer to
+modify Ghidra's decompilation output and then re-compile that into a patchable
+representation. First, Ghidra's decompilation is not guaranteed to be
 syntactically correct or compilable. This can be mitigated through developer
 effort; however, the level of effort increases with the complexity of and number
-of references in the target function(s). Second, Ghidra’s heuristic
+of references in the target function(s). Second, Ghidra's heuristic
 decompilation pipeline has been proven to be unfaithful with respect to the
 execution semantics of the machine code. In the worst case, this could result in
 a developer inadvertently introducing new vulnerabilities into the program
 during the patching process.
 
-Despite Ghidra’s decompilation not being precise enough for recompilation, our
-experience from AMP tells us that Ghidra’s decompilation is good enough to be a
+Despite Ghidra's decompilation not being precise enough for recompilation, our
+experience from AMP tells us that Ghidra's decompilation is good enough to be a
 productivity multiplier for developers trying to locate functions that need
 patching.
 
@@ -174,11 +208,11 @@ not sufficient for the diverse nature of software.
 
 3. After locating the relevant function(s) in Ghidra, the Patchestry plugin will
 present the developer with an editable decompilation of the target function(s).
-Patchestry’s decompilations will be sound and precise with respect to the
-available information in Ghidra’s analysis database. Regardless of how small the
+Patchestry's decompilations will be sound and precise with respect to the
+available information in Ghidra's analysis database. Regardless of how small the
 patch size could be, Patchestry will always formulate the problem at the
 function granularity. There are theoretical and pragmatic reasons why
-Patchestry’s minimum patch recompilation granularity is function-at-a-time.
+Patchestry's minimum patch recompilation granularity is function-at-a-time.
 
 From a theoretical standpoint, function granularity patches enable Patchestry to
 leverage stronger guarantees about the application binary interface (ABI). It is
@@ -193,7 +227,7 @@ unit of code. Our task in Patchestry is thus to convert code for recompilation
 into LLVM IR functions, which Clang can convert to machine code.
 
 4. The developer edits the decompiled function(s), enacting the necessary
-changes to patch the vulnerability in the decompiled code. Patchestry’s highest
+changes to patch the vulnerability in the decompiled code. Patchestry's highest
 level decompiled code (C-like) will look approximately similar, regardless of
 the platform/architecture of the medical device software. This will help improve
 developer productivity. Moreover, the meta-patch library will allow the
@@ -202,7 +236,7 @@ developer to automate the patching process.
 At this stage, the binary-level patch has not yet been formulated. What
 particular changes are needed to patch a given vulnerability are beyond the
 scope of the project and require an external tool. Patchestry will, however,
-provide a library of “patch intrinsics” such as “add bounds check.” These will
+provide a library of "patch intrinsics" such as "add bounds check." These will
 be formulated as templates of meta-patches.
 
 A developer can make near arbitrary changes within the body of the decompiled
@@ -220,7 +254,7 @@ behaviors, Patchestry will allow developers to leverage model- and
 contract-based software verification techniques. These techniques are normally
 challenging to apply to lifting/decompilation due to a lack of end-to-end
 visibility into the lifting process; usually the techniques only apply at the
-very last stage, on the decompiled/lifted result. However, Patchestry’s approach
+very last stage, on the decompiled/lifted result. However, Patchestry's approach
 to decompilation is multi-level: decompilation progresses through a stage of
 increasingly high-level IRs. By taking a multi-level approach, Patchestry can
 instrument contracts at various stages of the process.
@@ -359,11 +393,11 @@ void meta_patch(source_module_t module) {
 ```
 
 Patchestry introduces a metaprogramming interface enabling  developer-defined
-code transformations. Patchestry’s interface supports common patching operations
+code transformations. Patchestry's interface supports common patching operations
 such as code insertion, replacement, alteration, and deletion. To obtain the
 source module from the program binary, we leverage state-of-the-art decompilers
 and seamlessly integrate them into the MLIR source representation, as elaborated
-later. Patchestry’s source representation can be modified and queried through
+later. Patchestry's source representation can be modified and queried through
 the metaprogramming API.
 
 The second crucial aspect of Patchestry involves providing assurances regarding
