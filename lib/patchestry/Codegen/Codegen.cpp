@@ -53,6 +53,11 @@ namespace patchestry::codegen {
     }
 
     void CodeGenerator::emit_cir(clang::ASTContext &actx, const patchestry::Options &options) {
+        // Check if diagnostic error is set. If yes, ignore it.
+        if (actx.getDiagnostics().hasErrorOccurred()) {
+            actx.getDiagnostics().Reset();
+        }
+
         auto maybe_mod = emit_mlir_module(actx);
         if (!maybe_mod.has_value()) {
             LOG(ERROR) << "Failed to emit mlir module\n";

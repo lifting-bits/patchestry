@@ -361,7 +361,7 @@ namespace patchestry::ast {
 
             auto *label_decl = clang::LabelDecl::Create(
                 ctx, func_decl, sourceLocation(ctx.getSourceManager(), key),
-                &ctx.Idents.get(label_name_from_key(key))
+                &ctx.Idents.get(labelNameFromKey(key))
             );
             if (label_decl == nullptr) {
                 LOG(ERROR) << "Skipping, fail to create label for basic block with key: " << key

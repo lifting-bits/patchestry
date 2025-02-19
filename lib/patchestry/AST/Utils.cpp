@@ -6,10 +6,13 @@
  */
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/SourceManager.h>
 #include <llvm/Support/MemoryBuffer.h>
+
+#include <patchestry/AST/Utils.hpp>
 
 namespace patchestry::ast {
 
@@ -42,9 +45,109 @@ namespace patchestry::ast {
         }
     }
 
-    std::string label_name_from_key(std::string key) {
+    std::string labelNameFromKey(std::string key) {
         std::replace(key.begin(), key.end(), ':', '_');
         return key;
+    }
+
+    clang::CastKind getCastKind(
+        clang::ASTContext &ctx, const clang::QualType &from_type, const clang::QualType &to_type
+    ) {
+        assert(!to_type.isNull() && "to_type is null");
+        assert(!from_type.isNull() && "from_type is null");
+
+        // Identity cast
+        if (ctx.hasSameUnqualifiedType(from_type, to_type)) {
+            return clang::CastKind::CK_NoOp;
+        }
+
+        // Void cast
+        if (to_type->isVoidType()) {
+            return clang::CastKind::CK_ToVoid;
+        }
+
+        // Boolean conversion
+        if (to_type->isBooleanType()) {
+            if (from_type->isIntegerType()) {
+                return clang::CK_IntegralToBoolean;
+            }
+            if (from_type->isFloatingType()) {
+                return clang::CK_FloatingToBoolean;
+            }
+            if (from_type->isPointerType()) {
+                return clang::CK_PointerToBoolean;
+            }
+            if (from_type->isMemberPointerType()) {
+                return clang::CK_MemberPointerToBoolean;
+            }
+        }
+
+        // Integer conversion
+        if (to_type->isIntegerType()) {
+            if (from_type->isBooleanType()) {
+                return clang::CK_BooleanToSignedIntegral;
+            }
+            if (from_type->isFloatingType()) {
+                return clang::CK_FloatingToIntegral;
+            }
+            if (from_type->isPointerType()) {
+                return clang::CK_PointerToIntegral;
+            }
+            if (from_type->isEnumeralType()) {
+                return clang::CK_IntegralCast;
+            }
+        }
+
+        // Floating conversion
+        if (to_type->isFloatingType()) {
+            if (from_type->isIntegerType()) {
+                return clang::CK_IntegralToFloating;
+            }
+            if (from_type->isFloatingType()) {
+                return clang::CK_FloatingCast;
+            }
+        }
+
+        // Handle pointer target type
+        if (to_type->isAnyPointerType()) {
+            if (from_type->isIntegerType()) {
+                return clang::CK_IntegralToPointer;
+            }
+            if (from_type->isArrayType()) {
+                return clang::CK_ArrayToPointerDecay;
+            }
+            if (from_type->isFunctionType()) {
+                return clang::CK_FunctionToPointerDecay;
+            }
+            if (from_type->isAnyPointerType()) {
+                return clang::CK_BitCast;
+            }
+        }
+        // Array conversions
+        if (to_type->isArrayType()) {
+            if (from_type->canDecayToPointerType()) {
+                return clang::CK_ArrayToPointerDecay;
+            }
+        }
+
+        // Complex numbers
+        if (to_type->isComplexType()) {
+            if (from_type->isIntegerType()) {
+                return clang::CK_IntegralComplexCast;
+            }
+            if (from_type->isFloatingType()) {
+                return clang::CK_FloatingComplexCast;
+            }
+        }
+
+        // Member pointer conversions
+        if (to_type->isMemberPointerType() && from_type->isMemberPointerType()) {
+            return clang::CK_BaseToDerived;
+        }
+
+        assert(false && "Failed to find implicit cast kind");
+
+        return clang::CastKind::CK_NoOp;
     }
 
 } // namespace patchestry::ast

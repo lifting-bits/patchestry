@@ -6,6 +6,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include "patchestry/Util/Diagnostic.hpp"
 #include <cstdlib>
 #include <fstream>
 #include <memory>
@@ -174,7 +175,7 @@ int main(int argc, char **argv) {
     inv_target_opts.Triple                = llvm::sys::getDefaultTargetTriple();
 
     ci.createDiagnostics(*llvm::vfs::getRealFileSystem());
-    ci.getDiagnostics().setClient(new clang::IgnoringDiagConsumer());
+    ci.getDiagnostics().setClient(new patchestry::DiagnosticClient());
     if (!ci.hasDiagnostics()) {
         LOG(ERROR) << "Failed to initialize diagnostics.\n";
         return EXIT_FAILURE;
