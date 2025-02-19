@@ -82,6 +82,10 @@ namespace patchestry::ast {
             }
         }
 
+        if (from_type->isIntegerType() && to_type->isCharType()) {
+            return clang::CK_IntegralCast;
+        }
+
         // Integer conversion
         if (to_type->isIntegerType()) {
             if (from_type->isBooleanType()) {

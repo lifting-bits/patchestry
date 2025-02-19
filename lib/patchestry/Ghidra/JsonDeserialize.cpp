@@ -25,7 +25,8 @@ namespace patchestry::ghidra {
     std::optional< std::string > stripNull(std::optional< llvm::StringRef > stref) {
         if (stref && !stref->empty()) {
             auto str = stref->str();
-            str.erase(std::remove(str.begin(), str.end(), '\0'), str.end());
+            str.erase(std::remove(str.begin(), str.end(), '\00'), str.end());
+            str.erase(std::remove(str.begin(), str.end(), '\01'), str.end());
             return str;
         }
         return std::nullopt;
@@ -434,7 +435,7 @@ namespace patchestry::ghidra {
 
         auto function = maybe_target->getString("function");
         if (function.has_value() && !function->empty()) {
-            target.function = function->str();
+            target.function = stripNull(function);
         }
 
         auto call_op = maybe_target->getString("operation");
