@@ -9,6 +9,7 @@
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/OperationKinds.h>
+#include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 
 namespace patchestry::ast {
@@ -22,5 +23,8 @@ namespace patchestry::ast {
     clang::CastKind getCastKind(
         clang::ASTContext &ctx, const clang::QualType &from_type, const clang::QualType &to_type
     );
+
+    bool
+    shouldReinterpretCast(const clang::QualType &from_type, const clang::QualType &to_type);
 
 } // namespace patchestry::ast
