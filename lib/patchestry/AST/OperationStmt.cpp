@@ -49,9 +49,9 @@ namespace patchestry::ast {
             );
         }
 
-        clang::DeclStmt *create_decl_stmt(
+        clang::DeclStmt *create_decl_stmt( // NOLINT
             clang::ASTContext &ctx, clang::Decl *decl, clang::SourceLocation loc
-        ) { // NOLINT
+        ) {
             auto decl_group = clang::DeclGroupRef(decl);
             return new (ctx) clang::DeclStmt(decl_group, loc, loc);
         }
@@ -133,22 +133,7 @@ namespace patchestry::ast {
         }
 
         // Fallbak to reinterpret cast like expression
-        auto addr_of_expr = sema().CreateBuiltinUnaryOp(loc, clang::UO_AddrOf, expr);
-        assert(!addr_of_expr.isInvalid());
-
-        auto to_pointer_type = ctx.getPointerType(to_type);
-        auto casted_expr     = sema().BuildCStyleCastExpr(
-            loc, ctx.getTrivialTypeSourceInfo(to_pointer_type), loc,
-            addr_of_expr.getAs< clang::Expr >()
-        );
-        assert(!casted_expr.isInvalid());
-
-        auto derefed_expr = sema().CreateBuiltinUnaryOp(
-            loc, clang::UO_Deref, casted_expr.getAs< clang::Expr >()
-        );
-        assert(!derefed_expr.isInvalid());
-
-        return derefed_expr.getAs< clang::Expr >();
+        return make_reinterpret_cast(ctx, expr, to_type, loc);
     }
 
     clang::Expr *OpBuilder::make_explicit_cast(
@@ -1064,16 +1049,20 @@ namespace patchestry::ast {
 
         auto *lhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
         auto *rhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
-        if (auto *uo = clang::dyn_cast< clang::UnaryOperator >(lhs)) {
-            auto *lhs_with_paren = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs);
-            lhs                  = lhs_with_paren;
-        }
-        if (auto *uo = clang::dyn_cast< clang::UnaryOperator >(rhs)) {
-            auto *rhs_with_paren = new (ctx) clang::ParenExpr(op_loc, op_loc, rhs);
-            rhs                  = rhs_with_paren;
-        }
 
-        auto result = sema().CreateBuiltinBinOp(op_loc, kind, lhs, rhs);
+        auto make_paren_expr = [&](clang::ASTContext &ctx, clang::Expr *expr,
+                                   clang::SourceLocation loc) -> clang::Expr * {
+            if (auto *uo = clang::dyn_cast< clang::UnaryOperator >(expr); uo) {
+                auto *paren = new (ctx) clang::ParenExpr(loc, loc, expr);
+                assert(paren != nullptr && "Failed to create paren expression.");
+                return paren;
+            }
+            return expr;
+        };
+
+        auto result = sema().CreateBuiltinBinOp(
+            op_loc, kind, make_paren_expr(ctx, lhs, op_loc), make_paren_expr(ctx, rhs, op_loc)
+        );
 
         assert(!result.isInvalid() && "Invalid result from binary operation");
 
