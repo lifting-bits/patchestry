@@ -29,7 +29,12 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer
     ) {
         if (is_integer) {
-            return ctx.getIntTypeForBitwidth(bit_size, static_cast< unsigned int >(is_signed));
+            auto intty =
+                ctx.getIntTypeForBitwidth(bit_size, static_cast< unsigned int >(is_signed));
+            if (intty.isNull()) {
+                return ctx.IntTy;
+            }
+            return intty;
         }
 
         switch (bit_size) {
@@ -86,6 +91,14 @@ namespace patchestry::ast {
             return clang::CK_IntegralCast;
         }
 
+        if (from_type->isIntegerType() && to_type->isArrayType()) {
+            return clang::CK_IntegralToPointer;
+        }
+
+        if (from_type->isIntegerType() && to_type->isRecordType()) {
+            return clang::CK_BitCast;
+        }
+
         // Integer conversion
         if (to_type->isIntegerType()) {
             if (from_type->isBooleanType()) {
@@ -97,7 +110,7 @@ namespace patchestry::ast {
             if (from_type->isPointerType()) {
                 return clang::CK_PointerToIntegral;
             }
-            if (from_type->isEnumeralType()) {
+            if (from_type->isEnumeralType() || from_type->isIntegerType()) {
                 return clang::CK_IntegralCast;
             }
         }
@@ -152,6 +165,24 @@ namespace patchestry::ast {
         assert(false && "Failed to find implicit cast kind");
 
         return clang::CastKind::CK_NoOp;
+    }
+
+    bool
+    shouldReinterpretCast(const clang::QualType &from_type, const clang::QualType &to_type) {
+        if (from_type->isRecordType()) {
+            return to_type->isArithmeticType() || to_type->isAnyPointerType()
+                || to_type->isArrayType();
+        }
+        if (from_type->isArithmeticType() || from_type->isPointerType()) {
+            return to_type->isArrayType() || to_type->isRecordType();
+        }
+
+        if (from_type->isArrayType()) {
+            return to_type->isIntegerType() || to_type->isPointerType()
+                || to_type->isRecordType();
+        }
+
+        return false;
     }
 
 } // namespace patchestry::ast

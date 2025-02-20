@@ -163,6 +163,11 @@ namespace patchestry::ast {
             clang::SourceLocation loc = clang::SourceLocation()
         );
 
+        clang::Stmt *create_array_assignment_operation(
+            clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
+            clang::SourceLocation loc = clang::SourceLocation()
+        );
+
         /**
          * @brief Performs an implicit and explicit cast of an expression to a specified type,
          * falling back to a manual pointer-based cast if necessary.
@@ -175,7 +180,7 @@ namespace patchestry::ast {
          * occurs.
          */
         clang::Expr *make_cast(
-            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+            clang::ASTContext &ctx, clang::Expr *expr, const clang::QualType &to_type,
             clang::SourceLocation loc
         );
 
@@ -187,6 +192,11 @@ namespace patchestry::ast {
         clang::Expr *make_implicit_cast(
             clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
             clang::CastKind kind
+        );
+
+        clang::Expr *make_reinterpret_cast(
+            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+            clang::SourceLocation loc
         );
 
         clang::Stmt *create_varnode(

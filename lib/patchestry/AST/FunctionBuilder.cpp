@@ -237,9 +237,8 @@ namespace patchestry::ast {
         }
 
         clang::FunctionProtoType::ExtProtoInfo ext_proto_info;
-        ext_proto_info.Variadic = proto.is_variadic;
-        ext_proto_info.ExceptionSpec.Type =
-            proto.is_noreturn ? clang::EST_DependentNoexcept : clang::EST_None;
+        ext_proto_info.Variadic           = proto.is_variadic;
+        ext_proto_info.ExceptionSpec.Type = clang::EST_None;
 
         return ctx.getFunctionType(rttype, args_vector, ext_proto_info);
     }
@@ -332,8 +331,9 @@ namespace patchestry::ast {
         set_sema_context(function_def);
         auto body_vec = create_function_body(ctx, function_def);
         function_def->setBody(clang::CompoundStmt::Create(
-            ctx, body_vec, clang::FPOptionsOverride(), clang::SourceLocation(),
-            clang::SourceLocation()
+            ctx, body_vec, clang::FPOptionsOverride(),
+            sourceLocation(ctx.getSourceManager(), function.get().key),
+            sourceLocation(ctx.getSourceManager(), function.get().key)
         ));
         set_sema_context(prev_context);
 

@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include "patchestry/AST/TypeBuilder.hpp"
 #include <optional>
 #include <utility>
 
@@ -63,7 +64,8 @@ namespace patchestry::ast {
             auto param_type = param->getType();
             if (param_type->isIntegerType()) {
                 return new (ctx) clang::IntegerLiteral(
-                    ctx, llvm::APInt(32U, 0), param_type, clang::SourceLocation()
+                    ctx, llvm::APInt(ctx.getIntWidth(param_type), 0), param_type,
+                    clang::SourceLocation()
                 );
             } else if (param_type->isFloatingType()) {
                 llvm::APFloat value(llvm::APFloat::IEEEsingle(), "0.0");
@@ -72,7 +74,8 @@ namespace patchestry::ast {
                 );
             } else if (param_type->isPointerType()) {
                 return new (ctx) clang::IntegerLiteral(
-                    ctx, llvm::APInt(32U, 0), param_type, clang::SourceLocation()
+                    ctx, llvm::APInt(ctx.getIntWidth(param_type), 0), param_type,
+                    clang::SourceLocation()
                 );
             } else if (param_type->isBooleanType()) {
                 return new (ctx)
@@ -90,7 +93,7 @@ namespace patchestry::ast {
      * falling back to a manual pointer-based cast if necessary.
      */
     clang::Expr *OpBuilder::make_cast(
-        clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+        clang::ASTContext &ctx, clang::Expr *expr, const clang::QualType &to_type,
         clang::SourceLocation loc
     ) {
         if (expr == nullptr || to_type.isNull()) {
@@ -101,6 +104,19 @@ namespace patchestry::ast {
         auto from_type = expr->getType();
         if (ctx.hasSameUnqualifiedType(from_type, to_type)) {
             return expr;
+        }
+
+        // Note: The exported high-pcode from ghidra may have types that can't be casted causing
+        // diagnostics errors. For example:
+        //   unsigned int -> struct
+        //   void* -> struct
+        //   struct -> unsigned int
+        //   struct -> void*
+        // Identify such cases early and make expression doing reinterpret cast.
+        if (shouldReinterpretCast(from_type, to_type)) {
+            auto *cast_expr = make_reinterpret_cast(ctx, expr, to_type, loc);
+            assert(cast_expr != nullptr && "Failed to create cast expression");
+            return cast_expr;
         }
 
         if (expr->isPRValue()) {
@@ -139,10 +155,10 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
         clang::SourceLocation loc
     ) {
-        auto casted_expr =
+        auto cast =
             sema().BuildCStyleCastExpr(loc, ctx.getTrivialTypeSourceInfo(to_type), loc, expr);
-        assert(!casted_expr.isInvalid() && "Invalid casted result");
-        return casted_expr.getAs< clang::Expr >();
+        assert(!cast.isInvalid() && "Invalid casted result");
+        return cast.getAs< clang::Expr >();
     }
 
     clang::Expr *OpBuilder::make_implicit_cast(
@@ -185,6 +201,43 @@ namespace patchestry::ast {
         return result.getAs< clang::Expr >();
     }
 
+    clang::Expr *OpBuilder::make_reinterpret_cast(
+        clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+        clang::SourceLocation loc
+    ) {
+        if (expr == nullptr || to_type.isNull()) {
+            LOG(ERROR) << "Invalid expr of type to perform reinterpret cast\n";
+            return nullptr;
+        }
+
+        auto create_temporary_expr = [&](clang::ASTContext &ctx,
+                                         clang::Expr *expr) -> clang::Expr * {
+            if (expr->isPRValue()) {
+                return sema().CreateMaterializeTemporaryExpr(expr->getType(), expr, true);
+            }
+            return expr;
+            (void) ctx;
+        };
+
+        auto *temp_expr  = create_temporary_expr(ctx, expr);
+        auto addrof_expr = sema().CreateBuiltinUnaryOp(loc, clang::UO_AddrOf, temp_expr);
+        assert(!addrof_expr.isInvalid() && "Invalid AddressOf expression");
+
+        auto to_pointer_type = ctx.getPointerType(to_type);
+        auto casted_expr     = sema().BuildCStyleCastExpr(
+            loc, ctx.getTrivialTypeSourceInfo(to_pointer_type), loc,
+            addrof_expr.getAs< clang::Expr >()
+        );
+        assert(!casted_expr.isInvalid());
+
+        auto deref_expr = sema().CreateBuiltinUnaryOp(
+            loc, clang::UO_Deref, casted_expr.getAs< clang::Expr >()
+        );
+        assert(!deref_expr.isInvalid());
+
+        return deref_expr.getAs< clang::Expr >();
+    }
+
     clang::Stmt *OpBuilder::create_assign_operation(
         clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
         clang::SourceLocation loc
@@ -204,73 +257,81 @@ namespace patchestry::ast {
             return assign_operation.getAs< clang::Stmt >();
         }
 
-        if ((input_type->isArithmeticType() && output_type->isArithmeticType())) {
-            auto casted_expr = sema().PerformImplicitConversion(
-                input_expr, output_type, clang::AssignmentAction::Converting
-            );
-            assert(!casted_expr.isInvalid());
+        auto *cast_expr = make_cast(ctx, input_expr, output_type, loc);
+        assert(cast_expr != nullptr && "Failed to create cast expressions!");
 
-            auto assign_operation = sema().CreateBuiltinBinOp(
-                loc, clang::BO_Assign, output_expr, casted_expr.getAs< clang::Expr >()
-            );
-            assert(!assign_operation.isInvalid());
-            return assign_operation.getAs< clang::Stmt >();
+        if (output_type->isArrayType() || output_type->isConstantArrayType()) {
+            return create_array_assignment_operation(ctx, cast_expr, output_expr, loc);
         }
 
-        // Same size record types - direct conversion
-        if (output_type->isRecordType() && input_type->isRecordType()
-            && ctx.getTypeSize(output_type) == ctx.getTypeSize(input_type))
-        {
-            auto implicit_cast = sema().PerformImplicitConversion(
-                input_expr, output_expr->getType(), clang::AssignmentAction::Converting
-            );
+        auto assign_operation =
+            sema().CreateBuiltinBinOp(loc, clang::BO_Assign, output_expr, cast_expr);
 
-            if (!implicit_cast.isInvalid()) {
-                auto assign_operation = sema().CreateBuiltinBinOp(
-                    loc, clang::BO_Assign, output_expr, implicit_cast.getAs< clang::Expr >()
-                );
-                assert(!assign_operation.isInvalid());
-                return assign_operation.getAs< clang::Stmt >();
-            }
-        }
-
-        // Handle pointer and array conversions
-        if ((input_type->isPointerType() || input_type->isArrayType())
-            && (output_type->isPointerType() || output_type->isArrayType()))
-        {
-            auto implicit_cast = sema().PerformImplicitConversion(
-                input_expr, output_type, clang::AssignmentAction::Converting
-            );
-            if (!implicit_cast.isInvalid()) {
-                auto assign_operation = sema().CreateBuiltinBinOp(
-                    loc, clang::BO_Assign, output_expr, implicit_cast.getAs< clang::Expr >()
-                );
-                assert(!assign_operation.isInvalid());
-                return assign_operation.getAs< clang::Stmt >();
-            }
-        }
-
-        if (input_type->isPointerType() && output_type->isArithmeticType()) {
-            auto cast_result = sema().ImpCastExprToType(
-                input_expr, output_type, clang::CastKind::CK_PointerToIntegral
-            );
-            assert(!cast_result.isInvalid());
-            auto assign_operation = sema().CreateBuiltinBinOp(
-                loc, clang::BO_Assign, output_expr, cast_result.getAs< clang::Expr >()
-            );
-            assert(!assign_operation.isInvalid());
-            return assign_operation.getAs< clang::Stmt >();
-        }
-
-        auto bitcast_result =
-            sema().ImpCastExprToType(input_expr, output_type, clang::CastKind::CK_BitCast);
-        assert(!bitcast_result.isInvalid());
-
-        auto assign_operation = sema().CreateBuiltinBinOp(
-            loc, clang::BO_Assign, output_expr, bitcast_result.getAs< clang::Expr >()
-        );
         assert(!assign_operation.isInvalid());
         return assign_operation.getAs< clang::Stmt >();
+    }
+
+    clang::Stmt *OpBuilder::create_array_assignment_operation(
+        clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
+        clang::SourceLocation loc
+    ) {
+        if ((input_expr == nullptr) || (output_expr == nullptr)) {
+            return nullptr;
+        }
+
+        auto to_type      = output_expr->getType();
+        auto *elem_type   = to_type->getPointeeOrArrayElementType();
+        auto num_elements = ctx.getTypeSize(to_type) / ctx.getTypeSize(elem_type);
+        clang::SmallVector< clang::Stmt *, 4 > body;
+
+        auto *index = clang::VarDecl::Create(
+            ctx, sema().CurContext, loc, loc, &ctx.Idents.get("i"), ctx.IntTy, nullptr,
+            clang::SC_None
+        );
+
+        auto *index_init = clang::IntegerLiteral::Create(
+            ctx, llvm::APInt(static_cast< unsigned >(ctx.getTypeSize(ctx.IntTy)), 0), ctx.IntTy,
+            loc
+        );
+        index->setInit(index_init);
+        auto *index_decl = new (ctx) clang::DeclStmt(clang::DeclGroupRef(index), loc, loc);
+
+        auto *index_ref = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), index, false,
+            clang::SourceLocation(), index->getType(), clang::VK_LValue
+        );
+
+        auto *cond_expr = sema()
+                              .BuildBinOp(
+                                  sema().getCurScope(), loc, clang::BO_LT, index_ref,
+                                  clang::IntegerLiteral::Create(
+                                      ctx, llvm::APInt(32, num_elements), ctx.IntTy, loc
+                                  )
+                              )
+                              .get();
+
+        auto *inc_expr =
+            sema().BuildUnaryOp(sema().getCurScope(), loc, clang::UO_PreInc, index_ref).get();
+
+        // Array assignment: LHS[i] = RHS[i];
+        auto *lhs_expr =
+            sema().CreateBuiltinArraySubscriptExpr(output_expr, loc, index_ref, loc).get();
+
+        auto *rhs_expr =
+            sema().CreateBuiltinArraySubscriptExpr(input_expr, loc, index_ref, loc).get();
+
+        auto *assign_expr =
+            sema()
+                .BuildBinOp(sema().getCurScope(), loc, clang::BO_Assign, lhs_expr, rhs_expr)
+                .get();
+
+        // Wrap assignment in a CompoundStmt (loop body)
+        body.push_back(assign_expr);
+        auto *loop_body =
+            clang::CompoundStmt::Create(ctx, body, sema().CurFPFeatureOverrides(), loc, loc);
+
+        return new (ctx
+        ) clang::ForStmt(ctx, index_decl, cond_expr, index, inc_expr, loop_body, loc, loc, loc);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_copy(
@@ -326,6 +387,19 @@ namespace patchestry::ast {
                        << "\n";
             return { nullptr, false };
         }
+
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        if (op.type) {
+            const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+            auto pointer_type   = ctx.getPointerType(op_type);
+            auto *cast_expr     = make_cast(ctx, input_expr, pointer_type, op_loc);
+            assert(cast_expr != nullptr && "Failed to make cast expression");
+            input_expr = cast_expr;
+        }
+
+        // TODO(kumarak): If input expr is of type void*, derefencing it will lead to type void.
+        // Should it be typecasted to int*??
 
         auto derefed_expr = sema().CreateBuiltinUnaryOp(
             sourceLocation(ctx.getSourceManager(), op.key), clang::UO_Deref,
@@ -677,11 +751,23 @@ namespace patchestry::ast {
 
         // TODO(kumarak): It should be the size of input1 field in bits; At the moment
         // consider it as 4 bytes but should be fixed.
-        unsigned low_width = 32U;
-
+        unsigned low_width = ctx.getIntWidth(ctx.IntTy);
         auto merge_to_next = !op.output.has_value();
-        auto *shift_value =
-            clang::IntegerLiteral::Create(ctx, llvm::APInt(32, low_width), ctx.IntTy, location);
+        auto *shift_value  = clang::IntegerLiteral::Create(
+            ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), low_width), ctx.IntTy, location
+        );
+
+        // If Operation has type, convert expression to operation type and perform bit-shift and
+        // or operation.
+        if (op.type) {
+            auto op_type           = type_builder().get_serialized_types().at(*op.type);
+            auto *cast_expr_input0 = make_cast(ctx, input0_expr, op_type, location);
+            assert(cast_expr_input0 != nullptr && "Failed to create cast expression");
+            input0_expr            = cast_expr_input0;
+            auto *cast_expr_input1 = make_cast(ctx, input1_expr, op_type, location);
+            assert(cast_expr_input1 != nullptr && "Failed to create cast expression");
+            input1_expr = cast_expr_input1;
+        }
 
         auto shifted_high_result = sema().CreateBuiltinBinOp(
             location, clang::BO_Shl, input0_expr, clang::dyn_cast< clang::Expr >(shift_value)
@@ -814,8 +900,7 @@ namespace patchestry::ast {
         if (implicit_result.isInvalid()) {
             // If fail to perform implcit cast perform explicit cast
             auto result = sema().BuildCStyleCastExpr(
-                op_loc, ctx.getTrivialTypeSourceInfo(target_type), op_loc,
-                clang::dyn_cast< clang::Expr >(input_expr)
+                op_loc, ctx.getTrivialTypeSourceInfo(target_type), op_loc, input_expr
             );
 
             input_expr = result.getAs< clang::Expr >();
@@ -881,33 +966,56 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_carry(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
-        return {};
+        if (op.inputs.empty() || op.inputs.size() != 2U) {
+            LOG(ERROR) << "Skipping, carry operation due to input operands. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto *input0 =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        auto *input1 =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+
+        auto sum =
+            sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_Add, input0, input1);
+        assert(!sum.isInvalid() && "Failed to create add operation");
+
+        auto carry = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_LT, sum.getAs< clang::Expr >(), input0
+        );
+        assert(!carry.isInvalid() && "Failed to create carry operation");
+
+        if (!op.output.has_value()) {
+            return { carry.getAs< clang::Stmt >(), true };
+        }
+
+        auto *output =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+
+        return { create_assign_operation(ctx, carry.getAs< clang::Expr >(), output, op_loc),
+                 false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_scarry(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
-        return {};
+        return create_int_carry(ctx, function, op);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_sborrow(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
+        UNIMPLEMENTED("create_int_sborrow not implemented"); // NOLINT
         return {};
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_2comp(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
-        return {};
+        return create_unary_operation(ctx, function, op, clang::UnaryOperatorKind::UO_Minus);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_unary_operation(
@@ -955,13 +1063,18 @@ namespace patchestry::ast {
         auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
 
         auto *lhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
-
         auto *rhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+        if (auto *uo = clang::dyn_cast< clang::UnaryOperator >(lhs)) {
+            auto *lhs_with_paren = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs);
+            lhs                  = lhs_with_paren;
+        }
+        if (auto *uo = clang::dyn_cast< clang::UnaryOperator >(rhs)) {
+            auto *rhs_with_paren = new (ctx) clang::ParenExpr(op_loc, op_loc, rhs);
+            rhs                  = rhs_with_paren;
+        }
 
-        auto result = sema().CreateBuiltinBinOp(
-            op_loc, kind, clang::dyn_cast< clang::Expr >(lhs),
-            clang::dyn_cast< clang::Expr >(rhs)
-        );
+        auto result = sema().CreateBuiltinBinOp(op_loc, kind, lhs, rhs);
+
         assert(!result.isInvalid() && "Invalid result from binary operation");
 
         if (!op.output) {
@@ -981,7 +1094,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
+        UNIMPLEMENTED("create_float_abs not implemented"); // NOLINT
         return {};
     }
 
@@ -989,7 +1102,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
+        UNIMPLEMENTED("create_float_sqrt not implemented"); // NOLINT
         return {};
     }
 
@@ -997,7 +1110,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
+        UNIMPLEMENTED("create_float_floor not implemented"); // NOLINT
         return {};
     }
 
@@ -1005,7 +1118,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
+        UNIMPLEMENTED("create_float_ceil not implemented"); // NOLINT
         return {};
     }
 
@@ -1102,11 +1215,8 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        auto cast_result =
-            sema().ImpCastExprToType(input_expr, op_type, clang::CastKind::CK_BitCast);
-        assert(!cast_result.isInvalid());
-
-        auto *ptr_expr = cast_result.getAs< clang::Expr >();
+        auto *ptr_expr = make_cast(ctx, input_expr, op_type, op_loc);
+        assert(ptr_expr != nullptr && "Failed to make cast expr");
 
         auto *byte_offset =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
@@ -1203,21 +1313,28 @@ namespace patchestry::ast {
             return { input_expr, true };
         }
 
-        // Create cast operation to op_type
-        auto casted_result = sema().BuildCStyleCastExpr(
-            op_loc, ctx.getTrivialTypeSourceInfo(op_type), op_loc, input_expr
-        );
-        assert(!casted_result.isInvalid());
+        auto make_cast_expr = [&](clang::ASTContext &ctx, clang::Expr *expr,
+                                  clang::QualType to_type,
+                                  clang::SourceLocation loc) -> clang::Expr * {
+            auto input_type = expr->getType();
+            if (shouldReinterpretCast(input_type, to_type)) {
+                return make_reinterpret_cast(ctx, expr, to_type, loc);
+            }
+
+            return make_explicit_cast(ctx, expr, to_type, loc);
+        };
+
+        auto *cast = make_cast_expr(ctx, input_expr, op_type, op_loc);
+        assert(cast != nullptr && "failed to create vast expression");
 
         if (!op.output) {
-            return { casted_result.getAs< clang::Stmt >(), true };
+            return { cast, true };
         }
 
-        auto *casted_expr = casted_result.getAs< clang::Expr >();
         auto *output_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
 
-        return { create_assign_operation(ctx, casted_expr, output_expr, op_loc), false };
+        return { create_assign_operation(ctx, cast, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool >
