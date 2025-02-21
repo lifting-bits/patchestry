@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -147,6 +148,7 @@ namespace patchestry::ghidra {
     struct Program
     {
         std::optional< std::string > arch;
+        std::optional< std::string > lang;
         std::optional< std::string > format;
         std::unordered_map< std::string, Function > serialized_functions;
         std::unordered_map< std::string, std::shared_ptr< VarnodeType > > serialized_types;

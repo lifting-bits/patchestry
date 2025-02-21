@@ -199,6 +199,11 @@ namespace patchestry::ast {
             clang::SourceLocation loc
         );
 
+        clang::Expr *make_member_expr(
+            clang::ASTContext &ctx, clang::Expr *base, unsigned offset,
+            clang::SourceLocation loc = clang::SourceLocation()
+        );
+
         clang::Stmt *create_varnode(
             clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
             clang::SourceLocation = clang::SourceLocation()

@@ -5,15 +5,16 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "patchestry/AST/TypeBuilder.hpp"
 #include <optional>
 #include <utility>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
+#include <clang/AST/DeclAccessPair.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/NestedNameSpecifier.h>
 #include <clang/AST/OperationKinds.h>
+#include <clang/AST/RecordLayout.h>
 #include <clang/AST/Stmt.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/LLVM.h>
@@ -27,6 +28,7 @@
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/OperationBuilder.hpp>
+#include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
@@ -416,21 +418,22 @@ namespace patchestry::ast {
         }
 
         if (op.inputs.size() == 2) {
+            auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
             auto *lhs_expr =
                 clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
             auto *rhs_expr =
                 clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
 
+            // If not member expression, fallback to derefencing and assigning the value to lhs
+            // expression.
             auto deref_result = sema().CreateBuiltinUnaryOp(
-                sourceLocation(ctx.getSourceManager(), op.key), clang::UO_Deref,
-                clang::dyn_cast< clang::Expr >(lhs_expr)
+                op_loc, clang::UO_Deref, clang::dyn_cast< clang::Expr >(lhs_expr)
             );
             assert(!deref_result.isInvalid());
 
             return { create_assign_operation(
-                         ctx, rhs_expr, deref_result.getAs< clang::Expr >(),
-                         sourceLocation(ctx.getSourceManager(), op.key)
+                         ctx, rhs_expr, deref_result.getAs< clang::Expr >(), op_loc
                      ),
                      false };
         }
@@ -1182,6 +1185,61 @@ namespace patchestry::ast {
         return { create_assign_operation(ctx, implicit_cast, output_expr, op_loc), false };
     }
 
+    clang::Expr *OpBuilder::make_member_expr(
+        clang::ASTContext &ctx, clang::Expr *base, unsigned offset, clang::SourceLocation loc
+    ) {
+        auto base_type = base->getType();
+        if (!base_type->isPointerType() || !base_type->getPointeeType()->isRecordType()) {
+            LOG(ERROR) << "Can't make member expre, base type is not pointer of record decl!\n";
+            return nullptr;
+        }
+
+        auto find_field_decl = [&](clang::ASTContext &ctx, clang::RecordDecl *decl,
+                                   unsigned int target_offset) -> clang::FieldDecl * {
+            if (decl == nullptr || !decl->isCompleteDefinition()) {
+                return nullptr;
+            }
+
+            const auto &layout = ctx.getASTRecordLayout(decl);
+            for (auto *field : decl->fields()) {
+                auto offset =
+                    static_cast< unsigned int >(layout.getFieldOffset(field->getFieldIndex()));
+                if (offset >= target_offset * 8U) {
+                    return field;
+                }
+            }
+
+            assert(false && "Failed to find field decl at offset, check!");
+            return nullptr;
+        };
+
+        // Convert to rvalue if not there
+        auto convert_rvalue = [&](clang::ASTContext &ctx, clang::Expr *expr) -> clang::Expr * {
+            if (!expr->isPRValue()) {
+                return make_implicit_cast(
+                    ctx, expr, expr->getType(), clang::CastKind::CK_LValueToRValue
+                );
+            }
+            return expr;
+        };
+
+        auto *pointee    = base_type->getPointeeType()->getAs< clang::RecordType >();
+        auto *decl       = pointee->getDecl();
+        // get the definition of record decl
+        auto *definition = decl->getDefinition();
+
+        auto *field = find_field_decl(ctx, definition, offset);
+        assert(field != nullptr && "failed to find record decl field at offset");
+
+        clang::DeclarationNameInfo member_name_info(field->getDeclName(), loc);
+        return sema().BuildMemberExpr(
+            convert_rvalue(ctx, base), true, loc, clang::NestedNameSpecifierLoc(),
+            clang::SourceLocation(), field,
+            clang::DeclAccessPair::make(field, clang::AS_public), false, member_name_info,
+            field->getType(), clang::VK_LValue, clang::OK_Ordinary
+        );
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_ptrsub(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -1202,27 +1260,37 @@ namespace patchestry::ast {
         auto op_loc         = sourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0], op_loc));
 
-        auto *ptr_expr = make_cast(ctx, input_expr, op_type, op_loc);
-        assert(ptr_expr != nullptr && "Failed to make cast expr");
+        clang::Expr *ptr_expr = nullptr;
 
-        auto *byte_offset =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+        auto input_type = input_expr->getType();
+        if (input_type->isPointerType() && input_type->getPointeeType()->isRecordType()) {
+            auto *mem_expr = make_member_expr(ctx, input_expr, *op.inputs[1].value);
+            auto *addrof_expr =
+                sema()
+                    .BuildUnaryOp(sema().getCurScope(), op_loc, clang::UO_AddrOf, mem_expr)
+                    .get();
+            ptr_expr = addrof_expr;
+        } else {
+            auto *byte_offset = clang::dyn_cast< clang::Expr >(
+                create_varnode(ctx, function, op.inputs[1], op_loc)
+            );
 
-        auto add_result =
-            sema().CreateBuiltinBinOp(op_loc, clang::BO_Add, ptr_expr, byte_offset);
-        assert(!add_result.isInvalid());
+            auto add_result = sema().CreateBuiltinBinOp(
+                op_loc, clang::BO_Add, make_cast(ctx, input_expr, op_type, op_loc), byte_offset
+            );
+            assert(!add_result.isInvalid() && "Invalid ptr_sub expression");
+            ptr_expr = add_result.getAs< clang::Expr >();
+        }
 
-        auto *ptr_add_expr = add_result.getAs< clang::Expr >();
         if (merge_to_next) {
-            return { ptr_add_expr, true };
+            return { ptr_expr, true };
         }
 
         auto *output_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
-
-        return { create_assign_operation(ctx, ptr_add_expr, output_expr, op_loc), false };
+        return { create_assign_operation(ctx, ptr_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_ptradd(
