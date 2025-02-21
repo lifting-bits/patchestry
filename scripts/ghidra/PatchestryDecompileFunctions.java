@@ -2407,6 +2407,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			beginObject();
 			name("arch").value(getArch());
+			name("id").value(getLanguageID());
 			name("format").value(currentProgram.getExecutableFormat());
 
 			name("functions").beginObject();
@@ -2431,6 +2432,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			return "unknown";
 		}
 		return currentProgram.getLanguage().getProcessor().toString();
+	}
+
+	private String getLanguageID() throws Exception {
+		if (currentProgram.getLanguage() == null ||
+				currentProgram.getLanguage().getLanguageDescription() == null) {
+			return "unknown";
+		}
+		return currentProgram.getLanguage().getLanguageDescription().getLanguageID().toString();
 	}
 
 	private DecompInterface getDecompilerInterface() throws Exception {

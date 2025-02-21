@@ -9,6 +9,8 @@
 #include "patchestry/Util/Diagnostic.hpp"
 #include <cstdlib>
 #include <fstream>
+#include <ios>
+#include <llvm/TargetParser/Triple.h>
 #include <memory>
 #include <string_view>
 
@@ -143,6 +145,68 @@ namespace {
         cg_opts.StrictEnums            = false;
     }
 
+    std::string createTargetTriple(const std::string &arch, const std::string &lang) {
+        llvm::Triple target_triple;
+
+        // Utility function to split the language identifier (lang) string
+        auto split_language = [](const std::string &lang_id,
+                                 char delim = ':') -> std::vector< std::string > {
+            std::vector< std::string > tokens;
+            std::stringstream ss(lang_id);
+            std::string token;
+
+            while (std::getline(ss, token, delim)) {
+                tokens.push_back(token);
+            }
+            return tokens;
+        };
+
+        // Ghidra export lang id in the format - arch:endianess:size:variant
+        auto lang_vec = split_language(lang);
+        if (lang_vec.size() < 3) {
+            LOG(ERROR
+            ) << "Error: Invalid language format. Expected 'arch:endianess:size:variant'.\n";
+            return "";
+        }
+
+        int bit_size = std::stoi(lang_vec[2]);
+        auto is_le   = (lang_vec[1] == "LE");
+
+        if (arch == "X86" || arch == "X86-64") {
+            target_triple.setArch(bit_size == 32U ? llvm::Triple::x86 : llvm::Triple::x86_64);
+        } else if (arch == "ARM") {
+            target_triple.setArch(
+                bit_size == 32U ? (is_le ? llvm::Triple::arm : llvm::Triple::armeb)
+                                : (is_le ? llvm::Triple::aarch64 : llvm::Triple::aarch64_be)
+            );
+        }
+
+        else if (arch == "MIPS")
+        {
+            target_triple.setArch(
+                bit_size == 32U ? (is_le ? llvm::Triple::mipsel : llvm::Triple::mips)
+                                : (is_le ? llvm::Triple::mips64el : llvm::Triple::mips64)
+            );
+        } else if (arch == "POWERPC") {
+            target_triple.setArch(
+                bit_size == 32U ? (is_le ? llvm::Triple::ppcle : llvm::Triple::ppc)
+                                : (is_le ? llvm::Triple::ppc64le : llvm::Triple::ppc64)
+            );
+        } else {
+            target_triple.setArch(llvm::Triple::UnknownArch);
+        }
+
+        target_triple.setVendor(llvm::Triple::UnknownVendor);
+        target_triple.setOS(llvm::Triple::Linux);
+
+        // Set environment (for specific cases)
+        if (arch == "ARM" && bit_size == 32) {
+            target_triple.setEnvironment(llvm::Triple::GNUEABIHF); // Hard float ABI
+        }
+
+        return target_triple.str();
+    }
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -184,7 +248,7 @@ int main(int argc, char **argv) {
 
     std::shared_ptr< clang::TargetOptions > target_options =
         std::make_shared< clang::TargetOptions >();
-    target_options->Triple = llvm::sys::getDefaultTargetTriple();
+    target_options->Triple = createTargetTriple(*program->arch, *program->lang);
     ci.setTarget(clang::TargetInfo::CreateTargetInfo(ci.getDiagnostics(), target_options));
 
     ci.getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;

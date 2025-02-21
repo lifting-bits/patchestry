@@ -57,6 +57,7 @@ namespace patchestry::ghidra {
     std::optional< Program > JsonParser::deserialize_program(const JsonObject &root) {
         Program program;
         program.arch   = get_string_if_valid(root, "arch");
+        program.lang   = get_string_if_valid(root, "id");
         program.format = get_string_if_valid(root, "format");
 
         // Deserialize types recovered
