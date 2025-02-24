@@ -1,11 +1,11 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %pcode-lifter -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
-// RUN: %file-check --input-file %t.cir -check-prefix=CIR
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // CIR: cir.func @open_memmap
-// RUN: %file-check --input-file %t.mlir -check-prefix=MLIR
+// RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir
 // MLIR: llvm.func @open_memmap
-// RUN: %file-check --input-file %t.ll -check-prefix=LL
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // LL: define dso_local i64 @open_memmap(i64 %0)
 {
   "arch": "AARCH64",
