@@ -77,30 +77,11 @@ namespace {
         "print-tu", llvm::cl::desc("Pretty print translation unit"), llvm::cl::init(false)
     );
 
-    const llvm::cl::opt< std::string > pipelines( // NOLINT(cert-err58-cpp)
-        "pipelines", llvm::cl::desc("Specify pipelines for lowering steps"),
-        llvm::cl::value_desc("string"), llvm::cl::init("")
-    );
-
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
         );
 
-        auto split_pipelines = [&](std::string_view pipelines,
-                                   char delim = ',') -> std::vector< std::string > {
-            std::vector< std::string > vec;
-            size_t start = 0;
-            size_t end   = 0;
-            while ((end = pipelines.find(delim, start)) != std::string_view::npos) {
-                vec.emplace_back(pipelines.substr(start, end - start));
-                start = end + 1;
-            }
-            vec.emplace_back(pipelines.substr(start)); // Last part
-            return vec;
-        };
-
-        auto pipeline_stages = split_pipelines(pipelines.getValue());
         return {
             .emit_cir    = emit_cir.getValue(),
             .emit_mlir   = emit_mlir.getValue(), // It is set to true by default
@@ -111,7 +92,6 @@ namespace {
             .output_file = output_filename.getValue(),
             .input_file  = input_filename.getValue(),
             .print_tu    = print_tu.getValue(),
-            .pipelines   = std::move(pipeline_stages),
         };
     }
 
@@ -174,7 +154,7 @@ namespace {
 
         if (arch == "X86" || arch == "X86-64") {
             target_triple.setArch(bit_size == 32U ? llvm::Triple::x86 : llvm::Triple::x86_64);
-        } else if (arch == "ARM") {
+        } else if (arch == "ARM" || arch == "AARCH64") {
             target_triple.setArch(
                 bit_size == 32U ? (is_le ? llvm::Triple::arm : llvm::Triple::armeb)
                                 : (is_le ? llvm::Triple::aarch64 : llvm::Triple::aarch64_be)
