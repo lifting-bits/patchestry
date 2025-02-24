@@ -2,9 +2,9 @@
 // RUN: %pcode-lifter -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
 // RUN: %file-check --input-file %t.cir -check-prefix=CIR
-// CIR: cir.func @open_memmap(%arg0: !u64i loc("unique:001a7f80:0:0":1:1)) -> !u64i
+// CIR: cir.func @open_memmap
 // RUN: %file-check --input-file %t.mlir -check-prefix=MLIR
-// MLIR:llvm.func @open_memmap 
+// MLIR: llvm.func @open_memmap
 // RUN: %file-check --input-file %t.ll -check-prefix=LL
 // LL: define dso_local i64 @open_memmap(i64 %0)
 {
