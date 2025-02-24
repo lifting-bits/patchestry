@@ -8,7 +8,6 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
 namespace patchestry {
 
@@ -25,8 +24,6 @@ namespace patchestry {
         std::string input_file;
 
         bool print_tu = false;
-
-        std::vector< std::string > pipelines = {};
     };
 
 } // namespace patchestry
