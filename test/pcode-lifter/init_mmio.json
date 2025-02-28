@@ -1,0 +1,314 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %pcode-lifter -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// CIR: cir.func @init_mmio
+// RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir
+// MLIR: llvm.func @init_mmio
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// LL: define dso_local void @init_mmio(ptr %0, ptr %1, ptr %2)
+{
+  "arch": "x86",
+  "id": "x86:LE:64:default",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:001011c0": {
+      "name": "init_mmio",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "56e6a64d",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "6fb50c0e",
+          "6fb50c0e",
+          "6fb50c0e"
+        ]
+      },
+      "basic_blocks": {
+        "ram:001011c0:0:basic": {
+          "operations": {
+            "ram:001011de:246:0": {
+              "mnemonic": "COPY",
+              "type": "3e635f49",
+              "inputs": [
+                {
+                  "type": "3e635f49",
+                  "kind": "string",
+                  "string_value": "%d"
+                }
+              ]
+            },
+            "ram:001011de:35:1": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000002",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "3e635f49",
+                  "kind": "temporary",
+                  "operation": "ram:001011de:246:0"
+                },
+                {
+                  "type": "6fb50c0e",
+                  "kind": "parameter",
+                  "operation": "unique:0017dc00:0:0"
+                }
+              ]
+            },
+            "ram:001011eb:247:2": {
+              "mnemonic": "COPY",
+              "type": "3e635f49",
+              "inputs": [
+                {
+                  "type": "3e635f49",
+                  "kind": "string",
+                  "string_value": "%d"
+                }
+              ]
+            },
+            "ram:001011eb:50:3": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000002",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "3e635f49",
+                  "kind": "temporary",
+                  "operation": "ram:001011eb:247:2"
+                },
+                {
+                  "type": "6fb50c0e",
+                  "kind": "parameter",
+                  "operation": "unique:0017dc01:1:0"
+                }
+              ]
+            },
+            "ram:001011f0:53:4": {
+              "mnemonic": "COPY",
+              "type": "2c7b6d4",
+              "output": {
+                "kind": "local",
+                "operation": "unique:0017dc03:3:0"
+              },
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:001011f8:249:5": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "6fb50c0e",
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "local",
+                  "operation": "unique:0017dc03:3:0"
+                }
+              ]
+            },
+            "ram:00101202:248:6": {
+              "mnemonic": "COPY",
+              "type": "3e635f49",
+              "inputs": [
+                {
+                  "type": "3e635f49",
+                  "kind": "string",
+                  "string_value": "%d"
+                }
+              ]
+            },
+            "ram:00101202:69:8": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000002",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "3e635f49",
+                  "kind": "temporary",
+                  "operation": "ram:00101202:248:6"
+                },
+                {
+                  "type": "6fb50c0e",
+                  "kind": "temporary",
+                  "operation": "ram:001011f8:249:5"
+                }
+              ]
+            },
+            "ram:00101209:87:9": {
+              "mnemonic": "INT_EQUAL",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "local",
+                  "operation": "unique:0017dc03:3:0"
+                },
+                {
+                  "type": "2c7b6d4",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:0010120e:228:10": {
+              "mnemonic": "INT_ZEXT",
+              "type": "56d5e94b",
+              "inputs": [
+                {
+                  "type": "55cce7b8",
+                  "kind": "temporary",
+                  "operation": "ram:00101209:87:9"
+                }
+              ]
+            },
+            "ram:00101211:94:11": {
+              "mnemonic": "STORE",
+              "inputs": [
+                {
+                  "type": "6fb50c0e",
+                  "kind": "parameter",
+                  "operation": "unique:0017dc02:2:0"
+                },
+                {
+                  "type": "56d5e94b",
+                  "kind": "temporary",
+                  "operation": "ram:0010120e:228:10"
+                }
+              ]
+            },
+            "ram:0010121c:118:12": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:001011de:246:0",
+            "ram:001011de:35:1",
+            "ram:001011eb:247:2",
+            "ram:001011eb:50:3",
+            "ram:001011f0:53:4",
+            "ram:001011f8:249:5",
+            "ram:00101202:248:6",
+            "ram:00101202:69:8",
+            "ram:00101209:87:9",
+            "ram:0010120e:228:10",
+            "ram:00101211:94:11",
+            "ram:0010121c:118:12"
+          ]
+        },
+        "ram:001011c0:entry": {
+          "operations": {
+            "unique:0017dc00:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "hemo",
+              "type": "6fb50c0e",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:0017dc01:1:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "oxygen",
+              "type": "6fb50c0e",
+              "kind": "parameter",
+              "index": 1
+            },
+            "unique:0017dc02:2:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "error",
+              "type": "6fb50c0e",
+              "kind": "parameter",
+              "index": 2
+            },
+            "unique:0017dc03:3:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "local_1c",
+              "type": "2c7b6d4"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:001011c0:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:0017dc00:0:0",
+            "unique:0017dc01:1:0",
+            "unique:0017dc02:2:0",
+            "unique:0017dc03:3:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:001011c0:entry"
+    },
+    "EXTERNAL:00000002": {
+      "name": "scanf",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "2c7b6d4",
+        "is_variadic": true,
+        "is_noreturn": false,
+        "parameter_types": [
+          "3e635f49"
+        ]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "56e6a64d": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "6fb50c0e": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "2c7b6d4"
+    },
+    "3e635f49": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "55d79ccc"
+    },
+    "2c7b6d4": {
+      "name": "int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "55cce7b8": {
+      "name": "bool",
+      "size": 1,
+      "kind": "integer"
+    },
+    "56d5e94b": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "55d79ccc": {
+      "name": "char",
+      "size": 1,
+      "kind": "integer"
+    }
+  }
+}

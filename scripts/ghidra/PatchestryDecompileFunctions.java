@@ -53,6 +53,7 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.listing.StackFrame;
 import ghidra.program.model.listing.Variable;
 import ghidra.program.model.listing.VariableStorage;
+import ghidra.program.model.listing.Data;
 
 import ghidra.program.model.mem.MemBuffer;
 import ghidra.program.model.mem.Memory;
@@ -105,6 +106,10 @@ import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolType;
+import ghidra.program.model.symbol.SymbolTable;
+import ghidra.program.model.symbol.SymbolUtilities;
+import ghidra.program.model.symbol.FlowType;
+import ghidra.program.model.symbol.Reference;
 
 import ghidra.util.UniversalID;
 
@@ -229,6 +234,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		private Map<Address, HighVariable> seen_globals;
 		private Map<HighVariable, Address> address_of_global;
 
+		// The seen data
+		private Map<Address, Data> seen_data;
+
 		// The seen types. The size of `types_to_serialize` is monotonically
 		// non-decreasing, so that as we add new things to `seen_types`, we add
 		// to the end of `types_to_serialize`. This lets us properly handle
@@ -343,6 +351,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			this.prefix_operations = new HashMap<>();
 			this.address_of_global = new HashMap<>();
 			this.callother_uses = new ArrayList<>();
+			this.seen_data = new HashMap<>();
 		}
 
 		private String label(HighFunction function) throws Exception {
@@ -418,6 +427,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 		
 			return Undefined.getUndefinedDataType(ret_val.getSize());
+		}
+
+		private Address getAddress(PcodeOp op) throws Exception {
+			SequenceNumber sn = op.getSeqnum();
+			return sn.getTarget();
 		}
 		
 		// Return the label of an intrinsic with `CALLOTHER`. This is based
@@ -757,6 +771,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			return null;
 		}
 
+		private Address makeGlobalFromData(Data data) throws Exception {
+			if (data == null) {
+				return null;
+			}
+			seen_data.put(data.getMinAddress(), data);
+			return data.getMinAddress();
+		}
+
 		// Try to distinguish "local" variables from global ones. Roughly, we
 		// want to make sure that the backing storage for a given variable
 		// *isn't* RAM. Thus, UNIQUE, STACK, CONST, etc. are all in-scope for
@@ -811,6 +833,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 			
 			return VariableClassification.UNKNOWN;
+		}
+
+		private Data getDataReferencedAsConstant(Varnode node) throws Exception {
+			if (!node.isConstant()) {
+				return null;
+			}
+			// Ghidra sometime fail to resolve references to Data and show it as const. 
+			// Check if it is referencing Data as constant from `ram` addresspace.
+			AddressSpace ram = currentProgram.getAddressFactory().getAddressSpace("ram");
+			Address address = ram.getAddress(node.getOffset());
+			return getDataAt(address);
 		}
 		
 		// Serialize an input or output varnode.
@@ -890,8 +923,19 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					break;
 				case CONSTANT:
 					if (node.isConstant()) {
-						name("kind").value("constant");
-						name("value").value(node.getOffset());
+						Data dataref = getDataReferencedAsConstant(node);
+						if (dataref != null) {
+							if (dataref.hasStringValue()) {
+								name("kind").value("string");
+								name("string_value").value(dataref.getValue().toString());
+							} else {
+								name("kind").value("global");
+								name("global").value(label(makeGlobalFromData(dataref)));
+							}
+						} else {
+							name("kind").value("constant");
+							name("value").value(node.getOffset());
+						}
 					} else {
 						assert false;
 						name("kind").value("unknown");
@@ -2288,6 +2332,22 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				name("size").value(Integer.toString(global.getSize()));
 				name("type").value(label(global.getDataType()));
 				endObject();
+			}
+
+			for (Map.Entry<Address, Data> entry : seen_data.entrySet()) {
+				Address address = entry.getKey();
+				Data datavar = entry.getValue();
+				String name = datavar.getDefaultLabelPrefix(null) + "_"
+					+ SymbolUtilities.replaceInvalidChars(datavar.getDefaultValueRepresentation(), false)
+					+ "_" + datavar.getMinAddress().toString();
+
+				name(label(address)).beginObject();
+				name("name").value(name);
+				name("size").value(Integer.toString(datavar.getDataType().getLength()));
+				name("type").value(label(datavar.getDataType()));
+				endObject();
+
+
 			}
 
 			println("Total serialized globals: " + Integer.toString(seen_globals.size()));
