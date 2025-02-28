@@ -72,6 +72,8 @@ namespace patchestry::ast {
                     return create_temporary(ctx, function, vnode);
                 case Varnode::VARNODE_CONSTANT:
                     return create_constant(ctx, vnode);
+                case Varnode::VARNODE_STRING:
+                    return create_string(ctx, vnode);
             }
 
             return nullptr;
@@ -246,6 +248,28 @@ namespace patchestry::ast {
         }
 
         return {};
+    }
+
+    clang::Stmt *OpBuilder::create_string(clang::ASTContext &ctx, const Varnode &vnode) {
+        if (vnode.kind != Varnode::VARNODE_STRING) {
+            LOG(ERROR) << "Varnode is not string, invalid varnode.\n";
+            return {};
+        }
+
+        if (!vnode.string_value) {
+            LOG(ERROR) << "No string value found, invalid varnode.\n";
+            return {};
+        }
+
+        auto string_array = ctx.getConstantArrayType(
+            ctx.CharTy.withConst(), llvm::APInt(32, vnode.string_value.value().size() + 1),
+            nullptr, clang::ArraySizeModifier::Normal, 0
+        );
+
+        return clang::StringLiteral::Create(
+            ctx, vnode.string_value.value(), clang::StringLiteralKind::Ordinary, false,
+            string_array, clang::SourceLocation()
+        );
     }
 
     /**

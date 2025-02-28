@@ -7,6 +7,8 @@
  */
 
 #include "patchestry/Util/Diagnostic.hpp"
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <ios>
@@ -125,7 +127,7 @@ namespace {
         cg_opts.StrictEnums            = false;
     }
 
-    std::string createTargetTriple(const std::string &arch, const std::string &lang) {
+    std::string createTargetTriple(std::string &arch, const std::string &lang) {
         llvm::Triple target_triple;
 
         // Utility function to split the language identifier (lang) string
@@ -152,22 +154,29 @@ namespace {
         int bit_size = std::stoi(lang_vec[2]);
         auto is_le   = (lang_vec[1] == "LE");
 
-        if (arch == "X86" || arch == "X86-64") {
+        auto is_equal = [&](std::string a, std::string b) -> bool {
+            return a.size() == b.size()
+                && std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char c1, char c2) {
+                       return std::tolower(c1) == std::tolower(c2);
+                   });
+        };
+
+        if (is_equal(arch, "x86") || is_equal(arch, "x86-64")) {
             target_triple.setArch(bit_size == 32U ? llvm::Triple::x86 : llvm::Triple::x86_64);
-        } else if (arch == "ARM" || arch == "AARCH64") {
+        } else if (is_equal(arch, "ARM") || is_equal(arch, "AARCH64")) {
             target_triple.setArch(
                 bit_size == 32U ? (is_le ? llvm::Triple::arm : llvm::Triple::armeb)
                                 : (is_le ? llvm::Triple::aarch64 : llvm::Triple::aarch64_be)
             );
         }
 
-        else if (arch == "MIPS")
+        else if (is_equal(arch, "MIPS"))
         {
             target_triple.setArch(
                 bit_size == 32U ? (is_le ? llvm::Triple::mipsel : llvm::Triple::mips)
                                 : (is_le ? llvm::Triple::mips64el : llvm::Triple::mips64)
             );
-        } else if (arch == "POWERPC") {
+        } else if (is_equal(arch, "POWERPC")) {
             target_triple.setArch(
                 bit_size == 32U ? (is_le ? llvm::Triple::ppcle : llvm::Triple::ppc)
                                 : (is_le ? llvm::Triple::ppc64le : llvm::Triple::ppc64)
@@ -180,7 +189,7 @@ namespace {
         target_triple.setOS(llvm::Triple::Linux);
 
         // Set environment (for specific cases)
-        if (arch == "ARM" && bit_size == 32) {
+        if (is_equal(arch, "ARM") && bit_size == 32) {
             target_triple.setEnvironment(llvm::Triple::GNUEABIHF); // Hard float ABI
         }
 

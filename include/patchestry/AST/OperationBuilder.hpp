@@ -229,6 +229,8 @@ namespace patchestry::ast {
 
         clang::Stmt *create_constant(clang::ASTContext &ctx, const Varnode &vnode);
 
+        clang::Stmt *create_string(clang::ASTContext &ctx, const Varnode &vnode);
+
         clang::QualType get_varnode_type(clang::ASTContext &ctx, const Varnode &vnode);
 
         TypeBuilder &type_builder(void) { return builder->type_builder.get(); }

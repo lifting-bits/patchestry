@@ -46,7 +46,8 @@ namespace patchestry::ghidra {
             VARNODE_PARAM,
             VARNODE_FUNCTION,
             VARNODE_TEMPORARY,
-            VARNODE_CONSTANT
+            VARNODE_CONSTANT,
+            VARNODE_STRING
         };
 
         static Varnode::Kind convertToKind(const std::string &kdd) {
@@ -57,7 +58,8 @@ namespace patchestry::ghidra {
                 {"parameter",     VARNODE_PARAM},
                 { "function",  VARNODE_FUNCTION},
                 {"temporary", VARNODE_TEMPORARY},
-                { "constant",  VARNODE_CONSTANT}
+                { "constant",  VARNODE_CONSTANT},
+                {   "string",    VARNODE_STRING}
             };
 
             // if kind is not present in the map, return varnode_unknown
@@ -72,6 +74,7 @@ namespace patchestry::ghidra {
         std::optional< std::string > operation;
         std::optional< std::string > function;
         std::optional< uint32_t > value;
+        std::optional< std::string > string_value;
         std::optional< std::string > global;
     };
 

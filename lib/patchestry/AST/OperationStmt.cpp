@@ -580,17 +580,26 @@ namespace patchestry::ast {
             }
         }
 
+        auto get_argument_type = [&](const clang::FunctionDecl *callee, clang::Expr *arg,
+                                     unsigned index) -> clang::QualType {
+            auto *proto = callee->getType()->getAs< clang::FunctionProtoType >();
+            if (proto->isVariadic() && (index >= proto->getNumParams())) {
+                return arg->getType();
+            }
+            return proto->getParamType(index);
+        };
+
         unsigned index = 0;
         std::vector< clang::Expr * > arguments;
         for (const auto &input : op.inputs) {
-            if (index >= num_params) {
+            if (index >= num_params && !proto_type->isVariadic()) {
                 // The recovered operation inputs does not match with number of function
                 // arguments. Drop extra inputs and don't add them to the callee arguments.
                 continue;
             }
             auto *vnode_expr =
                 clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
-            auto arg_type = proto_type->getParamType(index++);
+            auto arg_type = get_argument_type(callee, vnode_expr, index++);
             if (!vnode_expr->isPRValue()) {
                 vnode_expr = make_implicit_cast(
                     ctx, vnode_expr, vnode_expr->getType(), clang::CastKind::CK_LValueToRValue
