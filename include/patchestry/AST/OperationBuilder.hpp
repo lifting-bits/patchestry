@@ -153,6 +153,11 @@ namespace patchestry::ast {
             clang::ASTContext &ctx, const Function &function, const Operation &op
         );
 
+        std::pair< clang::Stmt *, bool > create_builtin_call_expr(
+            clang::ASTContext &ctx, const Function &function, const Operation &op,
+            clang::Builtin::ID id
+        );
+
       private:
         clang::Expr *build_callexpr_from_function(
             clang::ASTContext &ctx, const Function &function, const Operation &op

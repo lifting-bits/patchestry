@@ -867,9 +867,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				return null;
 			}
 
-			Address ram_space_address = convertAddressToRamSpace(address);
-
-			MemoryBufferImpl memoryBuffer = new MemoryBufferImpl(program.getMemory(), ram_space_address);
+			Address ram_address = convertAddressToRamSpace(address);
+			MemoryBufferImpl memoryBuffer = new MemoryBufferImpl(program.getMemory(), ram_address);
 			DataType char_type = pointer.getDataType();
 			StringDataInstance string_data_instance = StringDataInstance.getStringDataInstance(char_type, memoryBuffer, char_type.getDefaultSettings(), -1);
 			int detectedLength = string_data_instance.getStringLength();
@@ -886,13 +885,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 			// Ghidra sometime fail to resolve references to Data and show it as const. 
 			// Check if it is referencing Data as constant from `ram` addresspace.
-			Address address = ram_space.getAddress(node.getOffset());
-			Data data = getDataAt(address);
-			return data;
+			Address ram_address = convertAddressToRamSpace(node.getAddress());
+			return getDataAt(ram_address);
 		}
 
-
-		
 		// Serialize an input or output varnode.
 		private void serializeInput(PcodeOp op, Varnode node) throws Exception {
 			assert !node.isFree();
@@ -985,6 +981,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 								name("kind").value("string");
 								name("string_value").value(string);
 							} else {
+								assert false;
 								Listing listing = getCurrentProgram().getListing();
 								Data data = listing.createData(convertAddressToRamSpace(node.getAddress()), var.getDataType());
 								name("kind").value("global");
