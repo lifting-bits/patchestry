@@ -35,6 +35,8 @@ import ghidra.program.model.data.BitFieldDataType;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.StringDataType;
+import ghidra.program.model.data.StringDataInstance;
+import ghidra.program.model.data.CharDataType;
 
 import ghidra.program.model.lang.CompilerSpec;
 import ghidra.program.model.lang.Language;
@@ -57,6 +59,7 @@ import ghidra.program.model.listing.Data;
 
 import ghidra.program.model.mem.MemBuffer;
 import ghidra.program.model.mem.Memory;
+import ghidra.program.model.mem.MemoryBufferImpl;
 
 import ghidra.program.model.pcode.FunctionPrototype;
 import ghidra.program.model.pcode.GlobalSymbolMap;
@@ -835,16 +838,60 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			return VariableClassification.UNKNOWN;
 		}
 
+		private Address convertAddressToRamSpace(Address address) throws Exception {
+			if (address == null) {
+				return null;
+			}
+			return ram_space.getAddress(address.toString(false));
+		}
+
+		private boolean isCharPointer(Varnode node) throws Exception {
+			HighVariable var = variableOf(node.getHigh());
+			if (var == null) {
+				return false;
+			}
+
+			DataType dt = var.getDataType();
+			if (dt instanceof Pointer) {
+				DataType base = ((Pointer) dt).getDataType();
+				if ((base instanceof CharDataType) || ( ((TypeDef )base).getBaseDataType() instanceof CharDataType)) {
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		private String findNullTerminatedString(Address address, Pointer pointer) throws Exception {
+			if (!address.getAddressSpace().isConstantSpace()) {
+				return null;
+			}
+
+			Address ram_space_address = convertAddressToRamSpace(address);
+
+			MemoryBufferImpl memoryBuffer = new MemoryBufferImpl(program.getMemory(), ram_space_address);
+			DataType char_type = pointer.getDataType();
+			StringDataInstance string_data_instance = StringDataInstance.getStringDataInstance(char_type, memoryBuffer, char_type.getDefaultSettings(), -1);
+			int detectedLength = string_data_instance.getStringLength();
+			if (detectedLength == -1) {
+				return null;
+			}
+			string_data_instance = new StringDataInstance(char_type, char_type.getDefaultSettings(), memoryBuffer, detectedLength, true);
+			return string_data_instance.getStringValue();
+		}
+
 		private Data getDataReferencedAsConstant(Varnode node) throws Exception {
 			if (!node.isConstant()) {
 				return null;
 			}
 			// Ghidra sometime fail to resolve references to Data and show it as const. 
 			// Check if it is referencing Data as constant from `ram` addresspace.
-			AddressSpace ram = currentProgram.getAddressFactory().getAddressSpace("ram");
-			Address address = ram.getAddress(node.getOffset());
-			return getDataAt(address);
+			Address address = ram_space.getAddress(node.getOffset());
+			Data data = getDataAt(address);
+			return data;
 		}
+
+
 		
 		// Serialize an input or output varnode.
 		private void serializeInput(PcodeOp op, Varnode node) throws Exception {
@@ -931,6 +978,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 							} else {
 								name("kind").value("global");
 								name("global").value(label(makeGlobalFromData(dataref)));
+							}
+						} else if (isCharPointer(node) && var != null) {
+							String string = findNullTerminatedString(node.getAddress(), ((Pointer) var.getDataType()));
+							if (string != null) {
+								name("kind").value("string");
+								name("string_value").value(string);
+							} else {
+								Listing listing = getCurrentProgram().getListing();
+								Data data = listing.createData(convertAddressToRamSpace(node.getAddress()), var.getDataType());
+								name("kind").value("global");
+								name("global").value(label(makeGlobalFromData(data)));
 							}
 						} else {
 							name("kind").value("constant");
@@ -2027,7 +2085,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		}
 
 		private void serialize(PcodeOp op) throws Exception {
-
 			beginObject();
 			name("mnemonic").value(mnemonic(op));
 			
