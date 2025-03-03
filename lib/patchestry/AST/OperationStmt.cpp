@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <clang/Basic/Builtins.h>
 #include <optional>
 #include <utility>
 
@@ -1094,65 +1095,211 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_abs(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED("create_float_abs not implemented"); // NOLINT
-        return {};
+        if ((op.mnemonic != Mnemonic::OP_FLOAT_ABS) || (op.inputs.size() != 1U)) {
+            LOG(ERROR) << "FLOAT_FLOOR operation is invalid or has invalid input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "FLOAT_FLOOR operation type is not serialized. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        return create_builtin_call_expr(ctx, function, op, clang::Builtin::BIabs);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_sqrt(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED("create_float_sqrt not implemented"); // NOLINT
-        return {};
+        if ((op.mnemonic != Mnemonic::OP_FLOAT_SQRT) || (op.inputs.size() != 1U)) {
+            LOG(ERROR) << "FLOAT_FLOOR operation is invalid or has invalid input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "FLOAT_FLOOR operation type is not serialized. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        return create_builtin_call_expr(ctx, function, op, clang::Builtin::BIsqrt);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_floor(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED("create_float_floor not implemented"); // NOLINT
-        return {};
+        if ((op.mnemonic != Mnemonic::OP_FLOAT_ROUND) || (op.inputs.size() != 1U)) {
+            LOG(ERROR) << "FLOAT_FLOOR operation is invalid or has invalid input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "FLOAT_FLOOR operation type is not serialized. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        return create_builtin_call_expr(ctx, function, op, clang::Builtin::BIfloorf);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_ceil(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED("create_float_ceil not implemented"); // NOLINT
-        return {};
+        if ((op.mnemonic != Mnemonic::OP_FLOAT_ROUND) || (op.inputs.size() != 1U)) {
+            LOG(ERROR) << "FLOAT_CEIL operation is invalid or has invalid input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "FLOAT_CEIL operation type is not serialized. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        return create_builtin_call_expr(ctx, function, op, clang::Builtin::BIceilf);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_round(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
-        return {};
+        if ((op.mnemonic != Mnemonic::OP_FLOAT_ROUND) || (op.inputs.size() != 1U)) {
+            LOG(ERROR) << "FLOAT_ROUND operation is invalid or has invalid input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "FLOAT_ROUND operation type is not serialized. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        return create_builtin_call_expr(ctx, function, op, clang::Builtin::BIroundf);
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_builtin_call_expr(
+        clang::ASTContext &ctx, const Function &function, const Operation &op,
+        clang::Builtin::ID id
+    ) {
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        auto *input_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        auto *call_expr = sema().BuildBuiltinCallExpr(op_loc, id, { input_expr });
+        if (op.output.has_value()) {
+            return { call_expr, true };
+        }
+
+        auto *output_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        return { create_assign_operation(ctx, call_expr, output_expr), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int2float(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
-        return {};
+        if ((op.mnemonic != Mnemonic::OP_FLOAT2FLOAT) || (op.inputs.size() != 1U)) {
+            LOG(ERROR) << "INT2FLOAT operation is invalid or has invalid input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "INT2FLOAT operation type is not serialized. key: " << op.key << "\n";
+            return {};
+        }
+
+        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        auto op_loc         = sourceLocation(ctx.getSourceManager(), op.key);
+
+        auto *input_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        auto *cast_expr =
+            make_implicit_cast(ctx, input_expr, op_type, clang::CK_IntegralToFloating);
+        if (!op.output.has_value()) {
+            return { cast_expr, true };
+        }
+
+        auto *output_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+
+        return { create_assign_operation(ctx, cast_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_nan(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
-        return {};
+        if ((op.inputs.size() != 1U) || (op.mnemonic != Mnemonic::OP_FLOAT_NAN)) {
+            LOG(ERROR) << "FLOAT_NAN operation is invalid or has invalid input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "FLOAT_NAN operation type is not serialized. key: " << op.key << "\n";
+            return {};
+        }
+
+        auto nan_value = llvm::APFloat::getQNaN(llvm::APFloat::IEEEsingle());
+        auto *nan_expr = clang::FloatingLiteral::Create(
+            ctx, nan_value, true, ctx.FloatTy, clang::SourceLocation()
+        );
+
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        auto *input_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        auto nan_check =
+            sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_NE, input_expr, nan_expr);
+        assert(!nan_check.isInvalid() && "Invalid nan check");
+        if (!op.output.has_value()) {
+            return { nan_check.getAs< clang::Stmt >(), true };
+        }
+
+        auto *output_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+
+        return { create_assign_operation(ctx, nan_check.get(), output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_float2float(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED(" %s not implemented", __FUNCTION__); // NOLINT
-        return {};
+        if ((op.mnemonic != Mnemonic::OP_FLOAT2FLOAT) || (op.inputs.size() != 1U)) {
+            LOG(ERROR) << "FLOAT2FLOAT operation is invalid or has invalid input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        if (!type_builder().get_serialized_types().contains(*op.type)) {
+            LOG(ERROR) << "FLOAT2FLOAT operation type is not serialized. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        auto op_loc         = sourceLocation(ctx.getSourceManager(), op.key);
+
+        auto *input_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        auto *cast_expr = make_implicit_cast(ctx, input_expr, op_type, clang::CK_FloatingCast);
+        if (!op.output.has_value()) {
+            return { cast_expr, true };
+        }
+
+        auto *output_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+
+        return { create_assign_operation(ctx, cast_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_trunc(
