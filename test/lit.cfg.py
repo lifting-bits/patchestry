@@ -1,4 +1,3 @@
-
 import os
 import platform
 import re
@@ -17,6 +16,11 @@ config.name = 'PatchestryTest'
 
 # Set the test format to ShTest (shell-based tests)
 config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
+
+# Set up macOS SDK path if on Darwin
+if platform.system() == 'Darwin':
+    sdk_path = subprocess.check_output(['xcrun', '--show-sdk-path']).decode().strip()
+    config.environment['SDKROOT'] = sdk_path
 
 config.python_executable = config.python_executable if config.python_executable else sys.executable
 
