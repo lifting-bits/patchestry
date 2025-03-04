@@ -7,6 +7,8 @@
 
 import ghidra.app.script.GhidraScript;
 
+import ghidra.framework.options.Options;
+
 import ghidra.app.cmd.function.CallDepthChangeInfo;
 
 import ghidra.app.decompiler.component.DecompilerUtils;
@@ -113,6 +115,8 @@ import ghidra.program.model.symbol.SymbolTable;
 import ghidra.program.model.symbol.SymbolUtilities;
 import ghidra.program.model.symbol.FlowType;
 import ghidra.program.model.symbol.Reference;
+
+import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 
 import ghidra.util.UniversalID;
 
@@ -2619,10 +2623,26 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		serializeToFile(Path.of(getScriptArgs()[1]), getAllFunctions());
 	}
 
+	// Update and re-run auto analysis.
+	private void runAutoAnalysis() throws Exception {
+		Program program = getCurrentProgram();
+		AutoAnalysisManager mgr = AutoAnalysisManager.getAnalysisManager(program);
+		Options options = program.getOptions(Program.ANALYSIS_PROPERTIES);
+		options.setBoolean("Aggressive Instruction Finder", true);
+		options.setBoolean("Decompiler Parameter ID", true);
+		for (String option : options.getOptionNames()) {
+			println(option + " = " + options.getValueAsString(option));
+		}
+		mgr.reAnalyzeAll(null);
+	}
+
 	private void runHeadless() throws Exception {
 		if (getScriptArgs().length < 1) {
 			throw new IllegalArgumentException("mode is not specified for headless execution");
 		}
+
+		// Update and run auto analysis before accessing decompiler interface.
+		runAutoAnalysis();
 
 		// Execution mode
 		String mode = getScriptArgs()[0];
@@ -2672,6 +2692,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 	private void runGUI() throws Exception {
 		String mode = askString("mode", "Please enter mode:");
 		println("Running in mode: " + mode);
+
+		// Update and run auto analysis before accessing decompiler interface.
+		runAutoAnalysis();
 		switch (mode.toLowerCase()) {
 		case "single":
 			decompileSingleFunctionInGUI();
