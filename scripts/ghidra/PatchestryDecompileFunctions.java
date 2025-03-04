@@ -854,7 +854,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			DataType dt = var.getDataType();
 			if (dt instanceof Pointer) {
 				DataType base = ((Pointer) dt).getDataType();
-				if ((base instanceof CharDataType) || ( ((TypeDef )base).getBaseDataType() instanceof CharDataType)) {
+				if (base instanceof TypeDef) {
+					base = ((TypeDef )base).getBaseDataType();
+				}
+				if (base instanceof CharDataType) {
 					return true;
 				}
 			}
