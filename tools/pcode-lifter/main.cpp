@@ -154,11 +154,15 @@ namespace {
         int bit_size = std::stoi(lang_vec[2]);
         auto is_le   = (lang_vec[1] == "LE");
 
-        auto is_equal = [&](std::string a, std::string b) -> bool {
-            return a.size() == b.size()
-                && std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char c1, char c2) {
-                       return std::tolower(c1) == std::tolower(c2);
-                   });
+        auto is_equal = [&](std::string astr, std::string bstr) -> bool {
+            // transform both the string to lower-case and compare
+            std::transform(astr.begin(), astr.end(), astr.begin(), [](unsigned char c) {
+                return std::toupper(c);
+            });
+            std::transform(bstr.begin(), bstr.end(), bstr.begin(), [](unsigned char c) {
+                return std::toupper(c);
+            });
+            return astr == bstr;
         };
 
         if (is_equal(arch, "x86") || is_equal(arch, "x86-64")) {
@@ -261,7 +265,6 @@ int main(int argc, char **argv) {
     auto *pcode_consumer = dynamic_cast< patchestry::ast::PcodeASTConsumer * >(&ast_consumer);
     if (pcode_consumer != nullptr) {
         auto codegen = std::make_unique< patchestry::codegen::CodeGenerator >(ci);
-        LOG(INFO) << "Emitting mlir\n";
         codegen->emit_cir(ast_context, options);
     }
 
