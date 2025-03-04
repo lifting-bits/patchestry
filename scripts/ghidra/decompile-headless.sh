@@ -60,6 +60,10 @@ parse_args() {
                 ;;
             -c|--ci)
                 CI_OUTPUT_FOLDER="$2"
+                if [ -z "$CI_OUTPUT_FOLDER" ]; then
+                    echo "Error: CI output folder path cannot be empty"
+                    exit 1
+                fi
                 shift 2
                 ;;
             *)
@@ -113,10 +117,16 @@ is_not_absolute_path() {
 }
 
 validate_paths() {
-    # CI_OUTPUT_FOLDER should be absolute to avoid any issue with mounting locations
-    if [ -n "$CI_OUTPUT_FOLDER" ] && is_not_absolute_path "$CI_OUTPUT_FOLDER"; then
-        echo "$CI_OUTPUT_FOLDER path is not absolute. Exiting!"
-        exit 1
+    # CI_OUTPUT_FOLDER should be absolute and exist as a directory
+    if [ -n "$CI_OUTPUT_FOLDER" ]; then
+        if is_not_absolute_path "$CI_OUTPUT_FOLDER"; then
+            echo "$CI_OUTPUT_FOLDER path is not absolute. Exiting!"
+            exit 1
+        fi
+        if [ ! -d "$CI_OUTPUT_FOLDER" ]; then
+            echo "$CI_OUTPUT_FOLDER does not exist or is not a directory. Exiting!"
+            exit 1
+        fi
     fi
 
     # Expect both input and output file to exist
@@ -152,6 +162,7 @@ build_docker_command() {
             trailofbits/patchestry-decompilation:latest \
             --input /mnt/output/$INPUT_PATH \
             $ARGS --output /mnt/output/$OUTPUT_PATH"
+        echo "CMD: ${RUN}"
 
     else
         RUN="docker run --rm \
