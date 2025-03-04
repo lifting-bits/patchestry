@@ -127,8 +127,8 @@ To build on MacOS, you'll need to set up the development environment first:
    ```
    cmake -G Ninja ../llvm \
        -DCMAKE_INSTALL_PREFIX="/path/to/installdir" \
-       -DCMAKE_BUILD_TYPE=Debug \
-       -DLLVM_ENABLE_PROJECTS="clang;mlir" \
+       -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+       -DLLVM_ENABLE_PROJECTS="clang;mlir;clang-tools-extra" \
        -DLLVM_ENABLE_ASSERTIONS=ON \
        -DCLANG_ENABLE_CIR=ON \
        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
