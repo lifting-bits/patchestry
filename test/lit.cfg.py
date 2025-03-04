@@ -76,5 +76,13 @@ for tool in tools:
     llvm_config.add_tool_substitutions([tool])
 
 # Add PATH to substitutions
+# Set up CI output folder with default path
+ci_output_folder = llvm_config.lit_config.params.get('CI_OUTPUT_FOLDER', '')
+if not ci_output_folder:
+    ci_output_folder = os.path.join(config.test_exec_root, 'ghidra', 'Output')
+
+# Create CI output directory if it doesn't exist
+os.makedirs(ci_output_folder, exist_ok=True)
+
 config.substitutions.append(('%PATH%', config.environment['PATH']))
-config.substitutions.append(('%ci_output_folder', f"--ci {llvm_config.lit_config.params.get('CI_OUTPUT_FOLDER', '')}"))
+config.substitutions.append(('%ci_output_folder', f"--ci {ci_output_folder}"))
