@@ -57,10 +57,53 @@ config.json_strip_comments = os.path.join(config.test_scripts_dir, 'strip-json-c
 
 config.pcode_lifter_tool = patchestry_tool_path('pcode-lifter')
 
+def get_musl_include_path(arch):
+    """Get the musl include path for the given architecture on macOS.
+    
+    Args:
+        arch: Target architecture ('x86_64' or 'aarch64')
+    Returns:
+        The full path to the musl include directory
+    """
+    try:
+        musl_prefix = subprocess.check_output(['brew', '--prefix', 'musl-cross'], 
+                                            stderr=subprocess.PIPE).decode().strip()
+        return os.path.join(musl_prefix, 'libexec', f'{arch}-linux-musl', 'include')
+    except subprocess.CalledProcessError:
+        default_path = '/usr/local/opt/musl-cross/libexec/{arch}-linux-musl/include'
+        if not os.path.exists(default_path.format(arch=arch)):
+            lit_config.fatal('musl-cross not found. Please run: brew install FiloSottile/musl-cross/musl-cross')
+        return default_path.format(arch=arch)
+
+def get_target_flags(arch, system):
+    """Get compiler flags for the target architecture and system.
+    
+    Args:
+        arch: Target architecture ('x86_64' or 'aarch64')
+        system: Host system ('Darwin' or other)
+    """
+    if system == 'Darwin':
+        # On MacOS, use musl cross compiler
+        musl_include = get_musl_include_path(arch)
+        return [
+            f'-target {arch}-linux-musl',
+            f'-isystem {musl_include}'
+        ]
+    else:
+        # On Linux, use gnu
+        return [f'-target {arch}-linux-gnu']
+
+def get_compiler_command(arch):
+    """Get the full compiler command for the target architecture."""
+    return FindTool('clang')
+
 # Define tool substitutions
 tools = [
     ToolSubst('%file-check', command=FindTool('FileCheck')),
-    ToolSubst('%cc', command=FindTool('clang')),
+    ToolSubst('%cc-x86_64', command=get_compiler_command('x86_64'), 
+              extra_args=get_target_flags('x86_64', platform.system())),
+    ToolSubst('%cc-aarch64', command=get_compiler_command('aarch64'),
+              extra_args=get_target_flags('aarch64', platform.system())),
     ToolSubst('%cxx', command=FindTool('clang++')),
     ToolSubst('%host_cc', command=config.host_cc),
     ToolSubst('%host_cxx', command=config.host_cxx),

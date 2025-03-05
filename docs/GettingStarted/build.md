@@ -107,7 +107,10 @@ To build on MacOS, you'll need to set up the development environment first:
 
 2. Install the required dependencies using Homebrew:
    ```
-   brew install colima docker docker-buildx docker-credential-helper cmake
+   # basics
+   brew install colima docker docker-buildx docker-credential-helper cmake lit
+   # to run tests, we need to cross-compile for x86-64/Linux and aarch64/Linux
+   brew install FiloSottile/musl-cross/musl-cross
    ```
 
 3. Configure Docker BuildX to work with Colima:
@@ -125,7 +128,7 @@ To build on MacOS, you'll need to set up the development environment first:
 
 5. For building ClangIR, clone the project and compile with the following CMake configuration:
    ```
-   cmake -G Ninja ../llvm \
+   cmake -G Ninja ../../llvm \
        -DCMAKE_INSTALL_PREFIX="/path/to/installdir" \
        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
        -DLLVM_ENABLE_PROJECTS="clang;mlir;clang-tools-extra" \
@@ -133,8 +136,20 @@ To build on MacOS, you'll need to set up the development environment first:
        -DCLANG_ENABLE_CIR=ON \
        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
        -DLLVM_ENABLE_RTTI=ON \
-       -DLLVM_TARGETS_TO_BUILD="host"
+       -DLLVM_INSTALL_UTILS=ON \
+       -DLLVM_TARGETS_TO_BUILD="host;AArch64;ARM;X86"
    ```
+
+The targets list of `"host;AArch64;ARM;X86"` is intentional (to always build host arch, AArch64, ARM, and x86), even if host arch is almost certainly either AArch64 or X86.
+
+
+6. Build with:
+```
+CC=$(which clang) CXX=$(which clang++) cmake \
+   --preset default \
+   -DCMAKE_PREFIX_PATH=<path_to_llvm_install>/lib/cmake/ \
+   -DLLVM_EXTERNAL_LIT=$(which lit)
+```
 
 This setup provides a complete development environment for building and running the project on MacOS. The configuration uses Colima as a Docker backend, which provides better performance and resource management compared to Docker Desktop on MacOS.
 
