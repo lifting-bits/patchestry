@@ -27,10 +27,11 @@
       "binaryDir": "${sourceDir}/builds/${presetName}",
       "generator": "Ninja Multi-Config",
       "inherits": "cmake-pedantic",
-      "toolchainFile": "${sourceDir}/cmake/lld.toolchain.cmake",
+      "toolchainFile": "${sourceDir}/cmake/${hostSystemName}.toolchain.cmake",
       "cacheVariables": {
           "CMAKE_CONFIGURATION_TYPES": "Release;RelWithDebInfo;Debug",
-          "CMAKE_PREFIX_PATH": "$env{CMAKE_PREFIX_PATH}"
+          "CMAKE_PREFIX_PATH": "/Users/artem/dh/llvm/lib/cmake",
+          "LLVM_EXTERNAL_LIT": "/opt/homebrew/bin/lit"
       }
     },
     {

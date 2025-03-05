@@ -30,6 +30,6 @@ add_lit_testsuite(pcode-lifter-tests
 )
 
 add_test(NAME lit
-  COMMAND lit -v "${CMAKE_CURRENT_BINARY_DIR}/ghidra"
+  COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/ghidra"
   --param BUILD_TYPE=$<CONFIG>
 )
