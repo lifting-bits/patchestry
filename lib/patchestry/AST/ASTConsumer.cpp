@@ -102,10 +102,11 @@ namespace patchestry::ast {
 
             auto var_type  = type_builder->get_serialized_types().at(variable.type);
             auto location  = sourceLocation(ctx.getSourceManager(), key);
+            // Create extern global variable to link with the symbols from original binary
             auto *var_decl = clang::VarDecl::Create(
                 ctx, ctx.getTranslationUnitDecl(), location, location,
                 &ctx.Idents.get(variable.name), var_type,
-                ctx.getTrivialTypeSourceInfo(var_type), clang::SC_Static
+                ctx.getTrivialTypeSourceInfo(var_type), clang::SC_Extern
             );
             var_decl->setDeclContext(ctx.getTranslationUnitDecl());
             ctx.getTranslationUnitDecl()->addDecl(var_decl);
