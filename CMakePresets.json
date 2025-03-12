@@ -30,7 +30,7 @@
       "toolchainFile": "${sourceDir}/cmake/${hostSystemName}.toolchain.cmake",
       "cacheVariables": {
           "CMAKE_CONFIGURATION_TYPES": "Release;RelWithDebInfo;Debug",
-          "CMAKE_PREFIX_PATH": "/Users/artem/dh/llvm/lib/cmake",
+          "CMAKE_PREFIX_PATH": "$env{CMAKE_PREFIX_PATH}",
           "LLVM_EXTERNAL_LIT": "/opt/homebrew/bin/lit"
       }
     },
