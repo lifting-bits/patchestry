@@ -887,7 +887,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		}
 
 		private Data getDataReferencedAsConstant(Varnode node) throws Exception {
-			if (!node.isConstant()) {
+			if (!node.isConstant() || node.getAddress().equals(constant_space.getAddress(0))) {
 				return null;
 			}
 			// Ghidra sometime fail to resolve references to Data and show it as const. 
@@ -982,7 +982,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 								name("kind").value("global");
 								name("global").value(label(makeGlobalFromData(dataref)));
 							}
-						} else if (isCharPointer(node) && var != null) {
+						} else if (isCharPointer(node) && var != null
+							&& !node.getAddress().equals(constant_space.getAddress(0))) {
 							String string = findNullTerminatedString(node.getAddress(), ((Pointer) var.getDataType()));
 							if (string != null) {
 								name("kind").value("string");
