@@ -7,10 +7,10 @@
 
 #pragma once
 
-#include <array>
 #include <memory>
 #include <unordered_map>
 
+#include <clang/CIR/Dialect/Passes.h>
 #include <llvm/Support/LogicalResult.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/Pass/Pass.h>
@@ -24,9 +24,9 @@ namespace patchestry::codegen {
       public:
         explicit PassManagerBuilder(mlir::MLIRContext *context) : mctx(context) {
             pm = std::make_unique< mlir::PassManager >(context);
+            pm->addPass(mlir::createFlattenCFGPass());
+            pm->addPass(mlir::createCIRSimplifyPass());
         }
-
-        static std::vector< std::string > list_vast_passes(void); // NOLINT
 
         void add_passes(const std::vector< std::string > &steps);
 

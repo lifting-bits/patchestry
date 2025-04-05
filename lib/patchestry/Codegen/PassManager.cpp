@@ -19,50 +19,8 @@ namespace patchestry::codegen {
         }
     } // namespace
 
-    std::vector< std::string > PassManagerBuilder::list_vast_passes(void) {
-        return { "vast-hl-splice-trailing-scopes",
-                 "vast-hl-to-hl-builtin",
-                 "vast-hl-ude",
-                 "vast-hl-dce",
-                 "vast-hl-lower-elaborated-types",
-                 "vast-hl-lower-typedefs",
-                 "vast-hl-lower-enum-refs",
-                 "vast-hl-lower-enum-decls",
-                 "vast-hl-lower-types",
-                 "vast-hl-to-ll-func",
-                 "vast-hl-to-ll-cf",
-                 "vast-hl-to-ll-geps",
-                 "vast-vars-to-cells",
-                 "vast-refs-to-ssa",
-                 "vast-evict-static-locals",
-                 "vast-strip-param-lvalues",
-                 "vast-lower-value-categories",
-                 "vast-hl-to-lazy-regions",
-                 "vast-emit-abi",
-                 "vast-lower-abi",
-                 "vast-irs-to-llvm",
-                 "vast-core-to-llvm" };
-    }
-
     void PassManagerBuilder::add_passes(const std::vector< std::string > &steps) {
         build_operation_map(steps);
-        for (const auto &step : steps) {
-            auto operation_name = operation_names.at(step);
-            LOG(INFO) << "Operation name for step: " << step << " -> " << operation_name
-                      << "\n";
-            if (operation_name == "core.module") {
-                auto &nested_pm = pm->nest(operation_name);
-                if (failed(mlir::parsePassPipeline(step, nested_pm))) {
-                    LOG(ERROR) << "Failed to parse pipeline " << step << " for op "
-                               << operation_name << "\n";
-                }
-            } else if (operation_name == "builtin.module") {
-                if (failed(mlir::parsePassPipeline(step, *pm))) {
-                    LOG(ERROR) << "Failed to parse pipeline " << step << " for op "
-                               << operation_name << "\n";
-                }
-            }
-        }
     }
 
     void PassManagerBuilder::build_operation_map(const std::vector< std::string > &steps) {

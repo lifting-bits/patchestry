@@ -5,7 +5,8 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "patchestry/Codegen/Codegen.hpp"
+#include <optional>
+
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/DeclGroup.h>
@@ -33,7 +34,6 @@
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Export.h>
 
-#include <optional>
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Codegen/PassManager.hpp>
@@ -67,6 +67,17 @@ namespace patchestry::codegen {
         if (options.emit_cir) {
             Serializer::serializeToFile(*maybe_mod, options.output_file + ".cir");
         }
+
+        /*
+            // Disable running specific passes
+        {
+            auto cloned_mod = maybe_mod->clone();
+            auto *mctx      = cloned_mod.getContext();
+            mlir::PassManager pm(mctx);
+            pm.addPass(mlir::createFlattenCFGPass());
+            std::ignore = pm.run(cloned_mod);
+            Serializer::serializeToFile(cloned_mod, options.output_file + ".cir1");
+        }*/
 
         if (options.emit_mlir) {
             auto cloned_mod = maybe_mod->clone();
