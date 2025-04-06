@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <mlir/Parser/Parser.h>
 #include <optional>
 
 #include <clang/AST/ASTContext.h>
@@ -34,6 +35,8 @@
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Export.h>
 
+#include "clang/CIR/Dialect/IR/CIRDialect.h"
+
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Codegen/PassManager.hpp>
@@ -42,7 +45,7 @@
 
 namespace patchestry::codegen {
 
-    std::optional< mlir::ModuleOp > CodeGenerator::emit_mlir_module(clang::ASTContext &ctx) {
+    std::optional< mlir::ModuleOp > CodeGenerator::lower_ast_to_mlir(clang::ASTContext &ctx) {
         for (const auto &decl : ctx.getTranslationUnitDecl()->noload_decls()) {
             cirdriver->HandleTopLevelDecl(clang::DeclGroupRef(decl));
         }
@@ -58,7 +61,7 @@ namespace patchestry::codegen {
             actx.getDiagnostics().Reset();
         }
 
-        auto maybe_mod = emit_mlir_module(actx);
+        auto maybe_mod = lower_ast_to_mlir(actx);
         if (!maybe_mod.has_value()) {
             LOG(ERROR) << "Failed to emit mlir module\n";
             return;
