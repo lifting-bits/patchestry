@@ -1,4 +1,4 @@
-# Copyright (c) 2024, Trail of Bits, Inc.
+# Copyright (c) 2025, Trail of Bits, Inc.
 #
 # This source code is licensed in accordance with the terms specified in
 # the LICENSE file found in the root directory of this source tree.
@@ -9,18 +9,17 @@ set(LLVM_LINK_COMPONENTS
 )
 
 
-add_executable(pcode-lifter
+add_executable(patchir-opt
     main.cpp
 )
 
-llvm_update_compile_flags(pcode-lifter)
-target_link_libraries(pcode-lifter
+llvm_update_compile_flags(patchir-opt)
+target_link_libraries(patchir-opt
     PRIVATE
-        patchestry::ghidra
-        patchestry::ast
         patchestry::codegen
         clangFrontend
+        patchestry::passes
         MLIROptLib
 )
 
-mlir_check_link_libraries(pcode-lifter)
+mlir_check_link_libraries(patchir-opt)
