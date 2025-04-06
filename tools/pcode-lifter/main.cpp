@@ -21,6 +21,7 @@
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/CompilerInvocation.h>
 #include <clang/Frontend/FrontendOptions.h>
+
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/JSON.h>
@@ -154,10 +155,10 @@ namespace {
 
         auto is_equal = [&](std::string astr, std::string bstr) -> bool {
             // transform both the string to lower-case and compare
-            std::transform(astr.begin(), astr.end(), astr.begin(), [](unsigned char c) {
+            std::ranges::transform(astr, astr.begin(), [](unsigned char c) {
                 return std::toupper(c);
             });
-            std::transform(bstr.begin(), bstr.end(), bstr.begin(), [](unsigned char c) {
+            std::ranges::transform(bstr, bstr.begin(), [](unsigned char c) {
                 return std::toupper(c);
             });
             return astr == bstr;

@@ -5,3 +5,5 @@
 
 add_subdirectory(pcode-translate)
 add_subdirectory(pcode-lifter)
+add_subdirectory(patchir-cir2llvm)
+add_subdirectory(patchir-opt)
