@@ -6,15 +6,11 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include "patchestry/Util/Diagnostic.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
-#include <ios>
-#include <llvm/TargetParser/Triple.h>
 #include <memory>
-#include <string_view>
 
 #include <clang/AST/ASTConsumer.h>
 #include <clang/AST/ASTContext.h>
@@ -32,10 +28,12 @@
 #include <llvm/Support/VirtualFileSystem.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/Triple.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
+#include <patchestry/Util/Diagnostic.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/Util/Options.hpp>
 

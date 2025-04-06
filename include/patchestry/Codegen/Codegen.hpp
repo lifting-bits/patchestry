@@ -7,17 +7,17 @@
 
 #pragma once
 
-#include <llvm/Support/VirtualFileSystem.h>
 #include <memory>
-#include <mlir/IR/BuiltinOps.h>
 #include <string>
+#include <vector>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/CIR/CIRGenerator.h>
 #include <clang/Frontend/CompilerInstance.h>
+#include <llvm/Support/VirtualFileSystem.h>
+#include <mlir/IR/BuiltinOps.h>
 
 #include <patchestry/Util/Options.hpp>
-#include <vector>
 
 namespace llvm {
     class raw_fd_ostream;

@@ -5,7 +5,6 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include <clang/Basic/Builtins.h>
 #include <optional>
 #include <utility>
 
@@ -18,6 +17,7 @@
 #include <clang/AST/RecordLayout.h>
 #include <clang/AST/Stmt.h>
 #include <clang/AST/Type.h>
+#include <clang/Basic/Builtins.h>
 #include <clang/Basic/LLVM.h>
 #include <clang/Basic/LangOptions.h>
 #include <clang/Basic/SourceLocation.h>

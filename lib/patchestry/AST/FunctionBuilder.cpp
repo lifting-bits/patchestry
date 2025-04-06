@@ -5,7 +5,6 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include <clang/Basic/SourceLocation.h>
 #include <memory>
 #include <sstream>
 #include <unordered_map>
@@ -14,6 +13,7 @@
 #include <clang/AST/Attr.h>
 #include <clang/AST/Attrs.inc>
 #include <clang/AST/OperationKinds.h>
+#include <clang/Basic/SourceLocation.h>
 #include <clang/Frontend/CompilerInstance.h>
 
 #include <patchestry/AST/FunctionBuilder.hpp>
