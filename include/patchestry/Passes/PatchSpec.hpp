@@ -28,7 +28,6 @@ namespace patchestry::passes {
         PatchOperationKind kind = PatchOperationKind::NONE;
         std::string target;
         std::vector< std::string > arguments;
-        std::string return_value;
     };
 
     struct PatchConfig
@@ -58,7 +57,6 @@ namespace llvm::yaml {
         static void mapping(IO &io, patchestry::passes::PatchOperation &arg) {
             io.mapRequired("target", arg.target);
             io.mapOptional("arguments", arg.arguments);
-            io.mapOptional("return_value", arg.return_value);
         }
     };
 

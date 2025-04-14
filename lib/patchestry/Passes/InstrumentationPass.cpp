@@ -6,6 +6,8 @@
  */
 
 #include <memory>
+#include <mlir/IR/Value.h>
+#include <mlir/IR/ValueRange.h>
 #include <optional>
 #include <set>
 
@@ -101,8 +103,9 @@ namespace patchestry::passes {
                             break;
                         case PatchOperationKind::APPLY_AFTER_PATCH:
                             llvm::outs() << "    Apply After: " << operation.target << "\n";
-                            llvm::outs()
-                                << "    Return Value: " << operation.return_value << "\n";
+                            for (const auto &arg : operation.arguments) {
+                                llvm::outs() << "      - " << arg << "\n";
+                            }
                             break;
                         case PatchOperationKind::WRAP_AROUND_PATCH:
                             llvm::outs() << "    Wrap Around: " << operation.target << "\n";
@@ -112,6 +115,12 @@ namespace patchestry::passes {
                     }
                 }
             }
+        }
+
+        cir::CastKind getCastKind(mlir::Type from, mlir::Type to) {
+            (void) from;
+            (void) to;
+            return cir::CastKind::integral;
         }
 
     } // namespace
@@ -206,6 +215,63 @@ namespace patchestry::passes {
         });
     }
 
+    void InstrumentationPass::prepare_call_arguments(
+        mlir::OpBuilder &builder, cir::CallOp op, cir::FuncOp patch_func,
+        const PatchOperation &patch, llvm::SmallVector< mlir::Value > &args
+    ) {
+        if (op.getNumArgOperands() == 0) {
+            assert(patch.arguments.empty() && "Patch arguments are not empty");
+            assert(
+                patch_func.getNumArguments() == 0 && "Patch function arguments are not empty"
+            );
+            return;
+        }
+
+        if (patch_func.getNumArguments() > op.getNumArgOperands()) {
+            LOG(ERROR) << "Number of arguments in patch is greater than the number of "
+                          "arguments in the call operation\n";
+            return;
+        }
+
+        // Check if patch function argument is taking return value
+        if (patch.arguments.size() == 1 && patch.arguments[0] == "return_value") {
+            if (op.getResultTypes().size() == 0) {
+                LOG(ERROR) << "Call operation does not have a return value\n";
+                return;
+            }
+            auto patch_argument_type = patch_func.getArguments().front().getType();
+            auto call_return_type    = op->getResultTypes().front();
+            if (patch_argument_type != call_return_type) {
+                auto cast_op = builder.create< cir::CastOp >(
+                    op->getLoc(), patch_argument_type,
+                    getCastKind(call_return_type, patch_argument_type), op.getResults().front()
+                );
+                args.append(cast_op->getResults().begin(), cast_op->getResults().end());
+                return;
+            }
+            args.append(op->getResults().begin(), op->getResults().end());
+            return;
+        }
+
+        auto create_cast = [&](mlir::Value value, mlir::Type type) -> mlir::Value {
+            if (value.getType() == type) {
+                return value;
+            }
+
+            auto cast_op = builder.create< cir::CastOp >(
+                op->getLoc(), type, getCastKind(value.getType(), type), value
+            );
+            return cast_op->getResults().front();
+        };
+        (void) create_cast;
+
+        // llvm::SmallVector< mlir::Value, 4 > argument_vec;
+        for (unsigned i = 0; i < patch.arguments.size(); i++) {
+            auto patch_arg_type = patch_func.getArgumentTypes()[i];
+            args.push_back(create_cast(op.getArgOperands()[i], patch_arg_type));
+        }
+    }
+
     void InstrumentationPass::apply_before_patch(
         cir::CallOp op, const PatchOperation &patch, mlir::ModuleOp patch_module
     ) {
@@ -234,8 +300,13 @@ namespace patchestry::passes {
         }
 
         auto symbol_ref = mlir::FlatSymbolRefAttr::get(op->getContext(), patch_function_name);
-        auto call_op    = builder.create< cir::CallOp >(
-            op->getLoc(), symbol_ref, mlir::Type(), get_call_arguments(op, patch)
+        llvm::SmallVector< mlir::Value > function_args;
+        prepare_call_arguments(builder, op, patch_func, patch, function_args);
+        auto call_op = builder.create< cir::CallOp >(
+            op->getLoc(), symbol_ref,
+            patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
+                                                     : mlir::Type(),
+            function_args
         );
         call_op->setAttr("extra_attrs", op.getExtraAttrs());
     }
@@ -268,8 +339,13 @@ namespace patchestry::passes {
         }
 
         auto symbol_ref = mlir::FlatSymbolRefAttr::get(op->getContext(), patch_function_name);
-        auto call_op    = builder.create< cir::CallOp >(
-            op->getLoc(), symbol_ref, mlir::Type(), get_call_arguments(op, patch)
+        llvm::SmallVector< mlir::Value > function_args;
+        prepare_call_arguments(builder, op, patch_func, patch, function_args);
+        auto call_op = builder.create< cir::CallOp >(
+            op->getLoc(), symbol_ref,
+            patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
+                                                     : mlir::Type(),
+            function_args
         );
         call_op->setAttr("extra_attrs", op.getExtraAttrs());
     }
@@ -345,28 +421,6 @@ namespace patchestry::passes {
         // Clone and insert the symbol into the destination module
         dest.push_back(src_sym->clone());
         return mlir::success();
-    }
-
-    mlir::ValueRange
-    InstrumentationPass::get_call_arguments(cir::CallOp op, const PatchOperation &patch) {
-        if (patch.arguments.empty()) {
-            return mlir::ValueRange();
-        }
-
-        // Handle the special case where the patch is applied to the return value
-        if (patch.arguments.size() == 1 && patch.arguments[0] == "return_value") {
-            return op.getResults();
-        }
-
-        // If number of patches is greater than the number of arguments in the call operation
-        if (patch.arguments.size() > op.getArgOperands().size()) {
-            LOG(ERROR
-            ) << "Number of arguments in patch is greater than the number of arguments "
-                 "in the call operation\n";
-            return mlir::ValueRange();
-        }
-
-        return op.getArgOperands().take_front(patch.arguments.size());
     }
 
 } // namespace patchestry::passes
