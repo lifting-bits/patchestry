@@ -57,6 +57,10 @@ config.json_strip_comments = os.path.join(config.test_scripts_dir, 'strip-json-c
 
 config.pcode_lifter_tool = patchestry_tool_path('pcode-lifter')
 
+config.patchir_opt_tool = patchestry_tool_path('patchir-opt')
+
+config.patchir_cir2llvm_tool = patchestry_tool_path('patchir-cir2llvm')
+
 def get_musl_include_path(arch):
     """Get the musl include path for the given architecture on macOS.
     
@@ -110,6 +114,8 @@ tools = [
     ToolSubst('%decompile-headless', command=config.decompiler_headless_tool),
     ToolSubst('%pcode-translate', command=config.pcode_translate_tool),
     ToolSubst('%pcode-lifter', command=config.pcode_lifter_tool),
+    ToolSubst('%patchir-opt', command=config.patchir_opt_tool),
+    ToolSubst('%patchir-cir2llvm', command=config.patchir_cir2llvm_tool),
     ToolSubst('%strip-json-comments', command=config.json_strip_comments),
 ]
 
