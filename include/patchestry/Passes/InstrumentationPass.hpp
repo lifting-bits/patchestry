@@ -61,6 +61,8 @@ namespace patchestry::passes {
         mlir::LogicalResult merge_module_symbol(
             mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
         );
+
+        mlir::ValueRange get_call_arguments(cir::CallOp op, const PatchOperation &patch);
     };
 
 } // namespace patchestry::passes

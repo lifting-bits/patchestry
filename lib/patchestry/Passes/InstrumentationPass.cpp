@@ -235,7 +235,7 @@ namespace patchestry::passes {
 
         auto symbol_ref = mlir::FlatSymbolRefAttr::get(op->getContext(), patch_function_name);
         auto call_op    = builder.create< cir::CallOp >(
-            op->getLoc(), symbol_ref, mlir::Type(), op.getArgOperands()
+            op->getLoc(), symbol_ref, mlir::Type(), get_call_arguments(op, patch)
         );
         call_op->setAttr("extra_attrs", op.getExtraAttrs());
     }
@@ -269,7 +269,7 @@ namespace patchestry::passes {
 
         auto symbol_ref = mlir::FlatSymbolRefAttr::get(op->getContext(), patch_function_name);
         auto call_op    = builder.create< cir::CallOp >(
-            op->getLoc(), symbol_ref, mlir::Type(), op.getResults()
+            op->getLoc(), symbol_ref, mlir::Type(), get_call_arguments(op, patch)
         );
         call_op->setAttr("extra_attrs", op.getExtraAttrs());
     }
@@ -343,9 +343,30 @@ namespace patchestry::passes {
             return mlir::success();
         }
         // Clone and insert the symbol into the destination module
-        auto *cloned_sym = src_sym->clone();
-        dest.push_back(cloned_sym);
+        dest.push_back(src_sym->clone());
         return mlir::success();
+    }
+
+    mlir::ValueRange
+    InstrumentationPass::get_call_arguments(cir::CallOp op, const PatchOperation &patch) {
+        if (patch.arguments.empty()) {
+            return mlir::ValueRange();
+        }
+
+        // Handle the special case where the patch is applied to the return value
+        if (patch.arguments.size() == 1 && patch.arguments[0] == "return_value") {
+            return op.getResults();
+        }
+
+        // If number of patches is greater than the number of arguments in the call operation
+        if (patch.arguments.size() > op.getArgOperands().size()) {
+            LOG(ERROR
+            ) << "Number of arguments in patch is greater than the number of arguments "
+                 "in the call operation\n";
+            return mlir::ValueRange();
+        }
+
+        return op.getArgOperands().take_front(patch.arguments.size());
     }
 
 } // namespace patchestry::passes
