@@ -91,11 +91,15 @@ namespace llvm::yaml {
                 before_operation.kind =
                     patchestry::passes::PatchOperationKind::APPLY_BEFORE_PATCH;
                 spec.operations.emplace_back(before_operation);
-            } else if (has_apply_after) {
+            }
+
+            if (has_apply_after) {
                 after_operation.kind =
                     patchestry::passes::PatchOperationKind::APPLY_AFTER_PATCH;
                 spec.operations.emplace_back(after_operation);
-            } else if (has_wrap_around) {
+            }
+
+            if (has_wrap_around) {
                 wrap_operation.kind = patchestry::passes::PatchOperationKind::WRAP_AROUND_PATCH;
                 spec.operations.emplace_back(wrap_operation);
             }
