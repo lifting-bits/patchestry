@@ -8,6 +8,7 @@
 #pragma once
 
 #include <memory>
+#include <mlir/IR/Value.h>
 #include <string>
 
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
@@ -45,6 +46,11 @@ namespace patchestry::passes {
         void instrument_function_calls(cir::FuncOp func);
 
       private:
+        void prepare_call_arguments(
+            mlir::OpBuilder &builder, cir::CallOp op, cir::FuncOp patch_func,
+            const PatchOperation &patch, llvm::SmallVector< mlir::Value > &args
+        );
+
         void apply_before_patch(
             cir::CallOp op, const PatchOperation &patch, mlir::ModuleOp patch_module
         );
@@ -61,8 +67,6 @@ namespace patchestry::passes {
         mlir::LogicalResult merge_module_symbol(
             mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
         );
-
-        mlir::ValueRange get_call_arguments(cir::CallOp op, const PatchOperation &patch);
     };
 
 } // namespace patchestry::passes
