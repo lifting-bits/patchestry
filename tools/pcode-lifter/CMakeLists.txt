@@ -20,7 +20,6 @@ target_link_libraries(pcode-lifter
         patchestry::ast
         patchestry::codegen
         clangFrontend
-        MLIROptLib
 )
 
 mlir_check_link_libraries(pcode-lifter)
