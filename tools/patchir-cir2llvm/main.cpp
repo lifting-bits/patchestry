@@ -29,33 +29,36 @@
 #include <patchestry/Util/Log.hpp>
 
 namespace {
-
-    const llvm::cl::opt< std::string > input_filename( // NOLINT(cert-err58-cpp)
+    // Command line option for input file. Defaults to "-" (stdin)
+    const llvm::cl::opt< std::string > input_filename(
         llvm::cl::Positional, llvm::cl::desc("<input filename>"), llvm::cl::init("-")
     );
 
-    const llvm::cl::opt< std::string > output_filename( // NOLINT(cert-err58-cpp)
+    // Command line option for output file. Defaults to "-" (stdout)
+    const llvm::cl::opt< std::string > output_filename(
         "o", llvm::cl::desc("Output filename"), llvm::cl::value_desc("filename"),
         llvm::cl::init("-")
     );
 
-    const llvm::cl::opt< std::string > target_triple( // NOLINT(cert-err58-cpp)
+    // Command line option to specify target triple for compilation
+    const llvm::cl::opt< std::string > target_triple(
         "target", llvm::cl::desc("Specify a target triple when compiling"), llvm::cl::init("")
     );
 
-    const llvm::cl::opt< bool > emit_ll( // NOLINT(cert-err58-cpp)
-        "S", llvm::cl::desc("Emit LLVM IR Representation"), llvm::cl::init(false)
-    );
-
+    // Command line flag to emit LLVM IR instead of bitcode
+    const llvm::cl::opt< bool >
+        emit_ll("S", llvm::cl::desc("Emit LLVM IR Representation"), llvm::cl::init(false));
 } // namespace
 
 namespace cir {
     namespace direct {
+        // External declaration for registering CIR dialect translation
         extern void registerCIRDialectTranslation(mlir::DialectRegistry &registry);
-    }
+    } // namespace direct
 } // namespace cir
 
 namespace {
+    // Sets the target triple attribute on the MLIR module
     std::string prepareModuleTriple(mlir::ModuleOp &module) {
         if (!target_triple.empty()) {
             module->setAttr(
@@ -67,6 +70,7 @@ namespace {
         return {};
     }
 
+    // Configures data layout for the module based on target triple
     llvm::LogicalResult prepareModuleDataLayout(mlir::ModuleOp module, llvm::StringRef tt) {
         auto *context = module.getContext();
 
@@ -91,6 +95,7 @@ namespace {
         return llvm::success();
     }
 
+    // Prepares MLIR module for translation by setting up target triple and data layout
     llvm::LogicalResult prepareModuleForTranslation(mlir::ModuleOp module) {
         auto mod_triple =
             module->getAttrOfType< mlir::StringAttr >(cir::CIRDialect::getTripleAttrName());
@@ -111,6 +116,7 @@ namespace {
         return prepareModuleDataLayout(module, triple);
     }
 
+    // Writes LLVM module to file either as bitcode or LLVM IR
     llvm::LogicalResult
     writeBitcodeToFile(llvm::Module &module, llvm::StringRef output_filename) {
         std::error_code ec;
@@ -128,6 +134,7 @@ namespace {
     }
 } // namespace
 
+// Main function for the patchir-cir2llvm tool
 int main(int argc, char **argv) {
     llvm::InitLLVM y(argc, argv);
     llvm::cl::ParseCommandLineOptions(argc, argv, "patchir-cir2llvm driver\n");
