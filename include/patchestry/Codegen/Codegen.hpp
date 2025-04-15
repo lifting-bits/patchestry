@@ -17,6 +17,11 @@
 #include <llvm/Support/VirtualFileSystem.h>
 #include <mlir/IR/BuiltinOps.h>
 
+#include <llvm/Support/VirtualFileSystem.h>
+
+#include <mlir/IR/BuiltinOps.h>
+#include <mlir/IR/MLIRContext.h>
+
 #include <patchestry/Util/Options.hpp>
 
 namespace llvm {
@@ -51,9 +56,10 @@ namespace patchestry::codegen {
             const patchestry::Options &options
         );
 
-      private:
-        std::optional< mlir::ModuleOp > emit_mlir_module(clang::ASTContext &ctx);
+        // Emit mlir module from ASTContext
+        std::optional< mlir::ModuleOp > lower_ast_to_mlir(clang::ASTContext &ctx);
 
+      private:
         std::optional< mlir::ModuleOp > emit_after_pipeline(
             clang::ASTContext &ctx, mlir::ModuleOp mod,
             const std::vector< std::string > &pipelines
