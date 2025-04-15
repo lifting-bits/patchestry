@@ -125,15 +125,8 @@ namespace patchestry::passes {
 
     } // namespace
 
-    void registerInstrumentationPasses(void) {
-        mlir::PassPipelineRegistration< InstrumentationOptions > pipeline(
-            "patch-mlir-pipeline", "Instrumentation pass for patching MLIR",
-            [](mlir::OpPassManager &pm, const InstrumentationOptions &opts) {
-                pm.addPass(std::make_unique< patchestry::passes::InstrumentationPass >(
-                    opts.spec_file.getValue()
-                ));
-            }
-        );
+    std::unique_ptr< mlir::Pass > createInstrumentationPass(std::string spec_file) {
+        return std::make_unique< InstrumentationPass >(spec_file);
     }
 
     InstrumentationPass::InstrumentationPass(std::string spec) : spec_file(std::move(spec)) {

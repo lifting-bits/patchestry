@@ -24,13 +24,9 @@
 
 namespace patchestry::passes {
 
-    struct InstrumentationOptions : mlir::PassPipelineOptions< InstrumentationOptions >
-    {
-        Option< std::string > spec_file{ *this, "spec",
-                                         llvm::cl::desc("Patch specification file") };
-    };
+    void registerInstrumentationPasses(std::string spec_file);
 
-    void registerInstrumentationPasses(void);
+    std::unique_ptr< mlir::Pass > createInstrumentationPass(std::string spec_file);
 
     class InstrumentationPass
         : public mlir::PassWrapper< InstrumentationPass, mlir::OperationPass< mlir::ModuleOp > >
