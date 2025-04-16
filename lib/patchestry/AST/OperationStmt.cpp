@@ -318,8 +318,11 @@ namespace patchestry::ast {
         auto *loop_body =
             clang::CompoundStmt::Create(ctx, body, sema().CurFPFeatureOverrides(), loc, loc);
 
-        return new (ctx
-        ) clang::ForStmt(ctx, index_decl, cond_expr, index, inc_expr, loop_body, loc, loc, loc);
+        // Set the condVar to nullptr to avoid redeclaration. The ForStmt redeclare the
+        // conditional stmt causing conflit with init stmt.
+        return new (ctx) clang::ForStmt(
+            ctx, index_decl, cond_expr, nullptr, inc_expr, loop_body, loc, loc, loc
+        );
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_copy(
@@ -531,8 +534,21 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_branchind(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return {};
+        if (op.inputs.size() != 1U) {
+            LOG(ERROR) << "BRANCHIND operation with invalid input operand. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        auto *input_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        auto loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        // Create indirect goto statement for branchind
+        auto *result_stmt = new (ctx) clang::IndirectGotoStmt(loc, loc, input_expr);
+        assert(result_stmt != nullptr && "Failed to create indirect goto statement");
+
+        return { result_stmt, false };
     }
 
     void OpBuilder::extend_callexpr_agruments(
@@ -540,7 +556,7 @@ namespace patchestry::ast {
         std::vector< clang::Expr * > &arguments
     ) {
         auto minargs = fndecl->getMinRequiredArguments();
-        for (unsigned i = static_cast< unsigned >(arguments.size()); i < minargs; i++) {
+        for (auto i = static_cast< unsigned >(arguments.size()); i < minargs; i++) {
             auto *param = fndecl->getParamDecl(i);
             arguments.emplace_back(createDefaultArgument(ctx, param));
         }
