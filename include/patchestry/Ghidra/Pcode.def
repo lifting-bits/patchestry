@@ -18,6 +18,7 @@
         X(BRANCHIND) \
         X(CALL) \
         X(CALLIND) \
+        X(CALLOTHER) \
         X(USERDEFINED) \
         X(RETURN) \
         X(PIECE) \
