@@ -516,6 +516,8 @@ namespace patchestry::ast {
                 return op_builder->create_call(ctx, function, op);
             case Mnemonic::OP_CALLIND:
                 return op_builder->create_callind(ctx, function, op);
+            case Mnemonic::OP_CALLOTHER:
+                return op_builder->create_callother(ctx, function, op);
             case Mnemonic::OP_USERDEFINED:
                 return op_builder->create_userdefined(ctx, function, op);
             case Mnemonic::OP_RETURN:

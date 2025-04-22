@@ -62,6 +62,9 @@ namespace patchestry::ast {
         std::pair< clang::Stmt *, bool >
         create_callind(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
+        std::pair< clang::Stmt *, bool >
+        create_callother(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
         std::pair< clang::Stmt *, bool > create_userdefined(
             clang::ASTContext &ctx, const Function &function, const Operation &op
         );

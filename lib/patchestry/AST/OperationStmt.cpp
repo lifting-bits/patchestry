@@ -716,6 +716,13 @@ namespace patchestry::ast {
         return {};
     }
 
+    std::pair< clang::Stmt *, bool > OpBuilder::create_callother(
+        clang::ASTContext &ctx, const Function &function, const Operation &op
+    ) {
+        (void) ctx, (void) function, (void) op;
+        return {};
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_userdefined(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
