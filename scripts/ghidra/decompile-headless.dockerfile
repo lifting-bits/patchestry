@@ -1,13 +1,13 @@
-FROM eclipse-temurin:17 AS base
+FROM eclipse-temurin:21 AS base
 
 FROM base AS build
 
-ENV GHIDRA_VERSION=11.1.2
+ENV GHIDRA_VERSION=11.3.2
 ENV GRADLE_VERSION=8.2
 ENV GRADLE_HOME=/opt/gradle
-ENV GHIDRA_RELEASE_TAG=20240709
+ENV GHIDRA_RELEASE_TAG=20250415
 ENV GHIDRA_PACKAGE=ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_RELEASE_TAG}
-ENV GHIDRA_SHA256=219ec130b901645779948feeb7cc86f131dd2da6c36284cf538c3a7f3d44b588
+ENV GHIDRA_SHA256=99d45035bdcc3d6627e7b1232b7b379905a9fad76c772c920602e2b5d8b2dac2
 ENV GHIDRA_REPOSITORY=https://github.com/NationalSecurityAgency/ghidra
 
 RUN apt-get update && apt-get install -y \
@@ -37,8 +37,11 @@ RUN wget https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.
 # Set the PATH for Gradle
 ENV PATH="${GRADLE_HOME}/bin:${PATH}"
 
-RUN chmod +x /ghidra/support/buildNatives && \
-    /ghidra/support/buildNatives
+#RUN cd /ghidra/support/buildNatives && \
+#    /ghidra/support/buildNatives
+
+RUN cd /ghidra/support/gradle \
+    && gradle buildNatives
 
 RUN apt-get purge -y --auto-remove wget ca-certificates unzip && \
     apt-get clean

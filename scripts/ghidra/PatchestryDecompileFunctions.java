@@ -104,6 +104,7 @@ import ghidra.program.model.data.Undefined;
 import ghidra.program.model.data.Union;
 import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.data.WideCharDataType;
+import ghidra.program.model.data.UnsignedLongLongDataType;
 
 import ghidra.program.model.symbol.ExternalManager;
 import ghidra.program.model.symbol.Namespace;
@@ -1862,9 +1863,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			Address caller_address = current_function.getFunction().getEntryPoint();
 			Varnode target_node = op.getInput(0);
 			Function callee = null;
-			
-			name("has_return_value").value(op.getOutput() != null);
-			
+
 			if (target_node.isAddress()) {
 				Address target_address = caller_address.getNewAddress(
 						target_node.getOffset());
@@ -1876,6 +1875,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					callee = fm.getReferencedFunction(target_address);	
 				}
 			}
+
+			boolean has_return_value = op.getOutput() != null || (callee != null && callee.getReturnType() != VoidDataType.dataType);
+			name("has_return_value").value(has_return_value);
 
 			name("target");
 			if (callee != null) {
@@ -2507,9 +2509,10 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 									  !function.isThunk() &&
 									  !IGNORED_NAMES.contains(function.getName());
 
-				DecompileResults res = ifc.decompileFunction(function, DECOMPILATION_TIMEOUT, null);
+				DecompileResults res = ifc.decompileFunction(function, DECOMPILATION_TIMEOUT, monitor);
 				HighFunction high_function = res.getHighFunction();
-				
+				// println("Decompiling function: " + res.decompileCompleted());
+				// println("  C: " + res.getDecompiledFunction().getC());
 				name(function_label).beginObject();
 				serialize(high_function, function, visit_pcode);
 				endObject();
@@ -2634,7 +2637,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		for (String option : options.getOptionNames()) {
 			println(option + " = " + options.getValueAsString(option));
 		}
-		mgr.reAnalyzeAll(null);
+		mgr.scheduleOneTimeAnalysis(
+			mgr.getAnalyzer("Aggressive Instruction Finder"), currentProgram.getMemory());
+		mgr.scheduleOneTimeAnalysis(
+			mgr.getAnalyzer("Decompiler Parameter ID"), currentProgram.getMemory());
+
+		mgr.startAnalysis(monitor);
+		mgr.waitForAnalysis(null, monitor);
 	}
 
 	private void runHeadless() throws Exception {
