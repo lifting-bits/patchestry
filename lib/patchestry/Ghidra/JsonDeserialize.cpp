@@ -445,8 +445,9 @@ namespace patchestry::ghidra {
             target.operation = call_op->str();
         }
 
-        target.is_noreturn = maybe_target->getBoolean("is_noreturn").value_or(false);
-        op.target          = std::move(target);
+        target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
+        op.target           = std::move(target);
+        op.has_return_value = call_obj.getBoolean("has_return_value").value_or(false);
     }
 
     void JsonParser::deserialize_branch_operation(const JsonObject &branch_obj, Operation &op) {

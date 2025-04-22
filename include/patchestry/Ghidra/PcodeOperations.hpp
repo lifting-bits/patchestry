@@ -52,14 +52,14 @@ namespace patchestry::ghidra {
 
         static Varnode::Kind convertToKind(const std::string &kdd) {
             static const std::unordered_map< std::string, Varnode::Kind > kind_map = {
-                {  "unknown",   VARNODE_UNKNOWN},
-                {   "global",    VARNODE_GLOBAL},
-                {    "local",     VARNODE_LOCAL},
-                {"parameter",     VARNODE_PARAM},
-                { "function",  VARNODE_FUNCTION},
-                {"temporary", VARNODE_TEMPORARY},
-                { "constant",  VARNODE_CONSTANT},
-                {   "string",    VARNODE_STRING}
+                {   "unknown",   VARNODE_UNKNOWN },
+                {    "global",    VARNODE_GLOBAL },
+                {     "local",     VARNODE_LOCAL },
+                { "parameter",     VARNODE_PARAM },
+                {  "function",  VARNODE_FUNCTION },
+                { "temporary", VARNODE_TEMPORARY },
+                {  "constant",  VARNODE_CONSTANT },
+                {    "string",    VARNODE_STRING }
             };
 
             // if kind is not present in the map, return varnode_unknown
@@ -111,6 +111,7 @@ namespace patchestry::ghidra {
 
         // Call Operation
         std::optional< OperationTarget > target;
+        std::optional< bool > has_return_value;
 
         // Branch Operation
         std::optional< std::string > target_block;
