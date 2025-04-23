@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include "patchestry/Passes/PatchSpec.hpp"
 #include <memory>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/ValueRange.h>
@@ -49,7 +50,6 @@
 #include <mlir/Support/LLVM.h>
 
 #include <patchestry/Passes/InstrumentationPass.hpp>
-#include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
 
 namespace patchestry::passes {
@@ -74,7 +74,7 @@ namespace patchestry::passes {
         parseSpecifications(llvm::StringRef yaml_str) {
             llvm::SourceMgr sm;
             PatchSpec config;
-
+            llvm::errs() << "Parsing YAML: " << yaml_str << "\n";
             llvm::yaml::Input yaml_input(yaml_str, &sm);
             yaml_input >> config;
             if (yaml_input.error()) {
@@ -399,20 +399,22 @@ namespace patchestry::passes {
     ) {
         mlir::SymbolTable dest_sym_table(dest);
         mlir::SymbolTable src_sym_table(src);
+        (void) symbol_name;
 
-        // Lookup the symbol in the source module
-        auto *src_sym = src_sym_table.lookup(symbol_name);
-        if (src_sym == nullptr) {
-            LOG(ERROR) << "Symbol " << symbol_name << " not found in source module\n";
-            return mlir::failure();
+        for (auto &op : *src.getBody()) {
+            if (auto sym_op = mlir::dyn_cast< mlir::SymbolOpInterface >(op)) {
+                std::string sym_name = sym_op.getName().str();
+                if (dest_sym_table.lookup(sym_name) != nullptr) {
+                    LOG(INFO) << "Symbol " << sym_name
+                              << " already exists in destination module, skipping";
+                    continue;
+                }
+
+                // Clone and insert the symbol into the destination module
+                dest.push_back(op.clone());
+            }
         }
 
-        if (dest_sym_table.lookup(symbol_name) != nullptr) {
-            LOG(INFO) << "Symbol " << symbol_name << " already exists in destination module\n";
-            return mlir::success();
-        }
-        // Clone and insert the symbol into the destination module
-        dest.push_back(src_sym->clone());
         return mlir::success();
     }
 

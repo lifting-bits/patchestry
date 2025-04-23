@@ -1,0 +1,14 @@
+arch: "ARM:LE:32"
+patches: 
+  - function: "spo2_lookup"
+    patch_file: "../patchestry/test/patchir-opt/patch_spo2_lookup.c"
+    locals: 
+      - "SVar5"
+    apply_before:
+      target: "patch::before::spo2_lookup"
+      arguments:
+        - "SVar5"
+    apply_after:
+      target: "patch::after::spo2_lookup"
+      arguments:
+        - "return_value"
