@@ -85,7 +85,11 @@ namespace patchestry::instrumentation {
         std::error_code ec;
         llvm::raw_fd_ostream os(output_filename, ec, llvm::sys::fs::OF_None);
         if (ec) {
-            LOG(ERROR) << "Error opening " << output_filename << ": " << ec.message() << "\n";
+            if (ec.value() == ENOENT) {
+                LOG(ERROR) << "Error: Cannot open " << output_filename << " - parent directory does not exist\n";
+            } else {
+                LOG(ERROR) << "Error opening " << output_filename << ": " << ec.message() << "\n";
+            }
             return llvm::failure();
         }
         module->print(os);
