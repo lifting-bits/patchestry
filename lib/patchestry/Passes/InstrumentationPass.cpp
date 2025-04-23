@@ -406,7 +406,7 @@ namespace patchestry::passes {
                 std::string sym_name = sym_op.getName().str();
                 if (dest_sym_table.lookup(sym_name) != nullptr) {
                     LOG(INFO) << "Symbol " << sym_name
-                              << " already exists in destination module, skipping";
+                              << " already exists in destination module, skipping\n";
                     continue;
                 }
 
