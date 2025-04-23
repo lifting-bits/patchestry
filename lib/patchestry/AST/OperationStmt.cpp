@@ -579,8 +579,8 @@ namespace patchestry::ast {
 
         // get the callee and its prototy for creating function argument list
         const auto &callee = function_builder().function_list.get().at(*op.target->function);
-        auto *proto_type   = callee->getType()->getAs< clang::FunctionProtoType >();
-        auto num_params    = proto_type->getNumParams();
+        const auto *proto_type = callee->getType()->getAs< clang::FunctionProtoType >();
+        auto num_params        = proto_type->getNumParams();
 
         // The callee return type may be missing or incorrect during representing high pcode
         // into JSON format. Double check the function return type with operation type and fix
@@ -594,12 +594,15 @@ namespace patchestry::ast {
                 auto epi            = proto_type->getExtProtoInfo();
                 auto new_proto_type = ctx.getFunctionType(op_type, param_types, epi);
                 callee->setType(new_proto_type);
+                for (auto *decl : callee->redecls()) {
+                    decl->setType(new_proto_type);
+                }
             }
         }
 
         auto get_argument_type = [&](const clang::FunctionDecl *callee, clang::Expr *arg,
                                      unsigned index) -> clang::QualType {
-            auto *proto = callee->getType()->getAs< clang::FunctionProtoType >();
+            const auto *proto = callee->getType()->getAs< clang::FunctionProtoType >();
             if (proto->isVariadic() && (index >= proto->getNumParams())) {
                 return arg->getType();
             }

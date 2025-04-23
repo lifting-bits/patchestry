@@ -62,8 +62,10 @@ namespace patchestry::ast {
          * @return A pointer to the created `clang::FunctionDecl` object. Returns `nullptr` if
          * the creation fails due to errors such as an empty function name or an invalid type.
          */
-        clang::FunctionDecl *
-        create_declaration(clang::ASTContext &ctx, bool is_definition = false);
+        clang::FunctionDecl *create_declaration(
+            clang::ASTContext &ctx, const clang::QualType &function_type,
+            bool is_definition = false
+        );
 
         /**
          * @brief Creates a function type based on the provided function prototype.

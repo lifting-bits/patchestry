@@ -87,7 +87,11 @@ namespace patchestry::ast {
         , global_var_list(globals)
         , local_variables({}) {
         if (!function.key.empty()) {
-            if (auto *function_decl = create_declaration(ci.getASTContext())) {
+            if (auto *function_decl = create_declaration(
+                    ci.getASTContext(),
+                    create_function_type(ci.getASTContext(), function.prototype)
+                ))
+            {
                 prev_decl = function_decl;
                 function_list.get().emplace(function.key, prev_decl);
             }
@@ -115,18 +119,19 @@ namespace patchestry::ast {
      * @return A pointer to the created `clang::FunctionDecl` object. Returns `nullptr` if the
      * creation fails due to errors such as an empty function name or an invalid type.
      */
-    clang::FunctionDecl *
-    FunctionBuilder::create_declaration(clang::ASTContext &ctx, bool is_definition) {
+    clang::FunctionDecl *FunctionBuilder::create_declaration(
+        clang::ASTContext &ctx, const clang::QualType &function_type, bool is_definition
+    ) {
         if (function.get().name.empty()) {
             LOG(ERROR) << "Function name is empty. function key " << function.get().key << "\n";
             return {};
         }
 
-        auto function_type = create_function_type(ctx, function.get().prototype);
-        auto location      = clang::SourceLocation();
-        auto *func_decl    = clang::FunctionDecl::Create(
+        auto location   = clang::SourceLocation();
+        auto *func_decl = clang::FunctionDecl::Create(
             ctx, ctx.getTranslationUnitDecl(), location, location,
-            &ctx.Idents.get(function.get().name), function_type, nullptr, clang::SC_None
+            &ctx.Idents.get(function.get().name), function_type,
+            ctx.getTrivialTypeSourceInfo(function_type), clang::SC_None
         );
 
         if (func_decl == nullptr) {
@@ -312,9 +317,12 @@ namespace patchestry::ast {
             return {};
         }
 
-        // basic_block_stmts.clear();
+        // if previous declaration exist use it's type
+        auto function_type = prev_decl != nullptr
+            ? prev_decl->getType()
+            : create_function_type(ctx, function.get().prototype);
 
-        auto *function_def = create_declaration(ctx, /*is_definition=*/true);
+        auto *function_def = create_declaration(ctx, function_type, /*is_definition=*/true);
         if (function_def == nullptr) {
             LOG(ERROR) << "Failed to create function definition. key: " << function.get().key
                        << "\n";
@@ -323,7 +331,6 @@ namespace patchestry::ast {
 
         // Set previous declaration if exist
         function_def->setPreviousDecl(prev_decl);
-        prev_decl = function_def;
 
         // Before creating function body, set sema context to the current function. It gets used
         // to set lexical and sema decl context for ast nodes.
@@ -335,6 +342,7 @@ namespace patchestry::ast {
             sourceLocation(ctx.getSourceManager(), function.get().key),
             sourceLocation(ctx.getSourceManager(), function.get().key)
         ));
+        function_def->setWillHaveBody(true);
         set_sema_context(prev_context);
 
         return function_def;
