@@ -33,17 +33,17 @@ namespace patchestry::cl {
     ); // NOLINT(cert-err58-cpp)
 
     const cl::opt< std::string > input_filename( // NOLINT(cert-err58-cpp)
-        llvm::cl::Positional, llvm::cl::desc("<input file>"), llvm::cl::init("-"),
+        llvm::cl::Positional, llvm::cl::desc("<input CIR file to patch>"), llvm::cl::init("-"),
         cl::cat(category)
     );
 
     const cl::opt< std::string > output_filename( // NOLINT(cert-err58-cpp)
-        "o", llvm::cl::desc("Output filename"), llvm::cl::value_desc("filename"),
+        "o", llvm::cl::desc("Output filename for the patched CIR"), llvm::cl::value_desc("filename"),
         llvm::cl::init("-"), cl::cat(category)
     );
 
     const cl::opt< std::string > spec_filename( // NOLINT(cert-err58-cpp)
-        "spec", llvm::cl::desc("Specification file for patches"),
+        "spec", llvm::cl::desc("Specification file for patch placement (in YAML)"),
         llvm::cl::value_desc("filename"), llvm::cl::cat(category)
     );
 
