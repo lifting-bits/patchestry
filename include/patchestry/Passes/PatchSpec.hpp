@@ -35,6 +35,7 @@ namespace patchestry::passes {
         std::string function;
         std::string patch_file;
         std::optional< std::string > patch_module;
+        std::vector< std::string > locals;
         std::vector< PatchOperation > operations;
     };
 
@@ -67,6 +68,7 @@ namespace llvm::yaml {
         static void mapping(IO &io, patchestry::passes::PatchConfig &spec) {
             io.mapRequired("function", spec.function);
             io.mapOptional("patch_file", spec.patch_file);
+            io.mapOptional("locals", spec.locals);
 
             patchestry::passes::PatchOperation before_operation;
             patchestry::passes::PatchOperation after_operation;

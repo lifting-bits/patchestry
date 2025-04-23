@@ -1,0 +1,2516 @@
+{
+  "arch": "ARM",
+  "id": "ARM:LE:32:v8",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:08000b2c": {
+      "name": "measurement_update",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "56e6a64d",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:08000b2c:0:basic": {
+          "operations": {
+            "ram:08000b30:17:20": {
+              "mnemonic": "CALL",
+              "type": "2c7b6d4",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd00:0:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:08000668",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": []
+            },
+            "ram:08000b3e:28:21": {
+              "mnemonic": "INT_SUB",
+              "type": "2c7b6d4",
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "local",
+                  "operation": "unique:000dfd00:0:0"
+                },
+                {
+                  "type": "2c7b6d4",
+                  "kind": "global",
+                  "global": "ram:20000104"
+                }
+              ]
+            },
+            "ram:08000b42:2285:22": {
+              "mnemonic": "CAST",
+              "type": "56d5e94b",
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "temporary",
+                  "operation": "ram:08000b3e:28:21"
+                }
+              ]
+            },
+            "ram:08000b42:45:23": {
+              "mnemonic": "INT_LESS",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "global",
+                  "global": "ram:20000154"
+                },
+                {
+                  "type": "56d5e94b",
+                  "kind": "temporary",
+                  "operation": "ram:08000b42:2285:22"
+                }
+              ]
+            },
+            "ram:08000b42:46:24": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000b46:1:basic",
+              "not_taken_block": "ram:08000c6a:14:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000b42:45:23"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000b30:17:20",
+            "ram:08000b3e:28:21",
+            "ram:08000b42:2285:22",
+            "ram:08000b42:45:23",
+            "ram:08000b42:46:24"
+          ]
+        },
+        "ram:08000b46:1:basic": {
+          "operations": {
+            "ram:08000b46:2273:0": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "88575794",
+              "inputs": [
+                {
+                  "type": "9bb5cdc",
+                  "kind": "local",
+                  "operation": "unique:000dfd01:1:0"
+                }
+              ]
+            },
+            "ram:08000b48:194:21": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080009ac",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "88575794",
+                  "kind": "temporary",
+                  "operation": "ram:08000b46:2273:0"
+                }
+              ]
+            },
+            "ram:08000b4e:199:22": {
+              "mnemonic": "INT_ZEXT",
+              "type": "56d5e94b",
+              "inputs": [
+                {
+                  "type": "9bb5cdc",
+                  "kind": "local",
+                  "operation": "unique:000dfd02:2:0"
+                }
+              ]
+            },
+            "ram:08000b4e:2286:23": {
+              "mnemonic": "CAST",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd03:3:0"
+              },
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "temporary",
+                  "operation": "ram:08000b4e:199:22"
+                }
+              ]
+            },
+            "ram:08000b52:2275:24": {
+              "mnemonic": "COPY",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd04:4:0"
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd03:3:0"
+                }
+              ]
+            },
+            "ram:08000b52:2287:25": {
+              "mnemonic": "CAST",
+              "type": "2fc924a2:3660426063961501102",
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd03:3:0"
+                }
+              ]
+            },
+            "ram:08000b52:208:46": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080029c0",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "2fc924a2:3660426063961501102",
+                  "kind": "temporary",
+                  "operation": "ram:08000b52:2287:25"
+                }
+              ]
+            },
+            "ram:08000b5e:2271:47": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "4512a1aa",
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "global",
+                  "global": "ram:200000f4"
+                }
+              ]
+            },
+            "ram:08000b5e:228:67": {
+              "mnemonic": "CALL",
+              "type": "2169b041",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080007cc",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "4512a1aa",
+                  "kind": "temporary",
+                  "operation": "ram:08000b5e:2271:47"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd04:4:0"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "constant",
+                  "value": 1064514355
+                }
+              ]
+            },
+            "ram:08000b5e:2288:68": {
+              "mnemonic": "CAST",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd05:5:0"
+              },
+              "inputs": [
+                {
+                  "type": "2169b041",
+                  "kind": "temporary",
+                  "operation": "ram:08000b5e:228:67"
+                }
+              ]
+            },
+            "ram:08000b6a:256:88": {
+              "mnemonic": "CALL",
+              "type": "2169b041",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080007ee",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "global",
+                  "global": "ram:2000010c"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd05:5:0"
+                },
+                {
+                  "type": "2c7b6d4",
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:08000b6a:2289:89": {
+              "mnemonic": "CAST",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd04:4:0"
+              },
+              "inputs": [
+                {
+                  "type": "2169b041",
+                  "kind": "temporary",
+                  "operation": "ram:08000b6a:256:88"
+                }
+              ]
+            },
+            "ram:08000b74:275:109": {
+              "mnemonic": "CALL",
+              "type": "2169b041",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080007ee",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "global",
+                  "global": "ram:20000174"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd04:4:0"
+                },
+                {
+                  "type": "2c7b6d4",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000b74:2290:110": {
+              "mnemonic": "CAST",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd04:4:0"
+              },
+              "inputs": [
+                {
+                  "type": "2169b041",
+                  "kind": "temporary",
+                  "operation": "ram:08000b74:275:109"
+                }
+              ]
+            },
+            "ram:08000b7e:2267:111": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "6dbd011a",
+              "inputs": [
+                {
+                  "type": "2169afe1",
+                  "kind": "global",
+                  "global": "ram:200000b8"
+                }
+              ]
+            },
+            "ram:08000b7e:2291:112": {
+              "mnemonic": "CAST",
+              "type": "4512a1aa",
+              "inputs": [
+                {
+                  "type": "6dbd011a",
+                  "kind": "temporary",
+                  "operation": "ram:08000b7e:2267:111"
+                }
+              ]
+            },
+            "ram:08000b7e:291:132": {
+              "mnemonic": "CALL",
+              "type": "2169b041",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:0800084c",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "4512a1aa",
+                  "kind": "temporary",
+                  "operation": "ram:08000b7e:2291:112"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd05:5:0"
+                }
+              ]
+            },
+            "ram:08000b7e:2292:133": {
+              "mnemonic": "CAST",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd06:6:0"
+              },
+              "inputs": [
+                {
+                  "type": "2169b041",
+                  "kind": "temporary",
+                  "operation": "ram:08000b7e:291:132"
+                }
+              ]
+            },
+            "ram:08000b86:298:134": {
+              "mnemonic": "INT_ZEXT",
+              "type": "56d5e94b",
+              "inputs": [
+                {
+                  "type": "9bb5cdc",
+                  "kind": "local",
+                  "operation": "unique:000dfd01:1:0"
+                }
+              ]
+            },
+            "ram:08000b86:2293:135": {
+              "mnemonic": "CAST",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd07:7:0"
+              },
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "temporary",
+                  "operation": "ram:08000b86:298:134"
+                }
+              ]
+            },
+            "ram:08000b88:2294:136": {
+              "mnemonic": "CAST",
+              "type": "2fc924a2:3660426063961501102",
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd07:7:0"
+                }
+              ]
+            },
+            "ram:08000b88:302:156": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080029c0",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "2fc924a2:3660426063961501102",
+                  "kind": "temporary",
+                  "operation": "ram:08000b88:2294:136"
+                }
+              ]
+            },
+            "ram:08000b94:2272:157": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "4512a1aa",
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "global",
+                  "global": "ram:200000fc"
+                }
+              ]
+            },
+            "ram:08000b94:322:176": {
+              "mnemonic": "CALL",
+              "type": "2169b041",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080007cc",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "4512a1aa",
+                  "kind": "temporary",
+                  "operation": "ram:08000b94:2272:157"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd07:7:0"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "constant",
+                  "value": 1064514355
+                }
+              ]
+            },
+            "ram:08000b94:2295:177": {
+              "mnemonic": "CAST",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd07:7:0"
+              },
+              "inputs": [
+                {
+                  "type": "2169b041",
+                  "kind": "temporary",
+                  "operation": "ram:08000b94:322:176"
+                }
+              ]
+            },
+            "ram:08000b9a:328:197": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:08001fac",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd07:7:0"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "global",
+                  "global": "ram:200000fc"
+                }
+              ]
+            },
+            "ram:08000ba4:352:217": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:08001fac",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd05:5:0"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "global",
+                  "global": "ram:200000f4"
+                }
+              ]
+            },
+            "ram:08000bac:2268:218": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "6dbd011a",
+              "inputs": [
+                {
+                  "type": "2169afe1",
+                  "kind": "global",
+                  "global": "ram:200000c4"
+                }
+              ]
+            },
+            "ram:08000bac:2296:219": {
+              "mnemonic": "CAST",
+              "type": "4512a1aa",
+              "inputs": [
+                {
+                  "type": "6dbd011a",
+                  "kind": "temporary",
+                  "operation": "ram:08000bac:2268:218"
+                }
+              ]
+            },
+            "ram:08000bac:366:238": {
+              "mnemonic": "CALL",
+              "type": "2169b041",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:0800084c",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "4512a1aa",
+                  "kind": "temporary",
+                  "operation": "ram:08000bac:2296:219"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd05:5:0"
+                }
+              ]
+            },
+            "ram:08000bac:2297:239": {
+              "mnemonic": "CAST",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd05:5:0"
+              },
+              "inputs": [
+                {
+                  "type": "2169b041",
+                  "kind": "temporary",
+                  "operation": "ram:08000bac:366:238"
+                }
+              ]
+            },
+            "ram:08000bb6:2269:240": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "6dbd011a",
+              "inputs": [
+                {
+                  "type": "2169afe1",
+                  "kind": "global",
+                  "global": "ram:200000d0"
+                }
+              ]
+            },
+            "ram:08000bb6:2298:241": {
+              "mnemonic": "CAST",
+              "type": "4512a1aa",
+              "inputs": [
+                {
+                  "type": "6dbd011a",
+                  "kind": "temporary",
+                  "operation": "ram:08000bb6:2269:240"
+                }
+              ]
+            },
+            "ram:08000bb6:389:260": {
+              "mnemonic": "CALL",
+              "type": "2169b041",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:0800084c",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "4512a1aa",
+                  "kind": "temporary",
+                  "operation": "ram:08000bb6:2298:241"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd07:7:0"
+                }
+              ]
+            },
+            "ram:08000bb6:2299:261": {
+              "mnemonic": "CAST",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd07:7:0"
+              },
+              "inputs": [
+                {
+                  "type": "2169b041",
+                  "kind": "temporary",
+                  "operation": "ram:08000bb6:389:260"
+                }
+              ]
+            },
+            "ram:08000bc2:421:281": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:0800233c",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd05:5:0"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd05:5:0"
+                }
+              ]
+            },
+            "ram:08000bc8:427:301": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:08001c70",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd05:5:0"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "global",
+                  "global": "ram:200000b0"
+                }
+              ]
+            },
+            "ram:08000bd4:2277:302": {
+              "mnemonic": "COPY",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000b0"
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd05:5:0"
+                }
+              ]
+            },
+            "ram:08000bd4:452:322": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:0800233c",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd07:7:0"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd07:7:0"
+                }
+              ]
+            },
+            "ram:08000bda:458:342": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:08001c70",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd07:7:0"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "global",
+                  "global": "ram:200000b4"
+                }
+              ]
+            },
+            "ram:08000bde:459:343": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "6dbd7579",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd08:8:0"
+              },
+              "inputs": [
+                {
+                  "type": "806fec25",
+                  "kind": "global",
+                  "global": "ram:2000020a"
+                }
+              ]
+            },
+            "ram:08000be6:1409:344": {
+              "mnemonic": "INT_ADD",
+              "type": "806fec25",
+              "output": {
+                "kind": "global",
+                "global": "ram:2000020a"
+              },
+              "inputs": [
+                {
+                  "type": "806fec25",
+                  "kind": "global",
+                  "global": "ram:2000020a"
+                },
+                {
+                  "type": "806fec25",
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:08000bec:2278:345": {
+              "mnemonic": "COPY",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000b4"
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd07:7:0"
+                }
+              ]
+            },
+            "ram:08000bec:2300:346": {
+              "mnemonic": "CAST",
+              "type": "56d5e94b",
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd03:3:0"
+                }
+              ]
+            },
+            "ram:08000bec:487:366": {
+              "mnemonic": "CALL",
+              "type": "2169b0c1",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd09:9:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080009d0",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "temporary",
+                  "operation": "ram:08000bec:2300:346"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd06:6:0"
+                }
+              ]
+            },
+            "ram:08000bec:766:367": {
+              "mnemonic": "SUBPIECE",
+              "type": "2c7b6d4",
+              "inputs": [
+                {
+                  "type": "2169b0c1",
+                  "kind": "local",
+                  "operation": "unique:000dfd09:9:0"
+                },
+                {
+                  "type": "2169b041",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000bf0:492:368": {
+              "mnemonic": "INT_NOTEQUAL",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "temporary",
+                  "operation": "ram:08000bec:766:367"
+                },
+                {
+                  "type": "2c7b6d4",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000bf2:498:369": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000bf4:2:basic",
+              "not_taken_block": "ram:08000bfc:3:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000bf0:492:368"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000b46:2273:0",
+            "ram:08000b48:194:21",
+            "ram:08000b4e:199:22",
+            "ram:08000b4e:2286:23",
+            "ram:08000b52:2275:24",
+            "ram:08000b52:2287:25",
+            "ram:08000b52:208:46",
+            "ram:08000b5e:2271:47",
+            "ram:08000b5e:228:67",
+            "ram:08000b5e:2288:68",
+            "ram:08000b6a:256:88",
+            "ram:08000b6a:2289:89",
+            "ram:08000b74:275:109",
+            "ram:08000b74:2290:110",
+            "ram:08000b7e:2267:111",
+            "ram:08000b7e:2291:112",
+            "ram:08000b7e:291:132",
+            "ram:08000b7e:2292:133",
+            "ram:08000b86:298:134",
+            "ram:08000b86:2293:135",
+            "ram:08000b88:2294:136",
+            "ram:08000b88:302:156",
+            "ram:08000b94:2272:157",
+            "ram:08000b94:322:176",
+            "ram:08000b94:2295:177",
+            "ram:08000b9a:328:197",
+            "ram:08000ba4:352:217",
+            "ram:08000bac:2268:218",
+            "ram:08000bac:2296:219",
+            "ram:08000bac:366:238",
+            "ram:08000bac:2297:239",
+            "ram:08000bb6:2269:240",
+            "ram:08000bb6:2298:241",
+            "ram:08000bb6:389:260",
+            "ram:08000bb6:2299:261",
+            "ram:08000bc2:421:281",
+            "ram:08000bc8:427:301",
+            "ram:08000bd4:2277:302",
+            "ram:08000bd4:452:322",
+            "ram:08000bda:458:342",
+            "ram:08000bde:459:343",
+            "ram:08000be6:1409:344",
+            "ram:08000bec:2278:345",
+            "ram:08000bec:2300:346",
+            "ram:08000bec:487:366",
+            "ram:08000bec:766:367",
+            "ram:08000bf0:492:368",
+            "ram:08000bf2:498:369"
+          ]
+        },
+        "ram:08000bf4:2:basic": {
+          "operations": {
+            "ram:08000bf4:499:0": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "6dbd7579",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd08:8:0"
+              },
+              "inputs": [
+                {
+                  "type": "9bb5cdc",
+                  "kind": "global",
+                  "global": "ram:20000208"
+                }
+              ]
+            },
+            "ram:08000bf8:1412:1": {
+              "mnemonic": "INT_ADD",
+              "type": "9bb5cdc",
+              "output": {
+                "kind": "global",
+                "global": "ram:20000208"
+              },
+              "inputs": [
+                {
+                  "type": "9bb5cdc",
+                  "kind": "global",
+                  "global": "ram:20000208"
+                },
+                {
+                  "type": "9bb5cdc",
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:08000bf4:2:basic.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000bfc:3:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:08000bf4:499:0",
+            "ram:08000bf8:1412:1",
+            "ram:08000bf4:2:basic.exit"
+          ]
+        },
+        "ram:08000bfc:3:basic": {
+          "operations": {
+            "ram:08000c02:524:2": {
+              "mnemonic": "INT_EQUAL",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "55d79ccc",
+                  "kind": "global",
+                  "global": "ram:20000168"
+                },
+                {
+                  "type": "55d79ccc",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000c04:530:3": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000c96:4:basic",
+              "not_taken_block": "ram:08000c06:5:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000c02:524:2"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c02:524:2",
+            "ram:08000c04:530:3"
+          ]
+        },
+        "ram:08000c96:4:basic": {
+          "operations": {
+            "ram:08000c9a:2264:0": {
+              "mnemonic": "COPY",
+              "type": "4ecbe51:3660426063961501099",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000e0"
+              },
+              "inputs": [
+                {
+                  "type": "4ecbe51:3660426063961501099",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000c9a:2265:1": {
+              "mnemonic": "COPY",
+              "type": "2c7b6d4",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000e4"
+              },
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000c9a:712:2": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000c38:7:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c9a:2264:0",
+            "ram:08000c9a:2265:1",
+            "ram:08000c9a:712:2"
+          ]
+        },
+        "ram:08000c06:5:basic": {
+          "operations": {
+            "ram:08000c0a:537:19": {
+              "mnemonic": "CALL",
+              "type": "4ecbe51:3660426063961501099",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000e0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080028e4",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "global",
+                  "global": "ram:2000015c"
+                }
+              ]
+            },
+            "ram:08000c16:554:20": {
+              "mnemonic": "INT_LESS",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "9bb5cdc",
+                  "kind": "constant",
+                  "value": 2
+                },
+                {
+                  "type": "9bb5cdc",
+                  "kind": "global",
+                  "global": "ram:20000208"
+                }
+              ]
+            },
+            "ram:08000c16:555:21": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000c18:6:basic",
+              "not_taken_block": "ram:08000c38:7:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000c16:554:20"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c0a:537:19",
+            "ram:08000c16:554:20",
+            "ram:08000c16:555:21"
+          ]
+        },
+        "ram:08000c18:6:basic": {
+          "operations": {
+            "ram:08000c1c:2276:0": {
+              "mnemonic": "COPY",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd06:6:0"
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "global",
+                  "global": "ram:200000b4"
+                }
+              ]
+            },
+            "ram:08000c1c:563:22": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:08001fac",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "global",
+                  "global": "ram:200000b4"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "global",
+                  "global": "ram:200000b0"
+                }
+              ]
+            },
+            "ram:08000c20:2301:23": {
+              "mnemonic": "CAST",
+              "type": "56d5e94b",
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd06:6:0"
+                }
+              ]
+            },
+            "ram:08000c20:2302:24": {
+              "mnemonic": "CAST",
+              "type": "56d5e94b",
+              "inputs": [
+                {
+                  "type": "6dbd7579",
+                  "kind": "local",
+                  "operation": "unique:000dfd08:8:0"
+                }
+              ]
+            },
+            "ram:08000c20:567:43": {
+              "mnemonic": "CALL",
+              "type": "2169b041",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080004fa",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "temporary",
+                  "operation": "ram:08000c20:2301:23"
+                },
+                {
+                  "type": "2169b041",
+                  "kind": "local",
+                  "operation": "unique:000dfd0a:10:0"
+                },
+                {
+                  "type": "56d5e94b",
+                  "kind": "temporary",
+                  "operation": "ram:08000c20:2302:24"
+                }
+              ]
+            },
+            "ram:08000c20:2303:44": {
+              "mnemonic": "CAST",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd06:6:0"
+              },
+              "inputs": [
+                {
+                  "type": "2169b041",
+                  "kind": "temporary",
+                  "operation": "ram:08000c20:567:43"
+                }
+              ]
+            },
+            "ram:08000c24:571:63": {
+              "mnemonic": "CALL",
+              "type": "55d79ccc",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd0b:11:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:080008b0",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd06:6:0"
+                }
+              ]
+            },
+            "ram:08000c24:758:64": {
+              "mnemonic": "INT_SEXT",
+              "type": "2c7b6d4",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000e4"
+              },
+              "inputs": [
+                {
+                  "type": "55d79ccc",
+                  "kind": "local",
+                  "operation": "unique:000dfd0b:11:0"
+                }
+              ]
+            },
+            "ram:08000c2a:578:65": {
+              "mnemonic": "COPY",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000b0"
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000c2c:580:66": {
+              "mnemonic": "COPY",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000b4"
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000c34:591:67": {
+              "mnemonic": "COPY",
+              "type": "806fec25",
+              "output": {
+                "kind": "global",
+                "global": "ram:2000020a"
+              },
+              "inputs": [
+                {
+                  "type": "806fec25",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000c36:594:68": {
+              "mnemonic": "COPY",
+              "type": "9bb5cdc",
+              "output": {
+                "kind": "global",
+                "global": "ram:20000208"
+              },
+              "inputs": [
+                {
+                  "type": "9bb5cdc",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000c18:6:basic.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000c38:7:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c1c:2276:0",
+            "ram:08000c1c:563:22",
+            "ram:08000c20:2301:23",
+            "ram:08000c20:2302:24",
+            "ram:08000c20:567:43",
+            "ram:08000c20:2303:44",
+            "ram:08000c24:571:63",
+            "ram:08000c24:758:64",
+            "ram:08000c2a:578:65",
+            "ram:08000c2c:580:66",
+            "ram:08000c34:591:67",
+            "ram:08000c36:594:68",
+            "ram:08000c18:6:basic.exit"
+          ]
+        },
+        "ram:08000c38:7:basic": {
+          "operations": {
+            "ram:08000c40:601:16": {
+              "mnemonic": "COPY",
+              "type": "2169b041",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000ec"
+              },
+              "inputs": [
+                {
+                  "type": "2169b041",
+                  "kind": "constant",
+                  "value": 3248488448
+                }
+              ]
+            },
+            "ram:08000c42:603:17": {
+              "mnemonic": "COPY",
+              "type": "2169b041",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000f0"
+              },
+              "inputs": [
+                {
+                  "type": "2169b041",
+                  "kind": "constant",
+                  "value": 1101004800
+                }
+              ]
+            },
+            "ram:08000c46:616:36": {
+              "mnemonic": "CALL",
+              "type": "2c7b6d4",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd0c:12:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:08001bf0",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd04:4:0"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "constant",
+                  "value": 3248488448
+                }
+              ]
+            },
+            "ram:08000c4a:621:37": {
+              "mnemonic": "INT_EQUAL",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "local",
+                  "operation": "unique:000dfd0c:12:0"
+                },
+                {
+                  "type": "2c7b6d4",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000c4c:627:38": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000c9c:8:basic",
+              "not_taken_block": "ram:08000c4e:10:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000c4a:621:37"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c40:601:16",
+            "ram:08000c42:603:17",
+            "ram:08000c46:616:36",
+            "ram:08000c4a:621:37",
+            "ram:08000c4c:627:38"
+          ]
+        },
+        "ram:08000c9c:8:basic": {
+          "operations": {
+            "ram:08000ca0:688:18": {
+              "mnemonic": "CALL",
+              "type": "2c7b6d4",
+              "output": {
+                "kind": "local",
+                "operation": "unique:000dfd0c:12:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:08001c18",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd04:4:0"
+                },
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "constant",
+                  "value": 1101004800
+                }
+              ]
+            },
+            "ram:08000ca4:693:19": {
+              "mnemonic": "INT_NOTEQUAL",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "local",
+                  "operation": "unique:000dfd0c:12:0"
+                },
+                {
+                  "type": "2c7b6d4",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000ca6:2281:20": {
+              "mnemonic": "COPY",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000e8"
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "local",
+                  "operation": "unique:000dfd04:4:0"
+                }
+              ]
+            },
+            "ram:08000ca6:699:21": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000cae:9:basic",
+              "not_taken_block": "ram:08000c50:11:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000ca4:693:19"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000ca0:688:18",
+            "ram:08000ca4:693:19",
+            "ram:08000ca6:2281:20",
+            "ram:08000ca6:699:21"
+          ]
+        },
+        "ram:08000cae:9:basic": {
+          "operations": {
+            "ram:08000cae:706:0": {
+              "mnemonic": "COPY",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000e8"
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "constant",
+                  "value": 1101004800
+                }
+              ]
+            },
+            "ram:08000cb0:707:2": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000c50:11:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:08000cae:706:0",
+            "ram:08000cb0:707:2"
+          ]
+        },
+        "ram:08000c4e:10:basic": {
+          "operations": {
+            "ram:08000c4e:629:0": {
+              "mnemonic": "COPY",
+              "type": "ffce3474:3660426063961501105",
+              "output": {
+                "kind": "global",
+                "global": "ram:200000e8"
+              },
+              "inputs": [
+                {
+                  "type": "ffce3474:3660426063961501105",
+                  "kind": "constant",
+                  "value": 3248488448
+                }
+              ]
+            },
+            "ram:08000c4e:10:basic.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000c50:11:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c4e:629:0",
+            "ram:08000c4e:10:basic.exit"
+          ]
+        },
+        "ram:08000c50:11:basic": {
+          "operations": {
+            "ram:08000c54:637:18": {
+              "mnemonic": "INT_NOTEQUAL",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "bcc0bc9",
+                  "kind": "global",
+                  "global": "ram:200000dc"
+                },
+                {
+                  "type": "bcc0bc9",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000c56:643:19": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000c58:12:basic",
+              "not_taken_block": "ram:08000c5c:13:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000c54:637:18"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c54:637:18",
+            "ram:08000c56:643:19"
+          ]
+        },
+        "ram:08000c58:12:basic": {
+          "operations": {
+            "ram:08000c5a:2270:0": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "7cb62847",
+              "inputs": [
+                {
+                  "type": "4ecbe51:3660426063961501099",
+                  "kind": "global",
+                  "global": "ram:200000e0"
+                }
+              ]
+            },
+            "ram:08000c5a:654:19": {
+              "mnemonic": "CALLIND",
+              "has_return_value": false,
+              "target": {
+                "type": "bcc0bc9",
+                "kind": "global",
+                "global": "ram:200000dc"
+              },
+              "inputs": [
+                {
+                  "type": "7cb62847",
+                  "kind": "temporary",
+                  "operation": "ram:08000c5a:2270:0"
+                }
+              ]
+            },
+            "ram:08000c58:12:basic.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000c5c:13:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c5a:2270:0",
+            "ram:08000c5a:654:19",
+            "ram:08000c58:12:basic.exit"
+          ]
+        },
+        "ram:08000c5c:13:basic": {
+          "operations": {
+            "ram:08000c66:665:17": {
+              "mnemonic": "INT_ADD",
+              "type": "56d5e94b",
+              "output": {
+                "kind": "global",
+                "global": "ram:20000204"
+              },
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "global",
+                  "global": "ram:20000204"
+                },
+                {
+                  "type": "56d5e94b",
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:08000c68:2282:18": {
+              "mnemonic": "COPY",
+              "type": "2c7b6d4",
+              "output": {
+                "kind": "global",
+                "global": "ram:20000104"
+              },
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "local",
+                  "operation": "unique:000dfd00:0:0"
+                }
+              ]
+            },
+            "ram:08000c5c:13:basic.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000c6a:14:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c66:665:17",
+            "ram:08000c68:2282:18",
+            "ram:08000c5c:13:basic.exit"
+          ]
+        },
+        "ram:08000c6a:14:basic": {
+          "operations": {
+            "ram:08000c70:55:18": {
+              "mnemonic": "INT_SUB",
+              "type": "2c7b6d4",
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "local",
+                  "operation": "unique:000dfd00:0:0"
+                },
+                {
+                  "type": "2c7b6d4",
+                  "kind": "global",
+                  "global": "ram:20000108"
+                }
+              ]
+            },
+            "ram:08000c78:2304:19": {
+              "mnemonic": "CAST",
+              "type": "56d5e94b",
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "temporary",
+                  "operation": "ram:08000c70:55:18"
+                }
+              ]
+            },
+            "ram:08000c78:92:20": {
+              "mnemonic": "INT_LESS",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "constant",
+                  "value": 1000
+                },
+                {
+                  "type": "56d5e94b",
+                  "kind": "temporary",
+                  "operation": "ram:08000c78:2304:19"
+                }
+              ]
+            },
+            "ram:08000c78:93:22": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000c7a:15:basic",
+              "not_taken_block": "ram:08000c92:21:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000c78:92:20"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c70:55:18",
+            "ram:08000c78:2304:19",
+            "ram:08000c78:92:20",
+            "ram:08000c78:93:22"
+          ]
+        },
+        "ram:08000c7a:15:basic": {
+          "operations": {
+            "ram:08000c80:107:0": {
+              "mnemonic": "INT_LESS",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "global",
+                  "global": "ram:20000204"
+                },
+                {
+                  "type": "56d5e94b",
+                  "kind": "constant",
+                  "value": 111
+                }
+              ]
+            },
+            "ram:08000c80:108:1": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000cb2:16:basic",
+              "not_taken_block": "ram:08000c82:19:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000c80:107:0"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c80:107:0",
+            "ram:08000c80:108:1"
+          ]
+        },
+        "ram:08000cb2:16:basic": {
+          "operations": {
+            "ram:08000cb4:163:0": {
+              "mnemonic": "INT_LESS",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "global",
+                  "global": "ram:20000204"
+                },
+                {
+                  "type": "56d5e94b",
+                  "kind": "constant",
+                  "value": 90
+                }
+              ]
+            },
+            "ram:08000cb4:164:1": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000cb6:17:basic",
+              "not_taken_block": "ram:08000c8a:20:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000cb4:163:0"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000cb4:163:0",
+            "ram:08000cb4:164:1"
+          ]
+        },
+        "ram:08000cb6:17:basic": {
+          "operations": {
+            "ram:08000cba:172:0": {
+              "mnemonic": "INT_NOTEQUAL",
+              "type": "55cce7b8",
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "global",
+                  "global": "ram:20000154"
+                },
+                {
+                  "type": "56d5e94b",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000cbc:178:1": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:08000cbe:18:basic",
+              "not_taken_block": "ram:08000c8a:20:basic",
+              "condition": {
+                "type": "55cce7b8",
+                "kind": "temporary",
+                "operation": "ram:08000cba:172:0"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:08000cba:172:0",
+            "ram:08000cbc:178:1"
+          ]
+        },
+        "ram:08000cbe:18:basic": {
+          "operations": {
+            "ram:08000cbe:181:0": {
+              "mnemonic": "INT_SUB",
+              "type": "56d5e94b",
+              "output": {
+                "kind": "global",
+                "global": "ram:20000154"
+              },
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "global",
+                  "global": "ram:20000154"
+                },
+                {
+                  "type": "56d5e94b",
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:08000cc0:188:1": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000c8a:20:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:08000cbe:181:0",
+            "ram:08000cc0:188:1"
+          ]
+        },
+        "ram:08000c82:19:basic": {
+          "operations": {
+            "ram:08000c86:114:0": {
+              "mnemonic": "INT_ADD",
+              "type": "56d5e94b",
+              "output": {
+                "kind": "global",
+                "global": "ram:20000154"
+              },
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "global",
+                  "global": "ram:20000154"
+                },
+                {
+                  "type": "56d5e94b",
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:08000c82:19:basic.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000c8a:20:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c86:114:0",
+            "ram:08000c82:19:basic.exit"
+          ]
+        },
+        "ram:08000c8a:20:basic": {
+          "operations": {
+            "ram:08000c90:133:1": {
+              "mnemonic": "COPY",
+              "type": "56d5e94b",
+              "output": {
+                "kind": "global",
+                "global": "ram:20000204"
+              },
+              "inputs": [
+                {
+                  "type": "56d5e94b",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:08000c90:2284:2": {
+              "mnemonic": "COPY",
+              "type": "2c7b6d4",
+              "output": {
+                "kind": "global",
+                "global": "ram:20000108"
+              },
+              "inputs": [
+                {
+                  "type": "2c7b6d4",
+                  "kind": "local",
+                  "operation": "unique:000dfd00:0:0"
+                }
+              ]
+            },
+            "ram:08000c8a:20:basic.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000c92:21:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c90:133:1",
+            "ram:08000c90:2284:2",
+            "ram:08000c8a:20:basic.exit"
+          ]
+        },
+        "ram:08000c92:21:basic": {
+          "operations": {
+            "ram:08000c94:152:21": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:08000c94:152:21"
+          ]
+        },
+        "ram:08000b2c:entry": {
+          "operations": {
+            "unique:000dfd00:0:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "iVar2",
+              "type": "2c7b6d4"
+            },
+            "unique:000dfd01:1:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "UNNAMED",
+              "type": "9bb5cdc"
+            },
+            "unique:000dfd02:2:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "local_1e",
+              "type": "9bb5cdc"
+            },
+            "unique:000dfd03:3:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "i",
+              "type": "ffce3474:3660426063961501105"
+            },
+            "unique:000dfd04:4:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "SVar4",
+              "type": "ffce3474:3660426063961501105"
+            },
+            "unique:000dfd05:5:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "SVar3",
+              "type": "ffce3474:3660426063961501105"
+            },
+            "unique:000dfd06:6:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "SVar5",
+              "type": "ffce3474:3660426063961501105"
+            },
+            "unique:000dfd07:7:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "SVar6",
+              "type": "ffce3474:3660426063961501105"
+            },
+            "unique:000dfd08:8:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "puVar8",
+              "type": "6dbd7579"
+            },
+            "unique:000dfd09:9:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "uVar9",
+              "type": "2169b0c1"
+            },
+            "unique:000dfd0a:10:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "extraout_r1",
+              "type": "2169b041"
+            },
+            "unique:000dfd0b:11:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "cVar1",
+              "type": "55d79ccc"
+            },
+            "unique:000dfd0c:12:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "iVar7",
+              "type": "2c7b6d4"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:08000b2c:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:000dfd00:0:0",
+            "unique:000dfd01:1:0",
+            "unique:000dfd02:2:0",
+            "unique:000dfd03:3:0",
+            "unique:000dfd04:4:0",
+            "unique:000dfd05:5:0",
+            "unique:000dfd06:6:0",
+            "unique:000dfd07:7:0",
+            "unique:000dfd08:8:0",
+            "unique:000dfd09:9:0",
+            "unique:000dfd0a:10:0",
+            "unique:000dfd0b:11:0",
+            "unique:000dfd0c:12:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:08000b2c:entry"
+    },
+    "ram:08000668": {
+      "name": "clock_millis",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "2169b041",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      }
+    },
+    "ram:080009ac": {
+      "name": "measurement_read",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "6dbd7579",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "6dbd7579"
+        ]
+      }
+    },
+    "ram:080029c0": {
+      "name": "__aeabi_ui2f",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "ffce3474:3660426063961501105",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "2fc924a2:3660426063961501102"
+        ]
+      }
+    },
+    "ram:080007cc": {
+      "name": "filter_dc",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "56e6a64d",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "4512a1aa",
+          "ffce3474:3660426063961501105",
+          "ffce3474:3660426063961501105"
+        ]
+      }
+    },
+    "ram:080007ee": {
+      "name": "filter_mean",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "56e6a64d",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "2c7b6d4",
+          "ffce3474:3660426063961501105",
+          "2c7b6d4"
+        ]
+      }
+    },
+    "ram:0800084c": {
+      "name": "filter_butterworth_lp",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "56e6a64d",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "4512a1aa",
+          "ffce3474:3660426063961501105"
+        ]
+      }
+    },
+    "ram:08001fac": {
+      "name": "__aeabi_fdiv",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "ffce3474:3660426063961501105",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "ffce3474:3660426063961501105",
+          "ffce3474:3660426063961501105"
+        ]
+      }
+    },
+    "ram:0800233c": {
+      "name": "__aeabi_fmul",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "ffce3474:3660426063961501105",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "ffce3474:3660426063961501105",
+          "ffce3474:3660426063961501105"
+        ]
+      }
+    },
+    "ram:08001c70": {
+      "name": "__aeabi_fadd",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "ffce3474:3660426063961501105",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "ffce3474:3660426063961501105",
+          "ffce3474:3660426063961501105"
+        ]
+      }
+    },
+    "ram:080009d0": {
+      "name": "measurement_detect_pulse",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "2169b0c1",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "56d5e94b",
+          "ffce3474:3660426063961501105"
+        ]
+      }
+    },
+    "ram:080028e4": {
+      "name": "__aeabi_f2iz",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "4ecbe51:3660426063961501099",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "ffce3474:3660426063961501105"
+        ]
+      }
+    },
+    "ram:080004fa": {
+      "name": "qfp_fsqrt",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "56e6a64d",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "56d5e94b",
+          "2169b041",
+          "56d5e94b"
+        ]
+      }
+    },
+    "ram:080008b0": {
+      "name": "spo2_lookup",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "55d79ccc",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "ffce3474:3660426063961501105"
+        ]
+      }
+    },
+    "ram:08001bf0": {
+      "name": "__aeabi_fcmplt",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "2169b041",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "ffce3474:3660426063961501105",
+          "ffce3474:3660426063961501105"
+        ]
+      }
+    },
+    "ram:08001c18": {
+      "name": "__aeabi_fcmpgt",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "2169b041",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "ffce3474:3660426063961501105",
+          "ffce3474:3660426063961501105"
+        ]
+      }
+    }
+  },
+  "globals": {
+    "ram:200000fc": {
+      "name": "dc_filter_red",
+      "size": "4",
+      "type": "ffce3474:3660426063961501105"
+    },
+    "ram:2000015c": {
+      "name": "pulse_current_bpm",
+      "size": "4",
+      "type": "ffce3474:3660426063961501105"
+    },
+    "ram:200000dc": {
+      "name": "callback_on_update",
+      "size": "4",
+      "type": "bcc0bc9"
+    },
+    "ram:200000b8": {
+      "name": "butt_filter_ir",
+      "size": "1",
+      "type": "2169afe1"
+    },
+    "ram:200000f4": {
+      "name": "dc_filter_ir",
+      "size": "4",
+      "type": "ffce3474:3660426063961501105"
+    },
+    "ram:20000154": {
+      "name": "measurement_delay",
+      "size": "4",
+      "type": "56d5e94b"
+    },
+    "ram:200000b4": {
+      "name": "ac_sqsum_red",
+      "size": "4",
+      "type": "ffce3474:3660426063961501105"
+    },
+    "ram:200000d0": {
+      "name": "butt_filter_spo2_red",
+      "size": "1",
+      "type": "2169afe1"
+    },
+    "ram:200000b0": {
+      "name": "ac_sqsum_ir",
+      "size": "4",
+      "type": "ffce3474:3660426063961501105"
+    },
+    "ram:200000f0": {
+      "name": "DAT_200000f0",
+      "size": "4",
+      "type": "2169b041"
+    },
+    "ram:200000ec": {
+      "name": "DAT_200000ec",
+      "size": "4",
+      "type": "2169b041"
+    },
+    "ram:2000020a": {
+      "name": "spo2_samples",
+      "size": "2",
+      "type": "806fec25"
+    },
+    "ram:20000208": {
+      "name": "spo2_beats",
+      "size": "2",
+      "type": "9bb5cdc"
+    },
+    "ram:20000168": {
+      "name": "pulse_present",
+      "size": "1",
+      "type": "55d79ccc"
+    },
+    "ram:200000e8": {
+      "name": "DAT_200000e8",
+      "size": "4",
+      "type": "ffce3474:3660426063961501105"
+    },
+    "ram:20000108": {
+      "name": "last_report",
+      "size": "4",
+      "type": "2c7b6d4"
+    },
+    "ram:200000c4": {
+      "name": "butt_filter_spo2_ir",
+      "size": "1",
+      "type": "2169afe1"
+    },
+    "ram:20000104": {
+      "name": "last_measurement",
+      "size": "4",
+      "type": "2c7b6d4"
+    },
+    "ram:200000e4": {
+      "name": "DAT_200000e4",
+      "size": "4",
+      "type": "2c7b6d4"
+    },
+    "ram:20000204": {
+      "name": "sample_count",
+      "size": "4",
+      "type": "56d5e94b"
+    },
+    "ram:200000e0": {
+      "name": "current_measurement",
+      "size": "4",
+      "type": "4ecbe51:3660426063961501099"
+    },
+    "ram:2000010c": {
+      "name": "null_??_2000010c",
+      "size": "1",
+      "type": "2169afe1"
+    },
+    "ram:20000174": {
+      "name": "null_??_20000174",
+      "size": "1",
+      "type": "2169afe1"
+    }
+  },
+  "types": {
+    "56e6a64d": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "2c7b6d4": {
+      "name": "int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "56d5e94b": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "55cce7b8": {
+      "name": "bool",
+      "size": 1,
+      "kind": "integer"
+    },
+    "88575794": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "9bb5cdc"
+    },
+    "9bb5cdc": {
+      "name": "unsigned short",
+      "size": 2,
+      "kind": "integer"
+    },
+    "ffce3474:3660426063961501105": {
+      "name": "SFtype",
+      "kind": "typedef",
+      "size": 4,
+      "base_type": "6a790a47"
+    },
+    "2fc924a2:3660426063961501102": {
+      "name": "USItype",
+      "kind": "typedef",
+      "size": 4,
+      "base_type": "56d5e94b"
+    },
+    "4512a1aa": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "ffce3474:3660426063961501105"
+    },
+    "2169b041": {
+      "name": "undefined4",
+      "size": 4,
+      "kind": "undefined"
+    },
+    "6dbd011a": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "2169afe1"
+    },
+    "2169afe1": {
+      "name": "undefined1",
+      "size": 1,
+      "kind": "undefined"
+    },
+    "6dbd7579": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "2169b001"
+    },
+    "806fec25": {
+      "name": "short",
+      "size": 2,
+      "kind": "integer"
+    },
+    "2169b0c1": {
+      "name": "undefined8",
+      "size": 8,
+      "kind": "undefined"
+    },
+    "55d79ccc": {
+      "name": "char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "4ecbe51:3660426063961501099": {
+      "name": "SItype",
+      "kind": "typedef",
+      "size": 4,
+      "base_type": "2c7b6d4"
+    },
+    "bcc0bc9": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "d7c99a50:3660426062009052600"
+    },
+    "7cb62847": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "4ecbe51:3660426063961501099"
+    },
+    "6a790a47": {
+      "name": "float",
+      "size": 4,
+      "kind": "float"
+    },
+    "2169b001": {
+      "name": "undefined2",
+      "size": 2,
+      "kind": "undefined"
+    },
+    "d7c99a50:3660426062009052600": {
+      "name": "undefined",
+      "size": 1,
+      "kind": "undefined"
+    }
+  }
+}
