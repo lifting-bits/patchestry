@@ -104,7 +104,6 @@ import ghidra.program.model.data.Undefined;
 import ghidra.program.model.data.Union;
 import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.data.WideCharDataType;
-import ghidra.program.model.data.UnsignedLongLongDataType;
 
 import ghidra.program.model.symbol.ExternalManager;
 import ghidra.program.model.symbol.Namespace;
