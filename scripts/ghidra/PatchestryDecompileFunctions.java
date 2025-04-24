@@ -2457,7 +2457,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             "__register_frame_info_bases", "__assert_fail",
             "_init", "_fini", "_ITM_registerTMCloneTable",
             "_ITM_deregisterTMCloneTable", "register_tm_clones",
-            "deregister_tm_clones"
+            "deregister_tm_clones", "__sinit"
 		);
 
 		// Serialize all `CALLOTHER` intrinsics.
