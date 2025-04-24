@@ -160,7 +160,16 @@ namespace patchestry::passes {
 
     void InstrumentationPass::runOnOperation() {
         mlir::ModuleOp mod = getOperation();
-        mod.walk([this](cir::FuncOp op) { instrument_function_calls(op); });
+        llvm::SmallVector< cir::FuncOp, 8 > worklist;
+
+        // get the list of functions
+        mod.walk([&](cir::FuncOp op) { worklist.push_back(op); });
+
+        // instrument the calls in each function
+        for (size_t i = 0; i < worklist.size(); ++i) {
+            cir::FuncOp func = worklist[i];
+            instrument_function_calls(func);
+        }
     }
 
     void InstrumentationPass::instrument_function_calls(cir::FuncOp func) {
