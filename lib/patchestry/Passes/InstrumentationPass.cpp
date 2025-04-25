@@ -70,10 +70,10 @@ namespace patchestry::passes {
             return result;
         }
 
-        llvm::Expected< patchestry::passes::PatchSpec >
+        llvm::Expected< patchestry::passes::PatchConfiguration >
         parseSpecifications(llvm::StringRef yaml_str) {
             llvm::SourceMgr sm;
-            PatchSpec config;
+            PatchConfiguration config;
             llvm::errs() << "Parsing YAML: " << yaml_str << "\n";
             llvm::yaml::Input yaml_input(yaml_str, &sm);
             yaml_input >> config;
@@ -87,32 +87,48 @@ namespace patchestry::passes {
         }
 
         // Test function to print the parsed config
-        void printSpecifications(const PatchSpec &config) {
+        void printSpecifications(const PatchConfiguration &config) {
             llvm::outs() << "Number of patches: " << config.patches.size() << "\n";
-            for (const auto &patch : config.patches) {
+            for (const auto &spec : config.patches) {
+                const auto &match = spec.match;
+                llvm::outs() << "Match:\n";
+                llvm::outs() << "  Symbol: " << match.symbol << "\n";
+                llvm::outs() << "  Kind: " << match.kind << "\n";
+                llvm::outs() << "  Operation: " << match.operation << "\n";
+                llvm::outs() << "  Function Name: " << match.function_name << "\n";
+                llvm::outs() << "  Argument Matches:\n";
+                for (const auto &arg_match : match.argument_matches) {
+                    llvm::outs() << "    - Index: " << arg_match.index << "\n";
+                    llvm::outs() << "      Name: " << arg_match.name << "\n";
+                    llvm::outs() << "      Type: " << arg_match.type << "\n";
+                }
+                llvm::outs() << "  Variable Matches:\n";
+                for (const auto &var_match : match.variable_matches) {
+                    llvm::outs() << "    - Name: " << var_match.name << "\n";
+                    llvm::outs() << "      Type: " << var_match.type << "\n";
+                }
+
+                const auto &patch = spec.patch;
                 llvm::outs() << "  Patch:\n";
-                llvm::outs() << "    Function: " << patch.function << "\n";
+                switch (patch.mode) {
+                    case PatchInfoMode::APPLY_BEFORE:
+                        llvm::outs() << "    mode: Apply Before\n";
+                        break;
+                    case PatchInfoMode::APPLY_AFTER:
+                        llvm::outs() << "    mode: Apply After\n";
+                        break;
+                    case PatchInfoMode::REPLACE:
+                        llvm::outs() << "    mode: Replace\n";
+                        break;
+                    default:
+                        break;
+                }
+                llvm::outs() << "    Code:\n" << patch.code << "\n";
                 llvm::outs() << "    Patch File: " << patch.patch_file << "\n";
-                for (const auto &operation : patch.operations) {
-                    switch (operation.kind) {
-                        case PatchOperationKind::APPLY_BEFORE_PATCH:
-                            llvm::outs() << "    Apply Before: " << operation.target << "\n";
-                            for (const auto &arg : operation.arguments) {
-                                llvm::outs() << "      - " << arg << "\n";
-                            }
-                            break;
-                        case PatchOperationKind::APPLY_AFTER_PATCH:
-                            llvm::outs() << "    Apply After: " << operation.target << "\n";
-                            for (const auto &arg : operation.arguments) {
-                                llvm::outs() << "      - " << arg << "\n";
-                            }
-                            break;
-                        case PatchOperationKind::WRAP_AROUND_PATCH:
-                            llvm::outs() << "    Wrap Around: " << operation.target << "\n";
-                            break;
-                        default:
-                            break;
-                    }
+                llvm::outs() << "    Patch Function: " << patch.patch_function << "\n";
+                llvm::outs() << "    Arguments:\n";
+                for (const auto &arg : patch.arguments) {
+                    llvm::outs() << "      - " << arg << "\n";
                 }
             }
         }
@@ -123,9 +139,46 @@ namespace patchestry::passes {
             return cir::CastKind::integral;
         }
 
+        // Rename a symbol in the module
+        mlir::LogicalResult renameSymbol(mlir::ModuleOp mod, const std::string &sym_name) {
+            mlir::SymbolTable mod_sym_table(mod);
+            auto *sym_op = mod_sym_table.lookup(sym_name);
+            if (sym_op == nullptr) {
+                LOG(ERROR) << "Symbol " << sym_name << " not found in module\n";
+                return mlir::failure();
+            }
+
+            if (mlir::failed(mod_sym_table.rename(sym_op, sym_name + "_patched"))) {
+                LOG(ERROR) << "Failed to rename symbol " << sym_name << " to "
+                           << sym_name + "_renamed" << "\n";
+                return mlir::failure();
+            }
+
+            return mlir::success();
+        }
+
+        // Rename symbols in the module to avoid collisions with the patch module
+        mlir::LogicalResult resolveSymbolCollisions(
+            mlir::ModuleOp mod, std::vector< std::string > &original_symbols
+        ) {
+            mlir::SymbolTable mod_sym_table(mod);
+            for (const auto &sym_name : original_symbols) {
+                auto *sym_op = mod_sym_table.lookup(sym_name);
+                if (sym_op == nullptr) {
+                    continue;
+                }
+
+                if (mlir::failed(renameSymbol(mod, sym_name))) {
+                    LOG(ERROR) << "Failed to rename symbol " << sym_name << "\n";
+                }
+            }
+
+            return mlir::success();
+        }
+
     } // namespace
 
-    std::unique_ptr< mlir::Pass > createInstrumentationPass(std::string spec_file) {
+    std::unique_ptr< mlir::Pass > createInstrumentationPass(const std::string &spec_file) {
         return std::make_unique< InstrumentationPass >(spec_file);
     }
 
@@ -145,7 +198,8 @@ namespace patchestry::passes {
         }
 
         config = std::move(config_or_err.get());
-        for (auto &patch : config->patches) {
+        for (auto &spec : config->patches) {
+            auto &patch = spec.patch;
             if (!llvm::sys::fs::exists(patch.patch_file)) {
                 LOG(ERROR) << "Patch file " << patch.patch_file << " does not exist\n";
                 continue;
@@ -158,22 +212,50 @@ namespace patchestry::passes {
         printSpecifications(*config);
     }
 
+    /**
+     * @brief Applies instrumentation to the MLIR module based on the patch specifications.
+     *        The function iterates through all functions in the module and applies the
+     *        specified patches to function calls.
+     *
+     * @note The function list in module can grow during instrumentation. We collect the list
+     *       of functions before starting the instrumentation process to avoid issues with
+     *       growing functions.
+     *
+     * @todo Perform instrumentation based on Operations match
+     */
     void InstrumentationPass::runOnOperation() {
         mlir::ModuleOp mod = getOperation();
-        llvm::SmallVector< cir::FuncOp, 8 > worklist;
+        llvm::SmallVector< cir::FuncOp, 8 > function_worklist;
+        // Collection of all symbol names in the module
+        std::vector< std::string > symbols;
 
-        // get the list of functions
-        mod.walk([&](cir::FuncOp op) { worklist.push_back(op); });
+        // First pass: collect all symbol names defined in the module
+        mod.walk([&](mlir::SymbolOpInterface op) { symbols.emplace_back(op.getName().str()); });
 
-        // instrument the calls in each function
-        for (size_t i = 0; i < worklist.size(); ++i) {
-            cir::FuncOp func = worklist[i];
-            instrument_function_calls(func);
+        // Second pass: gather all functions for later instrumentation
+        mod.walk([&](cir::FuncOp op) { function_worklist.push_back(op); });
+
+        // Third pass: process each function to instrument function calls
+        // We use indexed loop because function_worklist size could change during
+        // instrumentation
+        for (size_t i = 0; i < function_worklist.size(); ++i) {
+            instrument_function_calls(function_worklist[i], symbols);
         }
     }
 
-    void InstrumentationPass::instrument_function_calls(cir::FuncOp func) {
-        func.walk([this](cir::CallOp op) {
+    /**
+     * @brief Instruments function calls within a given function based on the patch
+     * specifications. The function iterates through all function calls in the provided function
+     * and applies the specified patches.
+     *
+     * @param func The function to instrument.
+     * @param symbols The list of all symbol names in the module.
+     */
+    void InstrumentationPass::instrument_function_calls(
+        cir::FuncOp func, std::vector< std::string > &symbols
+    ) {
+        (void) symbols;
+        func.walk([&](cir::CallOp op) {
             if (!config || config->patches.empty()) {
                 LOG(ERROR) << "No patch configuration found. Skipping...\n";
                 return;
@@ -183,14 +265,17 @@ namespace patchestry::passes {
             assert(!callee_name.empty() && "Callee name is empty");
 
             std::set< std::string > seen_functions;
-            for (const auto &patch : config->patches) {
-                if (patch.function != callee_name
+            for (const auto &spec : config->patches) {
+                const auto &match = spec.match;
+                if (match.symbol != callee_name
                     || seen_functions.find(callee_name) != seen_functions.end())
                 {
                     continue;
                 }
 
                 seen_functions.emplace(callee_name);
+
+                const auto &patch = spec.patch;
                 // Create module from the patch file mlir representation
                 auto patch_module = load_patch_module(*op->getContext(), *patch.patch_module);
                 if (!patch_module) {
@@ -198,28 +283,43 @@ namespace patchestry::passes {
                                << "\n ";
                     continue;
                 }
-                for (const auto &operation : patch.operations) {
-                    switch (operation.kind) {
-                        case PatchOperationKind::APPLY_BEFORE_PATCH:
-                            apply_before_patch(op, operation, patch_module.get());
-                            break;
-                        case PatchOperationKind::APPLY_AFTER_PATCH:
-                            apply_after_patch(op, operation, patch_module.get());
-                            break;
-                        case PatchOperationKind::WRAP_AROUND_PATCH:
-                            wrap_around_patch(op, operation, patch_module.get());
-                            break;
-                        default:
-                            break;
+
+                if (mlir::failed(resolveSymbolCollisions(patch_module.get(), symbols))) {
+                    LOG(ERROR) << "Failed to resolve symbol collisions with the patch module\n";
+                }
+
+                switch (patch.mode) {
+                    case PatchInfoMode::APPLY_BEFORE: {
+                        apply_before_patch(op, match, patch, patch_module.get());
+                        break;
                     }
+                    case PatchInfoMode::APPLY_AFTER: {
+                        apply_after_patch(op, match, patch, patch_module.get());
+                        break;
+                    }
+                    case PatchInfoMode::REPLACE:
+                        replace_call(op, match, patch, patch_module.get());
+                        break;
+                    default:
+                        break;
                 }
             }
         });
     }
 
+    /**
+     * @brief Prepares the arguments for a function call based on the patch information.
+     *        This function handles argument type casting and argument matching.
+     *
+     * @param builder The MLIR operation builder.
+     * @param op The call operation to be instrumented.
+     * @param patch_func The function to be called as a patch.
+     * @param patch The patch information.
+     * @param args The vector to store the prepared arguments.
+     */
     void InstrumentationPass::prepare_call_arguments(
         mlir::OpBuilder &builder, cir::CallOp op, cir::FuncOp patch_func,
-        const PatchOperation &patch, llvm::SmallVector< mlir::Value > &args
+        const PatchInfo &patch, llvm::SmallVector< mlir::Value > &args
     ) {
         if (op.getNumArgOperands() == 0) {
             assert(patch.arguments.empty() && "Patch arguments are not empty");
@@ -274,14 +374,24 @@ namespace patchestry::passes {
         }
     }
 
+    /**
+     * @brief Applies a patch before the function call. This function inserts a call to the
+     * patch function before the original function call.
+     *
+     * @param op The call operation to be instrumented.
+     * @param match The match information for the function call.
+     * @param patch The patch information.
+     * @param patch_module The module containing the patch function.
+     */
     void InstrumentationPass::apply_before_patch(
-        cir::CallOp op, const PatchOperation &patch, mlir::ModuleOp patch_module
+        cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+        mlir::ModuleOp patch_module
     ) {
         mlir::OpBuilder builder(op);
         builder.setInsertionPoint(op);
         auto module = op->getParentOfType< mlir::ModuleOp >();
 
-        std::string patch_function_name = namifyPatchFunction(patch.target);
+        std::string patch_function_name = namifyPatchFunction(patch.patch_function);
         auto input_types                = llvm::to_vector(op->getOperandTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
@@ -311,16 +421,27 @@ namespace patchestry::passes {
             function_args
         );
         call_op->setAttr("extra_attrs", op.getExtraAttrs());
+        (void) match;
     }
 
+    /**
+     * @brief Applies a patch after the function call. This function inserts a call to the patch
+     * function after the original function call.
+     *
+     * @param op The call operation to be instrumented.
+     * @param match The match information for the function call.
+     * @param patch The patch information.
+     * @param patch_module The module containing the patch function.
+     */
     void InstrumentationPass::apply_after_patch(
-        cir::CallOp op, const PatchOperation &patch, mlir::ModuleOp patch_module
+        cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+        mlir::ModuleOp patch_module
     ) {
         mlir::OpBuilder builder(op);
         auto module = op->getParentOfType< mlir::ModuleOp >();
         builder.setInsertionPointAfter(op);
 
-        std::string patch_function_name = namifyPatchFunction(patch.target);
+        std::string patch_function_name = namifyPatchFunction(patch.patch_function);
         auto input_types                = llvm::to_vector(op.getResultTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
@@ -350,10 +471,22 @@ namespace patchestry::passes {
             function_args
         );
         call_op->setAttr("extra_attrs", op.getExtraAttrs());
+        (void) match;
     }
 
-    void InstrumentationPass::wrap_around_patch(
-        cir::CallOp op, const PatchOperation &patch, mlir::ModuleOp patch_module
+    /**
+     * @brief Replaces the function call with a patch function. This function replaces the
+     * original function call with a call to the patch function.
+     *
+     * @param op The call operation to be instrumented.
+     * @param match The match information for the function call.
+     * @param patch The patch information.
+     * @param patch_module The module containing the patch function.
+     */
+
+    void InstrumentationPass::replace_call(
+        cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+        mlir::ModuleOp patch_module
     ) {
         mlir::OpBuilder builder(op);
         auto loc    = op.getLoc();
@@ -366,7 +499,7 @@ namespace patchestry::passes {
         auto callee_name = op.getCallee()->str();
         assert(!callee_name.empty() && "Wrap around patch: callee name is empty");
 
-        auto patch_function_name = namifyPatchFunction(patch.target);
+        auto patch_function_name = namifyPatchFunction(patch.patch_function);
         auto result_types        = llvm::to_vector(op.getResultTypes());
 
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
@@ -382,7 +515,7 @@ namespace patchestry::passes {
 
         auto wrap_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
         if (!wrap_func) {
-            LOG(ERROR) << "Wrap around patch: patch function " << patch.target
+            LOG(ERROR) << "Wrap around patch: patch function " << patch.patch_function
                        << " not defined. Patching failed...\n";
             return;
         }
@@ -395,14 +528,30 @@ namespace patchestry::passes {
         wrap_call_op->setAttr("extra_attrs", op.getExtraAttrs());
         op.replaceAllUsesWith(wrap_call_op);
         op.erase();
+        (void) match;
     }
 
+    /**
+     * @brief Loads a patch module from a string representation.
+     *
+     * @param ctx The MLIR context.
+     * @param patch_string The string representation of the patch module.
+     * @return mlir::OwningOpRef< mlir::ModuleOp > The loaded patch module.
+     */
     mlir::OwningOpRef< mlir::ModuleOp > InstrumentationPass::load_patch_module(
         mlir::MLIRContext &ctx, const std::string &patch_string
     ) {
         return mlir::parseSourceString< mlir::ModuleOp >(patch_string, &ctx);
     }
 
+    /**
+     * @brief Merges a symbol from a source module into a destination module.
+     *
+     * @param dest The destination module.
+     * @param src The source module.
+     * @param symbol_name The name of the symbol to be merged.
+     * @return mlir::LogicalResult The result of the merge operation.
+     */
     mlir::LogicalResult InstrumentationPass::merge_module_symbol(
         mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
     ) {
