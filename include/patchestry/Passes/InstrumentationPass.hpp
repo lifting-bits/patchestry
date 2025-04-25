@@ -26,35 +26,38 @@ namespace patchestry::passes {
 
     void registerInstrumentationPasses(std::string spec_file);
 
-    std::unique_ptr< mlir::Pass > createInstrumentationPass(std::string spec_file);
+    std::unique_ptr< mlir::Pass > createInstrumentationPass(const std::string &spec_file);
 
     class InstrumentationPass
         : public mlir::PassWrapper< InstrumentationPass, mlir::OperationPass< mlir::ModuleOp > >
     {
         std::string spec_file;
-        std::optional< PatchSpec > config;
+        std::optional< PatchConfiguration > config;
 
       public:
         explicit InstrumentationPass(std::string spec);
 
         void runOnOperation() final;
 
-        void instrument_function_calls(cir::FuncOp func);
+        void instrument_function_calls(cir::FuncOp func, std::vector< std::string > &symbols);
 
       private:
         void prepare_call_arguments(
             mlir::OpBuilder &builder, cir::CallOp op, cir::FuncOp patch_func,
-            const PatchOperation &patch, llvm::SmallVector< mlir::Value > &args
+            const PatchInfo &patch, llvm::SmallVector< mlir::Value > &args
         );
 
         void apply_before_patch(
-            cir::CallOp op, const PatchOperation &patch, mlir::ModuleOp patch_module
+            cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+            mlir::ModuleOp patch_module
         );
         void apply_after_patch(
-            cir::CallOp op, const PatchOperation &patch, mlir::ModuleOp patch_module
+            cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+            mlir::ModuleOp patch_module
         );
-        void wrap_around_patch(
-            cir::CallOp op, const PatchOperation &patch, mlir::ModuleOp patch_module
+        void replace_call(
+            cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+            mlir::ModuleOp patch_module
         );
 
         mlir::OwningOpRef< mlir::ModuleOp >
