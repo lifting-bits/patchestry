@@ -1,3 +1,4 @@
+// RUN: true
 typedef float SFtype;
 
 
