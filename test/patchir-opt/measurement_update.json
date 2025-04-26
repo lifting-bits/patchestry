@@ -1,3 +1,4 @@
+// RUN: true
 {
   "arch": "ARM",
   "id": "ARM:LE:32:v8",
