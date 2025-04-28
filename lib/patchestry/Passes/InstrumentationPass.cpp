@@ -408,20 +408,154 @@ namespace patchestry::passes {
     ) {
         mlir::SymbolTable dest_sym_table(dest);
         mlir::SymbolTable src_sym_table(src);
-        (void) symbol_name;
 
-        for (auto &op : *src.getBody()) {
-            if (auto sym_op = mlir::dyn_cast< mlir::SymbolOpInterface >(op)) {
+        // Look up the specific symbol in the source module
+        auto *src_symbol = src_sym_table.lookup(symbol_name);
+        if (!src_symbol) {
+            LOG(ERROR) << "Symbol " << symbol_name << " not found in source module\n";
+            return mlir::failure();
+        }
+
+        // Function to check if a symbol is global (e.g., function declarations)
+        auto is_global_symbol = [](mlir::Operation *op) {
+            if (auto func = mlir::dyn_cast<cir::FuncOp>(op)) {
+                return func.isDeclaration();
+            }
+            if (auto global = mlir::dyn_cast<cir::GlobalOp>(op)) {
+                // Check if it's a private or dsolocal symbol
+                return !(global.getLinkage() == cir::GlobalLinkageKind::PrivateLinkage || 
+                        global.isDSOLocal());
+            }
+            return false;
+        };
+
+        // First pass: collect all symbols that need to be copied
+        std::vector<mlir::Operation*> symbols_to_copy;
+        std::set<std::string> processed_symbols;
+        
+        // Create a symbol table collection for the source module
+        mlir::SymbolTableCollection symbol_table_collection;
+        symbol_table_collection.getSymbolTable(src);
+
+        std::function<void(mlir::Operation*)> collect_symbols = [&](mlir::Operation *op) {
+            if (auto sym_op = mlir::dyn_cast<mlir::SymbolOpInterface>(op)) {
                 std::string sym_name = sym_op.getName().str();
-                if (dest_sym_table.lookup(sym_name) != nullptr) {
-                    LOG(INFO) << "Symbol " << sym_name
-                              << " already exists in destination module, skipping\n";
-                    continue;
+                if (processed_symbols.count(sym_name)) {
+                    LOG(WARNING) << "Skipping already processed symbol: " << sym_name << "\n";
+                    return;
+                }
+                processed_symbols.insert(sym_name);
+                
+                LOG(INFO) << "\n=== Processing symbol: " << sym_name << " ===\n";
+
+                // Check for conflicts
+                if (dest_sym_table.lookup(sym_name)) {
+                    if (is_global_symbol(op)) {
+                        // For global symbols, keep the one in dest and warn
+                        LOG(WARNING) << "Global symbol " << sym_name 
+                                   << " already exists in destination module, keeping existing\n";
+                        return;
+                    } else {
+                        // For local symbols, rename
+                        auto maybeNewName = src_sym_table.renameToUnique(op, {&dest_sym_table});
+                        if(mlir::failed(maybeNewName)) {
+                            LOG(ERROR) << "Failed to rename symbol " << sym_name << "\n";
+                            return;
+                        }
+                        LOG(INFO) << "Renamed symbol: " << sym_name << " -> "
+                                  << maybeNewName->getValue() << "\n";
+
+                        // After renaming, we need to process the new symbol
+                        if (auto new_sym = mlir::dyn_cast<mlir::SymbolOpInterface>(op)) {
+                            std::string new_sym_name = new_sym.getName().str();
+                            if (!processed_symbols.count(new_sym_name)) {
+                                processed_symbols.insert(new_sym_name);
+                                symbols_to_copy.push_back(op);
+                            }
+                        }
+                        return; // Don't process the old symbol further
+                    }
                 }
 
-                // Clone and insert the symbol into the destination module
-                dest.push_back(op.clone());
+                symbols_to_copy.push_back(op);
+
+                // Get all uses of this symbol in the module
+                auto sym_name_attr = mlir::StringAttr::get(op->getContext(), sym_name);
+                LOG(INFO) << "Searching for uses of symbol: " << sym_name << "\n";
+                auto uses = mlir::SymbolTable::getSymbolUses(sym_name_attr, src);
+                if (uses) {
+                    llvm::errs() << "Found " << std::distance(uses->begin(), uses->end()) << " uses\n";
+                    for (auto &use : *uses) {
+                        LOG(INFO) << "  Use found in operation: " << use.getUser()->getName() << "\n";
+                        LOG(INFO) << "    Location: " << use.getUser()->getLoc() << "\n";
+                        LOG(INFO) << "    Symbol reference: " << use.getSymbolRef() << "\n";
+                        
+                        // Look up the referenced symbol
+                        if (auto *referenced = symbol_table_collection.lookupSymbolIn(src, use.getSymbolRef().getRootReference())) {
+                            collect_symbols(referenced);
+                        } else {
+                            LOG(WARNING) << "Could not find referenced symbol: " 
+                                         << use.getSymbolRef().getRootReference().getValue() << "\n";
+                        }
+                    }
+                } else {
+                    LOG(WARNING) << "No uses found for symbol: " << sym_name << "\n";
+                }
+
+                if (!op) {
+                    LOG(WARNING) << "Operation is null, skipping nested reference walk\n";
+                    return;
+                }
+
+                // Get the parent module to ensure it's still valid
+                auto parent_module = op->getParentOfType<mlir::ModuleOp>();
+                if (!parent_module) {
+                    LOG(WARNING) << "Could not find parent module, skipping nested reference walk\n";
+                    return;
+                }
+
+                op->walk([&](mlir::Operation *nested_op) {
+                    if (!nested_op) {
+                        LOG(WARNING) << "Found null nested operation, skipping\n";
+                        return;
+                    }
+
+                    if (auto nested_sym_user = mlir::dyn_cast<mlir::SymbolUserOpInterface>(nested_op)) {
+                        // Get all symbol uses in this operation
+                        auto uses = mlir::SymbolTable::getSymbolUses(nested_op);
+                        if (uses) {
+                            for (auto &use : *uses) {
+                                if (!use.getUser()) {
+                                    LOG(WARNING) << "Found null symbol use, skipping\n";
+                                    continue;
+                                }
+
+                                LOG(INFO) << "  Found nested symbol reference: " 
+                                          << use.getSymbolRef().getRootReference().getValue() << "\n";
+                                LOG(INFO) << "    In operation: " << nested_op->getName() << "\n";
+                                LOG(INFO) << "    Location: " << nested_op->getLoc() << "\n";
+                                
+                                if (auto *referenced = symbol_table_collection.lookupSymbolIn(src, use.getSymbolRef().getRootReference())) {
+                                    collect_symbols(referenced);
+                                } else {
+                                    llvm::errs() << "    WARNING: Could not find referenced symbol: " 
+                                                << use.getSymbolRef().getRootReference().getValue() << "\n";
+                                }
+                            }
+                        }
+                    }
+                });
+
+                llvm::errs() << "=== Finished processing symbol: " << sym_name << " ===\n\n";
             }
+        };
+
+        // Start with the requested symbol
+        collect_symbols(src_symbol);
+
+        // Second pass: copy all collected symbols
+        for (auto *op : symbols_to_copy) {
+            dest.push_back(op->clone());
         }
 
         return mlir::success();
