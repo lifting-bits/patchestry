@@ -12,14 +12,15 @@
 #include <optional>
 #include <set>
 
+#define GET_TYPEDEF_CLASSES
+#include "clang/CIR/Dialect/IR/CIRAttrs.h"
+#include "clang/CIR/Dialect/IR/CIRDialect.h"
+#include "clang/CIR/Dialect/IR/CIROpsEnums.h"
+#include "clang/CIR/Dialect/IR/CIRTypes.h"
 #include <clang/AST/ASTContext.h>
 #include <clang/Basic/DiagnosticOptions.h>
 #include <clang/Basic/TargetInfo.h>
 #include <clang/Basic/TargetOptions.h>
-#include <clang/CIR/Dialect/IR/CIRDialect.h>
-#include <clang/CIR/Dialect/IR/CIROpsEnums.h>
-#include <clang/CIR/Dialect/IR/CIRTypes.h>
-#include <clang/CIR/LowerToLLVM.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/CompilerInvocation.h>
 #include <clang/Frontend/FrontendOptions.h>
@@ -54,6 +55,17 @@
 
 namespace patchestry::passes {
 
+    enum class TypeCategory : std::uint8_t {
+        None,
+        Boolean,
+        Integer,
+        Float,
+        Pointer,
+        Array,
+        ComplexInt,
+        ComplexFloat
+    };
+
     std::optional< std::string >
     emitModuleAsString(const std::string &filename, const std::string &lang); // NOLINT
 
@@ -70,11 +82,42 @@ namespace patchestry::passes {
             return result;
         }
 
+        TypeCategory classifyType(mlir::Type ty) {
+            if (!ty) {
+                return TypeCategory::None;
+            }
+
+            if (mlir::isa< cir::BoolType >(ty)) {
+                return TypeCategory::Boolean;
+            }
+            if (mlir::isa< cir::IntType >(ty)) {
+                return TypeCategory::Integer;
+            }
+            if (mlir::isa< cir::SingleType >(ty)) {
+                return TypeCategory::Float;
+            }
+            if (mlir::isa< cir::PointerType >(ty)) {
+                return TypeCategory::Pointer;
+            }
+            if (mlir::isa< cir::ArrayType >(ty)) {
+                return TypeCategory::Array;
+            }
+            if (mlir::isa< cir::ComplexType >(ty)) {
+                auto elem_ty = mlir::cast< cir::ComplexType >(ty).getElementTy();
+                if (mlir::isa< cir::SingleType >(elem_ty)) {
+                    return TypeCategory::ComplexFloat;
+                }
+                if (mlir::isa< cir::IntType >(elem_ty)) {
+                    return TypeCategory::ComplexInt;
+                }
+            }
+            return TypeCategory::None;
+        }
+
         llvm::Expected< patchestry::passes::PatchConfiguration >
         parseSpecifications(llvm::StringRef yaml_str) {
             llvm::SourceMgr sm;
             PatchConfiguration config;
-            llvm::errs() << "Parsing YAML: " << yaml_str << "\n";
             llvm::yaml::Input yaml_input(yaml_str, &sm);
             yaml_input >> config;
             if (yaml_input.error()) {
@@ -86,6 +129,7 @@ namespace patchestry::passes {
             return config;
         }
 
+#ifdef DEBUG
         // Test function to print the parsed config
         void printSpecifications(const PatchConfiguration &config) {
             llvm::outs() << "Number of patches: " << config.patches.size() << "\n";
@@ -132,48 +176,111 @@ namespace patchestry::passes {
                 }
             }
         }
+#endif
 
         cir::CastKind getCastKind(mlir::Type from, mlir::Type to) {
-            (void) from;
-            (void) to;
-            return cir::CastKind::integral;
-        }
+            auto from_category = classifyType(from);
+            auto to_category   = classifyType(to);
 
-        // Rename a symbol in the module
-        mlir::LogicalResult renameSymbol(mlir::ModuleOp mod, const std::string &sym_name) {
-            mlir::SymbolTable mod_sym_table(mod);
-            auto *sym_op = mod_sym_table.lookup(sym_name);
-            if (sym_op == nullptr) {
-                LOG(ERROR) << "Symbol " << sym_name << " not found in module\n";
-                return mlir::failure();
+            if (from_category == TypeCategory::Integer && to_category == TypeCategory::Integer)
+            {
+                return cir::CastKind::integral;
+            }
+            if (from_category == TypeCategory::Integer || to_category == TypeCategory::Boolean)
+            {
+                return cir::CastKind::int_to_bool;
+            }
+            if (from_category == TypeCategory::Boolean || to_category == TypeCategory::Integer)
+            {
+                return cir::CastKind::bool_to_int;
+            }
+            if (from_category == TypeCategory::Float && to_category == TypeCategory::Float) {
+                return cir::CastKind::floating;
+            }
+            if (from_category == TypeCategory::Float && to_category == TypeCategory::Integer) {
+                return cir::CastKind::float_to_int;
+            }
+            if (from_category == TypeCategory::Integer && to_category == TypeCategory::Float) {
+                return cir::CastKind::int_to_float;
+            }
+            if (from_category == TypeCategory::Float && to_category == TypeCategory::Boolean) {
+                return cir::CastKind::float_to_bool;
+            }
+            if (from_category == TypeCategory::Boolean && to_category == TypeCategory::Float) {
+                return cir::CastKind::bool_to_float;
+            }
+            if (from_category == TypeCategory::Pointer && to_category == TypeCategory::Pointer)
+            {
+                return cir::CastKind::bitcast;
             }
 
-            if (mlir::failed(mod_sym_table.rename(sym_op, sym_name + "_patched"))) {
-                LOG(ERROR) << "Failed to rename symbol " << sym_name << " to "
-                           << sym_name + "_renamed" << "\n";
-                return mlir::failure();
+            if (from_category == TypeCategory::Pointer && to_category == TypeCategory::Integer)
+            {
+                return cir::CastKind::ptr_to_int;
+            }
+            if (from_category == TypeCategory::Pointer && to_category == TypeCategory::Boolean)
+            {
+                return cir::CastKind::ptr_to_bool;
+            }
+            if (from_category == TypeCategory::Integer && to_category == TypeCategory::Pointer)
+            {
+                return cir::CastKind::int_to_ptr;
             }
 
-            return mlir::success();
-        }
-
-        // Rename symbols in the module to avoid collisions with the patch module
-        mlir::LogicalResult resolveSymbolCollisions(
-            mlir::ModuleOp mod, std::vector< std::string > &original_symbols
-        ) {
-            mlir::SymbolTable mod_sym_table(mod);
-            for (const auto &sym_name : original_symbols) {
-                auto *sym_op = mod_sym_table.lookup(sym_name);
-                if (sym_op == nullptr) {
-                    continue;
+            if (from_category == TypeCategory::ComplexInt
+                && to_category == TypeCategory::ComplexFloat)
+            {
+                return cir::CastKind::int_complex_to_float_complex;
+            }
+            if (from_category == TypeCategory::ComplexFloat
+                && to_category == TypeCategory::ComplexInt)
+            {
+                return cir::CastKind::float_complex_to_int_complex;
+            }
+            if (from_category == TypeCategory::ComplexInt
+                && to_category == TypeCategory::ComplexInt)
+            {
+                return cir::CastKind::int_complex;
+            }
+            if (from_category == TypeCategory::ComplexFloat
+                && to_category == TypeCategory::ComplexFloat)
+            {
+                return cir::CastKind::float_complex;
+            }
+            if (from_category == TypeCategory::Pointer && to_category == TypeCategory::Pointer)
+            {
+                auto from_ptr = mlir::dyn_cast< cir::PointerType >(from);
+                auto to_ptr   = mlir::dyn_cast< cir::PointerType >(to);
+                if (from_ptr && to_ptr && from_ptr.getAddrSpace() != to_ptr.getAddrSpace()) {
+                    return cir::CastKind::address_space;
                 }
-
-                if (mlir::failed(renameSymbol(mod, sym_name))) {
-                    LOG(ERROR) << "Failed to rename symbol " << sym_name << "\n";
-                }
+                return cir::CastKind::bitcast;
             }
 
-            return mlir::success();
+            if (from_category == TypeCategory::Array && to_category == TypeCategory::Pointer) {
+                return cir::CastKind::array_to_ptrdecay;
+            }
+            if ((from_category == TypeCategory::Integer || from_category == TypeCategory::Float)
+                && (to_category == TypeCategory::ComplexInt
+                    || to_category == TypeCategory::ComplexFloat))
+            {
+                return (from_category == TypeCategory::Float) ? cir::CastKind::float_to_complex
+                                                              : cir::CastKind::int_to_complex;
+            }
+
+            if (from_category == TypeCategory::ComplexInt
+                && to_category == TypeCategory::Integer)
+            {
+                return cir::CastKind::int_complex_to_real;
+            }
+
+            if (from_category == TypeCategory::ComplexFloat
+                && to_category == TypeCategory::Float)
+            {
+                return cir::CastKind::float_complex_to_real;
+            }
+
+            return cir::CastKind::bitcast;
         }
 
     } // namespace
@@ -208,8 +315,10 @@ namespace patchestry::passes {
             patch.patch_module = emitModuleAsString(patch.patch_file, config->arch);
         }
 
-        // print specifications
+// print specifications
+#ifdef DEBUG
         printSpecifications(*config);
+#endif
     }
 
     /**
@@ -217,8 +326,8 @@ namespace patchestry::passes {
      *        The function iterates through all functions in the module and applies the
      *        specified patches to function calls.
      *
-     * @note The function list in module can grow during instrumentation. We collect the list
-     *       of functions before starting the instrumentation process to avoid issues with
+     * @note The function list in module can grow during instrumentation. We collect the
+     * list of functions before starting the instrumentation process to avoid issues with
      *       growing functions.
      *
      * @todo Perform instrumentation based on Operations match
@@ -226,11 +335,6 @@ namespace patchestry::passes {
     void InstrumentationPass::runOnOperation() {
         mlir::ModuleOp mod = getOperation();
         llvm::SmallVector< cir::FuncOp, 8 > function_worklist;
-        // Collection of all symbol names in the module
-        std::vector< std::string > symbols;
-
-        // First pass: collect all symbol names defined in the module
-        mod.walk([&](mlir::SymbolOpInterface op) { symbols.emplace_back(op.getName().str()); });
 
         // Second pass: gather all functions for later instrumentation
         mod.walk([&](cir::FuncOp op) { function_worklist.push_back(op); });
@@ -239,22 +343,18 @@ namespace patchestry::passes {
         // We use indexed loop because function_worklist size could change during
         // instrumentation
         for (size_t i = 0; i < function_worklist.size(); ++i) {
-            instrument_function_calls(function_worklist[i], symbols);
+            instrument_function_calls(function_worklist[i]);
         }
     }
 
     /**
      * @brief Instruments function calls within a given function based on the patch
-     * specifications. The function iterates through all function calls in the provided function
-     * and applies the specified patches.
+     * specifications. The function iterates through all function calls in the provided
+     * function and applies the specified patches.
      *
      * @param func The function to instrument.
-     * @param symbols The list of all symbol names in the module.
      */
-    void InstrumentationPass::instrument_function_calls(
-        cir::FuncOp func, std::vector< std::string > &symbols
-    ) {
-        (void) symbols;
+    void InstrumentationPass::instrument_function_calls(cir::FuncOp func) {
         func.walk([&](cir::CallOp op) {
             if (!config || config->patches.empty()) {
                 LOG(ERROR) << "No patch configuration found. Skipping...\n";
@@ -282,10 +382,6 @@ namespace patchestry::passes {
                     LOG(ERROR) << "Failed to load patch module for function: " << callee_name
                                << "\n ";
                     continue;
-                }
-
-                if (mlir::failed(resolveSymbolCollisions(patch_module.get(), symbols))) {
-                    LOG(ERROR) << "Failed to resolve symbol collisions with the patch module\n";
                 }
 
                 switch (patch.mode) {
@@ -425,8 +521,8 @@ namespace patchestry::passes {
     }
 
     /**
-     * @brief Applies a patch after the function call. This function inserts a call to the patch
-     * function after the original function call.
+     * @brief Applies a patch after the function call. This function inserts a call to the
+     * patch function after the original function call.
      *
      * @param op The call operation to be instrumented.
      * @param match The match information for the function call.
@@ -567,88 +663,100 @@ namespace patchestry::passes {
 
         // Function to check if a symbol is global (e.g., function declarations)
         auto is_global_symbol = [](mlir::Operation *op) {
-            if (auto func = mlir::dyn_cast<cir::FuncOp>(op)) {
+            if (auto func = mlir::dyn_cast< cir::FuncOp >(op)) {
                 return func.isDeclaration();
             }
-            if (auto global = mlir::dyn_cast<cir::GlobalOp>(op)) {
+            if (auto global = mlir::dyn_cast< cir::GlobalOp >(op)) {
                 // Check if it's a private or dsolocal symbol
-                return !(global.getLinkage() == cir::GlobalLinkageKind::PrivateLinkage || 
-                        global.isDSOLocal());
+                return !(
+                    global.getLinkage() == cir::GlobalLinkageKind::PrivateLinkage
+                    || global.isDSOLocal()
+                );
             }
             return false;
         };
 
         // First pass: collect all symbols that need to be copied
-        std::vector<mlir::Operation*> symbols_to_copy;
-        std::set<std::string> processed_symbols;
-        
+        std::vector< mlir::Operation * > symbols_to_copy;
+        std::set< std::string > processed_symbols;
+
         // Create a symbol table collection for the source module
         mlir::SymbolTableCollection symbol_table_collection;
         symbol_table_collection.getSymbolTable(src);
 
-        std::function<void(mlir::Operation*)> collect_symbols = [&](mlir::Operation *op) {
-            if (auto sym_op = mlir::dyn_cast<mlir::SymbolOpInterface>(op)) {
+        std::function< void(mlir::Operation *) > collect_symbols = [&](mlir::Operation *op) {
+            if (auto sym_op = mlir::dyn_cast< mlir::SymbolOpInterface >(op)) {
                 std::string sym_name = sym_op.getName().str();
                 if (processed_symbols.count(sym_name)) {
-                    LOG(WARNING) << "Skipping already processed symbol: " << sym_name << "\n";
+#ifdef DEBUG
+                    LOG(INFO) << "Skipping already processed symbol: " << sym_name << "\n";
+#endif
                     return;
                 }
                 processed_symbols.insert(sym_name);
-                
-                LOG(INFO) << "\n=== Processing symbol: " << sym_name << " ===\n";
 
                 // Check for conflicts
                 if (dest_sym_table.lookup(sym_name)) {
                     if (is_global_symbol(op)) {
                         // For global symbols, keep the one in dest and warn
-                        LOG(WARNING) << "Global symbol " << sym_name 
-                                   << " already exists in destination module, keeping existing\n";
+                        LOG(WARNING)
+                            << "Global symbol " << sym_name
+                            << " already exists in destination module, keeping existing\n";
                         return;
-                    } else {
-                        // For local symbols, rename
-                        auto maybeNewName = src_sym_table.renameToUnique(op, {&dest_sym_table});
-                        if(mlir::failed(maybeNewName)) {
-                            LOG(ERROR) << "Failed to rename symbol " << sym_name << "\n";
-                            return;
-                        }
-                        LOG(INFO) << "Renamed symbol: " << sym_name << " -> "
-                                  << maybeNewName->getValue() << "\n";
-
-                        // After renaming, we need to process the new symbol
-                        if (auto new_sym = mlir::dyn_cast<mlir::SymbolOpInterface>(op)) {
-                            std::string new_sym_name = new_sym.getName().str();
-                            if (!processed_symbols.count(new_sym_name)) {
-                                processed_symbols.insert(new_sym_name);
-                                symbols_to_copy.push_back(op);
-                            }
-                        }
-                        return; // Don't process the old symbol further
                     }
+                    // For local symbols, rename
+                    auto maybe_new_name = src_sym_table.renameToUnique(op, { &dest_sym_table });
+                    if (mlir::failed(maybe_new_name)) {
+                        LOG(ERROR) << "Failed to rename symbol " << sym_name << "\n";
+                        return;
+                    }
+                    LOG(INFO) << "Renamed symbol: " << sym_name << " -> "
+                              << maybe_new_name->getValue() << "\n";
+
+                    // After renaming, we need to process the new symbol
+                    if (auto new_sym = mlir::dyn_cast< mlir::SymbolOpInterface >(op)) {
+                        std::string new_sym_name = new_sym.getName().str();
+                        if (!processed_symbols.contains(new_sym_name)) {
+                            processed_symbols.insert(new_sym_name);
+                            symbols_to_copy.push_back(op);
+                        }
+                    }
+                    return; // Don't process the old symbol further
                 }
 
                 symbols_to_copy.push_back(op);
 
                 // Get all uses of this symbol in the module
                 auto sym_name_attr = mlir::StringAttr::get(op->getContext(), sym_name);
+#ifdef DEBUG
                 LOG(INFO) << "Searching for uses of symbol: " << sym_name << "\n";
+#endif
                 auto uses = mlir::SymbolTable::getSymbolUses(sym_name_attr, src);
                 if (uses) {
-                    llvm::errs() << "Found " << std::distance(uses->begin(), uses->end()) << " uses\n";
-                    for (auto &use : *uses) {
-                        LOG(INFO) << "  Use found in operation: " << use.getUser()->getName() << "\n";
+#ifdef DEBUG
+                    LOG(INFO) << "Found " << std::distance(uses->begin(), uses->end())
+                              << " uses\n";
+#endif
+                    for (const auto &use : *uses) {
+#ifdef DEBUG
+                        LOG(INFO)
+                            << "  Use found in operation: " << use.getUser()->getName() << "\n";
                         LOG(INFO) << "    Location: " << use.getUser()->getLoc() << "\n";
                         LOG(INFO) << "    Symbol reference: " << use.getSymbolRef() << "\n";
-                        
+#endif
+
                         // Look up the referenced symbol
-                        if (auto *referenced = symbol_table_collection.lookupSymbolIn(src, use.getSymbolRef().getRootReference())) {
+                        if (auto *referenced = symbol_table_collection.lookupSymbolIn(
+                                src, use.getSymbolRef().getRootReference()
+                            ))
+                        {
                             collect_symbols(referenced);
                         } else {
-                            LOG(WARNING) << "Could not find referenced symbol: " 
-                                         << use.getSymbolRef().getRootReference().getValue() << "\n";
+                            LOG(WARNING)
+                                << "Could not find referenced symbol: "
+                                << use.getSymbolRef().getRootReference().getValue() << "\n";
                         }
                     }
-                } else {
-                    LOG(WARNING) << "No uses found for symbol: " << sym_name << "\n";
                 }
 
                 if (!op) {
@@ -657,9 +765,10 @@ namespace patchestry::passes {
                 }
 
                 // Get the parent module to ensure it's still valid
-                auto parent_module = op->getParentOfType<mlir::ModuleOp>();
+                auto parent_module = op->getParentOfType< mlir::ModuleOp >();
                 if (!parent_module) {
-                    LOG(WARNING) << "Could not find parent module, skipping nested reference walk\n";
+                    LOG(WARNING
+                    ) << "Could not find parent module, skipping nested reference walk\n";
                     return;
                 }
 
@@ -669,33 +778,41 @@ namespace patchestry::passes {
                         return;
                     }
 
-                    if (auto nested_sym_user = mlir::dyn_cast<mlir::SymbolUserOpInterface>(nested_op)) {
+                    if (auto nested_sym_user =
+                            mlir::dyn_cast< mlir::SymbolUserOpInterface >(nested_op))
+                    {
                         // Get all symbol uses in this operation
                         auto uses = mlir::SymbolTable::getSymbolUses(nested_op);
                         if (uses) {
-                            for (auto &use : *uses) {
+                            for (const auto &use : *uses) {
                                 if (!use.getUser()) {
                                     LOG(WARNING) << "Found null symbol use, skipping\n";
                                     continue;
                                 }
-
-                                LOG(INFO) << "  Found nested symbol reference: " 
-                                          << use.getSymbolRef().getRootReference().getValue() << "\n";
-                                LOG(INFO) << "    In operation: " << nested_op->getName() << "\n";
+#ifdef DEBUG
+                                LOG(INFO)
+                                    << "  Found nested symbol reference: "
+                                    << use.getSymbolRef().getRootReference().getValue() << "\n";
+                                LOG(INFO)
+                                    << "    In operation: " << nested_op->getName() << "\n";
                                 LOG(INFO) << "    Location: " << nested_op->getLoc() << "\n";
-                                
-                                if (auto *referenced = symbol_table_collection.lookupSymbolIn(src, use.getSymbolRef().getRootReference())) {
+#endif
+
+                                if (auto *referenced = symbol_table_collection.lookupSymbolIn(
+                                        src, use.getSymbolRef().getRootReference()
+                                    ))
+                                {
                                     collect_symbols(referenced);
                                 } else {
-                                    llvm::errs() << "    WARNING: Could not find referenced symbol: " 
-                                                << use.getSymbolRef().getRootReference().getValue() << "\n";
+                                    LOG(WARNING)
+                                        << "Could not find referenced symbol: "
+                                        << use.getSymbolRef().getRootReference().getValue()
+                                        << "\n";
                                 }
                             }
                         }
                     }
                 });
-
-                llvm::errs() << "=== Finished processing symbol: " << sym_name << " ===\n\n";
             }
         };
 
