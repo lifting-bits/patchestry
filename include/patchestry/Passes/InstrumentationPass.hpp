@@ -39,7 +39,7 @@ namespace patchestry::passes {
 
         void runOnOperation() final;
 
-        void instrument_function_calls(cir::FuncOp func, std::vector< std::string > &symbols);
+        void instrument_function_calls(cir::FuncOp func);
 
       private:
         void prepare_call_arguments(
