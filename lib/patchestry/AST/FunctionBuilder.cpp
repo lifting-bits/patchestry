@@ -311,9 +311,13 @@ namespace patchestry::ast {
      * blocks, or if the function definition cannot be created.
      */
     clang::FunctionDecl *FunctionBuilder::create_definition(clang::ASTContext &ctx) {
-        if (function.get().name.empty() || function.get().basic_blocks.empty()) {
-            LOG(ERROR) << "Can't create function definition. Missing function name or has no "
-                          "basic blocks.\n";
+        if (function.get().name.empty()) {
+            LOG(ERROR) << "Can't create function definition. Missing function name.\n";
+            return {};
+        }
+
+        if (function.get().basic_blocks.empty()) {
+            LOG(ERROR) << "Can't create function definition for '" << function.get().name << "'. Function has no basic blocks.\n";
             return {};
         }
 
