@@ -576,19 +576,19 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				serializePrototype((FunctionSignature) data_type);
 
 			} else if (data_type instanceof PartialUnion) {
-				name("kind").value("todo");  // TODO(pag): Implement this
+				name("kind").value("todo:PartialUnion");  // TODO(pag): Implement this
 				name("size").value(data_type.getLength());
 
 			} else if (data_type instanceof BitFieldDataType) {
-				name("kind").value("todo");  // TODO(pag): Implement this
+				name("kind").value("todo:BitFieldDataType");  // TODO(pag): Implement this
 				name("size").value(data_type.getLength());
 				
 			} else if (data_type instanceof WideCharDataType) {
-				name("kind").value("todo");  // TODO(pag): Implement this
+				name("kind").value("WideCharDataType");
 				name("size").value(data_type.getLength());
 				
 			} else if (data_type instanceof StringDataType) {
-				name("kind").value("todo");  // TODO(pag): Implement this
+				name("kind").value("todo:StringDataType");  // TODO(pag): Implement this
 				name("size").value(data_type.getLength());
 				
 			} else {
@@ -877,13 +877,17 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			Address ram_address = convertAddressToRamSpace(address);
 			MemoryBufferImpl memoryBuffer = new MemoryBufferImpl(program.getMemory(), ram_address);
 			DataType char_type = pointer.getDataType();
+			//println("Debug: char_type = " + char_type.getName() + ", size = " + char_type.getLength());
+			//println("Debug: char_type class = " + char_type.getClass().getName());
 			StringDataInstance string_data_instance = StringDataInstance.getStringDataInstance(char_type, memoryBuffer, char_type.getDefaultSettings(), -1);
 			int detectedLength = string_data_instance.getStringLength();
+			//println("Debug: detectedLength = " + detectedLength);
 			if (detectedLength == -1) {
 				return null;
 			}
-			string_data_instance = new StringDataInstance(char_type, char_type.getDefaultSettings(), memoryBuffer, detectedLength, true);
-			return string_data_instance.getStringValue();
+			String value = string_data_instance.getStringValue();
+			//println("Debug: stringValue = " + value);
+			return value;
 		}
 
 		private Data getDataReferencedAsConstant(Varnode node) throws Exception {
@@ -893,7 +897,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			// Ghidra sometime fail to resolve references to Data and show it as const. 
 			// Check if it is referencing Data as constant from `ram` addresspace.
 			Address ram_address = convertAddressToRamSpace(node.getAddress());
-			return getDataAt(ram_address);
+			Data data = getDataAt(ram_address);
+			return data;
 		}
 
 		// Serialize an input or output varnode.
