@@ -44,6 +44,16 @@ namespace patchestry::ghidra {
     }
 
     template< typename ObjectType >
+    constexpr std::optional< std::string >
+    get_string_with_empty(const ObjectType &obj, const char *field) {
+        if (auto value = (obj.getString)(field)) {
+            // Return the string even if it's empty
+            return value->str();
+        }
+        return std::nullopt;
+    }
+
+    template< typename ObjectType >
     std::string
     get_string(const ObjectType &obj, const char *field, std::string default_value = "") {
         if (auto value = (obj.getString)(field)) {
@@ -121,6 +131,7 @@ namespace patchestry::ghidra {
                 case VarnodeType::Kind::VT_INTEGER:
                 case VarnodeType::Kind::VT_FLOAT:
                 case VarnodeType::Kind::VT_CHAR:
+                case VarnodeType::Kind::VT_WIDECHAR:
                 case VarnodeType::Kind::VT_VOID:
                     deserialize_buildin(
                         *dynamic_cast< BuiltinType * >(vnode_type.get()),
@@ -187,6 +198,7 @@ namespace patchestry::ghidra {
         auto name     = get_string(type_obj, "name");
         auto size     = static_cast< uint32_t >(type_obj.getInteger("size").value_or(0));
         auto kind_str = get_string(type_obj, "kind");
+        LOG(INFO) << "Attempting to convert kind string: [" << kind_str << "]" << "\n";
         auto kind     = VarnodeType::convertToKind(kind_str);
         switch (kind) {
             case VarnodeType::Kind::VT_INVALID: {
@@ -197,6 +209,7 @@ namespace patchestry::ghidra {
             case VarnodeType::Kind::VT_INTEGER:
             case VarnodeType::Kind::VT_FLOAT:
             case VarnodeType::Kind::VT_CHAR:
+            case VarnodeType::Kind::VT_WIDECHAR:
                 return std::make_shared< BuiltinType >(name, kind, size);
             case VarnodeType::Kind::VT_ARRAY:
                 return std::make_shared< ArrayType >(name, kind, size);
@@ -227,6 +240,7 @@ namespace patchestry::ghidra {
             varnode.kind == VarnodeType::Kind::VT_BOOLEAN
             || varnode.kind == VarnodeType::Kind::VT_INTEGER
             || varnode.kind == VarnodeType::Kind::VT_CHAR
+            || varnode.kind == VarnodeType::Kind::VT_WIDECHAR
             || varnode.kind == VarnodeType::Kind::VT_FLOAT
             || varnode.kind == VarnodeType::Kind::VT_VOID
         );
@@ -381,7 +395,7 @@ namespace patchestry::ghidra {
 
         auto set_field_if_valid = [](const std::optional< std::string > &field,
                                      std::optional< std::string > &vnode_field) {
-            if (field && !field->empty()) {
+            if (field) {
                 vnode_field = *field;
             }
         };
@@ -391,7 +405,7 @@ namespace patchestry::ghidra {
         set_field_if_valid(get_string_if_valid(var_obj, "operation"), vnode.operation);
         set_field_if_valid(get_string_if_valid(var_obj, "function"), vnode.function);
         set_field_if_valid(get_string_if_valid(var_obj, "global"), vnode.global);
-        set_field_if_valid(get_string_if_valid(var_obj, "string_value"), vnode.string_value);
+        set_field_if_valid(get_string_with_empty(var_obj, "string_value"), vnode.string_value);
         vnode.value = var_obj.getInteger("value");
         return vnode;
     }

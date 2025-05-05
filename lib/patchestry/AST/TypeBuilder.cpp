@@ -94,6 +94,9 @@ namespace patchestry::ast {
             case VarnodeType::VT_CHAR:
                 return ctx.CharTy;
 
+            case VarnodeType::VT_WIDECHAR:
+                return ctx.WideCharTy;
+
             case VarnodeType::VT_FLOAT:
                 return getTypeFromSize(
                     ctx, vnode_type->size * TypeBuilder::num_bits_in_byte, /*is_signed=*/false,

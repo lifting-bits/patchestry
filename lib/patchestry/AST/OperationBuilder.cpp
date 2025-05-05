@@ -258,17 +258,40 @@ namespace patchestry::ast {
 
         if (!vnode.string_value) {
             LOG(ERROR) << "No string value found, invalid varnode.\n";
+            LOG(ERROR) << vnode.dump() << "\n";
             return {};
         }
 
+        // Determine if this is a wide string based on the type
+        bool is_wide = false;
+        if (!vnode.type_key.empty()) {
+            if (type_builder().get_serialized_types().contains(vnode.type_key)) {
+                auto type = type_builder().get_serialized_types().at(vnode.type_key);
+                is_wide = type->isWideCharType();
+            }
+        }
+
+        // For empty string, we still need an array of size 1 for the null terminator
+        const size_t string_length = vnode.string_value->length();
+        const size_t array_size = string_length + 1; // +1 for null terminator
+
+        // Create the appropriate array type
+        auto char_type = is_wide ? ctx.WideCharTy : ctx.CharTy;
         auto string_array = ctx.getConstantArrayType(
-            ctx.CharTy.withConst(), llvm::APInt(32, vnode.string_value.value().size() + 1),
-            nullptr, clang::ArraySizeModifier::Normal, 0
+            char_type.withConst(), 
+            llvm::APInt(32, array_size),
+            nullptr, 
+            clang::ArraySizeModifier::Normal, 
+            0
         );
 
         return clang::StringLiteral::Create(
-            ctx, vnode.string_value.value(), clang::StringLiteralKind::Ordinary, false,
-            string_array, clang::SourceLocation()
+            ctx, 
+            *vnode.string_value,  // Use the string value directly
+            is_wide ? clang::StringLiteralKind::Wide : clang::StringLiteralKind::Ordinary,
+            false,
+            string_array, 
+            clang::SourceLocation()
         );
     }
 

@@ -47,7 +47,7 @@ namespace patchestry::ghidra {
             VARNODE_FUNCTION,
             VARNODE_TEMPORARY,
             VARNODE_CONSTANT,
-            VARNODE_STRING
+            VARNODE_STRING,
         };
 
         static Varnode::Kind convertToKind(const std::string &kdd) {
@@ -65,6 +65,47 @@ namespace patchestry::ghidra {
             // if kind is not present in the map, return varnode_unknown
             auto iter = kind_map.find(kdd);
             return iter != kind_map.end() ? iter->second : VARNODE_UNKNOWN;
+        }
+
+        std::string dump() const {
+            std::string result;
+            result += "Varnode {\n";
+            
+            // Convert kind to string
+            std::string kind_str;
+            switch (kind) {
+                case VARNODE_UNKNOWN: kind_str = "UNKNOWN"; break;
+                case VARNODE_GLOBAL: kind_str = "GLOBAL"; break;
+                case VARNODE_LOCAL: kind_str = "LOCAL"; break;
+                case VARNODE_PARAM: kind_str = "PARAM"; break;
+                case VARNODE_FUNCTION: kind_str = "FUNCTION"; break;
+                case VARNODE_TEMPORARY: kind_str = "TEMPORARY"; break;
+                case VARNODE_CONSTANT: kind_str = "CONSTANT"; break;
+                case VARNODE_STRING: kind_str = "STRING"; break;
+            }
+            
+            result += "  kind: " + kind_str + "\n";
+            result += "  size: " + std::to_string(size) + "\n";
+            result += "  type_key: " + type_key + "\n";
+            
+            if (operation) {
+                result += "  operation: " + *operation + "\n";
+            }
+            if (function) {
+                result += "  function: " + *function + "\n";
+            }
+            if (value) {
+                result += "  value: " + std::to_string(*value) + "\n";
+            }
+            if (string_value) {
+                result += "  string_value: " + *string_value + "\n";
+            }
+            if (global) {
+                result += "  global: " + *global + "\n";
+            }
+            
+            result += "}";
+            return result;
         }
 
         Kind kind;
