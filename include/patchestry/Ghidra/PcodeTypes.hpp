@@ -24,6 +24,7 @@ namespace patchestry::ghidra {
             VT_INTEGER,
             VT_FLOAT,
             VT_CHAR,
+            VT_WIDECHAR,
             VT_POINTER,
             VT_FUNCTION,
             VT_ARRAY,
@@ -49,7 +50,8 @@ namespace patchestry::ghidra {
                 {     "enum",      VT_ENUM},
                 {  "typedef",   VT_TYPEDEF},
                 {"undefined", VT_UNDEFINED},
-                {     "void",      VT_VOID}
+                {     "void",      VT_VOID},
+                {"WideCharDataType", VT_WIDECHAR}
             };
 
             // if kind is not present in the map, return vt_invalid
