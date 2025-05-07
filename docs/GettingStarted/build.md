@@ -1,104 +1,14 @@
 
-## Dependencies
+# Building
+We mostly rely on a build container, but some dependencies are still needed outside that container: our fork of [LLVM20](https://github.com/trail-of-forks/clangir), a local copy of `lld`, and LLVM [LIT](https://llvm.org/docs/CommandGuide/lit.html).
 
-| Name | Version |
-| ---- | ------- |
-| [CMake](https://cmake.org/) | >= 3.25.0 |
-| [LLVM](http://llvm.org/) | == 18 |
+In order to set up those and build Patchestry, please follow the first-time instructions for your development environment of choice:
+- [macOS](#first-time-setup-macos)
+- [Linux](#first-time-setup-linux)
 
-Currently, it is necessary to use `clang` (due to `gcc` bug) to build Patchestry, because of `patchestry`. On Linux it is also necessary to use `lld` at the moment.
+See also: [Development](#development)
 
-Patchestry uses `llvm-18` which can be obtained from the [repository](https://apt.llvm.org/) provided by LLVM.
-
-Before building (for Ubuntu) get all the necessary dependencies by running
-```
-apt-get install build-essential cmake ninja-build libstdc++-12-dev llvm-18 libmlir-18 libmlir-18-dev mlir-18-tools libclang-18-dev
-```
-or an equivalent command for your operating system of choice.
-
-## Ubuntu 22.04
-
-Optionally (re-)install dependecies from their respective official sources.
-
-```sh
-sudo bash .devcontainer/reinstall-cmake.sh "3.29.2"
-sudo bash .devcontainer/install-llvm.sh "18" all
-```
-
-With dependecies installed, we can build in `build/` in the project root.
-```sh
-# Assuming `/usr/lib/llvm-18/` contains an llvm-18 installation.
-cmake --preset default -DCMAKE_PREFIX_PATH=/usr/lib/llvm-18/lib/cmake/
-# Valid user presets are `debug`, `release`, `relwithdebinfo`.
-cmake --build --preset=debug
-```
-
-# Getting Ghidra
-
-Get Java JDK (x64)
-
-```shell
-wget -c https://download.oracle.com/java/22/latest/jdk-22_linux-x64_bin.tar.gz -O jdk.tar.gz
-tar xvf jdk.tar.gz
-mv jdk-22.0.1 ~/jdk
-echo "export PATH=\$PATH:~/jdk/bin" >> ~/.bashrc
-```
-
-Get Ghidra
-```shell
-wget -c https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.1.1_build/ghidra_11.1.1_PUBLIC_20240614.zip -O ghidra.zip
-unzip ghidra.zip
-mv ghidra_11.1.1_PUBLIC ~/ghidra
-```
-
-# Installing Ghidra Scripts
-
-Link `ghidra_scripts` directory to `$HOME`. We assume that `./patchestry` contains the cloned repository.
-```shell
-ln -s patchestry/ghidra_scripts ~
-```
-
-
-## Instructions
-
-To configure project run `cmake` with following default options.
-In case `clang` isn't your default compiler prefix the command with `CC=clang CXX=clang++`.
-If you want to use system installed `llvm` and `mlir` (on Ubuntu) use:
-
-The simplest way is to run
-
-```
-cmake --workflow release
-```
-
-If this method doesn't work for you, configure the project in the usual way:
-
-```
-cmake --preset default
-```
-
-To use a specific `llvm` provide `-DCMAKE_PREFIX_PATH=<llvm & mlir instalation paths>` option, where `CMAKE_PREFIX_PATH` points to directory containing `LLVMConfig.cmake` and `MLIRConfig.cmake`.
-
-Note: Patchestry requires LLVM with RTTI enabled. Use `LLVM_ENABLE_RTTI=ON` if you build your own LLVM.
-
-
-Finally, build the project:
-
-```
-cmake --build --preset release
-```
-
-Use `debug` preset for debug build.
-
-## Test
-
-```
-ctest --preset debug
-```
-
-# MacOS
-
-To build on MacOS, you'll need to set up the development environment first:
+# First Time Development Setup: MacOS
 
 1. Install Xcode from the App Store and set up the command line tools:
    ```
@@ -153,3 +63,102 @@ CC=$(which clang) CXX=$(which clang++) cmake \
 
 This setup provides a complete development environment for building and running the project on MacOS. The configuration uses Colima as a Docker backend, which provides better performance and resource management compared to Docker Desktop on MacOS.
 
+# First Time Development Setup: Linux
+If you'd like to either follow step by step instructions or run a script to automatically follow them in a fresh Linux instance, here's a [Gist](https://gist.github.com/kaoudis/e734c6197dbed595586ab659844df737) that sets everything up from zero in a fresh VM for you and runs the Patchestry tests to confirm the setup works. This Gist should stay reasonably up to date since it's used to initialize ephemeral coding environments. It's been tested on Ubuntu 24.04. The only thing that should be different for other Ubuntus or for Debian is the `apt` package naming.
+
+Steps followed in the [Gist](https://gist.github.com/kaoudis/e734c6197dbed595586ab659844df737) to get to a working install:
+1. Base dependency install (Docker, lld, build tools such as CMake)
+2. Acquire LLVM LIT from Python Pip
+3. Build and install LLVM
+4. Build and install Patchestry
+5. Build the headless container in the Patchestry repository (this should set up and install Ghidra and everything else)
+6. Test Patchestry, which requires the container
+
+# Development 
+
+## CMake Commands
+- to build, see the command referenced in step 6 [above](#first-time-development-setup-macos) or the commands used for [Linux](#first-time-development-setup-linux). You'll use the `default` preset to configure and most likely the `debug` or `release` presets for the subsequent build command after configuration.
+- to run tests, ensure the headless container is available first by running `scripts/ghidra/build-headless-docker.sh`, then you may `cmake --build builds/default/ -j$((`nproc`+1)) --preset debug --target test` (using the preset of your choice but selecting the `test` target)
+
+## Ghidra
+
+### Installing Ghidra Scripts
+Link `ghidra_scripts` directory to `$HOME`. We assume that `./patchestry` contains the cloned repository.
+```shell
+ln -s patchestry/ghidra_scripts ~
+```
+
+### Installing Ghidra Locally
+You shouldn't need to do this directly in the current build *most of the time*. You may need Ghidra locally for Ghidra script debugging.
+
+Get Java JDK (x64)
+```shell
+wget -c https://download.oracle.com/java/22/latest/jdk-22_linux-x64_bin.tar.gz -O jdk.tar.gz
+tar xvf jdk.tar.gz
+mv jdk-22.0.1 ~/jdk
+echo "export PATH=\$PATH:~/jdk/bin" >> ~/.bashrc
+```
+
+Get Ghidra
+```shell
+wget -c https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.1.1_build/ghidra_11.1.1_PUBLIC_20240614.zip -O ghidra.zip
+unzip ghidra.zip
+mv ghidra_11.1.1_PUBLIC ~/ghidra
+```
+
+## Old Stuff
+
+Here are old sections of documentation retained for historical reference. Please follow the above instructions instead. 
+
+### Dev Container
+You shouldn't need to do this directly with the current build.
+
+```sh
+sudo bash .devcontainer/reinstall-cmake.sh "3.29.2"
+sudo bash .devcontainer/install-llvm.sh "18" all
+```
+
+With dependecies installed, we can build in `build/` in the project root.
+```sh
+# Assuming `/usr/lib/llvm-18/` contains an llvm-18 installation.
+cmake --preset default -DCMAKE_PREFIX_PATH=/usr/lib/llvm-18/lib/cmake/
+# Valid user presets are `debug`, `release`, `relwithdebinfo`.
+cmake --build --preset=debug
+```
+
+### Building Patchestry
+
+To configure project run `cmake` with following default options.
+In case `clang` isn't your default compiler prefix the command with `CC=clang CXX=clang++`.
+If you want to use system installed `llvm` and `mlir` (on Ubuntu) use:
+
+The simplest way is to run
+
+```
+cmake --workflow release
+```
+
+If this method doesn't work for you, configure the project in the usual way:
+
+```
+cmake --preset default
+```
+
+To use a specific `llvm` provide `-DCMAKE_PREFIX_PATH=<llvm & mlir instalation paths>` option, where `CMAKE_PREFIX_PATH` points to directory containing `LLVMConfig.cmake` and `MLIRConfig.cmake`.
+
+Note: Patchestry requires LLVM with RTTI enabled. Use `LLVM_ENABLE_RTTI=ON` if you build your own LLVM.
+
+
+Finally, build the project:
+
+```
+cmake --build --preset release
+```
+
+Use `debug` preset for debug build.
+
+## Test
+
+```
+ctest --preset debug
+```
