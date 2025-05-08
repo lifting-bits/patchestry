@@ -55,7 +55,7 @@ config.pcode_translate_tool = patchestry_tool_path('pcode-translate')
 
 config.json_strip_comments = os.path.join(config.test_scripts_dir, 'strip-json-comments.sh')
 
-config.pcode_lifter_tool = patchestry_tool_path('pcode-lifter')
+config.patchir_decomp_tool = patchestry_tool_path('patchir-decomp')
 
 config.patchir_opt_tool = patchestry_tool_path('patchir-opt')
 
@@ -113,7 +113,7 @@ tools = [
     ToolSubst('%host_cxx', command=config.host_cxx),
     ToolSubst('%decompile-headless', command=config.decompiler_headless_tool),
     ToolSubst('%pcode-translate', command=config.pcode_translate_tool),
-    ToolSubst('%pcode-lifter', command=config.pcode_lifter_tool),
+    ToolSubst('%patchir-decomp', command=config.patchir_decomp_tool),
     ToolSubst('%patchir-opt', command=config.patchir_opt_tool),
     ToolSubst('%patchir-cir2llvm', command=config.patchir_cir2llvm_tool),
     ToolSubst('%strip-json-comments', command=config.json_strip_comments),

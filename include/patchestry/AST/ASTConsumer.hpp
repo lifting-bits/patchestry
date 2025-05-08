@@ -55,12 +55,14 @@ namespace patchestry::ast {
             clang::ASTContext &ctx, FunctionMap &serialized_functions, TypeMap &serialized_types
         );
 
-        Program &get_program(void) const { return program.get(); }
+        std::unique_ptr< clang::ASTUnit > create_astunit(clang::ASTContext &ctx) const;
 
-        clang::Sema &sema(void) const { return ci.get().getSema(); }
+        Program &get_program(void) const { return program; }
 
-        std::reference_wrapper< Program > program;
-        std::reference_wrapper< clang::CompilerInstance > ci;
+        clang::Sema &sema(void) const { return ci.getSema(); }
+
+        Program &program;
+        clang::CompilerInstance &ci;
 
         const patchestry::Options &options; // NOLINT
         std::unique_ptr< TypeBuilder > type_builder;

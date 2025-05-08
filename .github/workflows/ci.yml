@@ -48,6 +48,10 @@ jobs:
       ENABLE_SANITIZER_ADDRESS: ${{ matrix.sanitizers }}
 
     steps:
+      - name: Clean Docker to prevent space issues
+        run: |
+          docker system prune -af --volumes || true
+
       - name: Clone the Patchestry repository
         uses: actions/checkout@v4
         with:
@@ -55,7 +59,7 @@ jobs:
           fetch-depth: 1
 
       - name: Configure build - sanitizers ${{ matrix.sanitizers }}
-        run: cmake --preset ci
+        run: cmake --preset ci -DLLVM_EXTERNAL_LIT=$(which lit) -DLLVM_Z3_INSTALL_DIR=/usr/local
 
       - name: Build ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: cmake --build --preset ci --config ${{ matrix.build-type }} -j $(nproc)

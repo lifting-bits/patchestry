@@ -23,10 +23,10 @@ RUN wget --progress=bar:force -O /tmp/ghidra.zip ${GHIDRA_REPOSITORY}/releases/d
     echo "${GHIDRA_SHA256} /tmp/ghidra.zip" | sha256sum -c -
 
 # Unzip and set up Ghidra
-RUN unzip /tmp/ghidra.zip -d /tmp && \
-    mv /tmp/ghidra_${GHIDRA_VERSION}_PUBLIC /ghidra && \
-    chmod +x /ghidra/ghidraRun && \
-    rm -rf /var/tmp/* /tmp/* /ghidra/docs /ghidra/Extensions/Eclipse /ghidra/licenses
+RUN unzip /tmp/ghidra.zip -d /tmp
+RUN mv /tmp/ghidra_${GHIDRA_VERSION}_PUBLIC /ghidra
+RUN chmod +x /ghidra/ghidraRun
+RUN rm -rf /var/tmp/* /tmp/* /ghidra/docs /ghidra/Extensions/Eclipse /ghidra/licenses
 
 # Download and install Gradle
 RUN wget https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -P /tmp \

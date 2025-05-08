@@ -6,6 +6,8 @@
  */
 
 #include <cassert>
+#include <clang/Frontend/ASTUnit.h>
+#include <clang/Frontend/CompilerInvocation.h>
 #include <memory>
 #include <unordered_map>
 
@@ -27,6 +29,19 @@
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include "rellic/AST/LoopRefine.h"
+#include "rellic/AST/MaterializeConds.h"
+#include "rellic/AST/NestedCondProp.h"
+#include "rellic/AST/NestedScopeCombine.h"
+#include "rellic/AST/ReachBasedRefine.h"
+#include "rellic/AST/Z3CondSimplify.h"
+#include <rellic/AST/ASTPass.h>
+#include <rellic/AST/CondBasedRefine.h>
+#include <rellic/AST/DeadStmtElim.h>
+#include <rellic/AST/ExprCombine.h>
+#include <rellic/AST/LocalDeclRenamer.h>
+#include <rellic/AST/StructFieldRenamer.h>
+
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
@@ -38,7 +53,7 @@
 namespace patchestry::ast {
 
     void PcodeASTConsumer::HandleTranslationUnit(clang::ASTContext &ctx) {
-        type_builder = std::make_unique< TypeBuilder >(ci.get().getASTContext());
+        type_builder = std::make_unique< TypeBuilder >(ci.getASTContext());
         if (!get_program().serialized_types.empty()) {
             type_builder->create_types(ctx, get_program().serialized_types);
         }
@@ -57,13 +72,6 @@ namespace patchestry::ast {
 #ifdef ENABLE_DEBUG
             ctx.getTranslationUnitDecl()->dumpColor();
 #endif
-            std::error_code ec;
-            auto out = std::make_unique< llvm::raw_fd_ostream >(
-                options.output_file + ".c", ec, llvm::sys::fs::OF_Text
-            );
-            ctx.getTranslationUnitDecl()->print(
-                *llvm::dyn_cast< llvm::raw_ostream >(out), ctx.getPrintingPolicy(), 0
-            );
         }
     }
 
@@ -77,8 +85,7 @@ namespace patchestry::ast {
         std::vector< std::shared_ptr< FunctionBuilder > > func_builders;
         for (const auto &[key, function] : serialized_functions) {
             auto builder = std::make_shared< FunctionBuilder >(
-                ci.get(), function, *type_builder, function_declarations,
-                global_variable_declarations
+                ci, function, *type_builder, function_declarations, global_variable_declarations
             );
 
             builder->initialize_op_builder();

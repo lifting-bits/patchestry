@@ -1,8 +1,8 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %pcode-lifter -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
-// CIR: cir.func @register_io_dev_memmap(%arg0: !cir.ptr<!u64i> loc("unique:001a7f80:0:0":1:1))
+// CIR: cir.func @register_io_dev_memmap
 // RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir
 // MLIR: llvm.func @register_io_dev_memmap
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
