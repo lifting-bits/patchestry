@@ -4,3 +4,9 @@
 [submodule "vendor/rellic/src"]
 	path = vendor/rellic/src
 	url = https://github.com/lifting-bits/rellic.git
+[submodule "vendor/glog/src"]
+	path = vendor/glog/src
+	url = https://github.com/google/glog.git
+[submodule "vendor/gflags/src"]
+	path = vendor/gflags/src
+	url = https://github.com/gflags/gflags.git
