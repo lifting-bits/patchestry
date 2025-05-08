@@ -1,0 +1,6 @@
+[submodule "vendor/clangir/src"]
+	path = vendor/clangir/src
+	url = https://github.com/trail-of-forks/clangir.git
+[submodule "vendor/rellic/src"]
+	path = vendor/rellic/src
+	url = https://github.com/lifting-bits/rellic.git

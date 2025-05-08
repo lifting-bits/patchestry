@@ -48,11 +48,9 @@ project(
   LANGUAGES C CXX
 )
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
 include(project_settings)
 include(project_utils)
+include(options)
 
 #
 # Setup package version
@@ -69,6 +67,8 @@ configure_file(
   ${CMAKE_CURRENT_BINARY_DIR}/include/patchestry/Version.inc
 )
 
+add_subdirectory("vendor")
+
 #
 # CCACHE
 #
@@ -82,8 +82,7 @@ FindAndSelectClangCompiler()
 #
 # LLVM & MLIR & Clang
 #
-find_package(LLVM 20 REQUIRED CONFIG)
-message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+find_package(LLVM 20 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 
@@ -91,19 +90,24 @@ include(TableGen)
 include(AddLLVM)
 include(HandleLLVMOptions)
 
-find_package(MLIR 20 REQUIRED CONFIG)
+find_package(MLIR 20 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
-
 include(AddMLIR)
 
-find_package(Clang 20 CONFIG REQUIRED)
+find_package(Clang 20 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
-list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+
 
 
 set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/bin)
 set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/lib)
+
+
+
+find_package(Z3 4.8 CONFIG REQUIRED)
+find_package(rellic REQUIRED)
+message(STATUS "Using RellicConfig.cmake in: ${rellic_DIR}")
 
 include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
 include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})

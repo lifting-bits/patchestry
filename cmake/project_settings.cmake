@@ -40,8 +40,9 @@ macro(settings_main)
   endif()
 
   # Globally set the required C++ standard
-  set(CMAKE_CXX_STANDARD 23)
+  set(CMAKE_CXX_STANDARD 20)
   set(CMAKE_CXX_EXTENSIONS OFF)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
   if(UNIX)
     if(APPLE)

@@ -57,7 +57,7 @@ build_clangir() {
         -DLLVM_INCLUDE_TOOLS:BOOL=ON \
         -DLLVM_INSTALL_UTILS:BOOL=ON \
         -DLLVM_ENABLE_ZSTD:BOOL=OFF \
-        -DLLVM_TARGETS_TO_BUILD="AArch64;X86;ARM" \ \
+        -DLLVM_TARGETS_TO_BUILD="AArch64;X86;ARM" \
         -DCMAKE_C_COMPILER=/usr/bin/clang \
         -DCMAKE_CXX_COMPILER=/usr/bin/clang++
     ninja install .
