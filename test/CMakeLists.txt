@@ -24,9 +24,9 @@ add_lit_testsuite(pcode-translate-tests
   ${CMAKE_CURRENT_SOURCE_DIR}/pcode-translate
 )
 
-add_lit_testsuite(pcode-lifter-tests
-  "Running pcode-lifter tests"
-  ${CMAKE_CURRENT_SOURCE_DIR}/pcode-lifter
+add_lit_testsuite(patchir-decomp-tests
+  "Running patchir-decomp tests"
+  ${CMAKE_CURRENT_SOURCE_DIR}/patchir-decomp
 )
 
 add_test(NAME lit

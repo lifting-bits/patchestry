@@ -9,17 +9,20 @@ set(LLVM_LINK_COMPONENTS
 )
 
 
-add_executable(pcode-lifter
+add_executable(patchir-decomp
     main.cpp
 )
 
-llvm_update_compile_flags(pcode-lifter)
-target_link_libraries(pcode-lifter
+llvm_update_compile_flags(patchir-decomp)
+target_link_libraries(patchir-decomp
     PRIVATE
         patchestry::ghidra
         patchestry::ast
         patchestry::codegen
+        rellic::rellic
+        glog::glog
         clangFrontend
 )
 
-mlir_check_link_libraries(pcode-lifter)
+
+mlir_check_link_libraries(patchir-decomp)

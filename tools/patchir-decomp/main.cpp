@@ -16,6 +16,7 @@
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Stmt.h>
 #include <clang/Basic/DiagnosticOptions.h>
+#include <clang/Basic/LangStandard.h>
 #include <clang/Basic/TargetInfo.h>
 #include <clang/Basic/TargetOptions.h>
 #include <clang/Frontend/CompilerInstance.h>
@@ -74,6 +75,11 @@ namespace {
         "verbose", llvm::cl::desc("Enable debug logs"), llvm::cl::init(false)
     ); // NOLINT(cert-err58-cpp)
 
+    const llvm::cl::opt< bool > use_remill_transform( // NOLINT(cert-err58-cpp)
+        "use_remill_transform", llvm::cl::desc("Enable remill decompilation transform"),
+        llvm::cl::init(true)
+    ); // NOLINT(cert-err58-cpp)
+
     const llvm::cl::opt< bool > print_tu( // NOLINT(cert-err58-cpp)
         "print-tu", llvm::cl::desc("Pretty print translation unit"), llvm::cl::init(false)
     );
@@ -84,15 +90,16 @@ namespace {
         );
 
         return {
-            .emit_cir    = emit_cir.getValue(),
-            .emit_mlir   = emit_mlir.getValue(), // It is set to true by default
-            .emit_llvm   = emit_llvm.getValue(),
-            .emit_asm    = emit_asm.getValue(),
-            .emit_obj    = emit_obj.getValue(),
-            .verbose     = verbose.getValue(),
-            .output_file = output_filename.getValue(),
-            .input_file  = input_filename.getValue(),
-            .print_tu    = print_tu.getValue(),
+            .emit_cir             = emit_cir.getValue(),
+            .emit_mlir            = emit_mlir.getValue(), // It is set to true by default
+            .emit_llvm            = emit_llvm.getValue(),
+            .emit_asm             = emit_asm.getValue(),
+            .emit_obj             = emit_obj.getValue(),
+            .verbose              = verbose.getValue(),
+            .use_remill_transform = use_remill_transform.getValue(),
+            .output_file          = output_filename.getValue(),
+            .input_file           = input_filename.getValue(),
+            .print_tu             = print_tu.getValue(),
         };
     }
 
@@ -106,8 +113,8 @@ namespace {
 
         // Create fake file to support real file system needed for vast
         // location translation
-        std::string data      = "/patchestry";
-        std::string file_name = "/tmp/patchestry";
+        std::string data      = "// temporary patchestry data";
+        std::string file_name = "/tmp/patchestry.c";
         std::ofstream(file_name) << data;
         llvm::ErrorOr< clang::FileEntryRef > file_entry_ref_or_err =
             ci.getFileManager().getVirtualFileRef(
@@ -117,6 +124,12 @@ namespace {
             *file_entry_ref_or_err, clang::SourceLocation(), clang::SrcMgr::C_User, 0
         );
         sm.setMainFileID(file_id);
+
+        ci.getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
+        ci.getFrontendOpts().Inputs.emplace_back(
+            clang::FrontendInputFile(file_name, clang::InputKind(clang::Language::C))
+        );
+        ci.getLangOpts().C99 = true;
     }
 
     void setCodegenOptions(clang::CompilerInstance &ci) {
@@ -243,9 +256,6 @@ int main(int argc, char **argv) {
     target_options->Triple = createTargetTriple(*program->arch, *program->lang);
     ci.setTarget(clang::TargetInfo::CreateTargetInfo(ci.getDiagnostics(), target_options));
 
-    ci.getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
-    ci.getLangOpts().C99               = true;
-
     setCodegenOptions(ci);
 
     // Create the preprocessor and AST context
@@ -257,14 +267,13 @@ int main(int argc, char **argv) {
         std::make_unique< patchestry::ast::PcodeASTConsumer >(ci, program.value(), options);
     ci.setASTConsumer(std::move(consumer));
     ci.createSema(clang::TU_Complete, nullptr);
-
     auto &ast_consumer = ci.getASTConsumer();
     ast_consumer.HandleTranslationUnit(ast_context);
 
     auto *pcode_consumer = dynamic_cast< patchestry::ast::PcodeASTConsumer * >(&ast_consumer);
     if (pcode_consumer != nullptr) {
         auto codegen = std::make_unique< patchestry::codegen::CodeGenerator >(ci);
-        codegen->emit_cir(ast_context, options);
+        codegen->lower_to_ir(ast_context, options);
     }
 
     return EXIT_SUCCESS;

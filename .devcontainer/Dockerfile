@@ -34,6 +34,10 @@ RUN curl -fsSL https://get.docker.com -o get-docker.sh && \
 # Install Python packages
 RUN pip3 install lit codespell jinja2 Pygments
 
+COPY ./install-z3.sh /tmp/
+RUN chmod +x /tmp/install-z3.sh && \
+    /tmp/install-z3.sh
+
 COPY ./install-clangir.sh /tmp/
 RUN chmod +x /tmp/install-clangir.sh && \
     /tmp/install-clangir.sh

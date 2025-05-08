@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <clang/Frontend/ASTUnit.h>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,9 +25,14 @@
 
 #include <patchestry/Util/Options.hpp>
 
+namespace clang {
+    class ASTUnit;
+} // namespace clang
+
 namespace llvm {
+    class Module;
     class raw_fd_ostream;
-}
+} // namespace llvm
 
 namespace patchestry::codegen {
 
@@ -49,21 +55,18 @@ namespace patchestry::codegen {
 
         virtual ~CodeGenerator() = default;
 
-        void emit_cir(clang::ASTContext &actx, const patchestry::Options &options);
+        // lower clang AST to CIR representation
+        void lower_to_ir(clang::ASTContext &actx, const patchestry::Options &options);
 
-        void emit_tower(
-            clang::ASTContext &actx, const LocationMap &locations,
-            const patchestry::Options &options
-        );
-
-        // Emit mlir module from ASTContext
+        // Emit CIR representation from ASTContext
         std::optional< mlir::ModuleOp > lower_ast_to_mlir(clang::ASTContext &ctx);
 
+        // Emit LLVM IR representation from ASTContext
+        std::unique_ptr< llvm::Module >
+        lower_ast_to_llvm(clang::ASTContext &ctx, llvm::LLVMContext &llvm_ctx);
+
       private:
-        std::optional< mlir::ModuleOp > emit_after_pipeline(
-            clang::ASTContext &ctx, mlir::ModuleOp mod,
-            const std::vector< std::string > &pipelines
-        );
+        void emit_cir(clang::ASTContext &ctx, const patchestry::Options &options);
 
         void visit_locations(clang::ASTContext &ctx);
 

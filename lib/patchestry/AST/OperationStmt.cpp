@@ -542,7 +542,14 @@ namespace patchestry::ast {
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
-        auto loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto loc       = sourceLocation(ctx.getSourceManager(), op.key);
+        auto expr_type = input_expr->getType();
+        if (!expr_type->isPointerType()) {
+            auto op_type    = ctx.getPointerType(expr_type);
+            auto *cast_expr = make_cast(ctx, input_expr, op_type, loc);
+            assert(cast_expr != nullptr && "Failed to create cast expression");
+            input_expr = cast_expr;
+        }
 
         // Create indirect goto statement for branchind
         auto *result_stmt = new (ctx) clang::IndirectGotoStmt(loc, loc, input_expr);

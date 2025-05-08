@@ -19,4 +19,10 @@ target_link_libraries(patchestry_ast
   PRIVATE
     LLVMSupport
     patchestry_settings
+    glog::glog
+)
+
+target_include_directories(patchestry_ast
+  PRIVATE
+    "$<BUILD_INTERFACE:${RELLIC_INCLUDE_DIRS}>"
 )

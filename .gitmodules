@@ -1,0 +1,13 @@
+[submodule "vendor/clangir/src"]
+	path = vendor/clangir/src
+	url = https://github.com/trail-of-forks/clangir.git
+[submodule "vendor/rellic/src"]
+	path = vendor/rellic/src
+	url = https://github.com/lifting-bits/rellic.git
+	branch = llvm20
+[submodule "vendor/glog/src"]
+	path = vendor/glog/src
+	url = https://github.com/google/glog.git
+[submodule "vendor/gflags/src"]
+	path = vendor/gflags/src
+	url = https://github.com/gflags/gflags.git

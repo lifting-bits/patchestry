@@ -5,6 +5,9 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <clang/Frontend/CompilerInstance.h>
+#include <llvm/IR/Module.h>
+#include <memory>
 #include <mlir/Parser/Parser.h>
 #include <optional>
 
@@ -31,11 +34,13 @@
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Host.h>
 
+#include "clang/CodeGen/CodeGenAction.h"
 #include <mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Export.h>
 
-#include "clang/CIR/Dialect/IR/CIRDialect.h"
+#include <clang/CodeGen/ModuleBuilder.h>
+#include <rellic/Decompiler.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
@@ -52,16 +57,88 @@ namespace patchestry::codegen {
 
         cirdriver->emitDeferredDecls();
         cirdriver->verifyModule();
+
         return std::make_optional(cirdriver->getModule());
     }
 
-    void CodeGenerator::emit_cir(clang::ASTContext &actx, const patchestry::Options &options) {
+    std::unique_ptr< llvm::Module >
+    CodeGenerator::lower_ast_to_llvm(clang::ASTContext &ctx, llvm::LLVMContext &llvm_ctx) {
+        auto &cg_opts = ci.getCodeGenOpts();
+        auto &diags   = ci.getDiagnostics();
+
+        std::unique_ptr< clang::CodeGenerator > cg(clang::CreateLLVMCodeGen(
+            diags, ci.getFrontendOpts().OutputFile,
+            ci.getFileManager().getVirtualFileSystemPtr(), ci.getHeaderSearchOpts(),
+            ci.getPreprocessorOpts(), cg_opts, llvm_ctx
+        ));
+        cg->Initialize(ctx);
+        for (const auto &decl : ctx.getTranslationUnitDecl()->noload_decls()) {
+            cg->HandleTopLevelDecl(clang::DeclGroupRef(decl));
+        }
+        return std::unique_ptr< llvm::Module >(cg->ReleaseModule());
+    }
+
+    void
+    CodeGenerator::lower_to_ir(clang::ASTContext &actx, const patchestry::Options &options) {
+        // NOTE: We use rellic to improve the generated AST. There are issues running rellic AST
+        // passes directly on AST. Temporarily we lower the AST to llvm IR and regenerate AST
+
+        llvm::LLVMContext llvm_ctx;
+        auto transform_ast = [&](clang::ASTContext &ctx
+                             ) -> std::optional< rellic::DecompilationResult > {
+            auto llvm_mod = lower_ast_to_llvm(ctx, llvm_ctx);
+            if (!llvm_mod) {
+                return {};
+            }
+
+            // Decompile llvm IR using remill
+            rellic::DecompilationOptions opts{ .lower_switches   = false,
+                                               .remove_phi_nodes = false };
+            auto results = rellic::Decompile(std::move(llvm_mod), std::move(opts));
+            if (!results.Succeeded()) {
+                LOG(ERROR) << "Failed to decompile LLVM ir for transforming AST"
+                           << results.TakeError().message;
+                return {};
+            }
+
+            auto value = results.TakeValue();
+            if (options.print_tu) {
+#ifdef ENABLE_DEBUG
+                value.ast->getASTContext().getTranslationUnitDecl()->dumpColor();
+#endif
+                std::error_code ec;
+                auto out = std::make_unique< llvm::raw_fd_ostream >(
+                    options.output_file + ".c", ec, llvm::sys::fs::OF_Text
+                );
+                value.ast->getASTContext().getTranslationUnitDecl()->print(
+                    *llvm::dyn_cast< llvm::raw_ostream >(out),
+                    value.ast->getASTContext().getPrintingPolicy(), 0
+                );
+            }
+
+            return value;
+        };
+
         // Check if diagnostic error is set. If yes, ignore it.
         if (actx.getDiagnostics().hasErrorOccurred()) {
             actx.getDiagnostics().Reset();
         }
 
-        auto maybe_mod = lower_ast_to_mlir(actx);
+        if (options.use_remill_transform) {
+            auto results = transform_ast(actx);
+            if (results && results->ast) {
+                emit_cir(results->ast->getASTContext(), options);
+                return;
+            }
+            LOG(WARNING
+            ) << "Failed to transform AST using remill; Fallback to default generation";
+        }
+
+        emit_cir(actx, options);
+    }
+
+    void CodeGenerator::emit_cir(clang::ASTContext &ctx, const patchestry::Options &options) {
+        auto maybe_mod = lower_ast_to_mlir(ctx);
         if (!maybe_mod.has_value()) {
             LOG(ERROR) << "Failed to emit mlir module\n";
             return;
@@ -70,17 +147,6 @@ namespace patchestry::codegen {
         if (options.emit_cir) {
             Serializer::serializeToFile(*maybe_mod, options.output_file + ".cir");
         }
-
-        /*
-            // Disable running specific passes
-        {
-            auto cloned_mod = maybe_mod->clone();
-            auto *mctx      = cloned_mod.getContext();
-            mlir::PassManager pm(mctx);
-            pm.addPass(mlir::createFlattenCFGPass());
-            std::ignore = pm.run(cloned_mod);
-            Serializer::serializeToFile(cloned_mod, options.output_file + ".cir1");
-        }*/
 
         if (options.emit_mlir) {
             auto cloned_mod = maybe_mod->clone();

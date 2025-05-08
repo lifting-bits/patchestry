@@ -22,5 +22,12 @@ target_link_libraries(patchestry_codegen
   PRIVATE
     LLVMSupport
     patchestry_settings
+    rellic::rellic
+    glog::glog
     ${CLANG_IR_LIBS}
+)
+
+target_include_directories(patchestry_codegen
+  PRIVATE
+    "$<BUILD_INTERFACE:${RELLIC_INCLUDE_DIRS}>"
 )
