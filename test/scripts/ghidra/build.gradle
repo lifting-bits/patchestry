@@ -1,0 +1,180 @@
+/*
+ * Copyright (c) 2025, Trail of Bits, Inc.
+ *
+ * This source code is licensed in accordance with the terms specified in
+ * the LICENSE file found in the root directory of this source tree.
+ */
+
+ // This build involves Ghidra sources, which we get in the decompile-test.dockerfile
+// before we use this Gradle build. There is ANOTHER build in the top level scripts 
+// directory that uses the Ghidra download without test deps (this is not that one).
+
+plugins {
+    id 'java'
+    id 'jacoco'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+ext {
+    containerImage = 'eclipse:temurin:21'
+    javaVersion = '21'
+}
+
+repositories {
+    mavenCentral()
+    // For msv-rngconverter, which is not in mavencentral but in Red Hat's repo
+    // This sounds weird but seems to be a Ghidra dep. todo(kaoudis) figure out
+    // why this wants to be on the classpath and see if it can be removed?
+    maven {
+        url 'https://maven.repository.redhat.com/earlyaccess/all/'
+    }
+
+    flatDir {
+        dirs '/home/user/ghidra_source/Ghidra/Framework',
+             '/home/user/ghidra_source/Ghidra/Processors',
+             '/home/user/ghidra_source/Ghidra/Debug',
+             '/home/user/ghidra_source/Ghidra/Features',
+             '/home/user/ghidra_source/Ghidra/Extensions',
+             '/home/user/ghidra_source/GPL',
+             '/home/user/ghidra_source/dependencies'
+    }
+}
+
+dependencies {
+    implementation(
+        'com.google.code.gson:gson:2.13.0',
+        'org.apache.logging.log4j:log4j-core:2.23.1',
+        'org.apache.logging.log4j:log4j-api:2.23.1',
+        'org.jdom:jdom:1.1.3',
+        'org.apache.commons:commons-lang3:3.14.0',
+        'org.apache.commons:commons-collections4:4.4',
+        'commons-io:commons-io:2.15.1',
+        'net.java.dev.msv:msv-rngconverter:2011.1-redhat-2',
+        'org.antlr:antlr-runtime:3.5.2',
+        'com.google.guava:guava:32.1.2-jre',
+        'javax.help:javahelp:2.0.05',
+        'org.apache.commons:commons-compress:1.21',
+        fileTree(dir: '/home/user/ghidra_source/Ghidra/Framework', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source/Ghidra/Processors', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source/Ghidra/Debug', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source/Ghidra/Features', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source/Ghidra/Extensions', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source/GPL', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source/dependencies', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source', include: '**/build/libs/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source', include: '**/lib/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source', include: '**/libs/*.jar')
+    )
+
+    testImplementation(
+        'org.junit.platform:junit-platform-console-standalone:1.13.0',
+        'org.mockito:mockito-core:5.11.0',
+        fileTree(dir: '/home/user/ghidra_source/Ghidra/Test', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source/Ghidra', include: '**/test/*.jar'),
+        fileTree(dir: '/home/user/ghidra_source/Ghidra', include: '**/test/libs/*.jar'),
+        sourceSets.main.output
+    )
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = [
+                    '/home/user/ghidra_scripts/', 
+                    '/home/user/ghidra_scripts/domain/', 
+                    '/home/user/ghidra_scripts/util/'
+                ]
+            // Exclude test directories since otherwise the build fails!
+            exclude '**/test/**'
+            exclude '**/*Test.java'
+        }
+    }
+    test {
+        java {
+            srcDirs = [
+                '/home/user/ghidra_scripts/test/',
+                '/home/user/ghidra_scripts/test/util/',
+                '/home/user/ghidra_scripts/' 
+            ]
+            include '**/test/**'
+            include '**/*Test.java'
+        }
+    }
+}
+
+configurations {
+    testImplementation {
+        extendsFrom implementation
+    }
+}
+
+compileJava {
+    options.release = 21
+    options.compilerArgs += ['-parameters']
+    options.fork = true
+    options.forkOptions.jvmArgs += [
+        '-XX:+UseContainerSupport', 
+        '-XX:MaxRAMPercentage=75.0'
+    ]
+}
+
+jar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(sourceSets.main.output) {
+        exclude '**/test/**'
+        exclude '**/*Test.class'
+    }
+}
+
+jacoco {
+    // compatible with Java 21
+    toolVersion = "0.8.11"
+}
+
+// how to run this thing and get a report out that you can look at:
+// $ mkdir jacoco
+// $ DOCKER_BUILDKIT=1 docker build -t trailofbits/decompile-test:latest -f test/decompile-test.dockerfile .
+// $ docker run --entrypoint /bin/bash -v /home/kellykaoudis/patchestry/jacoco/:/home/user/ghidra_scripts/build/ -it trailofbits/decompile-test
+// then within the container, within /home/user/ghidra_scripts: gradle jacocoTestReport
+// this will put the jacoco output in your local host directory, e.g. /home/kellykaoudis/patchestry/jacoco/.
+// then there's an index.html in jacoco/reports/jacoco/test/html/ !
+// this will also make xml output that you can visualise in the vscode coverage gutters extension, or similar.
+jacocoTestReport {
+    dependsOn test
+    mustRunAfter {
+        jar
+        test
+    }
+    reports {
+        // produces the xml for coverage gutters (html is produced by default too)
+        xml.required = true
+        xml.outputLocation = layout.buildDirectory.dir('jacoco/jacoco.xml').get().asFile
+    }
+}
+
+test {
+    useJUnitPlatform ()
+    testLogging {
+        events 'PASSED', 'SKIPPED', 'FAILED', 'standard_out', 'standard_error'
+        exceptionFormat 'full'
+        showStandardStreams = true
+        showExceptions = true
+    }
+    maxHeapSize = '2G'
+    failFast = true
+    javaLauncher.set(
+        javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(21))
+        }
+    )
+    jvmArgs += [
+        '-XX:+UseContainerSupport', 
+        '-XX:MaxRAMPercentage=75.0',
+        '-XX:+EnableDynamicAgentLoading',
+        '--add-exports=java.desktop/sun.awt=ALL-UNNAMED'
+    ]
+}

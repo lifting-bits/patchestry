@@ -6,7 +6,7 @@
 
 // RUN: %decompile-headless --input %t.o --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=DECOMPILEA %s --input-file %t
-// DECOMPILEA: "arch":"{{.*}}","format":"{{.*}}","functions":
+// DECOMPILEA: "architecture":"{{.*}}","format":"{{.*}}","functions":
 // DECOMPILEA-SAME: "name":"{{_?insert_substring}}"
 // DECOMPILEA-SAME: "name":"{{_?main}}"
 

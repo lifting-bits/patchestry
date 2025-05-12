@@ -1,58 +1,47 @@
 #
-# Copyright (c) 2024, Trail of Bits, Inc.
+# Copyright (c) 2025, Trail of Bits, Inc.
 #
 # This source code is licensed in accordance with the terms specified in
 # the LICENSE file found in the root directory of this source tree.
 #
 
-name: Build
-
+name: CI
 on:
   push:
     branches:
       - 'main'
-
     tags:
       - '*'
-
   pull_request:
     branches:
       - '*'
 
 jobs:
-  build:
+  llvm-build-and-test:
     strategy:
       matrix:
         llvm-version: [20]
         image-version: [22.04]
         build-type: [Release, Debug]
         sanitizers: [OFF]
-
     runs-on: ubuntu-${{ matrix.image-version }}
-    timeout-minutes: 90
+    timeout-minutes: 30
     container:
       image:
         ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
-
     services:
       docker:
         image: docker:20.10-dind
         options: --privileged
         ports:
-          - 2375:2375
-
+          - 12375:2375
     env:
       CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
       LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
       ENABLE_SANITIZER_UNDEFINED_BEHAVIOR: ${{ matrix.sanitizers }}
       ENABLE_SANITIZER_ADDRESS: ${{ matrix.sanitizers }}
       CI: true
-
     steps:
-      - name: Clean Docker to prevent space issues
-        run: |
-          docker system prune -af --volumes || true
-
       - name: Clone the Patchestry repository
         uses: actions/checkout@v4
         with:
@@ -63,14 +52,32 @@ jobs:
         run: cmake --preset ci -DPE_USE_VENDORED_Z3=OFF -DLLVM_EXTERNAL_LIT=$(which lit) -DLLVM_Z3_INSTALL_DIR=/usr/local
 
       - name: Build ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
-        run: cmake --build --preset ci --config ${{ matrix.build-type }} -j $(nproc)
+        run: cmake --build --preset ci --config ${{ matrix.build-type }} -j$(nproc)
 
-      - name: Build the headless docker image
+      - name: Build the headless decompilation docker image
         run: |
-          # Free more space before building Docker image
-          docker system prune -af --volumes || true
           bash ./scripts/ghidra/build-headless-docker.sh
 
       - name: Test ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: |
           lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=${{ github.workspace }}/builds/ci/test/ghidra/Output
+  
+  ghidra-script-tests:
+    strategy:
+      matrix:
+        image-version: [22.04]
+    runs-on: ubuntu-${{ matrix.image-version }}
+    timeout-minutes: 30
+    env:
+      CI: true
+    steps:
+      - name: Clone the Patchestry repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: Build the Ghidra testing Docker image and run tests via Gradle
+        run: |
+          DOCKER_BUILDKIT=1 docker build -t trailofbits/decompile-test:latest -f test/decompile-test.dockerfile . && \
+          docker run trailofbits/decompile-test

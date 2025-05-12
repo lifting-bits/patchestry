@@ -1,9 +1,11 @@
 /*
- * Copyright (c) 2024, Trail of Bits, Inc.
+ * Copyright (c) 2025, Trail of Bits, Inc.
  *
  * This source code is licensed in accordance with the terms specified in
  * the LICENSE file found in the root directory of this source tree.
  */
+
+import util.FunctionSerializer;
 
 import ghidra.app.script.GhidraScript;
 
@@ -42,32 +44,16 @@ import java.util.List;
 import java.util.Collections;
 
 public class PatchestryListFunctions extends GhidraScript {
-
-    public class FunctionSerializer extends JsonWriter {
-        public FunctionSerializer(java.io.BufferedWriter writer) {
-            super(writer);
-        }
-
-        public JsonWriter serialize(Function function) throws Exception {
-            beginObject();
-            name("name").value(function.getName());
-            name("address").value(function.getEntryPoint().toString());
-            name("is_thunk").value(function.isThunk());
-            return endObject();
-        }
-
-        public JsonWriter serialize(List<Function> functions) throws Exception {
-            beginObject();
-            name("program").value(currentProgram.getName());
-            name("functions").beginArray();
-            for (Function function : functions) {
-                serialize(function);
-            }
-            return endArray().endObject();
+    /* For test setup purposes, we don't want to control this script from the command line. */
+    protected void setProgram(Program program) throws RuntimeException {
+        if (program != null && getCurrentProgram() == null) {
+            currentProgram = program;
+        } else {
+            currentProgram = getCurrentProgram();
         }
     }
 
-    private List<Function> getAllFunctions() {
+    protected List<Function> getAllFunctions() {
         if (currentProgram == null || currentProgram.getFunctionManager() == null) {
             return Collections.emptyList();
         }
@@ -79,16 +65,21 @@ public class PatchestryListFunctions extends GhidraScript {
         return functions;
     }
 
-    private void serializeToFile(Path file, List<Function> functions) throws Exception { 
-        if (file == null || functions == null || functions.isEmpty()) {
-            throw new IllegalArgumentException("Invalid file path or empty function list");
+    protected void serializeToFile(Path file, List<Function> functions) throws Exception { 
+        if (file == null) {
+            throw new IllegalArgumentException("Invalid file writer");
         }
 
-        final var serializer = new FunctionSerializer(Files.newBufferedWriter(file));
-        serializer.serialize(functions).close();
+        if (functions == null || functions.isEmpty()) {
+            throw new IllegalArgumentException("Empty function list");
+        }
+
+        final var serializer = new FunctionSerializer(Files.newBufferedWriter(file), currentProgram);
+        serializer.serialize(functions);
+        serializer.close();
     }
 
-    private void runHeadless() throws Exception {
+    protected void runHeadless() throws Exception {
         if (getScriptArgs().length != 1) {
             throw new IllegalArgumentException("Output file is not specified");
         }

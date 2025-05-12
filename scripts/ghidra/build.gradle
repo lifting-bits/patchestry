@@ -1,0 +1,74 @@
+/*
+ * Copyright (c) 2025, Trail of Bits, Inc.
+ *
+ * This source code is licensed in accordance with the terms specified in
+ * the LICENSE file found in the root directory of this source tree.
+ */
+
+ // This build is for our scripts in the headless decompilation container. 
+// It neither contains Ghidra test sources, nor tests for our scripts.
+// If you want those, see the test build.gradle for our CI container.
+
+plugins {
+    id 'java'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+ext {
+    containerImage = 'eclipse:temurin:21'
+    javaVersion = '21'
+}
+
+repositories {
+    mavenCentral()
+    flatDir {
+        dirs '/home/user/ghidra/Ghidra/Framework',
+             '/home/user/ghidra/Ghidra/Processors',
+             '/home/user/ghidra/Ghidra/Debug',
+             '/home/user/ghidra/Ghidra/Features',
+             '/home/user/ghidra/Ghidra/Extensions',
+             '/home/user/ghidra/GPL',
+             '/home/user/ghidra/dependencies'
+    }
+}
+
+dependencies {
+    implementation(
+        fileTree(dir: '/home/user/ghidra/Ghidra/Framework', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra/Processors', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra/Debug', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra/Features', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra/Extensions', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/GPL', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/dependencies', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra', include: '**/build/libs/*.jar'),
+        fileTree(dir: '/home/user/ghidra', include: '**/lib/*.jar'),
+        fileTree(dir: '/home/user/ghidra', include: '**/libs/*.jar')
+    )
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = [
+                    '/home/user/ghidra_scripts/', 
+                    '/home/user/ghidra_scripts/domain/', 
+                    '/home/user/ghidra_scripts/util/'
+                ]
+        }
+    }
+}
+
+compileJava {
+    options.release = 21
+    options.compilerArgs += ['-parameters']
+    options.fork = true
+    options.forkOptions.jvmArgs += [
+        '-XX:+UseContainerSupport', 
+        '-XX:MaxRAMPercentage=75.0'
+    ]
+}
