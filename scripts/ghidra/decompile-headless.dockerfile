@@ -51,9 +51,9 @@ FROM base AS runtime
 RUN apt-get update && apt-get install -y \
     adduser \
     sudo \
-    file \
+    wget \
     binutils \
-    --no-install-recommends && \
+    file && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives
 
 # Add a user with no login shell and no login capabilities and add
@@ -66,14 +66,19 @@ RUN adduser --shell /sbin/nologin --disabled-login --gecos "" user && \
 USER user
 
 WORKDIR /home/user/
-
-RUN mkdir -p /home/user/ghidra_projects /home/user/ghidra_scripts
-
 COPY --from=build /ghidra ghidra
-COPY PatchestryListFunctions.java ghidra_scripts/
-COPY PatchestryDecompileFunctions.java ghidra_scripts/
 COPY --chown=user:user --chmod=755 decompile-entrypoint.sh  .
 
+WORKDIR /home/user/ghidra_scripts/
+COPY PatchestryListFunctions.java .
+COPY PatchestryDecompileFunctions.java .
+
+WORKDIR /home/user/ghidra_scripts/test/
+RUN wget -O junit-platform-console-standalone.jar \
+    https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.1/junit-platform-console-standalone-1.10.1.jar
+COPY test/ .
+
+WORKDIR /home/user/
 ENV GHIDRA_HOME=/home/user/ghidra
 ENV GHIDRA_SCRIPTS=/home/user/ghidra_scripts
 ENV GHIDRA_PROJECTS=/home/user/ghidra_projects

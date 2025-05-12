@@ -15,6 +15,7 @@ HIGH_PCODE=""
 function help {
     cat << EOF
 Usage: ./decompile-entrypoint.sh [OPTIONS]
+Note: In general, this script is intended to be run (in Docker) via `decompile-headless.sh`, not directly.
 
 Options:
   --help, -h
@@ -35,10 +36,15 @@ Options:
   --output <OUTPUT_FILE>
       Specify the output file to write the results.
 
+  --test-decomp
+      Runs in-situ decompilation tests against the Bloodlight and PulseOX firmware samples. Requires compiling
+      these binaries outside of the devcontainer environment so they can be used in test cases.
+
 Examples:
   ./decompile-entrypoint.sh --input /path/to/file --command list-functions --output /path/to/output.json
   ./decompile-entrypoint.sh --input /path/to/file --command decompile --function main --output /path/to/output.json
   ./decompile-entrypoint.sh --input /path/to/file --command decompile-all --output /path/to/output.json
+  ./decompile-entrypoint.sh --test-decomp
 EOF
 }
 
@@ -87,6 +93,11 @@ function parse_args {
                     die "--output requires an argument."
                 fi
                 ;;
+            --test-decomp)
+                # running in-situ tests requires only this argument
+                test_decomp
+                exit 0
+                ;;
             *)
                 die "Invalid option '$1'."
                 ;;
@@ -112,6 +123,27 @@ function validate_args {
     if [[ -z "$OUTPUT_FILE" ]]; then
         die "--output is required."
     fi
+}
+
+# Runs in-situ unit tests of the decompilation to pcode. todo(kaoudis) this 
+# or some test suite in the folder needs to also check to see if we have at 
+# least something in the output pcode for every single function in the 
+# functions list. Maybe this means converting some of the existing end to end
+# tests?
+function test_decomp {
+  local path="ghidra_scripts"
+  local junit="$path/test/junit-platform-console-standalone.jar" 
+  local classpath="$junit:$GHIDRA_PATH/Ghidra/Framework/Generic/lib/*:$GHIDRA_PATH/Ghidra/Framework/SoftwareModeling/lib/*:$path:$path/test"
+  local script_sources=$(find "$path" -maxdepth 1 -name "*.java" | tr '\n' ' ')
+  local test_sources=$(find "$path/test" -name "*Test.java" | tr '\n' ' ')
+
+  javac -cp "$classpath" $script_sources $test_sources
+
+  java -jar $junit \
+    --class-path "$classpath" \
+    --disable-banner \
+    --scan-classpath \
+    --include-classname ".*Test$"
 }
 
 ARCHITECTURE=""

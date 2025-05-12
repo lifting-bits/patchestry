@@ -1,9 +1,10 @@
 /*
- * Copyright (c) 2024, Trail of Bits, Inc.
+ * Copyright (c) 2025, Trail of Bits, Inc.
  *
  * This source code is licensed in accordance with the terms specified in
  * the LICENSE file found in the root directory of this source tree.
  */
+
 
 import ghidra.app.script.GhidraScript;
 
@@ -43,6 +44,7 @@ import ghidra.program.model.data.CharDataType;
 
 import ghidra.program.model.lang.CompilerSpec;
 import ghidra.program.model.lang.Language;
+import ghidra.program.model.lang.Processor;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.lang.RegisterManager;
 
@@ -134,6 +136,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -143,6 +146,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.TreeMap;
+
+import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.model.mem.Memory;
 
 public class PatchestryDecompileFunctions extends GhidraScript {
 
