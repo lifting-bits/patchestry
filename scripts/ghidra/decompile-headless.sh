@@ -75,18 +75,6 @@ parse_args() {
     done
 }
 
-validate_args() {
-    if [ -z "$INPUT_PATH" ]; then
-        echo "Error: Missing required option: -i, --input <input_file>"
-        exit 1
-    fi
-
-    if [ -z "$OUTPUT_PATH" ]; then
-        echo "Error: Missing required option: -o, --output <output_file>"
-        exit 1
-    fi
-}
-
 prepare_paths() {
     INPUT_PATH=$(realpath "$INPUT_PATH")
 
@@ -142,6 +130,11 @@ validate_paths() {
 }
 
 build_docker_command() {
+    CI=""
+    if [ -n "$CI_OUTPUT_FOLDER" ]; then
+        CI="-v $CI_OUTPUT_FOLDER:/mnt/output:rw"
+    fi
+
     local ARGS=
     if [  -n "$LIST_FUNCTIONS" ]; then
         ARGS="--command list-functions $ARGS"
@@ -149,7 +142,7 @@ build_docker_command() {
         if file "$INPUT_PATH" | grep -q "Mach-O"; then
             FUNCTION_NAME="_$FUNCTION_NAME"
         fi
-        ARGS="--command decompile --function \"$FUNCTION_NAME\" $ARGS"
+        ARGS="--command decompile --function \"$FUNCTION_NAME\" $ARGS" 
     else
         ARGS="--command decompile-all $ARGS"
     fi
@@ -158,7 +151,7 @@ build_docker_command() {
         INPUT_PATH=$(basename "$INPUT_PATH")
         OUTPUT_PATH=$(basename "$OUTPUT_PATH")
         RUN="docker run --rm \
-            -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
+            $CI \
             trailofbits/patchestry-decompilation:latest \
             --input /mnt/output/$INPUT_PATH \
             $ARGS --output /mnt/output/$OUTPUT_PATH"
@@ -181,9 +174,20 @@ build_docker_command() {
 
 main() {
     parse_args "$@"
-    validate_args
+
+    if [ -z "$INPUT_PATH" ]; then
+        echo "Error: Missing required option: -i, --input <input_file>"
+        exit 1
+    fi
+
+    if [ -z "$OUTPUT_PATH" ]; then
+        echo "Error: Missing required option: -o, --output <output_file>"
+        exit 1
+    fi
+
     prepare_paths
     validate_paths
+
     build_docker_command
 
     if [ "$VERBOSE" = true ]; then
