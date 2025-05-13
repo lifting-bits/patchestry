@@ -23,10 +23,17 @@ RUN wget --progress=bar:force -O /tmp/ghidra.zip ${GHIDRA_REPOSITORY}/releases/d
     echo "${GHIDRA_SHA256} /tmp/ghidra.zip" | sha256sum -c -
 
 # Unzip and set up Ghidra
+<<<<<<< HEAD
 RUN unzip /tmp/ghidra.zip -d /tmp
 RUN mv /tmp/ghidra_${GHIDRA_VERSION}_PUBLIC /ghidra
 RUN chmod +x /ghidra/ghidraRun
 RUN rm -rf /var/tmp/* /tmp/* /ghidra/docs /ghidra/Extensions/Eclipse /ghidra/licenses
+=======
+RUN unzip /tmp/ghidra.zip -d /tmp && \
+    mv /tmp/ghidra_${GHIDRA_VERSION}_PUBLIC /ghidra && \
+    chmod +x /ghidra/ghidraRun && \
+    rm -rf /var/tmp/* /tmp/* /ghidra/Extensions/Eclipse /ghidra/licenses
+>>>>>>> f68ef87 (start taking my initial draft and making it a) more usable and b) more supportable by moving tests into an inheriting container that can also be used in CI - this also gives me the ability to get the firmwares in there in a predictable place to use, fairly painlessly)
 
 # Download and install Gradle
 RUN wget https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -P /tmp \
@@ -37,11 +44,11 @@ RUN wget https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.
 # Set the PATH for Gradle
 ENV PATH="${GRADLE_HOME}/bin:${PATH}"
 
-#RUN cd /ghidra/support/buildNatives && \
-#    /ghidra/support/buildNatives
+WORKDIR /ghidra/support/gradle
+RUN gradle buildNatives
 
-RUN cd /ghidra/support/gradle \
-    && gradle buildNatives
+WORKDIR /ghidra/support/
+RUN ./buildGhidraJar
 
 RUN apt-get purge -y --auto-remove wget ca-certificates unzip && \
     apt-get clean
@@ -51,7 +58,6 @@ FROM base AS runtime
 RUN apt-get update && apt-get install -y \
     adduser \
     sudo \
-    wget \
     file && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives
 
@@ -65,17 +71,12 @@ RUN adduser --shell /sbin/nologin --disabled-login --gecos "" user && \
 USER user
 
 WORKDIR /home/user/
-COPY --from=build /ghidra ghidra
+COPY --chown=user:user --from=build /ghidra ghidra
 COPY --chown=user:user --chmod=755 decompile-entrypoint.sh  .
 
 WORKDIR /home/user/ghidra_scripts/
 COPY PatchestryListFunctions.java .
 COPY PatchestryDecompileFunctions.java .
-
-WORKDIR /home/user/ghidra_scripts/test/
-RUN wget -O junit-platform-console-standalone.jar \
-    https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.1/junit-platform-console-standalone-1.10.1.jar
-COPY test/ .
 
 WORKDIR /home/user/
 ENV GHIDRA_HOME=/home/user/ghidra
