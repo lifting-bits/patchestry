@@ -36,15 +36,10 @@ Options:
   --output <OUTPUT_FILE>
       Specify the output file to write the results.
 
-  --test-decomp
-      Runs in-situ decompilation tests against the Bloodlight and PulseOX firmware samples. Requires compiling
-      these binaries outside of the devcontainer environment so they can be used in test cases.
-
 Examples:
   ./decompile-entrypoint.sh --input /path/to/file --command list-functions --output /path/to/output.json
   ./decompile-entrypoint.sh --input /path/to/file --command decompile --function main --output /path/to/output.json
   ./decompile-entrypoint.sh --input /path/to/file --command decompile-all --output /path/to/output.json
-  ./decompile-entrypoint.sh --test-decomp
 EOF
 }
 
