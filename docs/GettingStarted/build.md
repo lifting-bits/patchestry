@@ -31,7 +31,7 @@ See also: [Development](#development)
    docker buildx version
    ```
 
-4. Log into Docker Hub:
+4. Log into Docker Hub (this may not be needed - it is not needed on Linux):
    ```
    docker login -u <username>
    ```
@@ -72,7 +72,7 @@ Steps followed in the [Gist](https://gist.github.com/kaoudis/e734c6197dbed595586
 3. Build and install LLVM
 4. Build and install Patchestry
 5. Build the headless container in the Patchestry repository (this should set up and install Ghidra and everything else)
-6. Test Patchestry, which requires the container
+6. Run tests for Patchestry, which requires the container / occurs in the container
 
 # Development 
 
@@ -82,14 +82,9 @@ Steps followed in the [Gist](https://gist.github.com/kaoudis/e734c6197dbed595586
 
 ## Ghidra
 
-### Installing Ghidra Scripts
-Link `ghidra_scripts` directory to `$HOME`. We assume that `./patchestry` contains the cloned repository.
-```shell
-ln -s patchestry/ghidra_scripts ~
-```
-
 ### Installing Ghidra Locally
-You shouldn't need to do this directly in the current build *most of the time*. You may need Ghidra locally for Ghidra script debugging.
+You shouldn't need to do this directly in the current build *most of the time*. Prefer working in the headless container. 
+You may want Ghidra locally for Ghidra script debugging.
 
 Get Java JDK (x64)
 ```shell
@@ -104,61 +99,4 @@ Get Ghidra
 wget -c https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.1.1_build/ghidra_11.1.1_PUBLIC_20240614.zip -O ghidra.zip
 unzip ghidra.zip
 mv ghidra_11.1.1_PUBLIC ~/ghidra
-```
-
-## Old Stuff
-
-Here are old sections of documentation retained for historical reference. Please follow the above instructions instead. 
-
-### Dev Container
-You shouldn't need to do this directly with the current build.
-
-```sh
-sudo bash .devcontainer/reinstall-cmake.sh "3.29.2"
-sudo bash .devcontainer/install-llvm.sh "18" all
-```
-
-With dependecies installed, we can build in `build/` in the project root.
-```sh
-# Assuming `/usr/lib/llvm-18/` contains an llvm-18 installation.
-cmake --preset default -DCMAKE_PREFIX_PATH=/usr/lib/llvm-18/lib/cmake/
-# Valid user presets are `debug`, `release`, `relwithdebinfo`.
-cmake --build --preset=debug
-```
-
-### Building Patchestry
-
-To configure project run `cmake` with following default options.
-In case `clang` isn't your default compiler prefix the command with `CC=clang CXX=clang++`.
-If you want to use system installed `llvm` and `mlir` (on Ubuntu) use:
-
-The simplest way is to run
-
-```
-cmake --workflow release
-```
-
-If this method doesn't work for you, configure the project in the usual way:
-
-```
-cmake --preset default
-```
-
-To use a specific `llvm` provide `-DCMAKE_PREFIX_PATH=<llvm & mlir instalation paths>` option, where `CMAKE_PREFIX_PATH` points to directory containing `LLVMConfig.cmake` and `MLIRConfig.cmake`.
-
-Note: Patchestry requires LLVM with RTTI enabled. Use `LLVM_ENABLE_RTTI=ON` if you build your own LLVM.
-
-
-Finally, build the project:
-
-```
-cmake --build --preset release
-```
-
-Use `debug` preset for debug build.
-
-## Test
-
-```
-ctest --preset debug
 ```
