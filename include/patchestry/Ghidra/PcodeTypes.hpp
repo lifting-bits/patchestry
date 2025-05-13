@@ -38,20 +38,20 @@ namespace patchestry::ghidra {
 
         static VarnodeType::Kind convertToKind(const std::string &kind) {
             static const std::unordered_map< std::string, VarnodeType::Kind > kind_map = {
-                {  "invalid",   VT_INVALID},
-                {     "bool",   VT_BOOLEAN},
-                {  "integer",   VT_INTEGER},
-                {    "float",     VT_FLOAT},
-                {  "pointer",   VT_POINTER},
-                { "function",  VT_FUNCTION},
-                {    "array",     VT_ARRAY},
-                {   "struct",    VT_STRUCT},
-                {    "union",     VT_UNION},
-                {     "enum",      VT_ENUM},
-                {  "typedef",   VT_TYPEDEF},
-                {"undefined", VT_UNDEFINED},
-                {     "void",      VT_VOID},
-                {"WideCharDataType", VT_WIDECHAR}
+                {   "invalid",   VT_INVALID },
+                {      "bool",   VT_BOOLEAN },
+                {   "integer",   VT_INTEGER },
+                {     "float",     VT_FLOAT },
+                {   "pointer",   VT_POINTER },
+                {  "function",  VT_FUNCTION },
+                {     "array",     VT_ARRAY },
+                {    "struct",    VT_STRUCT },
+                {     "union",     VT_UNION },
+                {      "enum",      VT_ENUM },
+                {   "typedef",   VT_TYPEDEF },
+                { "undefined", VT_UNDEFINED },
+                {      "void",      VT_VOID },
+                {     "wchar",  VT_WIDECHAR }
             };
 
             // if kind is not present in the map, return vt_invalid

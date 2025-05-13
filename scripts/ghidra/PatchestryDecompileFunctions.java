@@ -584,7 +584,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				name("size").value(data_type.getLength());
 				
 			} else if (data_type instanceof WideCharDataType) {
-				name("kind").value("WideCharDataType");
+				name("kind").value("wchar");
 				name("size").value(data_type.getLength());
 				
 			} else if (data_type instanceof StringDataType) {
