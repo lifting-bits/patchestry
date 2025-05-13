@@ -67,27 +67,44 @@ namespace patchestry::ghidra {
             return iter != kind_map.end() ? iter->second : VARNODE_UNKNOWN;
         }
 
+#ifdef ENABLE_DEBUG
         std::string dump() const {
             std::string result;
             result += "Varnode {\n";
-            
+
             // Convert kind to string
             std::string kind_str;
             switch (kind) {
-                case VARNODE_UNKNOWN: kind_str = "UNKNOWN"; break;
-                case VARNODE_GLOBAL: kind_str = "GLOBAL"; break;
-                case VARNODE_LOCAL: kind_str = "LOCAL"; break;
-                case VARNODE_PARAM: kind_str = "PARAM"; break;
-                case VARNODE_FUNCTION: kind_str = "FUNCTION"; break;
-                case VARNODE_TEMPORARY: kind_str = "TEMPORARY"; break;
-                case VARNODE_CONSTANT: kind_str = "CONSTANT"; break;
-                case VARNODE_STRING: kind_str = "STRING"; break;
+                case VARNODE_UNKNOWN:
+                    kind_str = "UNKNOWN";
+                    break;
+                case VARNODE_GLOBAL:
+                    kind_str = "GLOBAL";
+                    break;
+                case VARNODE_LOCAL:
+                    kind_str = "LOCAL";
+                    break;
+                case VARNODE_PARAM:
+                    kind_str = "PARAM";
+                    break;
+                case VARNODE_FUNCTION:
+                    kind_str = "FUNCTION";
+                    break;
+                case VARNODE_TEMPORARY:
+                    kind_str = "TEMPORARY";
+                    break;
+                case VARNODE_CONSTANT:
+                    kind_str = "CONSTANT";
+                    break;
+                case VARNODE_STRING:
+                    kind_str = "STRING";
+                    break;
             }
-            
+
             result += "  kind: " + kind_str + "\n";
             result += "  size: " + std::to_string(size) + "\n";
             result += "  type_key: " + type_key + "\n";
-            
+
             if (operation) {
                 result += "  operation: " + *operation + "\n";
             }
@@ -103,10 +120,11 @@ namespace patchestry::ghidra {
             if (global) {
                 result += "  global: " + *global + "\n";
             }
-            
+
             result += "}";
             return result;
         }
+#endif
 
         Kind kind;
         uint32_t size;
