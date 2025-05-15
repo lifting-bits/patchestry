@@ -22,33 +22,22 @@ RUN apt-get update && apt-get install -y \
 RUN wget --progress=bar:force -O /tmp/ghidra.zip ${GHIDRA_REPOSITORY}/releases/download/Ghidra_${GHIDRA_VERSION}_build/${GHIDRA_PACKAGE}.zip && \
     echo "${GHIDRA_SHA256} /tmp/ghidra.zip" | sha256sum -c -
 
-# Unzip and set up Ghidra
-<<<<<<< HEAD
-RUN unzip /tmp/ghidra.zip -d /tmp
-RUN mv /tmp/ghidra_${GHIDRA_VERSION}_PUBLIC /ghidra
-RUN chmod +x /ghidra/ghidraRun
-RUN rm -rf /var/tmp/* /tmp/* /ghidra/docs /ghidra/Extensions/Eclipse /ghidra/licenses
-=======
+
 RUN unzip /tmp/ghidra.zip -d /tmp && \
     mv /tmp/ghidra_${GHIDRA_VERSION}_PUBLIC /ghidra && \
-    chmod +x /ghidra/ghidraRun && \
-    rm -rf /var/tmp/* /tmp/* /ghidra/Extensions/Eclipse /ghidra/licenses
->>>>>>> f68ef87 (start taking my initial draft and making it a) more usable and b) more supportable by moving tests into an inheriting container that can also be used in CI - this also gives me the ability to get the firmwares in there in a predictable place to use, fairly painlessly)
+    chmod +x /ghidra/ghidraRun
 
-# Download and install Gradle
 RUN wget https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -P /tmp \
     && unzip /tmp/gradle-${GRADLE_VERSION}-bin.zip -d /opt/ \
     && ln -s /opt/gradle-${GRADLE_VERSION} ${GRADLE_HOME} \
     && rm /tmp/gradle-${GRADLE_VERSION}-bin.zip
 
-# Set the PATH for Gradle
 ENV PATH="${GRADLE_HOME}/bin:${PATH}"
 
 WORKDIR /ghidra/support/gradle
 RUN gradle buildNatives
 
-WORKDIR /ghidra/support/
-RUN ./buildGhidraJar
+RUN rm -rf /var/tmp/* /tmp/* /ghidra/docs /ghidra/Extensions/Eclipse /ghidra/licenses
 
 RUN apt-get purge -y --auto-remove wget ca-certificates unzip && \
     apt-get clean
@@ -71,6 +60,10 @@ RUN adduser --shell /sbin/nologin --disabled-login --gecos "" user && \
 USER user
 
 WORKDIR /home/user/
+
+COPY --chown=user:user --from=build /opt/gradle /opt/gradle
+ENV PATH="/opt/gradle/bin:${PATH}"
+
 COPY --chown=user:user --from=build /ghidra ghidra
 COPY --chown=user:user --chmod=755 decompile-entrypoint.sh  .
 
