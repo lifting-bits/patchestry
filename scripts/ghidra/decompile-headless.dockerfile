@@ -2,13 +2,13 @@ FROM eclipse-temurin:21 AS base
 
 FROM base AS build
 
-ENV GHIDRA_VERSION=11.3.2
-ENV GRADLE_VERSION=8.2
-ENV GRADLE_HOME=/opt/gradle
-ENV GHIDRA_RELEASE_TAG=20250415
-ENV GHIDRA_PACKAGE=ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_RELEASE_TAG}
-ENV GHIDRA_SHA256=99d45035bdcc3d6627e7b1232b7b379905a9fad76c772c920602e2b5d8b2dac2
-ENV GHIDRA_REPOSITORY=https://github.com/NationalSecurityAgency/ghidra
+ARG GHIDRA_VERSION=11.3.2
+ARG GRADLE_VERSION=8.2
+ARG GRADLE_HOME=/opt/gradle
+ARG GHIDRA_RELEASE_TAG=20250415
+ARG GHIDRA_PACKAGE=ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_RELEASE_TAG}
+ARG GHIDRA_SHA256=99d45035bdcc3d6627e7b1232b7b379905a9fad76c772c920602e2b5d8b2dac2
+ARG GHIDRA_REPOSITORY=https://github.com/NationalSecurityAgency/ghidra
 
 RUN apt-get update && apt-get install -y \
     wget \
@@ -68,10 +68,6 @@ USER user
 
 WORKDIR /home/user/
 
-COPY --chown=user:user --from=build /opt/gradle /opt/gradle
-ENV PATH="/opt/gradle/bin:${PATH}"
-COPY --from=build /etc/environment /etc/environment
-
 COPY --chown=user:user --from=build /ghidra ghidra
 COPY --chown=user:user --chmod=755 decompile-entrypoint.sh  .
 
@@ -84,6 +80,9 @@ ENV GHIDRA_HOME=/home/user/ghidra
 ENV GHIDRA_SCRIPTS=/home/user/ghidra_scripts
 ENV GHIDRA_PROJECTS=/home/user/ghidra_projects
 ENV GHIDRA_HEADLESS=${GHIDRA_HOME}/support/analyzeHeadless
+# pass into child testing container, should match main ghidra version 
+# we need ghidra source for tests
+ENV GHIDRA_RELEASE_TAG=Ghidra_11.3.2_build
 ENV USER=user
 
 ENTRYPOINT ["/home/user/decompile-entrypoint.sh"]

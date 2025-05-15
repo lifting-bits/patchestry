@@ -6,36 +6,37 @@ package scripts;
  * the LICENSE file found in the root directory of this source tree.
  */
 
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
+import static org.junit.jupiter.api.Assertions.*;
 
-import org.junit.Test;
-import static org.junit.Assert.*;
-
-import java.util.function.Function;
-
-import ghidra.app.script.GhidraScript;
-import ghidra.program.model.listing.Program;
 import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
+import ghidra.program.model.listing.Program;
+import java.io.File;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class PatchestryDecompileFunctionsTest extends AbstractGhidraHeadlessIntegrationTest {
     private Program pulseOxBinary;
     private Program bloodlightBinary;
 
-    @Override
+    @BeforeAll
     public void setUp() throws Exception {
         super.setUp();
         // NB: we set PULSEOX_FW_PATH in decompile-test.dockerfile, the test env.
         // The test environment is based on the main headless container, 
         // which must be built first before the test container!
         String pulseOxFirmwareLocation = System.getenv("PULSEOX_FW_PATH");
-        pulseOxBinary = loadTestProgram(pulseOxFirmwareLocation);
+        pulseOxBinary = importProgram(pulseOxFirmwareLocation);
 
         // the same is true of BLOODLIGHT_FW_PATH - it comes from 
         // decompile-test.dockerfile
         String bloodlightFirmwareLocation = System.getenv("BLOODLIGHT_FW_PATH");
-        bloodlightBinary = loadTestProgram(bloodlightFirmwareLocation);
+        bloodlightBinary = importProgram(bloodlightFirmwareLocation);
     }
 
-    @Override
+    @AfterAll
     public void tearDown() throws Exception {
         if (pulseOxBinary != null) {
             pulseOxBinary.release(this);
@@ -50,12 +51,6 @@ public class PatchestryDecompileFunctionsTest extends AbstractGhidraHeadlessInte
 
     @Test
     public void testDecompileFunction() throws Exception {
-        // PatchestryDecompileFunctions decompScript = new PatchestryDecompileFunctions();
-        
-        // decompScript.set(precompiledTestBinary, null, null, TaskMonitor.DUMMY);
-        
-        // String result = decompScript.decompileFunction(function);
-        // assertNotNull("Decompilation result should not be null", result);
         assertTrue(false);
     }
 }
