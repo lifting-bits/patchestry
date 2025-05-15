@@ -37,9 +37,14 @@ ENV PATH="${GRADLE_HOME}/bin:${PATH}"
 WORKDIR /ghidra/support/gradle
 RUN gradle buildNatives
 
+<<<<<<< HEAD
 RUN rm -rf /var/tmp/* /tmp/* /ghidra/docs /ghidra/Extensions/Eclipse /ghidra/licenses
 
 RUN apt-get purge -y --auto-remove wget ca-certificates unzip && \
+=======
+RUN rm -rf /ghidra/Extensions/Eclipse /ghidra/licenses ghidraRun.bat docs/ &&\
+    apt-get purge -y --auto-remove wget ca-certificates unzip && \
+>>>>>>> 1867655 (clean up the cleanup, since I'm going to get test dependencies that are not installed already here solely in the test dockerfile)
     apt-get clean
 
 FROM base AS runtime
@@ -63,6 +68,7 @@ WORKDIR /home/user/
 
 COPY --chown=user:user --from=build /opt/gradle /opt/gradle
 ENV PATH="/opt/gradle/bin:${PATH}"
+COPY --from=build /etc/environment /etc/environment
 
 COPY --chown=user:user --from=build /ghidra ghidra
 COPY --chown=user:user --chmod=755 decompile-entrypoint.sh  .
