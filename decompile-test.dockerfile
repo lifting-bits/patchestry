@@ -23,12 +23,15 @@ RUN sudo apt-get update && sudo apt-get install -y \
         git \
         python3 \
         python3-pip \
+        flex \
+        bison \
         wget \
+        unzip \
         ninja-build && \
     sudo update-alternatives --install /usr/bin/python python /usr/bin/python3 1
 
 ENV PULSEOX_COMMIT="54ed8ca6bec36cc13db8f6594e3bd9941937922a"
-RUN git clone --depth 1 https://github.com/IRNAS/pulseox-firmware.git
+RUN git clone https://github.com/IRNAS/pulseox-firmware.git
 WORKDIR /home/user/pulseox-firmware/
 RUN git fetch --depth=1 origin $PULSEOX_COMMIT && \
     git checkout $PULSEOX_COMMIT && \
@@ -46,7 +49,6 @@ RUN rm -rf /home/user/pulseox-firmware/
 
 WORKDIR /home/user/    
 ENV BLOODLIGHT_COMMIT="def737f481d6f0d16db4e94d7b26cbaae9838b41"
-# important - may not compile with the --depth 1 flag
 RUN git clone https://github.com/CodethinkLabs/bloodlight-firmware.git
 WORKDIR /home/user/bloodlight-firmware/
 RUN git fetch --depth=1 origin ${BLOODLIGHT_COMMIT} && \
@@ -60,33 +62,7 @@ RUN git fetch --depth=1 origin ${BLOODLIGHT_COMMIT} && \
 WORKDIR /home/user/
 RUN rm -rf /home/user/bloodlight-firmware/
 
-RUN sudo apt-get -y autoremove --purge && \
-    sudo apt-get purge -y ninja-build cmake libnewlib-arm-none-eabi gcc-arm-none-eabi && \
-    sudo apt-get clean && \
-    sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
-
-FROM patchestry-headless AS test
-
-# we use PULSEOX_FW_PATH for tests
-ENV PULSEOX_FW_PATH="/home/user/pulseox-firmware.elf"
-COPY --chown=user:user --from=base $PULSEOX_FW_PATH $PULSEOX_FW_PATH
-# we use BLOODLIGHT_FW_PATH for tests
-ENV BLOODLIGHT_FW_PATH="/home/user/bloodlight-firmware.elf"
-COPY --chown=user:user --from=base $BLOODLIGHT_FW_PATH $BLOODLIGHT_FW_PATH
-
-ENV DEBIAN_FRONTEND=noninteractive
-RUN sudo apt-get update && sudo apt-get install -y \
-        git \
-        unzip \
-        wget \   
-        flex \
-        bison \
-        build-essential \
-        python3 \
-        python3-pip && \
-    sudo apt-get clean && \
-    sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
-
+# Ghidra source requires Gradle 8.5+ currently
 ARG GRADLE_VERSION=8.5
 RUN wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -P /tmp \
     && sudo unzip -d /opt/gradle /tmp/gradle-${GRADLE_VERSION}-bin.zip \
@@ -95,50 +71,77 @@ RUN wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-b
 ENV PATH="/opt/gradle/latest/bin:${PATH}"
 
 # the production release of Ghidra doesn't have test deps, so we'll build what we need here.
+# GHIDRA_RELEASE_TAG_NAME is defined in the parent Dockerfile so if we ever update that version,
+# we also remember to update this so they match.
 WORKDIR /tmp
-RUN git clone --depth 1 --branch $GHIDRA_RELEASE_TAG https://github.com/NationalSecurityAgency/ghidra.git && \
-    mv ghidra /home/user/ghidra-source
+RUN git clone --depth 1 --single-branch --branch $GHIDRA_RELEASE_TAG_NAME https://github.com/NationalSecurityAgency/ghidra.git
 
-WORKDIR /home/user/ghidra-source
+WORKDIR /tmp/ghidra
 # warning - this gradle dependency fetch takes a very long time
 RUN gradle -I gradle/support/fetchDependencies.gradle
-# skips building the docs
 RUN gradle prepdev && \
     gradle :GhidraServer:yajswDevUnpack && \ 
     gradle buildGhidra --no-parallel --info --stacktrace
 
+RUN sudo apt-get -y autoremove --purge && \
+    sudo apt-get purge -y ninja-build cmake libnewlib-arm-none-eabi gcc-arm-none-eabi flex bison && \
+    sudo apt-get clean && \
+    sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+FROM patchestry-headless AS test
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN sudo apt-get update && sudo apt-get install -y \
+        git \
+        wget \
+        python3 \
+        python3-pip && \
+    sudo apt-get clean && \
+    sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+COPY --chown=user:user --from=base /tmp/ghidra/ /home/user/ghidra-source/
+COPY --chown=user:user --from=base /opt/gradle/ /opt/gradle/
+ENV PATH="/opt/gradle/latest/bin:${PATH}"
+
 WORKDIR /home/user
 COPY test/scripts/java/ .
+# some additional deps for Ghidra script tests
 RUN wget -O junit-platform-console-standalone.jar \
-    https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.1/junit-platform-console-standalone-1.10.1.jar
-RUN wget -O /home/user/ghidra-source/dependencies/flatRepo/gson-2.9.0.jar \
+    https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.1/junit-platform-console-standalone-1.10.1.jar && \
+    wget -O /home/user/ghidra-source/dependencies/flatRepo/gson-2.9.0.jar \
     https://repo1.maven.org/maven2/com/google/code/gson/gson/2.9.0/gson-2.9.0.jar
 
 # the GHIDRA_* env vars here come from the parent Dockerfile.
-ARG GHIDRA_SOURCE="/home/user/ghidra-source/Ghidra"
 ENV CLASSPATH="/home/user:\
 $GHIDRA_SCRIPTS:\
-$GHIDRA_SOURCE/Features/Base/build/libs/Base.jar:\
-$GHIDRA_SOURCE/Features/Base/build/libs/Base-test.jar:\
-$GHIDRA_SOURCE/Framework/Generic/build/libs/Generic.jar:\
-$GHIDRA_SOURCE/Framework/Generic/build/libs/Generic-test.jar:\
-$GHIDRA_SOURCE/Framework/Docking/build/libs/Docking.jar:\
-$GHIDRA_SOURCE/Framework/Docking/build/libs/Docking-test.jar:\
-$GHIDRA_SOURCE/Framework/SoftwareModeling/build/libs/SoftwareModeling.jar:\
-$GHIDRA_SOURCE/Framework/SoftwareModeling/build/libs/SoftwareModeling-test.jar:\
-$GHIDRA_SOURCE/Framework/Utility/build/libs/Utility.jar:\
-$GHIDRA_SOURCE/Framework/Utility/build/libs/Utility-test.jar:\
-$GHIDRA_SOURCE/Framework/Project/build/libs/Project.jar:\
-$GHIDRA_SOURCE/Framework/Project/build/libs/Project-test.jar:\
-$GHIDRA_SOURCE/Features/Decompiler/build/libs/Decompiler.jar:\
-$GHIDRA_SOURCE/Features/Decompiler/build/libs/Decompiler-test.jar:\
-$GHIDRA_SOURCE/Framework/FileSystem/build/libs/FileSystem.jar:\
-$GHIDRA_SOURCE/Framework/FileSystem/build/libs/FileSystem-test.jar:\
-$GHIDRA_SOURCE/Framework/DB/build/libs/DB.jar:\
-$GHIDRA_SOURCE/Framework/DB/build/libs/DB-test.jar:\
+/home/user/ghidra-source/Ghidra/Features/Base/build/libs/Base.jar:\
+/home/user/ghidra-source/Ghidra/Features/Base/build/libs/Base-test.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Generic/build/libs/Generic.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Generic/build/libs/Generic-test.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Docking/build/libs/Docking.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Docking/build/libs/Docking-test.jar:\
+/home/user/ghidra-source/Ghidra/Framework/SoftwareModeling/build/libs/SoftwareModeling.jar:\
+/home/user/ghidra-source/Ghidra/Framework/SoftwareModeling/build/libs/SoftwareModeling-test.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Utility/build/libs/Utility.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Utility/build/libs/Utility-test.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Project/build/libs/Project.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Project/build/libs/Project-test.jar:\
+/home/user/ghidra-source/Ghidra/Features/Decompiler/build/libs/Decompiler.jar:\
+/home/user/ghidra-source/Ghidra/Features/Decompiler/build/libs/Decompiler-test.jar:\
+/home/user/ghidra-source/Ghidra/Framework/FileSystem/build/libs/FileSystem.jar:\
+/home/user/ghidra-source/Ghidra/Framework/FileSystem/build/libs/FileSystem-test.jar:\
+/home/user/ghidra-source/Ghidra/Framework/DB/build/libs/DB.jar:\
+/home/user/ghidra-source/Ghidra/Framework/DB/build/libs/DB-test.jar:\
 /home/user/ghidra-source/dependencies/flatRepo/gson-2.9.0.jar:\
 junit-platform-console-standalone.jar"
-RUN find $GHIDRA_SOURCE -name "*test*.jar" && javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java` `ls ./*Test.java`
+RUN find /home/user/ghidra-source/ -name "*test*.jar" && javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java` `ls ./*Test.java`
+
+# we use PULSEOX_FW_PATH for tests
+ENV PULSEOX_FW_PATH="/home/user/pulseox-firmware.elf"
+COPY --chown=user:user --from=base $PULSEOX_FW_PATH $PULSEOX_FW_PATH
+# we use BLOODLIGHT_FW_PATH for tests
+ENV BLOODLIGHT_FW_PATH="/home/user/bloodlight-firmware.elf"
+COPY --chown=user:user --from=base $BLOODLIGHT_FW_PATH $BLOODLIGHT_FW_PATH
 
 # todo mkdir -p /mnt/output
 RUN java -Djunit.output.dir=/mnt/output \
