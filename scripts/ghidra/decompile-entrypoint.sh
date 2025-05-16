@@ -115,68 +115,12 @@ function validate_args {
   fi
 }
 
-ARCHITECTURE=""
-
-# Create the Ghidra processor string (ARCHITECTURE) from attributes visible to 
-# readelf in the input binary that we intend to pass to Ghidra eventually.
-function detect_processor {
-    local arch=$(file "$INPUT_FILE" | grep -o -E 'x86-64|Intel 80386|ARMv[0-9]+|armv[0-9]+|ARM aarch64|AArch64|ARM, big-endian|ARM, little-endian|ARM')
-    local endian="LE"
-    
-    # First check basic architecture from file command
-    if [[ "$arch" =~ x86-64 ]]; then
-        ARCHITECTURE="x86:LE:64:default"
-        return
-    elif [[ "$arch" =~ "Intel 80386" ]]; then
-        ARCHITECTURE="x86:LE:32:default"
-        return
-    elif [[ "$arch" =~ "ARM aarch64|AArch64" ]]; then
-        ARCHITECTURE="AARCH64:LE:64:v8A"
-        return
-    fi
-
-    # For ARM, check endianness first
-    if file "$INPUT_FILE" | grep -q "big-endian"; then
-        endian="BE"
-    fi
-
-    if [[ "$arch" =~ ARM || "$arch" =~ armv ]]; then
-        if readelf -S "$INPUT_FILE" | grep -q -E "\.text.*08000000|\.data.*20000000"; then
-            # Cortex-M memory layout detected
-            ARCHITECTURE="ARM:${endian}:32:v7"
-        else
-            # Check ARM attributes for version
-            local arm_attrs=$(readelf -A "$INPUT_FILE" 2>/dev/null)
-            if echo "$arm_attrs" | grep -q "Tag_CPU_arch: v8"; then
-                ARCHITECTURE="ARM:${endian}:32:v8"
-            elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v7"; then
-                ARCHITECTURE="ARM:${endian}:32:v7"
-            elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v6"; then
-                ARCHITECTURE="ARM:${endian}:32:v6"
-            elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v5"; then
-                ARCHITECTURE="ARM:${endian}:32:v5"
-            elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v4"; then
-                ARCHITECTURE="ARM:${endian}:32:v4"
-            else
-                # If all else fails, default to v7
-                ARCHITECTURE="ARM:${endian}:32:v7"
-            fi
-        fi
-    else
-        echo "Unknown input-binary architecture '$arch'?"
-        exit 1
-    fi
-
-    echo "Binary Architecture was: '$arch', '$arm_attrs' ($ARCHITECTURE)"
-}
-
 # Function to run Ghidra headless script for listing functions
 function run_list_functions {
   echo "Running Ghidra headless script to list functions..."
   ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
     -readOnly -deleteProject \
     -import $INPUT_FILE \
-    -processor $ARCHITECTURE \
     -postScript "PatchestryListFunctions.java" \
     $OUTPUT_FILE
 
@@ -193,7 +137,6 @@ function run_decompile_single {
   ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
     -readOnly -deleteProject \
     -import $INPUT_FILE \
-    -processor $ARCHITECTURE \
     -postScript ${ghidra_script} \
     single \
     $FUNCTION_NAME \
@@ -205,13 +148,12 @@ function run_decompile_single {
 }
 
 function run_decompile_all {
-  echo "Running Ghidra headless script to decompile all functions..."
+  echo "Running Ghidra headless script to decompile function..."
   local ghidra_script="PatchestryDecompileFunctions.java"
 
   ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
     -readOnly -deleteProject \
     -import $INPUT_FILE \
-    -processor $ARCHITECTURE \
     -postScript ${ghidra_script} \
     all \
     $OUTPUT_FILE
@@ -233,8 +175,6 @@ function main {
         exit 1
     fi
   fi
-
-  detect_processor
 
   case "$COMMAND" in
     list-functions)
