@@ -25,8 +25,6 @@ RUN sudo apt-get update && sudo apt-get install -y \
         python3-pip \
         wget \
         ninja-build && \
-    sudo apt-get clean && \
-    sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* && \
     sudo update-alternatives --install /usr/bin/python python /usr/bin/python3 1
 
 ENV PULSEOX_COMMIT="54ed8ca6bec36cc13db8f6594e3bd9941937922a"
@@ -61,6 +59,11 @@ RUN git fetch --depth=1 origin ${BLOODLIGHT_COMMIT} && \
 # then undo this
 WORKDIR /home/user/
 RUN rm -rf /home/user/bloodlight-firmware/
+
+RUN sudo apt-get -y autoremove --purge && \
+    sudo apt-get purge -y ninja-build cmake libnewlib-arm-none-eabi gcc-arm-none-eabi && \
+    sudo apt-get clean && \
+    sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 FROM patchestry-headless AS test
 
@@ -115,25 +118,27 @@ RUN wget -O /home/user/ghidra-source/dependencies/flatRepo/gson-2.9.0.jar \
 ARG GHIDRA_SOURCE="/home/user/ghidra-source/Ghidra"
 ENV CLASSPATH="/home/user:\
 $GHIDRA_SCRIPTS:\
-$GHIDRA_SOURCE/Framework/Generic/build/libs/Generic.jar:\
-$GHIDRA_SOURCE/Framework/Docking/build/libs/Docking.jar:\
-$GHIDRA_SOURCE/Framework/SoftwareModeling/build/libs/SoftwareModeling.jar:\
-$GHIDRA_SOURCE/Framework/Utility/build/libs/Utility.jar:\
-$GHIDRA_SOURCE/Framework/Project/build/libs/Project.jar:\
 $GHIDRA_SOURCE/Features/Base/build/libs/Base.jar:\
-$GHIDRA_SOURCE/Features/Decompiler/build/libs/Decompiler.jar:\
-$GHIDRA_SOURCE/Framework/Generic/build/libs/Generic-test.jar:\
-$GHIDRA_SOURCE/Framework/Docking/build/libs/Docking-test.jar:\
-$GHIDRA_SOURCE/Framework/SoftwareModeling/build/libs/SoftwareModeling-test.jar:\
-$GHIDRA_SOURCE/Framework/Project/build/libs/Project-test.jar:\
 $GHIDRA_SOURCE/Features/Base/build/libs/Base-test.jar:\
+$GHIDRA_SOURCE/Framework/Generic/build/libs/Generic.jar:\
+$GHIDRA_SOURCE/Framework/Generic/build/libs/Generic-test.jar:\
+$GHIDRA_SOURCE/Framework/Docking/build/libs/Docking.jar:\
+$GHIDRA_SOURCE/Framework/Docking/build/libs/Docking-test.jar:\
+$GHIDRA_SOURCE/Framework/SoftwareModeling/build/libs/SoftwareModeling.jar:\
+$GHIDRA_SOURCE/Framework/SoftwareModeling/build/libs/SoftwareModeling-test.jar:\
+$GHIDRA_SOURCE/Framework/Utility/build/libs/Utility.jar:\
+$GHIDRA_SOURCE/Framework/Utility/build/libs/Utility-test.jar:\
+$GHIDRA_SOURCE/Framework/Project/build/libs/Project.jar:\
+$GHIDRA_SOURCE/Framework/Project/build/libs/Project-test.jar:\
+$GHIDRA_SOURCE/Features/Decompiler/build/libs/Decompiler.jar:\
+$GHIDRA_SOURCE/Features/Decompiler/build/libs/Decompiler-test.jar:\
 $GHIDRA_SOURCE/Framework/FileSystem/build/libs/FileSystem.jar:\
 $GHIDRA_SOURCE/Framework/FileSystem/build/libs/FileSystem-test.jar:\
 $GHIDRA_SOURCE/Framework/DB/build/libs/DB.jar:\
 $GHIDRA_SOURCE/Framework/DB/build/libs/DB-test.jar:\
 /home/user/ghidra-source/dependencies/flatRepo/gson-2.9.0.jar:\
 junit-platform-console-standalone.jar"
-RUN javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java` `ls ./*Test.java`
+RUN find $GHIDRA_SOURCE -name "*test*.jar" && javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java` `ls ./*Test.java`
 
 # todo mkdir -p /mnt/output
 RUN java -Djunit.output.dir=/mnt/output \
