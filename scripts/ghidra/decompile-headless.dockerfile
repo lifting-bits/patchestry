@@ -37,14 +37,8 @@ ENV PATH="${GRADLE_HOME}/bin:${PATH}"
 WORKDIR /ghidra/support/gradle
 RUN gradle buildNatives
 
-<<<<<<< HEAD
-RUN rm -rf /var/tmp/* /tmp/* /ghidra/docs /ghidra/Extensions/Eclipse /ghidra/licenses
-
-RUN apt-get purge -y --auto-remove wget ca-certificates unzip && \
-=======
 RUN rm -rf /ghidra/Extensions/Eclipse /ghidra/licenses ghidraRun.bat docs/ &&\
     apt-get purge -y --auto-remove wget ca-certificates unzip && \
->>>>>>> 1867655 (clean up the cleanup, since I'm going to get test dependencies that are not installed already here solely in the test dockerfile)
     apt-get clean
 
 FROM base AS runtime
@@ -80,9 +74,6 @@ ENV GHIDRA_HOME=/home/user/ghidra
 ENV GHIDRA_SCRIPTS=/home/user/ghidra_scripts
 ENV GHIDRA_PROJECTS=/home/user/ghidra_projects
 ENV GHIDRA_HEADLESS=${GHIDRA_HOME}/support/analyzeHeadless
-# pass into child testing container, should match main ghidra version 
-# we need ghidra source for tests
-ENV GHIDRA_RELEASE_TAG=Ghidra_11.3.2_build
 ENV USER=user
 
 ENTRYPOINT ["/home/user/decompile-entrypoint.sh"]
