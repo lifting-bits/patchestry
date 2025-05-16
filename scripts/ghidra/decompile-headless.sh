@@ -143,11 +143,12 @@ build_docker_command() {
     fi
 
     if [ -n $TEST ]; then
-        echo "Running tests in-situ"
+    # todo (kaoudis) handle propagating output - this is just a convenience integration
+    # into this script, I don't think we should have both scripts AND dockerfiles...
+        echo "Running tests in-situ."
         RUN="docker run --rm \
             $CI \
-            trailofbits/patchestry-decompilation:latest \
-            --test-decomp"
+            trailofbits/decompile-test:latest"
         return
     else
         local ARGS=
