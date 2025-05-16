@@ -27,6 +27,7 @@ import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.AddressSpace;
+import ghidra.program.model.address.AddressOutOfBoundsException;
 
 import ghidra.program.model.block.BasicBlockModel;
 import ghidra.program.model.block.CodeBlock;
@@ -576,9 +577,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				serializePrototype((FunctionSignature) data_type);
 
 			} else if (data_type instanceof PartialUnion) {
-				name("kind").value("todo:PartialUnion");  // TODO(pag): Implement this
-				name("size").value(data_type.getLength());
-
+				DataType parent = ((PartialUnion) data_type).getParent();
+				if (parent != data_type) {
+					serialize(parent);
+				} else {
+					// PartialUnion stripped type is undefined type
+					serialize(((PartialUnion) data_type).getStrippedDataType());
+				}
 			} else if (data_type instanceof BitFieldDataType) {
 				name("kind").value("todo:BitFieldDataType");  // TODO(pag): Implement this
 				name("size").value(data_type.getLength());
@@ -846,7 +851,20 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (address == null) {
 				return null;
 			}
-			return ram_space.getAddress(address.toString(false));
+
+			try {
+				// If already in RAM space, just return it
+				if (address.getAddressSpace().getName().equals("ram")) {
+					return address;
+				}
+
+				// Get the numeric offset and create a new address in RAM space
+				long offset = address.getOffset();
+				return program.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
+			} catch (Exception e) {
+				println(String.format("Failed to convert address %s to RAM space: %s", address, e.getMessage()));
+				return null;
+			}
 		}
 
 		private boolean isCharPointer(Varnode node) throws Exception {
@@ -875,6 +893,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 
 			Address ram_address = convertAddressToRamSpace(address);
+			if (ram_address == null) {
+				return null;
+			}
 			MemoryBufferImpl memoryBuffer = new MemoryBufferImpl(program.getMemory(), ram_address);
 			DataType char_type = pointer.getDataType();
 			//println("Debug: char_type = " + char_type.getName() + ", size = " + char_type.getLength());
@@ -891,14 +912,31 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 		}
 
 		private Data getDataReferencedAsConstant(Varnode node) throws Exception {
+			// check if node is null
+			if (node == null) {
+				return null;
+			}
+
+			 // Only process constant nodes that aren't nulls (address 0 in constant space)
 			if (!node.isConstant() || node.getAddress().equals(constant_space.getAddress(0))) {
 				return null;
 			}
+
 			// Ghidra sometime fail to resolve references to Data and show it as const. 
 			// Check if it is referencing Data as constant from `ram` addresspace.
-			Address ram_address = convertAddressToRamSpace(node.getAddress());
-			Data data = getDataAt(ram_address);
-			return data;
+			try {
+				// Convert the constant value to a potential RAM address
+				Address ram_address = convertAddressToRamSpace(node.getAddress());
+				if (ram_address == null) {
+					return null;
+				}
+				return getDataAt(ram_address);
+
+			} catch (AddressOutOfBoundsException e) {
+				println("Address conversion out of bounds for constant: " +  e.getMessage());
+			}
+
+			return null;
 		}
 
 		// Serialize an input or output varnode.
