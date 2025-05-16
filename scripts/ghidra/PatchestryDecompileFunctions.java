@@ -853,17 +853,22 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 
 			try {
-				// If already in RAM space, just return it
-				if (address.getAddressSpace().getName().equals("ram")) {
+				// Note: Function converts address to ramspace only if it belongs to 
+				//       constant space; if address space is not constant, return
+				if (!address.getAddressSpace().isConstantSpace()) {
 					return address;
 				}
 
 				// Get the numeric offset and create a new address in RAM space
 				long offset = address.getOffset();
 				return program.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
-			} catch (Exception e) {
-				println(String.format("Failed to convert address %s to RAM space: %s", address, e.getMessage()));
+
+			} catch (AddressOutOfBoundsException e) {
+				println(String.format("Error converting address %s to RAM space: %s",
+					address, e.getMessage()));
 				return null;
+			} catch (Exception e) {
+				throw new RuntimeException("Failed converting address to RAM space", e);
 			}
 		}
 
@@ -924,19 +929,12 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			// Ghidra sometime fail to resolve references to Data and show it as const. 
 			// Check if it is referencing Data as constant from `ram` addresspace.
-			try {
-				// Convert the constant value to a potential RAM address
-				Address ram_address = convertAddressToRamSpace(node.getAddress());
-				if (ram_address == null) {
-					return null;
-				}
-				return getDataAt(ram_address);
-
-			} catch (AddressOutOfBoundsException e) {
-				println("Address conversion out of bounds for constant: " +  e.getMessage());
+			// Convert the constant value to a potential RAM address
+			Address ram_address = convertAddressToRamSpace(node.getAddress());
+			if (ram_address == null) {
+				return null;
 			}
-
-			return null;
+			return getDataAt(ram_address);
 		}
 
 		// Serialize an input or output varnode.
