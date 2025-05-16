@@ -199,7 +199,7 @@ namespace patchestry::ghidra {
         auto size     = static_cast< uint32_t >(type_obj.getInteger("size").value_or(0));
         auto kind_str = get_string(type_obj, "kind");
         LOG(INFO) << "Attempting to convert kind string: [" << kind_str << "]" << "\n";
-        auto kind     = VarnodeType::convertToKind(kind_str);
+        auto kind = VarnodeType::convertToKind(kind_str);
         switch (kind) {
             case VarnodeType::Kind::VT_INVALID: {
                 LOG(ERROR) << "Invalid varnode type: " << name << "\n";
@@ -324,40 +324,56 @@ namespace patchestry::ghidra {
         }
 
         // Iterate through the fields and initialize them
+        unsigned field_index = 0;
         for (const auto &field : *field_array) {
             const auto *field_obj = field.getAsObject();
             if (field_obj == nullptr) {
-                LOG(ERROR) << "Skipping invalid field object.\n";
+                LOG(ERROR) << "Field #" << field_index
+                           << ": Invalid field object format, skipping\n";
+                ++field_index;
                 continue;
             }
 
             auto field_type_key = get_string_if_valid(*field_obj, "type");
             if (!field_type_key) {
-                LOG(ERROR) << "Skipping field: missing type\n";
+                LOG(ERROR) << "Field #" << field_index
+                           << ": Missing required 'type' attribute, skipping\n";
+                ++field_index;
                 continue;
             }
 
             auto iter = serialized_types.find(*field_type_key);
             if (iter == serialized_types.end()) {
-                LOG(ERROR) << "Skipping field: component is not found on serialized types.\n";
+                LOG(ERROR) << "Field #" << field_index << ": Type '" << *field_type_key
+                           << "' not found in serialized types registry, skipping\n";
+                ++field_index;
                 continue;
             }
 
             auto maybe_offset = field_obj->getInteger("offset");
             if (!maybe_offset) {
-                LOG(ERROR) << "Skipping field: invalid offset value.\n";
+                LOG(ERROR) << "Field #" << field_index
+                           << ": Missing or invalid 'offset' value, skipping\n";
+                ++field_index;
                 continue;
             }
 
+            std::string field_name;
             auto maybe_name = get_string_if_valid(*field_obj, "name");
-            if (!maybe_name) {
-                LOG(ERROR) << "Skipping field: invalid name.\n";
-                continue;
+            if (maybe_name) {
+                field_name = *maybe_name;
+            } else {
+                field_name = "field_" + std::to_string(field_index);
+                LOG(WARNING) << "Field #" << field_index
+                             << " Missing or invalid name, using default: '" << field_name
+                             << "'\n";
             }
 
             varnode.add_components(
-                *maybe_name, *iter->second, static_cast< uint32_t >(*maybe_offset)
+                field_name, *iter->second, static_cast< uint32_t >(*maybe_offset)
             );
+
+            ++field_index;
         }
     }
 
