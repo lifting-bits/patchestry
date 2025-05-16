@@ -1,10 +1,9 @@
 /*
- * Copyright (c) 2025, Trail of Bits, Inc.
+ * Copyright (c) 2024, Trail of Bits, Inc.
  *
  * This source code is licensed in accordance with the terms specified in
  * the LICENSE file found in the root directory of this source tree.
  */
-
 
 import ghidra.app.script.GhidraScript;
 
@@ -43,7 +42,6 @@ import ghidra.program.model.data.CharDataType;
 
 import ghidra.program.model.lang.CompilerSpec;
 import ghidra.program.model.lang.Language;
-import ghidra.program.model.lang.Processor;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.lang.RegisterManager;
 
@@ -134,7 +132,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -144,9 +141,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.TreeMap;
-
-import ghidra.program.model.mem.MemoryBlock;
-import ghidra.program.model.mem.Memory;
 
 public class PatchestryDecompileFunctions extends GhidraScript {
 
@@ -852,22 +846,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			if (address == null) {
 				return null;
 			}
-			
-			AddressSpace space = address.getAddressSpace();
-			if (space.equals(ram_space) || program.getMemory().contains(address)) {
-				// using program memory alignment where possible
-				Function functionAddress = program.getFunctionManager().getFunctionAt(address);
-				if (functionAddress != null) {
-					// Let Ghidra handle address normalization when using program memory alignment
-					return functionAddress.getEntryPoint().getNewAddress(
-						address.getOffset() & ~(program.getLanguage().getInstructionAlignment() - 1));
-				}
-				return address;
-			}
-
-			// otherwise, attempt to force the address offset to make sense in RAM space
-			// this doesn't always work eg produces incorrect results for ARM EABI / Thumb
-			return ram_space.getAddress(address.getOffset());
+			return ram_space.getAddress(address.toString(false));
 		}
 
 		private boolean isCharPointer(Varnode node) throws Exception {
