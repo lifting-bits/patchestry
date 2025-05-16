@@ -45,10 +45,14 @@ FROM base AS runtime
 
 RUN apt-get update && apt-get install -y \
     adduser \
+<<<<<<< HEAD
     sudo \
     wget \
     binutils \
     file && \
+=======
+    sudo && \
+>>>>>>> 9ef076a (tag comment)
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives
 
 # Add a user with no login shell and no login capabilities and add
@@ -74,6 +78,9 @@ ENV GHIDRA_HOME=/home/user/ghidra
 ENV GHIDRA_SCRIPTS=/home/user/ghidra_scripts
 ENV GHIDRA_PROJECTS=/home/user/ghidra_projects
 ENV GHIDRA_HEADLESS=${GHIDRA_HOME}/support/analyzeHeadless
+# for getting release build-matching source for test jars in inheritor
+# should match version(s) used here (above) so that tests make sense
+ENV GHIDRA_RELEASE_TAG_NAME="Ghidra_11.3.2_build"
 ENV USER=user
 
 ENTRYPOINT ["/home/user/decompile-entrypoint.sh"]
