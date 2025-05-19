@@ -1,4 +1,5 @@
 package scripts;
+
 /*
  * Copyright (c) 2025, Trail of Bits, Inc.
  *
@@ -12,41 +13,39 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import static org.junit.jupiter.api.Assertions.*;
 
-import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
 import ghidra.program.model.listing.Program;
+import ghidra.test.AbstractGenericTest;
 import java.io.File;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class PatchestryDecompileFunctionsTest extends AbstractGhidraHeadlessIntegrationTest {
-    private Program pulseOxBinary;
-    private Program bloodlightBinary;
+public class PatchestryDecompileFunctionsTest extends AbstractGenericTest {
+    private Program pulseOxProgram;
+    private Program bloodlightProgram;
 
     @BeforeAll
     public void setUp() throws Exception {
-        super.setUp();
         // NB: we set PULSEOX_FW_PATH in decompile-test.dockerfile, the test env.
         // The test environment is based on the main headless container, 
         // which must be built first before the test container!
-        String pulseOxFirmwareLocation = System.getenv("PULSEOX_FW_PATH");
-        pulseOxBinary = importProgram(pulseOxFirmwareLocation);
+        File pulseOxFirmware = new File(System.getenv("PULSEOX_FW_PATH"));
+        pulseOxProgram = importProgram(pulseOxFirmware);
 
         // the same is true of BLOODLIGHT_FW_PATH - it comes from 
         // decompile-test.dockerfile
-        String bloodlightFirmwareLocation = System.getenv("BLOODLIGHT_FW_PATH");
-        bloodlightBinary = importProgram(bloodlightFirmwareLocation);
+        // File bloodlightFirmware = new File(System.getenv("BLOODLIGHT_FW_PATH"));
+        // bloodlightProgram = importProgram(bloodlightFirmware);
     }
 
     @AfterAll
     public void tearDown() throws Exception {
-        if (pulseOxBinary != null) {
-            pulseOxBinary.release(this);
+        if (pulseOxProgram != null) {
+            pulseOxProgram.release(this);
         }
 
-        if (bloodlightBinary != null) {
-            bloodlightBinary.release(this);
+        if (bloodlightProgram != null) {
+            bloodlightProgram.release(this);
         }
-
-        super.tearDown();
+        // super.tearDown();
     }
 
     @Test

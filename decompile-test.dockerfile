@@ -81,7 +81,27 @@ WORKDIR /tmp/ghidra
 RUN gradle -I gradle/support/fetchDependencies.gradle
 RUN gradle prepdev && \
     gradle :GhidraServer:yajswDevUnpack && \ 
-    gradle buildGhidra --no-parallel --info --stacktrace
+    gradle buildNatives && \
+    gradle buildGhidra --no-parallel --info --stacktrace && \
+    gradle compileTestJava processTestResources testClasses testJar 
+
+# some additional deps for the Ghidra script tests
+RUN wget -O dependencies/flatRepo/gson-2.9.0.jar \
+    https://repo1.maven.org/maven2/com/google/code/gson/gson/2.9.0/gson-2.9.0.jar && \
+    wget -O dependencies/flatRepo/junit-jupiter-api-5.9.3.jar \
+    https://repo1.maven.org/maven2/org/junit/jupiter/junit-jupiter-api/5.9.3/junit-jupiter-api-5.9.3.jar && \
+    wget -O dependencies/flatRepo/junit-jupiter-engine-5.9.3.jar \
+    https://repo1.maven.org/maven2/org/junit/jupiter/junit-jupiter-engine/5.9.3/junit-jupiter-engine-5.9.3.jar && \
+    wget -O dependencies/flatRepo/junit-platform-commons-1.9.3.jar \
+    https://repo1.maven.org/maven2/org/junit/platform/junit-platform-commons/1.9.3/junit-platform-commons-1.9.3.jar && \
+    wget -O dependencies/flatRepo/junit-platform-console-1.9.3.jar \
+    https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console/1.9.3/junit-platform-console-1.9.3.jar && \
+    wget -O dependencies/flatRepo/junit-vintage-engine-5.9.3.jar \
+    https://repo1.maven.org/maven2/org/junit/vintage/junit-vintage-engine/5.9.3/junit-vintage-engine-5.9.3.jar && \
+    wget -O dependencies/flatRepo/opentest4j-1.2.0.jar \
+    https://repo1.maven.org/maven2/org/opentest4j/opentest4j/1.2.0/opentest4j-1.2.0.jar && \
+    wget -O dependencies/flatRepo/apiguardian-api-1.1.2.jar \
+    https://repo1.maven.org/maven2/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar
 
 RUN sudo apt-get -y autoremove --purge && \
     sudo apt-get purge -y ninja-build cmake libnewlib-arm-none-eabi gcc-arm-none-eabi flex bison && \
@@ -92,8 +112,6 @@ FROM patchestry-headless AS test
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN sudo apt-get update && sudo apt-get install -y \
-        git \
-        wget \
         python3 \
         python3-pip && \
     sudo apt-get clean && \
@@ -105,11 +123,6 @@ ENV PATH="/opt/gradle/latest/bin:${PATH}"
 
 WORKDIR /home/user
 COPY test/scripts/java/ .
-# some additional deps for Ghidra script tests
-RUN wget -O junit-platform-console-standalone.jar \
-    https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.1/junit-platform-console-standalone-1.10.1.jar && \
-    wget -O /home/user/ghidra-source/dependencies/flatRepo/gson-2.9.0.jar \
-    https://repo1.maven.org/maven2/com/google/code/gson/gson/2.9.0/gson-2.9.0.jar
 
 # the GHIDRA_* env vars here come from the parent Dockerfile.
 ENV CLASSPATH="/home/user:\
@@ -122,19 +135,53 @@ $GHIDRA_SCRIPTS:\
 /home/user/ghidra-source/Ghidra/Framework/Docking/build/libs/Docking-test.jar:\
 /home/user/ghidra-source/Ghidra/Framework/SoftwareModeling/build/libs/SoftwareModeling.jar:\
 /home/user/ghidra-source/Ghidra/Framework/SoftwareModeling/build/libs/SoftwareModeling-test.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Generic/build/classes/java/main:\
+/home/user/ghidra-source/Ghidra/Framework/Options/build/libs/Options.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Options/build/libs/Options-test.jar:\
 /home/user/ghidra-source/Ghidra/Framework/Utility/build/libs/Utility.jar:\
 /home/user/ghidra-source/Ghidra/Framework/Utility/build/libs/Utility-test.jar:\
 /home/user/ghidra-source/Ghidra/Framework/Project/build/libs/Project.jar:\
 /home/user/ghidra-source/Ghidra/Framework/Project/build/libs/Project-test.jar:\
 /home/user/ghidra-source/Ghidra/Features/Decompiler/build/libs/Decompiler.jar:\
 /home/user/ghidra-source/Ghidra/Features/Decompiler/build/libs/Decompiler-test.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Graph/build/libs/Graph.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Graph/build/libs/Graph-test.jar:\
 /home/user/ghidra-source/Ghidra/Framework/FileSystem/build/libs/FileSystem.jar:\
 /home/user/ghidra-source/Ghidra/Framework/FileSystem/build/libs/FileSystem-test.jar:\
 /home/user/ghidra-source/Ghidra/Framework/DB/build/libs/DB.jar:\
 /home/user/ghidra-source/Ghidra/Framework/DB/build/libs/DB-test.jar:\
+/home/user/ghidra-source/Ghidra/Test/IntegrationTest/build/libs/IntegrationTest.jar:\
+/home/user/ghidra-source/Ghidra/Test/IntegrationTest/build/libs/IntegrationTest-test.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Help/build/libs/Help.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Help/build/libs/Help-test.jar:\
+/home/user/ghidra-source/Ghidra/Test/TestResources/build/libs/TestResources.jar:\
+/home/user/ghidra-source/Ghidra/Debug/Framework-Debugging/build/libs/Framework-Debugging.jar:\
+/home/user/ghidra-source/Ghidra/Debug/Framework-Debugging/build/libs/Framework-Debugging-test.jar:\
 /home/user/ghidra-source/dependencies/flatRepo/gson-2.9.0.jar:\
-junit-platform-console-standalone.jar"
-RUN find /home/user/ghidra-source/ -name "*test*.jar" && javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java` `ls ./*Test.java`
+/home/user/ghidra-source/dependencies/flatRepo/junit-jupiter-api-5.9.3.jar:\
+/home/user/ghidra-source/dependencies/flatRepo/junit-jupiter-engine-5.9.3.jar:\
+/home/user/ghidra-source/dependencies/flatRepo/junit-platform-commons-1.9.3.jar:\
+/home/user/ghidra-source/dependencies/flatRepo/junit-platform-console-1.9.3.jar:\
+/home/user/ghidra-source/dependencies/flatRepo/junit-vintage-engine-5.9.3.jar:\
+/home/user/ghidra-source/dependencies/flatRepo/opentest4j-1.2.0.jar:\
+/home/user/ghidra-source/dependencies/flatRepo/apiguardian-api-1.1.2.jar:\
+/home/user/ghidra-source/Ghidra/Framework/Generic/build/classes/java/test:\
+/home/user/ghidra-source/Ghidra/Framework/Generic/build/resources/main:\
+/home/user/ghidra-source/Ghidra/Framework/Generic/build/resources/test:\
+/home/user/ghidra-source/Ghidra/Framework/Generic/build/classes/java/main:\
+/home/user/ghidra-source/Ghidra/Framework/Generic/build/classes/java/test:\
+/home/user/ghidra-source/Ghidra/Framework/Options/build/classes/java/main:\
+/home/user/ghidra-source/Ghidra/Framework/Options/build/classes/java/test:\
+/home/user/ghidra-source/Ghidra/Test/IntegrationTest/build/classes/java/main:\
+/home/user/ghidra-source/Ghidra/Test/IntegrationTest/build/classes/java/test:\
+/home/user/ghidra-source/Ghidra/Features/Decompiler/build/classes/java/main:\
+/home/user/ghidra-source/Ghidra/Features/Decompiler/build/classes/java/test:\
+/home/user/ghidra-source/Ghidra/Framework/Gui/build/classes/java/main:\
+/home/user/ghidra-source/Ghidra/Framework/Gui/build/classes/java/test\
+"
+
+RUN find /home/user/ghidra-source -name "HeadlessTestEnvironment.class" && \
+    javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java` `ls ./*Test.java`
 
 # we use PULSEOX_FW_PATH for tests
 ENV PULSEOX_FW_PATH="/home/user/pulseox-firmware.elf"
@@ -143,9 +190,8 @@ COPY --chown=user:user --from=base $PULSEOX_FW_PATH $PULSEOX_FW_PATH
 ENV BLOODLIGHT_FW_PATH="/home/user/bloodlight-firmware.elf"
 COPY --chown=user:user --from=base $BLOODLIGHT_FW_PATH $BLOODLIGHT_FW_PATH
 
-# todo mkdir -p /mnt/output
-RUN java -Djunit.output.dir=/mnt/output \
--jar junit-platform-console-standalone.jar \
+RUN mkdir -p /mnt/output
+RUN java -Djunit.output.dir=/mnt/output org.junit.platform.console.ConsoleLauncher \
     --class-path "$CLASSPATH" \
     --disable-banner \
     --scan-classpath \
