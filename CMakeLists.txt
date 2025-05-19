@@ -116,7 +116,8 @@ set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/lib)
 
 
 
-find_package(Z3 4.8 CONFIG REQUIRED)
+find_package(Z3 4.8 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+message(STATUS "Using Z3Config.cmake in ${Z3_DIR}")
 
 find_package(rellic REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using RellicConfig.cmake in: ${rellic_DIR}")

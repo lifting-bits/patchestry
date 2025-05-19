@@ -4,6 +4,7 @@
 # This source code is licensed in accordance with the terms specified in
 # the LICENSE file found in the root directory of this source tree.
 #
+cmake_minimum_required(VERSION 3.20.0)
 
 find_package(gflags CONFIG REQUIRED QUIET HINTS "${PE_VENDOR_INSTALL_DIR}")
 
