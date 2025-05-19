@@ -110,14 +110,13 @@ find_package(Clang 20 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
 
 
-
 set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/bin)
 set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/lib)
 
 
-
+include_directories(SYSTEM "${PE_VENDOR_INSTALL_DIR}/include")
 find_package(Z3 4.8 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
-message(STATUS "Using Z3Config.cmake in ${Z3_DIR}")
+message(STATUS "Using Z3Config.cmake in ${Z3_DIR} and Z3 headers in ${PE_VENDOR_INSTALL_DIR}/include")
 
 find_package(rellic REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using RellicConfig.cmake in: ${rellic_DIR}")

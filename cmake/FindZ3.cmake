@@ -49,7 +49,7 @@ endfunction(check_z3_version)
 # Looking for Z3 in LLVM_Z3_INSTALL_DIR
 find_path(Z3_INCLUDE_DIR NAMES z3.h
   NO_DEFAULT_PATH
-  PATHS ${LLVM_Z3_INSTALL_DIR}/include
+  PATHS ${PE_VENDOR_INSTALL_DIR}/include
   PATH_SUFFIXES libz3 z3
   )
 
