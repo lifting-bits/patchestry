@@ -11,3 +11,6 @@
 [submodule "vendor/gflags/src"]
 	path = vendor/gflags/src
 	url = https://github.com/gflags/gflags.git
+[submodule "vendor/z3/src"]
+	path = vendor/z3/src
+	url = https://github.com/Z3Prover/z3.git
