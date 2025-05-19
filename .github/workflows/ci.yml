@@ -46,6 +46,7 @@ jobs:
       LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
       ENABLE_SANITIZER_UNDEFINED_BEHAVIOR: ${{ matrix.sanitizers }}
       ENABLE_SANITIZER_ADDRESS: ${{ matrix.sanitizers }}
+      CI: true
 
     steps:
       - name: Clean Docker to prevent space issues
@@ -65,7 +66,10 @@ jobs:
         run: cmake --build --preset ci --config ${{ matrix.build-type }} -j $(nproc)
 
       - name: Build the headless docker image
-        run: bash ./scripts/ghidra/build-headless-docker.sh
+        run: |
+          # Free more space before building Docker image
+          docker system prune -af --volumes || true
+          bash ./scripts/ghidra/build-headless-docker.sh
 
       - name: Test ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: |
