@@ -71,3 +71,7 @@ execute_process(COMMAND ${CMAKE_COMMAND} --build . --target install
                 WORKING_DIRECTORY "${build_dir}")
 
 find_package(gflags CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}" NO_DEFAULT_PATH)
+
+if(DEFINED ENV{CI})
+  execute_process(COMMAND ${CMAKE_COMMAND} -E remove_directory "${build_dir}")
+endif()

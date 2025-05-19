@@ -19,7 +19,7 @@ execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${build_dir}")
 
 execute_process(COMMAND ${CMAKE_COMMAND}
                         -G "${CMAKE_GENERATOR}"
-  			"-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                        "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
                         "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
                         "-DCMAKE_INSTALL_PREFIX=${PE_VENDOR_INSTALL_DIR}"
                         "-DCMAKE_INSTALL_RPATH=${CMAKE_INSTALL_RPATH}"
@@ -38,3 +38,7 @@ set(LLVM_Z3_INSTALL_DIR "${PE_VENDOR_INSTALL_DIR}" PARENT_SCOPE)
 #     specified CMAKE_BUILD_TYPE above in (b).
 execute_process(COMMAND ${CMAKE_COMMAND} --build . --target install
                 WORKING_DIRECTORY "${build_dir}")
+
+if(DEFINED ENV{CI})
+  execute_process(COMMAND ${CMAKE_COMMAND} -E remove_directory "${build_dir}")
+endif()

@@ -84,3 +84,7 @@ execute_process(COMMAND ${CMAKE_COMMAND}
 #     specified CMAKE_BUILD_TYPE above in (b).
 execute_process(COMMAND ${CMAKE_COMMAND} --build . --target install
                 WORKING_DIRECTORY "${build_dir}")
+
+if(DEFINED ENV{CI})
+  execute_process(COMMAND ${CMAKE_COMMAND} -E remove_directory "${build_dir}")
+endif()
