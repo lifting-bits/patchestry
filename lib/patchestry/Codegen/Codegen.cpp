@@ -92,8 +92,11 @@ namespace patchestry::codegen {
             }
 
             // Decompile llvm IR using remill
-            rellic::DecompilationOptions opts{ .lower_switches   = false,
-                                               .remove_phi_nodes = false };
+            rellic::DecompilationOptions opts{ 
+		    .lower_switches   		= false,
+                    .remove_phi_nodes 		= false,
+		    .additional_providers 	= {},
+	    };
             auto results = rellic::Decompile(std::move(llvm_mod), std::move(opts));
             if (!results.Succeeded()) {
                 LOG(ERROR) << "Failed to decompile LLVM ir for transforming AST"
