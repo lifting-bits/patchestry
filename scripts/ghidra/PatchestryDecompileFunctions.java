@@ -1479,9 +1479,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				return false;
 			}
 
-			// TODO: Identify cases where we need explicit CAST operation to handle 
-			//       conversion. Some cases like pointer conversion of different types
-			//       or type conversion of builtin types gets handled during AST generation
+			// TODO: Identify cases where we need explicit CAST operations to handle conversions.
+ 			//       Some cases like pointer conversion between different types or type conversion
+			//       of builtin types are already handled during AST generation.
 
 			// Handle float to int and int to float conversion
 			if ((var_type instanceof AbstractFloatDataType && arg_type instanceof AbstractIntegerDataType) ||
@@ -1546,7 +1546,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 				DataType arg_type = normalizeDataType(getArgumentType(callee, i-1));
 
 				// Skip if types match or both are compatible for implicit conversion
-				if (typesAreCompatible(var_type, arg_type)) {
+				if (var_type == null || arg_type == null
+					|| typesAreCompatible(var_type, arg_type)) {
 					continue;
 				}
 
