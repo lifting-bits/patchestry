@@ -437,6 +437,20 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			return Undefined.getUndefinedDataType(ret_val.getSize());
 		}
 
+		private DataType functionArgumentType(FunctionSignature proto, int index) {
+			if (proto == null) {
+				return null;
+			}
+
+			ParameterDefinition[] arguments = proto.getArguments();
+			int num_params = (int) arguments.length;
+			if (index > num_params) {
+				return null;
+			}
+
+			return arguments[index].getDataType();
+		}
+
 		private Address getAddress(PcodeOp op) throws Exception {
 			SequenceNumber sn = op.getSeqnum();
 			return sn.getTarget();
@@ -1431,6 +1445,77 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			return true;
 		}
+
+		private DataType unwrapPossibleTypedef(DataType dt) throws Exception {
+			if (dt instanceof TypeDef) {
+				return ((TypeDef) dt).getBaseDataType();
+			}
+			return dt;
+		}
+
+		private boolean rewriteCallArgument(
+				HighFunction high_function, PcodeOp call_op) throws Exception {
+			Address caller_address = high_function.getFunction().getEntryPoint();
+			Varnode call_target_node = call_op.getInput(0);
+
+			Function callee = null;
+			if (call_target_node.isAddress()) {
+				Address target_address = caller_address.getNewAddress(
+						call_target_node.getOffset());
+				callee = fm.getFunctionAt(target_address);
+				if (callee == null) {
+					callee = fm.getReferencedFunction(target_address);
+				}
+			}
+
+			DataTypeManager dtm = program.getDataTypeManager();
+			Address op_loc = call_op.getSeqnum().getTarget();
+			List<PcodeOp> prefix_ops = getOrCreatePrefixOperations(call_op);
+
+			for (int i = 1; i < call_op.getInputs().length; i++) {
+				Varnode input = call_op.getInput(i);
+				HighVariable var = input.getHigh();
+
+				// TODO: We are rewriting call arguments only if argument it takes is
+				//       global variable. However, the problem with type mismatch exist
+				//       with other variable arguments as well and it needs to be extended.
+				if (classifyVariable(variableOf(var)) == VariableClassification.UNKNOWN) {
+					continue;
+				}
+
+				DataType var_type = unwrapPossibleTypedef(var.getDataType());
+				DataType arg_type = unwrapPossibleTypedef(functionArgumentType(callee.getSignature(), i-1));
+
+				// if var_type matches with function argument type, or both are instanceof
+				// Pointer, no need to rewrite them.
+				if ((var_type == arg_type)
+					|| ((var_type instanceof Pointer) && (arg_type instanceof Pointer))) {
+					continue;
+				}
+
+				if (((var_type instanceof Composite) || (var_type instanceof Array))
+					&& (arg_type instanceof Pointer)) {
+					Address address = nextUniqueAddress();
+					SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
+					DefinitionVarnode def = new DefinitionVarnode(address, var_type.getLength());
+					UseVarnode use = new UseVarnode(address, def.getSize());
+					PcodeOp address_of = createAddressOf(def, loc, input);
+					prefix_ops.add(address_of);
+
+					Varnode[] instances = new Varnode[2];
+					instances[0] = address_of.getOutput();
+					instances[1] = use;
+					DataType node_type = dtm.getPointer(var_type);
+					HighVariable tracker = new HighTemporary(
+					node_type, instances[0], instances, op_loc, high_function);
+
+					def.setDef(tracker, address_of);
+					use.setHigh(tracker);
+					call_op.setInput(use, i);
+				}
+			}
+			return true;
+		}
 		
 		// Get or create a prefix operations list. These are operations that
 		// will precede `op` in our serialization, regardless of whether or
@@ -1629,6 +1714,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 									println("Unsupported CALLOTHER at " + label(op) + ": " + op.toString());
 									return false;
 								}
+							}
+							break;
+						case PcodeOp.CALL:
+							if (op.getInputs().length > 0) {
+								rewriteCallArgument(high_function, op);
 							}
 							break;
 						case PcodeOp.PTRSUB:
