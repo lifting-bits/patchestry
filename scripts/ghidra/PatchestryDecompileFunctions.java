@@ -110,6 +110,7 @@ import ghidra.program.model.symbol.ExternalManager;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
+import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolType;
 import ghidra.program.model.symbol.SymbolTable;
@@ -1599,6 +1600,35 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			}
 			return modified;
 		}
+
+		private boolean rewriteVoidReturnType(
+				HighFunction high_function, PcodeOp call_op) throws Exception {
+			Address caller_address = high_function.getFunction().getEntryPoint();
+			Varnode call_target_node = call_op.getInput(0);
+			Function callee = resolveCalledFunction(call_target_node, caller_address);
+			if (callee == null) {
+				// If the function cannot be resolved, we can't properly rewrite return type
+				return false;
+			}
+
+			// Only handle rewrite if return type is void but call_op output expects a non void return type
+			Varnode call_output = call_op.getOutput();
+			if (callee.getReturnType() != VoidDataType.dataType || call_output == null) {
+				return false;
+			}
+
+			HighVariable var = call_output.getHigh();
+			if (var == null) {
+				return false;
+			}
+
+			DataType fixed_rttype = var.getDataType();
+			if (fixed_rttype == null) {
+				return false;
+			}
+			callee.setReturnType(fixed_rttype, SourceType.DEFAULT);
+			return true;
+		}
 		
 		// Get or create a prefix operations list. These are operations that
 		// will precede `op` in our serialization, regardless of whether or
@@ -1800,7 +1830,12 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 							}
 							break;
 						case PcodeOp.CALL:
+							// Rewrite call argument if there is type mismatch and can't be
+							// handled during AST generation
 							rewriteCallArgument(high_function, op);
+							// Rewrite return type if the function retuns void but pcode op has 
+							// valid output varnode.
+							rewriteVoidReturnType(high_function, op);
 							break;
 						case PcodeOp.PTRSUB:
 							if (!rewritePtrSubcomponent(high_function, op, cdci)) {
