@@ -51,6 +51,8 @@ FROM base AS runtime
 RUN apt-get update && apt-get install -y \
     adduser \
     sudo \
+    file \
+    binutils \
     --no-install-recommends && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives
 

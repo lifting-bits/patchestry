@@ -114,12 +114,92 @@ function validate_args {
   fi
 }
 
+ARCHITECTURE=""
+
+# Create the Ghidra processor string (ARCHITECTURE) from attributes visible to 
+# readelf in the input binary that we intend to pass to Ghidra eventually.
+# The processor string tells Ghidra how to decompile the input binary, based on
+# the pspec and cspec files available to it. The string has four colon-sep 
+# parts (processor_name:endianness:mode:variant), the first
+# three of which relate to and help define which pspec Ghidra will use:
+#
+# The first part is the processor name (e.g., x86, ARM, MIPS).
+# The second part is the endianness (e.g., LE, BE).
+# The third part is the address size or mode (e.g., 32, 64, 16).
+# The fourth part is the compiler specification or a processor variant (e.g., 
+# gcc, windows, clang, or a custom variant for special processor features).
+# This defines which cspec Ghidra will use to decompile. This doesn't quite mean
+# "what compiler was used to compile the input binary", i.e., if a binary was
+# originally compiled with clang for linux, you'd still put gcc or default for
+# the variant string.
+function detect_processor {
+    local file_output = $(file "$INPUT_FILE")
+    local variant="default"  
+    local endianness="LE"
+
+    local processor_name=$("$file_output" | grep -o -E 'x86-64|Intel 80386|ARMv[0-9]+|armv[0-9]+|ARM aarch64|AArch64|ARM, big-endian|ARM, little-endian|ARM')
+    if [[ "$processor_name" =~ x86-64 ]]; then
+        ARCHITECTURE="x86:${endianness}:64:${variant}"
+        return
+    elif [[ "$processor_name" =~ "Intel 80386" ]]; then
+        ARCHITECTURE="x86:${endianness}:32:${variant}"
+        return
+    elif [[ "$processor_name" =~ "ARM aarch64|AArch64" ]]; then
+        ARCHITECTURE="AARCH64:${endianness}:64:v8A"
+        return
+    fi
+
+    # For ARM, check endianness first
+    if file "$INPUT_FILE" | grep -q "big-endian"; then
+        endianness="BE"
+    fi
+
+    if [[ "$file_output" == *"ELF"* ]]; then
+      variant="gcc"
+    elif [[ "$file_output" == *"PE32"* || "$file_output" == *"PE32+"* ]]; then
+      variant="windows"
+    elif [[ "$file_output" == *"Mach-O"* ]]; then
+      variant="clang"
+    fi 
+
+    if [[ "$processor_name" =~ ARM || "$processor_name" =~ armv ]]; then
+        variant="v7"
+        if readelf -S "$INPUT_FILE" | grep -q -E "\.text.*08000000|\.data.*20000000"; then
+            # Cortex-M memory layout detected
+            ARCHITECTURE="ARM:${endianness}:32:${variant}"
+        else
+            # Check ARM attributes for version
+            local arm_attrs=$(readelf -A "$INPUT_FILE" 2>/dev/null)
+            if echo "$arm_attrs" | grep -q "Tag_CPU_arch: v8"; then
+                ARCHITECTURE="ARM:${endianness}:32:v8"
+            elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v7"; then
+                ARCHITECTURE="ARM:${endianness}:32:${variant}"
+            elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v6"; then
+                ARCHITECTURE="ARM:${endianness}:32:v6"
+            elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v5"; then
+                ARCHITECTURE="ARM:${endianness}:32:v5"
+            elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v4"; then
+                ARCHITECTURE="ARM:${endianness}:32:v4"
+            else
+                # If all else fails, default to v7
+                ARCHITECTURE="ARM:${endianness}:32:${variant}"
+            fi
+        fi
+    else
+        echo "Could not determine full input-binary architecture, observed '$processor_name' '$endianness' ? '$variant'"
+        exit 1
+    fi
+
+    echo "Binary Architecture was: '$processor_name', '$arm_attrs' ($ARCHITECTURE)"
+}
+
 # Function to run Ghidra headless script for listing functions
 function run_list_functions {
   echo "Running Ghidra headless script to list functions..."
   ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
     -readOnly -deleteProject \
     -import $INPUT_FILE \
+    -processor $ARCHITECTURE \
     -postScript "PatchestryListFunctions.java" \
     $OUTPUT_FILE
 
@@ -136,6 +216,7 @@ function run_decompile_single {
   ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
     -readOnly -deleteProject \
     -import $INPUT_FILE \
+    -processor $ARCHITECTURE \
     -postScript ${ghidra_script} \
     single \
     $FUNCTION_NAME \
@@ -147,12 +228,13 @@ function run_decompile_single {
 }
 
 function run_decompile_all {
-  echo "Running Ghidra headless script to decompile function..."
+  echo "Running Ghidra headless script to decompile all functions..."
   local ghidra_script="PatchestryDecompileFunctions.java"
 
   ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
     -readOnly -deleteProject \
     -import $INPUT_FILE \
+    -processor $ARCHITECTURE \
     -postScript ${ghidra_script} \
     all \
     $OUTPUT_FILE
@@ -174,6 +256,8 @@ function main {
         exit 1
     fi
   fi
+
+  detect_processor
 
   case "$COMMAND" in
     list-functions)
