@@ -134,23 +134,11 @@ ARCHITECTURE=""
 # the variant string.
 function detect_processor {
     local file_output = $(file "$INPUT_FILE")
-    local variant="default"  
+    local variant="default" 
+    local mode="32" 
+
     local endianness="LE"
-
-    local processor_name=$("$file_output" | grep -o -E 'x86-64|Intel 80386|ARMv[0-9]+|armv[0-9]+|ARM aarch64|AArch64|ARM, big-endian|ARM, little-endian|ARM')
-    if [[ "$processor_name" =~ x86-64 ]]; then
-        ARCHITECTURE="x86:${endianness}:64:${variant}"
-        return
-    elif [[ "$processor_name" =~ "Intel 80386" ]]; then
-        ARCHITECTURE="x86:${endianness}:32:${variant}"
-        return
-    elif [[ "$processor_name" =~ "ARM aarch64|AArch64" ]]; then
-        ARCHITECTURE="AARCH64:${endianness}:64:v8A"
-        return
-    fi
-
-    # For ARM, check endianness first
-    if file "$INPUT_FILE" | grep -q "big-endian"; then
+    if [["$file_output" == *"big-endian"*]]; then
         endianness="BE"
     fi
 
@@ -162,35 +150,52 @@ function detect_processor {
       variant="clang"
     fi 
 
+    local processor_name=$("$file_output" | grep -o -E 'x86-64|Intel 80386|ARMv[0-9]+|armv[0-9]+|ARM aarch64|AArch64|ARM, big-endian|ARM, little-endian|ARM')
+    if [[ "$processor_name" =~ "x86-64" ]]; then
+        ARCHITECTURE="x86:${endianness}:64:${variant}"
+        return
+    elif [[ "$processor_name" =~ "Intel 80386" ]]; then
+        ARCHITECTURE="x86:${endianness}:{$mode}:${variant}"
+        return
+    elif [[ "$processor_name" =~ "ARM aarch64|AArch64" ]]; then
+        ARCHITECTURE="AARCH64:${endianness}:64:v8A"
+        return
+    fi
+
     if [[ "$processor_name" =~ ARM || "$processor_name" =~ armv ]]; then
         variant="v7"
         if readelf -S "$INPUT_FILE" | grep -q -E "\.text.*08000000|\.data.*20000000"; then
             # Cortex-M memory layout detected
-            ARCHITECTURE="ARM:${endianness}:32:${variant}"
+            ARCHITECTURE="ARM:${endianness}:${mode}:${variant}"
         else
             # Check ARM attributes for version
             local arm_attrs=$(readelf -A "$INPUT_FILE" 2>/dev/null)
             if echo "$arm_attrs" | grep -q "Tag_CPU_arch: v8"; then
-                ARCHITECTURE="ARM:${endianness}:32:v8"
+                ARCHITECTURE="ARM:${endianness}:${mode}:v8"
             elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v7"; then
-                ARCHITECTURE="ARM:${endianness}:32:${variant}"
+                if [["$arm_attrs" =~ "Cortex-M"]]; then
+                  variant="Cortex"
+                fi
+
+                ARCHITECTURE="ARM:${endianness}:${mode}:${variant}"
             elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v6"; then
-                ARCHITECTURE="ARM:${endianness}:32:v6"
+                ARCHITECTURE="ARM:${endianness}:${mode}:v6"
             elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v5"; then
-                ARCHITECTURE="ARM:${endianness}:32:v5"
+                ARCHITECTURE="ARM:${endianness}:${mode}:v5"
             elif echo "$arm_attrs" | grep -q "Tag_CPU_arch: v4"; then
-                ARCHITECTURE="ARM:${endianness}:32:v4"
+                ARCHITECTURE="ARM:${endianness}:${mode}:v4"
             else
-                # If all else fails, default to v7
-                ARCHITECTURE="ARM:${endianness}:32:${variant}"
+                echo "Not sure what we have here... defaulting to ARMv7 for now... Attributes: '${arm_attrs}'"
+                ARCHITECTURE="ARM:${endianness}:${mode}:${variant}"
             fi
         fi
     else
-        echo "Could not determine full input-binary architecture, observed '$processor_name' '$endianness' ? '$variant'"
+        echo "Could not determine full input-binary architecture"
+        observed '$processor_name':'$endianness':'$mode':'$variant'
         exit 1
     fi
 
-    echo "Binary Architecture was: '$processor_name', '$arm_attrs' ($ARCHITECTURE)"
+    echo "observed '$processor_name':'$endianness':'$mode':'$variant'"
 }
 
 # Function to run Ghidra headless script for listing functions
