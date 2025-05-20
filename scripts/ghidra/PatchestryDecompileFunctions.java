@@ -437,20 +437,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			return Undefined.getUndefinedDataType(ret_val.getSize());
 		}
 
-		private DataType functionArgumentType(FunctionSignature proto, int index) {
-			if (proto == null) {
-				return null;
-			}
-
-			ParameterDefinition[] arguments = proto.getArguments();
-			int num_params = (int) arguments.length;
-			if (index > num_params) {
-				return null;
-			}
-
-			return arguments[index].getDataType();
-		}
-
 		private Address getAddress(PcodeOp op) throws Exception {
 			SequenceNumber sn = op.getSeqnum();
 			return sn.getTarget();
@@ -1446,55 +1432,124 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 			return true;
 		}
 
-		private DataType unwrapPossibleTypedef(DataType dt) throws Exception {
+		private DataType normalizeDataType(DataType dt) throws Exception {
 			if (dt instanceof TypeDef) {
 				return ((TypeDef) dt).getBaseDataType();
 			}
 			return dt;
 		}
 
+		private DataType getArgumentType(Function callee, int param_index) {
+			if (callee == null || param_index < 0) {
+				return null;
+			}
+
+			FunctionSignature signature = callee.getSignature();
+			if (signature == null) {
+				return null;
+			}
+
+			ParameterDefinition[] params = signature.getArguments();
+			if (params == null || param_index >= params.length) {
+				return null;
+			}
+
+			ParameterDefinition param = params[param_index];
+			return param != null ? param.getDataType() : null;
+		}
+
+		private Function resolveCalledFunction(Varnode target_node, Address caller) {
+			if (!target_node.isAddress()) {
+				return null;
+			}
+
+			Address target_address = caller.getNewAddress(target_node.getOffset());
+			// Try to get function at the target address
+			Function callee = fm.getFunctionAt(target_address);
+			if (callee == null) {
+				callee = fm.getReferencedFunction(target_address);
+			}
+
+			return callee;
+		}
+
+		private boolean needsCastOperation(DataType var_type, DataType arg_type) {
+			if (var_type.getLength() <= 0 || arg_type.getLength() <= 0) {
+				return false;
+			}
+
+			// TODO: Identify cases where we need explicit CAST operation to handle 
+			//       conversion. Some cases like pointer conversion of different types
+			//       or type conversion of builtin types gets handled during AST generation
+
+			// Handle float to int and int to float conversion
+			if ((var_type instanceof AbstractFloatDataType && arg_type instanceof AbstractIntegerDataType) ||
+				(var_type instanceof AbstractIntegerDataType && arg_type instanceof AbstractFloatDataType)) {
+				return true;
+			}
+
+			if ((var_type instanceof Pointer && arg_type instanceof AbstractIntegerDataType) ||
+				(var_type instanceof AbstractIntegerDataType && arg_type instanceof Pointer)) {
+				return true;
+			}
+
+			if ((var_type instanceof Enum && arg_type instanceof AbstractIntegerDataType) ||
+				(var_type instanceof AbstractIntegerDataType && arg_type instanceof Enum)) {
+				return true;
+			}
+
+			// TODO: Handle conversion of undefined array to int or packed struct
+
+			return false;
+		}
+
+
+		private boolean needsAddressOfConversion(DataType var_type, DataType arg_type) {
+			return ((var_type instanceof Composite) || (var_type instanceof Array)) && (arg_type instanceof Pointer);
+		}
+
+		private boolean typesAreCompatible(DataType var_type, DataType arg_type) {
+			return (var_type == arg_type) || ((var_type instanceof Pointer) && (arg_type instanceof Pointer));
+		}
+
+
 		private boolean rewriteCallArgument(
 				HighFunction high_function, PcodeOp call_op) throws Exception {
 			Address caller_address = high_function.getFunction().getEntryPoint();
 			Varnode call_target_node = call_op.getInput(0);
 
-			Function callee = null;
-			if (call_target_node.isAddress()) {
-				Address target_address = caller_address.getNewAddress(
-						call_target_node.getOffset());
-				callee = fm.getFunctionAt(target_address);
-				if (callee == null) {
-					callee = fm.getReferencedFunction(target_address);
-				}
+			Function callee = resolveCalledFunction(call_target_node, caller_address);
+			if (callee == null) {
+				// If the function cannot be resolved, we can't properly rewrite arguments
+				return false;
 			}
 
 			DataTypeManager dtm = program.getDataTypeManager();
 			Address op_loc = call_op.getSeqnum().getTarget();
 			List<PcodeOp> prefix_ops = getOrCreatePrefixOperations(call_op);
 
+			boolean modified = false;
+
 			for (int i = 1; i < call_op.getInputs().length; i++) {
 				Varnode input = call_op.getInput(i);
 				HighVariable var = input.getHigh();
 
-				// TODO: We are rewriting call arguments only if argument it takes is
-				//       global variable. However, the problem with type mismatch exist
-				//       with other variable arguments as well and it needs to be extended.
-				if (classifyVariable(variableOf(var)) == VariableClassification.UNKNOWN) {
+				// Note: Check variable classification type and don't check for argument mismatch if
+				//       it is of type UNKNOWN or CONSTANT
+				VariableClassification vclass = classifyVariable(variableOf(var));
+				if ((vclass == VariableClassification.UNKNOWN) || (vclass == VariableClassification.CONSTANT)) {
 					continue;
 				}
 
-				DataType var_type = unwrapPossibleTypedef(var.getDataType());
-				DataType arg_type = unwrapPossibleTypedef(functionArgumentType(callee.getSignature(), i-1));
+				DataType var_type = normalizeDataType(var.getDataType());
+				DataType arg_type = normalizeDataType(getArgumentType(callee, i-1));
 
-				// if var_type matches with function argument type, or both are instanceof
-				// Pointer, no need to rewrite them.
-				if ((var_type == arg_type)
-					|| ((var_type instanceof Pointer) && (arg_type instanceof Pointer))) {
+				// Skip if types match or both are compatible for implicit conversion
+				if (typesAreCompatible(var_type, arg_type)) {
 					continue;
 				}
 
-				if (((var_type instanceof Composite) || (var_type instanceof Array))
-					&& (arg_type instanceof Pointer)) {
+				if (needsAddressOfConversion(var_type, arg_type)) {
 					Address address = nextUniqueAddress();
 					SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
 					DefinitionVarnode def = new DefinitionVarnode(address, var_type.getLength());
@@ -1507,14 +1562,42 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 					instances[1] = use;
 					DataType node_type = dtm.getPointer(var_type);
 					HighVariable tracker = new HighTemporary(
-					node_type, instances[0], instances, op_loc, high_function);
+						node_type, instances[0], instances, op_loc, high_function);
 
 					def.setDef(tracker, address_of);
 					use.setHigh(tracker);
 					call_op.setInput(use, i);
+					modified = true;
+
+				} else if (needsCastOperation(var_type, arg_type)) {
+					Address address = nextUniqueAddress();
+					SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
+					DefinitionVarnode def = new DefinitionVarnode(address, var_type.getLength());
+
+					Varnode cast_output = new DefinitionVarnode(address, arg_type.getLength());
+					PcodeOp cast_op = new PcodeOp(loc, PcodeOp.CAST, new Varnode[] { input }, def);
+					cast_op.setOutput(cast_output);
+
+					UseVarnode use = new UseVarnode(address, cast_output.getSize());
+					prefix_ops.add(cast_op);
+
+					// Set up the high variables
+					Varnode[] instances = new Varnode[2];
+					instances[0] = cast_output;
+					instances[1] = use;
+
+					HighVariable tracker = new HighTemporary(
+						arg_type, instances[0], instances, op_loc, high_function);
+
+					((DefinitionVarnode)cast_output).setDef(tracker, cast_op);
+					use.setHigh(tracker);
+
+					// Update the call operation to use the cast result
+					call_op.setInput(use, i);
+					modified = true;
 				}
 			}
-			return true;
+			return modified;
 		}
 		
 		// Get or create a prefix operations list. These are operations that
@@ -1717,9 +1800,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 							}
 							break;
 						case PcodeOp.CALL:
-							if (op.getInputs().length > 0) {
-								rewriteCallArgument(high_function, op);
-							}
+							rewriteCallArgument(high_function, op);
 							break;
 						case PcodeOp.PTRSUB:
 							if (!rewritePtrSubcomponent(high_function, op, cdci)) {
