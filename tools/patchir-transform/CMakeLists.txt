@@ -9,12 +9,12 @@ set(LLVM_LINK_COMPONENTS
 )
 
 
-add_executable(patchir-opt
+add_executable(patchir-transform
     main.cpp
 )
 
-llvm_update_compile_flags(patchir-opt)
-target_link_libraries(patchir-opt
+llvm_update_compile_flags(patchir-transform)
+target_link_libraries(patchir-transform
     PRIVATE
         patchestry::codegen
         clangFrontend
@@ -22,4 +22,4 @@ target_link_libraries(patchir-opt
         MLIROptLib
 )
 
-mlir_check_link_libraries(patchir-opt)
+mlir_check_link_libraries(patchir-transform)

@@ -71,10 +71,10 @@ configure_file(
   ${CMAKE_CURRENT_BINARY_DIR}/include/patchestry/Version.inc
 )
 
-if(PLATFORM_MACOS)
+if(APPLE)
   set(CMAKE_MACOSX_RPATH 1)
   set(CMAKE_INSTALL_RPATH "@executable_path/../${PE_INSTALL_LIB_DIR}")
-elseif(PLATFORM_LINUX)
+elseif(UNIX AND NOT APPLE)
   set(CMAKE_INSTALL_RPATH "$ORIGIN/../${PE_INSTALL_LIB_DIR}")
 endif()
 

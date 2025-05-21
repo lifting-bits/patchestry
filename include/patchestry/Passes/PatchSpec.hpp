@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/YAMLTraits.h>
 
 namespace patchestry::passes {
@@ -76,8 +78,38 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchSpec)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::VariableMatch)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ArgumentMatch)
 
-namespace llvm::yaml {
+class PatchSpecContext
+{
+  public:
+    static PatchSpecContext &getInstance() {
+        static PatchSpecContext instance;
+        return instance;
+    }
 
+    void set_spec_path(const std::string &file) {
+        auto directory = llvm::sys::path::parent_path(file);
+        if (!directory.empty()) {
+            spec_path = directory.str();
+        }
+    }
+
+    std::string resolve_path(const std::string &file) {
+        if (llvm::sys::path::is_absolute(file)) {
+            return file;
+        }
+
+        llvm::SmallVector< char > directory;
+        directory.assign(spec_path.begin(), spec_path.end());
+        llvm::sys::path::append(directory, file);
+        llvm::sys::path::remove_dots(directory);
+        return std::string(directory.data(), directory.size());
+    }
+
+  private:
+    std::string spec_path;
+};
+
+namespace llvm::yaml {
     // Prase ArgumentMatch
     template<>
     struct MappingTraits< patchestry::passes::ArgumentMatch >
@@ -133,6 +165,12 @@ namespace llvm::yaml {
                 patch.mode = patchestry::passes::PatchInfoMode::REPLACE;
             } else { // Default to NONE
                 patch.mode = patchestry::passes::PatchInfoMode::NONE;
+            }
+
+            // resolve patch_file path
+            if (!patch.patch_file.empty() && !llvm::sys::path::is_absolute(patch.patch_file)) {
+                patch.patch_file =
+                    PatchSpecContext::getInstance().resolve_path(patch.patch_file);
             }
         }
     };

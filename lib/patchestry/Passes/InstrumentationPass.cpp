@@ -297,6 +297,7 @@ namespace patchestry::passes {
             return;
         }
 
+        PatchSpecContext::getInstance().set_spec_path(spec_file);
         auto config_or_err = parseSpecifications(buffer_or_err.get()->getBuffer());
         if (!config_or_err) {
             LOG(ERROR) << "Error: Failed to parse patch specification file: " << spec_file

@@ -1,10 +1,11 @@
 // RUN: true
 typedef float SFtype;
 
-
 extern void halt();
 
 extern void write_str(const char *str);
+
+extern unsigned char spo2_lookup(SFtype param_0);
 
 #define patch_assert(cond) \
     do { \
@@ -37,4 +38,9 @@ void patch__before__spo2_lookup(SFtype param_0) {
 void patch__after__spo2_lookup(unsigned char return_value) {
     // Your patch code here
     return;
+}
+
+unsigned char patch__replace__spo2_lookup(SFtype param_0) {
+    // Your patch code here
+    return spo2_lookup(param_0);
 }
