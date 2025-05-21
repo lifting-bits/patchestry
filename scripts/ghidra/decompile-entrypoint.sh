@@ -133,61 +133,89 @@ ARCHITECTURE=""
 # originally compiled with clang for linux, you'd still put gcc or default for
 # the variant string.
 function detect_processor {
-    local file_output=$(file "${INPUT_FILE}")
-    local variant="default" 
-    local mode="32" 
+    local file_output=$(file "$INPUT_FILE")
 
     local endianness="LE"
     if [[ "$file_output" == *"big-endian"* ]]; then
         endianness="BE"
     fi
 
-    if [[ "$file_output" == *"ELF"* ]]; then
-      variant="default" #gcc isn't supported for now
-    elif [[ "$file_output" == *"PE32"* ]]; then
-      variant="windows"
+    local variant="default"
+    if [[ "$file_output" == *"PE32"* ]]; then
+        variant="windows"
     elif [[ "$file_output" == *"Mach-O"* ]]; then
-      variant="clang"
-    fi 
-
-    local processor_name=$(echo "$file_output" | grep -o -E 'x86-64|Intel 80386|ARMv[0-9]+|armv[0-9]+|ARM aarch64|AArch64|ARM, big-endian|ARM, little-endian|ARM')
-    if [[ "$processor_name" =~ x86-64 ]]; then
-        ARCHITECTURE="x86:${endianness}:64:${variant}"
-        return
-    elif [[ "$processor_name" =~ Intel\ 80386 ]]; then
-        ARCHITECTURE="x86:${endianness}:${mode}:${variant}"
-        return
-    elif [[ "$processor_name" =~ ARM\ aarch64|AArch64 ]]; then
-        ARCHITECTURE="AARCH64:${endianness}:64:v8A"
-        return
-    elif [[ "$processor_name" =~ ARM|armv ]]; then
-        variant="v7"
-        local arm_attrs=$(readelf -A "$INPUT_FILE" 2>/dev/null)
-        if [[ "$arm_attrs" == *"Tag_CPU_arch: v8"* ]]; then
-            ARCHITECTURE="ARM:${endianness}:${mode}:v8"
-        elif [[ "$arm_attrs" == *"Tag_CPU_arch: v7"* ]]; then
-            if [[ "$arm_attrs" =~ "Cortex-M" ]] || readelf -S "$INPUT_FILE" | grep -q -E "\.text.*08000000|\.data.*20000000"; then
-              variant="Cortex"
-            fi
-
-            ARCHITECTURE="ARM:${endianness}:${mode}:${variant}"
-        elif [[ "$arm_attrs" == *"Tag_CPU_arch: v6"* ]]; then
-            ARCHITECTURE="ARM:${endianness}:${mode}:v6"
-        elif [[ "$arm_attrs" == *"Tag_CPU_arch: v5"* ]]; then
-            ARCHITECTURE="ARM:${endianness}:${mode}:v5"
-        elif [[ "$arm_attrs" == *"Tag_CPU_arch: v4"* ]]; then
-            ARCHITECTURE="ARM:${endianness}:${mode}:v4"
-        else
-            echo "Not sure what we have here... defaulting to ARMv7 for now... Attributes: '${arm_attrs}'"
-            ARCHITECTURE="ARM:${endianness}:${mode}:${variant}"
-        fi
-    else
-        echo "Could not determine full input-binary architecture"
-        echo "Observed '$processor_name':'$endianness':'$mode':'$variant'"
-        exit 1
+        variant="clang"
     fi
 
-    echo "Observed '$processor_name':'$endianness':'$mode':'$variant'"
+    local mode="32"
+    local processor_name=$(echo "$file_output" | grep -o -E \
+      'x86-64|Intel 80386|ARMv[0-9]+|armv[0-9]+|ARM aarch64|AArch64|MIPS|PowerPC|AVR|MSP430|8051|68k|SPARC|RISC-V|Xtensa|CR16C|Z80|6502|PIC')
+    case "$processor_name" in
+        "x86-64")
+            processor_name="x86"
+            mode="64"
+            ;;
+        "Intel 80386")
+            processor_name="x86"
+            ;;
+        "ARM aarch64"|"AArch64")
+            processor_name="AARCH64"
+            mode="64"
+            variant="v8A"
+            ;;
+        ARM*|armv*)
+            variant="v7"
+            processor_name="ARM"
+
+            local arm_attrs=$(readelf -A "$INPUT_FILE" 2>/dev/null)
+            if [[ "$arm_attrs" == *"Tag_CPU_arch: v8"* ]]; then
+                variant="v8"
+            elif [[ "$arm_attrs" == *"Cortex-M"* ]] || readelf -S "$INPUT_FILE" | grep -q -E "\.text.*08000000|\.data.*20000000"; then
+                variant="Cortex"
+            fi
+            ;;
+        "MIPS")
+            if [[ "$file_output" == *"MIPS64"* ]]; then
+                mode="64"
+            fi
+
+            if [[ "$file_output" == *"microMIPS"* ]]; then
+                variant="micro"
+            fi
+            ;;
+        "PowerPC")
+            if [[ "$file_output" == *"VLE"* ]]; then
+                variant="VLE"
+            fi
+
+            if [[ "$file_output" == *"64-bit"* ]]; then
+                mode="64"
+            fi
+            ;;
+        "68k")
+            processor_name="68000"
+            ;;
+        "SPARC")
+            processor_name="Sparc"
+            if [[ "$file_output" == *"64-bit"* ]]; then
+                mode="64"
+                variant="V9"
+            fi
+            ;;
+        "RISC-V")
+            processor_name="RISCV"
+            if [[ "$file_output" == *"64-bit"* ]]; then
+                mode="64"
+            fi
+            ;;
+        *)
+            echo "Unsupported architecture: '${processor_name}'"
+            exit 1
+            ;;
+    esac
+
+    ARCHITECTURE="${processor_name}:${endianness}:${mode}:${variant}"
+    echo "Detected architecture: ${ARCHITECTURE}"
 }
 
 # Function to run Ghidra headless script for listing functions
