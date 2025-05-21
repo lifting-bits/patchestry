@@ -19,6 +19,17 @@ if(NOT EXISTS "${src_dir}/CMakeLists.txt")
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 endif()
 
+# Only fetch doctest if testing is enabled
+if(RELLIC_ENABLE_TESTING)
+  include(FetchContent)
+  FetchContent_Declare(
+    doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG v2.4.11
+  )
+  FetchContent_MakeAvailable(doctest)
+endif()
+
 set(REMILL_PREFIX_PATH ${CMAKE_PREFIX_PATH})
 
 if (PE_USE_VENDORED_CLANG)
