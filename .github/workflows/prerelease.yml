@@ -99,7 +99,7 @@ jobs:
           fetch-depth: 1
 
       - name: Configure build
-        run: cmake --preset ci -DUSE_VENDORED_CLANG=1 -DLLVM_Z3_INSTALL_DIR=/usr/local
+        run: cmake --preset ci -DLLVM_Z3_INSTALL_DIR=/usr/local
 
       - name: Build Patchestry Doc
         run: cmake --build --preset ci-release --target mlir-doc
