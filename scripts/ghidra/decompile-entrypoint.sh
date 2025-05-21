@@ -115,7 +115,6 @@ function validate_args {
 }
 
 ARCHITECTURE=""
-
 # Create the Ghidra processor string (ARCHITECTURE) from attributes visible to 
 # readelf in the input binary that we intend to pass to Ghidra eventually.
 # The processor string tells Ghidra how to decompile the input binary, based on
@@ -127,10 +126,10 @@ ARCHITECTURE=""
 # The second part is the endianness (e.g., LE, BE).
 # The third part is the address size or mode (e.g., 32, 64, 16).
 # The fourth part is the compiler specification or a processor variant (e.g., 
-# gcc, windows, clang, or a custom variant for special processor features).
+# default, windows, clang, or a custom variant for special processor features).
 # This defines which cspec Ghidra will use to decompile. This doesn't quite mean
 # "what compiler was used to compile the input binary", i.e., if a binary was
-# originally compiled with clang for linux, you'd still put gcc or default for
+# originally compiled with clang for linux, you'd still put default for
 # the variant string.
 function detect_processor {
     local file_output=$(file "$INPUT_FILE")
@@ -207,6 +206,13 @@ function detect_processor {
             if [[ "$file_output" == *"64-bit"* ]]; then
                 mode="64"
             fi
+            ;;
+        "AVR"|"MSP430"|"8051"|"PIC"|"Z80"|"6502")
+        # Ghidra's language definitions for these architectures should not need 
+        # an explicit address size or endianness in the processor string
+            ARCHITECTURE="${processor_name}:${variant}"
+            echo "Detected architecture: ${ARCHITECTURE}"
+            return
             ;;
         *)
             echo "Unsupported architecture: '${processor_name}'"
