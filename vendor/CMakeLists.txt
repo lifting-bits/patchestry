@@ -16,8 +16,9 @@ set(CMAKE_LINKER_TYPE LLD CACHE STRING "Linker type for the Patchestry build sho
 add_subdirectory(gflags)
 add_subdirectory(glog)  # Depends on gflags
 add_subdirectory(z3)
-add_subdirectory(rellic)  # Depends on glog
 
 if(USE_VENDORED_CLANG)
     add_subdirectory(clangir)
 endif()
+
+add_subdirectory(rellic)  # Depends on glog and clangir (if vendored)
