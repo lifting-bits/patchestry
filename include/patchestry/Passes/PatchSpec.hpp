@@ -70,8 +70,33 @@ namespace patchestry::passes {
     {
         std::string arch;
         std::vector< PatchSpec > patches;
-    };
 
+        std::optional< PatchSpec > matches_operation(const std::string &operation) const {
+            if (operation.empty()) {
+                return {};
+            }
+            for (const auto &patch : patches) {
+                if (patch.match.operation == operation) {
+                    return patch;
+                }
+            }
+
+            return {};
+        }
+
+        std::optional< PatchSpec > matches_symbol(const std::string &symbol) const {
+            if (symbol.empty()) {
+                return {};
+            }
+            for (const auto &patch : patches) {
+                if (patch.match.symbol == symbol) {
+                    return patch;
+                }
+            }
+
+            return {};
+        }
+    };
 }; // namespace patchestry::passes
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchSpec)

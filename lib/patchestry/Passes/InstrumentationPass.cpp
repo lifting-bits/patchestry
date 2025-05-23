@@ -338,7 +338,13 @@ namespace patchestry::passes {
         llvm::SmallVector< cir::FuncOp, 8 > function_worklist;
 
         // Second pass: gather all functions for later instrumentation
-        mod.walk([&](cir::FuncOp op) { function_worklist.push_back(op); });
+        mod.walk([&](mlir::Operation *op) {
+            if (auto func = mlir::dyn_cast< cir::FuncOp >(op)) {
+                function_worklist.push_back(func);
+            }
+
+            llvm::outs() << "Found function: " << op->getName() << "\n";
+        });
 
         // Third pass: process each function to instrument function calls
         // We use indexed loop because function_worklist size could change during
@@ -359,30 +365,22 @@ namespace patchestry::passes {
         func.walk([&](cir::CallOp op) {
             if (!config || config->patches.empty()) {
                 LOG(ERROR) << "No patch configuration found. Skipping...\n";
-                return;
+                return mlir::WalkResult::interrupt();
             }
 
             auto callee_name = op.getCallee()->str();
             assert(!callee_name.empty() && "Callee name is empty");
 
-            std::set< std::string > seen_functions;
-            for (const auto &spec : config->patches) {
-                const auto &match = spec.match;
-                if (match.symbol != callee_name
-                    || seen_functions.find(callee_name) != seen_functions.end())
-                {
-                    continue;
-                }
-
-                seen_functions.emplace(callee_name);
-
-                const auto &patch = spec.patch;
+            auto patch_spec = config->matches_symbol(callee_name);
+            if (patch_spec) {
+                const auto &match = patch_spec->match;
+                const auto &patch = patch_spec->patch;
                 // Create module from the patch file mlir representation
                 auto patch_module = load_patch_module(*op->getContext(), *patch.patch_module);
                 if (!patch_module) {
                     LOG(ERROR) << "Failed to load patch module for function: " << callee_name
                                << "\n ";
-                    continue;
+                    return mlir::WalkResult::skip();
                 }
 
                 switch (patch.mode) {
@@ -401,6 +399,8 @@ namespace patchestry::passes {
                         break;
                 }
             }
+
+            return mlir::WalkResult::advance();
         });
     }
 
