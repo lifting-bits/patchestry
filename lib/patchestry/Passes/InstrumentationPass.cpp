@@ -7,6 +7,7 @@
 
 #include "patchestry/Passes/PatchSpec.hpp"
 #include <memory>
+#include <mlir/IR/Operation.h>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/ValueRange.h>
 #include <optional>
@@ -336,6 +337,7 @@ namespace patchestry::passes {
     void InstrumentationPass::runOnOperation() {
         mlir::ModuleOp mod = getOperation();
         llvm::SmallVector< cir::FuncOp, 8 > function_worklist;
+        llvm::SmallVector< mlir::Operation *, 8 > operation_worklist;
 
         // Second pass: gather all functions for later instrumentation
         mod.walk([&](mlir::Operation *op) {
@@ -343,14 +345,60 @@ namespace patchestry::passes {
                 function_worklist.push_back(func);
             }
 
-            llvm::outs() << "Found function: " << op->getName() << "\n";
+            if (config->matches_operation(op->getName().getStringRef().str())) {
+                operation_worklist.push_back(op);
+            }
         });
 
         // Third pass: process each function to instrument function calls
         // We use indexed loop because function_worklist size could change during
         // instrumentation
-        for (size_t i = 0; i < function_worklist.size(); ++i) {
-            instrument_function_calls(function_worklist[i]);
+        for (auto func : function_worklist) {
+            instrument_function_calls(func);
+        }
+
+        // Patch operations if match is found
+        for (auto *op : operation_worklist) {
+            instrument_operation(op);
+        }
+    }
+
+    void InstrumentationPass::instrument_operation(mlir::Operation *op) {
+        if (!config || config->patches.empty()) {
+            LOG(ERROR) << "No patch configuration found. Skipping...\n";
+            return;
+        }
+
+        for (const auto &spec : config->patches) {
+            if (spec.match.operation == op->getName().getStringRef().str()) {
+                const auto &match = spec.match;
+                const auto &patch = spec.patch;
+                auto patch_module = load_patch_module(*op->getContext(), *patch.patch_module);
+                if (!patch_module) {
+                    LOG(ERROR) << "Failed to load patch module for operation: "
+                               << op->getName().getStringRef().str() << "\n ";
+                    return;
+                }
+
+                switch (patch.mode) {
+                    case PatchInfoMode::APPLY_BEFORE: {
+                        apply_before_patch(op, match, patch, patch_module.get());
+                        break;
+                    }
+                    case PatchInfoMode::APPLY_AFTER: {
+                        apply_after_patch(op, match, patch, patch_module.get());
+                        break;
+                    }
+                    case PatchInfoMode::REPLACE:
+                        LOG(ERROR) << "Replace mode not supported for operations\n";
+                        break;
+                    default:
+                        LOG(ERROR) << "Unsupported patch mode: " << patchInfoModeToString(patch.mode)
+                                   << " for operation: " << op->getName().getStringRef().str() << "\n";
+                        break;
+                }
+                (void) match;
+            }
         }
     }
 
@@ -371,8 +419,12 @@ namespace patchestry::passes {
             auto callee_name = op.getCallee()->str();
             assert(!callee_name.empty() && "Callee name is empty");
 
-            auto patch_spec = config->matches_symbol(callee_name);
-            if (patch_spec) {
+            auto patch_spec = std::find_if(
+                config->patches.begin(), config->patches.end(),
+                [&](const PatchSpec &spec) { return spec.match.symbol == callee_name; }
+            );
+
+            if (patch_spec != config->patches.end()) {
                 const auto &match = patch_spec->match;
                 const auto &patch = patch_spec->patch;
                 // Create module from the patch file mlir representation
@@ -415,10 +467,10 @@ namespace patchestry::passes {
      * @param args The vector to store the prepared arguments.
      */
     void InstrumentationPass::prepare_call_arguments(
-        mlir::OpBuilder &builder, cir::CallOp op, cir::FuncOp patch_func,
+        mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
         const PatchInfo &patch, llvm::SmallVector< mlir::Value > &args
     ) {
-        if (op.getNumArgOperands() == 0) {
+        if (op->getNumOperands() == 0) {
             assert(patch.arguments.empty() && "Patch arguments are not empty");
             assert(
                 patch_func.getNumArguments() == 0 && "Patch function arguments are not empty"
@@ -426,7 +478,7 @@ namespace patchestry::passes {
             return;
         }
 
-        if (patch_func.getNumArguments() > op.getNumArgOperands()) {
+        if (patch_func.getNumArguments() > op->getNumOperands()) {
             LOG(ERROR) << "Number of arguments in patch is greater than the number of "
                           "arguments in the call operation\n";
             return;
@@ -434,7 +486,7 @@ namespace patchestry::passes {
 
         // Check if patch function argument is taking return value
         if (patch.arguments.size() == 1 && patch.arguments[0] == "return_value") {
-            if (op.getResultTypes().size() == 0) {
+            if (op->getResultTypes().size() == 0) {
                 LOG(ERROR) << "Call operation does not have a return value\n";
                 return;
             }
@@ -443,7 +495,7 @@ namespace patchestry::passes {
             if (patch_argument_type != call_return_type) {
                 auto cast_op = builder.create< cir::CastOp >(
                     op->getLoc(), patch_argument_type,
-                    getCastKind(call_return_type, patch_argument_type), op.getResults().front()
+                    getCastKind(call_return_type, patch_argument_type), op->getResults().front()
                 );
                 args.append(cast_op->getResults().begin(), cast_op->getResults().end());
                 return;
@@ -462,12 +514,18 @@ namespace patchestry::passes {
             );
             return cast_op->getResults().front();
         };
-        (void) create_cast;
 
-        // llvm::SmallVector< mlir::Value, 4 > argument_vec;
+        if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+            for (unsigned i = 0; i < patch.arguments.size(); i++) {
+                auto patch_arg_type = patch_func.getArgumentTypes()[i];
+                args.push_back(create_cast(call_op.getArgOperands()[i], patch_arg_type));
+            }
+            return;
+        }
+
         for (unsigned i = 0; i < patch.arguments.size(); i++) {
             auto patch_arg_type = patch_func.getArgumentTypes()[i];
-            args.push_back(create_cast(op.getArgOperands()[i], patch_arg_type));
+            args.push_back(create_cast(op->getOperands()[i], patch_arg_type));
         }
     }
 
@@ -481,7 +539,7 @@ namespace patchestry::passes {
      * @param patch_module The module containing the patch function.
      */
     void InstrumentationPass::apply_before_patch(
-        cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+        mlir::Operation *op, const PatchMatch &match, const PatchInfo &patch,
         mlir::ModuleOp patch_module
     ) {
         mlir::OpBuilder builder(op);
@@ -489,7 +547,6 @@ namespace patchestry::passes {
         auto module = op->getParentOfType< mlir::ModuleOp >();
 
         std::string patch_function_name = namifyPatchFunction(patch.patch_function);
-        auto input_types                = llvm::to_vector(op->getOperandTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
             return;
@@ -517,7 +574,14 @@ namespace patchestry::passes {
                                                      : mlir::Type(),
             function_args
         );
-        call_op->setAttr("extra_attrs", op.getExtraAttrs());
+        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+            call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
+        } else {
+            mlir::NamedAttrList empty;
+            call_op->setAttr("extra_attrs", cir::ExtraFuncAttributesAttr::get(
+                op->getContext(), empty.getDictionary(op->getContext())
+            ));
+        }
         (void) match;
     }
 
@@ -531,7 +595,7 @@ namespace patchestry::passes {
      * @param patch_module The module containing the patch function.
      */
     void InstrumentationPass::apply_after_patch(
-        cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+        mlir::Operation *op, const PatchMatch &match, const PatchInfo &patch,
         mlir::ModuleOp patch_module
     ) {
         mlir::OpBuilder builder(op);
@@ -539,7 +603,6 @@ namespace patchestry::passes {
         builder.setInsertionPointAfter(op);
 
         std::string patch_function_name = namifyPatchFunction(patch.patch_function);
-        auto input_types                = llvm::to_vector(op.getResultTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
             return;
@@ -567,7 +630,14 @@ namespace patchestry::passes {
                                                      : mlir::Type(),
             function_args
         );
-        call_op->setAttr("extra_attrs", op.getExtraAttrs());
+        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+            call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
+        } else {
+            mlir::NamedAttrList empty;
+            call_op->setAttr("extra_attrs", cir::ExtraFuncAttributesAttr::get(
+                op->getContext(), empty.getDictionary(op->getContext())
+            ));
+        }
         (void) match;
     }
 

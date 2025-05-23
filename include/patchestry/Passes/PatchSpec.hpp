@@ -71,32 +71,39 @@ namespace patchestry::passes {
         std::string arch;
         std::vector< PatchSpec > patches;
 
-        std::optional< PatchSpec > matches_operation(const std::string &operation) const {
+        bool matches_operation(const std::string &operation) const {
             if (operation.empty()) {
-                return {};
+                return false;
             }
-            for (const auto &patch : patches) {
-                if (patch.match.operation == operation) {
-                    return patch;
-                }
-            }
-
-            return {};
+            return std::any_of(patches.begin(), patches.end(), [&](const PatchSpec &patch) {
+                return patch.match.operation == operation;
+            });
         }
 
-        std::optional< PatchSpec > matches_symbol(const std::string &symbol) const {
+        bool matches_symbol(const std::string &symbol) const {
             if (symbol.empty()) {
-                return {};
+                return false;
             }
-            for (const auto &patch : patches) {
-                if (patch.match.symbol == symbol) {
-                    return patch;
-                }
-            }
-
-            return {};
+            return std::any_of(patches.begin(), patches.end(), [&](const PatchSpec &patch) {
+                return patch.match.symbol == symbol;
+            });
         }
     };
+
+    namespace {
+        [[maybe_unused]] inline std::string_view patchInfoModeToString(PatchInfoMode mode) {
+            switch (mode) {
+                case PatchInfoMode::NONE:
+                    return "NONE";
+                case PatchInfoMode::APPLY_BEFORE:
+                    return "APPLY_BEFORE";
+                case PatchInfoMode::APPLY_AFTER:
+                    return "APPLY_AFTER";
+                case PatchInfoMode::REPLACE:
+                    return "REPLACE";
+            }
+        }
+    }
 }; // namespace patchestry::passes
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchSpec)

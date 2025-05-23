@@ -8,6 +8,7 @@
 #pragma once
 
 #include <memory>
+#include <mlir/IR/Operation.h>
 #include <mlir/IR/Value.h>
 #include <string>
 
@@ -40,23 +41,26 @@ namespace patchestry::passes {
         void runOnOperation() final;
 
         void instrument_function_calls(cir::FuncOp func);
+        void instrument_operation(mlir::Operation *op);
 
       private:
         void prepare_call_arguments(
-            mlir::OpBuilder &builder, cir::CallOp op, cir::FuncOp patch_func,
+            mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
             const PatchInfo &patch, llvm::SmallVector< mlir::Value > &args
         );
 
         void apply_before_patch(
-            cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+            mlir::Operation *op, const PatchMatch &match, const PatchInfo &patch,
             mlir::ModuleOp patch_module
         );
+
         void apply_after_patch(
-            cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+            mlir::Operation *op, const PatchMatch &match, const PatchInfo &patch,
             mlir::ModuleOp patch_module
         );
+
         void replace_call(
-            cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+            cir::CallOp call_op, const PatchMatch &match, const PatchInfo &patch,
             mlir::ModuleOp patch_module
         );
 
