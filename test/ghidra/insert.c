@@ -1,7 +1,8 @@
 // UNSUPPORTED: system-windows
 // RUN: %cc-x86_64 %s -g -c -o %t.o
-// RUN: %decompile-headless --input %t.o --function insert_substring --output %t
-// %ci_output_folder
+// RUN: %decompile-headless --input %t.o --function insert_substring --output %t %ci_output_folder
+// RUN: %file-check -vv --check-prefix=DECOMPILES %s --input-file %t
+// DECOMPILES: "name":"{{_?insert_substring}}"
 
 // RUN: %decompile-headless --input %t.o --output %t %ci_output_folder
 // RUN: %file-check -vv --check-prefix=DECOMPILEA %s --input-file %t
