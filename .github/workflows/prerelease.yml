@@ -18,10 +18,10 @@ on:
 permissions: write-all
 
 jobs:
-  build:
+  build_prerelease:
     strategy:
       matrix:
-        llvm-version: [18]
+        llvm-version: [20]
         image-version: [22.04]
 
     name: "Pre Release"
@@ -73,7 +73,7 @@ jobs:
   build_doc:
     strategy:
       matrix:
-        llvm-version: [18]
+        llvm-version: [20]
         image-version: [22.04]
     name: "Build Patchestry doc"
     runs-on: ubuntu-${{ matrix.image-version }}
@@ -88,6 +88,10 @@ jobs:
         LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
 
     steps:
+      - name: Clean Docker to prevent space issues
+        run: |
+          docker system prune -af --volumes || true
+
       - name: Clone the Patchestry repository
         uses: actions/checkout@v4
         with:
@@ -95,7 +99,7 @@ jobs:
           fetch-depth: 1
 
       - name: Configure build
-        run: cmake --preset ci
+        run: cmake --preset ci -DLLVM_Z3_INSTALL_DIR=/usr/local
 
       - name: Build Patchestry Doc
         run: cmake --build --preset ci-release --target mlir-doc
