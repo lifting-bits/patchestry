@@ -110,6 +110,7 @@ import ghidra.program.model.symbol.ExternalManager;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
+import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolType;
 import ghidra.program.model.symbol.SymbolTable;
@@ -1431,6 +1432,204 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
 			return true;
 		}
+
+		private DataType normalizeDataType(DataType dt) throws Exception {
+			if (dt instanceof TypeDef) {
+				return ((TypeDef) dt).getBaseDataType();
+			}
+			return dt;
+		}
+
+		private DataType getArgumentType(Function callee, int param_index) {
+			if (callee == null || param_index < 0) {
+				return null;
+			}
+
+			FunctionSignature signature = callee.getSignature();
+			if (signature == null) {
+				return null;
+			}
+
+			ParameterDefinition[] params = signature.getArguments();
+			if (params == null || param_index >= params.length) {
+				return null;
+			}
+
+			ParameterDefinition param = params[param_index];
+			return param != null ? param.getDataType() : null;
+		}
+
+		private Function resolveCalledFunction(Varnode target_node, Address caller) {
+			if (!target_node.isAddress()) {
+				return null;
+			}
+
+			Address target_address = caller.getNewAddress(target_node.getOffset());
+			// Try to get function at the target address
+			Function callee = fm.getFunctionAt(target_address);
+			if (callee == null) {
+				callee = fm.getReferencedFunction(target_address);
+			}
+
+			return callee;
+		}
+
+		private boolean needsCastOperation(DataType var_type, DataType arg_type) {
+			if (var_type.getLength() <= 0 || arg_type.getLength() <= 0) {
+				return false;
+			}
+
+			// TODO: Identify cases where we need explicit CAST operations to handle conversions.
+ 			//       Some cases like pointer conversion between different types or type conversion
+			//       of builtin types are already handled during AST generation.
+
+			// Handle float to int and int to float conversion
+			if ((var_type instanceof AbstractFloatDataType && arg_type instanceof AbstractIntegerDataType) ||
+				(var_type instanceof AbstractIntegerDataType && arg_type instanceof AbstractFloatDataType)) {
+				return true;
+			}
+
+			if ((var_type instanceof Pointer && arg_type instanceof AbstractIntegerDataType) ||
+				(var_type instanceof AbstractIntegerDataType && arg_type instanceof Pointer)) {
+				return true;
+			}
+
+			if ((var_type instanceof Enum && arg_type instanceof AbstractIntegerDataType) ||
+				(var_type instanceof AbstractIntegerDataType && arg_type instanceof Enum)) {
+				return true;
+			}
+
+			// TODO: Handle conversion of undefined array to int or packed struct
+
+			return false;
+		}
+
+
+		private boolean needsAddressOfConversion(DataType var_type, DataType arg_type) {
+			return ((var_type instanceof Composite) || (var_type instanceof Array)) && (arg_type instanceof Pointer);
+		}
+
+		private boolean typesAreCompatible(DataType var_type, DataType arg_type) {
+			return (var_type == arg_type) || ((var_type instanceof Pointer) && (arg_type instanceof Pointer));
+		}
+
+
+		private boolean rewriteCallArgument(
+				HighFunction high_function, PcodeOp call_op) throws Exception {
+			Address caller_address = high_function.getFunction().getEntryPoint();
+			Varnode call_target_node = call_op.getInput(0);
+
+			Function callee = resolveCalledFunction(call_target_node, caller_address);
+			if (callee == null) {
+				// If the function cannot be resolved, we can't properly rewrite arguments
+				return false;
+			}
+
+			DataTypeManager dtm = program.getDataTypeManager();
+			Address op_loc = call_op.getSeqnum().getTarget();
+			List<PcodeOp> prefix_ops = getOrCreatePrefixOperations(call_op);
+
+			boolean modified = false;
+
+			for (int i = 1; i < call_op.getInputs().length; i++) {
+				Varnode input = call_op.getInput(i);
+				HighVariable var = input.getHigh();
+
+				// Note: Check variable classification type and don't check for argument mismatch if
+				//       it is of type UNKNOWN or CONSTANT
+				VariableClassification vclass = classifyVariable(variableOf(var));
+				if ((vclass == VariableClassification.UNKNOWN) || (vclass == VariableClassification.CONSTANT)) {
+					continue;
+				}
+
+				DataType var_type = normalizeDataType(var.getDataType());
+				DataType arg_type = normalizeDataType(getArgumentType(callee, i-1));
+
+				// Skip if types match or both are compatible for implicit conversion
+				if (var_type == null || arg_type == null
+					|| typesAreCompatible(var_type, arg_type)) {
+					continue;
+				}
+
+				if (needsAddressOfConversion(var_type, arg_type)) {
+					Address address = nextUniqueAddress();
+					SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
+					DefinitionVarnode def = new DefinitionVarnode(address, var_type.getLength());
+					UseVarnode use = new UseVarnode(address, def.getSize());
+					PcodeOp address_of = createAddressOf(def, loc, input);
+					prefix_ops.add(address_of);
+
+					Varnode[] instances = new Varnode[2];
+					instances[0] = address_of.getOutput();
+					instances[1] = use;
+					DataType node_type = dtm.getPointer(var_type);
+					HighVariable tracker = new HighTemporary(
+						node_type, instances[0], instances, op_loc, high_function);
+
+					def.setDef(tracker, address_of);
+					use.setHigh(tracker);
+					call_op.setInput(use, i);
+					modified = true;
+
+				} else if (needsCastOperation(var_type, arg_type)) {
+					Address address = nextUniqueAddress();
+					SequenceNumber loc = new SequenceNumber(address, next_seqnum++);
+					DefinitionVarnode def = new DefinitionVarnode(address, var_type.getLength());
+
+					Varnode cast_output = new DefinitionVarnode(address, arg_type.getLength());
+					PcodeOp cast_op = new PcodeOp(loc, PcodeOp.CAST, new Varnode[] { input }, def);
+					cast_op.setOutput(cast_output);
+
+					UseVarnode use = new UseVarnode(address, cast_output.getSize());
+					prefix_ops.add(cast_op);
+
+					// Set up the high variables
+					Varnode[] instances = new Varnode[2];
+					instances[0] = cast_output;
+					instances[1] = use;
+
+					HighVariable tracker = new HighTemporary(
+						arg_type, instances[0], instances, op_loc, high_function);
+
+					((DefinitionVarnode)cast_output).setDef(tracker, cast_op);
+					use.setHigh(tracker);
+
+					// Update the call operation to use the cast result
+					call_op.setInput(use, i);
+					modified = true;
+				}
+			}
+			return modified;
+		}
+
+		private boolean rewriteVoidReturnType(
+				HighFunction high_function, PcodeOp call_op) throws Exception {
+			Address caller_address = high_function.getFunction().getEntryPoint();
+			Varnode call_target_node = call_op.getInput(0);
+			Function callee = resolveCalledFunction(call_target_node, caller_address);
+			if (callee == null) {
+				// If the function cannot be resolved, we can't properly rewrite return type
+				return false;
+			}
+
+			// Only handle rewrite if return type is void but call_op output expects a non void return type
+			Varnode call_output = call_op.getOutput();
+			if (callee.getReturnType() != VoidDataType.dataType || call_output == null) {
+				return false;
+			}
+
+			HighVariable var = call_output.getHigh();
+			if (var == null) {
+				return false;
+			}
+
+			DataType fixed_rttype = var.getDataType();
+			if (fixed_rttype == null) {
+				return false;
+			}
+			callee.setReturnType(fixed_rttype, SourceType.DEFAULT);
+			return true;
+		}
 		
 		// Get or create a prefix operations list. These are operations that
 		// will precede `op` in our serialization, regardless of whether or
@@ -1630,6 +1829,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 									return false;
 								}
 							}
+							break;
+						case PcodeOp.CALL:
+							// Rewrite call argument if there is type mismatch and can't be
+							// handled during AST generation
+							rewriteCallArgument(high_function, op);
+							// Rewrite return type if the function retuns void but pcode op has 
+							// valid output varnode.
+							rewriteVoidReturnType(high_function, op);
 							break;
 						case PcodeOp.PTRSUB:
 							if (!rewritePtrSubcomponent(high_function, op, cdci)) {
