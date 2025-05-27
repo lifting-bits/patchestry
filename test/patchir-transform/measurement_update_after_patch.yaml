@@ -1,0 +1,14 @@
+arch: "ARM:LE:32"
+patches: 
+  - name: "apply_after_spo2_lookup"
+    match:
+      symbol: "spo2_lookup"
+      kind: "function"
+    patch:
+      mode: "ApplyAfter"
+      patch_file: "patch_spo2_lookup.c"
+      patch_function: "patch::after::spo2_lookup"
+      arguments:
+        - "return_value"
+    exclude:
+      - ""
