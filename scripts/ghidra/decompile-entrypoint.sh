@@ -131,6 +131,10 @@ ARCHITECTURE=""
 # "what compiler was used to compile the input binary", i.e., if a binary was
 # originally compiled with clang for linux, you'd still put default for
 # the variant string.
+#
+# Currently, this function is specific to ELF architecture detection, and covers
+# the bare basics of PE architecture detection.
+# todo(kaoudis) Future work should include more support for binary blob, and PE.
 function detect_processor {
     local file_output=$(file "$INPUT_FILE")
 
