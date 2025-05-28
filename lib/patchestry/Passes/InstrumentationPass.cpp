@@ -40,6 +40,7 @@
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Dialect.h>
+#include <mlir/IR/IRMapping.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/OwningOpRef.h>
@@ -286,11 +287,13 @@ namespace patchestry::passes {
 
     } // namespace
 
-    std::unique_ptr< mlir::Pass > createInstrumentationPass(const std::string &spec_file) {
-        return std::make_unique< InstrumentationPass >(spec_file);
+    std::unique_ptr< mlir::Pass >
+    createInstrumentationPass(const std::string &spec_file, InlineOptions &inline_options) {
+        return std::make_unique< InstrumentationPass >(spec_file, inline_options);
     }
 
-    InstrumentationPass::InstrumentationPass(std::string spec) : spec_file(std::move(spec)) {
+    InstrumentationPass::InstrumentationPass(std::string spec, InlineOptions &inline_options)
+        : spec_file(std::move(spec)), inline_options(inline_options) {
         auto buffer_or_err = llvm::MemoryBuffer::getFile(spec_file);
         if (!buffer_or_err) {
             LOG(ERROR) << "Error: Failed to read patch specification file: " << spec_file
@@ -361,6 +364,13 @@ namespace patchestry::passes {
         for (auto *op : operation_worklist) {
             instrument_operation(op);
         }
+
+        // Inline inserted call operation
+        if (inline_options.enable_inlining) {
+            for (auto *op : inline_worklists) {
+                std::ignore = inline_call(mod, mlir::cast< cir::CallOp >(op));
+            }
+        }
     }
 
     void InstrumentationPass::instrument_operation(mlir::Operation *op) {
@@ -393,8 +403,9 @@ namespace patchestry::passes {
                         LOG(ERROR) << "Replace mode not supported for operations\n";
                         break;
                     default:
-                        LOG(ERROR) << "Unsupported patch mode: " << patchInfoModeToString(patch.mode)
-                                   << " for operation: " << op->getName().getStringRef().str() << "\n";
+                        LOG(ERROR)
+                            << "Unsupported patch mode: " << patchInfoModeToString(patch.mode)
+                            << " for operation: " << op->getName().getStringRef().str() << "\n";
                         break;
                 }
                 (void) match;
@@ -467,10 +478,10 @@ namespace patchestry::passes {
      * @param args The vector to store the prepared arguments.
      */
     void InstrumentationPass::prepare_call_arguments(
-        mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
+        mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
         const PatchInfo &patch, llvm::SmallVector< mlir::Value > &args
     ) {
-        if (op->getNumOperands() == 0) {
+        if (call_op->getNumOperands() == 0) {
             assert(patch.arguments.empty() && "Patch arguments are not empty");
             assert(
                 patch_func.getNumArguments() == 0 && "Patch function arguments are not empty"
@@ -478,7 +489,7 @@ namespace patchestry::passes {
             return;
         }
 
-        if (patch_func.getNumArguments() > op->getNumOperands()) {
+        if (patch_func.getNumArguments() > call_op->getNumOperands()) {
             LOG(ERROR) << "Number of arguments in patch is greater than the number of "
                           "arguments in the call operation\n";
             return;
@@ -486,21 +497,22 @@ namespace patchestry::passes {
 
         // Check if patch function argument is taking return value
         if (patch.arguments.size() == 1 && patch.arguments[0] == "return_value") {
-            if (op->getResultTypes().size() == 0) {
+            if (call_op->getResultTypes().size() == 0) {
                 LOG(ERROR) << "Call operation does not have a return value\n";
                 return;
             }
             auto patch_argument_type = patch_func.getArguments().front().getType();
-            auto call_return_type    = op->getResultTypes().front();
+            auto call_return_type    = call_op->getResultTypes().front();
             if (patch_argument_type != call_return_type) {
                 auto cast_op = builder.create< cir::CastOp >(
-                    op->getLoc(), patch_argument_type,
-                    getCastKind(call_return_type, patch_argument_type), op->getResults().front()
+                    call_op->getLoc(), patch_argument_type,
+                    getCastKind(call_return_type, patch_argument_type),
+                    call_op->getResults().front()
                 );
                 args.append(cast_op->getResults().begin(), cast_op->getResults().end());
                 return;
             }
-            args.append(op->getResults().begin(), op->getResults().end());
+            args.append(call_op->getResults().begin(), call_op->getResults().end());
             return;
         }
 
@@ -510,22 +522,22 @@ namespace patchestry::passes {
             }
 
             auto cast_op = builder.create< cir::CastOp >(
-                op->getLoc(), type, getCastKind(value.getType(), type), value
+                call_op->getLoc(), type, getCastKind(value.getType(), type), value
             );
             return cast_op->getResults().front();
         };
 
-        if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
             for (unsigned i = 0; i < patch.arguments.size(); i++) {
                 auto patch_arg_type = patch_func.getArgumentTypes()[i];
-                args.push_back(create_cast(call_op.getArgOperands()[i], patch_arg_type));
+                args.push_back(create_cast(orig_call_op.getArgOperands()[i], patch_arg_type));
             }
             return;
         }
 
         for (unsigned i = 0; i < patch.arguments.size(); i++) {
             auto patch_arg_type = patch_func.getArgumentTypes()[i];
-            args.push_back(create_cast(op->getOperands()[i], patch_arg_type));
+            args.push_back(create_cast(call_op->getOperands()[i], patch_arg_type));
         }
     }
 
@@ -578,10 +590,14 @@ namespace patchestry::passes {
             call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
         } else {
             mlir::NamedAttrList empty;
-            call_op->setAttr("extra_attrs", cir::ExtraFuncAttributesAttr::get(
-                op->getContext(), empty.getDictionary(op->getContext())
-            ));
+            call_op->setAttr(
+                "extra_attrs",
+                cir::ExtraFuncAttributesAttr::get(
+                    op->getContext(), empty.getDictionary(op->getContext())
+                )
+            );
         }
+        inline_worklists.push_back(call_op);
         (void) match;
     }
 
@@ -634,10 +650,14 @@ namespace patchestry::passes {
             call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
         } else {
             mlir::NamedAttrList empty;
-            call_op->setAttr("extra_attrs", cir::ExtraFuncAttributesAttr::get(
-                op->getContext(), empty.getDictionary(op->getContext())
-            ));
+            call_op->setAttr(
+                "extra_attrs",
+                cir::ExtraFuncAttributesAttr::get(
+                    op->getContext(), empty.getDictionary(op->getContext())
+                )
+            );
         }
+        inline_worklists.push_back(call_op);
         (void) match;
     }
 
@@ -696,6 +716,100 @@ namespace patchestry::passes {
         op.replaceAllUsesWith(wrap_call_op);
         op.erase();
         (void) match;
+    }
+
+    mlir::LogicalResult
+    InstrumentationPass::inline_call(mlir::ModuleOp module, cir::CallOp call_op) {
+        mlir::OpBuilder builder(call_op);
+        mlir::Location loc = call_op.getLoc();
+
+        auto callee = mlir::dyn_cast< cir::FuncOp >(
+            module.lookupSymbol< cir::FuncOp >(call_op.getCallee()->str())
+        );
+        if (!callee) {
+            LOG(ERROR) << "Callee not found in module\n";
+            return mlir::failure();
+        }
+
+        mlir::IRMapping mapper;
+        for (auto [arg, operand] : llvm::zip(callee.getArguments(), call_op.getArgOperands())) {
+            mapper.map(arg, operand);
+        }
+
+        // get caller block and split it at call site
+        mlir::Block *caller_block = call_op->getBlock();
+        mlir::Block *split_block  = caller_block->splitBlock(call_op->getIterator());
+
+        mlir::DenseMap< mlir::Block *, mlir::Block * > block_map;
+
+        // First pass: clone all blocks (without operations)
+        mlir::Region &callee_region = callee.getBody();
+        for (mlir::Block &block : callee_region) {
+            mlir::Block *cloned_block = new mlir::Block();
+
+            for (mlir::BlockArgument arg : block.getArguments()) {
+                cloned_block->addArgument(arg.getType(), arg.getLoc());
+            }
+
+            caller_block->getParent()->getBlocks().insert(
+                split_block->getIterator(), cloned_block
+            );
+            block_map[&block] = cloned_block;
+        }
+
+        // Second pass: clone operations and fix up block references
+        for (mlir::Block &orig_block : callee_region) {
+            mlir::Block *cloned_block = block_map[&orig_block];
+            builder.setInsertionPointToEnd(cloned_block);
+
+            for (mlir::Operation &op : orig_block) {
+                if (op.hasTrait< mlir::OpTrait::IsTerminator >()) {
+                    if (auto return_op = dyn_cast< cir::ReturnOp >(&op)) {
+                        // Handle return operation - branch to continue block
+                        mlir::SmallVector< mlir::Value > results;
+                        for (mlir::Value result : return_op.getOperands()) {
+                            results.push_back(mapper.lookup(result));
+                        }
+
+                        // Replace call results and branch to continue block
+                        for (auto [callResult, returnValue] :
+                             llvm::zip(call_op.getResults(), results))
+                        {
+                            callResult.replaceAllUsesWith(returnValue);
+                        }
+
+                        builder.create< cir::BrOp >(loc, split_block);
+                    } else if (auto branch_op = dyn_cast< cir::BrOp >(&op)) {
+                        // Fix branch destinations
+                        mlir::Block *targetBlock = block_map[branch_op.getDest()];
+                        mlir::SmallVector< mlir::Value > operands;
+                        for (mlir::Value operand : branch_op.getDestOperands()) {
+                            operands.push_back(mapper.lookup(operand));
+                        }
+                        builder.create< cir::BrOp >(loc, targetBlock, operands);
+                    }
+                } else {
+                    // Clone regular operations
+                    builder.clone(op, mapper);
+                }
+            }
+        }
+
+        mlir::Block *callee_entry_block = block_map[&callee_region.front()];
+        builder.setInsertionPointToEnd(caller_block);
+
+        // If entry block has arguments, pass them from the call operands
+        mlir::SmallVector< mlir::Value > entry_args;
+        for (mlir::Value arg : callee.getArguments()) {
+            entry_args.push_back(mapper.lookup(arg));
+        }
+        builder.create< cir::BrOp >(loc, callee_entry_block, entry_args);
+
+        // Remove the original call
+        call_op.erase();
+        callee.erase();
+
+        return mlir::success();
     }
 
     /**

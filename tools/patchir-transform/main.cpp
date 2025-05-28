@@ -20,6 +20,7 @@
 #include <mlir/Support/LLVM.h>
 #include <mlir/Target/LLVMIR/Dialect/All.h>
 #include <mlir/Tools/mlir-opt/MlirOptMain.h>
+#include <mlir/Transforms/Passes.h>
 
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
@@ -52,6 +53,11 @@ namespace patchestry::cl {
         llvm::cl::init(true), llvm::cl::cat(category)
     );
 
+    const cl::opt< bool > enable_inlining( // NOLINT(cert-err58-cpp)
+        "enable-inlining", llvm::cl::desc("Enable inlining of patch functions"),
+        llvm::cl::init(false), llvm::cl::cat(category)
+    );
+
 } // namespace patchestry::cl
 
 using namespace patchestry::cl;
@@ -75,7 +81,8 @@ namespace patchestry::instrumentation {
 
         if (enable_instrumentation.getValue()) {
             mlir::PassManager pm(&context);
-            pm.addPass(patchestry::passes::createInstrumentationPass(spec_filename.getValue()));
+            patchestry::passes::InlineOptions inline_options = {enable_inlining.getValue()};
+            pm.addPass(patchestry::passes::createInstrumentationPass(spec_filename.getValue(), inline_options));
             if (mlir::failed(pm.run(*module))) {
                 LOG(ERROR) << "Failed to run instrumentation passes\n";
                 return mlir::failure();
@@ -112,7 +119,6 @@ int main(int argc, char **argv) {
     registry.insert< cir::CIRDialect >();
 
     mlir::MLIRContext context(registry);
-
     return mlir::failed(patchestry::instrumentation::run(context)) ? EXIT_FAILURE
                                                                    : EXIT_SUCCESS;
 }

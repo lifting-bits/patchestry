@@ -102,6 +102,7 @@ namespace patchestry::passes {
                 case PatchInfoMode::REPLACE:
                     return "REPLACE";
             }
+            return "UNKNOWN";
         }
     }
 }; // namespace patchestry::passes

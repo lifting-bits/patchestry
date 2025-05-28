@@ -20,23 +20,33 @@
 #include <mlir/Pass/Pass.h>
 #include <mlir/Pass/PassOptions.h>
 #include <mlir/Support/LLVM.h>
+#include <mlir/Transforms/InliningUtils.h>
 
 #include <patchestry/Passes/PatchSpec.hpp>
 
 namespace patchestry::passes {
 
+    struct InlineOptions;
+
     void registerInstrumentationPasses(std::string spec_file);
 
-    std::unique_ptr< mlir::Pass > createInstrumentationPass(const std::string &spec_file);
+    std::unique_ptr< mlir::Pass > createInstrumentationPass(const std::string &spec_file, InlineOptions &inline_options);
+
+    struct InlineOptions {
+        bool enable_inlining;
+    };
+
 
     class InstrumentationPass
         : public mlir::PassWrapper< InstrumentationPass, mlir::OperationPass< mlir::ModuleOp > >
     {
         std::string spec_file;
         std::optional< PatchConfiguration > config;
+        std::vector<mlir::Operation *> inline_worklists;
+        InlineOptions &inline_options;
 
       public:
-        explicit InstrumentationPass(std::string spec);
+        explicit InstrumentationPass(std::string spec, InlineOptions &inline_options);
 
         void runOnOperation() final;
 
@@ -63,6 +73,8 @@ namespace patchestry::passes {
             cir::CallOp call_op, const PatchMatch &match, const PatchInfo &patch,
             mlir::ModuleOp patch_module
         );
+
+        mlir::LogicalResult inline_call(mlir::ModuleOp module, cir::CallOp call_op);
 
         mlir::OwningOpRef< mlir::ModuleOp >
         load_patch_module(mlir::MLIRContext &ctx, const std::string &patch_string);
