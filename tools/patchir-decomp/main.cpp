@@ -75,8 +75,8 @@ namespace {
         "verbose", llvm::cl::desc("Enable debug logs"), llvm::cl::init(false)
     ); // NOLINT(cert-err58-cpp)
 
-    const llvm::cl::opt< bool > use_remill_transform( // NOLINT(cert-err58-cpp)
-        "use_remill_transform", llvm::cl::desc("Enable remill decompilation transform"),
+    const llvm::cl::opt< bool > use_rellic_transform( // NOLINT(cert-err58-cpp)
+        "use-rellic-transform", llvm::cl::desc("Enable rellic decompilation transform"),
         llvm::cl::init(true)
     ); // NOLINT(cert-err58-cpp)
 
@@ -96,7 +96,7 @@ namespace {
             .emit_asm             = emit_asm.getValue(),
             .emit_obj             = emit_obj.getValue(),
             .verbose              = verbose.getValue(),
-            .use_remill_transform = use_remill_transform.getValue(),
+            .use_rellic_transform = use_rellic_transform.getValue(),
             .output_file          = output_filename.getValue(),
             .input_file           = input_filename.getValue(),
             .print_tu             = print_tu.getValue(),
