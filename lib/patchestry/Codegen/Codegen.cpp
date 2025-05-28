@@ -91,12 +91,12 @@ namespace patchestry::codegen {
                 return {};
             }
 
-            // Decompile llvm IR using remill
-            rellic::DecompilationOptions opts{ 
-		    .lower_switches   		= false,
-                    .remove_phi_nodes 		= false,
-		    .additional_providers 	= {},
-	    };
+            // Decompile llvm IR using rellic
+            rellic::DecompilationOptions opts{
+                .lower_switches       = false,
+                .remove_phi_nodes     = false,
+                .additional_providers = {},
+            };
             auto results = rellic::Decompile(std::move(llvm_mod), std::move(opts));
             if (!results.Succeeded()) {
                 LOG(ERROR) << "Failed to decompile LLVM ir for transforming AST"
@@ -104,22 +104,7 @@ namespace patchestry::codegen {
                 return {};
             }
 
-            auto value = results.TakeValue();
-            if (options.print_tu) {
-#ifdef ENABLE_DEBUG
-                value.ast->getASTContext().getTranslationUnitDecl()->dumpColor();
-#endif
-                std::error_code ec;
-                auto out = std::make_unique< llvm::raw_fd_ostream >(
-                    options.output_file + ".c", ec, llvm::sys::fs::OF_Text
-                );
-                value.ast->getASTContext().getTranslationUnitDecl()->print(
-                    *llvm::dyn_cast< llvm::raw_ostream >(out),
-                    value.ast->getASTContext().getPrintingPolicy(), 0
-                );
-            }
-
-            return value;
+            return results.TakeValue();
         };
 
         // Check if diagnostic error is set. If yes, ignore it.
@@ -127,7 +112,7 @@ namespace patchestry::codegen {
             actx.getDiagnostics().Reset();
         }
 
-        if (options.use_remill_transform) {
+        if (options.use_rellic_transform) {
             auto results = transform_ast(actx);
             if (results && results->ast) {
                 emit_cir(results->ast->getASTContext(), options);
@@ -141,6 +126,20 @@ namespace patchestry::codegen {
     }
 
     void CodeGenerator::emit_cir(clang::ASTContext &ctx, const patchestry::Options &options) {
+        if (options.print_tu) {
+            LOG(INFO) << "Printing AST\n";
+#ifdef ENABLE_DEBUG
+            value.ast->getASTContext().getTranslationUnitDecl()->dumpColor();
+#endif
+            std::error_code ec;
+            auto out = std::make_unique< llvm::raw_fd_ostream >(
+                options.output_file + ".c", ec, llvm::sys::fs::OF_Text
+            );
+            ctx.getTranslationUnitDecl()->print(
+                *llvm::dyn_cast< llvm::raw_ostream >(out), ctx.getPrintingPolicy(), 0
+            );
+        }
+
         auto maybe_mod = lower_ast_to_mlir(ctx);
         if (!maybe_mod.has_value()) {
             LOG(ERROR) << "Failed to emit mlir module\n";
