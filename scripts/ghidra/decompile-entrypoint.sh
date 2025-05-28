@@ -164,13 +164,25 @@ function detect_processor {
 			variant="v8A"
 			;;
 		ARM*|armv*)
-			variant="v7"
+			variant="v7" # also includes/will be used for Cortex-A
 			processor_name="ARM"
 
 			local arm_attrs=$(readelf -A "$INPUT_FILE" 2>/dev/null)
 			if [[ "$arm_attrs" == *"Tag_CPU_arch: v8"* ]]; then
 				variant="v8"
-			elif [[ "$arm_attrs" == *"Cortex-M"* ]] || readelf -S "$INPUT_FILE" | grep -q -E "\.text.*08000000|\.data.*20000000"; then
+			# If we're using the Cortex variant, the binary uses Thumb (T32) 
+			# instructions and we want Ghidra to correspondingly/correctly 
+			# disassemble them. While we *hope* if we get here that the ELF 
+			# attributes show that the binary is compiled for a Cortex 
+			# microcontroller, we fall back to section-addressing as attribs
+			# are not always present (eg, for a raw .bin or an Intel HEX file,
+			# or if ELF attributes are otherwise stripped). 
+			#
+			# Section addressing varies for other archs, 
+			# but 0x20000000 is by standard the start of SRAM for Cortex-M.
+			# https://developer.arm.com/documentation/dui0646/c/The-Cortex-M7-Processor/Memory-model
+			# https://developer.arm.com/documentation/dui0662/latest/The-Cortex-M0--Processor/Memory-model 
+			elif [[ "$arm_attrs" == *"Cortex-M"* ]] || [[ "$arm_attrs" == *"Tag_CPU_arch_profile: Microcontroller"* ]] || readelf -S "$INPUT_FILE" | grep -q -E "\.data.*20000000"; then
 				variant="Cortex"
 			elif [[ "$file_output" == *"EABI2"* || "$file_output" == *"EABI1"* ]]; then
 				variant="v5"
