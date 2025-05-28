@@ -76,7 +76,7 @@ namespace {
     ); // NOLINT(cert-err58-cpp)
 
     const llvm::cl::opt< bool > use_rellic_transform( // NOLINT(cert-err58-cpp)
-        "use_rellic_transform", llvm::cl::desc("Enable rellic decompilation transform"),
+        "use-rellic-transform", llvm::cl::desc("Enable rellic decompilation transform"),
         llvm::cl::init(true)
     ); // NOLINT(cert-err58-cpp)
 
@@ -216,7 +216,6 @@ namespace {
 
 int main(int argc, char **argv) {
     auto options = parseCommandLineOptions(argc, argv);
-    llvm::outs() << "use rellic transform: " << options.use_rellic_transform << "\n";
 
     llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
         llvm::MemoryBuffer::getFile(options.input_file);

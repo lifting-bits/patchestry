@@ -94,7 +94,10 @@ namespace patchestry::codegen {
             // Decompile llvm IR using rellic
             rellic::DecompilationOptions opts{
                 .lower_switches       = false,
-                .remove_phi_nodes     = false,
+                // https://github.com/lifting-bits/rellic/issues/102
+                // If there are Phi nodes, it can't be converted back to AST. Enable removing
+                // phi node before decompiling.
+                .remove_phi_nodes     = true,
                 .additional_providers = {},
             };
             auto results = rellic::Decompile(std::move(llvm_mod), std::move(opts));
