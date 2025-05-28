@@ -6,13 +6,13 @@ patches:
       kind: "function"
       argument_matches:
         - index: 0
-          name: "SVar5"
+          name: "var6"
           type: "SFtype"
     patch:
       mode: "ApplyBefore"
       patch_file: "patch_spo2_lookup.c"
       patch_function: "patch::before::spo2_lookup"
       arguments:
-        - "SVar5"
+        - "var6"
     exclude:
       - ""

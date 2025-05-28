@@ -27,7 +27,7 @@ namespace patchestry::passes {
 
     struct ArgumentMatch
     {
-        int index;
+        unsigned index;
         std::string name;
         std::string type;
     };
@@ -104,7 +104,7 @@ namespace patchestry::passes {
             }
             return "UNKNOWN";
         }
-    }
+    } // namespace
 }; // namespace patchestry::passes
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchSpec)

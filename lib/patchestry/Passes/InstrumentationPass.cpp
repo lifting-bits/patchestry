@@ -12,6 +12,7 @@
 #include <mlir/IR/ValueRange.h>
 #include <optional>
 #include <set>
+#include <string_view>
 
 #define GET_TYPEDEF_CLASSES
 #include "clang/CIR/Dialect/IR/CIRAttrs.h"
@@ -326,6 +327,57 @@ namespace patchestry::passes {
 #endif
     }
 
+    namespace {
+        bool matchVariableOperand(
+            mlir::Operation *op, std::string_view name, std::string_view type
+        ) {
+            for (const auto &operand : op->getOperands()) {
+                auto *defining_op = operand.getDefiningOp();
+                if (!defining_op) {
+                    continue;
+                }
+                auto op_name = defining_op->getName().getStringRef().str();
+                if (op_name == name) {
+                    return true;
+                }
+            }
+
+            (void) type;
+            return false;
+        }
+
+        bool
+        matchCallArguments(mlir::Operation *op, const std::vector< ArgumentMatch > &matches) {
+            // if there are no arguments to match, return true
+            if (matches.empty()) {
+                llvm::outs() << "No arguments to match\n";
+                return true;
+            }
+            llvm::outs() << "Matching arguments: " << matches.size() << "\n";
+
+            // if the operation is not a call, return false
+            if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+                for (const auto &match : matches) {
+                    if (match.index >= static_cast< unsigned >(call_op.getNumOperands())) {
+                        return false;
+                    }
+                    if (match.name
+                        != call_op.getArgOperands()[match.index]
+                               .getDefiningOp()
+                               ->getName()
+                               .getStringRef()
+                               .str())
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            return false;
+        }
+    } // namespace
+
     /**
      * @brief Applies instrumentation to the MLIR module based on the patch specifications.
      *        The function iterates through all functions in the module and applies the
@@ -380,7 +432,12 @@ namespace patchestry::passes {
         }
 
         for (const auto &spec : config->patches) {
-            if (spec.match.operation == op->getName().getStringRef().str()) {
+            if (spec.match.operation == op->getName().getStringRef().str()
+                && matchVariableOperand(
+                    op, spec.match.variable_matches.front().name,
+                    spec.match.variable_matches.front().type
+                ))
+            {
                 const auto &match = spec.match;
                 const auto &patch = spec.patch;
                 auto patch_module = load_patch_module(*op->getContext(), *patch.patch_module);
@@ -435,7 +492,10 @@ namespace patchestry::passes {
                 [&](const PatchSpec &spec) { return spec.match.symbol == callee_name; }
             );
 
-            if (patch_spec != config->patches.end()) {
+            if (patch_spec != config->patches.end()
+                && matchCallArguments(op, patch_spec->match.argument_matches))
+            {
+                llvm::outs() << "Match found for function: " << callee_name << "\n";
                 const auto &match = patch_spec->match;
                 const auto &patch = patch_spec->patch;
                 // Create module from the patch file mlir representation
