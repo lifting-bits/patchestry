@@ -11,6 +11,7 @@
 #include <mlir/IR/Value.h>
 #include <mlir/IR/ValueRange.h>
 #include <optional>
+#include <regex>
 #include <set>
 #include <string_view>
 
@@ -73,6 +74,16 @@ namespace patchestry::passes {
     emitModuleAsString(const std::string &filename, const std::string &lang); // NOLINT
 
     namespace {
+        /**
+         * @brief Converts a string to a valid function name by replacing invalid characters.
+         *
+         * This function takes a string and converts it to a valid function name by replacing
+         * any non-alphanumeric characters (except underscores) with underscores. This is used
+         * to ensure patch function names are valid identifiers.
+         *
+         * @param str The input string to convert
+         * @return std::string The converted function name
+         */
         std::string namifyPatchFunction(const std::string &str) {
             std::string result;
             for (char c : str) {
@@ -85,6 +96,17 @@ namespace patchestry::passes {
             return result;
         }
 
+        /**
+         * @brief Classifies an MLIR type into a category for cast kind determination.
+         *
+         * This function examines an MLIR type and classifies it into one of several categories
+         * (Boolean, Integer, Float, Pointer, Array, ComplexInt, ComplexFloat, or None).
+         * This classification is used to determine the appropriate cast kind when converting
+         * between different types.
+         *
+         * @param ty The MLIR type to classify
+         * @return TypeCategory The category of the type
+         */
         TypeCategory classifyType(mlir::Type ty) {
             if (!ty) {
                 return TypeCategory::None;
@@ -117,6 +139,16 @@ namespace patchestry::passes {
             return TypeCategory::None;
         }
 
+        /**
+         * @brief Parses patch specifications from a YAML string.
+         *
+         * This function takes a YAML string containing patch specifications and parses it
+         * into a PatchConfiguration object. It uses LLVM's YAML parsing infrastructure
+         * to deserialize the configuration.
+         *
+         * @param yaml_str The YAML string to parse
+         * @return llvm::Expected<PatchConfiguration> The parsed configuration or an error
+         */
         llvm::Expected< patchestry::passes::PatchConfiguration >
         parseSpecifications(llvm::StringRef yaml_str) {
             llvm::SourceMgr sm;
@@ -181,6 +213,17 @@ namespace patchestry::passes {
         }
 #endif
 
+        /**
+         * @brief Determines the appropriate CIR cast kind for converting between two types.
+         *
+         * This function analyzes the source and destination types and determines the
+         * appropriate CIR cast kind to use for the conversion. It handles various type
+         * conversions including integer, float, boolean, pointer, array, and complex types.
+         *
+         * @param from The source type
+         * @param to The destination type
+         * @return cir::CastKind The appropriate cast kind for the conversion
+         */
         cir::CastKind getCastKind(mlir::Type from, mlir::Type to) {
             auto from_category = classifyType(from);
             auto to_category   = classifyType(to);
@@ -288,11 +331,32 @@ namespace patchestry::passes {
 
     } // namespace
 
+    /**
+     * @brief Creates a new instance of the InstrumentationPass.
+     *
+     * Factory function that creates and returns a unique pointer to an InstrumentationPass
+     * instance. The pass will apply patches according to the specifications in the provided
+     * spec_file and use the given inline options for controlling inlining behavior.
+     *
+     * @param spec_file Path to the YAML patch specification file
+     * @param inline_options Configuration options for controlling function inlining behavior
+     * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
+     */
     std::unique_ptr< mlir::Pass >
     createInstrumentationPass(const std::string &spec_file, InlineOptions &inline_options) {
         return std::make_unique< InstrumentationPass >(spec_file, inline_options);
     }
 
+    /**
+     * @brief Constructs an InstrumentationPass with the given specification file and options.
+     *
+     * The constructor loads and parses the patch specification file, validates patch files,
+     * and prepares the pass for execution. If the specification file cannot be loaded or
+     * parsed, appropriate error messages are logged.
+     *
+     * @param spec Path to the YAML patch specification file
+     * @param inline_options Reference to inlining configuration options
+     */
     InstrumentationPass::InstrumentationPass(std::string spec, InlineOptions &inline_options)
         : spec_file(std::move(spec)), inline_options(inline_options) {
         auto buffer_or_err = llvm::MemoryBuffer::getFile(spec_file);
@@ -328,32 +392,96 @@ namespace patchestry::passes {
     }
 
     namespace {
-        bool matchVariableOperand(
-            mlir::Operation *op, std::string_view name, std::string_view type
-        ) {
+
+        /**
+         * @brief Retrieves the defining operation for a variable with the given name.
+         *
+         * This function unwraps load and cast operations to get the underlying variable
+         * definition. It searches through the operands of the given operation to find
+         * a variable with the specified name. It should be extended to handle other
+         * operand types for more comprehensive variable name matching.
+         *
+         * @param op The operation to search for variable operands
+         * @param name The name of the variable to find
+         * @return mlir::Operation* The defining operation for the variable, or nullptr if not
+         * found
+         */
+        mlir::Operation *getVariableDefiningOp(mlir::Operation *op, std::string_view name) {
             for (const auto &operand : op->getOperands()) {
                 auto *defining_op = operand.getDefiningOp();
-                if (!defining_op) {
+                if (defining_op == nullptr) {
                     continue;
                 }
-                auto op_name = defining_op->getName().getStringRef().str();
+                if (mlir::isa< cir::LoadOp, cir::CastOp >(defining_op)) {
+                    defining_op = defining_op->getOperand(0).getDefiningOp();
+                    if (defining_op == nullptr) {
+                        continue;
+                    }
+                }
+
+                // get name attribute from defining operation
+                auto op_name = mlir::dyn_cast< mlir::StringAttr >(defining_op->getAttr("name"));
                 if (op_name == name) {
-                    return true;
+                    return defining_op;
                 }
             }
 
-            (void) type;
-            return false;
+            return nullptr;
         }
 
+        /**
+         * @brief Checks if an operation's variable operands match the specified criteria.
+         *
+         * This function determines whether the variable operands of an operation match
+         * the variable matching criteria specified in the patch configuration. If no
+         * variables need to be matched, it returns true. It also handles cases where
+         * the defining operation is null (block arguments).
+         *
+         * @param op The operation to check for variable matches
+         * @param matches The vector of variable match criteria
+         * @return bool True if the operation matches the variable criteria, false otherwise
+         */
+        bool
+        matchVariableOperand(mlir::Operation *op, const std::vector< VariableMatch > &matches) {
+            // if there are no variables to match, return true
+            if (matches.empty()) {
+                return true;
+            }
+
+            // if defining operation is null, it could be a block argument
+            // we should return true in that case and patch for all block arguments
+            auto *defining_op = op->getOperand(0).getDefiningOp();
+            if (defining_op == nullptr) {
+                return true;
+            }
+
+            if (op->getNumOperands() < matches.size()) {
+                return false;
+            }
+
+            return std::ranges::any_of(matches, [&](const auto &match) {
+                return getVariableDefiningOp(op, match.name) != nullptr;
+            });
+        }
+
+        /**
+         * @brief Checks if a call operation's arguments match the specified criteria.
+         *
+         * This function determines whether the arguments of a call operation match
+         * the argument matching criteria specified in the patch configuration. It verifies
+         * that the operation is a call operation and that each specified argument
+         * matches the expected variable name and index.
+         *
+         * @param op The operation to check (should be a call operation)
+         * @param matches The vector of argument match criteria
+         * @return bool True if the call arguments match the criteria, false otherwise
+         */
         bool
         matchCallArguments(mlir::Operation *op, const std::vector< ArgumentMatch > &matches) {
             // if there are no arguments to match, return true
             if (matches.empty()) {
-                llvm::outs() << "No arguments to match\n";
                 return true;
             }
-            llvm::outs() << "Matching arguments: " << matches.size() << "\n";
 
             // if the operation is not a call, return false
             if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
@@ -361,19 +489,15 @@ namespace patchestry::passes {
                     if (match.index >= static_cast< unsigned >(call_op.getNumOperands())) {
                         return false;
                     }
-                    if (match.name
-                        != call_op.getArgOperands()[match.index]
-                               .getDefiningOp()
-                               ->getName()
-                               .getStringRef()
-                               .str())
-                    {
+                    auto *defining_op = getVariableDefiningOp(
+                        call_op.getArgOperand(match.index).getDefiningOp(), match.name
+                    );
+                    if (defining_op == nullptr) {
                         return false;
                     }
                 }
                 return true;
             }
-
             return false;
         }
     } // namespace
@@ -430,13 +554,12 @@ namespace patchestry::passes {
             LOG(ERROR) << "No patch configuration found. Skipping...\n";
             return;
         }
+        auto func = op->getParentOfType< cir::FuncOp >();
 
         for (const auto &spec : config->patches) {
             if (spec.match.operation == op->getName().getStringRef().str()
-                && matchVariableOperand(
-                    op, spec.match.variable_matches.front().name,
-                    spec.match.variable_matches.front().type
-                ))
+                && matchVariableOperand(op, spec.match.variable_matches)
+                && !exclude_from_patching(func, spec))
             {
                 const auto &match = spec.match;
                 const auto &patch = spec.patch;
@@ -493,9 +616,9 @@ namespace patchestry::passes {
             );
 
             if (patch_spec != config->patches.end()
-                && matchCallArguments(op, patch_spec->match.argument_matches))
+                && matchCallArguments(op, patch_spec->match.argument_matches)
+                && !exclude_from_patching(func, *patch_spec))
             {
-                llvm::outs() << "Match found for function: " << callee_name << "\n";
                 const auto &match = patch_spec->match;
                 const auto &patch = patch_spec->patch;
                 // Create module from the patch file mlir representation
@@ -1070,6 +1193,51 @@ namespace patchestry::passes {
         }
 
         return mlir::success();
+    }
+
+    /**
+     * @brief Determines if a function should be excluded from patching using regex checks.
+     *
+     * This method checks whether a given function should be excluded from the
+     * patching process based on the patch specification exclusion criteria.
+     * It uses regular expression matching to compare the function name against
+     * the exclusion patterns defined in the patch specification.
+     *
+     * @param func The function to check for exclusion
+     * @param spec The patch specification containing exclusion rules
+     * @return bool True if the function should be excluded, false otherwise
+     */
+    bool InstrumentationPass::exclude_from_patching(cir::FuncOp func, const PatchSpec &spec) {
+        // Get the function name
+        auto func_name = func.getName().str();
+
+        // If no exclusion patterns are specified, don't exclude
+        if (spec.exclude.empty()) {
+            return false;
+        }
+
+        // Check each exclusion pattern against the function name
+        for (const auto &pattern : spec.exclude) {
+            try {
+                // Create regex from the pattern
+                std::regex exclude_regex(pattern);
+
+                // Check if the function name matches the exclusion pattern
+                if (std::regex_match(func_name, exclude_regex)) {
+                    LOG(INFO) << "Function '" << func_name
+                              << "' excluded by pattern: " << pattern << "\n";
+                    return true;
+                }
+            } catch (const std::regex_error &e) {
+                LOG(ERROR) << "Invalid regex pattern in exclude list: '" << pattern
+                           << "' - Error: " << e.what() << "\n";
+                // Continue with other patterns even if one is invalid
+                continue;
+            }
+        }
+
+        // Function is not excluded by any pattern
+        return false;
     }
 
 } // namespace patchestry::passes
