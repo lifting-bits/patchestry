@@ -6,10 +6,8 @@
  */
 
 #include "patchestry/Passes/PatchSpec.hpp"
+
 #include <memory>
-#include <mlir/IR/Operation.h>
-#include <mlir/IR/Value.h>
-#include <mlir/IR/ValueRange.h>
 #include <optional>
 #include <regex>
 #include <set>
@@ -44,10 +42,13 @@
 #include <mlir/IR/Dialect.h>
 #include <mlir/IR/IRMapping.h>
 #include <mlir/IR/MLIRContext.h>
+#include <mlir/IR/Operation.h>
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/OwningOpRef.h>
 #include <mlir/IR/SymbolTable.h>
 #include <mlir/IR/Types.h>
+#include <mlir/IR/Value.h>
+#include <mlir/IR/ValueRange.h>
 #include <mlir/InitAllPasses.h>
 #include <mlir/Parser/Parser.h>
 #include <mlir/Pass/PassManager.h>
@@ -56,6 +57,8 @@
 
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/Util/Log.hpp>
+
+#include "NameResolver.h"
 
 namespace patchestry::passes {
 
@@ -517,6 +520,8 @@ namespace patchestry::passes {
         mlir::ModuleOp mod = getOperation();
         llvm::SmallVector< cir::FuncOp, 8 > function_worklist;
         llvm::SmallVector< mlir::Operation *, 8 > operation_worklist;
+
+        OperandNameResolver resolver(mod);
 
         // Second pass: gather all functions for later instrumentation
         mod.walk([&](mlir::Operation *op) {
@@ -1009,7 +1014,7 @@ namespace patchestry::passes {
     }
 
     /**
-     * @brief Merges a symbol from a source module into a destination module.
+     * @brief Merges symbol recursively from a source module into a destination module.
      *
      * @param dest The destination module.
      * @param src The source module.

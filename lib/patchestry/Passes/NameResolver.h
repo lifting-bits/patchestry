@@ -27,6 +27,8 @@ namespace patchestry::passes {
         // Check if an operand matches a name pattern
         bool operand_matches_pattern(mlir::Value operand, const std::string &pattern) const;
 
+        void dump_value_names(void);
+
       private:
         void build_value_names(mlir::Operation *op);
 

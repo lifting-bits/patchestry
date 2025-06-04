@@ -23,6 +23,10 @@ namespace patchestry::passes {
     OperandNameResolver::OperandNameResolver(mlir::Operation *root_op) : root_op(root_op) {
         if (root_op) {
             build_value_names(root_op);
+            for (auto &[value, name] : value_names) {
+                value.dump();
+                llvm::outs() << name << "\n";
+            }
         }
     }
 
