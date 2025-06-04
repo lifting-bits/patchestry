@@ -19,6 +19,7 @@ set(PE_INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}" CACHE PATH "Directory i
 set(PE_INSTALL_SHARE_DIR "${CMAKE_INSTALL_DATADIR}" CACHE PATH "Directory in which Multiplier CMake files will be installed")
 set(PE_VENDOR_INSTALL_DIR "${PROJECT_BINARY_DIR}/vendor/install" CACHE PATH "Directory in which multiplier's vendored dependencies are installed")
 
+option(PE_USE_VENDORED_Z3 "Set to OFF to disable default building of Z3 as a vendored library." ON)
 option(PE_USE_VENDORED_GLOG "Set to OFF to disable default building of Google glog as a vendored library." ON)
 option(PE_USE_VENDORED_GFLAGS "Set to OFF to disable default building of gflags as a vendored library." ON)
 option(PE_USE_VENDORED_CLANG "Set to OFF to disable default building of Clang/LLVM as a vendored library." OFF)
