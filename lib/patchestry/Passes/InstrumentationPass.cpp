@@ -5,8 +5,6 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include <patchestry/Util/Warnings.hpp>
-
 #include <memory>
 #include <optional>
 #include <regex>
@@ -37,7 +35,6 @@
 #include <llvm/TargetParser/Host.h>
 #include <llvm/TargetParser/Triple.h>
 
-PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/BuiltinOps.h>
@@ -54,13 +51,12 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
 #include <mlir/Pass/PassManager.h>
 #include <mlir/Pass/PassRegistry.h>
 #include <mlir/Support/LLVM.h>
-    PE_RELAX_WARNINGS_END // End of MLIR headers
 
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
 
-    namespace patchestry::passes {
+namespace patchestry::passes {
 
     enum class TypeCategory : std::uint8_t {
         None,
@@ -73,9 +69,8 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
         ComplexFloat
     };
 
-    std::optional< std::string > emitModuleAsString(
-        const std::string &filename, const std::string &lang
-    ); // NOLINT
+    std::optional< std::string >
+    emitModuleAsString(const std::string &filename, const std::string &lang); // NOLINT
 
     namespace {
         /**
@@ -355,9 +350,8 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
      * @param inline_options Configuration options for controlling function inlining behavior
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
-    std::unique_ptr< mlir::Pass > createInstrumentationPass(
-        const std::string &spec_file, const PatchOptions &patch_options
-    ) {
+    std::unique_ptr< mlir::Pass >
+    createInstrumentationPass(const std::string &spec_file, const PatchOptions &patch_options) {
         return std::make_unique< InstrumentationPass >(spec_file, patch_options);
     }
 
@@ -511,7 +505,7 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
      * @param args The vector to store the prepared arguments.
      */
     void InstrumentationPass::prepare_call_arguments(
-        mlir::OpBuilder & builder, mlir::Operation * call_op, cir::FuncOp patch_func,
+        mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
         const PatchInfo &patch, llvm::SmallVector< mlir::Value > &args
     ) {
         if (call_op->getNumOperands() == 0) {
@@ -585,20 +579,20 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
      * @param patch_module The module containing the patch function.
      */
     void InstrumentationPass::apply_before_patch(
-        mlir::Operation * op, const PatchMatch &match, const PatchInfo &patch,
+        mlir::Operation *call_op, const PatchMatch &match, const PatchInfo &patch,
         mlir::ModuleOp patch_module
     ) {
-        if (op == nullptr) {
+        if (call_op == nullptr) {
             LOG(ERROR) << "Patch before: Operation is null";
             return;
         }
 
-        mlir::OpBuilder builder(op);
-        builder.setInsertionPoint(op);
-        auto module = op->getParentOfType< mlir::ModuleOp >();
+        mlir::OpBuilder builder(call_op);
+        builder.setInsertionPoint(call_op);
+        auto module = call_op->getParentOfType< mlir::ModuleOp >();
 
         std::string patch_function_name = namifyPatchFunction(patch.patch_function);
-        auto input_types                = llvm::to_vector(op->getOperandTypes());
+        auto input_types                = llvm::to_vector(call_op->getOperandTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
             return;
@@ -617,30 +611,31 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
             return;
         }
 
-        auto symbol_ref = mlir::FlatSymbolRefAttr::get(op->getContext(), patch_function_name);
+        auto symbol_ref =
+            mlir::FlatSymbolRefAttr::get(call_op->getContext(), patch_function_name);
         llvm::SmallVector< mlir::Value > function_args;
-        prepare_call_arguments(builder, op, patch_func, patch, function_args);
-        auto call_op = builder.create< cir::CallOp >(
-            op->getLoc(), symbol_ref,
+        prepare_call_arguments(builder, call_op, patch_func, patch, function_args);
+        auto patch_call_op = builder.create< cir::CallOp >(
+            call_op->getLoc(), symbol_ref,
             patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
                                                      : mlir::Type(),
             function_args
         );
 
         // Add extra attributes for the patched call function
-        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(op)) {
-            call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
+        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
+            patch_call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
         } else {
             mlir::NamedAttrList empty;
-            call_op->setAttr(
+            patch_call_op->setAttr(
                 "extra_attrs",
                 cir::ExtraFuncAttributesAttr::get(
-                    op->getContext(), empty.getDictionary(op->getContext())
+                    call_op->getContext(), empty.getDictionary(call_op->getContext())
                 )
             );
         }
         if (patch_options.enable_inlining) {
-            inline_worklists.push_back(call_op);
+            inline_worklists.push_back(patch_call_op);
         }
         (void) match;
     }
@@ -655,20 +650,20 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
      * @param patch_module The module containing the patch function.
      */
     void InstrumentationPass::apply_after_patch(
-        mlir::Operation * op, const PatchMatch &match, const PatchInfo &patch,
+        mlir::Operation *call_op, const PatchMatch &match, const PatchInfo &patch,
         mlir::ModuleOp patch_module
     ) {
-        if (op == nullptr) {
+        if (call_op == nullptr) {
             LOG(ERROR) << "Patch after: Operation is null";
             return;
         }
 
-        mlir::OpBuilder builder(op);
-        auto module = op->getParentOfType< mlir::ModuleOp >();
-        builder.setInsertionPointAfter(op);
+        mlir::OpBuilder builder(call_op);
+        auto module = call_op->getParentOfType< mlir::ModuleOp >();
+        builder.setInsertionPointAfter(call_op);
 
         std::string patch_function_name = namifyPatchFunction(patch.patch_function);
-        auto input_types                = llvm::to_vector(op->getResultTypes());
+        auto input_types                = llvm::to_vector(call_op->getResultTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
             return;
@@ -687,30 +682,31 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
             return;
         }
 
-        auto symbol_ref = mlir::FlatSymbolRefAttr::get(op->getContext(), patch_function_name);
+        auto symbol_ref =
+            mlir::FlatSymbolRefAttr::get(call_op->getContext(), patch_function_name);
         llvm::SmallVector< mlir::Value > function_args;
-        prepare_call_arguments(builder, op, patch_func, patch, function_args);
-        auto call_op = builder.create< cir::CallOp >(
-            op->getLoc(), symbol_ref,
+        prepare_call_arguments(builder, call_op, patch_func, patch, function_args);
+        auto patch_call_op = builder.create< cir::CallOp >(
+            call_op->getLoc(), symbol_ref,
             patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
                                                      : mlir::Type(),
             function_args
         );
 
         // Add extra attributes for the patched call function
-        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(op)) {
-            call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
+        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
+            patch_call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
         } else {
             mlir::NamedAttrList empty;
-            call_op->setAttr(
+            patch_call_op->setAttr(
                 "extra_attrs",
                 cir::ExtraFuncAttributesAttr::get(
-                    op->getContext(), empty.getDictionary(op->getContext())
+                    call_op->getContext(), empty.getDictionary(patch_call_op->getContext())
                 )
             );
         }
         if (patch_options.enable_inlining) {
-            inline_worklists.push_back(call_op);
+            inline_worklists.push_back(patch_call_op);
         }
         (void) match;
     }
@@ -780,7 +776,7 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
      * @return mlir::OwningOpRef< mlir::ModuleOp > The loaded patch module.
      */
     mlir::OwningOpRef< mlir::ModuleOp > InstrumentationPass::load_patch_module(
-        mlir::MLIRContext & ctx, const std::string &patch_string
+        mlir::MLIRContext &ctx, const std::string &patch_string
     ) {
         return mlir::parseSourceString< mlir::ModuleOp >(patch_string, &ctx);
     }
@@ -983,9 +979,8 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
      * @param call_op The call operation to be inlined
      * @return mlir::LogicalResult Success or failure of the inlining operation
      */
-    mlir::LogicalResult InstrumentationPass::inline_call(
-        mlir::ModuleOp module, cir::CallOp call_op
-    ) {
+    mlir::LogicalResult
+    InstrumentationPass::inline_call(mlir::ModuleOp module, cir::CallOp call_op) {
         mlir::OpBuilder builder(call_op);
         mlir::Location loc = call_op.getLoc();
 
@@ -1022,7 +1017,7 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
         mlir::Block *split_block  = caller_block->splitBlock(call_op->getIterator());
 
         // Note: Using of DenseMap is causing null-pointer dereference issue with ci.
-        std::unordered_map< mlir::Block *, mlir::Block * > block_map;
+        mlir::DenseMap< mlir::Block *, mlir::Block * > block_map;
 
         // First pass: clone all blocks (without operations)
         mlir::Region &callee_region = callee.getBody();
@@ -1040,7 +1035,8 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
             caller_block->getParent()->getBlocks().insert(
                 split_block->getIterator(), cloned_block
             );
-            // block_map.emplace(&block, cloned_block);
+
+            block_map[&block] = cloned_block;
         }
 
         // Second pass: clone operations and fix up block references
