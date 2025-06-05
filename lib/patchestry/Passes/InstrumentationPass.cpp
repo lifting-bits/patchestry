@@ -513,6 +513,15 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
         });
     }
 
+    /**
+     * @brief Instruments an operation based on patch specifications.
+     *
+     * This method applies patches to operations that match the operation patterns
+     * defined in the patch specification. It supports variable matching and applies
+     * before patch modes (replace and after mode is not supported for operations yet).
+     *
+     * @param op The operation to be instrumented
+     */
     void InstrumentationPass::instrument_operation(mlir::Operation * op) {
         if (!config || config->patches.empty()) {
             LOG(ERROR) << "No patch configuration found. Skipping...\n";

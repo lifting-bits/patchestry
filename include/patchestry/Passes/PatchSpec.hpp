@@ -38,12 +38,18 @@ namespace patchestry::passes {
         std::string type;
     };
 
+    struct FunctionMatch
+    {
+        std::string name;
+        std::string type;
+    };
+
     struct PatchMatch
     {
         std::string symbol;
         std::string kind;
         std::string operation;
-        std::string function_name;
+        std::vector< FunctionMatch > function_matches;
         std::vector< ArgumentMatch > argument_matches;
         std::vector< VariableMatch > variable_matches;
     };
@@ -109,6 +115,7 @@ namespace patchestry::passes {
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchSpec)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::VariableMatch)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ArgumentMatch)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::FunctionMatch)
 
 class PatchSpecContext
 {
@@ -163,6 +170,16 @@ namespace llvm::yaml {
         }
     };
 
+    // Prase FunctionMatch
+    template<>
+    struct MappingTraits< patchestry::passes::FunctionMatch >
+    {
+        static void mapping(IO &io, patchestry::passes::FunctionMatch &func) {
+            io.mapRequired("name", func.name);
+            io.mapOptional("type", func.type);
+        }
+    };
+
     // Prase PatchMatch
     template<>
     struct MappingTraits< patchestry::passes::PatchMatch >
@@ -171,7 +188,7 @@ namespace llvm::yaml {
             io.mapOptional("symbol", match.symbol);
             io.mapOptional("kind", match.kind);
             io.mapOptional("operation", match.operation);
-            io.mapOptional("function_name", match.function_name);
+            io.mapOptional("function_matches", match.function_matches);
             io.mapOptional("argument_matches", match.argument_matches);
             io.mapOptional("variable_matches", match.variable_matches);
         }
