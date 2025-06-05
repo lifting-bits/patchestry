@@ -45,14 +45,10 @@ FROM base AS runtime
 
 RUN apt-get update && apt-get install -y \
     adduser \
-<<<<<<< HEAD
     sudo \
     wget \
     binutils \
     file && \
-=======
-    sudo && \
->>>>>>> 9ef076a (tag comment)
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives
 
 # Add a user with no login shell and no login capabilities and add
