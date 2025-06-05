@@ -27,7 +27,7 @@ namespace patchestry::passes {
 
     struct ArgumentMatch
     {
-        int index;
+        unsigned index;
         std::string name;
         std::string type;
     };
@@ -70,9 +70,41 @@ namespace patchestry::passes {
     {
         std::string arch;
         std::vector< PatchSpec > patches;
+
+        bool matches_operation(const std::string &operation) const {
+            if (operation.empty()) {
+                return true;
+            }
+            return std::any_of(patches.begin(), patches.end(), [&](const PatchSpec &spec) {
+                return spec.match.operation == operation;
+            }); // NOLINT
+        }
+
+        bool matches_symbol(const std::string &symbol) const {
+            if (symbol.empty()) {
+                return true;
+            }
+            return std::any_of(patches.begin(), patches.end(), [&](const PatchSpec &spec) {
+                return spec.match.symbol == symbol;
+            }); // NOLINT
+        }
     };
 
-}; // namespace patchestry::passes
+    [[maybe_unused]] inline std::string_view patchInfoModeToString(PatchInfoMode mode) {
+        switch (mode) {
+            case PatchInfoMode::NONE:
+                return "NONE";
+            case PatchInfoMode::APPLY_BEFORE:
+                return "APPLY_BEFORE";
+            case PatchInfoMode::APPLY_AFTER:
+                return "APPLY_AFTER";
+            case PatchInfoMode::REPLACE:
+                return "REPLACE";
+        }
+        return "UNKNOWN";
+    }
+
+} // namespace patchestry::passes
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchSpec)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::VariableMatch)
