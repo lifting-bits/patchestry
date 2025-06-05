@@ -415,15 +415,28 @@ namespace patchestry::passes {
     void InstrumentationPass::runOnOperation() {
         mlir::ModuleOp mod = getOperation();
         llvm::SmallVector< cir::FuncOp, 8 > function_worklist;
+        llvm::SmallVector< mlir::Operation *, 8 > operation_worklist;
 
         // Second pass: gather all functions for later instrumentation
         mod.walk([&](cir::FuncOp op) { function_worklist.push_back(op); });
+
+        // Gather operations for instrumentation
+        mod.walk([&](mlir::Operation *op) {
+            if (!mlir::isa< cir::FuncOp, mlir::ModuleOp >(op)) {
+                operation_worklist.push_back(op);
+            }
+        });
 
         // Third pass: process each function to instrument function calls
         // We use indexed loop because function_worklist size could change during
         // instrumentation
         for (size_t i = 0; i < function_worklist.size(); ++i) {
             instrument_function_calls(function_worklist[i]);
+        }
+
+        // Process operations for instrumentation
+        for (auto *op : operation_worklist) {
+            instrument_operation(op);
         }
 
         // Inline inserted call operation
@@ -492,6 +505,54 @@ namespace patchestry::passes {
                 }
             }
         });
+    }
+
+    /**
+     * @brief Instruments an operation based on patch specifications.
+     *
+     * This method applies patches to operations that match the operation patterns
+     * defined in the patch specification. It supports variable matching and applies
+     * before patch modes (replace and after mode is not supported for operations yet).
+     *
+     * @param op The operation to be instrumented
+     */
+    void InstrumentationPass::instrument_operation(mlir::Operation * op) {
+        if (!config || config->patches.empty()) {
+            LOG(ERROR) << "No patch configuration found. Skipping...\n";
+            return;
+        }
+        auto func = op->getParentOfType< cir::FuncOp >();
+        if (!func) {
+            LOG(ERROR) << "Operation is not in a function. Skipping...\n";
+            return;
+        }
+
+        for (const auto &spec : config->patches) {
+            if (spec.match.operation == op->getName().getStringRef().str()
+                && !exclude_from_patching(func, spec))
+            {
+                const auto &patch = spec.patch;
+                const auto &match = spec.match;
+                auto patch_module = load_patch_module(*op->getContext(), *patch.patch_module);
+                if (!patch_module) {
+                    LOG(ERROR) << "Failed to load patch module for operation: "
+                               << op->getName().getStringRef().str() << "\n ";
+                    continue;
+                }
+
+                switch (patch.mode) {
+                    case PatchInfoMode::APPLY_BEFORE: {
+                        apply_before_patch(op, match, patch, patch_module.get());
+                        break;
+                    }
+                    default:
+                        LOG(ERROR)
+                            << "Unsupported patch mode: " << patchInfoModeToString(patch.mode)
+                            << " for operation: " << op->getName().getStringRef().str() << "\n";
+                        break;
+                }
+            }
+        }
     }
 
     /**

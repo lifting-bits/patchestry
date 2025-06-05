@@ -127,6 +127,17 @@ namespace patchestry::passes {
          */
         void instrument_function_calls(cir::FuncOp func);
 
+        /**
+         * @brief Instruments a specific operation based on patch specifications.
+         *
+         * This method applies patches to operations that match the operation patterns
+         * defined in the patch specification. It supports variable matching and applies
+         * before patch modes (replace and after mode is not supported for operations yet).
+         *
+         * @param op The operation to be instrumented
+         */
+        void instrument_operation(mlir::Operation *op);
+
       private:
         /**
          * @brief Prepares arguments for a patch function call.
