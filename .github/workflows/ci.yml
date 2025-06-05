@@ -60,7 +60,7 @@ jobs:
           fetch-depth: 1
 
       - name: Configure build - sanitizers ${{ matrix.sanitizers }}
-        run: cmake --preset ci -DLLVM_EXTERNAL_LIT=$(which lit) -DLLVM_Z3_INSTALL_DIR=/usr/local
+        run: cmake --preset ci -DPE_USE_VENDORED_Z3=OFF -DLLVM_EXTERNAL_LIT=$(which lit) -DLLVM_Z3_INSTALL_DIR=/usr/local
 
       - name: Build ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: cmake --build --preset ci --config ${{ matrix.build-type }} -j $(nproc)
