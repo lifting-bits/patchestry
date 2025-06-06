@@ -2,13 +2,13 @@
 # scripts/ghidra/decompile-headless.dockerfile in this repo.
 FROM trailofbits/patchestry-decompilation:latest AS patchestry-headless
 
-# This Dockerfile is building and running tests in the same environment
-# as the headless container. On Linux, you can build with:
+# This Dockerfile runs tests for the decompilation part of Patchestry in the same environment
+# as the headless container, for uniformity. On Linux, you can build with:
 # $ DOCKER_BUILDKIT=1 docker build -t trailofbits/patchestry-test:latest -f decompile-test.dockerfile .
 #
 # Or, if you just want to build the test firmware for local use and *not run*
 # unit tests, refer to the firmwares/Dockerfile rather than this Dockerfile.
-# For the headless container, see scripts/ghidra/decompile-headless.dockerfile.
+# For the base, see scripts/ghidra/decompile-headless.dockerfile.
 
 FROM patchestry-headless AS base
 
@@ -79,29 +79,21 @@ RUN git clone --depth 1 --single-branch --branch $GHIDRA_RELEASE_TAG_NAME https:
 WORKDIR /tmp/ghidra
 # warning - this gradle dependency fetch takes a very long time
 RUN gradle -I gradle/support/fetchDependencies.gradle
+
 RUN gradle prepdev && \
     gradle :GhidraServer:yajswDevUnpack && \ 
-    gradle buildNatives && \
     gradle buildGhidra --no-parallel --info --stacktrace && \
-    gradle compileTestJava processTestResources testClasses testJar 
+    gradle :IntegrationTest:build :IntegrationTest:testClasses :IntegrationTest:testJar
 
 # some additional deps for the Ghidra script tests
 RUN wget -O dependencies/flatRepo/gson-2.9.0.jar \
-    https://repo1.maven.org/maven2/com/google/code/gson/gson/2.9.0/gson-2.9.0.jar && \
-    wget -O dependencies/flatRepo/junit-jupiter-api-5.9.3.jar \
-    https://repo1.maven.org/maven2/org/junit/jupiter/junit-jupiter-api/5.9.3/junit-jupiter-api-5.9.3.jar && \
-    wget -O dependencies/flatRepo/junit-jupiter-engine-5.9.3.jar \
-    https://repo1.maven.org/maven2/org/junit/jupiter/junit-jupiter-engine/5.9.3/junit-jupiter-engine-5.9.3.jar && \
-    wget -O dependencies/flatRepo/junit-platform-commons-1.9.3.jar \
-    https://repo1.maven.org/maven2/org/junit/platform/junit-platform-commons/1.9.3/junit-platform-commons-1.9.3.jar && \
-    wget -O dependencies/flatRepo/junit-platform-console-1.9.3.jar \
-    https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console/1.9.3/junit-platform-console-1.9.3.jar && \
-    wget -O dependencies/flatRepo/junit-vintage-engine-5.9.3.jar \
-    https://repo1.maven.org/maven2/org/junit/vintage/junit-vintage-engine/5.9.3/junit-vintage-engine-5.9.3.jar && \
+        https://repo1.maven.org/maven2/com/google/code/gson/gson/2.9.0/gson-2.9.0.jar && \
+    wget -O dependencies/flatRepo/junit-platform-console-standalone-1.13.0.jar \
+        https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.13.0/junit-platform-console-standalone-1.13.0.jar && \
     wget -O dependencies/flatRepo/opentest4j-1.2.0.jar \
-    https://repo1.maven.org/maven2/org/opentest4j/opentest4j/1.2.0/opentest4j-1.2.0.jar && \
+        https://repo1.maven.org/maven2/org/opentest4j/opentest4j/1.2.0/opentest4j-1.2.0.jar && \
     wget -O dependencies/flatRepo/apiguardian-api-1.1.2.jar \
-    https://repo1.maven.org/maven2/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar
+        https://repo1.maven.org/maven2/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar
 
 RUN sudo apt-get -y autoremove --purge && \
     sudo apt-get purge -y ninja-build cmake libnewlib-arm-none-eabi gcc-arm-none-eabi flex bison && \
@@ -117,7 +109,7 @@ RUN sudo apt-get update && sudo apt-get install -y \
     sudo apt-get clean && \
     sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-COPY --chown=user:user --from=base /tmp/ghidra/ /home/user/ghidra-source/
+COPY --chown=user:user --from=base /tmp/ghidra/ /home/user/ghidra_source/
 COPY --chown=user:user --from=base /opt/gradle/ /opt/gradle/
 ENV PATH="/opt/gradle/latest/bin:${PATH}"
 
@@ -127,62 +119,124 @@ COPY test/scripts/java/ .
 # the GHIDRA_* env vars here come from the parent Dockerfile.
 ENV CLASSPATH="/home/user:\
 $GHIDRA_SCRIPTS:\
-/home/user/ghidra-source/Ghidra/Features/Base/build/libs/Base.jar:\
-/home/user/ghidra-source/Ghidra/Features/Base/build/libs/Base-test.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Generic/build/libs/Generic.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Generic/build/libs/Generic-test.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Docking/build/libs/Docking.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Docking/build/libs/Docking-test.jar:\
-/home/user/ghidra-source/Ghidra/Framework/SoftwareModeling/build/libs/SoftwareModeling.jar:\
-/home/user/ghidra-source/Ghidra/Framework/SoftwareModeling/build/libs/SoftwareModeling-test.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Generic/build/classes/java/main:\
-/home/user/ghidra-source/Ghidra/Framework/Options/build/libs/Options.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Options/build/libs/Options-test.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Utility/build/libs/Utility.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Utility/build/libs/Utility-test.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Project/build/libs/Project.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Project/build/libs/Project-test.jar:\
-/home/user/ghidra-source/Ghidra/Features/Decompiler/build/libs/Decompiler.jar:\
-/home/user/ghidra-source/Ghidra/Features/Decompiler/build/libs/Decompiler-test.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Graph/build/libs/Graph.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Graph/build/libs/Graph-test.jar:\
-/home/user/ghidra-source/Ghidra/Framework/FileSystem/build/libs/FileSystem.jar:\
-/home/user/ghidra-source/Ghidra/Framework/FileSystem/build/libs/FileSystem-test.jar:\
-/home/user/ghidra-source/Ghidra/Framework/DB/build/libs/DB.jar:\
-/home/user/ghidra-source/Ghidra/Framework/DB/build/libs/DB-test.jar:\
-/home/user/ghidra-source/Ghidra/Test/IntegrationTest/build/libs/IntegrationTest.jar:\
-/home/user/ghidra-source/Ghidra/Test/IntegrationTest/build/libs/IntegrationTest-test.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Help/build/libs/Help.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Help/build/libs/Help-test.jar:\
-/home/user/ghidra-source/Ghidra/Test/TestResources/build/libs/TestResources.jar:\
-/home/user/ghidra-source/Ghidra/Debug/Framework-Debugging/build/libs/Framework-Debugging.jar:\
-/home/user/ghidra-source/Ghidra/Debug/Framework-Debugging/build/libs/Framework-Debugging-test.jar:\
-/home/user/ghidra-source/dependencies/flatRepo/gson-2.9.0.jar:\
-/home/user/ghidra-source/dependencies/flatRepo/junit-jupiter-api-5.9.3.jar:\
-/home/user/ghidra-source/dependencies/flatRepo/junit-jupiter-engine-5.9.3.jar:\
-/home/user/ghidra-source/dependencies/flatRepo/junit-platform-commons-1.9.3.jar:\
-/home/user/ghidra-source/dependencies/flatRepo/junit-platform-console-1.9.3.jar:\
-/home/user/ghidra-source/dependencies/flatRepo/junit-vintage-engine-5.9.3.jar:\
-/home/user/ghidra-source/dependencies/flatRepo/opentest4j-1.2.0.jar:\
-/home/user/ghidra-source/dependencies/flatRepo/apiguardian-api-1.1.2.jar:\
-/home/user/ghidra-source/Ghidra/Framework/Generic/build/classes/java/test:\
-/home/user/ghidra-source/Ghidra/Framework/Generic/build/resources/main:\
-/home/user/ghidra-source/Ghidra/Framework/Generic/build/resources/test:\
-/home/user/ghidra-source/Ghidra/Framework/Generic/build/classes/java/main:\
-/home/user/ghidra-source/Ghidra/Framework/Generic/build/classes/java/test:\
-/home/user/ghidra-source/Ghidra/Framework/Options/build/classes/java/main:\
-/home/user/ghidra-source/Ghidra/Framework/Options/build/classes/java/test:\
-/home/user/ghidra-source/Ghidra/Test/IntegrationTest/build/classes/java/main:\
-/home/user/ghidra-source/Ghidra/Test/IntegrationTest/build/classes/java/test:\
-/home/user/ghidra-source/Ghidra/Features/Decompiler/build/classes/java/main:\
-/home/user/ghidra-source/Ghidra/Features/Decompiler/build/classes/java/test:\
-/home/user/ghidra-source/Ghidra/Framework/Gui/build/classes/java/main:\
-/home/user/ghidra-source/Ghidra/Framework/Gui/build/classes/java/test\
-"
+/home/user/ghidra_source/GPL/DMG/data/lib/*:\
+/home/user/ghidra_source/dependencies/downloads/*:\
+/home/user/ghidra_source/dependencies/flatRepo/*:\
+/home/user/ghidra_source/Ghidra/Test/IntegrationTest/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Configurations/Public_Release/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Debug/Framework-AsyncComm/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Debug/Debugger-rmi-trace/build/libs/*\
+/home/user/ghidra_source/Ghidra/Debug/TaintAnalysis/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Debug/Debugger-isf/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Debug/Debugger-jpda/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Debug/Debugger-api/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Debug/AnnotationValidator/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Debug/Framework-TraceModeling/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Debug/Debugger/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Debug/ProposedUtils/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/Graph/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/SoftwareModeling/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/Generic/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/Gui/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/Pty/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/Emulation/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/DB/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/Docking/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/Utility/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/FileSystem/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/Help/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Framework/Project/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/SuperH4/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/MIPS/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/Atmel/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/HCS12/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/Sparc/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/DATA/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/ARM/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/TI_MSP430/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/eBPF/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/JVM/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/Dalvik/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/PowerPC/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/Loongarch/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/68000/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/8051/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/PIC/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/Xtensa/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/x86/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/Toy/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/tricore/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/RISCV/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/V850/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Processors/AARCH64/build/libs/*:\
+/home/user/ghidra_source/Ghidra/RuntimeScripts/Common/support/gradle/*:\
+/home/user/ghidra_source/Ghidra/Features/PDB/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/MicrosoftDemangler/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/VersionTracking/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/VersionTrackingBSim/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/FileFormats/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/MicrosoftDmang/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/ProgramDiff/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/GnuDemangler/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/Base/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/GraphServices/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/SourceCodeLookup/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/DebugUtils/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/FunctionGraphDecompilerExtension/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/WildcardAssembler/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/core/commons/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/core/yajsw/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/core/permit/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/core/jna/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/core/netty/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/regex/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/commons/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/cron/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/keystore/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/vfs-dbx/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/vfs-webdav/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/abeille/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/yajsw/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/velocity/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/groovy/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/sigar/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/glazedlists/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/slf4j/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/jgoodies/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/Jython/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/SystemEmulation/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/CodeCompare/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/GraphFunctionCalls/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/Recognizers/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/ProgramGraph/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/SwiftDemangler/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/MicrosoftCodeAnalyzer/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/Sarif/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/FunctionID/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/PyGhidra/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/BSim/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/BytePatterns/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/GhidraGo/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/DecompilerDependent/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/ByteViewer/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/BSimFeatureVisualizer/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/Decompiler/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Features/FunctionGraph/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Extensions/sample/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Extensions/SleighDevTools/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Extensions/MachineLearning/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Extensions/bundle_examples/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Extensions/SampleTablePlugin/build/libs/*:\
+/home/user/ghidra_source/Ghidra/Extensions/BSimElasticPlugin/build/libs/*:\
+/home/user/ghidra_source/GhidraBuild/LaunchSupport/build/libs/*:\
+/home/user/ghidra_source/GhidraBuild/Skeleton/build/libs/*:\
+/home/user/ghidra_source/GhidraBuild/BuildFiles/Doclets/build/libs/*"
 
-RUN find /home/user/ghidra-source -name "HeadlessTestEnvironment.class" && \
-    javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java` `ls ./*Test.java`
-
+# we want all the tests, even if we add more later
+RUN javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java)` `ls ./*Test.java`
 # we use PULSEOX_FW_PATH for tests
 ENV PULSEOX_FW_PATH="/home/user/pulseox-firmware.elf"
 COPY --chown=user:user --from=base $PULSEOX_FW_PATH $PULSEOX_FW_PATH
@@ -190,9 +244,9 @@ COPY --chown=user:user --from=base $PULSEOX_FW_PATH $PULSEOX_FW_PATH
 ENV BLOODLIGHT_FW_PATH="/home/user/bloodlight-firmware.elf"
 COPY --chown=user:user --from=base $BLOODLIGHT_FW_PATH $BLOODLIGHT_FW_PATH
 
-RUN mkdir -p /mnt/output
-RUN java -Djunit.output.dir=/mnt/output org.junit.platform.console.ConsoleLauncher \
-    --class-path "$CLASSPATH" \
-    --disable-banner \
-    --scan-classpath \
-    --include-classname ".*Test$"
+RUN sudo mkdir -p /mnt/output && \
+    java -Djunit.output.dir=/mnt/output org.junit.platform.console.ConsoleLauncher \
+        --class-path "$CLASSPATH" \
+        --disable-banner \
+        --scan-classpath \
+        --include-classname ".*Test$"
