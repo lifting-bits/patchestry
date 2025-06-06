@@ -93,7 +93,7 @@ namespace patchestry::passes {
          * @param variable_matches The variable match criteria
          * @return true if the variables match the criteria
          */
-        static bool matches_variables( // NOLINT
+        static bool matches_symbols( // NOLINT
             mlir::Operation *op, const std::vector< VariableMatch > &variable_matches
         );
 

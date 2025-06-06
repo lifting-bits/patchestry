@@ -25,6 +25,8 @@ namespace patchestry::passes {
         REPLACE
     };
 
+    enum class MatchKind : uint8_t { NONE = 0, OPERATION, FUNCTION };
+
     struct ArgumentMatch
     {
         unsigned index;
@@ -40,6 +42,8 @@ namespace patchestry::passes {
         std::string type;
     };
 
+    using SymbolMatch = VariableMatch;
+
     struct FunctionContext
     {
         std::string name;
@@ -48,12 +52,13 @@ namespace patchestry::passes {
 
     struct PatchMatch
     {
-        std::string symbol;
-        std::string kind;
-        std::string operation;
+        std::string name;
+        MatchKind kind;
         std::vector< FunctionContext > function_context;
         std::vector< ArgumentMatch > argument_matches;
         std::vector< VariableMatch > variable_matches;
+        std::vector< SymbolMatch > symbol_matches;
+        std::vector< OperandMatch > operand_matches;
     };
 
     struct PatchInfo
@@ -84,7 +89,7 @@ namespace patchestry::passes {
                 return true;
             }
             return std::any_of(patches.begin(), patches.end(), [&](const PatchSpec &spec) {
-                return spec.match.operation == operation;
+                return spec.match.name == operation && spec.match.kind == MatchKind::OPERATION;
             }); // NOLINT
         }
 
@@ -93,7 +98,7 @@ namespace patchestry::passes {
                 return true;
             }
             return std::any_of(patches.begin(), patches.end(), [&](const PatchSpec &spec) {
-                return spec.match.symbol == symbol;
+                return spec.match.name == symbol && spec.match.kind == MatchKind::FUNCTION;
             }); // NOLINT
         }
     };
@@ -187,12 +192,20 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::PatchMatch >
     {
         static void mapping(IO &io, patchestry::passes::PatchMatch &match) {
-            io.mapOptional("symbol", match.symbol);
-            io.mapOptional("kind", match.kind);
-            io.mapOptional("operation", match.operation);
+            io.mapOptional("name", match.name);
             io.mapOptional("function_context", match.function_context);
             io.mapOptional("argument_matches", match.argument_matches);
             io.mapOptional("variable_matches", match.variable_matches);
+
+            std::string kind_str;
+            io.mapRequired("kind", kind_str);
+            if (kind_str == "operation") {
+                match.kind = patchestry::passes::MatchKind::OPERATION;
+            } else if (kind_str == "function") {
+                match.kind = patchestry::passes::MatchKind::FUNCTION;
+            } else { // Default to NONE
+                match.kind = patchestry::passes::MatchKind::NONE;
+            }
         }
     };
 
