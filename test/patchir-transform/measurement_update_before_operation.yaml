@@ -2,7 +2,7 @@ arch: "ARM:LE:32"
 patches:
   - name: "apply_before_spo2_lookup_operation"
     match:
-      operation: "cir.call"
+      name: "cir.call"
       kind: "operation"
       function_context:
         - name: "/.*measurement.*/"  # Functions containing "measurement"
