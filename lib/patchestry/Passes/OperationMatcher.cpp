@@ -317,6 +317,36 @@ namespace patchestry::passes {
             }
         }
 
+        if (auto global_op = mlir::dyn_cast< cir::GlobalOp >(op)) {
+            auto name_attr = global_op->getAttrOfType< mlir::StringAttr >("name");
+            if (name_attr) {
+                return name_attr.getValue().str();
+            }
+        }
+
+        if (auto cast_op = mlir::dyn_cast< cir::CastOp >(op)) {
+            auto operand             = cast_op.getOperand();
+            std::string operand_name = extract_ssa_value_name(operand);
+            if (!operand_name.empty()) {
+                return operand_name;
+            }
+        }
+
+        if (auto get_global_op = mlir::dyn_cast< cir::GetGlobalOp >(op)) {
+            auto global_var_name = get_global_op.getName().str();
+            if (!global_var_name.empty()) {
+                return global_var_name;
+            }
+        }
+
+        if (auto get_member_op = mlir::dyn_cast< cir::GetMemberOp >(op)) {
+            auto operand             = get_member_op.getOperand();
+            std::string operand_name = extract_ssa_value_name(operand);
+            if (!operand_name.empty()) {
+                return operand_name;
+            }
+        }
+
         // Check for load/store operations that might reference named variables
         if (auto load_op = mlir::dyn_cast< cir::LoadOp >(op)) {
             // Try to extract name from the loaded address
