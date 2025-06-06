@@ -423,7 +423,7 @@ namespace patchestry::passes {
 
         // Gather operations for instrumentation
         mod.walk([&](mlir::Operation *op) {
-            if (!mlir::isa< cir::FuncOp, mlir::ModuleOp >(op)) {
+            if (!mlir::isa< cir::FuncOp, mlir::ModuleOp, cir::GlobalOp >(op)) {
                 operation_worklist.push_back(op);
             }
         });
@@ -524,7 +524,7 @@ namespace patchestry::passes {
         }
         auto func = op->getParentOfType< cir::FuncOp >();
         if (!func) {
-            LOG(ERROR) << "Operation is not in a function. Skipping...\n";
+            LOG(INFO) << "Operation is not in a function. Skipping...\n";
             return;
         }
 

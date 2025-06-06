@@ -15,10 +15,16 @@
 // RUN: %file-check -vv -check-prefix=REPLACE %s --input-file %t4.cir
 // REPLACE: %{{[0-9]+}} = cir.call @patch__replace__spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> !u8i ext
 
-// RUN: %patchir-transform %t1.cir --spec %S/measurement_update_exclude_patch.yaml -o %t2.cir
-// RUN: %file-check -vv -check-prefix=CHECK %s --input-file %t2.cir
+// RUN: %patchir-transform %t1.cir --spec %S/measurement_update_exclude_patch.yaml -o %t5.cir
+// RUN: %file-check -vv -check-prefix=CHECK %s --input-file %t5.cir
 // CHECK-NOT: cir.call @patch__before__spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> () extra(#fn_attr)
 // CHECK: %{{[0-9]+}} = cir.call @spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> !u8i extra(#fn_attr)
+
+// RUN: %patchir-transform %t1.cir --spec %S/measurement_update_before_operation.yaml -o %t6.cir
+// RUN: %file-check -vv -check-prefix=BEFORE_OPERATION %s --input-file %t6.cir
+// BEFORE_OPERATION: cir.call @patch__before__spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> () extra(#fn_attr)
+// BEFORE_OPERATION: %{{[0-9]+}} = cir.call @spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> !u8i extra(#fn_attr)
+
 
 {
   "arch": "ARM",

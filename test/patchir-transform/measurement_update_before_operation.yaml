@@ -1,0 +1,22 @@
+arch: "ARM:LE:32"
+patches:
+  - name: "apply_before_spo2_lookup_operation"
+    match:
+      operation: "cir.call"
+      function_context:
+        - name: "/.*measurement.*/"  # Functions containing "measurement"
+        - name: "/.*update.*/"       # Functions containing "update"
+      argument_matches:
+        - index: 0  # First argument to the called function
+          name: "var6"
+          type: "!cir.float"
+      variable_matches:
+        - name: "spo2_lookup"  # The function being called
+    patch:
+      mode: "ApplyBefore"
+      patch_file: "patch_spo2_lookup.c"
+      patch_function: "patch::before::spo2_lookup"
+      arguments:
+        - "var6"
+    exclude:
+      - "test_.*"
