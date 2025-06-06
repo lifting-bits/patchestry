@@ -102,12 +102,6 @@ RUN wget -O dependencies/downloads/gson-2.9.0.jar \
         https://repo1.maven.org/maven2/org/apache/commons/commons-collections4/4.4/commons-collections4-4.4.jar && \
     wget -O dependencies/downloads/commons-io-2.15.1.jar \
         https://repo1.maven.org/maven2/commons-io/commons-io/2.15.1/commons-io-2.15.1.jar && \
-    wget -O dependencies/downloads/iso-relax.jar \
-        https://iso-relax.sourceforge.net/devSnapShot/iso-relax.jar && \
-    wget -O dependencies/downloads/msv-core-2011.1-redhat-2.jar \
-        https://maven.repository.redhat.com/earlyaccess/all/net/java/dev/msv/msv-core/2011.1-redhat-2/msv-core-2011.1-redhat-2.jar && \
-    wget -O dependencies/downloads/msv-generator-2011.1-redhat-2.jar \
-        https://maven.repository.redhat.com/earlyaccess/all/net/java/dev/msv/msv-generator/2011.1-redhat-2/msv-generator-2011.1-redhat-2.jar && \
     wget -O dependencies/downloads/msv-rngconverter-2011.1-redhat-2.jar \
         https://maven.repository.redhat.com/earlyaccess/all/net/java/dev/msv/msv-rngconverter/2011.1-redhat-2/msv-rngconverter-2011.1-redhat-2.jar && \
     wget -O dependencies/downloads/antlr-runtime-3.5.2.jar \
