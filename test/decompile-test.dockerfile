@@ -3,8 +3,8 @@
 FROM trailofbits/patchestry-decompilation:latest AS patchestry-headless
 
 # This Dockerfile runs tests for the decompilation part of Patchestry in the same environment
-# as the headless container, for uniformity. On Linux, you can build with:
-# $ DOCKER_BUILDKIT=1 docker build -t trailofbits/patchestry-test:latest -f decompile-test.dockerfile .
+# as the headless container, for uniformity. On Linux, you can build *from the root of the repo* with:
+# $ DOCKER_BUILDKIT=1 docker build -t trailofbits/patchestry-test:latest -f test/decompile-test.dockerfile .
 #
 # Or, if you just want to build the test firmware for local use and *not run*
 # unit tests, refer to the firmwares/Dockerfile rather than this Dockerfile.
@@ -90,10 +90,14 @@ RUN wget -O dependencies/flatRepo/gson-2.9.0.jar \
         https://repo1.maven.org/maven2/com/google/code/gson/gson/2.9.0/gson-2.9.0.jar && \
     wget -O dependencies/flatRepo/junit-platform-console-standalone-1.13.0.jar \
         https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.13.0/junit-platform-console-standalone-1.13.0.jar && \
-    wget -O dependencies/flatRepo/opentest4j-1.2.0.jar \
-        https://repo1.maven.org/maven2/org/opentest4j/opentest4j/1.2.0/opentest4j-1.2.0.jar && \
-    wget -O dependencies/flatRepo/apiguardian-api-1.1.2.jar \
-        https://repo1.maven.org/maven2/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar
+    wget -O dependencies/flatRepo/log4j-core-2.23.1.jar \
+        https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.23.1/log4j-core-2.23.1.jar && \
+    wget -O dependencies/flatRepo/log4j-api-2.23.1.jar \
+        https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.23.1/log4j-api-2.23.1.jar
+    # wget -O dependencies/flatRepo/junit-4.13.2.jar \
+    #     https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar && \
+    # wget -O dependencies/flatRepo/hamcrest-core-1.3.jar \
+    #     https://repo1.maven.org/maven2/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar
 
 RUN sudo apt-get -y autoremove --purge && \
     sudo apt-get purge -y ninja-build cmake libnewlib-arm-none-eabi gcc-arm-none-eabi flex bison && \
@@ -233,10 +237,10 @@ $GHIDRA_SCRIPTS:\
 /home/user/ghidra_source/Ghidra/Extensions/BSimElasticPlugin/build/libs/*:\
 /home/user/ghidra_source/GhidraBuild/LaunchSupport/build/libs/*:\
 /home/user/ghidra_source/GhidraBuild/Skeleton/build/libs/*:\
-/home/user/ghidra_source/GhidraBuild/BuildFiles/Doclets/build/libs/*"
+/home/user/ghidra_source/GhidraBuild/BuildFiles/Doclets/build/libs/*:"
 
 # we want all the tests, even if we add more later
-RUN javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java)` `ls ./*Test.java`
+RUN javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java` `ls ./*Test.java`
 # we use PULSEOX_FW_PATH for tests
 ENV PULSEOX_FW_PATH="/home/user/pulseox-firmware.elf"
 COPY --chown=user:user --from=base $PULSEOX_FW_PATH $PULSEOX_FW_PATH
@@ -244,8 +248,9 @@ COPY --chown=user:user --from=base $PULSEOX_FW_PATH $PULSEOX_FW_PATH
 ENV BLOODLIGHT_FW_PATH="/home/user/bloodlight-firmware.elf"
 COPY --chown=user:user --from=base $BLOODLIGHT_FW_PATH $BLOODLIGHT_FW_PATH
 
-RUN sudo mkdir -p /mnt/output && \
-    java -Djunit.output.dir=/mnt/output org.junit.platform.console.ConsoleLauncher \
+RUN sudo mkdir -p /mnt/output
+
+ENTRYPOINT java -Djunit.output.dir=/mnt/output org.junit.platform.console.ConsoleLauncher \
         --class-path "$CLASSPATH" \
         --disable-banner \
         --scan-classpath \

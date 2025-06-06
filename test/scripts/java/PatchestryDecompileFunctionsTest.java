@@ -1,7 +1,3 @@
-package scripts;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 /*
  * Copyright (c) 2025, Trail of Bits, Inc.
  *
@@ -12,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.File;
 
 import org.junit.jupiter.api.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 import ghidra.app.util.importer.AutoImporter;
 import ghidra.app.util.importer.MessageLog;
@@ -53,8 +50,8 @@ public class PatchestryDecompileFunctionsTest extends AbstractGhidraHeadlessInte
 
         // the same is true of BLOODLIGHT_FW_PATH - it comes from 
         // decompile-test.dockerfile
-        // File bloodlightFirmware = new File(System.getenv("BLOODLIGHT_FW_PATH"));
-        // bloodlightProgram = importProgram(bloodlightFirmware);
+        File bloodlightFirmware = new File(System.getenv("BLOODLIGHT_FW_PATH"));
+        bloodlightProgram = load(bloodlightFirmware, project);
     }
 
     @AfterAll
