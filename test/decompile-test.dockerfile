@@ -86,18 +86,34 @@ RUN gradle prepdev && \
     gradle :IntegrationTest:build :IntegrationTest:testClasses :IntegrationTest:testJar
 
 # some additional deps for the Ghidra script tests
-RUN wget -O dependencies/flatRepo/gson-2.9.0.jar \
+RUN wget -O dependencies/downloads/gson-2.9.0.jar \
         https://repo1.maven.org/maven2/com/google/code/gson/gson/2.9.0/gson-2.9.0.jar && \
-    wget -O dependencies/flatRepo/junit-platform-console-standalone-1.13.0.jar \
+    wget -O dependencies/downloads/junit-platform-console-standalone-1.13.0.jar \
         https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.13.0/junit-platform-console-standalone-1.13.0.jar && \
-    wget -O dependencies/flatRepo/log4j-core-2.23.1.jar \
+    wget -O dependencies/downloads/log4j-core-2.23.1.jar \
         https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.23.1/log4j-core-2.23.1.jar && \
-    wget -O dependencies/flatRepo/log4j-api-2.23.1.jar \
-        https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.23.1/log4j-api-2.23.1.jar
-    # wget -O dependencies/flatRepo/junit-4.13.2.jar \
-    #     https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar && \
-    # wget -O dependencies/flatRepo/hamcrest-core-1.3.jar \
-    #     https://repo1.maven.org/maven2/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar
+    wget -O dependencies/downloads/log4j-api-2.23.1.jar \
+        https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.23.1/log4j-api-2.23.1.jar && \
+    wget -O dependencies/downloads/jdom-1.1.3.jar \
+        https://repo1.maven.org/maven2/org/jdom/jdom/1.1.3/jdom-1.1.3.jar && \
+    wget -O dependencies/downloads/commons-lang3-3.14.0.jar \
+        https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar && \
+    wget -O dependencies/downloads/commons-collections4-4.4.jar \ 
+        https://repo1.maven.org/maven2/org/apache/commons/commons-collections4/4.4/commons-collections4-4.4.jar && \
+    wget -O dependencies/downloads/commons-io-2.15.1.jar \
+        https://repo1.maven.org/maven2/commons-io/commons-io/2.15.1/commons-io-2.15.1.jar && \
+    wget -O dependencies/downloads/iso-relax.jar \
+        https://iso-relax.sourceforge.net/devSnapShot/iso-relax.jar && \
+    wget -O dependencies/downloads/msv-core-2011.1-redhat-2.jar \
+        https://maven.repository.redhat.com/earlyaccess/all/net/java/dev/msv/msv-core/2011.1-redhat-2/msv-core-2011.1-redhat-2.jar && \
+    wget -O dependencies/downloads/msv-generator-2011.1-redhat-2.jar \
+        https://maven.repository.redhat.com/earlyaccess/all/net/java/dev/msv/msv-generator/2011.1-redhat-2/msv-generator-2011.1-redhat-2.jar && \
+    wget -O dependencies/downloads/msv-rngconverter-2011.1-redhat-2.jar \
+        https://maven.repository.redhat.com/earlyaccess/all/net/java/dev/msv/msv-rngconverter/2011.1-redhat-2/msv-rngconverter-2011.1-redhat-2.jar && \
+    wget -O dependencies/downloads/antlr-runtime-3.5.2.jar \
+        https://repo1.maven.org/maven2/org/antlr/antlr-runtime/3.5.2/antlr-runtime-3.5.2.jar && \
+    wget -O dependencies/downloads/guava-32.1.2-jre.jar \
+        https://repo1.maven.org/maven2/com/google/guava/guava/32.1.2-jre/guava-32.1.2-jre.jar
 
 RUN sudo apt-get -y autoremove --purge && \
     sudo apt-get purge -y ninja-build cmake libnewlib-arm-none-eabi gcc-arm-none-eabi flex bison && \
@@ -127,7 +143,6 @@ $GHIDRA_SCRIPTS:\
 /home/user/ghidra_source/dependencies/downloads/*:\
 /home/user/ghidra_source/dependencies/flatRepo/*:\
 /home/user/ghidra_source/Ghidra/Test/IntegrationTest/build/libs/*:\
-/home/user/ghidra_source/Ghidra/Configurations/Public_Release/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Debug/Framework-AsyncComm/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Debug/Debugger-rmi-trace/build/libs/*\
 /home/user/ghidra_source/Ghidra/Debug/TaintAnalysis/build/libs/*:\
@@ -173,7 +188,6 @@ $GHIDRA_SCRIPTS:\
 /home/user/ghidra_source/Ghidra/Processors/RISCV/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Processors/V850/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Processors/AARCH64/build/libs/*:\
-/home/user/ghidra_source/Ghidra/RuntimeScripts/Common/support/gradle/*:\
 /home/user/ghidra_source/Ghidra/Features/PDB/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Features/MicrosoftDemangler/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Features/VersionTracking/build/libs/*:\
@@ -188,27 +202,6 @@ $GHIDRA_SCRIPTS:\
 /home/user/ghidra_source/Ghidra/Features/DebugUtils/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Features/FunctionGraphDecompilerExtension/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Features/WildcardAssembler/build/libs/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/core/commons/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/core/yajsw/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/core/permit/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/core/jna/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/core/netty/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/regex/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/commons/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/cron/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/keystore/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/vfs-dbx/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/vfs-webdav/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/abeille/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/yajsw/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/velocity/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/groovy/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/sigar/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/glazedlists/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/slf4j/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/lib/extended/jgoodies/*:\
-/home/user/ghidra_source/Ghidra/Features/GhidraServer/build/data/yajsw-stable-13.12/*:\
 /home/user/ghidra_source/Ghidra/Features/GhidraServer/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Features/Jython/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Features/SystemEmulation/build/libs/*:\
@@ -234,10 +227,7 @@ $GHIDRA_SCRIPTS:\
 /home/user/ghidra_source/Ghidra/Extensions/MachineLearning/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Extensions/bundle_examples/build/libs/*:\
 /home/user/ghidra_source/Ghidra/Extensions/SampleTablePlugin/build/libs/*:\
-/home/user/ghidra_source/Ghidra/Extensions/BSimElasticPlugin/build/libs/*:\
-/home/user/ghidra_source/GhidraBuild/LaunchSupport/build/libs/*:\
-/home/user/ghidra_source/GhidraBuild/Skeleton/build/libs/*:\
-/home/user/ghidra_source/GhidraBuild/BuildFiles/Doclets/build/libs/*:"
+/home/user/ghidra_source/Ghidra/Extensions/BSimElasticPlugin/build/libs/*:"
 
 # we want all the tests, even if we add more later
 RUN javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java` `ls ./*Test.java`
@@ -248,10 +238,12 @@ COPY --chown=user:user --from=base $PULSEOX_FW_PATH $PULSEOX_FW_PATH
 ENV BLOODLIGHT_FW_PATH="/home/user/bloodlight-firmware.elf"
 COPY --chown=user:user --from=base $BLOODLIGHT_FW_PATH $BLOODLIGHT_FW_PATH
 
-RUN sudo mkdir -p /mnt/output
+RUN mkdir test_output
 
-ENTRYPOINT java -Djunit.output.dir=/mnt/output org.junit.platform.console.ConsoleLauncher \
-        --class-path "$CLASSPATH" \
-        --disable-banner \
-        --scan-classpath \
-        --include-classname ".*Test$"
+ENTRYPOINT java \
+        -Djunit.output.dir=test_output \
+        org.junit.platform.console.ConsoleLauncher \
+            --class-path "${CLASSPATH}" \
+            --disable-banner \
+            --scan-classpath \
+            --include-classname ".*Test$"
