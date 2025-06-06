@@ -12,6 +12,23 @@ The patch specification is designed to apply patches at specific points in the d
 
 By working at the MLIR level, patches can be written once and applied across multiple architectures, as the MLIR abstraction handles the architecture-specific details.
 
+## Matching Types
+
+Patchestry supports two types of matching:
+
+1. **Function-Based Matching**: Matches and instruments entire function calls
+2. **Operation-Based Matching**: Matches and instruments specific MLIR operations within functions
+
+### Function-Based vs Operation-Based Matching
+
+| Aspect | Function-Based | Operation-Based |
+|--------|----------------|-----------------|
+| **Granularity** | Entire function calls | Individual operations (load, store, arithmetic, etc.) |
+| **Match Criteria** | Function symbol, arguments | Operation type, function context, variables |
+| **Use Cases** | API monitoring, function replacement | Memory access tracking, operation validation |
+| **Required Fields** | `match.symbol` | `match.operation` |
+| **Context** | Caller context | Function containing the operation |
+
 ## Specification Format
 
 The patch specification is a YAML file with the following structure:
@@ -57,13 +74,55 @@ patches:
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `match.symbol` | Symbol name to match | `"read"` |
-| `match.kind` | Type of match target (`function`, `variable`, or `operation`) | `"function"` |
-| `match.operation` | Operation type to match (when kind is "operation") | `"cir.load", "cir.for"` |
-| `match.variable_matches` | Variables used in the operation | `name: "puVar8"` |
-| `match.argument_matches` | List of function arguments to match | See below |
+| `match.symbol` | Symbol name to match (for function-based matching) | `"read"` |
+| `match.kind` | Type of match target (`function` or `operation`) | `"function"` |
+| `match.operation` | Operation type to match (for operation-based matching) | `"cir.load"`, `"cir.store"`, `"cir.binop"` |
+| `match.function_context` | Functions where operation matches should be applied | `name: "/.*secure.*/"` |
+| `match.variable_matches` | Variables used in the operation | `name: "/.*password.*/"` |
+| `match.argument_matches` | Function arguments or Opearnds to match | See below |
 
-#### Argument Match Fields
+#### Operation-Based Matching
+
+For operation-based matching, the following additional fields are available:
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `match.operation` | **Required** - MLIR operation name to match | `"cir.load"`, `"cir.store"`, `"cir.call"` |
+| `match.function_context` | List of functions where operation should be matched | `[{name: "/.*secure.*/"}]` |
+| `match.variable_matches` | Variables accessed by the operation | `[{name: "/.*secret.*/", type: "!cir.ptr<...>"}]` |
+| `match.argument_matches` | Operands matches for the operation | `[{index: 0, name: "addr", type: "!cir.ptr<...>"}]` |
+
+#### Function Context Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `name` | Function name pattern (supports regex with `/pattern/`) | `"/.*secure.*/`, `"authenticate"` |
+| `type` | Function type pattern (optional) | `"!cir.func<!cir.void ()>"` |
+
+#### Variable Match Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `name` | Variable name pattern (supports regex with `/pattern/`) | `"/.*password.*/`, `"secret_key"` |
+| `type` | Variable type pattern (optional) | `"!cir.ptr<!cir.int<u, 32>>"` |
+
+#### Operand Match Fields (Operation-Based Matching)
+
+For operation-based matching, `argument_matches` refers to operands of the operation:
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `index` | Position of the operand (0-based) | `0` (first operand), `1` (second operand) |
+| `name` | Name of the operand variable | `"addr"`, `"/.*buffer.*/` |
+| `type` | Type of the operand | `"!cir.ptr<!cir.int<u, 32>>"` |
+
+Common operand patterns:
+- `cir.load`: operand 0 = address to load from
+- `cir.store`: operand 0 = value to store, operand 1 = address to store to
+- `cir.binop`: operand 0 = left operand, operand 1 = right operand
+- `cir.call`: operands = function arguments
+
+#### Argument Match Fields (Function-Based Matching)
 
 | Field | Description | Example |
 |-------|-------------|---------|
@@ -88,13 +147,58 @@ Exclude is a top-level field in each patch entry that defines patterns to exclud
 |-------|-------------|---------|
 | `exclude` | List of function name patterns to exclude from matching | `- "^func_*"` |
 
+## Operation-Based Matching Examples
+
+### Example 1: Monitor Sensitive Load Operations
+
+```yaml
+- name: "sensitive_loads"
+  match:
+    operation: "cir.load"
+    function_context:
+      - name: "/.*secure.*/"  # Functions containing "secure"
+      - name: "authenticate"  # Exact function name
+    variable_matches:
+      - name: "/.*password.*/"  # Variables containing "password"
+        type: "!cir.ptr<!cir.int<u, 32>>"
+```
+
+### Example 2: Match Store Operations with Specific Operands
+
+```yaml
+- name: "validate_stores"
+  match:
+    operation: "cir.store"
+    function_context:
+      - name: "/.*critical.*/"
+    argument_matches:
+      - index: 0  # The value being stored (first operand)
+        name: "user_input"
+        type: "!cir.ptr<!cir.char>"
+      - index: 1  # The address being stored to (second operand)
+        name: "buffer"
+        type: "!cir.ptr<!cir.array<!cir.char x 256>>"
+```
+
+### Pattern Matching
+
+Both function context and variable names support regex patterns when enclosed in forward slashes:
+
+- `/pattern/` - Regex pattern matching
+- `exact_name` - Exact string matching
+
+Examples:
+- `/.*secure.*/` matches functions containing "secure" anywhere
+- `/^test_.*/` matches functions starting with "test_"
+- `authenticate` matches exactly "authenticate"
+
 ## Patch Modes
 
 The specification supports three patching modes:
 
 - `ApplyBefore`: Apply patch before the matched function or operation
-- `ApplyAfter`: Apply patch after the matched function or operation
-- `Replace`: Completely replace the matched function or operation
+- `ApplyAfter`: Apply patch after the matched function
+- `Replace`: Completely replace the matched function
 
 ### ApplyBefore Mode
 
