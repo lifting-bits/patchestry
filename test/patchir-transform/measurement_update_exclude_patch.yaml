@@ -2,7 +2,7 @@ arch: "ARM:LE:32"
 patches: 
   - name: "apply_before_spo2_lookup"
     match:
-      symbol: "spo2_lookup"
+      name: "spo2_lookup"
       kind: "function"
       argument_matches:
         - index: 0

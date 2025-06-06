@@ -19,12 +19,28 @@
 
 namespace patchestry::passes {
 
-    bool
-    OperationMatcher::matches(mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec) {
+    bool OperationMatcher::matches(
+        mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec,
+        OperationMatcher::Mode mode // NOLINT
+    ) {
         const auto &match = spec.match;
 
-        // If kind is not operation, or name is empty, return false
-        if (match.kind != MatchKind::OPERATION || match.name.empty()) {
+        // Handle different match kinds
+        switch (mode) {
+            case OperationMatcher::Mode::OPERATION:
+                return matches_operation(op, func, match);
+            case OperationMatcher::Mode::FUNCTION:
+                return matches_function_call(op, func, match);
+        }
+
+        return false;
+    }
+
+    bool OperationMatcher::matches_operation(
+        mlir::Operation *op, cir::FuncOp func, const PatchMatch &match
+    ) {
+        // If the match kind is not operation, return false
+        if (match.name.empty() || match.kind != MatchKind::OPERATION) {
             return false;
         }
 
@@ -45,6 +61,46 @@ namespace patchestry::passes {
 
         // Check variable matches and return false if it doesn't match
         if (!matches_symbols(op, match.symbol_matches)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    bool OperationMatcher::matches_function_call(
+        mlir::Operation *op, cir::FuncOp func, const PatchMatch &match
+    ) {
+        // If the match kind is not function, return false
+        if (match.name.empty() || match.kind != MatchKind::FUNCTION) {
+            return false;
+        }
+
+        // For function-based matching, we expect a cir.call operation
+        auto call_op = mlir::dyn_cast< cir::CallOp >(op);
+        if (!call_op) {
+            return false;
+        }
+
+        // Check if the called function name matches
+        if (!match.name.empty()) {
+            std::string callee_name = extract_callee_name(call_op);
+            if (!matches_pattern(callee_name, match.name)) {
+                return false;
+            }
+        }
+
+        // Check function context match (the function containing the call)
+        if (!matches_function_context(func, match.function_context)) {
+            return false;
+        }
+
+        // Check argument matches for function calls
+        if (!matches_arguments(op, match.argument_matches)) {
+            return false;
+        }
+
+        // Check variable matches as one of the arguments
+        if (!matches_variables(op, match.variable_matches)) {
             return false;
         }
 
@@ -176,6 +232,92 @@ namespace patchestry::passes {
         }
 
         return false;
+    }
+
+    bool OperationMatcher::matches_arguments(
+        mlir::Operation *op, const std::vector< ArgumentMatch > &argument_matches
+    ) {
+        // If no argument matches specified, consider it a match
+        if (argument_matches.empty()) {
+            return true;
+        }
+
+        auto operands = op->getOperands();
+
+        for (const auto &arg_match : argument_matches) {
+            // Check if the argument index is valid
+            if (arg_match.index >= operands.size()) {
+                return false;
+            }
+
+            auto operand = operands[arg_match.index];
+
+            // Check argument name if specified
+            if (!arg_match.name.empty()) {
+                std::string var_name = extract_variable_name(op, arg_match.index);
+                if (!matches_pattern(var_name, arg_match.name)) {
+                    return false;
+                }
+            }
+
+            // Check argument type if specified
+            if (!arg_match.type.empty()) {
+                if (!matches_type(operand.getType(), arg_match.type)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    bool OperationMatcher::matches_variables(
+        mlir::Operation *op, const std::vector< VariableMatch > &variable_matches
+    ) {
+        // If no variable matches specified, consider it a match
+        if (variable_matches.empty()) {
+            return true;
+        }
+
+        // Check operands for variable matches
+        auto operands = op->getOperands();
+        for (unsigned i = 0; i < operands.size(); ++i) {
+            auto operand         = operands[i];
+            std::string var_name = extract_variable_name(op, i);
+            std::string var_type = type_to_string(operand.getType());
+
+            for (const auto &var_match : variable_matches) {
+                bool name_matches =
+                    var_match.name.empty() || matches_pattern(var_name, var_match.name);
+                bool type_matches =
+                    var_match.type.empty() || matches_pattern(var_type, var_match.type);
+
+                if (name_matches && type_matches) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    std::string OperationMatcher::extract_callee_name(cir::CallOp call_op) {
+        // Extract the called function name from the call operation
+        if (auto callee = call_op.getCalleeAttr()) {
+            return callee.getLeafReference().str();
+        }
+
+        // If no direct callee attribute, try to extract from operands
+        auto operands = call_op.getOperands();
+        if (!operands.empty()) {
+            auto first_operand = operands[0];
+            std::string name   = extract_ssa_value_name(first_operand);
+            if (!name.empty()) {
+                return name;
+            }
+        }
+
+        return "";
     }
 
     bool

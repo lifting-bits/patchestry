@@ -468,41 +468,43 @@ namespace patchestry::passes {
             auto callee_name = op.getCallee()->str();
             assert(!callee_name.empty() && "Callee name is empty");
 
-            std::set< std::string > seen_functions;
+            auto func = op->getParentOfType< cir::FuncOp >();
+            if (!func) {
+                LOG(ERROR) << "Call operation is not in a function. Skipping...\n";
+                return;
+            }
+
             for (const auto &spec : config->patches) {
-                const auto &match = spec.match;
-                if (match.name != callee_name
-                    || seen_functions.find(callee_name) != seen_functions.end()
-                    || exclude_from_patching(func, spec))
+                if (OperationMatcher::matches(op, func, spec, OperationMatcher::Mode::FUNCTION)
+                    && !exclude_from_patching(func, spec))
                 {
-                    continue;
-                }
-
-                seen_functions.emplace(callee_name);
-
-                const auto &patch = spec.patch;
-                // Create module from the patch file mlir representation
-                auto patch_module = load_patch_module(*op->getContext(), *patch.patch_module);
-                if (!patch_module) {
-                    LOG(ERROR) << "Failed to load patch module for function: " << callee_name
-                               << "\n ";
-                    continue;
-                }
-
-                switch (patch.mode) {
-                    case PatchInfoMode::APPLY_BEFORE: {
-                        apply_before_patch(op, match, patch, patch_module.get());
-                        break;
+                    const auto &patch = spec.patch;
+                    const auto &match = spec.match;
+                    // Create module from the patch file mlir representation
+                    auto patch_module =
+                        load_patch_module(*op->getContext(), *patch.patch_module);
+                    if (!patch_module) {
+                        LOG(ERROR)
+                            << "Failed to load patch module for function: " << callee_name
+                            << "\n ";
+                        continue;
                     }
-                    case PatchInfoMode::APPLY_AFTER: {
-                        apply_after_patch(op, match, patch, patch_module.get());
-                        break;
+
+                    switch (patch.mode) {
+                        case PatchInfoMode::APPLY_BEFORE: {
+                            apply_before_patch(op, match, patch, patch_module.get());
+                            break;
+                        }
+                        case PatchInfoMode::APPLY_AFTER: {
+                            apply_after_patch(op, match, patch, patch_module.get());
+                            break;
+                        }
+                        case PatchInfoMode::REPLACE:
+                            replace_call(op, match, patch, patch_module.get());
+                            break;
+                        default:
+                            break;
                     }
-                    case PatchInfoMode::REPLACE:
-                        replace_call(op, match, patch, patch_module.get());
-                        break;
-                    default:
-                        break;
                 }
             }
         });
@@ -529,7 +531,8 @@ namespace patchestry::passes {
         }
 
         for (const auto &spec : config->patches) {
-            if (OperationMatcher::matches(op, func, spec) && !exclude_from_patching(func, spec))
+            if (OperationMatcher::matches(op, func, spec, OperationMatcher::Mode::OPERATION)
+                && !exclude_from_patching(func, spec))
             {
                 const auto &patch = spec.patch;
                 const auto &match = spec.match;

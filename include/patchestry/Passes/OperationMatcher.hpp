@@ -22,7 +22,8 @@ namespace mlir {
 
 namespace cir {
     class FuncOp;
-}
+    class CallOp;
+} // namespace cir
 
 namespace patchestry::passes {
 
@@ -37,6 +38,8 @@ namespace patchestry::passes {
     class OperationMatcher
     {
       public:
+        enum Mode : uint8_t { OPERATION, FUNCTION };
+
         /**
          * @brief Checks if an operation matches the given patch specification.
          *
@@ -48,7 +51,8 @@ namespace patchestry::passes {
          * @param spec The patch specification to match against
          * @return true if the operation matches the specification
          */
-        static bool matches(mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec);
+        static bool
+        matches(mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec, Mode mode);
 
         /**
          * @brief Checks if an operation name matches the specified operation pattern.
@@ -79,6 +83,17 @@ namespace patchestry::passes {
          * @param argument_matches The argument match criteria
          * @return true if the arguments match the criteria
          */
+        static bool matches_arguments( // NOLINT
+            mlir::Operation *op, const std::vector< ArgumentMatch > &argument_matches
+        );
+
+        /**
+         * @brief Checks if operation operands match the specified operand patterns.
+         *
+         * @param op The operation whose operands to check
+         * @param operand_matches The operand match criteria
+         * @return true if the operands match the criteria
+         */
         static bool matches_operands( // NOLINT
             mlir::Operation *op, const std::vector< OperandMatch > &operand_matches
         );
@@ -93,9 +108,52 @@ namespace patchestry::passes {
          * @param variable_matches The variable match criteria
          * @return true if the variables match the criteria
          */
-        static bool matches_symbols( // NOLINT
+        static bool matches_variables( // NOLINT
             mlir::Operation *op, const std::vector< VariableMatch > &variable_matches
         );
+
+        /**
+         * @brief Checks if symbols match the specified symbol patterns.
+         *
+         * @param op The operation to check
+         * @param symbol_matches The symbol match criteria
+         * @return true if the symbols match the criteria
+         */
+        static bool matches_symbols( // NOLINT
+            mlir::Operation *op, const std::vector< SymbolMatch > &symbol_matches
+        );
+
+        /**
+         * @brief Matches operation-based criteria.
+         *
+         * @param op The operation to check
+         * @param func The function containing the operation
+         * @param match The operation match criteria
+         * @return true if the operation matches the criteria
+         */
+        static bool matches_operation( // NOLINT
+            mlir::Operation *op, cir::FuncOp func, const PatchMatch &match
+        );
+
+        /**
+         * @brief Matches function call-based criteria.
+         *
+         * @param op The operation to check (should be a call operation)
+         * @param func The function containing the call
+         * @param match The function match criteria
+         * @return true if the function call matches the criteria
+         */
+        static bool matches_function_call( // NOLINT
+            mlir::Operation *op, cir::FuncOp func, const PatchMatch &match
+        );
+
+        /**
+         * @brief Extracts the called function name from a call operation.
+         *
+         * @param call_op The call operation
+         * @return The name of the called function
+         */
+        static std::string extract_callee_name(cir::CallOp call_op); // NOLINT
 
       private:
         /**
