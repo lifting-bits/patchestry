@@ -471,7 +471,7 @@ namespace patchestry::passes {
             std::set< std::string > seen_functions;
             for (const auto &spec : config->patches) {
                 const auto &match = spec.match;
-                if (match.symbol != callee_name
+                if (match.name != callee_name
                     || seen_functions.find(callee_name) != seen_functions.end()
                     || exclude_from_patching(func, spec))
                 {

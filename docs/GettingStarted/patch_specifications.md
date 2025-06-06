@@ -78,8 +78,10 @@ patches:
 | `match.kind` | Type of match target (`function` or `operation`) | `"function"` |
 | `match.operation` | Operation type to match (for operation-based matching) | `"cir.load"`, `"cir.store"`, `"cir.binop"` |
 | `match.function_context` | Functions where operation matches should be applied | `name: "/.*secure.*/"` |
-| `match.variable_matches` | Variables used in the operation | `name: "/.*password.*/"` |
-| `match.argument_matches` | Function arguments or Opearnds to match | See below |
+| `match.variable_matches` | Variables used in the operation (for function-based matching) | `name: "/.*password.*/"` |
+| `match.argument_matches` | Function arguments or Opearnds to match (for function-based matching) | See below |
+| `match.symbol_matches` | Variables used in the operation (for operation-based matching) | `name: "/.*password.*/"` |
+| `match.operand_matches` | Function arguments or Opearnds to match (for operation-based matching) | See below |
 
 #### Operation-Based Matching
 
@@ -89,8 +91,8 @@ For operation-based matching, the following additional fields are available:
 |-------|-------------|---------|
 | `match.operation` | **Required** - MLIR operation name to match | `"cir.load"`, `"cir.store"`, `"cir.call"` |
 | `match.function_context` | List of functions where operation should be matched | `[{name: "/.*secure.*/"}]` |
-| `match.variable_matches` | Variables accessed by the operation | `[{name: "/.*secret.*/", type: "!cir.ptr<...>"}]` |
-| `match.argument_matches` | Operands matches for the operation | `[{index: 0, name: "addr", type: "!cir.ptr<...>"}]` |
+| `match.symbol_matches` | Variables accessed by the operation | `[{name: "/.*secret.*/", type: "!cir.ptr<...>"}]` |
+| `match.operand_matches` | Operands matches for the operation | `[{index: 0, name: "addr", type: "!cir.ptr<...>"}]` |
 
 #### Function Context Fields
 
@@ -99,16 +101,14 @@ For operation-based matching, the following additional fields are available:
 | `name` | Function name pattern (supports regex with `/pattern/`) | `"/.*secure.*/`, `"authenticate"` |
 | `type` | Function type pattern (optional) | `"!cir.func<!cir.void ()>"` |
 
-#### Variable Match Fields
+#### Symbol Match Fields  (Operation-Based Matching)
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `name` | Variable name pattern (supports regex with `/pattern/`) | `"/.*password.*/`, `"secret_key"` |
-| `type` | Variable type pattern (optional) | `"!cir.ptr<!cir.int<u, 32>>"` |
+| `name` | Symbol name pattern (supports regex with `/pattern/`) | `"/.*password.*/`, `"secret_key"` |
+| `type` | Symbol type pattern (optional) | `"!cir.ptr<!cir.int<u, 32>>"` |
 
 #### Operand Match Fields (Operation-Based Matching)
-
-For operation-based matching, `argument_matches` refers to operands of the operation:
 
 | Field | Description | Example |
 |-------|-------------|---------|
@@ -129,6 +129,13 @@ Common operand patterns:
 | `index` | Position of the argument (0-based) | `1` |
 | `name` | Name of the argument | `"buff"` |
 | `type` | Type of the argument | `"void*"` |
+
+#### Variable Match Fields  (Function-Based Matching)
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `name` | Variable name pattern (supports regex with `/pattern/`) | `"/.*password.*/`, `"secret_key"` |
+| `type` | Variable type pattern (optional) | `"!cir.ptr<!cir.int<u, 32>>"` |
 
 ### Patch Fields
 
@@ -158,7 +165,7 @@ Exclude is a top-level field in each patch entry that defines patterns to exclud
     function_context:
       - name: "/.*secure.*/"  # Functions containing "secure"
       - name: "authenticate"  # Exact function name
-    variable_matches:
+    symbol_matches:
       - name: "/.*password.*/"  # Variables containing "password"
         type: "!cir.ptr<!cir.int<u, 32>>"
 ```
@@ -171,7 +178,7 @@ Exclude is a top-level field in each patch entry that defines patterns to exclud
     operation: "cir.store"
     function_context:
       - name: "/.*critical.*/"
-    argument_matches:
+    operand_matches:
       - index: 0  # The value being stored (first operand)
         name: "user_input"
         type: "!cir.ptr<!cir.char>"

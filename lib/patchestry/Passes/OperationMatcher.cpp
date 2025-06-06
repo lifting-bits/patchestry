@@ -23,23 +23,28 @@ namespace patchestry::passes {
     OperationMatcher::matches(mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec) {
         const auto &match = spec.match;
 
-        // Check operation name match
-        if (!match.operation.empty() && !matches_operation_name(op, match.operation)) {
+        // If kind is not operation, or name is empty, return false
+        if (match.kind != MatchKind::OPERATION || match.name.empty()) {
             return false;
         }
 
-        // Check function context match
+        // Check operation name match and return false if it doesn't match
+        if (!matches_operation_name(op, match.name)) {
+            return false;
+        }
+
+        // Check function context match and return false if it doesn't match
         if (!matches_function_context(func, match.function_context)) {
             return false;
         }
 
-        // Check argument matches; incase of operation, it will check for the operand matches
-        if (!matches_operands(op, match.argument_matches)) {
+        // Check argument matches and return false if it doesn't match
+        if (!matches_operands(op, match.operand_matches)) {
             return false;
         }
 
-        // Check variable matches
-        if (!matches_variables(op, match.variable_matches)) {
+        // Check variable matches and return false if it doesn't match
+        if (!matches_symbols(op, match.symbol_matches)) {
             return false;
         }
 
@@ -49,8 +54,8 @@ namespace patchestry::passes {
     bool OperationMatcher::matches_operation_name(
         mlir::Operation *op, const std::string &operation_pattern
     ) {
-        // If operation pattern is empty, it will match all operations, clearly we don't want
-        // this. Return false if the operation name or pattern is empty
+        // If operation pattern is empty, it will match all operations, clearly we don't
+        // want this. Return false if the operation name or pattern is empty
         if (operation_pattern.empty()) {
             return false;
         }
@@ -123,11 +128,11 @@ namespace patchestry::passes {
         return true;
     }
 
-    bool OperationMatcher::matches_variables(
-        mlir::Operation *op, const std::vector< VariableMatch > &variable_matches
+    bool OperationMatcher::matches_symbols(
+        mlir::Operation *op, const std::vector< SymbolMatch > &symbol_matches
     ) {
         // If no variable matches specified, consider it a match
-        if (variable_matches.empty()) {
+        if (symbol_matches.empty()) {
             return true;
         }
 
@@ -138,7 +143,7 @@ namespace patchestry::passes {
             std::string var_name = extract_variable_name(op, i);
             std::string var_type = type_to_string(operand.getType());
 
-            for (const auto &var_match : variable_matches) {
+            for (const auto &var_match : symbol_matches) {
                 bool name_matches =
                     var_match.name.empty() || matches_pattern(var_name, var_match.name);
                 bool type_matches =
@@ -158,7 +163,7 @@ namespace patchestry::passes {
                 extract_variable_name(op, static_cast< unsigned >(operands.size() + i));
             std::string var_type = type_to_string(result.getType());
 
-            for (const auto &var_match : variable_matches) {
+            for (const auto &var_match : symbol_matches) {
                 bool name_matches =
                     var_match.name.empty() || matches_pattern(var_name, var_match.name);
                 bool type_matches =
@@ -234,8 +239,8 @@ namespace patchestry::passes {
 
     std::string OperationMatcher::extract_ssa_value_name(mlir::Value value) {
         // Check if the value has a location with name information
-        // Clangir does not uses NameLoc for associating names with values and it should go to
-        // fallback
+        // Clangir does not uses NameLoc for associating names with values and it should go
+        // to fallback
         auto loc = value.getLoc();
         if (auto name_loc = mlir::dyn_cast< mlir::NameLoc >(loc)) {
             return name_loc.getName().str();
