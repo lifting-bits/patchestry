@@ -32,13 +32,15 @@ namespace patchestry::passes {
         std::string type;
     };
 
+    using OperandMatch = ArgumentMatch;
+
     struct VariableMatch
     {
         std::string name;
         std::string type;
     };
 
-    struct FunctionMatch
+    struct FunctionContext
     {
         std::string name;
         std::string type;
@@ -49,7 +51,7 @@ namespace patchestry::passes {
         std::string symbol;
         std::string kind;
         std::string operation;
-        std::vector< FunctionMatch > function_matches;
+        std::vector< FunctionContext > function_context;
         std::vector< ArgumentMatch > argument_matches;
         std::vector< VariableMatch > variable_matches;
     };
@@ -115,7 +117,7 @@ namespace patchestry::passes {
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchSpec)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::VariableMatch)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ArgumentMatch)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::FunctionMatch)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::FunctionContext)
 
 class PatchSpecContext
 {
@@ -172,9 +174,9 @@ namespace llvm::yaml {
 
     // Prase FunctionMatch
     template<>
-    struct MappingTraits< patchestry::passes::FunctionMatch >
+    struct MappingTraits< patchestry::passes::FunctionContext >
     {
-        static void mapping(IO &io, patchestry::passes::FunctionMatch &func) {
+        static void mapping(IO &io, patchestry::passes::FunctionContext &func) {
             io.mapRequired("name", func.name);
             io.mapOptional("type", func.type);
         }
@@ -188,7 +190,7 @@ namespace llvm::yaml {
             io.mapOptional("symbol", match.symbol);
             io.mapOptional("kind", match.kind);
             io.mapOptional("operation", match.operation);
-            io.mapOptional("function_matches", match.function_matches);
+            io.mapOptional("function_context", match.function_context);
             io.mapOptional("argument_matches", match.argument_matches);
             io.mapOptional("variable_matches", match.variable_matches);
         }

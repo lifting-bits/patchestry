@@ -57,6 +57,7 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
     PE_RELAX_WARNINGS_END // End of MLIR headers
 
 #include <patchestry/Passes/InstrumentationPass.hpp>
+#include <patchestry/Passes/OperationMatcher.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
 
@@ -534,8 +535,7 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
         }
 
         for (const auto &spec : config->patches) {
-            if (spec.match.operation == op->getName().getStringRef().str()
-                && !exclude_from_patching(func, spec))
+            if (OperationMatcher::matches(op, func, spec) && !exclude_from_patching(func, spec))
             {
                 const auto &patch = spec.patch;
                 const auto &match = spec.match;

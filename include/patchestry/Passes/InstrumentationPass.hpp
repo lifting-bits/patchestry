@@ -8,11 +8,8 @@
 #pragma once
 
 #include <memory>
-#include <mlir/IR/Value.h>
+#include <optional>
 #include <string>
-
-#include <clang/CIR/Dialect/IR/CIRDialect.h>
-#include <clang/Frontend/CompilerInstance.h>
 
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/MLIRContext.h>
@@ -20,9 +17,21 @@
 #include <mlir/Pass/PassOptions.h>
 #include <mlir/Support/LLVM.h>
 
+#include <clang/CIR/Dialect/IR/CIRDialect.h>
+#include <clang/Frontend/CompilerInstance.h>
+
+#include <patchestry/Passes/OperationMatcher.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 
-namespace patchestry::passes {
+// Forward declarations to minimize header dependencies
+namespace mlir {
+    class Operation;
+    class Pass;
+    class Type;
+    class Value;
+} // namespace mlir
+
+namespace patchestry::passes { // NOLINT
 
     struct PatchOptions;
 
