@@ -38,6 +38,8 @@ namespace patchestry::passes {
     class OperationMatcher
     {
       public:
+        enum Mode : uint8_t { OPERATION, FUNCTION };
+
         /**
          * @brief Checks if an operation matches the given patch specification.
          *
@@ -49,7 +51,8 @@ namespace patchestry::passes {
          * @param spec The patch specification to match against
          * @return true if the operation matches the specification
          */
-        static bool matches(mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec);
+        static bool
+        matches(mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec, Mode mode);
 
         /**
          * @brief Checks if an operation name matches the specified operation pattern.

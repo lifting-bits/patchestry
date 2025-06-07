@@ -196,6 +196,8 @@ namespace llvm::yaml {
             io.mapOptional("function_context", match.function_context);
             io.mapOptional("argument_matches", match.argument_matches);
             io.mapOptional("variable_matches", match.variable_matches);
+            io.mapOptional("symbol_matches", match.symbol_matches);
+            io.mapOptional("operand_matches", match.operand_matches);
 
             std::string kind_str;
             io.mapRequired("kind", kind_str);

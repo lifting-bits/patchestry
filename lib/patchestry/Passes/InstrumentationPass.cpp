@@ -481,7 +481,7 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
             }
 
             for (const auto &spec : config->patches) {
-                if (OperationMatcher::matches(op, func, spec)
+                if (OperationMatcher::matches(op, func, spec, OperationMatcher::Mode::FUNCTION)
                     && !exclude_from_patching(func, spec))
                 {
                     const auto &patch = spec.patch;
@@ -537,7 +537,8 @@ PE_RELAX_WARNINGS_BEGIN // Relax warnings for MLIR headers
         }
 
         for (const auto &spec : config->patches) {
-            if (OperationMatcher::matches(op, func, spec) && !exclude_from_patching(func, spec))
+            if (OperationMatcher::matches(op, func, spec, OperationMatcher::Mode::OPERATION)
+                && !exclude_from_patching(func, spec))
             {
                 const auto &patch = spec.patch;
                 const auto &match = spec.match;

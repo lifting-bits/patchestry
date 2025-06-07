@@ -19,26 +19,33 @@
 
 namespace patchestry::passes {
 
-    bool
-    OperationMatcher::matches(mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec) {
+    bool OperationMatcher::matches(
+        mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec,
+        OperationMatcher::Mode mode // NOLINT
+    ) {
         const auto &match = spec.match;
 
         // Handle different match kinds
-        switch (match.kind) {
-            case MatchKind::OPERATION:
+        switch (mode) {
+            case OperationMatcher::Mode::OPERATION:
                 return matches_operation(op, func, match);
-            case MatchKind::FUNCTION:
+            case OperationMatcher::Mode::FUNCTION:
                 return matches_function_call(op, func, match);
-            default:
-                return false;
         }
+
+        return false;
     }
 
     bool OperationMatcher::matches_operation(
         mlir::Operation *op, cir::FuncOp func, const PatchMatch &match
     ) {
-        // Check operation name match
-        if (!match.name.empty() && !matches_operation_name(op, match.name)) {
+        // If the match kind is not operation, return false
+        if (match.name.empty() || match.kind != MatchKind::OPERATION) {
+            return false;
+        }
+
+        // Check operation name match and return false if it doesn't match
+        if (!matches_operation_name(op, match.name)) {
             return false;
         }
 
@@ -63,6 +70,11 @@ namespace patchestry::passes {
     bool OperationMatcher::matches_function_call(
         mlir::Operation *op, cir::FuncOp func, const PatchMatch &match
     ) {
+        // If the match kind is not function, return false
+        if (match.name.empty() || match.kind != MatchKind::FUNCTION) {
+            return false;
+        }
+
         // For function-based matching, we expect a cir.call operation
         auto call_op = mlir::dyn_cast< cir::CallOp >(op);
         if (!call_op) {
