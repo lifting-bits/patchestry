@@ -6,8 +6,8 @@ patches:
       kind: "function"
       argument_matches:
         - index: 0
-          name: "SVar5"
-          type: "SFtype"
+          name: "var6"
+          type: "!cir.float"
     patch:
       mode: "ApplyBefore"
       patch_file: "patch_spo2_lookup.c"
