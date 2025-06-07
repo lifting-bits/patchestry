@@ -15,9 +15,12 @@ set(CMAKE_LINKER_TYPE LLD CACHE STRING "Linker type for the Patchestry build sho
 # Build components in dependency order
 add_subdirectory(gflags)
 add_subdirectory(glog)  # Depends on gflags
-add_subdirectory(z3)
 
-if(USE_VENDORED_CLANG)
+if(PE_USE_VENDORED_Z3)
+    add_subdirectory(z3)
+endif()
+
+if(PE_USE_VENDORED_CLANG)
     add_subdirectory(clangir)
 endif()
 
