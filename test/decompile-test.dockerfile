@@ -132,7 +132,7 @@ COPY --chown=user:user --from=base /opt/gradle/ /opt/gradle/
 ENV PATH="/opt/gradle/latest/bin:${PATH}"
 
 WORKDIR /home/user
-COPY test/scripts/java/ .
+COPY test/scripts/java/ "$GHIDRA_SCRIPTS"
 
 # the GHIDRA_* env vars here come from the parent Dockerfile.
 ENV CLASSPATH="/home/user:\
@@ -228,7 +228,7 @@ $GHIDRA_SCRIPTS:\
 /home/user/ghidra_source/Ghidra/Extensions/BSimElasticPlugin/build/libs/*:"
 
 # we want all the tests, even if we add more later
-RUN javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/*.java` `ls ./*Test.java`
+RUN javac -Xlint:-options -cp "$CLASSPATH" `ls $GHIDRA_SCRIPTS/domain/*.java` `ls $GHIDRA_SCRIPTS/util/*.java` `ls $GHIDRA_SCRIPTS/*.java`
 # we use PULSEOX_FW_PATH for tests
 ENV PULSEOX_FW_PATH="/home/user/pulseox-firmware.elf"
 COPY --chown=user:user --from=base $PULSEOX_FW_PATH $PULSEOX_FW_PATH
@@ -238,9 +238,9 @@ COPY --chown=user:user --from=base $BLOODLIGHT_FW_PATH $BLOODLIGHT_FW_PATH
 
 RUN mkdir /home/user/test_output
 ENTRYPOINT java \
-        -Djunit.output.dir=test_output \
+        -Djunit.output.dir=/home/user/test_output \
         org.junit.platform.console.ConsoleLauncher \
             --class-path "${CLASSPATH}" \
             --disable-banner \
             --scan-classpath \
-            --include-classname ".*Test$"
+            --include-classname "/home/user/ghidra_scripts/.*Test$"

@@ -65,9 +65,11 @@ WORKDIR /home/user/
 COPY --chown=user:user --from=build /ghidra ghidra
 COPY --chown=user:user --chmod=755 decompile-entrypoint.sh  .
 
+# put the Java helper code where our Ghidra scripts expect it
 WORKDIR /home/user/ghidra_scripts/
-COPY PatchestryListFunctions.java .
-COPY PatchestryDecompileFunctions.java .
+COPY domain/ domain/
+COPY util/ util/
+COPY *.java .
 
 WORKDIR /home/user/
 ENV GHIDRA_HOME=/home/user/ghidra
