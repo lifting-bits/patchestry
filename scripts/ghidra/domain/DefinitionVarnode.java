@@ -22,12 +22,12 @@ public class DefinitionVarnode extends Varnode {
 
     @Override
     public PcodeOp getDefinitionPcodeOp() {
-        return definitionPcodeOp;
+        return this.definitionPcodeOp;
     }
 
     @Override
     public HighVariable getHighVariable() {
-        return highVariable;
+        return this.highVariable;
     }
 
     @Override
