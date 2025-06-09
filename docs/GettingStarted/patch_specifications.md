@@ -144,7 +144,7 @@ Common operand patterns:
 | `patch.mode` | patching mode to be applied (`ApplyBefore`, `ApplyAfter`, `Replace`) | `"ApplyBefore"` |
 | `patch.patch_file` | Path to the C file containing patch code | `"path/to/patch.c"` |
 | `patch.patch_function` | Function in patch file to call | `"patch::before::function_name"` |
-| `patch.arguments` | List of arguments to pass to patch function | `["arg1", "arg2"]` |
+| `patch.arguments` | List of arguments to pass to patch function | See [Argument Specification](#argument-specification) |
 
 ### Exclude Fields
 
@@ -153,6 +153,133 @@ Exclude is a top-level field in each patch entry that defines patterns to exclud
 | Field | Description | Example |
 |-------|-------------|---------|
 | `exclude` | List of function name patterns to exclude from matching | `- "^func_*"` |
+
+## Argument Specification
+
+Arguments passed to patch functions can come from different sources and are specified using a structured format that supports operands, function arguments, variables, and constants.
+
+### Argument Structure
+
+```yaml
+arguments:
+  - name: "operand_value"
+    source: "operand"
+    index: 0
+  - name: "constant_size"
+    source: "constant"
+    value: "1024"
+  - name: "local_var"
+    source: "variable"
+    symbol: "buffer_size"
+```
+
+### Argument Fields
+
+| Field | Description | Required | Example |
+|-------|-------------|----------|---------|
+| `name` | Descriptive name for the argument | Yes | `"left_operand"`, `"store_address"` |
+| `source` | Where the argument comes from | Yes | `"operand"`, `"argument"`, `"variable"`, `"constant"` |
+| `index` | Index for operands/arguments | When `source` is `"operand"` or `"argument"` | `0`, `1`, `2` |
+| `symbol` | Symbol name for variables | When `source` is `"variable"` | `"key_size"`, `"current_time"` |
+| `value` | Literal value for constants | When `source` is `"constant"` | `"1024"`, `"0x1000"` |
+
+### Argument Source Types
+
+| Source | Description | Required Fields | Use Case |
+|--------|-------------|-----------------|----------|
+| `operand` | Operation operand by position | `index` | Access operands of matched operations |
+| `argument` | Function call argument by position | `index` | Access arguments of matched function calls |
+| `variable` | Local variable or symbol by name | `symbol` | Access local variables in scope |
+| `constant` | Literal constant value | `value` | Pass fixed values to patch functions |
+
+### Argument Examples
+
+#### Function Call Arguments
+```yaml
+# Validate function arguments before call
+arguments:
+  - name: "dest_ptr"
+    source: "argument"
+    index: 0
+  - name: "src_ptr"
+    source: "argument"
+    index: 1
+  - name: "max_size"
+    source: "constant"
+    value: "4096"
+```
+
+#### Operation Operands
+```yaml
+# Check arithmetic overflow
+arguments:
+  - name: "left_val"
+    source: "operand"
+    index: 0
+  - name: "right_val"
+    source: "operand"
+    index: 1
+  - name: "overflow_limit"
+    source: "constant"
+    value: "4294967295"
+```
+
+#### Mixed Argument Types
+```yaml
+# Comprehensive validation
+arguments:
+  - name: "memory_addr"
+    source: "operand"
+    index: 0
+  - name: "buffer_size"
+    source: "variable"
+    symbol: "allocated_size"
+  - name: "validation_level"
+    source: "constant"
+    value: "2"
+  - name: "caller_func"
+    source: "argument"
+    index: 2
+```
+
+## Complete Patch Examples
+
+### Example 1: Function Call Validation with Structured Arguments
+
+```yaml
+arch: "ARM:LE:32"
+patches:
+  - name: "validate_memcpy_calls"
+    match:
+      symbol: "memcpy"
+      kind: "function"
+      argument_matches:
+        - index: 0
+          name: "dest"
+          type: "!cir.ptr<!cir.void>"
+        - index: 2
+          name: "size"
+          type: "!cir.int<u, 32>"
+    patch:
+      mode: "ApplyBefore"
+      patch_file: "patches/bounds_check.c"
+      patch_function: "validate_memcpy"
+      arguments:
+        - name: "dest_ptr"
+          source: "argument"
+          index: 0
+        - name: "copy_size"
+          source: "argument"
+          index: 2
+        - name: "max_allowed"
+          source: "constant"
+          value: "4096"
+        - name: "buffer_limit"
+          source: "variable"
+          symbol: "max_buffer_size"
+    exclude:
+      - "test_*"
+```
 
 ## Operation-Based Matching Examples
 
