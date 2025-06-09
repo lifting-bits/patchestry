@@ -107,7 +107,11 @@ RUN wget -O dependencies/downloads/gson-2.9.0.jar \
     wget -O dependencies/downloads/antlr-runtime-3.5.2.jar \
         https://repo1.maven.org/maven2/org/antlr/antlr-runtime/3.5.2/antlr-runtime-3.5.2.jar && \
     wget -O dependencies/downloads/guava-32.1.2-jre.jar \
-        https://repo1.maven.org/maven2/com/google/guava/guava/32.1.2-jre/guava-32.1.2-jre.jar
+        https://repo1.maven.org/maven2/com/google/guava/guava/32.1.2-jre/guava-32.1.2-jre.jar && \
+    wget -O dependencies/downloads/javahelp-2.0.05.jar \ 
+        https://repo1.maven.org/maven2/javax/help/javahelp/2.0.05/javahelp-2.0.05.jar && \
+    wget -O dependencies/downloads/commons-compress-1.21.jar \
+        https://repo1.maven.org/maven2/org/apache/commons/commons-compress/1.21/commons-compress-1.21.jar
 
 RUN sudo apt-get -y autoremove --purge && \
     sudo apt-get purge -y ninja-build cmake libnewlib-arm-none-eabi gcc-arm-none-eabi flex bison && \
@@ -232,8 +236,7 @@ COPY --chown=user:user --from=base $PULSEOX_FW_PATH $PULSEOX_FW_PATH
 ENV BLOODLIGHT_FW_PATH="/home/user/bloodlight-firmware.elf"
 COPY --chown=user:user --from=base $BLOODLIGHT_FW_PATH $BLOODLIGHT_FW_PATH
 
-RUN mkdir test_output
-
+RUN mkdir /home/user/test_output
 ENTRYPOINT java \
         -Djunit.output.dir=test_output \
         org.junit.platform.console.ConsoleLauncher \

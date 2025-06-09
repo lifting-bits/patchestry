@@ -5,10 +5,11 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.io.File;
 
 import org.junit.jupiter.api.*;
-import static org.junit.jupiter.api.Assertions.*;
 
 import ghidra.app.util.importer.AutoImporter;
 import ghidra.app.util.importer.MessageLog;
@@ -31,7 +32,7 @@ public class PatchestryDecompileFunctionsTest extends AbstractGhidraHeadlessInte
             fw,
             project,
             project.getProjectData().getRootFolder().getPathname(),
-            (Object) null,
+            this,
             log,
             monitor
         );
