@@ -21,7 +21,7 @@ public class UseVarnode extends Varnode {
 
     @Override
     public HighVariable getHighVariable() {
-        return highVariable;
+        return this.highVariable;
     }
 
     @Override
