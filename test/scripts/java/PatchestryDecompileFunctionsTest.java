@@ -15,7 +15,12 @@ import ghidra.app.util.importer.AutoImporter;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.app.util.opinion.LoadResults;
 import ghidra.framework.model.Project;
+import ghidra.program.model.lang.CompilerSpec;
+import ghidra.program.model.lang.Language;
+import ghidra.program.model.lang.LanguageID;
+import ghidra.program.model.lang.LanguageService;
 import ghidra.program.model.listing.Program;
+import ghidra.program.util.DefaultLanguageService;
 import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
 import ghidra.test.TestEnv;
 import ghidra.util.task.TaskMonitor;
@@ -27,11 +32,18 @@ public class PatchestryDecompileFunctionsTest extends AbstractGhidraHeadlessInte
     private MessageLog log = new MessageLog();
     private TaskMonitor monitor = TaskMonitor.DUMMY;
 
-    private Program load(File fw, Project project) throws Exception {
-        LoadResults<Program> importResults = AutoImporter.importByUsingBestGuess(
+    private Program load(File fw, String arch, Project project) throws Exception {
+        LanguageService languageService = DefaultLanguageService.getLanguageService();
+        LanguageID langId = new LanguageID(arch);
+        Language language = languageService.getLanguage(langId);
+        CompilerSpec compilerSpec = language.getDefaultCompilerSpec();
+
+        LoadResults<Program> importResults = AutoImporter.importByLookingForLcs(
             fw,
             project,
             project.getProjectData().getRootFolder().getPathname(),
+            language,
+            compilerSpec,
             this,
             log,
             monitor
@@ -47,12 +59,12 @@ public class PatchestryDecompileFunctionsTest extends AbstractGhidraHeadlessInte
         // The test environment is based on the main headless container, 
         // which must be built first before the test container!
         File pulseOxFirmware = new File(System.getenv("PULSEOX_FW_PATH"));
-        pulseOxProgram = load(pulseOxFirmware, project);
+        pulseOxProgram = load(pulseOxFirmware, "ARM:LE:32:Cortex", project);
 
         // the same is true of BLOODLIGHT_FW_PATH - it comes from 
         // decompile-test.dockerfile
         File bloodlightFirmware = new File(System.getenv("BLOODLIGHT_FW_PATH"));
-        bloodlightProgram = load(bloodlightFirmware, project);
+        bloodlightProgram = load(bloodlightFirmware, "ARM:LE:32:Cortex", project);
     }
 
     @AfterAll
