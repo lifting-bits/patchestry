@@ -18,6 +18,8 @@ patches:
       patch_file: "patch_spo2_lookup.c"
       patch_function: "patch::before::spo2_lookup"
       arguments:
-        - "var6"
+        - name: "function_argument"
+          source: "operand"
+          index: 0
     exclude:
       - "test_.*"

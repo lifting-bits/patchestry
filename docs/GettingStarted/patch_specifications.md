@@ -191,6 +191,7 @@ arguments:
 | `argument` | Function call argument by position | `index` | Access arguments of matched function calls |
 | `variable` | Local variable or symbol by name | `symbol` | Access local variables in scope |
 | `constant` | Literal constant value | `value` | Pass fixed values to patch functions |
+| `return_value` | Return value of function or operation | None | Access return value (for ApplyAfter mode) |
 
 ### Argument Examples
 
@@ -222,6 +223,17 @@ arguments:
   - name: "overflow_limit"
     source: "constant"
     value: "4294967295"
+```
+
+#### Return Value Handling
+```yaml
+# Access function return value (ApplyAfter mode)
+arguments:
+  - name: "result"
+    source: "return_value"
+  - name: "success_code"
+    source: "constant"
+    value: "0"
 ```
 
 #### Mixed Argument Types

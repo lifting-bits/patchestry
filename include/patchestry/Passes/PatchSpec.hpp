@@ -27,6 +27,23 @@ namespace patchestry::passes {
 
     enum class MatchKind : uint8_t { NONE = 0, OPERATION, FUNCTION };
 
+    enum class ArgumentSourceType : uint8_t {
+        OPERAND = 0, // Reference to operation operand by index
+        VARIABLE,    // Reference to variable by name
+        SYMBOL,      // Reference to symbol by name
+        CONSTANT,    // Literal constant value
+        RETURN_VALUE // Return value of function or operation
+    };
+
+    struct ArgumentSource
+    {
+        ArgumentSourceType source;
+        std::string name;                // Descriptive name for the argument
+        std::optional< unsigned > index; // Operand/argument index (required for OPERAND type)
+        std::optional< std::string > symbol; // Symbol name (required for VARIABLE/SYMBOL type)
+        std::optional< std::string > value;  // Constant value (required for CONSTANT type)
+    };
+
     struct ArgumentMatch
     {
         unsigned index;
@@ -68,7 +85,8 @@ namespace patchestry::passes {
         std::string patch_file;
         std::string patch_function;
         std::optional< std::string > patch_module;
-        std::vector< std::string > arguments;
+        std::vector< ArgumentSource >
+            argument_sources; // New: structured argument specifications
     };
 
     struct PatchSpec
@@ -122,6 +140,7 @@ namespace patchestry::passes {
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchSpec)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::VariableMatch)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ArgumentMatch)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ArgumentSource)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::FunctionContext)
 
 class PatchSpecContext
@@ -156,6 +175,36 @@ class PatchSpecContext
 };
 
 namespace llvm::yaml {
+    // Parse ArgumentSource
+    template<>
+    struct MappingTraits< patchestry::passes::ArgumentSource >
+    {
+        static void mapping(IO &io, patchestry::passes::ArgumentSource &arg) {
+            std::string source_str;
+            io.mapRequired("source", source_str);
+
+            if (source_str == "operand") {
+                arg.source = patchestry::passes::ArgumentSourceType::OPERAND;
+            } else if (source_str == "argument") {
+                arg.source = patchestry::passes::ArgumentSourceType::OPERAND; // Treat argument
+                                                                              // same as operand
+            } else if (source_str == "variable") {
+                arg.source = patchestry::passes::ArgumentSourceType::VARIABLE;
+            } else if (source_str == "symbol") {
+                arg.source = patchestry::passes::ArgumentSourceType::SYMBOL;
+            } else if (source_str == "constant") {
+                arg.source = patchestry::passes::ArgumentSourceType::CONSTANT;
+            } else if (source_str == "return_value") {
+                arg.source = patchestry::passes::ArgumentSourceType::RETURN_VALUE;
+            }
+
+            io.mapRequired("name", arg.name);
+            io.mapOptional("index", arg.index);
+            io.mapOptional("symbol", arg.symbol);
+            io.mapOptional("value", arg.value);
+        }
+    };
+
     // Prase ArgumentMatch
     template<>
     struct MappingTraits< patchestry::passes::ArgumentMatch >
@@ -219,7 +268,7 @@ namespace llvm::yaml {
             io.mapOptional("code", patch.code);
             io.mapOptional("patch_file", patch.patch_file);
             io.mapOptional("patch_function", patch.patch_function);
-            io.mapOptional("arguments", patch.arguments);
+            io.mapOptional("arguments", patch.argument_sources);
 
             std::string mode_str;
             io.mapRequired("mode", mode_str);

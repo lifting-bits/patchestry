@@ -9,6 +9,8 @@ patches:
       patch_file: "patch_spo2_lookup.c"
       patch_function: "patch::replace::spo2_lookup"
       arguments:
-        - "var6"
+        - name: "function_argument"
+          source: "variable"
+          symbol: "var6"
     exclude:
       - ""

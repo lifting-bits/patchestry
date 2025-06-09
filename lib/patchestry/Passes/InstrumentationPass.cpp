@@ -519,7 +519,7 @@ namespace patchestry::passes {
      *
      * @param op The operation to be instrumented
      */
-    void InstrumentationPass::instrument_operation(mlir::Operation * op) {
+    void InstrumentationPass::instrument_operation(mlir::Operation *op) {
         if (!config || config->patches.empty()) {
             LOG(ERROR) << "No patch configuration found. Skipping...\n";
             return;
@@ -560,7 +560,8 @@ namespace patchestry::passes {
 
     /**
      * @brief Prepares the arguments for a function call based on the patch information.
-     *        This function handles argument type casting and argument matching.
+     *        This function handles argument type casting and argument matching using
+     *        the new structured ArgumentSource specifications.
      *
      * @param builder The MLIR operation builder.
      * @param op The call operation to be instrumented.
@@ -572,41 +573,6 @@ namespace patchestry::passes {
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
         const PatchInfo &patch, llvm::SmallVector< mlir::Value > &args
     ) {
-        if (call_op->getNumOperands() == 0) {
-            assert(patch.arguments.empty() && "Patch arguments are not empty");
-            assert(
-                patch_func.getNumArguments() == 0 && "Patch function arguments are not empty"
-            );
-            return;
-        }
-
-        if (patch_func.getNumArguments() > call_op->getNumOperands()) {
-            LOG(ERROR) << "Number of arguments in patch is greater than the number of "
-                          "arguments in the call operation\n";
-            return;
-        }
-
-        // Check if patch function argument is taking return value
-        if (patch.arguments.size() == 1 && patch.arguments[0] == "return_value") {
-            if (call_op->getResultTypes().size() == 0) {
-                LOG(ERROR) << "Call operation does not have a return value\n";
-                return;
-            }
-            auto patch_argument_type = patch_func.getArguments().front().getType();
-            auto call_return_type    = call_op->getResultTypes().front();
-            if (patch_argument_type != call_return_type) {
-                auto cast_op = builder.create< cir::CastOp >(
-                    call_op->getLoc(), patch_argument_type,
-                    getCastKind(call_return_type, patch_argument_type),
-                    call_op->getResults().front()
-                );
-                args.append(cast_op->getResults().begin(), cast_op->getResults().end());
-                return;
-            }
-            args.append(call_op->getResults().begin(), call_op->getResults().end());
-            return;
-        }
-
         auto create_cast = [&](mlir::Value value, mlir::Type type) -> mlir::Value {
             if (value.getType() == type) {
                 return value;
@@ -618,18 +584,223 @@ namespace patchestry::passes {
             return cast_op->getResults().front();
         };
 
-        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
-            for (unsigned i = 0; i < patch.arguments.size(); i++) {
-                auto patch_arg_type = patch_func.getArgumentTypes()[i];
-                args.push_back(create_cast(orig_call_op.getArgOperands()[i], patch_arg_type));
-            }
-            return;
-        }
+        // Handle structured argument specifications
+        for (size_t i = 0;
+             i < patch.argument_sources.size() && i < patch_func.getNumArguments(); ++i)
+        {
+            const auto &arg_spec = patch.argument_sources[i];
+            auto patch_arg_type  = patch_func.getArgumentTypes()[i];
+            mlir::Value arg_value;
 
-        // llvm::SmallVector< mlir::Value, 4 > argument_vec;
-        for (unsigned i = 0; i < patch.arguments.size(); i++) {
-            auto patch_arg_type = patch_func.getArgumentTypes()[i];
-            args.push_back(create_cast(call_op->getOperands()[i], patch_arg_type));
+            switch (arg_spec.source) {
+                case ArgumentSourceType::OPERAND: {
+                    // Get operand by index
+                    if (!arg_spec.index.has_value()) {
+                        LOG(ERROR) << "OPERAND source requires index field\n";
+                        continue;
+                    }
+                    unsigned idx = arg_spec.index.value();
+
+                    if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
+                        if (idx >= orig_call_op.getArgOperands().size()) {
+                            LOG(ERROR) << "Operand index " << idx << " out of range\n";
+                            continue;
+                        }
+                        arg_value = orig_call_op.getArgOperands()[idx];
+                    } else {
+                        if (idx >= call_op->getNumOperands()) {
+                            LOG(ERROR) << "Operand index " << idx << " out of range\n";
+                            continue;
+                        }
+                        arg_value = call_op->getOperand(idx);
+                    }
+                    break;
+                }
+                case ArgumentSourceType::VARIABLE: {
+                    // Handle local variables only
+                    if (!arg_spec.symbol.has_value()) {
+                        LOG(ERROR) << "VARIABLE source requires symbol field\n";
+                        continue;
+                    }
+
+                    const std::string &var_name = arg_spec.symbol.value();
+                    mlir::Value var_value;
+                    bool found = false;
+
+                    // Look for local variables in function scope only
+                    auto func = call_op->getParentOfType< cir::FuncOp >();
+                    if (!func) {
+                        LOG(ERROR) << "Cannot find parent function for local variable lookup\n";
+                        continue;
+                    }
+
+                    // Search for local variables in function scope
+                    func.walk([&](mlir::Operation *op) {
+                        if (auto alloca_op = mlir::dyn_cast< cir::AllocaOp >(op)) {
+                            if (auto name_attr = op->getAttrOfType< mlir::StringAttr >("name"))
+                            {
+                                if (name_attr.getValue() == var_name) {
+                                    var_value = alloca_op.getResult();
+                                    found     = true;
+                                    return mlir::WalkResult::interrupt();
+                                }
+                            }
+                        }
+                        return mlir::WalkResult::advance();
+                    });
+
+                    if (!found) {
+                        LOG(WARNING) << "Local variable '" << var_name << "' not found\n";
+                        continue;
+                    }
+                    arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), var_value);
+                    break;
+                }
+                case ArgumentSourceType::SYMBOL: {
+                    // Handle global variables, functions, and any symbol in symbol table
+                    if (!arg_spec.symbol.has_value()) {
+                        LOG(ERROR) << "SYMBOL source requires symbol field\n";
+                        continue;
+                    }
+
+                    const std::string &symbol_name = arg_spec.symbol.value();
+                    mlir::Value symbol_value;
+                    bool found = false;
+
+                    auto module = call_op->getParentOfType< mlir::ModuleOp >();
+                    if (!module) {
+                        LOG(ERROR) << "Cannot find parent module for symbol lookup\n";
+                        continue;
+                    }
+
+                    // Look for global variables
+                    if (auto global_op = module.lookupSymbol< cir::GlobalOp >(symbol_name)) {
+                        // Create a GetGlobal operation to access the global variable
+                        auto global_type = global_op.getSymType();
+                        if (auto global_ptr_type =
+                                mlir::dyn_cast< cir::PointerType >(global_type))
+                        {
+                            symbol_value = builder.create< cir::GetGlobalOp >(
+                                call_op->getLoc(), global_ptr_type, symbol_name
+                            );
+                            found = true;
+                        } else {
+                            // For non-pointer globals, create a pointer type
+                            auto ptr_type =
+                                cir::PointerType::get(builder.getContext(), global_type);
+                            symbol_value = builder.create< cir::GetGlobalOp >(
+                                call_op->getLoc(), ptr_type, symbol_name
+                            );
+                            found = true;
+                        }
+                    }
+
+                    // Look for functions
+                    if (!found) {
+                        if (auto func_op = module.lookupSymbol< cir::FuncOp >(symbol_name)) {
+                            // Create a function reference
+                            auto func_type = func_op.getFunctionType();
+                            auto func_ptr_type =
+                                cir::PointerType::get(builder.getContext(), func_type);
+                            auto symbol_ref =
+                                mlir::FlatSymbolRefAttr::get(builder.getContext(), symbol_name);
+
+                            // Create a constant operation for the function pointer
+                            symbol_value = builder.create< cir::GetGlobalOp >(
+                                call_op->getLoc(), func_ptr_type, symbol_ref
+                            );
+                            found = true;
+                        }
+                    }
+
+                    if (!found) {
+                        LOG(WARNING)
+                            << "Symbol '" << symbol_name << "' not found in symbol table\n";
+                        continue;
+                    }
+                    arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), symbol_value);
+                    break;
+                }
+                case ArgumentSourceType::RETURN_VALUE: {
+                    // Handle return value of function or operation
+                    if (call_op->getNumResults() == 0) {
+                        LOG(ERROR) << "Operation/function does not have a return value\n";
+                        continue;
+                    }
+
+                    // Get the first result (most common case)
+                    arg_value = call_op->getResult(0);
+                    break;
+                }
+                case ArgumentSourceType::CONSTANT: {
+                    // Create constant value
+                    if (!arg_spec.value.has_value()) {
+                        LOG(ERROR) << "CONSTANT source requires value field\n";
+                        continue;
+                    }
+
+                    const std::string &const_value = arg_spec.value.value();
+
+                    // Parse constant based on patch function argument type
+                    if (auto int_type = mlir::dyn_cast< cir::IntType >(patch_arg_type)) {
+                        try {
+                            // Parse integer constant
+                            int64_t int_val =
+                                std::stoll(const_value, nullptr, 0); // Support hex, oct, dec
+
+                            auto attr = cir::IntAttr::get(
+                                cir::IntType::get(
+                                    builder.getContext(), int_type.getWidth(),
+                                    int_type.isSigned()
+                                ),
+                                llvm::APSInt(int_type.getWidth(), int_val)
+                            );
+                            arg_value = builder.create< cir::ConstantOp >(
+                                call_op->getLoc(), patch_arg_type, attr
+                            );
+                        } catch (const std::exception &e) {
+                            LOG(ERROR) << "Failed to parse integer constant '" << const_value
+                                       << "': " << e.what() << "\n";
+                            continue;
+                        }
+                    } else if (auto ptr_type =
+                                   mlir::dyn_cast< cir::PointerType >(patch_arg_type))
+                    {
+                        try {
+                            // Parse pointer constant (usually hex address)
+                            uint64_t ptr_val = std::stoull(const_value, nullptr, 0);
+                            auto int_type = cir::IntType::get(builder.getContext(), 64, false);
+                            auto int_attr = cir::IntAttr::get(
+                                cir::IntType::get(
+                                    builder.getContext(), int_type.getWidth(),
+                                    int_type.isSigned()
+                                ),
+                                llvm::APSInt(int_type.getWidth(), ptr_val)
+                            );
+                            auto int_const = builder.create< cir::ConstantOp >(
+                                call_op->getLoc(), int_type, int_attr
+                            );
+                            arg_value = builder.create< cir::CastOp >(
+                                call_op->getLoc(), patch_arg_type, cir::CastKind::int_to_ptr,
+                                int_const
+                            );
+                        } catch (const std::exception &e) {
+                            LOG(ERROR) << "Failed to parse pointer constant '" << const_value
+                                       << "': " << e.what() << "\n";
+                            continue;
+                        }
+                    } else {
+                        LOG(ERROR)
+                            << "Unsupported constant type for value '" << const_value << "'\n";
+                        continue;
+                    }
+                    break;
+                }
+            }
+
+            if (arg_value) {
+                args.push_back(create_cast(arg_value, patch_arg_type));
+            }
         }
     }
 
