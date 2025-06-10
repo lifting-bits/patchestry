@@ -814,29 +814,35 @@ namespace patchestry::passes {
      * @param patch_module The module containing the patch function.
      */
     void InstrumentationPass::apply_before_patch(
-        mlir::Operation *call_op, const PatchMatch &match, const PatchInfo &patch,
+        mlir::Operation *target_op, const PatchMatch &match, const PatchInfo &patch,
         mlir::ModuleOp patch_module
     ) {
-        if (call_op == nullptr) {
+        if (target_op == nullptr) {
             LOG(ERROR) << "Patch before: Operation is null";
             return;
         }
 
-        mlir::OpBuilder builder(call_op);
-        builder.setInsertionPoint(call_op);
-        auto module = call_op->getParentOfType< mlir::ModuleOp >();
+        mlir::OpBuilder builder(target_op);
+        builder.setInsertionPoint(target_op);
+        auto module = target_op->getParentOfType< mlir::ModuleOp >();
 
         std::string patch_function_name = namifyPatchFunction(patch.patch_function);
-        auto input_types                = llvm::to_vector(call_op->getOperandTypes());
+        auto input_types                = llvm::to_vector(target_op->getOperandTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
             return;
         }
 
-        auto result = merge_module_symbol(module, patch_module, patch_function_name);
-        if (mlir::failed(result)) {
-            LOG(ERROR) << "Failed to insert symbol into module\n";
-            return;
+        // check if the patch function is already in the module, if not, merge it
+        if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
+            auto result = merge_module_symbol(module, patch_module, patch_function_name);
+            if (mlir::failed(result)) {
+                LOG(ERROR) << "Failed to insert symbol into module\n";
+                return;
+            }
+        } else {
+            LOG(INFO) << "Patch function " << patch_function_name
+                      << " already exists in module, skipping merge\n";
         }
 
         auto patch_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
@@ -847,28 +853,19 @@ namespace patchestry::passes {
         }
 
         auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(call_op->getContext(), patch_function_name);
+            mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
         llvm::SmallVector< mlir::Value > function_args;
-        prepare_call_arguments(builder, call_op, patch_func, patch, function_args);
+        prepare_call_arguments(builder, target_op, patch_func, patch, function_args);
         auto patch_call_op = builder.create< cir::CallOp >(
-            call_op->getLoc(), symbol_ref,
+            target_op->getLoc(), symbol_ref,
             patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
                                                      : mlir::Type(),
             function_args
         );
 
-        // Add extra attributes for the patched call function
-        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
-            patch_call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
-        } else {
-            mlir::NamedAttrList empty;
-            patch_call_op->setAttr(
-                "extra_attrs",
-                cir::ExtraFuncAttributesAttr::get(
-                    call_op->getContext(), empty.getDictionary(call_op->getContext())
-                )
-            );
-        }
+        // Set appropriate attributes based on operation type
+        set_patch_call_attributes(patch_call_op, target_op);
+
         if (patch_options.enable_inlining) {
             inline_worklists.push_back(patch_call_op);
         }
@@ -885,29 +882,35 @@ namespace patchestry::passes {
      * @param patch_module The module containing the patch function.
      */
     void InstrumentationPass::apply_after_patch(
-        mlir::Operation *call_op, const PatchMatch &match, const PatchInfo &patch,
+        mlir::Operation *target_op, const PatchMatch &match, const PatchInfo &patch,
         mlir::ModuleOp patch_module
     ) {
-        if (call_op == nullptr) {
+        if (target_op == nullptr) {
             LOG(ERROR) << "Patch after: Operation is null";
             return;
         }
 
-        mlir::OpBuilder builder(call_op);
-        auto module = call_op->getParentOfType< mlir::ModuleOp >();
-        builder.setInsertionPointAfter(call_op);
+        mlir::OpBuilder builder(target_op);
+        auto module = target_op->getParentOfType< mlir::ModuleOp >();
+        builder.setInsertionPointAfter(target_op);
 
         std::string patch_function_name = namifyPatchFunction(patch.patch_function);
-        auto input_types                = llvm::to_vector(call_op->getResultTypes());
+        auto input_types                = llvm::to_vector(target_op->getResultTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
             return;
         }
 
-        auto result = merge_module_symbol(module, patch_module, patch_function_name);
-        if (mlir::failed(result)) {
-            LOG(ERROR) << "Failed to insert symbol into module\n";
-            return;
+        // check if the patch function is already in the module, if not, merge it
+        if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
+            auto result = merge_module_symbol(module, patch_module, patch_function_name);
+            if (mlir::failed(result)) {
+                LOG(ERROR) << "Failed to insert symbol into module\n";
+                return;
+            }
+        } else {
+            LOG(INFO) << "Patch function " << patch_function_name
+                      << " already exists in module, skipping merge\n";
         }
 
         auto patch_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
@@ -918,28 +921,19 @@ namespace patchestry::passes {
         }
 
         auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(call_op->getContext(), patch_function_name);
+            mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
         llvm::SmallVector< mlir::Value > function_args;
-        prepare_call_arguments(builder, call_op, patch_func, patch, function_args);
+        prepare_call_arguments(builder, target_op, patch_func, patch, function_args);
         auto patch_call_op = builder.create< cir::CallOp >(
-            call_op->getLoc(), symbol_ref,
+            target_op->getLoc(), symbol_ref,
             patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
                                                      : mlir::Type(),
             function_args
         );
 
-        // Add extra attributes for the patched call function
-        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
-            patch_call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
-        } else {
-            mlir::NamedAttrList empty;
-            patch_call_op->setAttr(
-                "extra_attrs",
-                cir::ExtraFuncAttributesAttr::get(
-                    call_op->getContext(), empty.getDictionary(patch_call_op->getContext())
-                )
-            );
-        }
+        // Set appropriate attributes based on operation type
+        set_patch_call_attributes(patch_call_op, target_op);
+
         if (patch_options.enable_inlining) {
             inline_worklists.push_back(patch_call_op);
         }
@@ -957,32 +951,38 @@ namespace patchestry::passes {
      */
 
     void InstrumentationPass::replace_call(
-        cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
+        cir::CallOp call_op, const PatchMatch &match, const PatchInfo &patch,
         mlir::ModuleOp patch_module
     ) {
-        mlir::OpBuilder builder(op);
-        auto loc    = op.getLoc();
-        auto *ctx   = op->getContext();
-        auto module = op->getParentOfType< mlir::ModuleOp >();
+        mlir::OpBuilder builder(call_op);
+        auto loc    = call_op.getLoc();
+        auto *ctx   = call_op->getContext();
+        auto module = call_op->getParentOfType< mlir::ModuleOp >();
         assert(module && "Wrap around patch: no module found");
 
-        builder.setInsertionPoint(op);
+        builder.setInsertionPoint(call_op);
 
-        auto callee_name = op.getCallee()->str();
+        auto callee_name = call_op.getCallee()->str();
         assert(!callee_name.empty() && "Wrap around patch: callee name is empty");
 
         auto patch_function_name = namifyPatchFunction(patch.patch_function);
-        auto result_types        = llvm::to_vector(op.getResultTypes());
+        auto result_types        = llvm::to_vector(call_op.getResultTypes());
 
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
             return;
         }
 
-        auto result = merge_module_symbol(module, patch_module, patch_function_name);
-        if (mlir::failed(result)) {
-            LOG(ERROR) << "Failed to insert symbol into module\n";
-            return;
+        // check if the patch function is already in the module, if not, merge it
+        if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
+            auto result = merge_module_symbol(module, patch_module, patch_function_name);
+            if (mlir::failed(result)) {
+                LOG(ERROR) << "Failed to insert symbol into module\n";
+                return;
+            }
+        } else {
+            LOG(INFO) << "Patch function " << patch_function_name
+                      << " already exists in module, skipping merge\n";
         }
 
         auto wrap_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
@@ -995,12 +995,48 @@ namespace patchestry::passes {
         auto wrap_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
         auto wrap_call_op  = builder.create< cir::CallOp >(
             loc, wrap_func_ref, result_types.size() != 0 ? result_types.front() : mlir::Type(),
-            op.getArgOperands()
+            call_op.getArgOperands()
         );
-        wrap_call_op->setAttr("extra_attrs", op.getExtraAttrs());
-        op.replaceAllUsesWith(wrap_call_op);
-        op.erase();
+
+        // Set appropriate attributes based on operation type
+        set_patch_call_attributes(wrap_call_op, call_op);
+
+        call_op.replaceAllUsesWith(wrap_call_op);
+        call_op.erase();
         (void) match;
+    }
+
+    /**
+     * @brief Sets appropriate attributes for the patch call operation.
+     *
+     * This function handles setting attributes on the patch call based on the
+     * type of the original operation being instrumented.
+     *
+     * @param patch_call_op The patch call operation to set attributes on
+     * @param target_op The original operation being instrumented
+     */
+    void InstrumentationPass::set_patch_call_attributes(
+        cir::CallOp patch_call_op, mlir::Operation *target_op
+    ) {
+        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(target_op)) {
+            // For CallOp operations, preserve the original extra attributes
+            patch_call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
+        } else {
+            // For non-CallOp operations, create empty extra attributes
+            mlir::NamedAttrList empty;
+            patch_call_op->setAttr(
+                "extra_attrs",
+                cir::ExtraFuncAttributesAttr::get(
+                    target_op->getContext(), empty.getDictionary(target_op->getContext())
+                )
+            );
+        }
+
+        // Add operation-specific attributes for debugging
+        patch_call_op->setAttr(
+            "patched_operation",
+            mlir::StringAttr::get(target_op->getContext(), target_op->getName().getStringRef())
+        );
     }
 
     /**
@@ -1371,7 +1407,7 @@ namespace patchestry::passes {
         for (const auto &pattern : spec.exclude) {
             try {
                 // Create regex from the pattern
-                std::regex exclude_regex(pattern);
+                std::regex exclude_regex(pattern, std::regex_constants::basic);
 
                 // Check if the function name matches the exclusion pattern
                 if (std::regex_match(func_name, exclude_regex)) {

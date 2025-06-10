@@ -110,9 +110,15 @@ namespace patchestry::passes {
     bool OperationMatcher::matches_operation_name(
         mlir::Operation *op, const std::string &operation_pattern
     ) {
-        // If operation pattern is empty, it will match all operations, clearly we don't
-        // want this. Return false if the operation name or pattern is empty
+        // If operation pattern is empty, whitespace-only, or effectively null, it will match
+        // all operations, clearly we don't want this. Return false if the operation name or
+        // pattern is empty/whitespace
         if (operation_pattern.empty()) {
+            return false;
+        }
+
+        // Check if pattern contains only whitespace
+        if (operation_pattern.find_first_not_of(" \t\n\r\f\v") == std::string::npos) {
             return false;
         }
 
@@ -322,7 +328,9 @@ namespace patchestry::passes {
 
     bool
     OperationMatcher::matches_pattern(const std::string &text, const std::string &pattern) {
-        // if no pattern, match all
+        // If no pattern, match all (this is intentionally different from matches_operation_name
+        // which rejects empty patterns - here empty patterns mean "don't filter by this
+        // criterion")
         if (pattern.empty()) {
             return true;
         }
@@ -331,7 +339,7 @@ namespace patchestry::passes {
         if (pattern.size() >= 2 && pattern.front() == '/' && pattern.back() == '/') {
             try {
                 std::string regex_pattern = pattern.substr(1, pattern.length() - 2);
-                std::regex regex(regex_pattern);
+                std::regex regex(regex_pattern, std::regex_constants::basic);
                 return std::regex_search(text, regex);
             } catch (const std::regex_error &) {
                 // If regex is invalid, fall back to exact match
