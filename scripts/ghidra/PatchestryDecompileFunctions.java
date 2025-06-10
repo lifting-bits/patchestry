@@ -203,8 +203,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             Files.newBufferedWriter(file), 
             getArch(), 
             getLanguageID(),
-            currentProgram.getFunctionManager(), 
-            currentProgram.getExternalManager(),
+            monitor,
+            currentProgram,
             getDecompilerInterface(), 
             new BasicBlockModel(currentProgram), 
             functions

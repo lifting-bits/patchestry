@@ -118,6 +118,7 @@ import ghidra.program.model.symbol.Reference;
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 
 import ghidra.util.UniversalID;
+import ghidra.util.task.TaskMonitor;
 
 import com.google.gson.stream.JsonWriter;
 
@@ -156,11 +157,13 @@ public class PcodeSerializer extends JsonWriter {
 		private Program program;
 		private String arch;
 		private String languageID;
+		private TaskMonitor monitor;
 		private AddressSpace externSpace;
 		private AddressSpace ramSpace;
 		private AddressSpace stackSpace;
 		private AddressSpace constantSpace;
 		private AddressSpace uniqueSpace;
+		private Program currentProgram;
 		private FunctionManager functionManager;
 		private ExternalManager externalManager;
 		private DecompInterface decompInterface;
@@ -259,8 +262,8 @@ public class PcodeSerializer extends JsonWriter {
 			java.io.BufferedWriter writer,
 			String arch, 
 			String languageId, 
-			FunctionManager functionManager,
-			ExternalManager externalManager, 
+			TaskMonitor monitor,
+			Program currentProgram, 
 			DecompInterface decompInterface,
 			BasicBlockModel basicBlockModel,
 			List<Function> functions
@@ -274,13 +277,15 @@ public class PcodeSerializer extends JsonWriter {
 
 			this.arch = arch;
 			this.languageID = languageId;
+			this.monitor = monitor;
 			this.externSpace = addressFactory.getAddressSpace("extern");
 			this.ramSpace = addressFactory.getAddressSpace("ram");
 			this.stackSpace = addressFactory.getStackSpace();
 			this.constantSpace = addressFactory.getConstantSpace();
 			this.uniqueSpace = addressFactory.getUniqueSpace();
-			this.functionManager = functionManager;
-			this.externalManager = externalManager;
+			this.currentProgram = currentProgram;
+			this.functionManager = currentProgram.getFunctionManager();
+			this.externalManager = currentProgram.getExternalManager();
 			this.decompInterface = decompInterface;
 			this.basicBlockModel = basicBlockModel;
 			this.functions = functions;
@@ -372,7 +377,7 @@ public class PcodeSerializer extends JsonWriter {
 				return VoidDataType.dataType;
 			}
 
-			HighVariable highVariable = returnValueVarnode.getHighVariable();
+			HighVariable highVariable = returnValueVarnode.getHigh();
 			if (highVariable != null) {
 				return highVariable.getDataType();
 			}
@@ -645,7 +650,7 @@ public class PcodeSerializer extends JsonWriter {
 			
 			// NOTE(pag): Don't use `resolveOp` here because that screws up the
 			//			  variable creation logic.
-			PcodeOp pcodeOp = node.getDefinitionPcodeOp();
+			PcodeOp pcodeOp = node.getDef();
 			if (pcodeOp == null) {
 				return true;
 			}
@@ -816,7 +821,7 @@ public class PcodeSerializer extends JsonWriter {
 		}
 
 		private boolean isCharPointer(Varnode node) throws Exception {
-			HighVariable highVariable = variableOf(node.getHighVariable());
+			HighVariable highVariable = variableOf(node.getHigh());
 			if (highVariable == null) {
 				return false;
 			}
@@ -873,8 +878,7 @@ public class PcodeSerializer extends JsonWriter {
 			if (ramSpaceAddress == null) {
 				return null;
 			}
-			// todo(kaoudis) currentProgram or ?
-			return currentProgram.getDataAt(ramSpaceAddress);
+			return node.getDataAt(ramSpaceAddress);
 		}
 
 		// Serialize an input or output varnode.
@@ -882,14 +886,14 @@ public class PcodeSerializer extends JsonWriter {
 			assert !node.isFree();
 			assert node.isInput();
 
-			PcodeOp nodeDefPcodeOp = resolveOp(node.getDefinitionPcodeOp());
-			HighVariable highVariable = variableOf(node.getHighVariable());
+			PcodeOp nodeDefPcodeOp = resolveOp(node.getDef());
+			HighVariable highVariable = variableOf(node.getHigh());
 
 			beginObject();
 			
 			if (highVariable != null) {
 				if (nodeDefPcodeOp == null) {
-					nodeDefPcodeOp = highVariable.getRepresentative().getDefinitionPcodeOp();
+					nodeDefPcodeOp = highVariable.getRepresentative().getDef();
 				}
 
 				name("type").value(label(highVariable.getDataType()));
@@ -971,7 +975,7 @@ public class PcodeSerializer extends JsonWriter {
 								name("string_value").value(string);
 							} else {
 								assert false;
-								Listing listing = getCurrentProgram().getListing();
+								Listing listing = this.currentProgram.getListing();
 								Data data = listing.createData(convertAddressToRamSpace(node.getAddress()), highVariable.getDataType());
 								name("kind").value("global");
 								name("global").value(label(makeGlobalFromData(data)));
@@ -1108,7 +1112,7 @@ public class PcodeSerializer extends JsonWriter {
 
 			// We need to invent a new `HighVariable` for this `HighSymbol`.
 			// Unfortunately we can't use `HighSymbol.setHighVariable` for the
-			// caching, so we need `missing_locals`.
+			// caching, so we need `missingLocalsMap`.
 			} else {
 				HighLocal highLocalVariable = oldLocalsMap.get(newHighVariable);
 				if (highLocalVariable == null) {
@@ -1157,7 +1161,7 @@ public class PcodeSerializer extends JsonWriter {
 			// Figure out the tye of the pointer to the local variable being
 			// referenced.
 			DataTypeManager dataTypeManager = program.getDataTypeManager();
-			DataType variableType = nodes[0].getHighVariable().getDataType();
+			DataType variableType = nodes[0].getHigh().getDataType();
 			DataType nodeDataType = dataTypeManager.getPointer(variableType);
 			
 			// Create a unique address for this `Varnode`.
@@ -1256,7 +1260,7 @@ public class PcodeSerializer extends JsonWriter {
 		private boolean createGlobalForPtrSubcomponent(
 				HighFunction highFunction, PcodeOp pcodeOp) throws Exception {
 			
-			HighVariable zero = pcodeOp.getInput(0).getHighVariable();
+			HighVariable zero = pcodeOp.getInput(0).getHigh();
 			if (!(zero instanceof HighOther)) {
 				return false;
 			}
@@ -1270,7 +1274,7 @@ public class PcodeSerializer extends JsonWriter {
 			}
 			
 			Varnode offsetNode = pcodeOp.getInput(1);
-			HighVariable offsetVariable = offsetNode.getHighVariable();
+			HighVariable offsetVariable = offsetNode.getHigh();
 			if (!(offsetVariable instanceof HighConstant)) {
 				return false;
 			}
@@ -1469,7 +1473,7 @@ public class PcodeSerializer extends JsonWriter {
 
 			for (int i = 1; i < callOp.getInputs().length; i++) {
 				Varnode input = callOp.getInput(i);
-				HighVariable variable = input.getHighVariable();
+				HighVariable variable = input.getHigh();
 
 				// Note: Check variable classification type and don't check for argument mismatch if
 				//       it is of type UNKNOWN or CONSTANT
@@ -1554,7 +1558,7 @@ public class PcodeSerializer extends JsonWriter {
 				return false;
 			}
 
-			HighVariable highVariable = callOutputVarnode.getHighVariable();
+			HighVariable highVariable = callOutputVarnode.getHigh();
 			if (highVariable == null) {
 				return false;
 			}
@@ -1625,7 +1629,7 @@ public class PcodeSerializer extends JsonWriter {
 			// Figure out the tye of the pointer to the local variable being
 			// referenced.
 			DataTypeManager dataTypeManager = program.getDataTypeManager();
-			DataType variableType = nodes[0].getHighVariable().getDataType();
+			DataType variableType = nodes[0].getHigh().getDataType();
 			DataType nodeDataType = dataTypeManager.getPointer(variableType);
 			
 			// Create a unique address for this `Varnode`.
@@ -1690,7 +1694,7 @@ public class PcodeSerializer extends JsonWriter {
 		// represent control-flow barriers in terms of data flow dependencies.
 		private void mineForVarNodes(PcodeOp pcodeOp) {
 			for (Varnode inputVarnode : pcodeOp.getInputs()) {
-				HighVariable highVariable = inputVarnode.getHighVariable();
+				HighVariable highVariable = inputVarnode.getHigh();
 				if (highVariable == null || !(highVariable instanceof HighLocal)) {
 					continue;
 				}
@@ -1820,7 +1824,7 @@ public class PcodeSerializer extends JsonWriter {
 		
 		// Return the variable of a given `Varnode`. This applies local fixups.
 		private HighVariable variableOf(Varnode varnode) {
-			return varnode == null ? null : variableOf(varnode.getHighVariable());
+			return varnode == null ? null : variableOf(varnode.getHigh());
 		}
 		
 		private HighVariable variableOf(PcodeOp pcodeOp) {
@@ -2013,7 +2017,7 @@ public class PcodeSerializer extends JsonWriter {
 			Varnode representative = var.getRepresentative();
 			PcodeOp representativeDefOp = null;
 			if (representative != null) {
-				representativeDefOp = resolveOp(representative.getDefinitionPcodeOp());			
+				representativeDefOp = resolveOp(representative.getDef());			
 				if (!isOriginalRepresentative(representative)) {
 					return representativeDefOp;
 				}
@@ -2686,7 +2690,7 @@ public class PcodeSerializer extends JsonWriter {
 									  !function.isThunk() &&
 									  !IGNORED_NAMES.contains(function.getName());
 
-				DecompileResults functionDecompResults = decompInterface.decompileFunction(function, DECOMPILATION_TIMEOUT, monitor);
+				DecompileResults functionDecompResults = decompInterface.decompileFunction(function, DECOMPILATION_TIMEOUT, this.monitor);
 				HighFunction highFunction = functionDecompResults.getHighFunction();
 				name(functionLabel).beginObject();
 				serialize(highFunction, function, shouldVisitPcode);
