@@ -2,17 +2,19 @@ arch: "ARM:LE:32"
 patches: 
   - name: "apply_before_spo2_lookup"
     match:
-      symbol: "spo2_lookup"
+      name: "spo2_lookup"
       kind: "function"
       argument_matches:
         - index: 0
-          name: "SVar5"
-          type: "SFtype"
+          name: "var6"
+          type: "!cir.float"
     patch:
       mode: "ApplyBefore"
       patch_file: "patch_spo2_lookup.c"
       patch_function: "patch::before::spo2_lookup"
       arguments:
-        - "SVar5"
+        - name: "function_argument"
+          source: "variable"
+          symbol: "var6"
     exclude:
       - "measurement_update"

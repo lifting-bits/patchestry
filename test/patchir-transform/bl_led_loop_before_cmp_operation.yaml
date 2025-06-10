@@ -1,0 +1,19 @@
+arch: "ARM:LE:32"
+patches:
+  - name: "apply_before_cmp"
+    match:
+      name: "cir.cmp"
+      kind: "operation"
+      symbol_matches:
+        - name: "bl_spi_mode"
+          type: "!cir.int<u, 32>"
+    patch:
+      mode: "ApplyBefore"
+      patch_file: "patch_bl_spi_mode.c"
+      patch_function: "patch::before::cmp::bl_spi_mode"
+      arguments:
+        - name: "global_var"
+          source: "symbol"
+          symbol: "bl_spi_mode"
+    exclude:
+      - ""
