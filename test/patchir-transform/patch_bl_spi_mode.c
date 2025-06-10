@@ -1,3 +1,4 @@
+// RUN: true
 typedef unsigned int uint32_t;
 // Simple assert implementation with error messages
 void patch_assert_fail(const char* message, const char* file, int line) {

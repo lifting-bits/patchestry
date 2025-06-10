@@ -1,3 +1,4 @@
+// RUN: true
 
 // Self-contained patch function with basic type definitions
 typedef unsigned int uint32_t;

@@ -272,6 +272,18 @@ namespace patchestry::passes { // NOLINT
          * @return bool True if the function should be excluded, false otherwise
          */
         bool exclude_from_patching(cir::FuncOp func, const PatchSpec &spec);
+
+        /**
+         * @brief Sets appropriate attributes for the patch call operation.
+         *
+         * This method handles setting attributes on the patch call based on the
+         * type of the original operation being instrumented. It preserves relevant
+         * attributes from CallOp operations and adds debugging information.
+         *
+         * @param patch_call_op The patch call operation to set attributes on
+         * @param target_op The original operation being instrumented
+         */
+        void set_patch_call_attributes(cir::CallOp patch_call_op, mlir::Operation *target_op);
     };
 
 } // namespace patchestry::passes
