@@ -194,20 +194,24 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         return decompiler;
     }
 
-    void serializeToFile(Path file, List<Function> functions) throws Exception {
-        if (file == null || functions == null || functions.isEmpty()) {
-            throw new IllegalArgumentException("Invalid file path or empty function list");
+    void serializeToFile(JsonWriter writer, List<Function> functions) throws Exception {
+        if (writer == null) {
+            throw new IllegalArgumentException("Invalid file writer");
+        }
+
+        if (functions == null || functions.isEmpty()) {
+            throw new IllegalArgumentException("Empty function list");
         }
 
         final var serializer = new PcodeSerializer(
-            new JsonWriter(Files.newBufferedWriter(file)), 
+            writer, 
+            functions,
             getArch(), 
             getLanguageID(),
             monitor,
             currentProgram,
             getDecompilerInterface(), 
-            new BasicBlockModel(currentProgram), 
-            functions
+            new BasicBlockModel(currentProgram)
         );
         serializer.serialize();
     }
@@ -228,14 +232,16 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         if (getScriptArgs().length < 3) {
             throw new IllegalArgumentException("Insufficient arguments. Expected: <function_name> <output_file> as argument");
         }
-        serializeToFile(Path.of(getScriptArgs()[2]), getGlobalFunctions(getScriptArgs()[1]));
+        JsonWriter writer = new JsonWriter(Files.newBufferedWriter(Path.of(getScriptArgs()[2])));
+        serializeToFile(writer, getGlobalFunctions(getScriptArgs()[1]));
     }
 
     void decompileAllFunctions() throws Exception {
         if (getScriptArgs().length < 2) {
             throw new IllegalArgumentException("Insufficient arguments. Expected: <output_file> as argument");
         }
-        serializeToFile(Path.of(getScriptArgs()[1]), getAllFunctions());
+        JsonWriter writer = new JsonWriter(Files.newBufferedWriter(Path.of(getScriptArgs()[1])));
+        serializeToFile(writer, getAllFunctions());
     }
 
     // Update and re-run auto analysis.
@@ -300,13 +306,15 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
         File outputDirectory = askDirectory("outputFilePath", "Select output directory");
         File outputFilePath = new File(outputDirectory, "patchestry.json");
-        serializeToFile(outputFilePath.toPath(), functions);
+        JsonWriter writer = new JsonWriter(Files.newBufferedWriter(outputFilePath.toPath()));
+        serializeToFile(writer, functions);
     }
 
     void decompileAllFunctionsInGUI() throws Exception {
         File outputDirectory = askDirectory("outputFilePath", "Select output directory");
         File outputFilePath = new File(outputDirectory, "patchestry.json");
-        serializeToFile(outputFilePath.toPath(), getAllFunctions());
+        JsonWriter writer = new JsonWriter(Files.newBufferedWriter(outputFilePath.toPath()));
+        serializeToFile(writer, getAllFunctions());
     }
 
     // GUI mode execution
