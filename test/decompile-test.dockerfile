@@ -260,6 +260,7 @@ RUN javac \
 RUN mkdir /opt/test_output
 ENTRYPOINT java \
         -Djunit.output.dir=/opt/test_output \
+        --add-opens java.desktop/sun.awt=ALL-UNNAMED \
         org.junit.platform.console.ConsoleLauncher \
             --class-path "${CLASSPATH}" \
             --disable-banner \
