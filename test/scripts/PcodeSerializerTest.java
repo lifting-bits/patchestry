@@ -38,13 +38,13 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
         List<Function> fns = Collections.emptyList();
         PcodeSerializer serializer = new PcodeSerializer(
             fakeWriter,
+            fns,
             "ARM",
             "Cortex",
             fakeMonitor,
             program,
             fakeDecompInterface,
-            new BasicBlockModel(program),
-            fns
+            new BasicBlockModel(program)
         );
 
         assertTrue(false);

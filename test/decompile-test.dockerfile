@@ -133,7 +133,13 @@ RUN wget -O dependencies/downloads/gson-2.9.0.jar \
     wget -O dependencies/downloads/commons-compress-1.21.jar \
         https://repo1.maven.org/maven2/org/apache/commons/commons-compress/1.21/commons-compress-1.21.jar && \
     wget -O dependencies/downloads/mockito-core-5.11.0.jar \
-        https://repo1.maven.org/maven2/org/mockito/mockito-core/5.11.0/mockito-core-5.11.0.jar
+        https://repo1.maven.org/maven2/org/mockito/mockito-core/5.11.0/mockito-core-5.11.0.jar && \
+    wget -O dependencies/downloads/byte-buddy-1.14.12.jar \
+        https://repo1.maven.org/maven2/net/bytebuddy/byte-buddy/1.14.12/byte-buddy-1.14.12.jar && \
+    wget -O dependencies/downloads/byte-buddy-agent-1.14.12.jar \
+        https://repo1.maven.org/maven2/net/bytebuddy/byte-buddy-agent/1.14.12/byte-buddy-agent-1.14.12.jar && \
+    wget -O dependencies/downloads/objenesis-3.3.jar \
+        https://repo1.maven.org/maven2/org/objenesis/objenesis/3.3/objenesis-3.3.jar
 
 ENV GHIDRA_SCRIPTS=/opt/ghidra_scripts
 ENV CLASSES=/opt/classes
