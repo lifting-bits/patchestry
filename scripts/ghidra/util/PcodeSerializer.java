@@ -265,25 +265,26 @@ public class PcodeSerializer {
 
 		public PcodeSerializer(
 			JsonWriter writer,
+			List<Function> functions,
 			String arch, 
 			String languageId, 
 			TaskMonitor monitor,
 			Program currentProgram, 
 			DecompInterface decompInterface,
-			BasicBlockModel basicBlockModel,
-			List<Function> functions
+			BasicBlockModel basicBlockModel
 		) {
 			this.writer = writer;
+			this.functions = functions;
 
-			this.program = functionManager.getProgram();
 			this.apiUtil = new ApiUtil(currentProgram);
-
-			this.language = (SleighLanguage) program.getLanguage();
-			AddressFactory addressFactory = program.getAddressFactory();
 
 			this.arch = arch;
 			this.languageID = languageId;
 			this.monitor = monitor;
+
+			this.language = (SleighLanguage) currentProgram.getLanguage();
+			AddressFactory addressFactory = currentProgram.getAddressFactory();
+
 			this.externSpace = addressFactory.getAddressSpace("extern");
 			this.ramSpace = addressFactory.getAddressSpace("ram");
 			this.stackSpace = addressFactory.getStackSpace();
@@ -294,7 +295,6 @@ public class PcodeSerializer {
 			this.externalManager = currentProgram.getExternalManager();
 			this.decompInterface = decompInterface;
 			this.basicBlockModel = basicBlockModel;
-			this.functions = functions;
 			this.originalFunctionsSize = functions.size();
 			this.seenFunctions = new TreeSet<>();
 			this.seenTypes = new HashSet<>();
@@ -305,7 +305,7 @@ public class PcodeSerializer {
 			this.nextUnique = language.getUniqueBase();
 			this.nextSeqNum = 0;
 			this.entryBlock = new ArrayList<>();
-			this.stackPointer = program.getCompilerSpec().getStackPointer();
+			this.stackPointer = currentProgram.getCompilerSpec().getStackPointer();
 			this.missingLocalsMap = new HashMap<>();
 			this.oldLocalsMap = new HashMap<>();
 			this.temporaryAddressMap = new HashMap<>();
@@ -1100,7 +1100,7 @@ public class PcodeSerializer {
 			
 			// Figure out the tye of the pointer to the local variable being
 			// referenced.
-			DataTypeManager dataTypeManager = program.getDataTypeManager();
+			DataTypeManager dataTypeManager = currentProgram.getDataTypeManager();
 			DataType variableType = nodes[0].getHigh().getDataType();
 			DataType nodeDataType = dataTypeManager.getPointer(variableType);
 			
@@ -1177,7 +1177,7 @@ public class PcodeSerializer {
 		Address getNextReferencedAddressOrMax(Address start) {
 			Address end = start.getAddressSpace().getMaxAddress();
 			AddressSet range = new AddressSet(start, end);
-			ReferenceManager references = program.getReferenceManager();
+			ReferenceManager references = currentProgram.getReferenceManager();
 			AddressIterator addressIterator = references.getReferenceDestinationIterator(range, true);
 			if (!addressIterator.hasNext()) {
 				return end;
@@ -1251,7 +1251,7 @@ public class PcodeSerializer {
 			//			  `1` by this heuristic.
 			int sizeInBytes = type.getLength();
 			if (sizeInBytes == -1 && type instanceof AbstractStringDataType) {
-				Listing listing = program.getListing();
+				Listing listing = currentProgram.getListing();
 				MemBuffer memory = listing.getCodeUnitAt(address);
 				Address nextAddress = getNextReferencedAddressOrMax(address);
 				sizeInBytes = ((AbstractStringDataType) type).getLength(
@@ -1405,7 +1405,7 @@ public class PcodeSerializer {
 				return false;
 			}
 
-			DataTypeManager dataTypeManager = program.getDataTypeManager();
+			DataTypeManager dataTypeManager = currentProgram.getDataTypeManager();
 			Address callOpAddress = callOp.getSeqnum().getTarget();
 			List<PcodeOp> prefixOperations = getOrCreatePrefixOperations(callOp);
 
@@ -1568,7 +1568,7 @@ public class PcodeSerializer {
 			
 			// Figure out the tye of the pointer to the local variable being
 			// referenced.
-			DataTypeManager dataTypeManager = program.getDataTypeManager();
+			DataTypeManager dataTypeManager = currentProgram.getDataTypeManager();
 			DataType variableType = nodes[0].getHigh().getDataType();
 			DataType nodeDataType = dataTypeManager.getPointer(variableType);
 			
