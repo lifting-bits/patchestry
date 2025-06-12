@@ -14,6 +14,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.Map.Entry;
 
 import ghidra.app.script.GhidraState;
 import ghidra.framework.plugintool.PluginTool;
@@ -22,6 +24,9 @@ import java.lang.reflect.Field;
 import org.junit.jupiter.api.*;
 
 import com.google.gson.stream.JsonWriter;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
@@ -40,6 +45,7 @@ import ghidra.program.model.lang.LanguageService;
 
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.listing.Variable;
 
 import ghidra.program.util.DefaultLanguageService;
 
@@ -48,11 +54,13 @@ import ghidra.test.TestEnv;
 
 import ghidra.util.task.TaskMonitor;
 import ghidra.app.script.GhidraScript;
+import java.util.Map;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class PatchestryDecompileFunctionsTest extends BaseTest {
 
     private PatchestryDecompileFunctions decompileScript = new PatchestryDecompileFunctions();
+    private Path tempArgOutputFile = null;
 
     @BeforeAll
     public void setUp() throws Exception {
@@ -61,10 +69,11 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
         File bloodlightFirmware = new File(System.getenv("BLOODLIGHT_FW_PATH"));
         program = load(bloodlightFirmware, testFwArch, project);
 
+        tempArgOutputFile = Files.createTempFile("test-decompile-single-fn", ".json");
         String[] argsBloodlight = {
             "single",
             "main",
-            "bloodlight_main_testgetarch.txt"
+            tempArgOutputFile.toString()
         };
         decompileScript.setScriptArgs(argsBloodlight);
         decompileScript.setProgram(program);
@@ -122,14 +131,57 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
         assertEquals(functions.size(), 262);
     }
 
-    @Disabled
     @Test
     public void testDecompileSingleFunction() throws Exception {
+        assertNotNull(decompileScript.getCurrentProgram());
+        decompileScript.decompileSingleFunction();
+        String fileContents = Files.readString(tempArgOutputFile);
+        assertNotNull(fileContents);
+
+        JsonObject topLevel = JsonParser.parseString(fileContents).getAsJsonObject();
+        assertNotNull(topLevel);
+
+        assertTrue(topLevel.has("architecture"));
+        assertEquals(topLevel.get("architecture").getAsString(), "ARM");
+
+        assertTrue(topLevel.has("id"));
+        assertEquals(topLevel.get("id").getAsString(), testFwArch);
+
+        assertTrue(topLevel.has("format"));
+        assertEquals(topLevel.get("format").getAsString(), "Executable and Linking Format (ELF)");
+
+        assertTrue(topLevel.has("functions"));
+        Set<Entry<String, JsonElement>> functions = topLevel.get("functions").getAsJsonObject().entrySet();
+        assertFalse(functions.isEmpty());
+
+        for (Entry functionEntry : functions) {
+            System.out.println(functionEntry.getKey());
+            System.out.println(functionEntry.getValue());
+        }
+
+        // assertTrue(fileContents.contains(mainFn.getName()));
+        // for (Variable var : mainFn.getAllVariables()) {
+        //     assertTrue(fileContents.contains(var.getName()));
+        // }
     }
 
     @Disabled
     @Test
     public void testDecompileAllFunctions() throws Exception {
+        assertNotNull(decompileScript.getCurrentProgram());
+        Path tempAllOutputFile = Files.createTempFile("test-decompile-all-fns", ".json");
+        String[] argsAll = {
+            "all",
+            tempAllOutputFile.toString()
+        };
+        decompileScript.setScriptArgs(argsAll);
+        assertEquals(decompileScript.getScriptArgs(), argsAll);
+        decompileScript.decompileAllFunctions();
+
+        String fileContents = Files.readString(tempAllOutputFile);
+        assertNotNull(fileContents);
+        JsonElement topLevelElement = JsonParser.parseString(fileContents);
+
     }
 
     @Disabled
