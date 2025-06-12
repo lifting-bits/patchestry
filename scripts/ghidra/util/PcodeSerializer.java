@@ -159,7 +159,7 @@ public class PcodeSerializer {
 		private JsonWriter writer;
 
 		private Program program;
-		private String arch;
+		private String architecture;
 		private String languageID;
 		private TaskMonitor monitor;
 		private AddressSpace externSpace;
@@ -266,7 +266,6 @@ public class PcodeSerializer {
 		public PcodeSerializer(
 			JsonWriter writer,
 			List<Function> functions,
-			String arch, 
 			String languageId, 
 			TaskMonitor monitor,
 			Program currentProgram, 
@@ -278,10 +277,10 @@ public class PcodeSerializer {
 
 			this.apiUtil = new ApiUtil(currentProgram);
 
-			this.arch = arch;
 			this.languageID = languageId;
 			this.monitor = monitor;
-
+			
+			this.architecture = currentProgram.getLanguage().getProcessor().toString();
 			this.language = (SleighLanguage) currentProgram.getLanguage();
 			AddressFactory addressFactory = currentProgram.getAddressFactory();
 
@@ -2650,7 +2649,7 @@ public class PcodeSerializer {
 		public void serialize() throws Exception {
 
 			writer.beginObject();
-			writer.name("arch").value(this.arch);
+			writer.name("architecture").value(this.architecture);
 			writer.name("id").value(this.languageID);
 			writer.name("format").value(currentProgram.getExecutableFormat());
 

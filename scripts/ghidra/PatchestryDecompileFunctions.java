@@ -157,14 +157,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
     }
 
-    String getArch() throws Exception {
-        if (currentProgram.getLanguage() == null
-                || currentProgram.getLanguage().getProcessor() == null) {
-            return "unknown";
-        }
-        return currentProgram.getLanguage().getProcessor().toString();
-    }
-
     String getLanguageID() throws Exception {
         if (currentProgram.getLanguage() == null
                 || currentProgram.getLanguage().getLanguageDescription() == null) {
@@ -205,8 +197,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
         final var serializer = new PcodeSerializer(
             writer, 
-            functions,
-            getArch(), 
+            functions, 
             getLanguageID(),
             monitor,
             currentProgram,
