@@ -1,8 +1,11 @@
+/*
+ * Copyright (c) 2025, Trail of Bits, Inc.
+ *
+ * This source code is licensed in accordance with the terms specified in
+ * the LICENSE file found in the root directory of this source tree.
+ */
+
 package util;
-
-import domain.*;
-
-import ghidra.app.script.GhidraScript;
 
 import ghidra.framework.options.Options;
 
@@ -122,9 +125,8 @@ import ghidra.util.task.TaskMonitor;
 
 import com.google.gson.stream.JsonWriter;
 
-import domain.DefinitionVarnode;
-import domain.HighTemporary;
-import domain.UseVarnode;
+import domain.*;
+import util.PcodeSerializer;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -146,13 +148,15 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.TreeMap;
 
-public class PcodeSerializer extends JsonWriter {
+public class PcodeSerializer {
 	    public static final int MIN_CALLOTHER = 0x100000;
     	public static final int DECOMPILATION_TIMEOUT = 30;
     	public static final int DECLARE_PARAM_VAR = MIN_CALLOTHER + 0;
     	public static final int DECLARE_LOCAL_VAR = MIN_CALLOTHER + 1;
     	public static final int DECLARE_TEMP_VAR = MIN_CALLOTHER + 2;
     	public static final int ADDRESS_OF = MIN_CALLOTHER + 3;
+
+		private JsonWriter writer;
 
 		private Program program;
 		private String arch;
@@ -164,6 +168,7 @@ public class PcodeSerializer extends JsonWriter {
 		private AddressSpace constantSpace;
 		private AddressSpace uniqueSpace;
 		private Program currentProgram;
+		private ApiUtil apiUtil;
 		private FunctionManager functionManager;
 		private ExternalManager externalManager;
 		private DecompInterface decompInterface;
@@ -259,7 +264,7 @@ public class PcodeSerializer extends JsonWriter {
 		private List<PcodeOp> callotherUsePcodeOps;
 
 		public PcodeSerializer(
-			java.io.BufferedWriter writer,
+			JsonWriter writer,
 			String arch, 
 			String languageId, 
 			TaskMonitor monitor,
@@ -268,9 +273,10 @@ public class PcodeSerializer extends JsonWriter {
 			BasicBlockModel basicBlockModel,
 			List<Function> functions
 		) {
-			super(writer);
+			this.writer = writer;
 
 			this.program = functionManager.getProgram();
+			this.apiUtil = new ApiUtil(currentProgram);
 
 			this.language = (SleighLanguage) program.getLanguage();
 			AddressFactory addressFactory = program.getAddressFactory();
@@ -326,27 +332,27 @@ public class PcodeSerializer extends JsonWriter {
 			return label(function.getEntryPoint());
 		}
 
-		private static String label(Address address) throws Exception {
+		static String label(Address address) throws Exception {
 			return address.toString(true  /* show address space prefix */);
 		}
 
-		private static String label(SequenceNumber sequenceNumber) throws Exception {
+		static String label(SequenceNumber sequenceNumber) throws Exception {
 			return label(sequenceNumber.getTarget()) + Address.SEPARATOR +
 				   Integer.toString(sequenceNumber.getTime()) + Address.SEPARATOR +
 				   Integer.toString(sequenceNumber.getOrder());
 		}
 
-		private static String label(PcodeBlock block) throws Exception {
+		static String label(PcodeBlock block) throws Exception {
 			return label(block.getStart()) + Address.SEPARATOR +
 				   Integer.toString(block.getIndex()) + Address.SEPARATOR +
 				   PcodeBlock.typeToName(block.getType());
 		}
 
-		private static String label(PcodeOp pcodeOp) throws Exception {
+		static String label(PcodeOp pcodeOp) throws Exception {
 			return label(pcodeOp.getSeqnum());
 		}
 
-		private String label(DataType type) throws Exception {
+		String label(DataType type) throws Exception {
 			// If type is null, assign VoidDataType in all cases.
 			// We assume it as void type.
 			if (type == null) {
@@ -370,7 +376,7 @@ public class PcodeSerializer extends JsonWriter {
 		}
 		
 		// Figure out the return type of an intrinsic op.
-		private DataType intrinsicReturnType(PcodeOp pcodeOp) {
+		DataType intrinsicReturnType(PcodeOp pcodeOp) {
 			DataType returnType = null;
 			Varnode returnValueVarnode = pcodeOp.getOutput();
 			if (returnValueVarnode == null) {
@@ -385,45 +391,45 @@ public class PcodeSerializer extends JsonWriter {
 			return Undefined.getUndefinedDataType(returnValueVarnode.getSize());
 		}
 
-		private Address getAddress(PcodeOp pcodeOp) throws Exception {
+		Address getAddress(PcodeOp pcodeOp) throws Exception {
 			SequenceNumber sequenceNumber = pcodeOp.getSeqnum();
 			return sequenceNumber.getTarget();
 		}
 		
 		// Return the label of an intrinsic with `CALLOTHER`. This is based
 		// off of the return value.
-		private String intrinsicLabel(PcodeOp pcodeOp) throws Exception {
+		String intrinsicLabel(PcodeOp pcodeOp) throws Exception {
 			int index = (int) pcodeOp.getInput(0).getOffset();
 			String name = language.getUserDefinedOpName(index);
 			return intrinsicLabel(name, intrinsicReturnType(pcodeOp));
 		}
 		
-		private String intrinsicLabel(
+		String intrinsicLabel(
 				String name, DataType returnDataType) throws Exception {
 			return name + Address.SEPARATOR + label(returnDataType);
 		}
 
-		private void serializePointerType(Pointer ptr) throws Exception {
-			name("kind").value("pointer");
-			name("size").value(ptr.getLength());
-			name("element_type").value(label(ptr.getDataType()));
+		void serializePointerType(Pointer ptr) throws Exception {
+			writer.name("kind").value("pointer");
+			writer.name("size").value(ptr.getLength());
+			writer.name("element_type").value(label(ptr.getDataType()));
 		}
 
-		private void serializeTypedefType(TypeDef typedef) throws Exception {
-			name("name").value(typedef.getDisplayName());
-			name("kind").value("typedef");
-			name("size").value(typedef.getLength());
-			name("base_type").value(label(typedef.getBaseDataType()));
+		void serializeTypedefType(TypeDef typedef) throws Exception {
+			writer.name("name").value(typedef.getDisplayName());
+			writer.name("kind").value("typedef");
+			writer.name("size").value(typedef.getLength());
+			writer.name("base_type").value(label(typedef.getBaseDataType()));
 		}
 
-		private void serializeArrayType(Array arr) throws Exception {
-			name("kind").value("array");
-			name("size").value(arr.getLength());
-			name("num_elements").value(arr.getNumElements());
-			name("element_type").value(label(arr.getDataType()));
+		void serializeArrayType(Array arr) throws Exception {
+			writer.name("kind").value("array");
+			writer.name("size").value(arr.getLength());
+			writer.name("num_elements").value(arr.getNumElements());
+			writer.name("element_type").value(label(arr.getDataType()));
 		}
 
-		private void serializeBuiltinType(
+		void serializeBuiltinType(
 				DataType dataType, String kind) throws Exception {
 			
 			String displayName = null;
@@ -436,54 +442,54 @@ public class PcodeSerializer extends JsonWriter {
 				displayName = dataType.getDisplayName();
 			}
 
-			name("name").value(displayName);
-			name("size").value(dataType.getLength());
-			name("kind").value(kind);
+			writer.name("name").value(displayName);
+			writer.name("size").value(dataType.getLength());
+			writer.name("kind").value(kind);
 		}
 
-		private void serializeCompositeType(
+		void serializeCompositeType(
 				Composite compositeDataType, String kind) throws Exception {
-			name("name").value(compositeDataType.getDisplayName());
-			name("kind").value(kind);
-			name("size").value(compositeDataType.getLength());
-			name("fields").beginArray();
+			writer.name("name").value(compositeDataType.getDisplayName());
+			writer.name("kind").value(kind);
+			writer.name("size").value(compositeDataType.getLength());
+			writer.name("fields").beginArray();
 
 			for (int i = 0; i < compositeDataType.getNumComponents(); i++) {
 				DataTypeComponent dtc = compositeDataType.getComponent(i);
-				beginObject();
-				name("type").value(label(dtc.getDataType()));
-				name("offset").value(dtc.getOffset());
+				writer.beginObject();
+				writer.name("type").value(label(dtc.getDataType()));
+				writer.name("offset").value(dtc.getOffset());
 
 				if (dtc.getFieldName() != null) {
-					name("name").value(dtc.getFieldName());
+					writer.name("name").value(dtc.getFieldName());
 				}
-				endObject();
+				writer.endObject();
 			}
-			endArray();
+			writer.endArray();
 		}
 
-		private void serializeEnumType(Enum enumDataType, String kind) throws Exception {
-			name("name").value(enumDataType.getDisplayName());
-			name("kind").value(kind);
-			name("size").value(enumDataType.getLength());	
+		void serializeEnumType(Enum enumDataType, String kind) throws Exception {
+			writer.name("name").value(enumDataType.getDisplayName());
+			writer.name("kind").value(kind);
+			writer.name("size").value(enumDataType.getLength());	
 			int enumCountOfEntries = enumDataType.getCount();
-			name("num_entries").value(enumCountOfEntries);
-			name("entries").beginArray();
+			writer.name("num_entries").value(enumCountOfEntries);
+			writer.name("entries").beginArray();
 			for (int i = 0; i < enumCountOfEntries; i++) {
 				String enumDataTypeName = enumDataType.getName(i);
 				if (enumDataTypeName != null) {
-					beginObject();
-					name("name").value(enumDataTypeName);
-					name("value").value(enumDataType.getValue(enumDataTypeName));
-					endObject();
+					writer.beginObject();
+					writer.name("name").value(enumDataTypeName);
+					writer.name("value").value(enumDataType.getValue(enumDataTypeName));
+					writer.endObject();
 				}
 			}
-			endArray();
+			writer.endArray();
 		}
 
-		private void serialize(DataType dataType) throws Exception {
+		void serialize(DataType dataType) throws Exception {
 			if (dataType == null) {
-				nullValue();
+				writer.nullValue();
 				return;
 			}
 
@@ -521,7 +527,7 @@ public class PcodeSerializer extends JsonWriter {
 				serializeBuiltinType(dataType, "undefined");
 
 			} else if (dataType instanceof FunctionDefinition) {
-				name("kind").value("function");
+				writer.name("kind").value("function");
 				serializePrototype((FunctionSignature) dataType);
 
 			} else if (dataType instanceof PartialUnion) {
@@ -533,93 +539,93 @@ public class PcodeSerializer extends JsonWriter {
 					serialize(((PartialUnion) dataType).getStrippedDataType());
 				}
 			} else if (dataType instanceof BitFieldDataType) {
-				name("kind").value("todo:BitFieldDataType");  // TODO(pag): Implement this
-				name("size").value(dataType.getLength());
+				writer.name("kind").value("todo:BitFieldDataType");  // TODO(pag): Implement this
+				writer.name("size").value(dataType.getLength());
 				
 			} else if (dataType instanceof WideCharDataType) {
-				name("kind").value("wchar");
-				name("size").value(dataType.getLength());
+				writer.name("kind").value("wchar");
+				writer.name("size").value(dataType.getLength());
 				
 			} else if (dataType instanceof StringDataType) {
-				name("kind").value("todo:StringDataType");  // TODO(pag): Implement this
-				name("size").value(dataType.getLength());
+				writer.name("kind").value("todo:StringDataType");  // TODO(pag): Implement this
+				writer.name("size").value(dataType.getLength());
 				
 			} else {
 				throw new Exception("Unhandled type: " + dataType.getClass().getName());
 			}
 		}
 
-		private void serializeTypes() throws Exception {
+		void serializeTypes() throws Exception {
 			for (int i = 0; i < typesToSerialize.size(); i++) {
 				DataType type = typesToSerialize.get(i);
-				name(label(type)).beginObject();
+				writer.name(label(type)).beginObject();
 				serialize(type);
-				endObject();
+				writer.endObject();
 			}
 
 			System.out.println("Total serialized types: " + typesToSerialize.size());
 		}
 		
-		private int serializePrototype() throws Exception {
-			name("return_type").value(label((DataType) null));
-			name("is_variadic").value(false);
-			name("is_noreturn").value(false);
-			name("parameter_types").beginArray().endArray();
+		int serializePrototype() throws Exception {
+			writer.name("return_type").value(label((DataType) null));
+			writer.name("is_variadic").value(false);
+			writer.name("is_noreturn").value(false);
+			writer.name("parameter_types").beginArray().endArray();
 			return 0;
 		}
 
-		private int serializePrototype(FunctionPrototype proto) throws Exception {
+		int serializePrototype(FunctionPrototype proto) throws Exception {
 			if (proto == null) {
 				return serializePrototype();
 			}
 
-			name("return_type").value(label(proto.getReturnType()));
-			name("is_variadic").value(proto.isVarArg());
-			name("is_noreturn").value(proto.hasNoReturn());
+			writer.name("return_type").value(label(proto.getReturnType()));
+			writer.name("is_variadic").value(proto.isVarArg());
+			writer.name("is_noreturn").value(proto.hasNoReturn());
 			
-			name("parameter_types").beginArray();
+			writer.name("parameter_types").beginArray();
 			int numberOfParams = proto.getNumParams();
 			for (int i = 0; i < numberOfParams; i++) {
-				value(label(proto.getParam(i).getDataType()));
+				writer.value(label(proto.getParam(i).getDataType()));
 			}
-			endArray();  // End of `parameter_types`.
+			writer.endArray();  // End of `parameter_types`.
 			return numberOfParams;
 		}
 		
-		private int serializePrototype(FunctionSignature proto) throws Exception {
+		int serializePrototype(FunctionSignature proto) throws Exception {
 			if (proto == null) {
 				return serializePrototype();
 			}
 
-			name("return_type").value(label(proto.getReturnType()));
-			name("is_variadic").value(proto.hasVarArgs());
-			name("is_noreturn").value(proto.hasNoReturn());
-			name("calling_convention").value(proto.getCallingConventionName());
+			writer.name("return_type").value(label(proto.getReturnType()));
+			writer.name("is_variadic").value(proto.hasVarArgs());
+			writer.name("is_noreturn").value(proto.hasNoReturn());
+			writer.name("calling_convention").value(proto.getCallingConventionName());
 			
 			ParameterDefinition[] arguments = proto.getArguments();
-			name("parameter_types").beginArray();
+			writer.name("parameter_types").beginArray();
 			int numberOfParameterTypes = (int) arguments.length;
 			for (int i = 0; i < numberOfParameterTypes; i++) {
-				value(label(arguments[i].getDataType()));
+				writer.value(label(arguments[i].getDataType()));
 			}
-			endArray();  // End of `parameter_types`.
+			writer.endArray();  // End of `parameter_types`.
 			return numberOfParameterTypes;
 		}
 
-		private void serialize(HighVariable highVariable) throws Exception {
+		void serialize(HighVariable highVariable) throws Exception {
 			if (highVariable == null) {
-				nullValue();
+				writer.nullValue();
 				return;
 			}
 
-			beginObject();
-			name("name").value(highVariable.getName());
-			name("type").value(label(highVariable.getDataType()));
-			endObject();
+			writer.beginObject();
+			writer.name("name").value(highVariable.getName());
+			writer.name("type").value(label(highVariable.getDataType()));
+			writer.endObject();
 		}
 
 		// Return the r-value of a varnode.
-		private Varnode rValueOf(Varnode node) throws Exception {
+		Varnode rValueOf(Varnode node) throws Exception {
 			return node;
 //			HighVariable high = node.getHigh();
 //			if (high == null) {
@@ -630,7 +636,7 @@ public class PcodeSerializer extends JsonWriter {
 //			return rep == null ? node : rep;
 		}
 		
-		private enum VariableClassification {
+		enum VariableClassification {
 			UNKNOWN,
 			PARAMETER,
 			LOCAL,
@@ -643,7 +649,7 @@ public class PcodeSerializer extends JsonWriter {
 		
 		// Returns `true` if a given representative is an original
 		// representative.
-		private boolean isOriginalRepresentative(Varnode node) {
+		boolean isOriginalRepresentative(Varnode node) {
 			if (node.isInput()) {
 				return true;
 			}
@@ -667,7 +673,7 @@ public class PcodeSerializer extends JsonWriter {
 		}
 		
 		// Resolve an operation to a replacement operation, if any.
-		private PcodeOp resolveOp(PcodeOp pcodeOp) {
+		PcodeOp resolveOp(PcodeOp pcodeOp) {
 			if (pcodeOp == null) {
 				return null;
 			}
@@ -682,7 +688,7 @@ public class PcodeSerializer extends JsonWriter {
 		// Get the representative of a `HighVariable`, or if we've re-written
 		// the representative with a `CALLOTHER`, then get the original
 		// representative.
-		private Varnode originalRepresentativeOf(HighVariable highVariable) {
+		Varnode originalRepresentativeOf(HighVariable highVariable) {
 			if (highVariable == null) {
 				return null;
 			}
@@ -701,7 +707,7 @@ public class PcodeSerializer extends JsonWriter {
 		}
 		
 		// Return the address of a high global variable.
-		private Address addressOfGlobal(HighVariable highGlobalVariable) throws Exception {
+		Address addressOfGlobal(HighVariable highGlobalVariable) throws Exception {
 			HighSymbol highSymbol = highGlobalVariable.getSymbol();
 			if (highSymbol != null && highSymbol.isGlobal()) {
 				SymbolEntry entry = highSymbol.getFirstWholeMap();
@@ -731,7 +737,7 @@ public class PcodeSerializer extends JsonWriter {
 			return null;
 		}
 
-		private Address makeGlobalFromData(Data data) throws Exception {
+		Address makeGlobalFromData(Data data) throws Exception {
 			if (data == null) {
 				return null;
 			}
@@ -743,7 +749,7 @@ public class PcodeSerializer extends JsonWriter {
 		// want to make sure that the backing storage for a given variable
 		// *isn't* RAM. Thus, UNIQUE, STACK, CONST, etc. are all in-scope for
 		// locals.
-		private VariableClassification classifyVariable(HighVariable highVariable) throws Exception {
+		VariableClassification classifyVariable(HighVariable highVariable) throws Exception {
 			if (highVariable == null) {
 				return VariableClassification.UNKNOWN;
 			}
@@ -795,32 +801,7 @@ public class PcodeSerializer extends JsonWriter {
 			return VariableClassification.UNKNOWN;
 		}
 
-		private Address convertAddressToRamSpace(Address address) throws Exception {
-			if (address == null) {
-				return null;
-			}
-
-			try {
-				// Note: Function converts address to ramspace only if it belongs to 
-				//       constant space; if address space is not constant, return
-				if (!address.getAddressSpace().isConstantSpace()) {
-					return address;
-				}
-
-				// Get the numeric offset and create a new address in RAM space
-				long offset = address.getOffset();
-				return program.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
-
-			} catch (AddressOutOfBoundsException e) {
-				System.out.println(String.format("Error converting address %s to RAM space: %s",
-					address, e.getMessage()));
-				return null;
-			} catch (Exception e) {
-				throw new RuntimeException("Failed converting address to RAM space", e);
-			}
-		}
-
-		private boolean isCharPointer(Varnode node) throws Exception {
+		boolean isCharPointer(Varnode node) throws Exception {
 			HighVariable highVariable = variableOf(node.getHigh());
 			if (highVariable == null) {
 				return false;
@@ -840,163 +821,122 @@ public class PcodeSerializer extends JsonWriter {
 			return false;
 		}
 
-		private String findNullTerminatedString(Address address, Pointer pointer) throws Exception {
-			if (!address.getAddressSpace().isConstantSpace()) {
-				return null;
-			}
-
-			Address ramSpaceAddress = convertAddressToRamSpace(address);
-			if (ramSpaceAddress == null) {
-				return null;
-			}
-			MemoryBufferImpl memoryBuffer = new MemoryBufferImpl(program.getMemory(), ramSpaceAddress);
-			DataType charDataType = pointer.getDataType();
-			StringDataInstance stringDataInstance = StringDataInstance.getStringDataInstance(charDataType, memoryBuffer, charDataType.getDefaultSettings(), -1);
-			int detectedLength = stringDataInstance.getStringLength();
-			if (detectedLength == -1) {
-				return null;
-			}
-			String value = stringDataInstance.getStringValue();
-			return value;
-		}
-
-		private Data getDataReferencedAsConstant(Varnode node) throws Exception {
-			// check if node is null
-			if (node == null) {
-				return null;
-			}
-
-			 // Only process constant nodes that aren't nulls (address 0 in constant space)
-			if (!node.isConstant() || node.getAddress().equals(constantSpace.getAddress(0))) {
-				return null;
-			}
-
-			// Ghidra sometime fail to resolve references to Data and show it as const. 
-			// Check if it is referencing Data as constant from `ram` addresspace.
-			// Convert the constant value to a potential RAM address
-			Address ramSpaceAddress = convertAddressToRamSpace(node.getAddress());
-			if (ramSpaceAddress == null) {
-				return null;
-			}
-			return node.getDataAt(ramSpaceAddress);
-		}
 
 		// Serialize an input or output varnode.
-		private void serializeInput(PcodeOp pcodeOp, Varnode node) throws Exception {
+		void serializeInput(PcodeOp pcodeOp, Varnode node) throws Exception {
 			assert !node.isFree();
 			assert node.isInput();
 
 			PcodeOp nodeDefPcodeOp = resolveOp(node.getDef());
 			HighVariable highVariable = variableOf(node.getHigh());
 
-			beginObject();
+			writer.beginObject();
 			
 			if (highVariable != null) {
 				if (nodeDefPcodeOp == null) {
 					nodeDefPcodeOp = highVariable.getRepresentative().getDef();
 				}
 
-				name("type").value(label(highVariable.getDataType()));
+				writer.name("type").value(label(highVariable.getDataType()));
 			} else {
-				name("size").value(node.getSize());
+				writer.name("size").value(node.getSize());
 			}
 
 			switch (classifyVariable(highVariable)) {
 				case UNKNOWN:
 					if (nodeDefPcodeOp != null && !node.isInput() && nodeDefPcodeOp == pcodeOp) {
 						if (node.isUnique()) {
-							name("kind").value("temporary");
+							writer.name("kind").value("temporary");
 						
 						// TODO(pag): Figure this out.
 						} else {
 							assert false;
-							name("kind").value("unknown");
+							writer.name("kind").value("unknown");
 						}
 	
 					// NOTE(pag): Should be a `TEMPORARY` classification.
 					} else if (node.isUnique()) {
 						assert false;
 						assert nodeDefPcodeOp != null;
-						name("kind").value("temporary");
-						name("operation").value(label(nodeDefPcodeOp));
+						writer.name("kind").value("temporary");
+						writer.name("operation").value(label(nodeDefPcodeOp));
 					
 					// NOTE(pag): Should be a `REGISTER` classification.
 					} else if (node.isConstant()) {
 						assert false;
-						name("kind").value("constant");
-						name("value").value(node.getOffset());
+						writer.name("kind").value("constant");
+						writer.name("value").value(node.getOffset());
 
 					} else {
 						assert false;
-						name("kind").value("unknown");
+						writer.name("kind").value("unknown");
 					}
 					break;
 				case PARAMETER:
-					name("kind").value("parameter");
-					name("operation").value(label(getOrCreateLocalVariable(highVariable, pcodeOp)));
+					writer.name("kind").value("parameter");
+					writer.name("operation").value(label(getOrCreateLocalVariable(highVariable, pcodeOp)));
 					break;
 				case LOCAL:
-					name("kind").value("local");
-					name("operation").value(label(getOrCreateLocalVariable(highVariable, pcodeOp)));
+					writer.name("kind").value("local");
+					writer.name("operation").value(label(getOrCreateLocalVariable(highVariable, pcodeOp)));
 					break;
 				case NAMED_TEMPORARY:
-					name("kind").value("temporary");
-					name("operation").value(label(getOrCreateLocalVariable(highVariable, pcodeOp)));
+					writer.name("kind").value("temporary");
+					writer.name("operation").value(label(getOrCreateLocalVariable(highVariable, pcodeOp)));
 					break;
 				case TEMPORARY:
 					assert nodeDefPcodeOp != null;
-					name("kind").value("temporary");
-					name("operation").value(label(nodeDefPcodeOp));
+					writer.name("kind").value("temporary");
+					writer.name("operation").value(label(nodeDefPcodeOp));
 					break;
 				case GLOBAL:
-					name("kind").value("global");
-					name("global").value(label(addressOfGlobal(highVariable)));
+					writer.name("kind").value("global");
+					writer.name("global").value(label(addressOfGlobal(highVariable)));
 					break;
 				case FUNCTION:
-					name("kind").value("function");
-					name("function").value(label(highVariable.getHighFunction()));
+					writer.name("kind").value("function");
+					writer.name("function").value(label(highVariable.getHighFunction()));
 					break;
 				case CONSTANT:
 					if (node.isConstant()) {
-						Data dataReferencedAsConstant = getDataReferencedAsConstant(node);
+						Data dataReferencedAsConstant = apiUtil.getDataReferencedAsConstant(node);
 						if (dataReferencedAsConstant != null) {
 							if (dataReferencedAsConstant.hasStringValue()) {
-								name("kind").value("string");
-								name("string_value").value(dataReferencedAsConstant.getValue().toString());
+								writer.name("kind").value("string");
+								writer.name("string_value").value(dataReferencedAsConstant.getValue().toString());
 							} else {
-								name("kind").value("global");
-								name("global").value(label(makeGlobalFromData(dataReferencedAsConstant)));
+								writer.name("kind").value("global");
+								writer.name("global").value(label(makeGlobalFromData(dataReferencedAsConstant)));
 							}
 						} else if (isCharPointer(node) && highVariable != null
 							&& !node.getAddress().equals(constantSpace.getAddress(0))) {
-							String string = findNullTerminatedString(node.getAddress(), ((Pointer) highVariable.getDataType()));
+							String string = apiUtil.findNullTerminatedString(node.getAddress(), ((Pointer) highVariable.getDataType()));
 							if (string != null) {
-								name("kind").value("string");
-								name("string_value").value(string);
+								writer.name("kind").value("string");
+								writer.name("string_value").value(string);
 							} else {
 								assert false;
-								Listing listing = this.currentProgram.getListing();
-								Data data = listing.createData(convertAddressToRamSpace(node.getAddress()), highVariable.getDataType());
-								name("kind").value("global");
-								name("global").value(label(makeGlobalFromData(data)));
+								Data data = apiUtil.getListingFromAddressAndType(node, highVariable);
+								writer.name("kind").value("global");
+								writer.name("global").value(label(makeGlobalFromData(data)));
 							}
 						} else {
-							name("kind").value("constant");
-							name("value").value(node.getOffset());
+							writer.name("kind").value("constant");
+							writer.name("value").value(node.getOffset());
 						}
 					} else {
 						assert false;
-						name("kind").value("unknown");
+						writer.name("kind").value("unknown");
 					}
 					break;
 			}
 
-			endObject();
+			writer.endObject();
 		}
 		
 		// Returns the index of the first input `Varnode` referncing the stack
 		// pointer, or `-1` if no direct references are found.
-		private int referencesStackPointer(PcodeOp op) throws Exception {
+		int referencesStackPointer(PcodeOp op) throws Exception {
 			int inputIndex = 0;
 			for (Varnode node : op.getInputs()) {
 				if (node.isRegister()) {
@@ -1033,7 +973,7 @@ public class PcodeSerializer extends JsonWriter {
 		// Given a `PTRSUB SP, offset` that resolves to the base of a local
 		// variable, or a `PTRSUB 0, addr` that resolves to the address of a
 		// global variable, generate and `ADDRESS_OF var`.
-		private PcodeOp createAddressOf(
+		PcodeOp createAddressOf(
 				Varnode defVarnode, SequenceNumber sequenceNumber, Varnode inputVarnode) {
 			Varnode inputs[] = new Varnode[2];
 			inputs[0] = new Varnode(constantSpace.getAddress(ADDRESS_OF), 4);
@@ -1045,7 +985,7 @@ public class PcodeSerializer extends JsonWriter {
 		// two `Varnode`s, the first referencing the relevant `HighVariable`
 		// that contains the byte at that stack offset, and the second being
 		// a constant byte displacement from the base of the stack variable.
-		private Varnode[] createStackPointerVarnodes(
+		Varnode[] createStackPointerVarnodes(
 				HighFunction highFunction, PcodeOp pcodeOp,
 				int varOffset) throws Exception {
 			
@@ -1151,7 +1091,7 @@ public class PcodeSerializer extends JsonWriter {
 		// Update a `PTRSUB 0, addr` or a `PTRSUB SP, offset` to be prefixed
 		// by an `ADDRESS_OF`, then operate on the `ADDRESS_OF` in the first
 		// input, and use a modified offset in the second input.
-		private boolean prefixPtrSubcomponentWithAddressOf(
+		boolean prefixPtrSubcomponentWithAddressOf(
 				HighFunction highFunction, PcodeOp pcodeOp,
 				Varnode[] nodes) throws Exception {
 
@@ -1203,7 +1143,7 @@ public class PcodeSerializer extends JsonWriter {
 		
 		// Given a `PTRSUB SP, offset`, try to invent a local variable at
 		// `offset` in a similar way to how the decompiler would.
-		private boolean createLocalForPtrSubcomponent(
+		boolean createLocalForPtrSubcomponent(
 				HighFunction highFunction, PcodeOp pcodeOp,
 				CallDepthChangeInfo cdci) throws Exception {
 			
@@ -1234,7 +1174,7 @@ public class PcodeSerializer extends JsonWriter {
 		
 		// Return the next referenced address after `start`, or the maximum
 		// address in `start`'s address space.
-		private Address getNextReferencedAddressOrMax(Address start) {
+		Address getNextReferencedAddressOrMax(Address start) {
 			Address end = start.getAddressSpace().getMaxAddress();
 			AddressSet range = new AddressSet(start, end);
 			ReferenceManager references = program.getReferenceManager();
@@ -1257,7 +1197,7 @@ public class PcodeSerializer extends JsonWriter {
 		
 		// Given a `PTRSUB const, const`, try to recognize it as a global variable
 		// reference, or a field reference within a global variable.
-		private boolean createGlobalForPtrSubcomponent(
+		boolean createGlobalForPtrSubcomponent(
 				HighFunction highFunction, PcodeOp pcodeOp) throws Exception {
 			
 			HighVariable zero = pcodeOp.getInput(0).getHigh();
@@ -1354,7 +1294,7 @@ public class PcodeSerializer extends JsonWriter {
 		}
 		
 		// Try to rewrite/mutate a `PTRSUB`.
-		private boolean rewritePtrSubcomponent(
+		boolean rewritePtrSubcomponent(
 				HighFunction highFunction, PcodeOp pcodeOp,
 				CallDepthChangeInfo cdci) throws Exception {
 
@@ -1373,14 +1313,14 @@ public class PcodeSerializer extends JsonWriter {
 			return true;
 		}
 
-		private DataType normalizeDataType(DataType dataType) throws Exception {
+		DataType normalizeDataType(DataType dataType) throws Exception {
 			if (dataType instanceof TypeDef) {
 				return ((TypeDef) dataType).getBaseDataType();
 			}
 			return dataType;
 		}
 
-		private DataType getArgumentType(Function callee, int paramIndex) {
+		DataType getArgumentType(Function callee, int paramIndex) {
 			if (callee == null || paramIndex < 0) {
 				return null;
 			}
@@ -1399,7 +1339,7 @@ public class PcodeSerializer extends JsonWriter {
 			return param != null ? param.getDataType() : null;
 		}
 
-		private Function resolveCalledFunction(Varnode targetVarnode, Address caller) {
+		Function resolveCalledFunction(Varnode targetVarnode, Address caller) {
 			if (!targetVarnode.isAddress()) {
 				return null;
 			}
@@ -1414,7 +1354,7 @@ public class PcodeSerializer extends JsonWriter {
 			return callee;
 		}
 
-		private boolean needsCastOperation(DataType variableType, DataType argumentType) {
+		boolean needsCastOperation(DataType variableType, DataType argumentType) {
 			if (variableType.getLength() <= 0 || argumentType.getLength() <= 0) {
 				return false;
 			}
@@ -1445,16 +1385,16 @@ public class PcodeSerializer extends JsonWriter {
 		}
 
 
-		private boolean needsAddressOfConversion(DataType variableType, DataType argumentType) {
+		boolean needsAddressOfConversion(DataType variableType, DataType argumentType) {
 			return ((variableType instanceof Composite) || (variableType instanceof Array)) && (argumentType instanceof Pointer);
 		}
 
-		private boolean typesAreCompatible(DataType variableType, DataType argumentType) {
+		boolean typesAreCompatible(DataType variableType, DataType argumentType) {
 			return (variableType == argumentType) || ((variableType instanceof Pointer) && (argumentType instanceof Pointer));
 		}
 
 
-		private boolean rewriteCallArgument(
+		boolean rewriteCallArgument(
 				HighFunction highFunction, PcodeOp callOp) throws Exception {
 			Address callerAddress = highFunction.getFunction().getEntryPoint();
 			Varnode callTargetNode = callOp.getInput(0);
@@ -1542,7 +1482,7 @@ public class PcodeSerializer extends JsonWriter {
 			return modified;
 		}
 
-		private boolean rewriteVoidReturnType(
+		boolean rewriteVoidReturnType(
 				HighFunction highFunction, PcodeOp callOp) throws Exception {
 			Address callerAddress = highFunction.getFunction().getEntryPoint();
 			Varnode callTargetNode = callOp.getInput(0);
@@ -1574,7 +1514,7 @@ public class PcodeSerializer extends JsonWriter {
 		// Get or create a prefix operations list. These are operations that
 		// will precede `op` in our serialization, regardless of whether or
 		// not `op` is elided.
-		private List<PcodeOp> getOrCreatePrefixOperations(PcodeOp pcodeOp) {
+		List<PcodeOp> getOrCreatePrefixOperations(PcodeOp pcodeOp) {
 			List<PcodeOp> ops = prefixOperationsMap.get(pcodeOp);
 			if (ops == null) {
 				ops = new ArrayList<PcodeOp>();
@@ -1584,7 +1524,7 @@ public class PcodeSerializer extends JsonWriter {
 		}
 
 		// Try to fixup direct stack pointer references in `op`.
-		private boolean tryFixupStackVarnode(
+		boolean tryFixupStackVarnode(
 				HighFunction highFunction, PcodeOp pcodeOp,
 				CallDepthChangeInfo cdci) throws Exception {
 
@@ -1692,7 +1632,7 @@ public class PcodeSerializer extends JsonWriter {
 		// if it exists by way of mining them from `MULTIEQUAL`, `COPY`, and
 		// `INDIRECT`` operations, which exist to encode SSA form, as well as to
 		// represent control-flow barriers in terms of data flow dependencies.
-		private void mineForVarNodes(PcodeOp pcodeOp) {
+		void mineForVarNodes(PcodeOp pcodeOp) {
 			for (Varnode inputVarnode : pcodeOp.getInputs()) {
 				HighVariable highVariable = inputVarnode.getHigh();
 				if (highVariable == null || !(highVariable instanceof HighLocal)) {
@@ -1724,7 +1664,7 @@ public class PcodeSerializer extends JsonWriter {
 		//
 		// NOTE(pag): This function is very much inspired by the `MakeStackRefs`
 		//		      script embedded in the Ghidra source.
-		private boolean fixUpMissingLocalVariables(
+		boolean fixUpMissingLocalVariables(
 				HighFunction highFunction, int numberOfParameters) throws Exception {
 			Function function = highFunction.getFunction();
 			FunctionSignature signature = function.getSignature();
@@ -1813,7 +1753,7 @@ public class PcodeSerializer extends JsonWriter {
 			return true;
 		}
 		
-		private HighVariable variableOf(HighVariable highVariable) {
+		HighVariable variableOf(HighVariable highVariable) {
 			if (highVariable == null) {
 				return null;
 			}
@@ -1823,17 +1763,17 @@ public class PcodeSerializer extends JsonWriter {
 		}
 		
 		// Return the variable of a given `Varnode`. This applies local fixups.
-		private HighVariable variableOf(Varnode varnode) {
+		HighVariable variableOf(Varnode varnode) {
 			return varnode == null ? null : variableOf(varnode.getHigh());
 		}
 		
-		private HighVariable variableOf(PcodeOp pcodeOp) {
+		HighVariable variableOf(PcodeOp pcodeOp) {
 			return variableOf(pcodeOp.getOutput());
 		}
 
 		// Handles serializing the output, if any, of `op`. We only actually
 		// serialize the named outputs.
-		private void serializeOutput(PcodeOp pcodeOp) throws Exception {
+		void serializeOutput(PcodeOp pcodeOp) throws Exception {
 			Varnode output = pcodeOp.getOutput();
 			if (output == null) {
 				return;
@@ -1841,9 +1781,9 @@ public class PcodeSerializer extends JsonWriter {
 
 			HighVariable outputHighVariable = variableOf(output);
 			if (outputHighVariable != null) {
-				name("type").value(label(outputHighVariable.getDataType()));
+				writer.name("type").value(label(outputHighVariable.getDataType()));
 			} else {
-				name("size").value(output.getSize());
+				writer.name("size").value(output.getSize());
 			}
 			
 			// Only record an output node when the target is something named.
@@ -1863,29 +1803,29 @@ public class PcodeSerializer extends JsonWriter {
 					return;
 			}
 
-			name("output").beginObject();
+			writer.name("output").beginObject();
 			if (klass == VariableClassification.PARAMETER) {
-				name("kind").value("parameter");
-				name("operation").value(label(getOrCreateLocalVariable(outputHighVariable, pcodeOp)));
+				writer.name("kind").value("parameter");
+				writer.name("operation").value(label(getOrCreateLocalVariable(outputHighVariable, pcodeOp)));
 			} else if (klass == VariableClassification.LOCAL) {
-				name("kind").value("local");
-				name("operation").value(label(getOrCreateLocalVariable(outputHighVariable, pcodeOp)));				
+				writer.name("kind").value("local");
+				writer.name("operation").value(label(getOrCreateLocalVariable(outputHighVariable, pcodeOp)));				
 			} else if (klass == VariableClassification.NAMED_TEMPORARY) {
-				name("kind").value("temporary");
-				name("operation").value(label(getOrCreateLocalVariable(outputHighVariable, pcodeOp)));
+				writer.name("kind").value("temporary");
+				writer.name("operation").value(label(getOrCreateLocalVariable(outputHighVariable, pcodeOp)));
 			} else if (klass == VariableClassification.GLOBAL) {
-				name("kind").value("global");
-				name("global").value(label(addressOfGlobal(outputHighVariable)));
+				writer.name("kind").value("global");
+				writer.name("global").value(label(addressOfGlobal(outputHighVariable)));
 			} else {
 				assert false;
 			}
- 			endObject();
+ 			writer.endObject();
 		}
 		
 		// The address of a `LOAD` or `STORE` is spread across two operands:
 		// the first being a constant representing the address space, and the
 		// second being the actual address.
-		private void serializeLoadStoreAddress(PcodeOp pcodeOp) throws Exception {
+		void serializeLoadStoreAddress(PcodeOp pcodeOp) throws Exception {
 			Varnode address = rValueOf(pcodeOp.getInput(1));
 			if (!address.isConstant()) {
 				serializeInput(pcodeOp, address);
@@ -1895,32 +1835,32 @@ public class PcodeSerializer extends JsonWriter {
 			Varnode addressSpaceVarnode = pcodeOp.getInput(0);
 			assert addressSpaceVarnode.isConstant();
 
-			beginObject();
-			name("size").value(pcodeOp.getInput(1).getSize());
+			writer.beginObject();
+			writer.name("size").value(pcodeOp.getInput(1).getSize());
 			System.out.println("!!! " + label(pcodeOp) + ": " + pcodeOp.toString());
-			endObject();
+			writer.endObject();
 		}
 		
 		// Serialize a `LOAD space, address` op, eliding the address space.
-		private void serializeLoadOp(PcodeOp pcodeOp) throws Exception {
+		void serializeLoadOp(PcodeOp pcodeOp) throws Exception {
 			serializeOutput(pcodeOp);
-			name("inputs").beginArray();
+			writer.name("inputs").beginArray();
 			serializeLoadStoreAddress(pcodeOp);
-			endArray();
+			writer.endArray();
 		}
 		
 		// Serialize a `STORE space, address, value` op, eliditing the address
 		// space.
-		private void serializeStoreOp(PcodeOp pcodeOp) throws Exception {
+		void serializeStoreOp(PcodeOp pcodeOp) throws Exception {
 			serializeOutput(pcodeOp);
-			name("inputs").beginArray();
+			writer.name("inputs").beginArray();
 			serializeLoadStoreAddress(pcodeOp);
 			serializeInput(pcodeOp, rValueOf(pcodeOp.getInput(2)));
-			endArray();
+			writer.endArray();
 		}
 		
 		// Product a new address in the `UNIQUE` address space.
-		private Address nextUniqueAddress() throws Exception {
+		Address nextUniqueAddress() throws Exception {
 			Address address = uniqueSpace.getAddress(nextUnique);
 			nextUnique += uniqueSpace.getAddressableUnitSize();
 			return address;
@@ -1934,7 +1874,7 @@ public class PcodeSerializer extends JsonWriter {
 		//
 		// TODO(pag): Do we want the `.getLength()` or `.getAlignedLength()`
 		//			  for the parameter size in the absence of a representative?
-		private PcodeOp createParamVarDecl(HighVariable highVariable) throws Exception {
+		PcodeOp createParamVarDecl(HighVariable highVariable) throws Exception {
 			HighParam param = (HighParam) highVariable;
 			Address address = nextUniqueAddress();
 			DefinitionVarnode definitionVarnode = new DefinitionVarnode(address, highVariable.getDataType().getAlignedLength());
@@ -1959,7 +1899,7 @@ public class PcodeSerializer extends JsonWriter {
 
 		// Creates a pseudo p-code op using a `CALLOTHER` that logically
 		// represents the definition of a local variable.
-		private PcodeOp createLocalVariableDefinition(HighVariable highVariable) throws Exception {
+		PcodeOp createLocalVariableDefinition(HighVariable highVariable) throws Exception {
 			Address address = nextUniqueAddress();
 			DefinitionVarnode definitionVarnode = new DefinitionVarnode(address, highVariable.getSize());
 			Varnode[] ins = new Varnode[1];
@@ -1983,7 +1923,7 @@ public class PcodeSerializer extends JsonWriter {
 
 		// Creates a pseudo p-code op using a `CALLOTHER` that logically
 		// represents the definition of a variable that stands in for a register.
-		private PcodeOp createNamedTemporaryRegisterVariableDeclaration(
+		PcodeOp createNamedTemporaryRegisterVariableDeclaration(
 				HighVariable highVariable, PcodeOp userPcodeOp) throws Exception {
 			Varnode representativeVarnode = originalRepresentativeOf(highVariable);
 			assert representativeVarnode.isRegister();
@@ -2011,7 +1951,7 @@ public class PcodeSerializer extends JsonWriter {
 
 		// Get or create a local variable pseudo definition op for the high
 		// variable `var`.
-		private PcodeOp getOrCreateLocalVariable(
+		PcodeOp getOrCreateLocalVariable(
 				HighVariable var, PcodeOp userPcodeOp) throws Exception {
 			
 			Varnode representative = var.getRepresentative();
@@ -2040,7 +1980,7 @@ public class PcodeSerializer extends JsonWriter {
 
 		// Serialize a direct call. This enqueues the targeted for type lifting
 		// `Function` if it can be resolved.
-		private void serializeCallOp(PcodeOp pcodeOp) throws Exception {
+		void serializeCallOp(PcodeOp pcodeOp) throws Exception {
 			Address callerAddress = currentFunction.getFunction().getEntryPoint();
 			Varnode targetNode = pcodeOp.getInput(0);
 			Function callee = null;
@@ -2058,36 +1998,36 @@ public class PcodeSerializer extends JsonWriter {
 			}
 
 			boolean hasReturnValue = pcodeOp.getOutput() != null || (callee != null && callee.getReturnType() != VoidDataType.dataType);
-			name("has_return_value").value(hasReturnValue);
+			writer.name("has_return_value").value(hasReturnValue);
 
-			name("target");
+			writer.name("target");
 			if (callee != null) {
 
 				functions.add(callee);
 
-				beginObject();
-				name("kind").value("function");
-				name("function").value(label(callee));
-				name("is_variadic").value(callee.hasVarArgs());
-				name("is_noreturn").value(callee.hasNoReturn());
-				endObject();
+				writer.beginObject();
+				writer.name("kind").value("function");
+				writer.name("function").value(label(callee));
+				writer.name("is_variadic").value(callee.hasVarArgs());
+				writer.name("is_noreturn").value(callee.hasNoReturn());
+				writer.endObject();
 
 			} else {
 				serializeInput(pcodeOp, rValueOf(targetNode));
 			}
 			
-			name("inputs").beginArray();			
+			writer.name("inputs").beginArray();			
 			Varnode[] inputs = pcodeOp.getInputs();
 			for (int i = 1; i < inputs.length; ++i) {
 				serializeInput(pcodeOp, rValueOf(inputs[i]));
 			}
-			endArray();
+			writer.endArray();
 		}
 
 		// Serialize an unconditional branch. This records the targeted block.
-		private void serializeBranchOp(PcodeOp pcodeOp) throws Exception {
+		void serializeBranchOp(PcodeOp pcodeOp) throws Exception {
 			assert currentBlock.getOutSize() == 1;
-			name("target_block").value(label(currentBlock.getOut(0)));
+			writer.name("target_block").value(label(currentBlock.getOut(0)));
 		}
 
 		// Serialize a conditional branch. This records the targeted blocks.
@@ -2101,50 +2041,50 @@ public class PcodeSerializer extends JsonWriter {
 		//        of simplification, and so the inputs representing the
 		//        branch targets may not actually represent the `true` or
 		//        `false` outputs in the traditional sense.
-		private void serializeCondBranchOp(PcodeOp pcodeOp) throws Exception {
-			name("taken_block").value(label(currentBlock.getTrueOut()));
-			name("not_taken_block").value(label(currentBlock.getFalseOut()));
-			name("condition");
+		void serializeCondBranchOp(PcodeOp pcodeOp) throws Exception {
+			writer.name("taken_block").value(label(currentBlock.getTrueOut()));
+			writer.name("not_taken_block").value(label(currentBlock.getFalseOut()));
+			writer.name("condition");
 			serializeInput(pcodeOp, rValueOf(pcodeOp.getInput(1)));
 		}
 
 		// Serialize a generic multi-input, single-output p-code operation.
-		private void serializeGenericOp(PcodeOp pcodeOp) throws Exception {
-			name("inputs").beginArray();
+		void serializeGenericOp(PcodeOp pcodeOp) throws Exception {
+			writer.name("inputs").beginArray();
 			for (Varnode inputVarnode : pcodeOp.getInputs()) {
 				serializeInput(pcodeOp, rValueOf(inputVarnode));
 			}
-			endArray();
+			writer.endArray();
 		}
 
 		// Serializes a pseudo-op `DECLARE_PARAM_VAR`, which is actually encoded
 		// as a `CALLOTHER`.
-		private void serializeDeclareParamVar(PcodeOp pcodeOp) throws Exception {
+		void serializeDeclareParamVar(PcodeOp pcodeOp) throws Exception {
 			HighVariable highVariableOfPcodeOp = variableOf(pcodeOp);
-			name("name").value(highVariableOfPcodeOp.getName());
-			name("type").value(label(highVariableOfPcodeOp.getDataType()));
-			name("kind").value("parameter");  // So that it also looks like an input/output.
+			writer.name("name").value(highVariableOfPcodeOp.getName());
+			writer.name("type").value(label(highVariableOfPcodeOp.getDataType()));
+			writer.name("kind").value("parameter");  // So that it also looks like an input/output.
 			if (highVariableOfPcodeOp instanceof HighParam) {
-				name("index").value(((HighParam) highVariableOfPcodeOp).getSlot());
+				writer.name("index").value(((HighParam) highVariableOfPcodeOp).getSlot());
 			}
 		}
 
 		// Serializes a pseudo-op `DECLARE_LOCAL_VAR`, which is actually encoded
 		// as a `CALLOTHER`.
-		private void serializeDeclareLocalVar(PcodeOp pcodeOp) throws Exception {
+		void serializeDeclareLocalVar(PcodeOp pcodeOp) throws Exception {
 			HighVariable highVariableOfPcodeOp = variableOf(pcodeOp);
 			HighSymbol highSymbol = highVariableOfPcodeOp.getSymbol();
-			name("kind").value("local");  // So that it also looks like an input/output.
+			writer.name("kind").value("local");  // So that it also looks like an input/output.
 			if (highSymbol != null && highVariableOfPcodeOp.getOffset() == -1 && highVariableOfPcodeOp.getName().equals("UNNAMED")) {
-				name("name").value(highSymbol.getName());
-				name("type").value(label(highSymbol.getDataType()));
+				writer.name("name").value(highSymbol.getName());
+				writer.name("type").value(label(highSymbol.getDataType()));
 			} else {
-				name("name").value(highVariableOfPcodeOp.getName());
-				name("type").value(label(highVariableOfPcodeOp.getDataType()));
+				writer.name("name").value(highVariableOfPcodeOp.getName());
+				writer.name("type").value(label(highVariableOfPcodeOp.getDataType()));
 			}
 		}
 		
-		private void serializeDeclareNamedTemporary(PcodeOp pcodeOp) throws Exception {
+		void serializeDeclareNamedTemporary(PcodeOp pcodeOp) throws Exception {
 			HighVariable highVariableOfPcodeOp = variableOf(pcodeOp);
 			Varnode representativeVarnode = originalRepresentativeOf(highVariableOfPcodeOp);
 
@@ -2157,20 +2097,20 @@ public class PcodeSerializer extends JsonWriter {
 				if (representativeVarnode.isRegister()) {
 					Register reg = language.getRegister(representativeVarnode.getAddress(), 0);
 					if (reg != null) {
-						name("name").value(reg.getName());
+						writer.name("name").value(reg.getName());
 					} else {
-						name("name").value("reg" + Address.SEPARATOR +
+						writer.name("name").value("reg" + Address.SEPARATOR +
 										   Long.toHexString(representativeVarnode.getOffset()));
 					}
 				} else {
-					name("name").value("temp");
+					writer.name("name").value("temp");
 				}
 			} else {
-				name("name").value(highVariableOfPcodeOp.getName());
+				writer.name("name").value(highVariableOfPcodeOp.getName());
 			}
 
-			name("kind").value("temporary");  // So that it also looks like an input/output.
-			name("type").value(label(highVariableOfPcodeOp.getDataType()));
+			writer.name("kind").value("temporary");  // So that it also looks like an input/output.
+			writer.name("type").value(label(highVariableOfPcodeOp.getDataType()));
 			
 			// NOTE(pag): The same register might appear multiple times, though
 			//			  we can't guarantee that they will appear with the
@@ -2180,43 +2120,43 @@ public class PcodeSerializer extends JsonWriter {
 			//			  AST.
 			PcodeOp userPcodeOp = temporaryAddressMap.get(highVariableOfPcodeOp);
 			if (userPcodeOp != null) {
-				name("address").value(label(userPcodeOp));
+				writer.name("address").value(label(userPcodeOp));
 			}
 		}
 		
 		// Serialize an `ADDRESS_OF`, used to the get the address of a local or
 		// global variable. These are created from `PTRSUB` nodes.
-		private void serializeAddressOfOp(PcodeOp pcodeOp) throws Exception {
+		void serializeAddressOfOp(PcodeOp pcodeOp) throws Exception {
 			serializeOutput(pcodeOp);
-			name("inputs").beginArray();
+			writer.name("inputs").beginArray();
 			serializeInput(pcodeOp, rValueOf(pcodeOp.getInputs()[1]));
-			endArray();
+			writer.endArray();
 		}
 		
 		// Serialize a `CALLOTHER` as a call to an intrinsic.
-		private void serializeIntrinsicCallOp(PcodeOp pcodeOp) throws Exception {
+		void serializeIntrinsicCallOp(PcodeOp pcodeOp) throws Exception {
 			serializeOutput(pcodeOp);
 			
-			name("target").beginObject();
-			name("kind").value("intrinsic");
-			name("function").value(intrinsicLabel(pcodeOp));
-			name("is_variadic").value(true);
-			name("is_noreturn").value(false);
-			endObject();  // End of `target`.
+			writer.name("target").beginObject();
+			writer.name("kind").value("intrinsic");
+			writer.name("function").value(intrinsicLabel(pcodeOp));
+			writer.name("is_variadic").value(true);
+			writer.name("is_noreturn").value(false);
+			writer.endObject();  // End of `target`.
 			
-			name("inputs").beginArray();			
+			writer.name("inputs").beginArray();			
 			Varnode[] inputs = pcodeOp.getInputs();
 			for (int i = 1; i < inputs.length; ++i) {
 				serializeInput(pcodeOp, rValueOf(inputs[i]));
 			}
-			endArray();
+			writer.endArray();
 		}
 
 		// Serialize a `CALLOTHER`. The first input operand is a constant
 		// representing the user-defined opcode number. In our case, we have
 		// our own user-defined opcodes for making things better mirror the
 		// structure/needs of MLIR.
-		private void serializeCallOtherOp(PcodeOp pcodeOp) throws Exception {
+		void serializeCallOtherOp(PcodeOp pcodeOp) throws Exception {
 			switch ((int) pcodeOp.getInput(0).getOffset()) {
 			case DECLARE_PARAM_VAR:
 				serializeDeclareParamVar(pcodeOp);
@@ -2237,13 +2177,13 @@ public class PcodeSerializer extends JsonWriter {
 		}
 		
 		// Serialize a `RETURN N[, val]` as logically being `RETURN val`.
-		private void serializeReturnOp(PcodeOp pcodeOp) throws Exception {
+		void serializeReturnOp(PcodeOp pcodeOp) throws Exception {
 			Varnode inputs[] = pcodeOp.getInputs();
-			name("inputs").beginArray();
+			writer.name("inputs").beginArray();
 			if (inputs.length == 2) {
 				serializeInput(pcodeOp, rValueOf(inputs[1]));
 			}
-			endArray();
+			writer.endArray();
 		}
 
 		// Get the mnemonic for a p-code operation. We have some custom
@@ -2254,7 +2194,7 @@ public class PcodeSerializer extends JsonWriter {
 		//        `CALLOTHER` via `Language.getSymbolTable()` using a
 		//        `UseropSymbol`. It's not clear if there's really value in
 		//        doing this, though.
-		private static String mnemonic(PcodeOp pcodeOp) {
+		static String mnemonic(PcodeOp pcodeOp) {
 			if (pcodeOp.getOpcode() == PcodeOp.CALLOTHER) {
 				switch ((int) pcodeOp.getInput(0).getOffset()) {
 				case DECLARE_PARAM_VAR:
@@ -2272,9 +2212,9 @@ public class PcodeSerializer extends JsonWriter {
 			return pcodeOp.getMnemonic();
 		}
 
-		private void serialize(PcodeOp pcodeOp) throws Exception {
-			beginObject();
-			name("mnemonic").value(mnemonic(pcodeOp));
+		void serialize(PcodeOp pcodeOp) throws Exception {
+			writer.beginObject();
+			writer.name("mnemonic").value(mnemonic(pcodeOp));
 			
 			switch (pcodeOp.getOpcode()) {
 				case PcodeOp.CALL:
@@ -2308,12 +2248,12 @@ public class PcodeSerializer extends JsonWriter {
 					break;
 			}
 
-			endObject();
+			writer.endObject();
 		}
 		
 		// Returns `true` if we can elide a `MULTIEQUAL` operation. If all
 		// inputs are of the identical `HighVariable`, then we can elide.
-		private boolean canElideMultiEqual(PcodeOp pcodeOp) throws Exception {
+		boolean canElideMultiEqual(PcodeOp pcodeOp) throws Exception {
 			HighVariable highVariableOfPcodeOp = variableOf(pcodeOp);
 			if (highVariableOfPcodeOp == null) {
 				return false;
@@ -2335,13 +2275,13 @@ public class PcodeSerializer extends JsonWriter {
 		//
 		// TODO(pag): This is toally unsafe if there's an intervening write to
 		//			  relevant variable. Probably should investigate this case.
-		private boolean canElideCopy(PcodeOp pcodeOp) throws Exception {
+		boolean canElideCopy(PcodeOp pcodeOp) throws Exception {
 			HighVariable highVariableOfPcodeOp = variableOf(pcodeOp);
 			return highVariableOfPcodeOp != null && highVariableOfPcodeOp == variableOf(pcodeOp.getInput(0));
 		}
 		
 		// Returns `true` if `op` is a branch operator.
-		private static boolean isBranch(PcodeOp pcodeOp) throws Exception {
+		static boolean isBranch(PcodeOp pcodeOp) throws Exception {
 			switch (pcodeOp.getOpcode()) {
 				case PcodeOp.BRANCH:
 				case PcodeOp.CBRANCH:
@@ -2354,10 +2294,10 @@ public class PcodeSerializer extends JsonWriter {
 		
 		// Serialize a high p-code basic block. This iterates over the p-code
 		// operations within the block and serializes them individually.
-		private void serialize(PcodeBlockBasic block) throws Exception {
+		void serialize(PcodeBlockBasic block) throws Exception {
 			PcodeBlock parentBlock = block.getParent();
 			if (parentBlock != null) {
-				name("parent_block").value(label(parentBlock));
+				writer.name("parent_block").value(label(parentBlock));
 			}
 			
 			boolean lastIsBranch = false;
@@ -2414,9 +2354,9 @@ public class PcodeSerializer extends JsonWriter {
 			}
 			
 			// Serialize the operations.
-			name("operations").beginObject();
+			writer.name("operations").beginObject();
 			for (PcodeOp pcodeOp : orderedPcodeOps) {
-				name(label(pcodeOp));
+				writer.name(label(pcodeOp));
 				currentBlock = block;
 				serialize(pcodeOp);
 				lastIsBranch = isBranch(pcodeOp);
@@ -2430,52 +2370,52 @@ public class PcodeSerializer extends JsonWriter {
 			String fallThroughLabel = "";
 			if (!lastIsBranch && block.getOutSize() == 1) {
 				fallThroughLabel = label(block) + ".exit";
-				name(fallThroughLabel).beginObject();
-				name("mnemonic").value("BRANCH");
-				name("target_block").value(label(block.getOut(0)));
-				endObject();  // End of BRANCH to `first_block`.	
+				writer.name(fallThroughLabel).beginObject();
+				writer.name("mnemonic").value("BRANCH");
+				writer.name("target_block").value(label(block.getOut(0)));
+				writer.endObject();  // End of BRANCH to `first_block`.	
 			}
 			
-			endObject();  // End of `operations`.
+			writer.endObject();  // End of `operations`.
 
 			// List out the operations in their order.
-			name("ordered_operations").beginArray();
+			writer.name("ordered_operations").beginArray();
 			for (PcodeOp op : orderedPcodeOps) {
-				value(label(op));
+				writer.value(label(op));
 			}
 			if (!fallThroughLabel.equals("")) {
-				value(fallThroughLabel);
+				writer.value(fallThroughLabel);
 			}
-			endArray();  // End of `ordered_operations`.
+			writer.endArray();  // End of `ordered_operations`.
 		}
 
 		// Emit a pseudo entry block to represent
-		private void serializeEntryBlock(
+		void serializeEntryBlock(
 				String label, PcodeBlockBasic firstPcodeBasicBlock) throws Exception {
-			name(label).beginObject();
-			name("operations").beginObject();
+			writer.name(label).beginObject();
+			writer.name("operations").beginObject();
 			for (PcodeOp pseudoPcodeOp : entryBlock) {
-				name(label(pseudoPcodeOp));
+				writer.name(label(pseudoPcodeOp));
 				serialize(pseudoPcodeOp);
 			}
 
 			// If there is a proper entry block, then invent a branch to it.
 			if (firstPcodeBasicBlock != null) {
-				name("entry.exit").beginObject();
-				name("mnemonic").value("BRANCH");
-				name("target_block").value(label(firstPcodeBasicBlock));
-				endObject();  // End of BRANCH to `first_block`.
+				writer.name("entry.exit").beginObject();
+				writer.name("mnemonic").value("BRANCH");
+				writer.name("target_block").value(label(firstPcodeBasicBlock));
+				writer.endObject();  // End of BRANCH to `first_block`.
 			}
 
-			endObject();  // End of operations.
+			writer.endObject();  // End of operations.
 
-			name("ordered_operations").beginArray();
+			writer.name("ordered_operations").beginArray();
 			for (PcodeOp pseudoPcodeOp : entryBlock) {
-				value(label(pseudoPcodeOp));
+				writer.value(label(pseudoPcodeOp));
 			}
-			value("entry.exit");
-			endArray();  // End of `ordered_operations`.
-			endObject();  // End of `entry` block.
+			writer.value("entry.exit");
+			writer.endArray();  // End of `ordered_operations`.
+			writer.endObject();  // End of `entry` block.
 		}
 		
 		// Serialize `function`. If we have `high_function` (the decompilation
@@ -2483,7 +2423,7 @@ public class PcodeSerializer extends JsonWriter {
 		// we will serialize the type information of `functionToSerialize`. If
 		// `shouldVisitPcode` is true, then this is a function for which we want to
 		// fully lift, i.e. visit all the high p-code.
-		private void serialize(
+		void serialize(
 				HighFunction highFunction, Function functionToSerialize,
 				boolean shouldVisitPcode) throws Exception {
 			
@@ -2495,14 +2435,14 @@ public class PcodeSerializer extends JsonWriter {
 			prefixOperationsMap.clear();
 
 			FunctionPrototype functionPrototype = null;
-			name("name").value(functionToSerialize.getName());
-			name("is_intrinsic").value(false);
+			writer.name("name").value(functionToSerialize.getName());
+			writer.name("is_intrinsic").value(false);
 
 			// If we have a high P-Code function, then serialize the blocks.
 			if (highFunction != null) {
 				functionPrototype = highFunction.getFunctionPrototype();
 
-				name("type").beginObject();
+				writer.name("type").beginObject();
 				
 				int numberOfParams = 0;
 				if (functionPrototype != null) {
@@ -2510,7 +2450,7 @@ public class PcodeSerializer extends JsonWriter {
 				} else {
 					numberOfParams = serializePrototype(functionToSerialize.getSignature());
 				}
-				endObject();  // End `type`.
+				writer.endObject();  // End `type`.
 
 				if (shouldVisitPcode && fixUpMissingLocalVariables(highFunction, numberOfParams)) {
 					
@@ -2518,15 +2458,15 @@ public class PcodeSerializer extends JsonWriter {
 					PcodeBlockBasic firstPcodeBasicBlock = null;
 					currentFunction = highFunction;
 
-					name("basic_blocks").beginObject();
+					writer.name("basic_blocks").beginObject();
 					for (PcodeBlockBasic basicBlock : highFunction.getBasicBlocks()) {
 						if (firstPcodeBasicBlock == null) {
 							firstPcodeBasicBlock = basicBlock;
 						}
 
-						name(label(basicBlock)).beginObject();
+						writer.name(label(basicBlock)).beginObject();
 						serialize(basicBlock);
-						endObject();
+						writer.endObject();
 					}
 
 					// If we created a fake entry block to represent variable
@@ -2536,29 +2476,29 @@ public class PcodeSerializer extends JsonWriter {
 						serializeEntryBlock(entryLabel, firstPcodeBasicBlock);
 					}
 					
-					endObject();  // End of `basic_blocks`.
+					writer.endObject();  // End of `basic_blocks`.
 					currentFunction = null;
 					
 					if (entryLabel != null) {
-						name("entry_block").value(entryLabel);
+						writer.name("entry_block").value(entryLabel);
 
 					} else if (firstPcodeBasicBlock != null) {
-						name("entry_block").value(label(firstPcodeBasicBlock));
+						writer.name("entry_block").value(label(firstPcodeBasicBlock));
 					}
 				}
 			} else {
-				name("type").beginObject();
+				writer.name("type").beginObject();
 				serializePrototype(functionToSerialize.getSignature());
-				endObject();  // End `type`.
+				writer.endObject();  // End `type`.
 			}
 		}
 		
-		private String entryBlockLabel() throws Exception {
+		String entryBlockLabel() throws Exception {
 			return label(currentFunction) +  Address.SEPARATOR + "entry";
 		}
 		
 		// Serialize the global variable declarations.
-		private void serializeGlobals() throws Exception {
+		void serializeGlobals() throws Exception {
 			for (Map.Entry<Address, HighVariable> entry : seenGlobalsMap.entrySet()) {
 				Address address = entry.getKey();
 				HighVariable globalHighVariable = entry.getValue();
@@ -2572,11 +2512,11 @@ public class PcodeSerializer extends JsonWriter {
 					}
 				}
 
-				name(label(address)).beginObject();
-				name("name").value(globalVariableName);
-				name("size").value(Integer.toString(globalHighVariable.getSize()));
-				name("type").value(label(globalHighVariable.getDataType()));
-				endObject();
+				writer.name(label(address)).beginObject();
+				writer.name("name").value(globalVariableName);
+				writer.name("size").value(Integer.toString(globalHighVariable.getSize()));
+				writer.name("type").value(label(globalHighVariable.getDataType()));
+				writer.endObject();
 			}
 
 			for (Map.Entry<Address, Data> entry : seenDataMap.entrySet()) {
@@ -2586,11 +2526,11 @@ public class PcodeSerializer extends JsonWriter {
 					+ SymbolUtilities.replaceInvalidChars(datavar.getDefaultValueRepresentation(), false)
 					+ "_" + datavar.getMinAddress().toString();
 
-				name(label(address)).beginObject();
-				name("name").value(name);
-				name("size").value(Integer.toString(datavar.getDataType().getLength()));
-				name("type").value(label(datavar.getDataType()));
-				endObject();
+				writer.name(label(address)).beginObject();
+				writer.name("name").value(name);
+				writer.name("size").value(Integer.toString(datavar.getDataType().getLength()));
+				writer.name("type").value(label(datavar.getDataType()));
+				writer.endObject();
 
 
 			}
@@ -2643,7 +2583,7 @@ public class PcodeSerializer extends JsonWriter {
 		);
 
 		// Serialize all `CALLOTHER` intrinsics.
-		private void serializeIntrinsics() throws Exception {
+		void serializeIntrinsics() throws Exception {
 			Set<String> seenIntrinsics = new HashSet<>();
 			int numIntrinsics = 0;
 			
@@ -2656,16 +2596,16 @@ public class PcodeSerializer extends JsonWriter {
 					continue;
 				}
 				
-				name(label).beginObject();
-				name("name").value(name);
-				name("is_intrinsic").value(true);
-				name("type").beginObject();
-				name("return_type").value(label(returnType));
-				name("is_variadic").value(true);
-				name("is_noreturn").value(false);
-				name("parameter_types").beginArray().endArray();
-				endObject();  // End of `type`.
-				endObject();
+				writer.name(label).beginObject();
+				writer.name("name").value(name);
+				writer.name("is_intrinsic").value(true);
+				writer.name("type").beginObject();
+				writer.name("return_type").value(label(returnType));
+				writer.name("is_variadic").value(true);
+				writer.name("is_noreturn").value(false);
+				writer.name("parameter_types").beginArray().endArray();
+				writer.endObject();  // End of `type`.
+				writer.endObject();
 				
 				++numIntrinsics;
 			}
@@ -2678,7 +2618,7 @@ public class PcodeSerializer extends JsonWriter {
 		// NOTE(pag): As we serialize functions, we might discover references
 		//			  to other functions, causing `functions` will grow over
 		// 			  time.
-		private void serializeFunctions() throws Exception {
+		void serializeFunctions() throws Exception {
 			for (int i = 0; i < functions.size(); ++i) {
 				Function function = functions.get(i);
 				String functionLabel = label(function);
@@ -2692,9 +2632,9 @@ public class PcodeSerializer extends JsonWriter {
 
 				DecompileResults functionDecompResults = decompInterface.decompileFunction(function, DECOMPILATION_TIMEOUT, this.monitor);
 				HighFunction highFunction = functionDecompResults.getHighFunction();
-				name(functionLabel).beginObject();
+				writer.name(functionLabel).beginObject();
 				serialize(highFunction, function, shouldVisitPcode);
-				endObject();
+				writer.endObject();
 			}
 
 			System.out.println("Total serialized functions: " + Integer.toString(functions.size()));
@@ -2709,23 +2649,26 @@ public class PcodeSerializer extends JsonWriter {
 		// variables.
 		public void serialize() throws Exception {
 
-			beginObject();
-			name("arch").value(this.arch);
-			name("id").value(this.languageID);
-			name("format").value(currentProgram.getExecutableFormat());
+			writer.beginObject();
+			writer.name("arch").value(this.arch);
+			writer.name("id").value(this.languageID);
+			writer.name("format").value(currentProgram.getExecutableFormat());
 
-			name("functions").beginObject();
+			writer.name("functions").beginObject();
 			serializeFunctions();
-			endObject();  // End of functions.
+			writer.endObject();  // End of functions.
 			
-			name("globals").beginObject();
+			writer.name("globals").beginObject();
 			serializeGlobals();
-			endObject();  // End of globals.
+			writer.endObject();  // End of globals.
 
-			name("types").beginObject();
+			writer.name("types").beginObject();
 			serializeTypes();
-			endObject();  // End of types.
+			writer.endObject();  // End of types.
 
-			endObject();
+			writer.endObject();
+
+			// close ourselves so the caller doesn't need to
+			writer.close();
 		}
 	}

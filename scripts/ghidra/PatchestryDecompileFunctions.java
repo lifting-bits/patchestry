@@ -200,7 +200,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
 
         final var serializer = new PcodeSerializer(
-            Files.newBufferedWriter(file), 
+            new JsonWriter(Files.newBufferedWriter(file)), 
             getArch(), 
             getLanguageID(),
             monitor,
@@ -210,7 +210,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             functions
         );
         serializer.serialize();
-        serializer.close();
     }
 
     List<Function> getAllFunctions() {
