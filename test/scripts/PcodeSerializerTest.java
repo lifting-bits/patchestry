@@ -12,14 +12,11 @@ import com.google.gson.stream.JsonWriter;
 
 import ghidra.app.decompiler.DecompInterface;
 
-import ghidra.test.AbstractGhidraHeadlessIntegrationTest;
-
 import ghidra.util.task.TaskMonitor;
 
 import ghidra.program.model.block.BasicBlockModel;
 
 import ghidra.program.model.listing.Function;
-import ghidra.program.model.listing.Program;
 
 import java.util.List;
 import java.util.Collections;
@@ -27,24 +24,21 @@ import java.util.Collections;
 import util.PcodeSerializer;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
-    Program program;
+public class PcodeSerializerTest extends BaseTest {
 
     @Test
     public void testConstructor() {
         JsonWriter fakeWriter = mock(JsonWriter.class);
-        TaskMonitor fakeMonitor = mock(TaskMonitor.class);
         DecompInterface fakeDecompInterface = mock(DecompInterface.class);
         List<Function> fns = Collections.emptyList();
         PcodeSerializer serializer = new PcodeSerializer(
-            fakeWriter,
-            fns,
-            "ARM",
-            "Cortex",
-            fakeMonitor,
-            program,
-            fakeDecompInterface,
-            new BasicBlockModel(program)
+                fakeWriter,
+                fns,
+                "Cortex",
+                fakeMonitor,
+                program,
+                fakeDecompInterface,
+                new BasicBlockModel(program)
         );
 
         assertTrue(false);

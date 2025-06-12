@@ -50,82 +50,38 @@ import ghidra.util.task.TaskMonitor;
 import ghidra.app.script.GhidraScript;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class PatchestryDecompileFunctionsTest extends AbstractGhidraHeadlessIntegrationTest {
-    private TestEnv env = null;
-    private Project project = null;
-    private Program bloodlightProgram = null;
-    private MessageLog log = new MessageLog();
-    private TaskMonitor monitor = mock(TaskMonitor.class);
+public class PatchestryDecompileFunctionsTest extends BaseTest {
+
     private PatchestryDecompileFunctions decompileScript = new PatchestryDecompileFunctions();
-    private String testFwArch = "ARM:LE:32:Cortex";
-
-    private Program load(File fw, String arch, Project project) throws Exception {
-        LanguageService languageService = DefaultLanguageService.getLanguageService();
-        LanguageID langId = new LanguageID(arch);
-        Language language = languageService.getLanguage(langId);
-        CompilerSpec compilerSpec = language.getDefaultCompilerSpec();
-
-        // lcs == language and compiler spec
-        LoadResults<Program> importResults = AutoImporter.importByLookingForLcs(
-            fw,
-            project,
-            project.getProjectData().getRootFolder().getPathname(),
-            language,
-            compilerSpec,
-            this,
-            log,
-            monitor
-        );
-        return (Program) importResults.getPrimaryDomainObject();
-    }
 
     @BeforeAll
     public void setUp() throws Exception {
-        // stub out mocked class methods
-        when(monitor.isCancelled()).thenReturn(false);
-
-        env = new TestEnv();
-        project = env.getProject();
+        super.setUp();
 
         File bloodlightFirmware = new File(System.getenv("BLOODLIGHT_FW_PATH"));
-        bloodlightProgram = load(bloodlightFirmware, testFwArch, project);
+        program = load(bloodlightFirmware, testFwArch, project);
 
         String[] argsBloodlight = {
-            "single", 
-            "main", 
+            "single",
+            "main",
             "bloodlight_main_testgetarch.txt"
         };
         decompileScript.setScriptArgs(argsBloodlight);
-        decompileScript.setProgram(bloodlightProgram);
+        decompileScript.setProgram(program);
 
-        // if we don't mock this, because we aren't in GhidraScript context here, testing
+        // if we don't fake this, because we aren't in GhidraScript context here, testing
         // decompiler-reliant stuff doesn't work
-        GhidraState fakeState = new GhidraState(env.getTool(), project, bloodlightProgram, null, null, null);
+        GhidraState fakeState = new GhidraState(env.getTool(), project, program, null, null, null);
         Field state = decompileScript.getClass().getSuperclass().getDeclaredField("state");
         state.setAccessible(true);
         state.set(decompileScript, fakeState);
+
+        Field monitorField = findFieldInHierarchy(decompileScript.getClass(), "monitor");
+        monitorField.setAccessible(true);
+        monitorField.set(decompileScript, fakeMonitor);
     }
 
-    @AfterAll
-    public void cleanUp() throws Exception {
-        if (bloodlightProgram != null) {
-            bloodlightProgram.release(this);
-        }
-
-        if (env != null) {
-            env.dispose();
-        }
-    }
-
-    @Test 
-    public void testGetArch() throws Exception {
-        assertNotNull(decompileScript.getCurrentProgram());
-        assertEquals(decompileScript.getArch(), "ARM");
-        assertEquals(decompileScript.getCurrentProgram().getLanguageID().toString(), testFwArch);
-        assertEquals(decompileScript.getCurrentProgram().getExecutablePath(), System.getenv("BLOODLIGHT_FW_PATH").toString());
-    }
-
-    @Test 
+    @Test
     public void testGetLanguageID() throws Exception {
         assertNotNull(decompileScript.getCurrentProgram());
         assertNotNull(decompileScript.getCurrentProgram().getLanguage());
@@ -138,62 +94,46 @@ public class PatchestryDecompileFunctionsTest extends AbstractGhidraHeadlessInte
         assertNotNull(decompileScript.getDecompilerInterface());
     }
 
-    @Test 
+    @Test
     public void testSerializeToFile() throws Exception {
         List<Function> empty = new ArrayList();
-        assertThrows(IllegalArgumentException.class, () -> {decompileScript.serializeToFile(null, empty);});
+        assertThrows(IllegalArgumentException.class, () -> {
+            decompileScript.serializeToFile(null, empty);
+        });
 
         Path tempFile = Files.createTempFile("test-serialize-to-file", ".json");
         JsonWriter writer = new JsonWriter(Files.newBufferedWriter(tempFile));
-        assertThrows(IllegalArgumentException.class, () -> {decompileScript.serializeToFile(writer, empty);});
-        
+        assertThrows(IllegalArgumentException.class, () -> {
+            decompileScript.serializeToFile(writer, empty);
+        });
+
         List<Function> usbFn = decompileScript.getGlobalFunctions("bl_usb__send_message");
         decompileScript.serializeToFile(writer, usbFn);
         String fileContents = Files.readString(tempFile);
         assertNotNull(fileContents);
+        // todo (kaoudis) consider testing file contents here - but that is more about PcodeSerializer working correctly
     }
 
-    @Disabled
     @Test
     public void testGetAllFunctions() throws Exception {
-        String[] args = {
-            "all", 
-            "bloodlight_main_testgetallfunctions.txt"
-        };
-        decompileScript.setScriptArgs(args);
-        decompileScript.setProgram(bloodlightProgram);
         assertNotNull(decompileScript.getCurrentProgram());
-        
-        Method getAllFunctions = PatchestryDecompileFunctions.class.getDeclaredMethod("getAllFunctions");
-        getAllFunctions.setAccessible(true);
-        List<Function> output = (List<Function>) getAllFunctions.invoke(decompileScript);
+        List<Function> functions = decompileScript.getAllFunctions();
+        // todo (kaoudis) check this number somehow - is it EVERYTHING in bloodlight?
+        assertEquals(functions.size(), 262);
     }
 
     @Disabled
     @Test
     public void testDecompileSingleFunction() throws Exception {
-        String[] args = {
-            "single", 
-            "main", 
-            "bloodlight_main_testrunheadlessdecompilesingle.txt"
-        };
-        decompileScript.setScriptArgs(args);
-        decompileScript.setProgram(bloodlightProgram);
-
-        assertNotNull(decompileScript.getCurrentProgram());
-
-        Method runHeadless = PatchestryDecompileFunctions.class.getDeclaredMethod("runHeadless");
-        runHeadless.setAccessible(true);
-        runHeadless.invoke(decompileScript);
     }
 
     @Disabled
-    @Test 
+    @Test
     public void testDecompileAllFunctions() throws Exception {
     }
 
     @Disabled
-    @Test 
+    @Test
     public void testRunAutoAnalysis() throws Exception {
     }
 }
