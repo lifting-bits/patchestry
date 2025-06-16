@@ -373,7 +373,6 @@ public class PcodeSerializer {
 		
 		// Figure out the return type of an intrinsic op.
 		DataType intrinsicReturnType(PcodeOp pcodeOp) {
-			DataType returnType = null;
 			Varnode returnValueVarnode = pcodeOp.getOutput();
 			if (returnValueVarnode == null) {
 				return VoidDataType.dataType;
@@ -384,6 +383,7 @@ public class PcodeSerializer {
 				return highVariable.getDataType();
 			}
 		
+			assert false;
 			return Undefined.getUndefinedDataType(returnValueVarnode.getSize());
 		}
 
