@@ -257,8 +257,8 @@ RUN javac \
     $GHIDRA_SCRIPTS/*.java \
     $GHIDRA_SCRIPT_TESTS/*.java
 
-RUN mkdir /opt/test_output
-ENTRYPOINT java \
+RUN mkdir /opt/test_output && \
+    java \
         -Djunit.output.dir=/opt/test_output \
         --add-opens java.desktop/sun.awt=ALL-UNNAMED \
         org.junit.platform.console.ConsoleLauncher \
