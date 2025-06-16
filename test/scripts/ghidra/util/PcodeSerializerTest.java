@@ -42,6 +42,7 @@ import ghidra.util.UniversalID;
 import ghidra.util.task.TaskMonitor;
 
 import java.lang.reflect.Field;
+import java.lang.Math;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -95,6 +96,11 @@ public class PcodeSerializerTest extends BaseTest {
         assertFalse(serializer.currentProgram.isClosed());
     }
 
+    private int rand(int min, int max) {
+        int range = max - min + 1;
+        return (int)(Math.random() * range) + min;
+    }
+
     @Test
     public void testLabelFunction() throws Exception {
         for (Function func : fns) {
@@ -115,7 +121,7 @@ public class PcodeSerializerTest extends BaseTest {
 
     @Test
     public void testLabelSequenceNumber() throws Exception {
-        DecompileResults result = decompInterface.decompileFunction(fns.get(0), 0, fakeMonitor);
+        DecompileResults result = decompInterface.decompileFunction(fns.get(rand(0, 10)), 0, fakeMonitor);
         HighFunction high = result.getHighFunction();
         Iterator<PcodeOpAST> iterator = high.getPcodeOps();
         assertTrue(iterator.hasNext());
@@ -129,7 +135,7 @@ public class PcodeSerializerTest extends BaseTest {
 
     @Test
     public void testLabelPcodeBlock() throws Exception {
-        DecompileResults result = decompInterface.decompileFunction(fns.get(0), 1, fakeMonitor);
+        DecompileResults result = decompInterface.decompileFunction(fns.get(rand(0, 10)), 0, fakeMonitor);
         HighFunction high = result.getHighFunction();
         Iterator<PcodeOpAST> iterator = high.getPcodeOps();
         
@@ -183,7 +189,7 @@ public class PcodeSerializerTest extends BaseTest {
 
     @Test
     public void testIntrinsicReturnType() throws Exception {
-        DecompileResults result = decompInterface.decompileFunction(fns.get(0), 1, fakeMonitor);
+        DecompileResults result = decompInterface.decompileFunction(fns.get(rand(0, 10)), 0, fakeMonitor);
         HighFunction high = result.getHighFunction();
         Iterator<PcodeOpAST> iterator = high.getPcodeOps();
         
@@ -202,22 +208,23 @@ public class PcodeSerializerTest extends BaseTest {
         }
     }
 
-    @Disabled
-    @Test
-    public void testGetAddressFromPcodeOp() throws Exception {
-        assertTrue(false);
-    }
-
-    @Disabled
     @Test
     public void testIntrinsicLabelFromPcodeOp() throws Exception {
-        assertTrue(false);
-    }
-    
-    @Disabled
-    @Test
-    public void testIntrinsicLabelFromReturnDataType() throws Exception {
-        assertTrue(false);
+        DecompileResults result = decompInterface.decompileFunction(fns.get(rand(0, 10)), 0, fakeMonitor);
+        HighFunction high = result.getHighFunction();
+        Iterator<PcodeOpAST> iterator = high.getPcodeOps();
+        
+        assertTrue(iterator.hasNext());
+        while (iterator.hasNext()) {
+            PcodeOp op = iterator.next();
+            String label = serializer.intrinsicLabel(op);
+            Varnode returnType = op.getOutput();
+            if (returnType == null) {
+                assertTrue(label.endsWith(serializer.label(VoidDataType.dataType)));
+            } else {
+                assertTrue(label.endsWith(serializer.label(returnType.getHigh().getDataType())));
+            }
+        }
     }
 
     @Disabled
