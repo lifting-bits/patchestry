@@ -69,7 +69,8 @@ WORKDIR /home/user/ghidra_scripts/
 # our expected runtime directory in the repository is scripts/ghidra/
 COPY domain/ domain/
 COPY util/ util/
-COPY *.java .
+COPY PatchestryDecompileFunctions.java .
+COPY PatchestryListFunctions.java .
 
 WORKDIR /home/user/
 ENV GHIDRA_HOME=/home/user/ghidra
