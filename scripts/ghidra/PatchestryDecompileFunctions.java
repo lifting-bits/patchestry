@@ -150,8 +150,8 @@ import java.util.TreeSet;
 import java.util.TreeMap;
 
 public class PatchestryDecompileFunctions extends GhidraScript {
-    /* For test setup purposes when we don't want to control this script from the command line. */
-    public void setProgram(Program program) throws RuntimeException {
+    /* For test setup purposes, we don't want to control this script from the command line. */
+    protected void setProgram(Program program) throws RuntimeException {
         if (program != null && getCurrentProgram() == null) {
             currentProgram = program;
         } else {
@@ -240,17 +240,27 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     // Update and re-run auto analysis.
     void runAutoAnalysis() throws Exception {
         Program program = getCurrentProgram();
-        AutoAnalysisManager mgr = AutoAnalysisManager.getAnalysisManager(program);
+
+        if (program == null) {
+            throw new IllegalStateException("Program cannot be null");
+        }
+
+        if (program.isClosed()) {
+            throw new UnsupportedOperationException("Program must be open for analysis to occur");
+        }
+
         Options options = program.getOptions(Program.ANALYSIS_PROPERTIES);
         options.setBoolean("Aggressive Instruction Finder", true);
         options.setBoolean("Decompiler Parameter ID", true);
         for (String option : options.getOptionNames()) {
             println(option + " = " + options.getValueAsString(option));
         }
+
+        AutoAnalysisManager mgr = AutoAnalysisManager.getAnalysisManager(program);
         mgr.scheduleOneTimeAnalysis(
-                mgr.getAnalyzer("Aggressive Instruction Finder"), currentProgram.getMemory());
+                mgr.getAnalyzer("Aggressive Instruction Finder"), program.getMemory());
         mgr.scheduleOneTimeAnalysis(
-                mgr.getAnalyzer("Decompiler Parameter ID"), currentProgram.getMemory());
+                mgr.getAnalyzer("Decompiler Parameter ID"), program.getMemory());
 
         mgr.startAnalysis(monitor);
         mgr.waitForAnalysis(null, monitor);
