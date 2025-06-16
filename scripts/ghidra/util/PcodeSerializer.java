@@ -106,7 +106,6 @@ import ghidra.program.model.data.Union;
 import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.data.WideCharDataType;
 
-import ghidra.program.model.symbol.ExternalManager;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceManager;
@@ -168,8 +167,6 @@ public class PcodeSerializer {
 		
 		Program currentProgram;
 		private ApiUtil apiUtil;
-		private FunctionManager functionManager;
-		private ExternalManager externalManager;
 		private DecompInterface decompInterface;
 		private BasicBlockModel basicBlockModel;
 		
@@ -272,7 +269,9 @@ public class PcodeSerializer {
 			BasicBlockModel basicBlockModel
 		) {
 			this.writer = writer;
+
 			this.functions = functions;
+			this.originalFunctionsSize = functions.size();
 
 			this.apiUtil = new ApiUtil(currentProgram);
 
@@ -281,29 +280,29 @@ public class PcodeSerializer {
 			
 			this.architecture = currentProgram.getLanguage().getProcessor().toString();
 			this.language = (SleighLanguage) currentProgram.getLanguage();
-			AddressFactory addressFactory = currentProgram.getAddressFactory();
+			this.nextUnique = language.getUniqueBase();
 
+			AddressFactory addressFactory = currentProgram.getAddressFactory();
 			this.externSpace = addressFactory.getAddressSpace("extern");
 			this.ramSpace = addressFactory.getAddressSpace("ram");
 			this.stackSpace = addressFactory.getStackSpace();
 			this.constantSpace = addressFactory.getConstantSpace();
 			this.uniqueSpace = addressFactory.getUniqueSpace();
+			
 			this.currentProgram = currentProgram;
-			this.functionManager = currentProgram.getFunctionManager();
-			this.externalManager = currentProgram.getExternalManager();
+			this.stackPointer = currentProgram.getCompilerSpec().getStackPointer();
+			
 			this.decompInterface = decompInterface;
 			this.basicBlockModel = basicBlockModel;
-			this.originalFunctionsSize = functions.size();
+			
 			this.seenFunctions = new TreeSet<>();
 			this.seenTypes = new HashSet<>();
 			this.seenGlobalsMap = new HashMap<>();
 			this.typesToSerialize = new ArrayList<>();
 			this.currentFunction = null;
 			this.currentBlock = null;
-			this.nextUnique = language.getUniqueBase();
 			this.nextSeqNum = 0;
 			this.entryBlock = new ArrayList<>();
-			this.stackPointer = currentProgram.getCompilerSpec().getStackPointer();
 			this.missingLocalsMap = new HashMap<>();
 			this.oldLocalsMap = new HashMap<>();
 			this.temporaryAddressMap = new HashMap<>();
@@ -1344,9 +1343,10 @@ public class PcodeSerializer {
 
 			Address targetAddress = caller.getNewAddress(targetVarnode.getOffset());
 			// Try to get function at the target address
-			Function callee = functionManager.getFunctionAt(targetAddress);
+			FunctionManager fm = currentProgram.getFunctionManager();
+			Function callee = fm.getFunctionAt(targetAddress);
 			if (callee == null) {
-				callee = functionManager.getReferencedFunction(targetAddress);
+				callee = fm.getReferencedFunction(targetAddress);
 			}
 
 			return callee;
@@ -1986,12 +1986,13 @@ public class PcodeSerializer {
 			if (targetNode.isAddress()) {
 				Address targetAddress = callerAddress.getNewAddress(
 						targetNode.getOffset());
-				callee = functionManager.getFunctionAt(targetAddress);
+				FunctionManager fm = currentProgram.getFunctionManager();
+				callee = fm.getFunctionAt(targetAddress);
 	
 				// `target_address` may be a pointer to an external. Figure out
 				// what we're calling.
 				if (callee == null) {
-					callee = functionManager.getReferencedFunction(targetAddress);	
+					callee = fm.getReferencedFunction(targetAddress);	
 				}
 			}
 
