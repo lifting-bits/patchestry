@@ -65,8 +65,8 @@ WORKDIR /home/user/
 COPY --chown=user:user --from=build /ghidra ghidra
 COPY --chown=user:user --chmod=755 decompile-entrypoint.sh  .
 
-# put the Java helper code where our Ghidra scripts expect it
 WORKDIR /home/user/ghidra_scripts/
+# our expected runtime directory in the repository is scripts/ghidra/
 COPY domain/ domain/
 COPY util/ util/
 COPY *.java .

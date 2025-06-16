@@ -5,7 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-package util;
+package scripts.ghidra.util;
 
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressOutOfBoundsException;
@@ -36,10 +36,10 @@ class ApiUtil extends FlatProgramAPI {
 
     public ApiUtil(Program program) {
         super(program);
-        this.program = program;
+        this.currentProgram = program;
     }
 
-    Address convertAddressToRamSpace(Address address) throws Exception {
+    protected Address convertAddressToRamSpace(Address address) throws Exception {
         if (address == null) {
             return null;
         }
@@ -53,7 +53,7 @@ class ApiUtil extends FlatProgramAPI {
 
             // Get the numeric offset and create a new address in RAM space
             long offset = address.getOffset();
-            return program.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
+            return currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(offset);
 
         } catch (AddressOutOfBoundsException e) {
             System.out.println(String.format("Error converting address %s to RAM space: %s",
@@ -64,14 +64,13 @@ class ApiUtil extends FlatProgramAPI {
         }
     }
 
-    public Data getDataReferencedAsConstant(Varnode node) throws Exception {
-        // check if node is null
+    protected Data getDataReferencedAsConstant(Varnode node) throws Exception {
         if (node == null) {
             return null;
         }
 
-            // Only process constant nodes that aren't nulls (address 0 in constant space)
-        if (!node.isConstant() || node.getAddress().equals(program.getAddressFactory().getConstantSpace().getAddress(0))) {
+        // Only process constant nodes that aren't nulls (address 0 in constant space)
+        if (!node.isConstant() || node.getAddress().equals(currentProgram.getAddressFactory().getConstantSpace().getAddress(0))) {
             return null;
         }
 
@@ -85,7 +84,7 @@ class ApiUtil extends FlatProgramAPI {
         return super.getDataAt(ramSpaceAddress);
     }
 
-    public String findNullTerminatedString(Address address, Pointer pointer) throws Exception {
+    protected String findNullTerminatedString(Address address, Pointer pointer) throws Exception {
         if (!address.getAddressSpace().isConstantSpace()) {
             return null;
         }
@@ -94,7 +93,7 @@ class ApiUtil extends FlatProgramAPI {
         if (ramSpaceAddress == null) {
             return null;
         }
-        MemoryBufferImpl memoryBuffer = new MemoryBufferImpl(program.getMemory(), ramSpaceAddress);
+        MemoryBufferImpl memoryBuffer = new MemoryBufferImpl(currentProgram.getMemory(), ramSpaceAddress);
         DataType charDataType = pointer.getDataType();
         StringDataInstance stringDataInstance = StringDataInstance.getStringDataInstance(charDataType, memoryBuffer, charDataType.getDefaultSettings(), -1);
         int detectedLength = stringDataInstance.getStringLength();
@@ -105,8 +104,8 @@ class ApiUtil extends FlatProgramAPI {
         return value;
     }
 
-    public Data getListingFromAddressAndType(Varnode node, HighVariable highVariable) throws Exception {
-        Listing listing = program.getListing();
+    protected Data getListingFromAddressAndType(Varnode node, HighVariable highVariable) throws Exception {
+        Listing listing = currentProgram.getListing();
 		return listing.createData(convertAddressToRamSpace(node.getAddress()), highVariable.getDataType());
     }
 }

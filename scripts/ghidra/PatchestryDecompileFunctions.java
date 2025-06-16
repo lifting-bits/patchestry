@@ -5,8 +5,10 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-import domain.*;
-import util.*;
+package scripts.ghidra;
+
+import scripts.ghidra.domain.*;
+import scripts.ghidra.util.*;
 
 import ghidra.app.script.GhidraScript;
 
@@ -149,7 +151,7 @@ import java.util.TreeMap;
 
 public class PatchestryDecompileFunctions extends GhidraScript {
     /* For test setup purposes when we don't want to control this script from the command line. */
-    void setProgram(Program program) throws RuntimeException {
+    public void setProgram(Program program) throws RuntimeException {
         if (program != null && getCurrentProgram() == null) {
             currentProgram = program;
         } else {

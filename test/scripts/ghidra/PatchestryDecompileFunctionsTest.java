@@ -4,6 +4,8 @@
  * This source code is licensed in accordance with the terms specified in
  * the LICENSE file found in the root directory of this source tree.
  */
+package scripts.ghidra;
+
 import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -54,7 +56,11 @@ import ghidra.test.TestEnv;
 
 import ghidra.util.task.TaskMonitor;
 import ghidra.app.script.GhidraScript;
+
 import java.util.Map;
+import jdk.jfr.Timestamp;
+
+import scripts.ghidra.PatchestryDecompileFunctions;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class PatchestryDecompileFunctionsTest extends BaseTest {
@@ -89,9 +95,9 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
         };
         decompileScript.setScriptArgs(argsBloodlight);
         decompileScript.setProgram(program);
-
         assertNotNull(decompileScript.getCurrentProgram());
         assertEquals(decompileScript.getScriptArgs(), argsBloodlight);
+        assertFalse(decompileScript.getCurrentProgram().isClosed());
     }
 
     @Test
@@ -169,6 +175,7 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
         assertEquals(fn.get("name").getAsString(), functionToDecompile);
         assertTrue(fn.has("is_intrinsic"));
         assertEquals(fn.get("is_intrinsic").getAsBoolean(), false);
+        // further testing of this format and output occurs in the serializer test suite
     }
 
     @Test
@@ -200,11 +207,22 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
         assertEquals(topLevel.get("format").getAsString(), "Executable and Linking Format (ELF)");
 
         assertTrue(topLevel.has("functions"));
+        // further testing of this format and output occurs in the serializer test suite
+    }
 
+    @Test
+    public void testRunAutoAnalysis() throws Exception {
+        assertThrows(IllegalStateException.class, () -> {
+            decompileScript.runAutoAnalysis();
+        });
+
+        setUpSingle();
+        decompileScript.runAutoAnalysis();
     }
 
     @Disabled
     @Test
-    public void testRunAutoAnalysis() throws Exception {
+    public void testRunHeadless() throws Exception {
+
     }
 }

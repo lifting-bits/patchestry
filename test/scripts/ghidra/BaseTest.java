@@ -4,6 +4,8 @@
  * This source code is licensed in accordance with the terms specified in
  * the LICENSE file found in the root directory of this source tree.
  */
+package scripts.ghidra;
+
 import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -49,7 +51,7 @@ import ghidra.test.TestEnv;
 import ghidra.util.task.TaskMonitor;
 import ghidra.app.script.GhidraScript;
 
-abstract class BaseTest extends AbstractGhidraHeadlessIntegrationTest {
+public abstract class BaseTest extends AbstractGhidraHeadlessIntegrationTest {
 
     protected TestEnv env = null;
     protected Project project = null;
@@ -96,7 +98,6 @@ abstract class BaseTest extends AbstractGhidraHeadlessIntegrationTest {
         env = new TestEnv();
         project = env.getProject();
 
-        // set up mocks here
         File bloodlightFirmware = new File(System.getenv("BLOODLIGHT_FW_PATH"));
         program = load(bloodlightFirmware, testFwArch, project);
     }

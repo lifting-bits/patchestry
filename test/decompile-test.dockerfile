@@ -141,9 +141,9 @@ RUN wget -O dependencies/downloads/gson-2.9.0.jar \
     wget -O dependencies/downloads/objenesis-3.3.jar \
         https://repo1.maven.org/maven2/org/objenesis/objenesis/3.3/objenesis-3.3.jar
 
-ENV GHIDRA_SCRIPTS=/opt/ghidra_scripts
+ENV GHIDRA_SCRIPTS=/opt/scripts/ghidra
 ENV CLASSES=/opt/classes
-ENV GHIDRA_SCRIPT_TESTS=/opt/test
+ENV GHIDRA_SCRIPT_TESTS=/opt/test/scripts/ghidra
 ENV CLASSPATH="/opt:\
 $GHIDRA_SCRIPTS:\
 $GHIDRA_SCRIPT_TESTS:\
@@ -240,11 +240,13 @@ $CLASSES:\
 
 
 WORKDIR /opt/ghidra_scripts/
-COPY test/scripts/ $GHIDRA_SCRIPT_TESTS
+
+COPY test/scripts/ghidra/ $GHIDRA_SCRIPT_TESTS
+COPY test/scripts/ghidra/util/ ${GHIDRA_SCRIPT_TESTS}/util/
+
 COPY scripts/ghidra/domain/ ${GHIDRA_SCRIPTS}/domain/
 COPY scripts/ghidra/util/ ${GHIDRA_SCRIPTS}/util/
-COPY scripts/ghidra/PatchestryDecompileFunctions.java $GHIDRA_SCRIPTS
-COPY scripts/ghidra/PatchestryListFunctions.java $GHIDRA_SCRIPTS
+COPY scripts/ghidra/*.java $GHIDRA_SCRIPTS
 
 WORKDIR /opt
 RUN mkdir $CLASSES
@@ -255,7 +257,8 @@ RUN javac \
     $GHIDRA_SCRIPTS/domain/*.java \
     $GHIDRA_SCRIPTS/util/*.java \
     $GHIDRA_SCRIPTS/*.java \
-    $GHIDRA_SCRIPT_TESTS/*.java
+    $GHIDRA_SCRIPT_TESTS/*.java \
+    $GHIDRA_SCRIPT_TESTS/util/*.java
 
 RUN mkdir /opt/test_output && \
     java \

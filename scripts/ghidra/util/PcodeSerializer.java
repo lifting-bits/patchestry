@@ -5,7 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-package util;
+package scripts.ghidra.util;
 
 import ghidra.framework.options.Options;
 
@@ -125,8 +125,7 @@ import ghidra.util.task.TaskMonitor;
 
 import com.google.gson.stream.JsonWriter;
 
-import domain.*;
-import util.PcodeSerializer;
+import scripts.ghidra.domain.*;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -158,7 +157,6 @@ public class PcodeSerializer {
 
 		private JsonWriter writer;
 
-		private Program program;
 		private String architecture;
 		private String languageID;
 		private TaskMonitor monitor;
@@ -167,7 +165,8 @@ public class PcodeSerializer {
 		private AddressSpace stackSpace;
 		private AddressSpace constantSpace;
 		private AddressSpace uniqueSpace;
-		private Program currentProgram;
+		
+		Program currentProgram;
 		private ApiUtil apiUtil;
 		private FunctionManager functionManager;
 		private ExternalManager externalManager;
