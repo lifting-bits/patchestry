@@ -203,8 +203,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             getLanguageID(),
             monitor,
             currentProgram,
-            getDecompilerInterface(), 
-            new BasicBlockModel(currentProgram)
+            getDecompilerInterface()
         );
         serializer.serialize();
     }

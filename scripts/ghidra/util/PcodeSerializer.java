@@ -154,18 +154,18 @@ public class PcodeSerializer {
     	public static final int DECLARE_TEMP_VAR = MIN_CALLOTHER + 2;
     	public static final int ADDRESS_OF = MIN_CALLOTHER + 3;
 
-		private JsonWriter writer;
+		protected Program currentProgram;
 
 		private String architecture;
 		private String languageID;
-		private TaskMonitor monitor;
 		private AddressSpace externSpace;
 		private AddressSpace ramSpace;
 		private AddressSpace stackSpace;
 		private AddressSpace constantSpace;
 		private AddressSpace uniqueSpace;
 		
-		Program currentProgram;
+		private JsonWriter writer;
+		private TaskMonitor monitor;
 		private ApiUtil apiUtil;
 		private DecompInterface decompInterface;
 		private BasicBlockModel basicBlockModel;
@@ -265,22 +265,27 @@ public class PcodeSerializer {
 			String languageId, 
 			TaskMonitor monitor,
 			Program currentProgram, 
-			DecompInterface decompInterface,
-			BasicBlockModel basicBlockModel
+			DecompInterface decompInterface
 		) {
 			this.writer = writer;
 
 			this.functions = functions;
 			this.originalFunctionsSize = functions.size();
 
-			this.apiUtil = new ApiUtil(currentProgram);
-
 			this.languageID = languageId;
 			this.monitor = monitor;
+			
+			this.currentProgram = currentProgram;
+			this.stackPointer = currentProgram.getCompilerSpec().getStackPointer();
+			
+			this.decompInterface = decompInterface;
 			
 			this.architecture = currentProgram.getLanguage().getProcessor().toString();
 			this.language = (SleighLanguage) currentProgram.getLanguage();
 			this.nextUnique = language.getUniqueBase();
+
+			this.apiUtil = new ApiUtil(currentProgram);
+			this.basicBlockModel = new BasicBlockModel(currentProgram);
 
 			AddressFactory addressFactory = currentProgram.getAddressFactory();
 			this.externSpace = addressFactory.getAddressSpace("extern");
@@ -288,13 +293,7 @@ public class PcodeSerializer {
 			this.stackSpace = addressFactory.getStackSpace();
 			this.constantSpace = addressFactory.getConstantSpace();
 			this.uniqueSpace = addressFactory.getUniqueSpace();
-			
-			this.currentProgram = currentProgram;
-			this.stackPointer = currentProgram.getCompilerSpec().getStackPointer();
-			
-			this.decompInterface = decompInterface;
-			this.basicBlockModel = basicBlockModel;
-			
+
 			this.seenFunctions = new TreeSet<>();
 			this.seenTypes = new HashSet<>();
 			this.seenGlobalsMap = new HashMap<>();
@@ -313,11 +312,11 @@ public class PcodeSerializer {
 			this.seenDataMap = new HashMap<>();
 		}
 
-		private String label(HighFunction function) throws Exception {
+		String label(HighFunction function) throws Exception {
 			return label(function.getFunction());
 		}
 
-		private String label(Function function) throws Exception {
+		String label(Function function) throws Exception {
 			
 			// NOTE(pag): This full dethunking works in collaboration with
 			//			  `seen_functions` checking in `serializeFunctions` to

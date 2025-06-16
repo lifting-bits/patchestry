@@ -246,6 +246,7 @@ COPY test/scripts/ghidra/util/ ${GHIDRA_SCRIPT_TESTS}/util/
 
 COPY scripts/ghidra/domain/ ${GHIDRA_SCRIPTS}/domain/
 COPY scripts/ghidra/util/ ${GHIDRA_SCRIPTS}/util/
+# we don't need the rest of the dockerfile / sh stuff
 COPY scripts/ghidra/*.java $GHIDRA_SCRIPTS
 
 WORKDIR /opt
@@ -260,8 +261,9 @@ RUN javac \
     $GHIDRA_SCRIPT_TESTS/*.java \
     $GHIDRA_SCRIPT_TESTS/util/*.java
 
-RUN mkdir /opt/test_output && \
-    java \
+RUN mkdir /opt/test_output 
+
+ENTRYPOINT java \
         -Djunit.output.dir=/opt/test_output \
         --add-opens java.desktop/sun.awt=ALL-UNNAMED \
         org.junit.platform.console.ConsoleLauncher \

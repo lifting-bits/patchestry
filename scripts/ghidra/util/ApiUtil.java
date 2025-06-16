@@ -32,11 +32,8 @@ import java.io.IOException;
  * declutter PcodeSerializer and probably merge into the main Ghidra script again.
  */
 class ApiUtil extends FlatProgramAPI {
-    Program program;
-
     public ApiUtil(Program program) {
         super(program);
-        this.currentProgram = program;
     }
 
     protected Address convertAddressToRamSpace(Address address) throws Exception {
