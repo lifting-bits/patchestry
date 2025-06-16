@@ -96,14 +96,9 @@ abstract class BaseTest extends AbstractGhidraHeadlessIntegrationTest {
         env = new TestEnv();
         project = env.getProject();
 
+        // set up mocks here
         File bloodlightFirmware = new File(System.getenv("BLOODLIGHT_FW_PATH"));
         program = load(bloodlightFirmware, testFwArch, project);
-
-        // GhidraState fakeState = new GhidraState(env.getTool(), project, program, null, null, null);
-        // Field state = decompileScript.getClass().getSuperclass().getDeclaredField("state");
-        // state.setAccessible(true);
-        // state.set(decompileScript, fakeState);
-        when(fakeMonitor.isCancelled()).thenReturn(false);
     }
 
     @AfterAll
@@ -111,7 +106,6 @@ abstract class BaseTest extends AbstractGhidraHeadlessIntegrationTest {
         if (program != null) {
             program.release(this);
         }
-
         if (env != null) {
             env.dispose();
         }

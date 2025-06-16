@@ -61,22 +61,11 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
 
     private PatchestryDecompileFunctions decompileScript = new PatchestryDecompileFunctions();
     private Path tempArgOutputFile = null;
+    private String functionToDecompile = "spi_send_lsb_first";
 
     @BeforeAll
     public void setUp() throws Exception {
         super.setUp();
-
-        File bloodlightFirmware = new File(System.getenv("BLOODLIGHT_FW_PATH"));
-        program = load(bloodlightFirmware, testFwArch, project);
-
-        tempArgOutputFile = Files.createTempFile("test-decompile-single-fn", ".json");
-        String[] argsBloodlight = {
-            "single",
-            "main",
-            tempArgOutputFile.toString()
-        };
-        decompileScript.setScriptArgs(argsBloodlight);
-        decompileScript.setProgram(program);
 
         // if we don't fake this, because we aren't in GhidraScript context here, testing
         // decompiler-reliant stuff doesn't work
@@ -88,23 +77,39 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
         Field monitorField = findFieldInHierarchy(decompileScript.getClass(), "monitor");
         monitorField.setAccessible(true);
         monitorField.set(decompileScript, fakeMonitor);
+
+        tempArgOutputFile = Files.createTempFile("test-decompile-single-fn", ".json");
+    }
+
+    private void setUpSingle() throws Exception {
+        String[] argsBloodlight = {
+            "single",
+            functionToDecompile,
+            tempArgOutputFile.toString()
+        };
+        decompileScript.setScriptArgs(argsBloodlight);
+        decompileScript.setProgram(program);
+
+        assertNotNull(decompileScript.getCurrentProgram());
+        assertEquals(decompileScript.getScriptArgs(), argsBloodlight);
     }
 
     @Test
     public void testGetLanguageID() throws Exception {
-        assertNotNull(decompileScript.getCurrentProgram());
+        setUpSingle();
         assertNotNull(decompileScript.getCurrentProgram().getLanguage());
         assertEquals(decompileScript.getLanguageID().toString(), testFwArch);
     }
 
     @Test
     public void testGetDecompilerInterface() throws Exception {
-        assertNotNull(decompileScript.getCurrentProgram());
+        setUpSingle();
         assertNotNull(decompileScript.getDecompilerInterface());
     }
 
     @Test
     public void testSerializeToFile() throws Exception {
+        setUpSingle();
         List<Function> empty = new ArrayList();
         assertThrows(IllegalArgumentException.class, () -> {
             decompileScript.serializeToFile(null, empty);
@@ -125,7 +130,7 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
 
     @Test
     public void testGetAllFunctions() throws Exception {
-        assertNotNull(decompileScript.getCurrentProgram());
+        setUpSingle();
         List<Function> functions = decompileScript.getAllFunctions();
         // todo (kaoudis) check this number somehow - is it EVERYTHING in bloodlight?
         assertEquals(functions.size(), 262);
@@ -133,7 +138,7 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
 
     @Test
     public void testDecompileSingleFunction() throws Exception {
-        assertNotNull(decompileScript.getCurrentProgram());
+        setUpSingle();
         decompileScript.decompileSingleFunction();
         String fileContents = Files.readString(tempArgOutputFile);
         assertNotNull(fileContents);
@@ -151,24 +156,23 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
         assertEquals(topLevel.get("format").getAsString(), "Executable and Linking Format (ELF)");
 
         assertTrue(topLevel.has("functions"));
+        // We can't "just" decomp one fn if it calls others, so this
+        // set will TYPICALLY have more than one thing in it.
+        // `spi_send_lsb_first` is pretty simple though and we're just using
+        // it here for testing we get something back from decomp at the top level. 
+        // We'll do more format checking in the actual pcode serialization test.
         Set<Entry<String, JsonElement>> functions = topLevel.get("functions").getAsJsonObject().entrySet();
         assertFalse(functions.isEmpty());
 
-        for (Entry functionEntry : functions) {
-            System.out.println(functionEntry.getKey());
-            System.out.println(functionEntry.getValue());
-        }
-
-        // assertTrue(fileContents.contains(mainFn.getName()));
-        // for (Variable var : mainFn.getAllVariables()) {
-        //     assertTrue(fileContents.contains(var.getName()));
-        // }
+        JsonObject fn = functions.iterator().next().getValue().getAsJsonObject();
+        assertTrue(fn.has("name"));
+        assertEquals(fn.get("name").getAsString(), functionToDecompile);
+        assertTrue(fn.has("is_intrinsic"));
+        assertEquals(fn.get("is_intrinsic").getAsBoolean(), false);
     }
 
-    @Disabled
     @Test
     public void testDecompileAllFunctions() throws Exception {
-        assertNotNull(decompileScript.getCurrentProgram());
         Path tempAllOutputFile = Files.createTempFile("test-decompile-all-fns", ".json");
         String[] argsAll = {
             "all",
@@ -176,11 +180,26 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
         };
         decompileScript.setScriptArgs(argsAll);
         assertEquals(decompileScript.getScriptArgs(), argsAll);
+
+        assertNotNull(decompileScript.getCurrentProgram());
         decompileScript.decompileAllFunctions();
 
         String fileContents = Files.readString(tempAllOutputFile);
         assertNotNull(fileContents);
-        JsonElement topLevelElement = JsonParser.parseString(fileContents);
+
+        JsonObject topLevel = JsonParser.parseString(fileContents).getAsJsonObject();
+        assertNotNull(topLevel);
+
+        assertTrue(topLevel.has("architecture"));
+        assertEquals(topLevel.get("architecture").getAsString(), "ARM");
+
+        assertTrue(topLevel.has("id"));
+        assertEquals(topLevel.get("id").getAsString(), testFwArch);
+
+        assertTrue(topLevel.has("format"));
+        assertEquals(topLevel.get("format").getAsString(), "Executable and Linking Format (ELF)");
+
+        assertTrue(topLevel.has("functions"));
 
     }
 
