@@ -142,7 +142,7 @@ build_docker_command() {
         CI="-v $CI_OUTPUT_FOLDER:/mnt/output:rw"
     fi
 
-    if [ -n $TEST ]; then
+    if [ -e "$TEST" ]; then
     # todo (kaoudis) handle propagating output - this is just a convenience integration
     # into this script, I don't think we should have both scripts AND dockerfiles...
         echo "Running tests in-situ."
