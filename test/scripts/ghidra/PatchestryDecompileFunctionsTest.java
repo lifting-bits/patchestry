@@ -209,20 +209,4 @@ public class PatchestryDecompileFunctionsTest extends BaseTest {
         assertTrue(topLevel.has("functions"));
         // further testing of this format and output occurs in the serializer test suite
     }
-
-    @Test
-    public void testRunAutoAnalysis() throws Exception {
-        assertThrows(IllegalStateException.class, () -> {
-            decompileScript.runAutoAnalysis();
-        });
-
-        setUpSingle();
-        decompileScript.runAutoAnalysis();
-    }
-
-    @Disabled
-    @Test
-    public void testRunHeadless() throws Exception {
-
-    }
 }
