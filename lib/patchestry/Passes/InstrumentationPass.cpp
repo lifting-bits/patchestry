@@ -1407,7 +1407,7 @@ namespace patchestry::passes {
         for (const auto &pattern : spec.exclude) {
             try {
                 // Create regex from the pattern
-                std::regex exclude_regex(pattern);
+                std::regex exclude_regex(pattern, std::regex_constants::basic);
 
                 // Check if the function name matches the exclusion pattern
                 if (std::regex_match(func_name, exclude_regex)) {

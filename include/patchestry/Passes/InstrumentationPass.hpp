@@ -173,13 +173,25 @@ namespace patchestry::passes { // NOLINT
          * This method inserts a call to the patch function immediately before the target
          * operation. It handles module symbol merging, argument preparation, and call creation.
          * The inserted call is added to the inline worklist if inlining is enabled.
+         */
+        void apply_before_operation(
+            mlir::Operation *op, const PatchMatch &match, const PatchInfo &patch,
+            mlir::ModuleOp patch_module
+        );
+
+        /**
+         * @brief Applies a patch before the target operation.
+         *
+         * This method inserts a call to the patch function immediately before the target
+         * operation. It handles module symbol merging, argument preparation, and call creation.
+         * The inserted call is added to the inline worklist if inlining is enabled.
          *
          * @param op The target operation to be instrumented
          * @param match The match information for the operation
          * @param patch The patch information containing the patch function details
          * @param patch_module The module containing the patch function
          */
-        void apply_before_patch(
+        void apply_before_function_call(
             mlir::Operation *op, const PatchMatch &match, const PatchInfo &patch,
             mlir::ModuleOp patch_module
         );
@@ -196,7 +208,7 @@ namespace patchestry::passes { // NOLINT
          * @param patch The patch information containing the patch function details
          * @param patch_module The module containing the patch function
          */
-        void apply_after_patch(
+        void apply_after_function_call(
             mlir::Operation *op, const PatchMatch &match, const PatchInfo &patch,
             mlir::ModuleOp patch_module
         );
@@ -213,7 +225,7 @@ namespace patchestry::passes { // NOLINT
          * @param patch The patch information containing the replacement function details
          * @param patch_module The module containing the patch function
          */
-        void replace_call(
+        void replace_function_call(
             cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
             mlir::ModuleOp patch_module
         );
