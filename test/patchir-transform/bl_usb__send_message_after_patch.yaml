@@ -1,0 +1,18 @@
+arch: "ARM:LE:32"
+patches: 
+  - name: "apply_before_write_packet"
+    match:
+      name: "usbd_ep_write_packet"
+      kind: "function"
+      argument_matches:
+        - index: 0
+          name: "usb_g"
+    patch:
+      mode: "ApplyAfter"
+      patch_file: "patch_usbd_ep_write_packet.c"
+      patch_function: "patch::after::usbd_ep_write_packet"
+      arguments:
+        - name: "function_return_value"
+          source: "return_value"
+    exclude:
+      - ""

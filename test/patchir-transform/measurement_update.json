@@ -3,22 +3,28 @@
 
 // RUN: %patchir-transform %t1.cir --spec %S/measurement_update_before_patch.yaml -o %t2.cir
 // RUN: %file-check -vv -check-prefix=BEFORE %s --input-file %t2.cir
-// BEFORE: cir.call @patch__before__spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> () extra(#fn_attr)
+// BEFORE: cir.call @patch__before__spo2_lookup(%{{[0-9]+}}) {patched_operation = "cir.call"} : (!cir.float) -> () extra(#fn_attr)
 // BEFORE: %{{[0-9]+}} = cir.call @spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> !u8i extra(#fn_attr)
 
 // RUN: %patchir-transform %t1.cir --spec %S/measurement_update_after_patch.yaml -o %t3.cir
 // RUN: %file-check -vv -check-prefix=AFTER %s --input-file %t3.cir
 // AFTER: %[[VAL1:[0-9]+]] = cir.call @spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> !u8i extra(#fn_attr)
-// AFTER: cir.call @patch__after__spo2_lookup(%[[VAL1]]) : (!u8i) -> () extra(#fn_attr)
+// AFTER: cir.call @patch__after__spo2_lookup(%[[VAL1]]) {patched_operation = "cir.call"} : (!u8i) -> () extra(#fn_attr)
 
 // RUN: %patchir-transform %t1.cir --spec %S/measurement_update_replace_patch.yaml -o %t4.cir
 // RUN: %file-check -vv -check-prefix=REPLACE %s --input-file %t4.cir
-// REPLACE: %{{[0-9]+}} = cir.call @patch__replace__spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> !u8i ext
+// REPLACE: %{{[0-9]+}} = cir.call @patch__replace__spo2_lookup(%{{[0-9]+}}) {patched_operation = "cir.call"} : (!cir.float) -> !u8i extra(#fn_attr)
 
-// RUN: %patchir-transform %t1.cir --spec %S/measurement_update_exclude_patch.yaml -o %t2.cir
-// RUN: %file-check -vv -check-prefix=CHECK %s --input-file %t2.cir
-// CHECK-NOT: cir.call @patch__before__spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> () extra(#fn_attr)
+// RUN: %patchir-transform %t1.cir --spec %S/measurement_update_exclude_patch.yaml -o %t5.cir
+// RUN: %file-check -vv -check-prefix=CHECK %s --input-file %t5.cir
+// CHECK-NOT: cir.call @patch__before__spo2_lookup(%{{[0-9]+}}) {patched_operation = "cir.call"} : (!cir.float) -> () extra(#fn_attr)
 // CHECK: %{{[0-9]+}} = cir.call @spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> !u8i extra(#fn_attr)
+
+// RUN: %patchir-transform %t1.cir --spec %S/measurement_update_before_operation.yaml -o %t6.cir
+// RUN: %file-check -vv -check-prefix=BEFORE_OPERATION %s --input-file %t6.cir
+// BEFORE_OPERATION: cir.call @patch__before__spo2_lookup(%{{[0-9]+}}) {patched_operation = "cir.call"} : (!cir.float) -> () extra(#fn_attr)
+// BEFORE_OPERATION: %{{[0-9]+}} = cir.call @spo2_lookup(%{{[0-9]+}}) : (!cir.float) -> !u8i extra(#fn_attr)
+
 
 {
   "arch": "ARM",
