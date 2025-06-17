@@ -331,7 +331,7 @@ namespace patchestry::passes {
         if (pattern.size() >= 2 && pattern.front() == '/' && pattern.back() == '/') {
             try {
                 std::string regex_pattern = pattern.substr(1, pattern.length() - 2);
-                std::regex regex(regex_pattern, std::regex_constants::basic);
+                std::regex regex(regex_pattern);
                 return std::regex_search(text, regex);
             } catch (const std::regex_error &) {
                 // If regex is invalid, fall back to exact match
