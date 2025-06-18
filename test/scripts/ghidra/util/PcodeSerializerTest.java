@@ -22,17 +22,7 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.address.AddressSpace;
 
-import ghidra.program.model.data.DataType;
-import ghidra.program.model.data.DataTypeManager;
-import ghidra.program.model.data.IntegerDataType;
-import ghidra.program.model.data.Pointer;
-import ghidra.program.model.data.PointerDataType;
-import ghidra.program.model.data.Structure;
-import ghidra.program.model.data.StructureDataType;
-import ghidra.program.model.data.TypeDef;
-import ghidra.program.model.data.TypedefDataType;
-import ghidra.program.model.data.Undefined;
-import ghidra.program.model.data.VoidDataType;
+import ghidra.program.model.data.*;
 
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
@@ -343,23 +333,44 @@ public class PcodeSerializerTest extends BaseTest {
         serializer.serializeType(structTypeDef);
         writer.endObject();
 
-        JsonObject jsonOutputStruct = JsonParser
+        JsonObject jsonOutput = JsonParser
             .parseString(stringWriter.toString())
             .getAsJsonObject();
-        String name = jsonOutputStruct.get("name").getAsString();
+        String name = jsonOutput.get("name").getAsString();
         assertEquals(name, fancyStructT);
-        String kind = jsonOutputStruct.get("kind").getAsString();
+        String kind = jsonOutput.get("kind").getAsString();
         assertEquals(kind, "typedef");
-        int size = jsonOutputStruct.get("size").getAsInt();
+        int size = jsonOutput.get("size").getAsInt();
         assertEquals(size, structTypeDef.getLength());
-        String baseType = jsonOutputStruct.get("base_type").getAsString();
+        String baseType = jsonOutput.get("base_type").getAsString();
         assertEquals(baseType, structTypeDef.getBaseDataType().toString());
     }
 
-    @Disabled
     @Test
     public void testSerializeArrayType() throws Exception {
-        assertTrue(false);
+        DataType elementType = new IntegerDataType();
+        int elements = 10;
+        if (elementType == null) {
+            fail("Unable to get element data type with which to test array data type serialization");
+        }
+        
+        Array arrayType = new ArrayDataType(elementType, elements, elementType.getLength());
+
+        writer.beginObject();
+        serializer.serializeType(arrayType);
+        writer.endObject();
+
+        JsonObject jsonOutput = JsonParser
+            .parseString(stringWriter.toString())
+            .getAsJsonObject();
+        String kind = jsonOutput.get("kind").getAsString();
+        assertEquals(kind, "array");
+        int size = jsonOutput.get("size").getAsInt();
+        assertEquals(size, arrayType.getLength());
+        int numElements = jsonOutput.get("num_elements").getAsInt();
+        assertEquals(numElements, elements);
+        String createdElementType = jsonOutput.get("element_type").getAsString();
+        assertEquals(createdElementType, serializer.label(elementType));
     }
 
     @Disabled
