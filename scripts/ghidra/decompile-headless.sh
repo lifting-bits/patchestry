@@ -19,11 +19,14 @@ Options:
   -v, --verbose         Enable verbose output
   -t, --interactive     Start Docker container in interactive mode
   -c, --ci              Run in CI mode
+  --test                Run tests in the Docker container
 
 Examples:
   ./decompile-headless.sh --input /path/to/file --output /path/to/output.json  // Decompile all functions
   ./decompile-headless.sh --input /path/to/file --function main --output /path/to/output.json // Decompile single function
   ./decompile-headless.sh --input /path/to/file --list-functions --output /path/to/output.json // List all functions from binary
+  ./decompile-headless.sh --test // Run all the tests
+  ./decompile-headless.sh --test --ci // Run all the tests, in CI-friendly mode
 EOF
 }
 
@@ -66,6 +69,10 @@ parse_args() {
                 fi
                 shift 2
                 ;;
+            --test)
+                TEST=true
+                shift
+                ;;
             *)
                 echo "Unknown option: $1"
                 show_help
@@ -73,18 +80,6 @@ parse_args() {
                 ;;
         esac
     done
-}
-
-validate_args() {
-    if [ -z "$INPUT_PATH" ]; then
-        echo "Error: Missing required option: -i, --input <input_file>"
-        exit 1
-    fi
-
-    if [ -z "$OUTPUT_PATH" ]; then
-        echo "Error: Missing required option: -o, --output <output_file>"
-        exit 1
-    fi
 }
 
 prepare_paths() {
@@ -142,48 +137,76 @@ validate_paths() {
 }
 
 build_docker_command() {
-    local ARGS=
-    if [  -n "$LIST_FUNCTIONS" ]; then
-        ARGS="--command list-functions $ARGS"
-    elif [ -n "$FUNCTION_NAME" ]; then
-        if file "$INPUT_PATH" | grep -q "Mach-O"; then
-            FUNCTION_NAME="_$FUNCTION_NAME"
-        fi
-        ARGS="--command decompile --function \"$FUNCTION_NAME\" $ARGS"
-    else
-        ARGS="--command decompile-all $ARGS"
+    CI=""
+    if [ -n "$CI_OUTPUT_FOLDER" ]; then
+        CI="-v $CI_OUTPUT_FOLDER:/mnt/output:rw"
     fi
 
-    if [ -n "$CI_OUTPUT_FOLDER" ]; then
-        INPUT_PATH=$(basename "$INPUT_PATH")
-        OUTPUT_PATH=$(basename "$OUTPUT_PATH")
+    if [ -e "$TEST" ]; then
+    # todo (kaoudis) handle propagating output - this is just a convenience integration
+    # into this script, I don't think we should have both scripts AND dockerfiles...
+        echo "Running tests in-situ."
         RUN="docker run --rm \
-            -v $CI_OUTPUT_FOLDER:/mnt/output:rw \
-            trailofbits/patchestry-decompilation:latest \
-            --input /mnt/output/$INPUT_PATH \
-            $ARGS --output /mnt/output/$OUTPUT_PATH"
-        echo "CMD: ${RUN}"
-
+            $CI \
+            trailofbits/decompile-test:latest"
+        return
     else
-        RUN="docker run --rm \
-            -v \"$INPUT_PATH:/input.o\" \
-            -v \"$OUTPUT_PATH:/output.json\" \
-            trailofbits/patchestry-decompilation:latest"
-
-        if [ "$INTERACTIVE" = true ]; then
-            RUN="${RUN} --entrypoint /bin/bash"
+        local ARGS=
+        if [  -n "$LIST_FUNCTIONS" ]; then
+            ARGS="--command list-functions $ARGS"
+        elif [ -n "$FUNCTION_NAME" ]; then
+            if file "$INPUT_PATH" | grep -q "Mach-O"; then
+                FUNCTION_NAME="_$FUNCTION_NAME"
+            fi
+            ARGS="--command decompile --function \"$FUNCTION_NAME\" $ARGS" 
         else
-            RUN="${RUN} --input /input.o \
-                ${ARGS} --output /output.json"
+            ARGS="--command decompile-all $ARGS"
+        fi
+
+        if [ -n "$CI_OUTPUT_FOLDER" ]; then
+            INPUT_PATH=$(basename "$INPUT_PATH")
+            OUTPUT_PATH=$(basename "$OUTPUT_PATH")
+            RUN="docker run --rm \
+                $CI \
+                trailofbits/patchestry-decompilation:latest \
+                --input /mnt/output/$INPUT_PATH \
+                $ARGS --output /mnt/output/$OUTPUT_PATH"
+            echo "CMD: ${RUN}"
+
+        else
+            RUN="docker run --rm \
+                -v \"$INPUT_PATH:/input.o\" \
+                -v \"$OUTPUT_PATH:/output.json\" \
+                trailofbits/patchestry-decompilation:latest"
+
+            if [ "$INTERACTIVE" = true ]; then
+                RUN="${RUN} --entrypoint /bin/bash"
+            else
+                RUN="${RUN} --input /input.o \
+                    ${ARGS} --output /output.json"
+            fi
         fi
     fi
 }
 
 main() {
     parse_args "$@"
-    validate_args
-    prepare_paths
-    validate_paths
+
+    if [ -z $TEST ]; then
+        if [ -z "$INPUT_PATH" ]; then
+            echo "Error: Missing required option: -i, --input <input_file>"
+            exit 1
+        fi
+
+        if [ -z "$OUTPUT_PATH" ]; then
+            echo "Error: Missing required option: -o, --output <output_file>"
+            exit 1
+        fi
+
+        prepare_paths
+        validate_paths
+    fi
+
     build_docker_command
 
     if [ "$VERBOSE" = true ]; then

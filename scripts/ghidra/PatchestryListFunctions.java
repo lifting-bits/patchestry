@@ -5,6 +5,8 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+package scripts.ghidra;
+
 import ghidra.app.script.GhidraScript;
 
 import ghidra.program.model.listing.Program;
