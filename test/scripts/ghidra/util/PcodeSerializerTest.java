@@ -11,9 +11,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.*;
 
 import com.google.gson.stream.JsonWriter;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.google.gson.Strictness;
 
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -373,10 +373,78 @@ public class PcodeSerializerTest extends BaseTest {
         assertEquals(createdElementType, serializer.label(elementType));
     }
 
-    @Disabled
     @Test 
     public void testSerializeStructureComposite() throws Exception {
+        StructureDataType structureType = new StructureDataType("ExtremelyFancyStruct", 0);
 
+        DataType integer = new IntegerDataType();
+        DataTypeComponent intComponent = structureType.add(integer, integer.getLength(), "foo", "");
+
+        DataType string = new StringDataType();
+        String stringValue = "bar";
+        DataTypeComponent stringComponent = structureType.add(string, stringValue.getBytes().length, "bar", "");
+
+        DataType lebool = new BooleanDataType();
+        DataTypeComponent boolComponent = structureType.add(lebool, lebool.getLength(), "baz", "");
+
+        writer.beginObject();
+        serializer.serializeType(structureType);
+        writer.endObject();
+
+        JsonObject jsonOutput = JsonParser
+            .parseString(stringWriter.toString())
+            .getAsJsonObject();
+        String name = jsonOutput.get("name").getAsString();
+        assertEquals(name, "ExtremelyFancyStruct");
+        String kind = jsonOutput.get("kind").getAsString();
+        assertEquals(kind, "struct");
+        int size = jsonOutput.get("size").getAsInt();
+        assertEquals(size, structureType.getLength());
+        
+        Iterator<JsonElement> fields = jsonOutput.get("fields").getAsJsonArray().iterator();
+        assertTrue(fields.hasNext());
+        if (fields.hasNext()) {
+            JsonObject field = fields.next().getAsJsonObject();
+
+            String fieldName = field.get("name").getAsString();
+            assertEquals(fieldName, "foo");
+
+            int offset = field.get("offset").getAsInt();
+            assertEquals(offset, intComponent.getOffset()); 
+
+            String type = field.get("type").getAsString();
+            assertEquals(type, serializer.label(integer).toString());
+        }
+
+        assertTrue(fields.hasNext());
+        if (fields.hasNext()) {
+            JsonObject field = fields.next().getAsJsonObject();
+
+            String fieldName = field.get("name").getAsString();
+            assertEquals(fieldName, stringValue);
+            
+            int offset = field.get("offset").getAsInt();
+            assertEquals(offset, stringComponent.getOffset());
+
+            String type = field.get("type").getAsString();
+            assertEquals(type, serializer.label(string).toString());
+        }
+
+        assertTrue(fields.hasNext());
+        if (fields.hasNext()) {
+            JsonObject field = fields.next().getAsJsonObject();
+
+            String fieldName = field.get("name").getAsString();
+            assertEquals(fieldName, "baz");
+
+            int offset = field.get("offset").getAsInt();
+            assertEquals(offset, boolComponent.getOffset());
+
+            String type = field.get("type").getAsString();
+            assertEquals(type, serializer.label(lebool).toString());
+        }
+
+        assertFalse(fields.hasNext());
     }
 
     @Disabled 
