@@ -11,6 +11,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.*;
 
 import com.google.gson.stream.JsonWriter;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.gson.Strictness;
 
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -21,6 +24,13 @@ import ghidra.program.model.address.AddressSpace;
 
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
+import ghidra.program.model.data.IntegerDataType;
+import ghidra.program.model.data.Pointer;
+import ghidra.program.model.data.PointerDataType;
+import ghidra.program.model.data.Structure;
+import ghidra.program.model.data.StructureDataType;
+import ghidra.program.model.data.TypeDef;
+import ghidra.program.model.data.TypedefDataType;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.data.VoidDataType;
 
@@ -41,6 +51,8 @@ import ghidra.program.model.pcode.Varnode;
 import ghidra.util.UniversalID;
 import ghidra.util.task.TaskMonitor;
 
+import java.io.StringWriter;
+
 import java.lang.reflect.Field;
 import java.lang.Math;
 
@@ -53,17 +65,16 @@ import scripts.ghidra.BaseTest;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class PcodeSerializerTest extends BaseTest {
-    JsonWriter fakeWriter = null;
+    StringWriter stringWriter = null;
+    JsonWriter writer = null;
     DecompInterface decompInterface = null;
     List<Function> fns = new ArrayList<Function>();
     PcodeSerializer serializer = null;
+    DataTypeManager dataTypeManager = null;
 
     @BeforeAll
     public void setUp() throws Exception {
         super.setUp();
-
-        fakeWriter = mock(JsonWriter.class);
-
         decompInterface = new DecompInterface();
         decompInterface.toggleCCode(false);
         decompInterface.toggleSyntaxTree(true);
@@ -83,17 +94,35 @@ public class PcodeSerializerTest extends BaseTest {
         }
         assertFalse(fns.isEmpty());
 
+        dataTypeManager = program.getDataTypeManager();
+    }
+
+    @BeforeEach 
+    public void startTest() throws Exception {
+        stringWriter = new StringWriter();
+        assertNotNull(stringWriter);
+
+        writer = new JsonWriter(stringWriter);
+        assertNotNull(writer);
+
         serializer = new PcodeSerializer(
-                fakeWriter,
+                writer,
                 fns,
                 "Cortex",
                 fakeMonitor,
                 program,
                 decompInterface
         );
-
         assertNotNull(serializer.currentProgram);
         assertFalse(serializer.currentProgram.isClosed());
+    }
+
+    @AfterEach
+    public void endTest() throws Exception {
+        if (!stringWriter.getBuffer().isEmpty()) {
+            writer.close();
+            stringWriter.close();
+        }
     }
 
     private int rand(int min, int max) {
@@ -121,6 +150,10 @@ public class PcodeSerializerTest extends BaseTest {
 
     @Test
     public void testLabelSequenceNumber() throws Exception {
+        // get the HighFunction of one of the first fns in the test ELF
+        // this still lacks the variety we might see in a real situation, but is more robust 
+        // than just using a single function decomp for all testing
+        // todo (kaoudis) save this result to the class and use it across tests
         DecompileResults result = decompInterface.decompileFunction(fns.get(rand(0, 10)), 0, fakeMonitor);
         HighFunction high = result.getHighFunction();
         Iterator<PcodeOpAST> iterator = high.getPcodeOps();
@@ -217,32 +250,128 @@ public class PcodeSerializerTest extends BaseTest {
         assertTrue(iterator.hasNext());
         while (iterator.hasNext()) {
             PcodeOp op = iterator.next();
-            String label = serializer.intrinsicLabel(op);
-            Varnode returnType = op.getOutput();
-            if (returnType == null) {
-                assertTrue(label.endsWith(serializer.label(VoidDataType.dataType)));
+
+            if (op.getOpcode() != PcodeOp.CALLOTHER) {
+                Throwable exception = assertThrows(UnsupportedOperationException.class, () -> {
+                    serializer.intrinsicLabel(op);
+                });
+
+                assertTrue(exception.getMessage().startsWith("Can only label a CALLOTHER PcodeOp"));
             } else {
-                assertTrue(label.endsWith(serializer.label(returnType.getHigh().getDataType())));
+                String label = serializer.intrinsicLabel(op);
+                Varnode returnType = op.getOutput();
+                if (returnType == null) {
+                    assertTrue(label.endsWith(serializer.label(VoidDataType.dataType)));
+                } else {
+                    assertTrue(label.endsWith(serializer.label(returnType.getHigh().getDataType())));
+                }
             }
         }
     }
 
-    @Disabled
+    @Test 
+    public void testSerializeNull() throws Exception {
+        assertTrue(writer.getSerializeNulls());
+        DataType nullType = null;
+        String nullName = serializer.label(nullType);
+        writer.beginObject();
+        writer.name(nullName);
+        serializer.serializeType(nullType);
+        writer.endObject();
+        
+        JsonObject jsonOutput = JsonParser
+            .parseString(stringWriter.toString())
+            .getAsJsonObject();
+        assertEquals(jsonOutput.get(nullName).toString(), "null");
+    }
+
     @Test
     public void testSerializePointerType() throws Exception {
-        assertTrue(false);
+        DecompileResults result = decompInterface.decompileFunction(fns.get(rand(0, 10)), 0, fakeMonitor);
+        Function function = result.getFunction();
+        Pointer pointer = new PointerDataType(function.getReturnType());
+
+        writer.beginObject();
+        serializer.serializeType(pointer);
+        writer.endObject();
+
+        JsonObject jsonOutput = JsonParser
+            .parseString(stringWriter.toString())
+            .getAsJsonObject();
+        String kind = jsonOutput.get("kind").getAsString();
+        assertEquals(kind, "pointer");
+        int size = jsonOutput.get("size").getAsInt();
+        assertEquals(size, pointer.getLength());
+        String elementType = jsonOutput.get("element_type").getAsString();
+        assertEquals(elementType, serializer.label(pointer.getDataType()).toString());
+    }
+
+    @Test
+    public void testSerializeTypedefTypePtr() throws Exception {
+        // A typedef is a custom data type, and pulseox doesn't seem to have any, so let's make some.
+        Pointer ptrType = new PointerDataType(IntegerDataType.dataType);
+        String intPtrT = "int_ptr_t";
+        TypeDef ptrTypeDef = new TypedefDataType(intPtrT, ptrType);
+
+        writer.beginObject();
+        serializer.serializeType(ptrTypeDef);
+        writer.endObject();
+
+        JsonObject jsonOutputPtr = JsonParser
+            .parseString(stringWriter.toString())
+            .getAsJsonObject();
+        String name = jsonOutputPtr.get("name").getAsString();
+        assertEquals(name, intPtrT);
+        String kind = jsonOutputPtr.get("kind").getAsString();
+        assertEquals(kind, "typedef");
+        int size = jsonOutputPtr.get("size").getAsInt();
+        assertEquals(size, ptrTypeDef.getLength());
+        String baseType = jsonOutputPtr.get("base_type").getAsString();
+        assertEquals(baseType, serializer.label(ptrTypeDef.getBaseDataType()).toString());
     }
 
     @Disabled
     @Test
-    public void testSerializeTypedefType() throws Exception {
-        assertTrue(false);
+    public void testSerializeTypedefTypeStruct() throws Exception {
+        // A typedef is a custom data type, and pulseox doesn't seem to have any, so let's make some.
+        Structure structType = new StructureDataType("fancy_struct", 8);
+        structType.add(IntegerDataType.dataType, "field1", null);
+        String fancyStructT = "fancy_struct_t";
+        TypeDef structTypeDef = new TypedefDataType(fancyStructT, structType);
+
+        writer.beginObject();
+        serializer.serializeType(structTypeDef);
+        writer.endObject();
+
+        JsonObject jsonOutputStruct = JsonParser
+            .parseString(stringWriter.toString())
+            .getAsJsonObject();
+        String name = jsonOutputStruct.get("name").getAsString();
+        assertEquals(name, fancyStructT);
+        String kind = jsonOutputStruct.get("kind").getAsString();
+        assertEquals(kind, "typedef");
+        int size = jsonOutputStruct.get("size").getAsInt();
+        assertEquals(size, structTypeDef.getLength());
+        String baseType = jsonOutputStruct.get("base_type").getAsString();
+        assertEquals(baseType, structTypeDef.getBaseDataType().toString());
     }
 
     @Disabled
     @Test
     public void testSerializeArrayType() throws Exception {
         assertTrue(false);
+    }
+
+    @Disabled
+    @Test 
+    public void testSerializeStructureComposite() throws Exception {
+
+    }
+
+    @Disabled 
+    @Test 
+    public void testSerializeUnionComposite() throws Exception {
+
     }
 
     @Disabled

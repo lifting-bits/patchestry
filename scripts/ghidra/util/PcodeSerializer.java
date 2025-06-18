@@ -395,34 +395,18 @@ public class PcodeSerializer {
 		// Return the label of an intrinsic with `CALLOTHER`. This is based
 		// off of the return value.
 		String intrinsicLabel(PcodeOp pcodeOp) throws Exception {
-			int index = (int) pcodeOp.getInput(0).getOffset();
-			String name = language.getUserDefinedOpName(index);
-			return intrinsicLabel(name, intrinsicReturnType(pcodeOp));
+			if (pcodeOp.getOpcode() == PcodeOp.CALLOTHER) {
+				int index = (int) pcodeOp.getInput(0).getOffset();
+				String name = language.getUserDefinedOpName(index);
+				return intrinsicLabel(name, intrinsicReturnType(pcodeOp));
+			} else {
+				throw new UnsupportedOperationException("Can only label a CALLOTHER PcodeOp, to which the first input should always be a constant representing the user-defined op index");
+			}
 		}
 		
 		String intrinsicLabel(
 				String name, DataType returnDataType) throws Exception {
 			return name + Address.SEPARATOR + label(returnDataType);
-		}
-
-		void serializePointerType(Pointer ptr) throws Exception {
-			writer.name("kind").value("pointer");
-			writer.name("size").value(ptr.getLength());
-			writer.name("element_type").value(label(ptr.getDataType()));
-		}
-
-		void serializeTypedefType(TypeDef typedef) throws Exception {
-			writer.name("name").value(typedef.getDisplayName());
-			writer.name("kind").value("typedef");
-			writer.name("size").value(typedef.getLength());
-			writer.name("base_type").value(label(typedef.getBaseDataType()));
-		}
-
-		void serializeArrayType(Array arr) throws Exception {
-			writer.name("kind").value("array");
-			writer.name("size").value(arr.getLength());
-			writer.name("num_elements").value(arr.getNumElements());
-			writer.name("element_type").value(label(arr.getDataType()));
 		}
 
 		void serializeBuiltinType(
@@ -483,20 +467,29 @@ public class PcodeSerializer {
 			writer.endArray();
 		}
 
-		void serialize(DataType dataType) throws Exception {
+		void serializeType(DataType dataType) throws Exception {
 			if (dataType == null) {
 				writer.nullValue();
-				return;
-			}
-
-			if (dataType instanceof Pointer) {
-				serializePointerType((Pointer) dataType);
+				
+			} else if (dataType instanceof Pointer) {
+				Pointer ptr = (Pointer) dataType;
+				writer.name("kind").value("pointer");
+				writer.name("size").value(ptr.getLength());
+				writer.name("element_type").value(label(ptr.getDataType()));
 
 			} else if (dataType instanceof TypeDef) {
-				serializeTypedefType((TypeDef) dataType);
+				TypeDef typeDef = (TypeDef) dataType;
+				writer.name("name").value(typeDef.getDisplayName());
+				writer.name("kind").value("typedef");
+				writer.name("size").value(typeDef.getLength());
+				writer.name("base_type").value(label(typeDef.getBaseDataType()));
 
 			} else if (dataType instanceof Array) {
-				serializeArrayType((Array) dataType);
+				Array array = (Array) dataType;
+				writer.name("kind").value("array");
+				writer.name("size").value(array.getLength());
+				writer.name("num_elements").value(array.getNumElements());
+				writer.name("element_type").value(label(array.getDataType()));
 
 			} else if (dataType instanceof Structure) {
 				serializeCompositeType((Composite) dataType, "struct");
@@ -529,10 +522,10 @@ public class PcodeSerializer {
 			} else if (dataType instanceof PartialUnion) {
 				DataType parent = ((PartialUnion) dataType).getParent();
 				if (parent != dataType) {
-					serialize(parent);
+					serializeType(parent);
 				} else {
 					// PartialUnion stripped type is undefined type
-					serialize(((PartialUnion) dataType).getStrippedDataType());
+					serializeType(((PartialUnion) dataType).getStrippedDataType());
 				}
 			} else if (dataType instanceof BitFieldDataType) {
 				writer.name("kind").value("todo:BitFieldDataType");  // TODO(pag): Implement this
@@ -554,8 +547,16 @@ public class PcodeSerializer {
 		void serializeTypes() throws Exception {
 			for (int i = 0; i < typesToSerialize.size(); i++) {
 				DataType type = typesToSerialize.get(i);
-				writer.name(label(type)).beginObject();
-				serialize(type);
+
+				if (type != null) {
+					writer.name(label(type)).beginObject();
+				} else {
+					// if the type is literally null, encapsulate it before naming it
+					writer.beginObject();
+					writer.name(label(type));
+				}
+
+				serializeType(type);
 				writer.endObject();
 			}
 
@@ -608,7 +609,7 @@ public class PcodeSerializer {
 			return numberOfParameterTypes;
 		}
 
-		void serialize(HighVariable highVariable) throws Exception {
+		void serializeHighVariable(HighVariable highVariable) throws Exception {
 			if (highVariable == null) {
 				writer.nullValue();
 				return;
@@ -2210,7 +2211,7 @@ public class PcodeSerializer {
 			return pcodeOp.getMnemonic();
 		}
 
-		void serialize(PcodeOp pcodeOp) throws Exception {
+		void serializePcodeOp(PcodeOp pcodeOp) throws Exception {
 			writer.beginObject();
 			writer.name("mnemonic").value(mnemonic(pcodeOp));
 			
@@ -2292,7 +2293,7 @@ public class PcodeSerializer {
 		
 		// Serialize a high p-code basic block. This iterates over the p-code
 		// operations within the block and serializes them individually.
-		void serialize(PcodeBlockBasic block) throws Exception {
+		void serializePcodeBasicBlock(PcodeBlockBasic block) throws Exception {
 			PcodeBlock parentBlock = block.getParent();
 			if (parentBlock != null) {
 				writer.name("parent_block").value(label(parentBlock));
@@ -2356,7 +2357,7 @@ public class PcodeSerializer {
 			for (PcodeOp pcodeOp : orderedPcodeOps) {
 				writer.name(label(pcodeOp));
 				currentBlock = block;
-				serialize(pcodeOp);
+				serializePcodeOp(pcodeOp);
 				lastIsBranch = isBranch(pcodeOp);
 				currentBlock = null;
 			}
@@ -2394,7 +2395,7 @@ public class PcodeSerializer {
 			writer.name("operations").beginObject();
 			for (PcodeOp pseudoPcodeOp : entryBlock) {
 				writer.name(label(pseudoPcodeOp));
-				serialize(pseudoPcodeOp);
+				serializePcodeOp(pseudoPcodeOp);
 			}
 
 			// If there is a proper entry block, then invent a branch to it.
@@ -2421,7 +2422,7 @@ public class PcodeSerializer {
 		// we will serialize the type information of `functionToSerialize`. If
 		// `shouldVisitPcode` is true, then this is a function for which we want to
 		// fully lift, i.e. visit all the high p-code.
-		void serialize(
+		void serializeFunction(
 				HighFunction highFunction, Function functionToSerialize,
 				boolean shouldVisitPcode) throws Exception {
 			
@@ -2463,7 +2464,7 @@ public class PcodeSerializer {
 						}
 
 						writer.name(label(basicBlock)).beginObject();
-						serialize(basicBlock);
+						serializePcodeBasicBlock(basicBlock);
 						writer.endObject();
 					}
 
@@ -2631,7 +2632,7 @@ public class PcodeSerializer {
 				DecompileResults functionDecompResults = decompInterface.decompileFunction(function, DECOMPILATION_TIMEOUT, this.monitor);
 				HighFunction highFunction = functionDecompResults.getHighFunction();
 				writer.name(functionLabel).beginObject();
-				serialize(highFunction, function, shouldVisitPcode);
+				serializeFunction(highFunction, function, shouldVisitPcode);
 				writer.endObject();
 			}
 

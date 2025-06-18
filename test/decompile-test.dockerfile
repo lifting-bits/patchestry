@@ -106,8 +106,8 @@ RUN gradle prepdev && \
     gradle :IntegrationTest:build :IntegrationTest:testClasses :IntegrationTest:testJar
 
 # some additional deps for the Ghidra script tests
-RUN wget -O dependencies/downloads/gson-2.9.0.jar \
-        https://repo1.maven.org/maven2/com/google/code/gson/gson/2.9.0/gson-2.9.0.jar && \
+RUN wget -O dependencies/downloads/gson-2.13.0.jar \
+        https://repo1.maven.org/maven2/com/google/code/gson/gson/2.13.0/gson-2.13.0.jar && \
     wget -O dependencies/downloads/junit-platform-console-standalone-1.13.0.jar \
         https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.13.0/junit-platform-console-standalone-1.13.0.jar && \
     wget -O dependencies/downloads/log4j-core-2.23.1.jar \
