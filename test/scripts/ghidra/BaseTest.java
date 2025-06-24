@@ -4,7 +4,6 @@
  * This source code is licensed in accordance with the terms specified in
  * the LICENSE file found in the root directory of this source tree.
  */
-package scripts.ghidra;
 
 import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;

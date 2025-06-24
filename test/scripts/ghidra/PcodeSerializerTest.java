@@ -4,8 +4,6 @@
  * This source code is licensed in accordance with the terms specified in
  * the LICENSE file found in the root directory of this source tree.
  */
-package scripts.ghidra.util;
-
 import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.*;
@@ -51,7 +49,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
-import scripts.ghidra.BaseTest;
+import util.PcodeSerializer;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class PcodeSerializerTest extends BaseTest {

@@ -4,8 +4,6 @@
  * This source code is licensed in accordance with the terms specified in
  * the LICENSE file found in the root directory of this source tree.
  */
-package scripts.ghidra;
-
 import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -59,8 +57,6 @@ import ghidra.app.script.GhidraScript;
 
 import java.util.Map;
 import jdk.jfr.Timestamp;
-
-import scripts.ghidra.PatchestryDecompileFunctions;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class PatchestryDecompileFunctionsTest extends BaseTest {
