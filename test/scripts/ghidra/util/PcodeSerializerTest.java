@@ -453,16 +453,16 @@ public class PcodeSerializerTest extends BaseTest {
 
     }
 
-    @Disabled
+    @Disabled 
     @Test 
-    public void testSerializeBuiltInType() throws Exception {
-        assertTrue(false);
+    public void testSerializeIntegerType() throws Exception {
+
     }
 
-    @Disabled
+    @Disabled 
     @Test 
-    public void testSerializeCompositeType() throws Exception {
-        assertTrue(false);
+    public void testSerializeFloatType() throws Exception {
+
     }
 
     @Disabled
@@ -471,16 +471,52 @@ public class PcodeSerializerTest extends BaseTest {
         assertTrue(false);
     }
 
-    @Disabled
-    @Test
-    public void testSerializeDataType() throws Exception {
-        assertTrue(false);
+    @Disabled 
+    @Test 
+    public void testSerializeVoidType() throws Exception {
+
     }
 
-    @Disabled
+    @Disabled 
     @Test 
-    public void testSerializeTypes() throws Exception {
-        assertTrue(false);
+    public void testSerializeUndefinedType() throws Exception {
+
+    }
+
+    @Disabled 
+    @Test 
+    public void testSerializeDefaultDataType() throws Exception {
+
+    }
+
+    @Disabled 
+    @Test 
+    public void testSerializePartialUnionType() throws Exception {
+
+    }
+
+    @Disabled 
+    @Test 
+    public void testSerializeBitFieldType() throws Exception {
+
+    }
+
+    @Disabled 
+    @Test 
+    public void testSerializeWideCharType() throws Exception {
+
+    }
+
+    @Disabled 
+    @Test 
+    public void testSerializeStringDataType() throws Exception {
+
+    }
+
+    @Disabled 
+    @Test 
+    public void testUnhandledDataType() throws Exception {
+
     }
 
     @Disabled
