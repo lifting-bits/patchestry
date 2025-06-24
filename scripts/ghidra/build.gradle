@@ -1,0 +1,132 @@
+plugins {
+    id 'java'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+repositories {
+    mavenCentral()
+    // For msv-rngconverter, which is not in mavencentral but in Red Hat's repo
+    maven {
+        url 'https://maven.repository.redhat.com/earlyaccess/all/'
+    }
+
+    flatDir {
+        dirs '/home/user/Ghidra/Ghidra/Framework',
+             '/home/user/Ghidra/Ghidra/Processors',
+             '/home/user/Ghidra/Ghidra/Debug',
+             '/home/user/Ghidra/Ghidra/Features',
+             '/home/user/Ghidra/Ghidra/Extensions',
+             '/home/user/Ghidra/GPL',
+             '/home/user/Ghidra/dependencies'
+    }
+}
+
+dependencies {
+    implementation(
+        'com.google.code.gson:gson:2.13.0',
+        'org.apache.logging.log4j:log4j-core:2.23.1',
+        'org.apache.logging.log4j:log4j-api:2.23.1',
+        'org.jdom:jdom:1.1.3',
+        'org.apache.commons:commons-lang3:3.14.0',
+        'org.apache.commons:commons-collections4:4.4',
+        'commons-io:commons-io:2.15.1',
+        'net.java.dev.msv:msv-rngconverter:2011.1-redhat-2',
+        'org.antlr:antlr-runtime:3.5.2',
+        'com.google.guava:guava:32.1.2-jre',
+        'javax.help:javahelp:2.0.05',
+        'org.apache.commons:commons-compress:1.21',
+        fileTree(dir: '/home/user/ghidra/Ghidra/Ghidra/Framework', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra/Ghidra/Processors', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra/Ghidra/Debug', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra/Ghidra/Features', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra/Ghidra/Extensions', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra/GPL', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra/dependencies', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra', include: '**/build/libs/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra', include: '**/lib/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra', include: '**/libs/*.jar')
+    )
+
+    testImplementation(
+        'org.junit.platform:junit-platform-console-standalone:1.13.0',
+        'org.mockito:mockito-core:5.11.0',
+        'net.bytebuddy:byte-buddy:1.14.12',
+        'net.bytebuddy:byte-buddy-agent:1.14.12',
+        'org.objenesis:objenesis:3.3',
+        fileTree(dir: '/home/user/ghidra/Ghidra/Test', include: '**/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra', include: '**/test/*.jar'),
+        fileTree(dir: '/home/user/ghidra/Ghidra', include: '**/test/libs/*.jar'),
+        // files('/home/user/ghidra_scripts'),
+        sourceSets.main.output
+    )
+
+    testRuntimeOnly (
+        'org.junit.jupiter:junit-jupiter-engine:5.10.2',
+        'org.junit.platform:junit-platform-console:1.10.2',
+        'org.junit.platform:junit-platform-launcher:1.10.2'
+    )
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = [
+                    '/home/user/ghidra_scripts/', 
+                    '/home/user/ghidra_scripts/domain/', 
+                    '/home/user/ghidra_scripts/util/'
+                ]
+            // Exclude test directories
+            exclude '**/test/**'
+            exclude '**/*Test.java'
+        }
+    }
+    test {
+        java {
+            srcDirs = [
+                '/home/user/ghidra_scripts/test/',
+                '/home/user/ghidra_scripts/test/util/',
+                '/home/user/ghidra_scripts/' 
+            ]
+        }
+    }
+}
+
+configurations {
+    testImplementation {
+        extendsFrom implementation
+    }
+}
+
+tasks.compileJava {
+    options.release = 21
+    // Exclude test sources from main compilation
+    source = sourceSets.main.java.matching {
+        exclude '**/test/**'
+        exclude '**/*Test.java'
+    }
+    options.compilerArgs += ['-parameters']
+}
+
+tasks.jar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(sourceSets.main.output) {
+        exclude '**/test/**'
+        exclude '**/*Test.class'
+    }
+}
+
+tasks.test {
+    dependsOn(jar)
+    useJUnitPlatform()
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    })
+    testLogging {
+        events "passed", "skipped", "failed"
+        showStandardStreams = true
+    }
+}
