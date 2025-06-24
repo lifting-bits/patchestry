@@ -5,7 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-package scripts.ghidra.util;
+package util;
 
 import ghidra.framework.options.Options;
 
@@ -124,7 +124,7 @@ import ghidra.util.task.TaskMonitor;
 
 import com.google.gson.stream.JsonWriter;
 
-import scripts.ghidra.domain.*;
+import domain.*;
 
 import java.io.BufferedWriter;
 import java.io.IOException;

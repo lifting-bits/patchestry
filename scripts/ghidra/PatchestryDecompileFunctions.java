@@ -5,10 +5,8 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-package scripts.ghidra;
-
-import scripts.ghidra.domain.*;
-import scripts.ghidra.util.*;
+import domain.*;
+import util.*;
 
 import ghidra.app.script.GhidraScript;
 

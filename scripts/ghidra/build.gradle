@@ -1,0 +1,91 @@
+plugins {
+    id 'java'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.withType(JavaCompile) {
+    options.release = 21
+}
+
+tasks.withType(Test) {
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    })
+}
+
+repositories {
+    mavenCentral()
+    // For msv-rngconverter, which is not in mavencentral but in Red Hat's repo
+    maven {
+        url 'https://maven.repository.redhat.com/earlyaccess/all/'
+    }
+
+    flatDir {
+        dirs '/home/user/Ghidra/Ghidra/Framework',
+             '/home/user/Ghidra/Ghidra/Processors',
+             '/home/user/Ghidra/Ghidra/Debug',
+             '/home/user/Ghidra/Ghidra/Features',
+             '/home/user/Ghidra/Ghidra/Extensions',
+             '/home/user/Ghidra/GPL',
+             '/home/user/Ghidra/dependencies'
+    }
+}
+
+dependencies {
+    implementation 'com.google.code.gson:gson:2.13.0'
+    implementation 'org.apache.logging.log4j:log4j-core:2.23.1'
+    implementation 'org.apache.logging.log4j:log4j-api:2.23.1'
+    implementation 'org.jdom:jdom:1.1.3'
+    implementation 'org.apache.commons:commons-lang3:3.14.0'
+    implementation 'org.apache.commons:commons-collections4:4.4'
+    implementation 'commons-io:commons-io:2.15.1'
+    implementation 'net.java.dev.msv:msv-rngconverter:2011.1-redhat-2'
+    implementation 'org.antlr:antlr-runtime:3.5.2'
+    implementation 'com.google.guava:guava:32.1.2-jre'
+    implementation 'javax.help:javahelp:2.0.05'
+    implementation 'org.apache.commons:commons-compress:1.21'
+
+    implementation fileTree(dir: '/home/user/ghidra/Ghidra/Ghidra/Framework', include: '**/*.jar')
+    implementation fileTree(dir: '/home/user/ghidra/Ghidra/Ghidra/Processors', include: '**/*.jar')
+    implementation fileTree(dir: '/home/user/ghidra/Ghidra/Ghidra/Debug', include: '**/*.jar')
+    implementation fileTree(dir: '/home/user/ghidra/Ghidra/Ghidra/Features', include: '**/*.jar')
+    implementation fileTree(dir: '/home/user/ghidra/Ghidra/Ghidra/Extensions', include: '**/*.jar')
+    implementation fileTree(dir: '/home/user/ghidra/Ghidra/GPL', include: '**/*.jar')
+    implementation fileTree(dir: '/home/user/ghidra/Ghidra/dependencies', include: '**/*.jar')
+    implementation fileTree(dir: '/home/user/ghidra/Ghidra', include: '**/build/libs/*.jar')
+    implementation fileTree(dir: '/home/user/ghidra/Ghidra', include: '**/lib/*.jar')
+    implementation fileTree(dir: '/home/user/ghidra/Ghidra', include: '**/libs/*.jar')
+
+    testImplementation 'org.junit.platform:junit-platform-console-standalone:1.13.0'
+    testImplementation 'org.mockito:mockito-core:5.11.0'
+    testImplementation 'net.bytebuddy:byte-buddy:1.14.12'
+    testImplementation 'net.bytebuddy:byte-buddy-agent:1.14.12'
+    testImplementation 'org.objenesis:objenesis:3.3'
+
+    testImplementation fileTree(dir: '/home/user/ghidra/Ghidra/Test', include: '**/*.jar')
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = [
+                    '/home/user/ghidra_scripts/', 
+                    '/home/user/ghidra_scripts/domain/', 
+                    '/home/user/ghidra_scripts/util/'
+                ]
+        }
+    }
+    test {
+        java {
+            srcDirs = [
+                '/home/user/ghidra_scripts/',
+                '/home/user/ghidra_scripts/domain/',
+                '/home/user/ghidra_scripts/util/'
+            ]
+        }
+    }
+}

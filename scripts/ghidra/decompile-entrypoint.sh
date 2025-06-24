@@ -283,7 +283,7 @@ function run_list_functions {
         -deleteProject \
         -import ${INPUT_FILE} \
         ${guess_architecture}\
-        -postScript "PatchestryListFunctions.java" \
+        -postScript "PatchestryListFunctions" \
         ${OUTPUT_FILE}
 
     if [ $? -ne 0 ]; then
@@ -305,7 +305,7 @@ function run_decompile_single {
         -deleteProject \
         -import ${INPUT_FILE} \
         ${guess_architecture}\
-        -postScript "PatchestryDecompileFunctions.java" \
+        -postScript "PatchestryDecompileFunctions" \
         single \
         ${FUNCTION_NAME} \
         ${OUTPUT_FILE}
@@ -328,7 +328,7 @@ function run_decompile_all {
         -deleteProject \
         -import ${INPUT_FILE} \
         ${guessArchitecture}\
-        -postScript "PatchestryDecompileFunctions.java" \
+        -postScript "PatchestryDecompileFunctions" \
         all \
         ${OUTPUT_FILE}
 

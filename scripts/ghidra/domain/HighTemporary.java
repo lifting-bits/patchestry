@@ -5,7 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-package scripts.ghidra.domain;
+package domain;
 
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.DataType;

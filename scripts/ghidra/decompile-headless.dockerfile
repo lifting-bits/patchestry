@@ -64,13 +64,17 @@ WORKDIR /home/user/
 
 COPY --chown=user:user --from=build /ghidra ghidra
 COPY --chown=user:user --chmod=755 decompile-entrypoint.sh  .
+COPY --chown=user:user --from=build /opt/gradle/ /opt/gradle/
+ENV PATH="/opt/gradle/bin:${PATH}"
 
 WORKDIR /home/user/ghidra_scripts/
-# our expected runtime directory in the repository is scripts/ghidra/
-COPY domain/ domain/
-COPY util/ util/
-COPY PatchestryDecompileFunctions.java .
-COPY PatchestryListFunctions.java .
+COPY --chown=user:user domain/ domain/
+COPY --chown=user:user util/ util/
+COPY --chown=user:user PatchestryDecompileFunctions.java .
+COPY --chown=user:user PatchestryListFunctions.java .
+COPY --chown=user:user build.gradle .
+
+RUN gradle build -x test
 
 WORKDIR /home/user/
 ENV GHIDRA_HOME=/home/user/ghidra
