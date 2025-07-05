@@ -8,11 +8,8 @@
 #pragma once
 
 #include <memory>
-#include <mlir/IR/Value.h>
+#include <optional>
 #include <string>
-
-#include <clang/CIR/Dialect/IR/CIRDialect.h>
-#include <clang/Frontend/CompilerInstance.h>
 
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/MLIRContext.h>
@@ -20,9 +17,21 @@
 #include <mlir/Pass/PassOptions.h>
 #include <mlir/Support/LLVM.h>
 
+#include <clang/CIR/Dialect/IR/CIRDialect.h>
+#include <clang/Frontend/CompilerInstance.h>
+
+#include <patchestry/Passes/OperationMatcher.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 
-namespace patchestry::passes {
+// Forward declarations to minimize header dependencies
+namespace mlir {
+    class Operation;
+    class Pass;
+    class Type;
+    class Value;
+} // namespace mlir
+
+namespace patchestry::passes { // NOLINT
 
     struct PatchOptions;
 
@@ -126,6 +135,17 @@ namespace patchestry::passes {
          * @param func The function containing calls to be instrumented
          */
         void instrument_function_calls(cir::FuncOp func);
+
+        /**
+         * @brief Instruments a specific operation based on patch specifications.
+         *
+         * This method applies patches to operations that match the operation patterns
+         * defined in the patch specification. It supports variable matching and applies
+         * before patch modes (replace and after mode is not supported for operations yet).
+         *
+         * @param op The operation to be instrumented
+         */
+        void instrument_operation(mlir::Operation *op);
 
       private:
         /**
@@ -252,6 +272,18 @@ namespace patchestry::passes {
          * @return bool True if the function should be excluded, false otherwise
          */
         bool exclude_from_patching(cir::FuncOp func, const PatchSpec &spec);
+
+        /**
+         * @brief Sets appropriate attributes for the patch call operation.
+         *
+         * This method handles setting attributes on the patch call based on the
+         * type of the original operation being instrumented. It preserves relevant
+         * attributes from CallOp operations and adds debugging information.
+         *
+         * @param patch_call_op The patch call operation to set attributes on
+         * @param target_op The original operation being instrumented
+         */
+        void set_patch_call_attributes(cir::CallOp patch_call_op, mlir::Operation *target_op);
     };
 
 } // namespace patchestry::passes
