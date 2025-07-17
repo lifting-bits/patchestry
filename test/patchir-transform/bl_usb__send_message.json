@@ -3,7 +3,7 @@
 
 // RUN: %patchir-transform %t1.cir --spec %S/bl_usb__send_message_before_patch.yaml -o %t2.cir
 // RUN: %file-check -vv -check-prefix=BEFORE %s --input-file %t2.cir
-// BEFORE: cir.call @patch__before__usbd_ep_write_packet(%{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}) {patched_operation = "cir.call"} : (!cir.ptr<!void>, !u32i, !cir.ptr<!void>, !u32i) -> () extra(#fn_attr)
+// BEFORE: cir.call @patch__before__usbd_ep_write_packet(%{{[0-9]+}}, %{{[0-9]+}}) {patched_operation = "cir.call"} : (!cir.ptr<!void>, !cir.ptr<!void>) -> () extra(#fn_attr)
 // BEFORE: %{{[0-9]+}} = cir.call @usbd_ep_write_packet(%{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}) : (!cir.ptr<!void>, !u8i, !cir.ptr<!void>, !u16i) -> !u16i extra(#fn_attr)
 
 

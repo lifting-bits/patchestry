@@ -1,19 +1,50 @@
-arch: "ARM:LE:32"
-patches:
-  - name: "apply_before_cmp"
-    match:
-      name: "cir.cmp"
-      kind: "operation"
-      symbol_matches:
-        - name: "bl_spi_mode"
-          type: "!cir.int<u, 32>"
-    patch:
-      mode: "ApplyBefore"
-      patch_file: "patch_bl_spi_mode.c"
-      patch_function: "patch::before::cmp::bl_spi_mode"
-      arguments:
-        - name: "global_var"
-          source: "symbol"
-          symbol: "bl_spi_mode"
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "led-loop-before-cmp-operation"
+  description: "Deploy LED loop before cmp operation"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2025-07-28"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  patches: "patches/led_loop_before_cmp_operation.yaml"
+
+execution_order:
+  - "meta_patches::LED-LOOP-BEFORE-CMP-OPERATION"
+
+
+meta_patches:
+  - name: "led_loop_before_cmp_operation"
+    id: "LED-LOOP-BEFORE-CMP-OPERATION"
+    description: "Apply before cmp operation"
+
+    patch_actions:
+      - id: "LED-LOOP-BEFORE-CMP-OPERATION"
+        description: "Apply before cmp operation"
+
+        # Match Configuration
+        match:
+          - name: "cir.cmp"
+            kind: "operation"
+            symbol_matches:
+              - name: "bl_spi_mode"
+                type: "!cir.int<u, 32>"
+
+        # Actions to Apply
+        action:
+          - mode: "apply_before"
+            patch_id: "LED-LOOP-BEFORE-CMP-OPERATION-001"
+            description: "Apply before cmp operation"
+            arguments:
+              - name: "global_var"
+                source: "symbol"
+                symbol: "bl_spi_mode"
+
     exclude:
       - ""

@@ -69,6 +69,12 @@ namespace patchestry::passes { // NOLINT
         bool enable_inlining;
     };
 
+    struct PatchInformation
+    {
+        std::optional< PatchSpec > spec;
+        std::optional< PatchAction > patch_action;
+    };
+
     /**
      * @brief MLIR pass that applies code instrumentation based on patch specifications.
      *
@@ -87,6 +93,7 @@ namespace patchestry::passes { // NOLINT
      */
     class InstrumentationPass
         : public mlir::PassWrapper< InstrumentationPass, mlir::OperationPass< mlir::ModuleOp > >
+
     {
         /** @brief Path to the YAML patch specification file */
         std::string spec_file;
@@ -125,27 +132,56 @@ namespace patchestry::passes { // NOLINT
         void runOnOperation() final;
 
         /**
-         * @brief Instruments function calls within a given function.
+         * @brief Applies meta patches in execution order.
          *
-         * This method walks through all function call operations within the provided function
-         * and applies patches that match the call patterns defined in the specification.
-         * It handles argument matching and applies the appropriate patch mode (before, after,
-         * replace).
-         *
-         * @param func The function containing calls to be instrumented
+         * @param function_worklist List of functions to process
+         * @param operation_worklist List of operations to process
+         * @param meta_patch_name Name of the meta patch to apply
          */
-        void instrument_function_calls(cir::FuncOp func);
+        void apply_meta_patches(
+            llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+            llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
+            const std::string &meta_patch_name
+        );
 
         /**
-         * @brief Instruments a specific operation based on patch specifications.
+         * @brief Applies meta contracts in execution order.
          *
-         * This method applies patches to operations that match the operation patterns
-         * defined in the patch specification. It supports variable matching and applies
-         * before patch modes (replace and after mode is not supported for operations yet).
-         *
-         * @param op The operation to be instrumented
+         * @param function_worklist List of functions to process
+         * @param operation_worklist List of operations to process
+         * @param meta_contract_name Name of the meta contract to apply
          */
-        void instrument_operation(mlir::Operation *op);
+        void apply_meta_contracts(
+            llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+            llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
+            const std::string &meta_contract_name
+        );
+
+        /**
+         * @brief Legacy patch application method for backward compatibility.
+         *
+         * @param function_worklist List of functions to process
+         * @param operation_worklist List of operations to process
+         */
+        void apply_legacy_patches(
+            llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+            llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist
+        );
+
+        /**
+         * @brief Applies a specific patch action to target functions and operations.
+         *
+         * @param function_worklist List of functions to process
+         * @param operation_worklist List of operations to process
+         * @param patch_action The patch action containing match criteria
+         * @param spec The patch specification to apply
+         * @param modified_patch The modified patch info with action-specific settings
+         */
+        void apply_patch_action_to_targets(
+            llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+            llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
+            const MetaPatchConfig &meta_patch, const PatchInformation &modified_patch
+        );
 
       private:
         /**
@@ -164,7 +200,7 @@ namespace patchestry::passes { // NOLINT
          */
         void prepare_call_arguments(
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
-            const PatchInfo &patch, llvm::SmallVector< mlir::Value > &args
+            const PatchInformation &patch, llvm::SmallVector< mlir::Value > &args
         );
 
         /**
@@ -175,13 +211,12 @@ namespace patchestry::passes { // NOLINT
          * The inserted call is added to the inline worklist if inlining is enabled.
          *
          * @param op The target operation to be instrumented
-         * @param match The match information for the operation
          * @param patch The patch information containing the patch function details
          * @param patch_module The module containing the patch function
          */
         void apply_before_patch(
-            mlir::Operation *op, const PatchMatch &match, const PatchInfo &patch,
-            mlir::ModuleOp patch_module
+            mlir::Operation *op, const PatchInformation &patch, mlir::ModuleOp patch_module,
+            bool inline_patches
         );
 
         /**
@@ -192,13 +227,12 @@ namespace patchestry::passes { // NOLINT
          * The inserted call is added to the inline worklist if inlining is enabled.
          *
          * @param op The target operation to be instrumented
-         * @param match The match information for the operation
          * @param patch The patch information containing the patch function details
          * @param patch_module The module containing the patch function
          */
         void apply_after_patch(
-            mlir::Operation *op, const PatchMatch &match, const PatchInfo &patch,
-            mlir::ModuleOp patch_module
+            mlir::Operation *op, const PatchInformation &patch, mlir::ModuleOp patch_module,
+            bool inline_patches
         );
 
         /**
@@ -209,13 +243,12 @@ namespace patchestry::passes { // NOLINT
          * while redirecting the call to the patch function.
          *
          * @param call_op The original call operation to be replaced
-         * @param match The match information for the call
          * @param patch The patch information containing the replacement function details
          * @param patch_module The module containing the patch function
          */
         void replace_call(
-            cir::CallOp op, const PatchMatch &match, const PatchInfo &patch,
-            mlir::ModuleOp patch_module
+            cir::CallOp op, const PatchInformation &patch, mlir::ModuleOp patch_module,
+            bool inline_patches
         );
 
         /**
@@ -265,13 +298,13 @@ namespace patchestry::passes { // NOLINT
          * @brief Determines if a function should be excluded from patching.
          *
          * This method checks whether a given function should be excluded from the
-         * patching process based on the patch specification criteria.
+         * patching process based on the meta patch exclusion criteria.
          *
          * @param func The function to check for exclusion
-         * @param spec The patch specification containing exclusion rules
+         * @param meta_patch The meta patch containing exclusion rules
          * @return bool True if the function should be excluded, false otherwise
          */
-        bool exclude_from_patching(cir::FuncOp func, const PatchSpec &spec);
+        bool exclude_from_patching(cir::FuncOp func, const MetaPatchConfig &meta_patch);
 
         /**
          * @brief Sets appropriate attributes for the patch call operation.

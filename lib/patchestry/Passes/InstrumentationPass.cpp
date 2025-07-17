@@ -56,6 +56,7 @@
 #include <patchestry/Passes/OperationMatcher.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
+#include <patchestry/YAML/YAMLParser.hpp>
 
 namespace patchestry::passes {
 
@@ -138,89 +139,6 @@ namespace patchestry::passes {
             }
             return TypeCategory::None;
         }
-
-        /**
-         * @brief Parses a YAML string into a PatchConfiguration object.
-         *
-         * This function parses a YAML string into a PatchConfiguration object, which contains
-         * the parsed patch specifications. It uses llvm::SourceMgr to manage the YAML input
-         * and llvm::yaml::Input to parse the YAML content.
-         *
-         * @param yaml_str The YAML string to parse
-         * @return llvm::Expected< patchestry::passes::PatchConfiguration > The parsed
-         * configuration or an error if parsing fails
-         */
-        llvm::Expected< patchestry::passes::PatchConfiguration >
-        parseSpecifications(llvm::StringRef yaml_str) {
-            llvm::SourceMgr sm;
-            PatchConfiguration config;
-            llvm::yaml::Input yaml_input(yaml_str, &sm);
-            yaml_input >> config;
-            if (yaml_input.error()) {
-                return llvm::createStringError(
-                    llvm::Twine("Failed to parse YAML: ") + yaml_input.error().message()
-                );
-            }
-
-            return config;
-        }
-
-#ifdef DEBUG
-        /**
-         * @brief Prints the parsed patch configuration to the console.
-         *
-         * This function prints the parsed patch configuration to the console for debugging
-         * purposes. It prints the number of patches, each patch's match criteria, and the
-         * patch details including code, patch file, function name, and arguments.
-         *
-         * @param config The PatchConfiguration object to print
-         */
-        void printSpecifications(const PatchConfiguration &config) {
-            llvm::outs() << "Number of patches: " << config.patches.size() << "\n";
-            for (const auto &spec : config.patches) {
-                const auto &match = spec.match;
-                llvm::outs() << "Match:\n";
-                llvm::outs() << "  Symbol: " << match.symbol << "\n";
-                llvm::outs() << "  Kind: " << match.kind << "\n";
-                llvm::outs() << "  Operation: " << match.operation << "\n";
-                llvm::outs() << "  Function Name: " << match.function_name << "\n";
-                llvm::outs() << "  Argument Matches:\n";
-                for (const auto &arg_match : match.argument_matches) {
-                    llvm::outs() << "    - Index: " << arg_match.index << "\n";
-                    llvm::outs() << "      Name: " << arg_match.name << "\n";
-                    llvm::outs() << "      Type: " << arg_match.type << "\n";
-                }
-                llvm::outs() << "  Variable Matches:\n";
-                for (const auto &var_match : match.variable_matches) {
-                    llvm::outs() << "    - Name: " << var_match.name << "\n";
-                    llvm::outs() << "      Type: " << var_match.type << "\n";
-                }
-
-                const auto &patch = spec.patch;
-                llvm::outs() << "  Patch:\n";
-                switch (patch.mode) {
-                    case PatchInfoMode::APPLY_BEFORE:
-                        llvm::outs() << "    mode: Apply Before\n";
-                        break;
-                    case PatchInfoMode::APPLY_AFTER:
-                        llvm::outs() << "    mode: Apply After\n";
-                        break;
-                    case PatchInfoMode::REPLACE:
-                        llvm::outs() << "    mode: Replace\n";
-                        break;
-                    default:
-                        break;
-                }
-                llvm::outs() << "    Code:\n" << patch.code << "\n";
-                llvm::outs() << "    Patch File: " << patch.patch_file << "\n";
-                llvm::outs() << "    Patch Function: " << patch.patch_function << "\n";
-                llvm::outs() << "    Arguments:\n";
-                for (const auto &arg : patch.arguments) {
-                    llvm::outs() << "      - " << arg << "\n";
-                }
-            }
-        }
-#endif
 
         /**
          * @brief Determines the appropriate cast kind between two MLIR types.
@@ -357,6 +275,23 @@ namespace patchestry::passes {
     }
 
     /**
+     * @brief Gets an item from the library based on the name.
+     *
+     * @param items The vector of items to search through
+     * @param name The name of the item to search for
+     * @return std::optional<T> The item if found, std::nullopt otherwise
+     */
+    template< typename T >
+    std::optional< T > lookup(const std::vector< T > &items, const std::string &name) {
+        for (const auto &item : items) {
+            if (item.id == name) {
+                return item;
+            }
+        }
+        return std::nullopt;
+    }
+
+    /**
      * @brief Constructs an InstrumentationPass with the given specification file and options.
      *
      * The constructor loads and parses the patch specification file, validates patch files,
@@ -378,181 +313,281 @@ namespace patchestry::passes {
         }
 
         PatchSpecContext::getInstance().set_spec_path(spec_file);
-        auto config_or_err = parseSpecifications(buffer_or_err.get()->getBuffer());
+        auto config_or_err = patchestry::yaml::utils::loadPatchConfiguration(
+            llvm::sys::path::filename(spec_file).str()
+        );
         if (!config_or_err) {
             LOG(ERROR) << "Error: Failed to parse patch specification file: " << spec_file
                        << "\n";
             return;
         }
 
-        config = std::move(config_or_err.get());
-        for (auto &spec : config->patches) {
-            auto &patch = spec.patch;
-            if (!llvm::sys::fs::exists(patch.patch_file)) {
-                LOG(ERROR) << "Patch file " << patch.patch_file << " does not exist\n";
+        config = std::move(config_or_err.value());
+        for (auto &spec : config->libraries.patches.patches) {
+            auto patches_file_path =
+                PatchSpecContext::getInstance().resolve_path(spec.implementation.code_file);
+            if (!llvm::sys::fs::exists(patches_file_path)) {
+                LOG(ERROR) << "Patch file " << patches_file_path << " does not exist\n";
                 continue;
             }
 
-            patch.patch_module = emitModuleAsString(patch.patch_file, config->arch);
+            auto patch_file_path =
+                PatchSpecContext::getInstance().resolve_path(spec.implementation.code_file);
+            spec.patch_module = emitModuleAsString(patch_file_path, config->target.arch);
+            if (!spec.patch_module) {
+                LOG(ERROR) << "Failed to emit patch module for " << spec.name << "\n";
+                continue;
+            }
         }
-
-// print specifications
-#ifdef DEBUG
-        printSpecifications(*config);
-#endif
     }
 
     /**
      * @brief Applies instrumentation to the MLIR module based on the patch specifications.
-     *        The function iterates through all functions in the module and applies the
-     *        specified patches to function calls.
+     *        The function follows the execution order and applies meta patches and contracts.
      *
      * @note The function list in module can grow during instrumentation. We collect the
      * list of functions before starting the instrumentation process to avoid issues with
      *       growing functions.
-     *
-     * @todo Perform instrumentation based on Operations match
      */
     void InstrumentationPass::runOnOperation() {
         mlir::ModuleOp mod = getOperation();
         llvm::SmallVector< cir::FuncOp, 8 > function_worklist;
         llvm::SmallVector< mlir::Operation *, 8 > operation_worklist;
 
-        // Second pass: gather all functions for later instrumentation
+        // check if the configuration is loaded; if not, return
+        if (!config) {
+            LOG(ERROR) << "No patch configuration loaded. Skipping instrumentation.\n";
+            return;
+        }
+
+        // gather all functions for later instrumentation
         mod.walk([&](cir::FuncOp op) { function_worklist.push_back(op); });
 
-        // Gather operations for instrumentation
+        // gather operations for instrumentation
         mod.walk([&](mlir::Operation *op) {
             if (!mlir::isa< cir::FuncOp, mlir::ModuleOp, cir::GlobalOp >(op)) {
                 operation_worklist.push_back(op);
             }
         });
 
-        // Third pass: process each function to instrument function calls
-        // We use indexed loop because function_worklist size could change during
-        // instrumentation
-        for (size_t i = 0; i < function_worklist.size(); ++i) {
-            instrument_function_calls(function_worklist[i]);
-        }
+        // if the execution order is empty, apply meta patches and contracts in order
+        if (config->execution_order.empty()) {
+            for (const auto &meta_patch : config->meta_patches) {
+                apply_meta_patches(function_worklist, operation_worklist, meta_patch.name);
+            }
+            for (const auto &meta_contract : config->meta_contracts) {
+                apply_meta_contracts(function_worklist, operation_worklist, meta_contract.name);
+            }
+        } else {
+            // process execution order if specified
+            for (const auto &execution_item : config->execution_order) {
+                // Parse execution item format: "meta_patches: name" or "meta_contracts: name"
+                auto colon_pos = execution_item.find("::");
+                if (colon_pos == std::string::npos) {
+                    LOG(ERROR) << "Invalid execution order format: " << execution_item << "\n";
+                    continue;
+                }
 
-        // Process operations for instrumentation
-        for (auto *op : operation_worklist) {
-            instrument_operation(op);
-        }
+                std::string type = execution_item.substr(0, colon_pos);
+                std::string name = execution_item.substr(colon_pos + 2);
 
-        // Inline inserted call operation
-        if (patch_options.enable_inlining) {
+                // Trim whitespace
+                name.erase(0, name.find_first_not_of(" \t"));
+                name.erase(name.find_last_not_of(" \t") + 1);
+
+                if (type == "meta_patches") {
+                    apply_meta_patches(function_worklist, operation_worklist, name);
+                } else if (type == "meta_contracts") {
+                    apply_meta_contracts(function_worklist, operation_worklist, name);
+                } else {
+                    LOG(ERROR) << "Unknown execution type: " << type << "\n";
+                }
+            }
+
+            // Inline inserted call operation
+            // if (patch_options.enable_inlining) {
             for (auto *op : inline_worklists) {
                 std::ignore = inline_call(mod, mlir::cast< cir::CallOp >(op));
             }
 
             // clear the worklist after inlining
             inline_worklists.clear();
+            //}
         }
     }
 
     /**
-     * @brief Instruments function calls within a given function based on the patch
-     * specifications. The function iterates through all function calls in the provided
-     * function and applies the specified patches.
+     * @brief Applies meta patches in execution order.
      *
-     * @param func The function to instrument.
+     * @param function_worklist List of functions to process
+     * @param operation_worklist List of operations to process
+     * @param meta_patch_name Name of the meta patch to apply
      */
-    void InstrumentationPass::instrument_function_calls(cir::FuncOp func) {
-        func.walk([&](cir::CallOp op) {
-            if (!config || config->patches.empty()) {
-                LOG(ERROR) << "No patch configuration found. Skipping...\n";
-                return;
+    void InstrumentationPass::apply_meta_patches(
+        llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+        llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
+        const std::string &meta_patch_name
+    ) {
+        auto target_meta_patch = lookup(config->meta_patches, meta_patch_name);
+
+        if (!target_meta_patch) {
+            LOG(ERROR) << "Meta patch '" << meta_patch_name << "' not found\n";
+            return;
+        }
+
+        LOG(INFO) << "Applying meta patch: " << meta_patch_name << "\n";
+
+        // Process each patch action in the meta patch
+        for (const auto &patch_action : target_meta_patch->patch_actions) {
+            LOG(INFO) << "Processing patch action: " << patch_action.action_id << "\n";
+
+            auto &action = patch_action.action[0];
+
+            // Find the corresponding patch specification by patch_id
+            auto patch_spec = lookup(config->libraries.patches.patches, action.patch_id);
+            if (!patch_spec) {
+                LOG(ERROR) << "Patch specification for ID '" << action.patch_id
+                           << "' not found\n";
+                continue;
             }
 
-            auto callee_name = op.getCallee()->str();
-            assert(!callee_name.empty() && "Callee name is empty");
-
-            auto func = op->getParentOfType< cir::FuncOp >();
-            if (!func) {
-                LOG(ERROR) << "Call operation is not in a function. Skipping...\n";
-                return;
-            }
-
-            for (const auto &spec : config->patches) {
-                if (OperationMatcher::matches(op, func, spec, OperationMatcher::Mode::FUNCTION)
-                    && !exclude_from_patching(func, spec))
-                {
-                    const auto &patch = spec.patch;
-                    const auto &match = spec.match;
-                    // Create module from the patch file mlir representation
-                    auto patch_module =
-                        load_patch_module(*op->getContext(), *patch.patch_module);
-                    if (!patch_module) {
-                        LOG(ERROR)
-                            << "Failed to load patch module for function: " << callee_name
-                            << "\n ";
-                        continue;
-                    }
-
-                    switch (patch.mode) {
-                        case PatchInfoMode::APPLY_BEFORE: {
-                            apply_before_patch(op, match, patch, patch_module.get());
-                            break;
-                        }
-                        case PatchInfoMode::APPLY_AFTER: {
-                            apply_after_patch(op, match, patch, patch_module.get());
-                            break;
-                        }
-                        case PatchInfoMode::REPLACE:
-                            replace_call(op, match, patch, patch_module.get());
-                            break;
-                        default:
-                            break;
-                    }
-                }
-            }
-        });
+            // Create a modified patch info with the action's mode and arguments
+            PatchInformation patch_to_apply = { .spec         = patch_spec,
+                                                .patch_action = patch_action };
+            // Apply the patch to matching functions and operations
+            apply_patch_action_to_targets(
+                function_worklist, operation_worklist, *target_meta_patch, patch_to_apply
+            );
+        }
     }
 
     /**
-     * @brief Instruments an operation based on patch specifications.
+     * @brief Applies meta contracts in execution order.
      *
-     * This method applies patches to operations that match the operation patterns
-     * defined in the patch specification. It supports variable matching and applies
-     * before patch modes (replace and after mode is not supported for operations yet).
-     *
-     * @param op The operation to be instrumented
+     * @param function_worklist List of functions to process
+     * @param operation_worklist List of operations to process
+     * @param meta_contract_name Name of the meta contract to apply
      */
-    void InstrumentationPass::instrument_operation(mlir::Operation *op) {
-        if (!config || config->patches.empty()) {
-            LOG(ERROR) << "No patch configuration found. Skipping...\n";
-            return;
-        }
-        auto func = op->getParentOfType< cir::FuncOp >();
-        if (!func) {
-            LOG(INFO) << "Operation is not in a function. Skipping...\n";
+    void InstrumentationPass::apply_meta_contracts(
+        llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+        llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
+        const std::string &meta_contract_name
+    ) {
+        // Find the meta contract by name
+        auto target_meta_contract = lookup(config->meta_contracts, meta_contract_name);
+        if (!target_meta_contract) {
+            LOG(ERROR) << "Meta contract '" << meta_contract_name << "' not found\n";
             return;
         }
 
-        for (const auto &spec : config->patches) {
-            if (OperationMatcher::matches(op, func, spec, OperationMatcher::Mode::OPERATION)
-                && !exclude_from_patching(func, spec))
-            {
-                const auto &patch = spec.patch;
-                const auto &match = spec.match;
-                auto patch_module = load_patch_module(*op->getContext(), *patch.patch_module);
-                if (!patch_module) {
-                    LOG(ERROR) << "Failed to load patch module for operation: "
-                               << op->getName().getStringRef().str() << "\n ";
+        LOG(INFO) << "Applying meta contract: " << meta_contract_name << "\n";
+
+        // TODO: Implement meta contract application
+        (void) function_worklist;
+        (void) operation_worklist;
+        (void) target_meta_contract;
+    }
+
+    /**
+     * @brief Applies a specific patch action to target functions and operations.
+     *
+     * @param function_worklist List of functions to process
+     * @param operation_worklist List of operations to process
+     * @param patch_action The patch action containing match criteria
+     * @param spec The patch specification to apply
+     * @param modified_patch The modified patch info with action-specific settings
+     */
+    void InstrumentationPass::apply_patch_action_to_targets(
+        llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+        llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
+        const MetaPatchConfig &meta_patch, const PatchInformation &patch_to_apply
+    ) {
+        const auto &patch_action = patch_to_apply.patch_action.value();
+        const auto &match        = patch_action.match[0];
+        const auto &action       = patch_action.action[0];
+
+        if (match.kind == MatchKind::FUNCTION) {
+            // Apply to function calls
+            for (auto func : function_worklist) {
+                if (exclude_from_patching(func, meta_patch)) {
                     continue;
                 }
 
-                switch (patch.mode) {
-                    case PatchInfoMode::APPLY_BEFORE: {
-                        apply_before_patch(op, match, patch, patch_module.get());
-                        break;
+                func.walk([&](cir::CallOp call_op) {
+                    // Create a temporary spec with the patch action match
+
+                    if (OperationMatcher::matches(
+                            call_op, func, patch_action, OperationMatcher::Mode::FUNCTION
+                        ))
+                    {
+                        auto patch_module = load_patch_module(
+                            *call_op->getContext(), *patch_to_apply.spec->patch_module
+                        );
+                        if (!patch_module) {
+                            LOG(ERROR) << "Failed to load patch module for function: "
+                                       << call_op.getCallee()->str() << "\n";
+                            return;
+                        }
+
+                        switch (action.mode) {
+                            case PatchInfoMode::APPLY_BEFORE:
+                                apply_before_patch(
+                                    call_op, patch_to_apply, patch_module.get(),
+                                    meta_patch.optimization.contains("inline-patches")
+                                );
+                                break;
+                            case PatchInfoMode::APPLY_AFTER:
+                                apply_after_patch(
+                                    call_op, patch_to_apply, patch_module.get(),
+                                    meta_patch.optimization.contains("inline-patches")
+                                );
+                                break;
+                            case PatchInfoMode::REPLACE:
+                                replace_call(
+                                    call_op, patch_to_apply, patch_module.get(),
+                                    meta_patch.optimization.contains("inline-patches")
+                                );
+                                break;
+                            default:
+                                LOG(ERROR) << "Unsupported patch mode for function call\n";
+                                break;
+                        }
                     }
-                    default:
-                        LOG(ERROR)
-                            << "Unsupported patch mode: " << patchInfoModeToString(patch.mode)
-                            << " for operation: " << op->getName().getStringRef().str() << "\n";
-                        break;
+                });
+            }
+        } else if (match.kind == MatchKind::OPERATION) {
+            // Apply to operations
+            for (auto *op : operation_worklist) {
+                auto func = op->getParentOfType< cir::FuncOp >();
+                if (!func || exclude_from_patching(func, meta_patch)) {
+                    continue;
+                }
+
+                if (OperationMatcher::matches(
+                        op, func, patch_action, OperationMatcher::Mode::OPERATION
+                    ))
+                {
+                    auto patch_module = load_patch_module(
+                        *op->getContext(), *patch_to_apply.spec->patch_module
+                    );
+                    if (!patch_module) {
+                        LOG(ERROR) << "Failed to load patch module for operation: "
+                                   << op->getName().getStringRef().str() << "\n";
+                        continue;
+                    }
+
+                    switch (action.mode) {
+                        case PatchInfoMode::APPLY_BEFORE:
+                            apply_before_patch(
+                                op, patch_to_apply, patch_module.get(),
+                                meta_patch.optimization.contains("inline-patches")
+                            );
+                            break;
+                        default:
+                            LOG(ERROR) << "Unsupported patch mode for operation: "
+                                       << op->getName().getStringRef().str() << "\n";
+                            break;
+                    }
                 }
             }
         }
@@ -571,7 +606,7 @@ namespace patchestry::passes {
      */
     void InstrumentationPass::prepare_call_arguments(
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
-        const PatchInfo &patch, llvm::SmallVector< mlir::Value > &args
+        const PatchInformation &patch, llvm::SmallVector< mlir::Value > &args
     ) {
         auto create_cast = [&](mlir::Value value, mlir::Type type) -> mlir::Value {
             if (value.getType() == type) {
@@ -584,11 +619,15 @@ namespace patchestry::passes {
             return cast_op->getResults().front();
         };
 
+        const auto &patch_action = patch.patch_action.value();
+        // const auto &patch_spec   = patch.spec.value();
+
         // Handle structured argument specifications
         for (size_t i = 0;
-             i < patch.argument_sources.size() && i < patch_func.getNumArguments(); ++i)
+             i < patch_action.action[0].arguments.size() && i < patch_func.getNumArguments();
+             ++i)
         {
-            const auto &arg_spec = patch.argument_sources[i];
+            const auto &arg_spec = patch_action.action[0].arguments[i];
             auto patch_arg_type  = patch_func.getArgumentTypes()[i];
             mlir::Value arg_value;
 
@@ -814,20 +853,25 @@ namespace patchestry::passes {
      * @param patch_module The module containing the patch function.
      */
     void InstrumentationPass::apply_before_patch(
-        mlir::Operation *target_op, const PatchMatch &match, const PatchInfo &patch,
-        mlir::ModuleOp patch_module
+        mlir::Operation *target_op, const PatchInformation &patch, mlir::ModuleOp patch_module,
+        bool inline_patches
     ) {
         if (target_op == nullptr) {
             LOG(ERROR) << "Patch before: Operation is null";
             return;
         }
 
+        const auto &patch_action = patch.patch_action.value();
+        const auto &patch_spec   = patch.spec.value();
+        (void) patch_action; // Suppress unused warning
+
         mlir::OpBuilder builder(target_op);
         builder.setInsertionPoint(target_op);
         auto module = target_op->getParentOfType< mlir::ModuleOp >();
 
-        std::string patch_function_name = namifyPatchFunction(patch.patch_function);
-        auto input_types                = llvm::to_vector(target_op->getOperandTypes());
+        std::string patch_function_name =
+            namifyPatchFunction(patch_spec.implementation.function_name);
+        auto input_types = llvm::to_vector(target_op->getOperandTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
             return;
@@ -866,36 +910,38 @@ namespace patchestry::passes {
         // Set appropriate attributes based on operation type
         set_patch_call_attributes(patch_call_op, target_op);
 
-        if (patch_options.enable_inlining) {
+        if (inline_patches) {
             inline_worklists.push_back(patch_call_op);
         }
-        (void) match;
     }
 
     /**
-     * @brief Applies a patch after the function call. This function inserts a call to the
-     * patch function after the original function call.
+     * @brief Applies a patch after the target operation.
      *
-     * @param op The call operation to be instrumented.
-     * @param match The match information for the function call.
-     * @param patch The patch information.
-     * @param patch_module The module containing the patch function.
+     * @param op The target operation to be instrumented
+     * @param patch The patch information containing the patch function details
+     * @param patch_module The module containing the patch function
      */
     void InstrumentationPass::apply_after_patch(
-        mlir::Operation *target_op, const PatchMatch &match, const PatchInfo &patch,
-        mlir::ModuleOp patch_module
+        mlir::Operation *target_op, const PatchInformation &patch, mlir::ModuleOp patch_module,
+        bool inline_patches
     ) {
         if (target_op == nullptr) {
             LOG(ERROR) << "Patch after: Operation is null";
             return;
         }
 
+        const auto &patch_action = patch.patch_action.value();
+        const auto &patch_spec   = patch.spec.value();
+        (void) patch_action; // Suppress unused warning
+
         mlir::OpBuilder builder(target_op);
         auto module = target_op->getParentOfType< mlir::ModuleOp >();
         builder.setInsertionPointAfter(target_op);
 
-        std::string patch_function_name = namifyPatchFunction(patch.patch_function);
-        auto input_types                = llvm::to_vector(target_op->getResultTypes());
+        std::string patch_function_name =
+            namifyPatchFunction(patch_spec.implementation.function_name);
+        auto input_types = llvm::to_vector(target_op->getResultTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
             return;
@@ -934,10 +980,9 @@ namespace patchestry::passes {
         // Set appropriate attributes based on operation type
         set_patch_call_attributes(patch_call_op, target_op);
 
-        if (patch_options.enable_inlining) {
+        if (inline_patches) {
             inline_worklists.push_back(patch_call_op);
         }
-        (void) match;
     }
 
     /**
@@ -951,8 +996,8 @@ namespace patchestry::passes {
      */
 
     void InstrumentationPass::replace_call(
-        cir::CallOp call_op, const PatchMatch &match, const PatchInfo &patch,
-        mlir::ModuleOp patch_module
+        cir::CallOp call_op, const PatchInformation &patch, mlir::ModuleOp patch_module,
+        bool inline_patches
     ) {
         mlir::OpBuilder builder(call_op);
         auto loc    = call_op.getLoc();
@@ -962,10 +1007,12 @@ namespace patchestry::passes {
 
         builder.setInsertionPoint(call_op);
 
+        const auto &patch_spec = patch.spec.value();
+
         auto callee_name = call_op.getCallee()->str();
         assert(!callee_name.empty() && "Wrap around patch: callee name is empty");
 
-        auto patch_function_name = namifyPatchFunction(patch.patch_function);
+        auto patch_function_name = namifyPatchFunction(patch_spec.implementation.function_name);
         auto result_types        = llvm::to_vector(call_op.getResultTypes());
 
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
@@ -987,7 +1034,8 @@ namespace patchestry::passes {
 
         auto wrap_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
         if (!wrap_func) {
-            LOG(ERROR) << "Wrap around patch: patch function " << patch.patch_function
+            LOG(ERROR) << "Wrap around patch: patch function "
+                       << patch_spec.implementation.function_name
                        << " not defined. Patching failed...\n";
             return;
         }
@@ -1003,7 +1051,10 @@ namespace patchestry::passes {
 
         call_op.replaceAllUsesWith(wrap_call_op);
         call_op.erase();
-        (void) match;
+
+        if (inline_patches) {
+            inline_worklists.push_back(wrap_call_op);
+        }
     }
 
     /**
@@ -1394,17 +1445,19 @@ namespace patchestry::passes {
      * @param spec The patch specification containing exclusion rules
      * @return bool True if the function should be excluded, false otherwise
      */
-    bool InstrumentationPass::exclude_from_patching(cir::FuncOp func, const PatchSpec &spec) {
+    bool InstrumentationPass::exclude_from_patching(
+        cir::FuncOp func, const MetaPatchConfig &meta_patch
+    ) {
         // Get the function name
         auto func_name = func.getName().str();
 
         // If no exclusion patterns are specified, don't exclude
-        if (spec.exclude.empty()) {
+        if (meta_patch.exclude.empty()) {
             return false;
         }
 
         // Check each exclusion pattern against the function name
-        for (const auto &pattern : spec.exclude) {
+        for (const auto &pattern : meta_patch.exclude) {
             try {
                 // Create regex from the pattern
                 std::regex exclude_regex(pattern, std::regex_constants::basic);

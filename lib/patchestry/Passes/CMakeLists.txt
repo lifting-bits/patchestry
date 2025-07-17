@@ -18,6 +18,7 @@ set(CLANG_IR_LIBS
 target_link_libraries(patchestry_passes
     PRIVATE
         patchestry_settings
+        patchestry_yaml
         MLIRSupport
         MLIRIR
         MLIRPass

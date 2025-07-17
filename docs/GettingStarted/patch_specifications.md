@@ -34,21 +34,55 @@ Patchestry supports two types of matching:
 The patch specification is a YAML file with the following structure:
 
 ```yaml
-arch: "ARCHITECTURE:ENDIANNESS:BITWIDTH"  # Architecture specification
-patches:
-  - name: "PatchName"                     # Unique identifier for the patch
-    match:                                # Match criteria
-      symbol: "..."                       # Symbol to match
-      kind: "..."                         # Kind of match (function, operation)
-      # Additional match criteria...
-    patch:                                # Patch configuration
-      mode: "..."                         # Patch mode (ApplyBefore, ApplyAfter, Replace)
-      patch_file: "..."                   # Path to patch implementation file
-      patch_function: "..."               # Function in patch file to call
-      arguments:                          # Arguments to pass to patch function
-        - "..."
-    exclude:                              # Exclusion criteria
-      - "*"                               # Function name patterns to exclude from matching
+apiVersion: patchestry.io/v1             # API version
+
+metadata:                                # Deployment metadata
+  name: "deployment-name"
+  description: "Deployment description"
+  version: "1.0.0"
+  author: "Author Name"
+  created: "YYYY-MM-DD"
+
+target:                                  # Target binary configuration
+  binary: "target_binary.bin"
+  arch: "ARCHITECTURE:ENDIANNESS:BITWIDTH"
+
+libraries:                               # External patch and contract libraries
+  patches: "path/to/patches.yaml"
+  contracts: "path/to/contracts.yaml"
+
+execution_order:                         # Order of patch/contract execution
+  - "meta_patches::meta_patch_name"
+  - "meta_contracts::meta_contract_name"
+
+meta_patches:                            # Meta-patch configurations
+  - name: ...
+    id: "..."
+    description: "..."
+    optimization:                        # Optimization settings
+      - "inline-patches"
+      - "inline-contracts"
+    patch_actions:                       # Individual patch actions
+      - id: "PATCH-001"
+        description: "..."
+        match:                           # Match criteria
+          - symbol: "..."
+            kind: "..."
+            # Additional match criteria...
+        action:                          # Patch actions
+          - mode: "..."
+            patch_id: "..."
+            description: "..."
+            arguments:                   # Patch arguments
+              - name: "..."
+                source: "..."
+                index: "0"
+    exclude:                             # Exclusion patterns
+      - "pattern_to_exclude"
+
+meta_contracts:                          # Meta-contract configurations
+  - name: ...
+    description: "..."
 ```
 
 ## Field Descriptions
@@ -57,18 +91,57 @@ patches:
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `arch` | Target architecture specification in format "ARCH:ENDIANNESS:BITWIDTH" | `"ARM:LE:32"` |
-| `patches` | List of patch specifications | `- name: "PatchName"...` |
+| `apiVersion` | API version for the patch specification | `"patchestry.io/v1"` |
+| `metadata` | Deployment metadata container | See metadata fields below |
+| `target` | Target binary configuration | See target fields below |
+| `libraries` | External patch and contract library references | See library fields below |
+| `execution_order` | Order of patch/contract group execution | `- "meta_patches::group_name"` |
+| `meta_patches` | Meta-patch group configurations | List of patch groups |
+| `meta_contracts` | Meta-contract group configurations | List of contract groups |
 
-
-### Patch Entry Fields
+### Metadata Fields
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `name` | Unique identifier defining the patch identity | `"CVE-2021-12345"` |
-| `match` | Container for match criteria | `symbol: "symbol_name"` |
-| `patch` | Container for patch configuration | `mode: "ApplyBefore"` |
-| `exclude` | Container for exclusion functions | `- "^func_*"` |
+| `name` | Deployment name identifier | `"usb-security-monitoring"` |
+| `description` | Deployment description | `"Deploy USB security monitoring"` |
+| `version` | Deployment version | `"1.0.0"` |
+| `author` | Author or team name | `"Security Team"` |
+| `created` | Creation date | `"2025-01-15"` |
+
+### Target Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `binary` | Target binary file name | `"firmware.bin"` |
+| `arch` | Target architecture specification in format "ARCH:ENDIANNESS:BITWIDTH" | `"ARM:LE:32"` |
+
+### Libraries Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `patches` | Path to external patch library YAML file | `"patches/security_patches.yaml"` |
+| `contracts` | Path to external contract library YAML file | `"contracts/security_contracts.yaml"` |
+
+### Meta-Patch Entry Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `name` | Unique identifier for the patch group | `"usb_security_patches"` |
+| `id` | Internal identifier for the patch group | `"usb_security_patches"` |
+| `description` | Description of the patch group purpose | `"USB security monitoring patches"` |
+| `optimization` | List of optimization flags | `["inline-patches", "inline-contracts"]` |
+| `patch_actions` | List of individual patch actions | See patch action fields below |
+| `exclude` | List of exclusion patterns | `["test_*", "debug_*"]` |
+
+### Patch Action Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `id` | Unique identifier for the patch action | `"USB-PATCH-001"` |
+| `description` | Description of what the patch does | `"Add USB security validation"` |
+| `match` | List of match criteria | See match fields below |
+| `action` | List of actions to apply | See action fields below |
 
 ### Match Fields
 
@@ -137,14 +210,25 @@ Common operand patterns:
 | `name` | Variable name pattern (supports regex with `/pattern/`) | `"/.*password.*/`, `"secret_key"` |
 | `type` | Variable type pattern (optional) | `"!cir.ptr<!cir.int<u, 32>>"` |
 
-### Patch Fields
+### Action Fields
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `patch.mode` | patching mode to be applied (`ApplyBefore`, `ApplyAfter`, `Replace`) | `"ApplyBefore"` |
-| `patch.patch_file` | Path to the C file containing patch code | `"path/to/patch.c"` |
-| `patch.patch_function` | Function in patch file to call | `"patch::before::function_name"` |
-| `patch.arguments` | List of arguments to pass to patch function | See [Argument Specification](#argument-specification) |
+| `mode` | Patching mode to be applied (`apply_before`, `apply_after`, `replace`) | `"apply_before"` |
+| `patch_id` | Reference to the patch implementation | `"USB-PATCH-001"` |
+| `description` | Description of the action being applied | `"Pre-validation security check"` |
+| `arguments` | List of arguments to pass to patch function | See [Argument Specification](#argument-specification) |
+
+### Optimization Flags
+
+The `optimization` field accepts a list of optimization settings:
+
+| Flag | Description | Effect |
+|------|-------------|--------|
+| `"inline-patches"` | Inline patch function calls | Reduces function call overhead |
+| `"inline-contracts"` | Inline contract function calls | Reduces contract validation overhead |
+| `"debug-info"` | Preserve debug information | Maintains debugging symbols |
+| `"size-optimize"` | Optimize for binary size | Reduces final binary size |
 
 ### Exclude Fields
 
@@ -256,41 +340,72 @@ arguments:
 
 ## Complete Patch Examples
 
-### Example 1: Function Call Validation with Structured Arguments
+### Example 1: USB Security Monitoring Deployment
+
+Based on the actual specification from `bl_usb__send_message_before_patch.yaml`:
 
 ```yaml
-arch: "ARM:LE:32"
-patches:
-  - name: "validate_memcpy_calls"
-    match:
-      symbol: "memcpy"
-      kind: "function"
-      argument_matches:
-        - index: 0
-          name: "dest"
-          type: "!cir.ptr<!cir.void>"
-        - index: 2
-          name: "size"
-          type: "!cir.int<u, 32>"
-    patch:
-      mode: "ApplyBefore"
-      patch_file: "patches/bounds_check.c"
-      patch_function: "validate_memcpy"
-      arguments:
-        - name: "dest_ptr"
-          source: "argument"
-          index: 0
-        - name: "copy_size"
-          source: "argument"
-          index: 2
-        - name: "max_allowed"
-          source: "constant"
-          value: "4096"
-        - name: "buffer_limit"
-          source: "variable"
-          symbol: "max_buffer_size"
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "usb-security-monitoring-deployment"
+  description: "Deploy USB security monitoring for medical device firmware"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2025-01-15"
+
+target:
+  binary: "medical_device_firmware.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  patches: "patches/usb_security_patches.yaml"
+  contracts: "contracts/usb_security_contracts.yaml"
+
+execution_order:
+  - "meta_patches::usb_security_meta_patches"
+  - "meta_contracts::usb_security_meta_contracts"
+
+meta_patches:
+  - name: usb_security_meta_patches
+    id: "usb_security_meta_patches"
+    description: "Meta patches for USB security"
+    optimization:
+      - "inline-patches"
+      - "inline-contracts"
+
+    patch_actions:
+      - id: "USB-PATCH-001"
+        description: "Patch to add USB security validation"
+
+        match:
+          - symbol: "usbd_ep_write_packet"
+            kind: "function"
+            function_context:
+              - name: "bl_usb__send_message"
+            argument_matches:
+              - index: 0
+                name: "usb_g"
+
+        action:
+          - mode: "apply_before"
+            patch_id: "USB-PATCH-001"
+            description: "Pre-validation security check"
+            arguments:
+              - name: "operand_0"
+                source: "operand"
+                index: "0"
+              - name: "variable_2"
+                source: "variable"
+                symbol: "var1"
+
     exclude:
       - "test_*"
+      - "debug_*"
+
+meta_contracts:
+  - name: usb_security_meta_contracts
+    description: "Meta contracts for USB security validation"
 ```
 
 ## Operation-Based Matching Examples
@@ -342,46 +457,68 @@ Examples:
 
 The specification supports three patching modes:
 
-- `ApplyBefore`: Apply patch before the matched function or operation
-- `ApplyAfter`: Apply patch after the matched function
-- `Replace`: Completely replace the matched function
+- `apply_before`: Apply patch before the matched function or operation
+- `apply_after`: Apply patch after the matched function
+- `replace`: Completely replace the matched function
 
-### ApplyBefore Mode
+### Apply Before Mode
 
-In `ApplyBefore` mode, the patch is applied before the matched function or operation executes.
+In `apply_before` mode, the patch is applied before the matched function or operation executes.
 ```yaml
-patch:
-  mode: "ApplyBefore"
-  patch_file: "path/to/patch.c"
-  target_function: "patch::before::function_name"
-  arguments:
-    - "arg1"
-    - "arg2"
+action:
+  - mode: "apply_before"
+    patch_id: "SECURITY-001"
+    description: "Pre-execution validation"
+    arguments:
+      - name: "input_param"
+        source: "operand"
+        index: "0"
+      - name: "max_size"
+        source: "constant"
+        value: "4096"
 ```
 
-### ApplyAfter Mode
+### Apply After Mode
 
-In `ApplyAfter` mode, the patch is applied after the matched function or operation completes.
+In `apply_after` mode, the patch is applied after the matched function or operation completes.
 
 ```yaml
-patch:
-  mode: "ApplyAfter"
-  patch_file: "path/to/patch.c"
-  target_function: "patch::after::function_name"
-  arguments:
-    - "return_value"
+action:
+  - mode: "apply_after"
+    patch_id: "LOGGING-001"
+    description: "Post-execution logging"
+    arguments:
+      - name: "return_value"
+        source: "return_value"
+      - name: "execution_time"
+        source: "variable"
+        symbol: "timer_end"
 ```
 
 ### Replace Mode
 
-In `Replace` mode, the matched function or operation is completely replaced by the patch function. The original code is not executed.
+In `replace` mode, the matched function or operation is completely replaced by the patch function. The original code is not executed.
 
 ```yaml
-patch:
-  mode: "Replace"
-  patch_file: "path/to/patch.c"
-  target_function: "patch::replace::function_name"
-  arguments:
-    - "arg1"
-    - "arg2"
+action:
+  - mode: "replace"
+    patch_id: "SECURE-REPLACEMENT-001"
+    description: "Secure function replacement"
+    arguments:
+      - name: "original_arg1"
+        source: "operand"
+        index: "0"
+      - name: "original_arg2"
+        source: "operand"
+        index: "1"
 ```
+
+## Deployment Architecture
+
+The meta-patch architecture allows for:
+
+1. **Modular Organization**: Group related patches into logical units
+2. **External Libraries**: Reference shared patch and contract libraries
+3. **Execution Ordering**: Control the order of patch application
+4. **Optimization Control**: Fine-tune performance characteristics
+5. **Exclusion Patterns**: Exclude specific functions from patching

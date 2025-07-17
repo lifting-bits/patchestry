@@ -1,0 +1,45 @@
+# patches/usb_security_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: usb-security-patches
+  version: "1.0.0"
+  description: "USB endpoint security patches for medical devices"
+  created: "2025-06-31"
+  author: "Security Team"
+
+patches:
+  - name: usb_endpoint_write_validation_before
+    id: "USB-PATCH-BEFORE-001"
+    description: "Validate USB endpoint write operations"
+    category: usb_security
+    severity: high
+    
+    implementation:
+      language: c
+      code_file: "patches/patch_usbd_ep_write_packet.c"
+      function_name: "patch::before::usbd_ep_write_packet"
+      parameters:
+        - name: usb_device
+          type: "usb_device_t*"
+          description: "USB device context"
+        - name: buffer
+          type: "const void*"
+          description: "Data buffer to write"
+          
+
+  - name: usb_endpoint_write_validation_after
+    id: "USB-PATCH-AFTER-001"
+    description: "Validate USB endpoint write return value"
+    category: usb_security
+    severity: high
+
+    implementation:
+      language: c
+      code_file: "patches/patch_usbd_ep_write_packet.c"
+      function_name: "patch::after::usbd_ep_write_packet"
+      parameters:
+        - name: return_value
+          type: "uint32_t"
+          description: "Return value from USB endpoint write operation"

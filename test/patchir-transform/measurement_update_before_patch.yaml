@@ -1,20 +1,50 @@
-arch: "ARM:LE:32"
-patches: 
-  - name: "apply_before_spo2_lookup"
-    match:
-      name: "spo2_lookup"
-      kind: "function"
-      argument_matches:
-        - index: 0
-          name: "var6"
-          type: "!cir.float"
-    patch:
-      mode: "ApplyBefore"
-      patch_file: "patch_spo2_lookup.c"
-      patch_function: "patch::before::spo2_lookup"
-      arguments:
-        - name: "function_argument"
-          source: "variable"
-          symbol: "var6"
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "measurement-update-before-patch"
+  description: "Patch measurement update before function"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2025-07-28"
+
+libraries:
+  patches: "patches/measurement_update_patch.yaml"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+meta_patches:
+  - name: "measurement_update_before_patch"
+    id: "MEASUREMENT-UPDATE-BEFORE-PATCH-001"
+    description: "Patch measurement update before function"
+
+    patch_actions:
+      - id: "MEASUREMENT-UPDATE-BEFORE-PATCH-001"
+        description: "Patch measurement update before function"
+
+        # Match Configuration
+        match:
+          - name: "spo2_lookup"
+            kind: "function"
+            argument_matches:
+              - index: 0
+                name: "var6"
+                type: "!cir.float"
+
+        # Actions to Apply
+        action:
+          - mode: "apply_before"
+            patch_id: "MEASUREMENT-UPDATE-BEFORE-PATCH-001"
+            description: "Patch measurement update before function"
+
+            # Arguments
+            arguments:
+              - name: "function_argument"
+                source: "variable"
+                symbol: "var6"
+
+    # Exclude
     exclude:
       - ""
