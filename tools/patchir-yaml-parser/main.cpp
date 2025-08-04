@@ -49,13 +49,15 @@ namespace {
 void prettyPrint(const passes::PatchConfiguration &config) {
     llvm::outs() << "=== Patch Configuration ===\n";
 
+    llvm::outs() << "apiVersion: " << config.api_version << "\n";
+
     // Print metadata
     llvm::outs() << "Metadata:\n";
-    llvm::outs() << "  API Version: " << config.metadata.apiVersion << "\n";
     llvm::outs() << "  Name: " << config.metadata.name << "\n";
     llvm::outs() << "  Description: " << config.metadata.description << "\n";
     llvm::outs() << "  Version: " << config.metadata.version << "\n";
     llvm::outs() << "  Author: " << config.metadata.author << "\n";
+    llvm::outs() << "  Organization: " << config.metadata.organization << "\n";
     llvm::outs() << "\n";
 
     // Print target

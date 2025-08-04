@@ -42,10 +42,11 @@ metadata:                                # Deployment metadata
   version: "1.0.0"
   author: "Author Name"
   created: "YYYY-MM-DD"
+  organization: "organization-name"
 
 target:                                  # Target binary configuration
   binary: "target_binary.bin"
-  arch: "ARCHITECTURE:ENDIANNESS:BITWIDTH"
+  arch: "ARCHITECTURE:ENDIANNESS:BITWIDTH:VARIANT"
 
 libraries:                               # External patch and contract libraries
   patches: "path/to/patches.yaml"
@@ -77,8 +78,6 @@ meta_patches:                            # Meta-patch configurations
               - name: "..."
                 source: "..."
                 index: "0"
-    exclude:                             # Exclusion patterns
-      - "pattern_to_exclude"
 
 meta_contracts:                          # Meta-contract configurations
   - name: ...
@@ -229,14 +228,6 @@ The `optimization` field accepts a list of optimization settings:
 | `"inline-contracts"` | Inline contract function calls | Reduces contract validation overhead |
 | `"debug-info"` | Preserve debug information | Maintains debugging symbols |
 | `"size-optimize"` | Optimize for binary size | Reduces final binary size |
-
-### Exclude Fields
-
-Exclude is a top-level field in each patch entry that defines patterns to exclude from matching. It allows more precise control over function where patches should not be applied.
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `exclude` | List of function name patterns to exclude from matching | `- "^func_*"` |
 
 ## Argument Specification
 

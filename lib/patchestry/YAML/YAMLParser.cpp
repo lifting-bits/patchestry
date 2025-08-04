@@ -66,7 +66,6 @@ namespace patchestry::yaml {
             return false;
         }
 
-        // Additional validation could be added here
         return true;
     }
 

@@ -158,17 +158,6 @@ namespace patchestry::passes { // NOLINT
         );
 
         /**
-         * @brief Legacy patch application method for backward compatibility.
-         *
-         * @param function_worklist List of functions to process
-         * @param operation_worklist List of operations to process
-         */
-        void apply_legacy_patches(
-            llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
-            llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist
-        );
-
-        /**
          * @brief Applies a specific patch action to target functions and operations.
          *
          * @param function_worklist List of functions to process
@@ -293,19 +282,6 @@ namespace patchestry::passes { // NOLINT
         mlir::LogicalResult merge_module_symbol(
             mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
         );
-
-        /**
-         * @brief Determines if a function should be excluded from patching.
-         *
-         * This method checks whether a given function should be excluded from the
-         * patching process based on the meta patch exclusion criteria.
-         *
-         * @param func The function to check for exclusion
-         * @param meta_patch The meta patch containing exclusion rules
-         * @return bool True if the function should be excluded, false otherwise
-         */
-        bool exclude_from_patching(cir::FuncOp func, const MetaPatchConfig &meta_patch);
-
         /**
          * @brief Sets appropriate attributes for the patch call operation.
          *

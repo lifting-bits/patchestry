@@ -69,12 +69,12 @@ namespace patchestry::passes {
 
     struct Metadata
     {
-        std::string apiVersion;
         std::string name;
         std::string description;
         std::string version;
         std::string author;
         std::string created;
+        std::string organization;
     };
 
     struct Parameter
@@ -176,7 +176,6 @@ namespace patchestry::passes {
         std::string id;
         std::string description;
         std::set< std::string > optimization;
-        std::vector< std::string > exclude;
         std::vector< PatchAction > patch_actions;
     };
 
@@ -411,12 +410,12 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::Metadata >
     {
         static void mapping(IO &io, patchestry::passes::Metadata &metadata) {
-            io.mapOptional("apiVersion", metadata.apiVersion);
             io.mapOptional("name", metadata.name);
             io.mapOptional("description", metadata.description);
             io.mapOptional("version", metadata.version);
             io.mapOptional("author", metadata.author);
             io.mapOptional("created", metadata.created);
+            io.mapOptional("organization", metadata.organization);
         }
     };
 
@@ -614,7 +613,6 @@ namespace llvm::yaml {
             for (const auto &opt : optimization) {
                 meta_patch.optimization.insert(opt);
             }
-            io.mapOptional("exclude", meta_patch.exclude);
             io.mapOptional("patch_actions", meta_patch.patch_actions);
         }
     };

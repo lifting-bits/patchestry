@@ -39,5 +39,3 @@ meta_patches:
             arguments:
               - name: "function_return_value"
                 source: "return_value"
-    exclude:
-      - ""

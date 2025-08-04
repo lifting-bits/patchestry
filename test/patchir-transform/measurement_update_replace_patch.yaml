@@ -40,5 +40,3 @@ meta_patches:
               - name: "function_argument"
                 source: "variable"
                 symbol: "var6"
-    exclude:
-      - ""

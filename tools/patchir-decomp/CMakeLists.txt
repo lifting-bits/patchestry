@@ -19,7 +19,7 @@ target_link_libraries(patchir-decomp
         patchestry::ghidra
         patchestry::ast
         patchestry::codegen
-        patchestry_yaml
+        patchestry::yaml
         rellic::rellic
         glog::glog
         clangFrontend

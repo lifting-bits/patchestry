@@ -49,6 +49,3 @@ meta_patches:
               - name: "function_argument"
                 source: "operand"
                 index: 0
-
-    exclude:
-      - "test_.*"

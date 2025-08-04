@@ -53,8 +53,6 @@ meta_patches:
                 source: "variable"
                 symbol: "var1"
 
-    exclude:
-      - ""
 
 meta_contracts:
   - name: usb_security_meta_contracts

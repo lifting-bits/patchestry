@@ -274,6 +274,16 @@ namespace patchestry::passes {
         return std::make_unique< InstrumentationPass >(spec_file, patch_options);
     }
 
+    template< typename T >
+    std::optional< T > lookup_by_name(const std::vector< T > &items, const std::string &name) {
+        for (const auto &item : items) {
+            if (item.name == name) {
+                return item;
+            }
+        }
+        return std::nullopt;
+    }
+
     /**
      * @brief Gets an item from the library based on the name.
      *
@@ -288,7 +298,7 @@ namespace patchestry::passes {
                 return item;
             }
         }
-        return std::nullopt;
+        return lookup_by_name(items, name);
     }
 
     /**
@@ -302,9 +312,17 @@ namespace patchestry::passes {
      * @param patch_options Reference to inlining configuration options
      */
     InstrumentationPass::InstrumentationPass(
-        std::string spec, const PatchOptions &patch_options
+        std::string spec_, const PatchOptions &patch_options_
     )
-        : spec_file(std::move(spec)), patch_options(patch_options) {
+        : spec_file(std::move(spec_)), patch_options(patch_options_) {
+        patchestry::yaml::YAMLParser parser;
+        PatchSpecContext::getInstance().set_spec_path(spec_file);
+        if (!parser.validate_yaml_file< patchestry::passes::PatchConfiguration >(spec_file)) {
+            LOG(ERROR) << "Error: Failed to parse patch specification file: " << spec_file
+                       << "\n";
+            return;
+        }
+
         auto buffer_or_err = llvm::MemoryBuffer::getFile(spec_file);
         if (!buffer_or_err) {
             LOG(ERROR) << "Error: Failed to read patch specification file: " << spec_file
@@ -312,7 +330,6 @@ namespace patchestry::passes {
             return;
         }
 
-        PatchSpecContext::getInstance().set_spec_path(spec_file);
         auto config_or_err = patchestry::yaml::utils::loadPatchConfiguration(
             llvm::sys::path::filename(spec_file).str()
         );
@@ -339,6 +356,7 @@ namespace patchestry::passes {
                 continue;
             }
         }
+        (void) patch_options;
     }
 
     /**
@@ -509,10 +527,6 @@ namespace patchestry::passes {
         if (match.kind == MatchKind::FUNCTION) {
             // Apply to function calls
             for (auto func : function_worklist) {
-                if (exclude_from_patching(func, meta_patch)) {
-                    continue;
-                }
-
                 func.walk([&](cir::CallOp call_op) {
                     // Create a temporary spec with the patch action match
 
@@ -559,7 +573,7 @@ namespace patchestry::passes {
             // Apply to operations
             for (auto *op : operation_worklist) {
                 auto func = op->getParentOfType< cir::FuncOp >();
-                if (!func || exclude_from_patching(func, meta_patch)) {
+                if (!func) {
                     continue;
                 }
 
@@ -1436,48 +1450,6 @@ namespace patchestry::passes {
         call_op.erase();
         callee.erase();
         return mlir::success();
-    }
-
-    /**
-     * @brief Determines if a function should be excluded from patching using regex checks.
-     *
-     * @param func The function to check for exclusion
-     * @param spec The patch specification containing exclusion rules
-     * @return bool True if the function should be excluded, false otherwise
-     */
-    bool InstrumentationPass::exclude_from_patching(
-        cir::FuncOp func, const MetaPatchConfig &meta_patch
-    ) {
-        // Get the function name
-        auto func_name = func.getName().str();
-
-        // If no exclusion patterns are specified, don't exclude
-        if (meta_patch.exclude.empty()) {
-            return false;
-        }
-
-        // Check each exclusion pattern against the function name
-        for (const auto &pattern : meta_patch.exclude) {
-            try {
-                // Create regex from the pattern
-                std::regex exclude_regex(pattern, std::regex_constants::basic);
-
-                // Check if the function name matches the exclusion pattern
-                if (std::regex_match(func_name, exclude_regex)) {
-                    LOG(INFO) << "Function '" << func_name
-                              << "' excluded by pattern: " << pattern << "\n";
-                    return true;
-                }
-            } catch (const std::regex_error &e) {
-                LOG(ERROR) << "Invalid regex pattern in exclude list: '" << pattern
-                           << "' - Error: " << e.what() << "\n";
-                // Continue with other patterns even if one is invalid
-                continue;
-            }
-        }
-
-        // Function is not excluded by any pattern
-        return false;
     }
 
 } // namespace patchestry::passes

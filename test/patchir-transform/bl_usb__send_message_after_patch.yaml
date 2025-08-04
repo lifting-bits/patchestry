@@ -49,9 +49,6 @@ meta_patches:
               - name: "function_return_value"
                 source: "return_value"
 
-    exclude:
-      - ""
-
 meta_contracts:
   - name: usb_security_meta_contracts
     description: "Meta contracts for USB security"
