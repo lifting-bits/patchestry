@@ -1,0 +1,17 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "usb-security-contracts"
+  version: "1.0.0"
+  description: "USB security contracts for medical devices"
+  created: "2025-06-31"
+  author: "Security Team"
+
+contracts:
+  - name: "usb_endpoint_write_validation_contract"
+    id: "usb_endpoint_write_validation_contract"
+    description: "Validate USB endpoint write"
+
+  - name: "apply_before_write_packet_before_contract"
+    id: "apply_before_write_packet_before_contract"
+    description: "Apply before write packet"

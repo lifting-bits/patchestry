@@ -52,7 +52,7 @@ namespace patchestry::passes {
          * @return true if the operation matches the specification
          */
         static bool
-        matches(mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec, Mode mode);
+        matches(mlir::Operation *op, cir::FuncOp func, const PatchAction &spec, Mode mode);
 
         /**
          * @brief Checks if an operation name matches the specified operation pattern.
@@ -132,7 +132,7 @@ namespace patchestry::passes {
          * @return true if the operation matches the criteria
          */
         static bool matches_operation( // NOLINT
-            mlir::Operation *op, cir::FuncOp func, const PatchMatch &match
+            mlir::Operation *op, cir::FuncOp func, const MatchConfig &match
         );
 
         /**
@@ -144,7 +144,7 @@ namespace patchestry::passes {
          * @return true if the function call matches the criteria
          */
         static bool matches_function_call( // NOLINT
-            mlir::Operation *op, cir::FuncOp func, const PatchMatch &match
+            mlir::Operation *op, cir::FuncOp func, const MatchConfig &match
         );
 
         /**

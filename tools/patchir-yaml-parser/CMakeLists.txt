@@ -9,18 +9,18 @@ set(LLVM_LINK_COMPONENTS
 )
 
 
-add_executable(patchir-transform
+add_executable(patchir-yaml-parser
     main.cpp
 )
 
-llvm_update_compile_flags(patchir-transform)
-target_link_libraries(patchir-transform
+llvm_update_compile_flags(patchir-yaml-parser)
+target_link_libraries(patchir-yaml-parser
     PRIVATE
+        patchestry::yaml
         patchestry::codegen
         clangFrontend
         patchestry::passes
-        patchestry::yaml
         MLIROptLib
 )
 
-mlir_check_link_libraries(patchir-transform)
+mlir_check_link_libraries(patchir-yaml-parser)

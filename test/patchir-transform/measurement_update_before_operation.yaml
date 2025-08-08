@@ -1,25 +1,51 @@
-arch: "ARM:LE:32"
-patches:
-  - name: "apply_before_spo2_lookup_operation"
-    match:
-      name: "cir.call"
-      kind: "operation"
-      function_context:
-        - name: "/.*measurement.*/"  # Functions containing "measurement"
-        - name: "/.*update.*/"       # Functions containing "update"
-      operand_matches:
-        - index: 0  # First argument to the called function
-          name: "var6"
-          type: "!cir.float"
-      symbol_matches:
-        - name: "spo2_lookup"  # The function being called
-    patch:
-      mode: "ApplyBefore"
-      patch_file: "patch_spo2_lookup.c"
-      patch_function: "patch::before::spo2_lookup"
-      arguments:
-        - name: "function_argument"
-          source: "operand"
-          index: 0
-    exclude:
-      - "test_.*"
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "measurement-update-before-operation"
+  description: "Patch measurement update before operation"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2025-07-28"
+
+libraries:
+  patches: "patches/measurement_update_patch.yaml"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+meta_patches:
+  - name: "measurement_update_before_operation"
+    id: "MEASUREMENT-UPDATE-BEFORE-OPERATION-001"
+    description: "Patch measurement update before operation"
+
+    patch_actions:
+      - id: "MEASUREMENT-UPDATE-BEFORE-OPERATION-001"
+        description: "Patch measurement update before operation"
+
+        # Match Configuration
+        match:
+          - name: "cir.call"
+            kind: "operation"
+            function_context:
+              - name: "/.*measurement.*/"  # Functions containing "measurement"
+              - name: "/.*update.*/"       # Functions containing "update"
+            operand_matches:
+              - index: 0  # First argument to the called function
+                name: "var6"
+                type: "!cir.float"
+            symbol_matches:
+              - name: "spo2_lookup"  # The function being called
+
+        # Actions to Apply
+        action:
+          - mode: "apply_before"
+            patch_id: "MEASUREMENT-UPDATE-BEFORE-OPERATION-001"
+            description: "Patch measurement update before operation"
+
+            # Arguments
+            arguments:
+              - name: "function_argument"
+                source: "operand"
+                index: 0

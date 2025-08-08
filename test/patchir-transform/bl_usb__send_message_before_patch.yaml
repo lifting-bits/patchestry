@@ -1,25 +1,59 @@
-arch: "ARM:LE:32"
-patches: 
-  - name: "apply_before_write_packet"
-    match:
-      name: "usbd_ep_write_packet"
-      kind: "function"
-    patch:
-      mode: "ApplyBefore"
-      patch_file: "patch_usbd_ep_write_packet.c"
-      patch_function: "patch::before::usbd_ep_write_packet"
-      arguments:
-        - name: "operand_0"
-          source: "operand"
-          index: "0"
-        - name: "constant_1"
-          source: "constant"
-          value: "0x82"
-        - name: "variable_2"
-          source: "variable"
-          symbol: "var1"
-        - name: "variable_4"
-          source: "variable"
-          symbol: "var3"
-    exclude:
-      - ""
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "usb-security-monitoring-deployment"
+  description: "Deploy USB security monitoring for medical device firmware"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2025-06-31"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  patches: "patches/usb_security_patches.yaml"
+  contracts: "contracts/usb_security_contracts.yaml"
+
+execution_order:
+  - "meta_patches::usb_security_meta_patches"
+  - "meta_contracts::usb_security_meta_contracts"
+
+meta_patches:
+  - name: usb_security_meta_patches
+    id: "usb_security_meta_patches"
+    description: "Meta patches for USB security"
+
+    # Patch Action Configuration
+    patch_actions:
+       - id: "USB-PATCH-001"
+         description: "Patch to add USB security"
+
+         # Match Configuration
+         match:
+          - name: "usbd_ep_write_packet"
+            kind: "function"
+            function_context:
+              - name: "bl_usb__send_message"
+            argument_matches:
+              - index: 0
+                name: "usb_g"
+
+         # Actions to Apply
+         action:
+          - mode: "apply_before"
+            patch_id: "USB-PATCH-BEFORE-001"
+            description: "Pre-validation security check"
+            arguments:
+              - name: "operand_0"
+                source: "operand"
+                index: "0"
+              - name: "variable_2"
+                source: "variable"
+                symbol: "var1"
+
+
+meta_contracts:
+  - name: usb_security_meta_contracts
+    description: "Meta contracts for USB security"

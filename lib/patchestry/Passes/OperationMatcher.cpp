@@ -20,10 +20,10 @@
 namespace patchestry::passes {
 
     bool OperationMatcher::matches(
-        mlir::Operation *op, cir::FuncOp func, const PatchSpec &spec,
+        mlir::Operation *op, cir::FuncOp func, const PatchAction &action,
         OperationMatcher::Mode mode // NOLINT
     ) {
-        const auto &match = spec.match;
+        const auto &match = action.match[0];
 
         // Handle different match kinds
         switch (mode) {
@@ -32,12 +32,11 @@ namespace patchestry::passes {
             case OperationMatcher::Mode::FUNCTION:
                 return matches_function_call(op, func, match);
         }
-
         return false;
     }
 
     bool OperationMatcher::matches_operation(
-        mlir::Operation *op, cir::FuncOp func, const PatchMatch &match
+        mlir::Operation *op, cir::FuncOp func, const MatchConfig &match
     ) {
         // If the match kind is not operation, return false
         if (match.name.empty() || match.kind != MatchKind::OPERATION) {
@@ -68,7 +67,7 @@ namespace patchestry::passes {
     }
 
     bool OperationMatcher::matches_function_call(
-        mlir::Operation *op, cir::FuncOp func, const PatchMatch &match
+        mlir::Operation *op, cir::FuncOp func, const MatchConfig &match
     ) {
         // If the match kind is not function, return false
         if (match.name.empty() || match.kind != MatchKind::FUNCTION) {

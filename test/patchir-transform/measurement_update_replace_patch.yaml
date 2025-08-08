@@ -1,16 +1,42 @@
-arch: "ARM:LE:32"
-patches: 
-  - name: "apply_replace_spo2_lookup"
-    match:
-      name: "spo2_lookup"
-      kind: "function"
-    patch:
-      mode: "Replace"
-      patch_file: "patch_spo2_lookup.c"
-      patch_function: "patch::replace::spo2_lookup"
-      arguments:
-        - name: "function_argument"
-          source: "variable"
-          symbol: "var6"
-    exclude:
-      - ""
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "measurement-update-replace-patch"
+  description: "Patch measurement update replace patch"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2025-07-28"
+
+libraries:
+  patches: "patches/measurement_update_patch.yaml"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+meta_patches:
+  - name: "measurement_update_replace_patch"
+    id: "MEASUREMENT-UPDATE-REPLACE-PATCH-001"
+    description: "Patch measurement update replace patch"
+
+    patch_actions:
+      - id: "MEASUREMENT-UPDATE-REPLACE-PATCH-001"
+        description: "Patch measurement update replace patch"
+
+        # Match Configuration
+        match:
+          - name: "spo2_lookup"
+            kind: "function"
+
+        # Actions to Apply
+        action:
+          - mode: "replace"
+            patch_id: "MEASUREMENT-UPDATE-REPLACE-PATCH-001"
+            description: "Patch measurement update replace patch"
+
+            # Arguments
+            arguments:
+              - name: "function_argument"
+                source: "variable"
+                symbol: "var6"
