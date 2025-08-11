@@ -21,10 +21,11 @@
 #include <clang/Frontend/CompilerInstance.h>
 
 #include <patchestry/Passes/OperationMatcher.hpp>
-#include <patchestry/Passes/PatchSpec.hpp>
+#include <patchestry/YAML/ConfigurationFile.hpp>
 
 // Forward declarations to minimize header dependencies
 namespace mlir {
+    class Function;
     class Operation;
     class Pass;
     class Type;
@@ -33,19 +34,20 @@ namespace mlir {
 
 namespace patchestry::passes { // NOLINT
 
-    struct PatchOptions;
+    struct InstrumentationOptions;
 
     /**
      * @brief Registers instrumentation passes with the MLIR pass registry.
      *
      * This function registers the instrumentation pass with the global MLIR pass registry,
-     * making it available for use in pass pipelines. The spec_file parameter specifies
-     * the patch specification file that defines the instrumentation rules.
+     * making it available for use in pass pipelines. The configuration_file parameter specifies
+     * the Patchestry configuration file that defines the meta-patches, meta-contracts, and
+     * other instrumentation rules.
      *
-     * @param spec_file Path to the YAML patch specification file containing instrumentation
-     * rules
+     * @param configuration_file Path to the YAML Patchestry configuration file containing
+     * instrumentation rules for applying patches, contracts, or both
      */
-    void registerInstrumentationPasses(std::string spec_file);
+    void registerInstrumentationPasses(std::string configuration_file);
 
     /**
      * @brief Creates a new instance of the InstrumentationPass.
@@ -53,35 +55,43 @@ namespace patchestry::passes { // NOLINT
      * Factory function that creates and returns a unique pointer to an InstrumentationPass
      * instance.
      *
-     * @param spec_file Path to the YAML patch specification file
-     * @param patch_options Configuration options for controlling function inlining behavior
+     * @param configuration_file Path to the YAML configuration file
+     * @param options Configuration options for controlling how instrumentation is generally
+     * applied
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
-    std::unique_ptr< mlir::Pass >
-    createInstrumentationPass(const std::string &spec_file, const PatchOptions &patch_options);
+    std::unique_ptr< mlir::Pass > createInstrumentationPass(
+        const std::string &configuration_file, const InstrumentationOptions &options
+    );
 
     /**
-     * @brief Configuration options for controlling patching behavior.
+     * @brief Configuration options for controlling instrumentation behavior.
      */
-    struct PatchOptions
+    struct InstrumentationOptions
     {
-        /** @brief Flag to enable or disable function inlining of patch functions */
+        /** @brief Flag to enable or disable function inlining of instrumentation functions */
         bool enable_inlining;
     };
 
     struct PatchInformation
     {
-        std::optional< PatchSpec > spec;
-        std::optional< PatchAction > patch_action;
+        std::optional< patch::PatchSpec > spec;
+        std::optional< patch::PatchAction > patch_action;
+    };
+
+    struct ContractInformation
+    { // the use of optional here takes care of some typing errors
+        std::optional< contract::ContractSpec > spec;
+        std::optional< contract::ContractAction > action;
     };
 
     /**
-     * @brief MLIR pass that applies code instrumentation based on patch specifications.
+     * @brief MLIR pass that applies code instrumentation based on configuration.
      *
      * The InstrumentationPass is an MLIR transformation pass that modifies MLIR modules
-     * by applying patches according to specifications defined in a YAML configuration file.
-     * It can instrument function calls and operations by inserting patch code before, after,
-     * or replacing the original operations entirely.
+     * by instrumenting according to specifications defined in a YAML configuration file.
+     * It can instrument function calls and operations by inserting patch or contract code
+     * before or after, or by replacing an original operation entirely with a patch.
      *
      * The pass supports three main instrumentation modes:
      * - APPLY_BEFORE: Insert patch code before the matched operation
@@ -95,39 +105,41 @@ namespace patchestry::passes { // NOLINT
         : public mlir::PassWrapper< InstrumentationPass, mlir::OperationPass< mlir::ModuleOp > >
 
     {
-        /** @brief Path to the YAML patch specification file */
-        std::string spec_file;
+        /** @brief Path to the YAML Patchestry configuration file */
+        std::string configuration_file;
 
-        /** @brief Parsed patch configuration from the specification file */
-        std::optional< PatchConfiguration > config;
+        /** @brief Parsed patch- or contract-specific configuration from the file */
+        std::optional< Configuration > config;
 
         /** @brief List of operations to be inlined after instrumentation */
         std::vector< mlir::Operation * > inline_worklists;
 
         /** @brief Reference to inlining configuration options */
-        const PatchOptions &patch_options;
+        const InstrumentationOptions &options;
 
       public:
         /**
-         * @brief Constructs an InstrumentationPass with the given specification file and
+         * @brief Constructs an InstrumentationPass with the given configuration file and
          * options.
          *
-         * The constructor loads and parses the patch specification file, validates patch files,
-         * and prepares the pass for execution. If the specification file cannot be loaded or
-         * parsed, appropriate error messages are logged.
+         * The constructor loads and parses the configuration YAML file, validates the indicated
+         * patches and/or contracts, and prepares the pass for execution. If a file cannot be
+         * loaded or parsed, appropriate error messages are logged.
          *
-         * @param spec Path to the YAML patch specification file
+         * @param configuration_file Path to the YAML configuration file
          * @param inline_options Reference to inlining configuration options
          */
-        explicit InstrumentationPass(std::string spec, const PatchOptions &patch_options);
+        explicit InstrumentationPass(
+            std::string configuration_file, const InstrumentationOptions &options
+        );
 
         /**
          * @brief Main entry point for the pass execution.
          *
          * This method is called by the MLIR pass manager to execute the instrumentation pass
          * on a module. It walks through all functions and operations in the module, applies
-         * matching patches according to the specification, and optionally inlines patch
-         * functions.
+         * matching patches according to the configuration (meta-patches, etc.), and optionally
+         * inlines patch functions.
          */
         void runOnOperation() final;
 
@@ -148,12 +160,10 @@ namespace patchestry::passes { // NOLINT
          * @brief Applies meta contracts in execution order.
          *
          * @param function_worklist List of functions to process
-         * @param operation_worklist List of operations to process
          * @param meta_contract_name Name of the meta contract to apply
          */
         void apply_meta_contracts(
             llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
-            llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
             const std::string &meta_contract_name
         );
 
@@ -162,14 +172,26 @@ namespace patchestry::passes { // NOLINT
          *
          * @param function_worklist List of functions to process
          * @param operation_worklist List of operations to process
-         * @param patch_action The patch action containing match criteria
-         * @param spec The patch specification to apply
-         * @param modified_patch The modified patch info with action-specific settings
+         * @param meta_patch
+         * @param modified_patch
          */
         void apply_patch_action_to_targets(
             llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
             llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
-            const MetaPatchConfig &meta_patch, const PatchInformation &modified_patch
+            const patch::MetaPatchConfig &meta_patch, const PatchInformation &modified_patch
+        );
+
+        /**
+         * @brief Applies a specific contract action to target functions.
+         *
+         * @param function_worklist List of functions to process
+         * @param meta_contract
+         * @param modified_contract
+         */
+        void apply_contract_action_to_targets(
+            llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+            const contract::MetaContractConfig &meta_contract,
+            const ContractInformation &modified_contract
         );
 
       private:
@@ -187,9 +209,28 @@ namespace patchestry::passes { // NOLINT
          * @param patch Patch information containing argument specifications
          * @param args Output vector to store the prepared arguments
          */
-        void prepare_call_arguments(
+        void prepare_patch_call_arguments(
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
             const PatchInformation &patch, llvm::DenseMap< mlir::Value, mlir::Value > &args_map
+        );
+
+        /**
+         * @brief Prepares arguments for a contract function call.
+         *
+         * This method handles argument preparation for contract function calls, including
+         * type casting when necessary. It supports special argument handling such as
+         * passing return values and ensures type compatibility between original and patch
+         * functions.
+         *
+         * @param builder MLIR operation builder for creating new operations
+         * @param op The original operation being patched
+         * @param contract_func The contract function to be called
+         * @param contract Contract information containing argument specifications
+         * @param args Output vector to store the prepared arguments
+         */
+        void prepare_contract_call_arguments(
+            mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp contract_func,
+            const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args
         );
 
         /**
@@ -202,6 +243,7 @@ namespace patchestry::passes { // NOLINT
          * @param op The target operation to be instrumented
          * @param patch The patch information containing the patch function details
          * @param patch_module The module containing the patch function
+         * @param inline_patches Whether or not to inline at application.
          */
         void apply_before_patch(
             mlir::Operation *op, const PatchInformation &patch, mlir::ModuleOp patch_module,
@@ -241,6 +283,57 @@ namespace patchestry::passes { // NOLINT
         );
 
         /**
+         * @brief Applies a contract before the target function.
+         *
+         * This method inserts a call to the contract function immediately before the target
+         * operation. It handles module symbol merging, argument preparation, and call creation.
+         * The inserted call is added to the inline worklist if inlining is enabled.
+         *
+         * @param target_op The target function to be instrumented
+         * @param contract The contract information containing the contract function details
+         * @param contract_module The module containing the contract function
+         * @param should_inline Whether or not to inline at application.
+         */
+        void apply_contract_before(
+            mlir::Operation *target_op, const ContractInformation &contract,
+            mlir::ModuleOp contract_module, bool should_inline
+        );
+
+        /**
+         * @brief Applies a contract after the target function.
+         *
+         * This method inserts a call to the contract function immediately after the target
+         * operation. It handles module symbol merging, argument preparation, and call creation.
+         * The inserted call is added to the inline worklist if inlining is enabled.
+         *
+         * @param op The target function to be instrumented
+         * @param contract The contract information containing the contract function details
+         * @param contract_module The module containing the contract function
+         * @param should_inline Whether or not to inline at application.
+         */
+        void apply_contract_after(
+            mlir::Operation *target_op, const ContractInformation &contract,
+            mlir::ModuleOp contract_module, bool should_inline
+        );
+
+        /** todo (kaoudis) still thinking about whether this makes sense
+         * @brief Applies a contract directly after the target function entrypoint,
+         * just "inside" the entrypoint, before the rest of the original function.
+         *
+         * This method handles module symbol merging, argument preparation, and call creation.
+         * The inserted call is added to the inline worklist if inlining is enabled.
+         *
+         * @param op The target function to be instrumented
+         * @param contract The contract information containing the contract function details
+         * @param contract_module The module containing the contract function
+         * @param should_inline Whether or not to inline at application.
+         */
+        void apply_contract_at_entrypoint(
+            cir::CallOp call_op, const ContractInformation &contract,
+            mlir::ModuleOp contract_module, bool should_inline
+        );
+
+        /**
          * @brief Inlines a function call operation.
          *
          * This method performs function inlining by replacing a call operation with the
@@ -254,18 +347,19 @@ namespace patchestry::passes { // NOLINT
         mlir::LogicalResult inline_call(mlir::ModuleOp module, cir::CallOp call_op);
 
         /**
-         * @brief Loads a patch module from its string representation.
+         * @brief Loads a code module from its string representation. This can be either a
+         * patch, or a contract!
          *
          * This method parses an MLIR module from its textual representation and returns
          * an owning reference to the parsed module. The module contains the patch functions
          * that will be merged into the target module.
          *
          * @param ctx The MLIR context for parsing
-         * @param patch_string The textual representation of the patch module
+         * @param module_string The textual representation of the patch module
          * @return mlir::OwningOpRef<mlir::ModuleOp> The parsed patch module
          */
         mlir::OwningOpRef< mlir::ModuleOp >
-        load_patch_module(mlir::MLIRContext &ctx, const std::string &patch_string);
+        load_code_module(mlir::MLIRContext &ctx, const std::string &module_string);
 
         /**
          * @brief Merges a specific symbol from source module into destination module.
@@ -282,12 +376,13 @@ namespace patchestry::passes { // NOLINT
         mlir::LogicalResult merge_module_symbol(
             mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
         );
+
         /**
-         * @brief Sets appropriate attributes for the patch call operation.
+         * @brief Sets appropriate attributes for the instrumentation call operation.
+         * This can be a call to a patch or a contract.
          *
-         * This method handles setting attributes on the patch call based on the
-         * type of the original operation being instrumented. It preserves relevant
-         * attributes from CallOp operations and adds debugging information.
+         * This function handles setting attributes on the call based on the
+         * type of the original operation being instrumented.
          *
          * @param patch_call_op The patch call operation to set attributes on
          * @param target_op The original operation being instrumented
@@ -313,40 +408,45 @@ namespace patchestry::passes { // NOLINT
          * @brief Handles OPERAND argument source type.
          */
         void handle_operand_argument(
-            mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
-            mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+            mlir::OpBuilder &builder, mlir::Operation *call_op,
+            const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+            llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
          * @brief Handles VARIABLE argument source type.
          */
         void handle_variable_argument(
-            mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
-            mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+            mlir::OpBuilder &builder, mlir::Operation *call_op,
+            const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+            llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
          * @brief Handles SYMBOL argument source type.
          */
         void handle_symbol_argument(
-            mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
-            mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+            mlir::OpBuilder &builder, mlir::Operation *call_op,
+            const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+            llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
          * @brief Handles RETURN_VALUE argument source type.
          */
         void handle_return_value_argument(
-            mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
-            mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+            mlir::OpBuilder &builder, mlir::Operation *call_op,
+            const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+            llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
          * @brief Handles CONSTANT argument source type.
          */
         void handle_constant_argument(
-            mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
-            mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+            mlir::OpBuilder &builder, mlir::Operation *call_op,
+            const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+            llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
@@ -368,6 +468,9 @@ namespace patchestry::passes { // NOLINT
          */
         std::optional< mlir::Value > find_global_symbol(
             mlir::OpBuilder &builder, mlir::Operation *call_op, const std::string &symbol_name
+        );
+        void set_instrumentation_call_attributes(
+            cir::CallOp instr_call_op, mlir::Operation *target_op
         );
     };
 

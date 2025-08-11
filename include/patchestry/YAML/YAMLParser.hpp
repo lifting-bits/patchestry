@@ -16,6 +16,8 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 
+#include <patchestry/Util/Log.hpp>
+
 namespace patchestry::yaml {
 
     class YAMLParser
@@ -55,6 +57,7 @@ namespace patchestry::yaml {
         input >> result;
 
         if (input.error()) {
+            LOG(ERROR) << "Input was malformed: " << input.error().message() << "\n";
             return std::nullopt;
         }
 

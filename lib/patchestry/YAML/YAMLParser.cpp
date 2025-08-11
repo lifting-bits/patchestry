@@ -16,15 +16,15 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 
-#include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
+#include <patchestry/YAML/ConfigurationFile.hpp>
 
 namespace patchestry::yaml {
 
     template< typename T >
     std::optional< T > YAMLParser::parse_from_file(const std::string &file_path) {
         // Set the spec path for relative path resolution
-        auto file   = PatchSpecContext::getInstance().resolve_path(file_path);
+        auto file   = ConfigurationFile::getInstance().resolve_path(file_path);
         auto buffer = load_file(file);
         if (!buffer) {
             LOG(ERROR) << "Failed to load file: " << file_path << "\n";
@@ -60,7 +60,7 @@ namespace patchestry::yaml {
             return false;
         }
 
-        // Try to parse as PatchConfiguration to validate structure
+        // Try to parse as Configuration to validate structure
         auto config = parse_yaml_content< T >(buffer->getBuffer().str());
         if (!config) {
             return false;
@@ -86,41 +86,41 @@ namespace patchestry::yaml {
     }
 
     // Explicit template instantiations for commonly used types to avoid linker errors
-    template std::optional< patchestry::passes::PatchConfiguration >
-    YAMLParser::parse_from_file< patchestry::passes::PatchConfiguration >(
+    template std::optional< patchestry::passes::Configuration >
+    YAMLParser::parse_from_file< patchestry::passes::Configuration >(
         const std::string &file_path
     );
 
-    template std::optional< patchestry::passes::PatchLibrary >
-    YAMLParser::parse_from_file< patchestry::passes::PatchLibrary >(const std::string &file_path
-    );
-
-    template std::optional< patchestry::passes::ContractLibrary >
-    YAMLParser::parse_from_file< patchestry::passes::ContractLibrary >(
+    template std::optional< patchestry::passes::patch::PatchLibrary >
+    YAMLParser::parse_from_file< patchestry::passes::patch::PatchLibrary >(
         const std::string &file_path
     );
 
-    template std::optional< patchestry::passes::PatchConfiguration >
-    YAMLParser::parse_from_string< patchestry::passes::PatchConfiguration >(
+    template std::optional< patchestry::passes::contract::ContractLibrary >
+    YAMLParser::parse_from_file< patchestry::passes::contract::ContractLibrary >(
+        const std::string &file_path
+    );
+
+    template std::optional< patchestry::passes::Configuration >
+    YAMLParser::parse_from_string< patchestry::passes::Configuration >(
         const std::string &yaml_content
     );
 
-    template std::optional< patchestry::passes::PatchLibrary >
-    YAMLParser::parse_from_string< patchestry::passes::PatchLibrary >(
+    template std::optional< patchestry::passes::patch::PatchLibrary >
+    YAMLParser::parse_from_string< patchestry::passes::patch::PatchLibrary >(
         const std::string &yaml_content
     );
 
-    template std::optional< patchestry::passes::ContractLibrary >
-    YAMLParser::parse_from_string< patchestry::passes::ContractLibrary >(
+    template std::optional< patchestry::passes::contract::ContractLibrary >
+    YAMLParser::parse_from_string< patchestry::passes::contract::ContractLibrary >(
         const std::string &yaml_content
     );
 
-    template std::string
-    YAMLParser::serialize_to_string< patchestry::passes::PatchConfiguration >(
-        const patchestry::passes::PatchConfiguration &object
+    template std::string YAMLParser::serialize_to_string< patchestry::passes::Configuration >(
+        const patchestry::passes::Configuration &object
     );
 
-    template bool YAMLParser::validate_yaml_file< patchestry::passes::PatchConfiguration >(
+    template bool YAMLParser::validate_yaml_file< patchestry::passes::Configuration >(
         const std::string &file_path
     );
 

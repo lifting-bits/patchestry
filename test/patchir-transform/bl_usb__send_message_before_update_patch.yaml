@@ -18,7 +18,6 @@ libraries:
 
 execution_order:
   - "meta_patches::usb_security_meta_patches"
-  - "meta_contracts::usb_security_meta_contracts"
 
 meta_patches:
   - name: usb_security_meta_patches
@@ -56,7 +55,3 @@ meta_patches:
                 symbol: "var1"
                 is_reference: true
 
-
-meta_contracts:
-  - name: usb_security_meta_contracts
-    description: "Meta contracts for USB security"

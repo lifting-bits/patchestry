@@ -61,6 +61,11 @@ jobs:
           cmake --build build_standalone -j$(nproc)
           cd -
 
+      - name: Free up disk space
+        run: |
+          sudo apt-get clean
+          docker system prune -af
+
       - name: Build the headless decompilation docker image
         run: |
           bash ./scripts/ghidra/build-headless-docker.sh

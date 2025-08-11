@@ -10,15 +10,16 @@ metadata:
 
 target:
   binary: "test_binary.bin"
-  arch: "ARM:LE:32"
+  arch: "ARM:LE:32:Cortex"
 
 libraries:
+ # these references are in relation to the location of this file
   patches: "patches/usb_security_patches.yaml"
-  contracts: "contracts/usb_security_contracts.yaml"
+#  contracts: "contracts/usb_security_contracts.yaml"
 
 execution_order:
   - "meta_patches::usb_security_meta_patches"
-  - "meta_contracts::usb_security_meta_contracts"
+#  - "meta_contracts::usb_security_meta_contracts"
 
 meta_patches:
   - name: usb_security_meta_patches
@@ -45,11 +46,35 @@ meta_patches:
          action:
           - mode: "apply_after"
             patch_id: "USB-PATCH-AFTER-001"
-            description: "Pre-validation security check"
+            description: "Checks function return value"
             arguments:
               - name: "function_return_value"
                 source: "return_value"
 
-meta_contracts:
-  - name: usb_security_meta_contracts
-    description: "Meta contracts for USB security"
+#meta_contracts:
+#  - name: usb_security_meta_contracts
+#    id: "usb_security_meta_contracts"
+#    description: "Meta contracts for USB security"
+
+#    contract_actions:
+#      - id: "USB-CONTRACT-001"
+#        description: "Asserts no error on response"
+#
+#        match:
+#        - name: "usbd_ep_write_packet"
+#          kind: "function"
+#          function_context:
+#            - name: "bl_usb__send_message"
+#          argument_matches:
+#            - index: 0
+#              name: "usb_g"
+
+#        action:
+#        - mode: "apply_after"
+#          contract_id: "USB-CONTRACT-AFTER-001"
+#          arguments:
+#            - name: "foo"
+#              source: "variable"
+#              value: 4
+#            - name: "bar"
+#              source: "constant"
