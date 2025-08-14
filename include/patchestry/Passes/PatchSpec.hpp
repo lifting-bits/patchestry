@@ -322,37 +322,6 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ContractSpec)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::MetaPatchConfig)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::MetaContractConfig)
 
-class PatchSpecContext
-{
-  public:
-    static PatchSpecContext &getInstance() {
-        static PatchSpecContext instance;
-        return instance;
-    }
-
-    void set_spec_path(const std::string &file) {
-        auto directory = llvm::sys::path::parent_path(file);
-        if (!directory.empty()) {
-            spec_path = directory.str();
-        }
-    }
-
-    std::string resolve_path(const std::string &file) {
-        if (llvm::sys::path::is_absolute(file)) {
-            return file;
-        }
-
-        llvm::SmallVector< char > directory;
-        directory.assign(spec_path.begin(), spec_path.end());
-        llvm::sys::path::append(directory, file);
-        llvm::sys::path::remove_dots(directory);
-        return std::string(directory.data(), directory.size());
-    }
-
-  private:
-    std::string spec_path;
-};
-
 namespace llvm::yaml {
     // Parse ArgumentSource
     template<>

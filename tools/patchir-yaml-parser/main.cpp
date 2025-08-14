@@ -12,10 +12,11 @@
 #include <llvm/Support/InitLLVM.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <patchestry/Passes/ConfigurationFile.hpp>
+#include <patchestry/Passes/PatchSpec.hpp>
+
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/YAML/YAMLParser.hpp>
-
-#include <patchestry/Passes/PatchSpec.hpp>
 
 using namespace patchestry;
 
@@ -126,13 +127,13 @@ void writeOutput(const std::string &content, const std::string &filename) {
 int main(int argc, char **argv) {
     llvm::InitLLVM init(argc, argv);
     llvm::cl::ParseCommandLineOptions(
-        argc, argv, "YAML Parser to verify patch specifications\n"
+        argc, argv, "YAML Parser to verify configuration files\n"
     );
 
     yaml::YAMLParser parser;
 
     // Parse the input file
-    PatchSpecContext::getInstance().set_spec_path(InputFile.getValue());
+    ConfigurationFile::getInstance().set_file_path(InputFile.getValue());
     auto file_path = llvm::sys::path::filename(InputFile.getValue()).str();
     auto config    = yaml::utils::loadPatchConfiguration(file_path);
     if (!config) {

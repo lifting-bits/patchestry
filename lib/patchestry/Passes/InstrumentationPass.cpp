@@ -52,6 +52,7 @@
 #include <mlir/Pass/PassRegistry.h>
 #include <mlir/Support/LLVM.h>
 
+#include <patchestry/Passes/ConfigurationFile.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/Passes/OperationMatcher.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
@@ -263,15 +264,15 @@ namespace patchestry::passes {
      *
      * Factory function that creates and returns a unique pointer to an InstrumentationPass
      * instance. The pass will apply patches according to the specifications in the provided
-     * spec_file and use the given inline options for controlling inlining behavior.
+     * configuration_file, and use the given inline options for controlling inlining behavior.
      *
-     * @param spec_file Path to the YAML patch specification file
+     * @param configuration_file Path to the YAML patch specification file
      * @param inline_options Configuration options for controlling function inlining behavior
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
     std::unique_ptr< mlir::Pass >
-    createInstrumentationPass(const std::string &spec_file, const PatchOptions &patch_options) {
-        return std::make_unique< InstrumentationPass >(spec_file, patch_options);
+    createInstrumentationPass(const std::string &configuration_file, const PatchOptions &patch_options) {
+        return std::make_unique< InstrumentationPass >(configuration_file, patch_options);
     }
 
     template< typename T >
@@ -302,39 +303,39 @@ namespace patchestry::passes {
     }
 
     /**
-     * @brief Constructs an InstrumentationPass with the given specification file and options.
+     * @brief Constructs an InstrumentationPass with the given configuration file and options.
      *
-     * The constructor loads and parses the patch specification file, validates patch files,
-     * and prepares the pass for execution. If the specification file cannot be loaded or
-     * parsed, appropriate error messages are logged.
+     * The constructor loads and parses the Patchestry configuration file, validates any patch 
+     * files, validates any contract files, and prepares the pass for execution. If the file 
+     * cannot be loaded or parsed, appropriate error messages are logged.
      *
-     * @param spec Path to the YAML patch specification file
+     * @param configuration_file Path to the top-level YAML configuration file
      * @param patch_options Reference to inlining configuration options
      */
     InstrumentationPass::InstrumentationPass(
         std::string spec_, const PatchOptions &patch_options_
     )
-        : spec_file(std::move(spec_)), patch_options(patch_options_) {
+        : configuration_file(std::move(spec_)), patch_options(patch_options_) {
         patchestry::yaml::YAMLParser parser;
-        PatchSpecContext::getInstance().set_spec_path(spec_file);
-        if (!parser.validate_yaml_file< patchestry::passes::PatchConfiguration >(spec_file)) {
-            LOG(ERROR) << "Error: Failed to parse patch specification file: " << spec_file
+        ConfigurationFile::getInstance().set_file_path(configuration_file);
+        if (!parser.validate_yaml_file< patchestry::passes::PatchConfiguration >(configuration_file)) {
+            LOG(ERROR) << "Error: Failed to parse patch specification file: " << configuration_file
                        << "\n";
             return;
         }
 
-        auto buffer_or_err = llvm::MemoryBuffer::getFile(spec_file);
+        auto buffer_or_err = llvm::MemoryBuffer::getFile(configuration_file);
         if (!buffer_or_err) {
-            LOG(ERROR) << "Error: Failed to read patch specification file: " << spec_file
+            LOG(ERROR) << "Error: Failed to read patch specification file: " << configuration_file
                        << "\n";
             return;
         }
 
         auto config_or_err = patchestry::yaml::utils::loadPatchConfiguration(
-            llvm::sys::path::filename(spec_file).str()
+            llvm::sys::path::filename(configuration_file).str()
         );
         if (!config_or_err) {
-            LOG(ERROR) << "Error: Failed to parse patch specification file: " << spec_file
+            LOG(ERROR) << "Error: Failed to parse patch specification file: " << configuration_file
                        << "\n";
             return;
         }
@@ -342,14 +343,14 @@ namespace patchestry::passes {
         config = std::move(config_or_err.value());
         for (auto &spec : config->libraries.patches.patches) {
             auto patches_file_path =
-                PatchSpecContext::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
             if (!llvm::sys::fs::exists(patches_file_path)) {
                 LOG(ERROR) << "Patch file " << patches_file_path << " does not exist\n";
                 continue;
             }
 
             auto patch_file_path =
-                PatchSpecContext::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
             spec.patch_module = emitModuleAsString(patch_file_path, config->target.arch);
             if (!spec.patch_module) {
                 LOG(ERROR) << "Failed to emit patch module for " << spec.name << "\n";

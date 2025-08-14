@@ -16,6 +16,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <patchestry/Passes/ConfigurationFile.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
 
@@ -24,7 +25,7 @@ namespace patchestry::yaml {
     template< typename T >
     std::optional< T > YAMLParser::parse_from_file(const std::string &file_path) {
         // Set the spec path for relative path resolution
-        auto file   = PatchSpecContext::getInstance().resolve_path(file_path);
+        auto file   = ConfigurationFile::getInstance().resolve_path(file_path);
         auto buffer = load_file(file);
         if (!buffer) {
             LOG(ERROR) << "Failed to load file: " << file_path << "\n";

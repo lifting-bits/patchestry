@@ -39,13 +39,14 @@ namespace patchestry::passes { // NOLINT
      * @brief Registers instrumentation passes with the MLIR pass registry.
      *
      * This function registers the instrumentation pass with the global MLIR pass registry,
-     * making it available for use in pass pipelines. The spec_file parameter specifies
-     * the patch specification file that defines the instrumentation rules.
+     * making it available for use in pass pipelines. The configuration_file parameter specifies
+     * the Patchestry configuration file that defines the meta-patches, meta-contracts, and other
+     * instrumentation rules.
      *
-     * @param spec_file Path to the YAML patch specification file containing instrumentation
-     * rules
+     * @param configuration_file Path to the YAML Patchestry configuration file containing 
+     * instrumentation rules
      */
-    void registerInstrumentationPasses(std::string spec_file);
+    void registerInstrumentationPasses(std::string configuration_file);
 
     /**
      * @brief Creates a new instance of the InstrumentationPass.
@@ -53,12 +54,12 @@ namespace patchestry::passes { // NOLINT
      * Factory function that creates and returns a unique pointer to an InstrumentationPass
      * instance.
      *
-     * @param spec_file Path to the YAML patch specification file
+     * @param configuration_file Path to the YAML configuration file
      * @param patch_options Configuration options for controlling function inlining behavior
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
     std::unique_ptr< mlir::Pass >
-    createInstrumentationPass(const std::string &spec_file, const PatchOptions &patch_options);
+    createInstrumentationPass(const std::string &configuration_file, const PatchOptions &patch_options);
 
     /**
      * @brief Configuration options for controlling patching behavior.
@@ -76,7 +77,7 @@ namespace patchestry::passes { // NOLINT
     };
 
     /**
-     * @brief MLIR pass that applies code instrumentation based on patch specifications.
+     * @brief MLIR pass that applies code instrumentation based on configuration.
      *
      * The InstrumentationPass is an MLIR transformation pass that modifies MLIR modules
      * by applying patches according to specifications defined in a YAML configuration file.
@@ -95,10 +96,10 @@ namespace patchestry::passes { // NOLINT
         : public mlir::PassWrapper< InstrumentationPass, mlir::OperationPass< mlir::ModuleOp > >
 
     {
-        /** @brief Path to the YAML patch specification file */
-        std::string spec_file;
+        /** @brief Path to the YAML Patchestry configuration file */
+        std::string configuration_file;
 
-        /** @brief Parsed patch configuration from the specification file */
+        /** @brief Parsed patch configuration from the file */
         std::optional< PatchConfiguration > config;
 
         /** @brief List of operations to be inlined after instrumentation */
@@ -109,25 +110,25 @@ namespace patchestry::passes { // NOLINT
 
       public:
         /**
-         * @brief Constructs an InstrumentationPass with the given specification file and
+         * @brief Constructs an InstrumentationPass with the given configuration file and
          * options.
          *
-         * The constructor loads and parses the patch specification file, validates patch files,
-         * and prepares the pass for execution. If the specification file cannot be loaded or
+         * The constructor loads and parses the configuration YAML file, validates patch files,
+         * and prepares the pass for execution. If a file cannot be loaded or
          * parsed, appropriate error messages are logged.
          *
-         * @param spec Path to the YAML patch specification file
+         * @param configuration_file Path to the YAML configuration file
          * @param inline_options Reference to inlining configuration options
          */
-        explicit InstrumentationPass(std::string spec, const PatchOptions &patch_options);
+        explicit InstrumentationPass(std::string configuration_file, const PatchOptions &patch_options);
 
         /**
          * @brief Main entry point for the pass execution.
          *
          * This method is called by the MLIR pass manager to execute the instrumentation pass
          * on a module. It walks through all functions and operations in the module, applies
-         * matching patches according to the specification, and optionally inlines patch
-         * functions.
+         * matching patches according to the configuration (meta-patches, etc.), and optionally inlines 
+         * patch functions.
          */
         void runOnOperation() final;
 
@@ -162,9 +163,8 @@ namespace patchestry::passes { // NOLINT
          *
          * @param function_worklist List of functions to process
          * @param operation_worklist List of operations to process
-         * @param patch_action The patch action containing match criteria
-         * @param spec The patch specification to apply
-         * @param modified_patch The modified patch info with action-specific settings
+         * @param meta_patch
+         * @param modified_patch
          */
         void apply_patch_action_to_targets(
             llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
@@ -202,6 +202,7 @@ namespace patchestry::passes { // NOLINT
          * @param op The target operation to be instrumented
          * @param patch The patch information containing the patch function details
          * @param patch_module The module containing the patch function
+         * @param inline_patches Whether or not to inline at application.
          */
         void apply_before_patch(
             mlir::Operation *op, const PatchInformation &patch, mlir::ModuleOp patch_module,
