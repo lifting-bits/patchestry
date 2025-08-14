@@ -62,7 +62,7 @@ namespace patchestry::yaml {
             return false;
         }
 
-        // Try to parse as PatchConfiguration to validate structure
+        // Try to parse as Configuration to validate structure
         auto config = parse_yaml_content< T >(buffer->getBuffer().str());
         if (!config) {
             return false;
@@ -88,8 +88,8 @@ namespace patchestry::yaml {
     }
 
     // Explicit template instantiations for commonly used types to avoid linker errors
-    template std::optional< patchestry::passes::PatchConfiguration >
-    YAMLParser::parse_from_file< patchestry::passes::PatchConfiguration >(
+    template std::optional< patchestry::passes::Configuration >
+    YAMLParser::parse_from_file< patchestry::passes::Configuration >(
         const std::string &file_path
     );
 
@@ -102,8 +102,8 @@ namespace patchestry::yaml {
         const std::string &file_path
     );
 
-    template std::optional< patchestry::passes::PatchConfiguration >
-    YAMLParser::parse_from_string< patchestry::passes::PatchConfiguration >(
+    template std::optional< patchestry::passes::Configuration >
+    YAMLParser::parse_from_string< patchestry::passes::Configuration >(
         const std::string &yaml_content
     );
 
@@ -118,11 +118,11 @@ namespace patchestry::yaml {
     );
 
     template std::string
-    YAMLParser::serialize_to_string< patchestry::passes::PatchConfiguration >(
-        const patchestry::passes::PatchConfiguration &object
+    YAMLParser::serialize_to_string< patchestry::passes::Configuration >(
+        const patchestry::passes::Configuration &object
     );
 
-    template bool YAMLParser::validate_yaml_file< patchestry::passes::PatchConfiguration >(
+    template bool YAMLParser::validate_yaml_file< patchestry::passes::Configuration >(
         const std::string &file_path
     );
 

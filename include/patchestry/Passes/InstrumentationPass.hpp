@@ -20,8 +20,8 @@
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <clang/Frontend/CompilerInstance.h>
 
+#include <patchestry/Passes/ConfigurationFile.hpp>
 #include <patchestry/Passes/OperationMatcher.hpp>
-#include <patchestry/Passes/PatchSpec.hpp>
 
 // Forward declarations to minimize header dependencies
 namespace mlir {
@@ -100,7 +100,7 @@ namespace patchestry::passes { // NOLINT
         std::string configuration_file;
 
         /** @brief Parsed patch configuration from the file */
-        std::optional< PatchConfiguration > config;
+        std::optional< Configuration > config;
 
         /** @brief List of operations to be inlined after instrumentation */
         std::vector< mlir::Operation * > inline_worklists;

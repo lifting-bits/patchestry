@@ -47,8 +47,8 @@ namespace {
 } // namespace
 
 // Pretty print patch configuration
-void prettyPrint(const passes::PatchConfiguration &config) {
-    llvm::outs() << "=== Patch Configuration ===\n";
+void prettyPrint(const passes::Configuration &config) {
+    llvm::outs() << "=== Patchestry Configuration ===\n";
 
     llvm::outs() << "apiVersion: " << config.api_version << "\n";
 
@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
     // Parse the input file
     ConfigurationFile::getInstance().set_file_path(InputFile.getValue());
     auto file_path = llvm::sys::path::filename(InputFile.getValue()).str();
-    auto config    = yaml::utils::loadPatchConfiguration(file_path);
+    auto config    = yaml::utils::loadConfiguration(file_path);
     if (!config) {
         LOG(ERROR) << "Failed to parse YAML file: " << file_path << "\n";
         return 1;
@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
 
     // Handle validation only
     if (Validate) {
-        bool isValid = yaml::utils::validatePatchConfiguration(*config);
+        bool isValid = yaml::utils::validateConfiguration(*config);
         if (isValid) {
             llvm::outs() << "YAML file is valid\n";
             return 0;
@@ -161,7 +161,7 @@ int main(int argc, char **argv) {
     }
 
     if (Serialize) {
-        std::string yaml = parser.serialize_to_string< passes::PatchConfiguration >(*config);
+        std::string yaml = parser.serialize_to_string< passes::Configuration >(*config);
         if (!yaml.empty()) {
             writeOutput(yaml, OutputFile.getValue());
         } else {

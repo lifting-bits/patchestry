@@ -318,7 +318,7 @@ namespace patchestry::passes {
         : configuration_file(std::move(spec_)), patch_options(patch_options_) {
         patchestry::yaml::YAMLParser parser;
         ConfigurationFile::getInstance().set_file_path(configuration_file);
-        if (!parser.validate_yaml_file< patchestry::passes::PatchConfiguration >(configuration_file)) {
+        if (!parser.validate_yaml_file< patchestry::passes::Configuration >(configuration_file)) {
             LOG(ERROR) << "Error: Failed to parse patch specification file: " << configuration_file
                        << "\n";
             return;
@@ -331,7 +331,7 @@ namespace patchestry::passes {
             return;
         }
 
-        auto config_or_err = patchestry::yaml::utils::loadPatchConfiguration(
+        auto config_or_err = patchestry::yaml::utils::loadConfiguration(
             llvm::sys::path::filename(configuration_file).str()
         );
         if (!config_or_err) {

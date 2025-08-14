@@ -18,7 +18,6 @@
 #include <llvm/Support/Path.h>
 #include <llvm/Support/YAMLTraits.h>
 
-#include <patchestry/Passes/ContractSpec.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/YAML/YAMLParser.hpp>
 
@@ -68,16 +67,6 @@ namespace patchestry::passes {
     using SymbolMatch     = VariableMatch;
     using FunctionContext = VariableMatch;
 
-    struct Metadata
-    {
-        std::string name;
-        std::string description;
-        std::string version;
-        std::string author;
-        std::string created;
-        std::string organization;
-    };
-
     struct Parameter
     {
         std::string name;
@@ -121,6 +110,15 @@ namespace patchestry::passes {
         std::vector< Action > action;
     };
 
+    struct Metadata {
+        std::string name;
+        std::string description;
+        std::string version;
+        std::string author;
+        std::string created;
+        std::string organization;
+    };
+
     struct PatchSpec
     {
         std::string name;
@@ -139,18 +137,6 @@ namespace patchestry::passes {
         std::vector< PatchSpec > patches;
     };
 
-    struct Libraries
-    {
-        PatchLibrary patches;
-        contract::ContractLibrary contracts;
-    };
-
-    struct Target
-    {
-        std::string binary;
-        std::string arch;
-    };
-
     struct MetaPatchConfig
     {
         std::string name;
@@ -158,17 +144,6 @@ namespace patchestry::passes {
         std::string description;
         std::set< std::string > optimization;
         std::vector< PatchAction > patch_actions;
-    };
-
-    struct PatchConfiguration
-    {
-        std::string api_version;
-        Metadata metadata;
-        Target target;
-        Libraries libraries;
-        std::vector< std::string > execution_order;
-        std::vector< MetaPatchConfig > meta_patches;
-        std::vector< contract::MetaContractConfig > meta_contracts;
     };
 
     [[maybe_unused]] inline std::string_view patchInfoModeToString(PatchInfoMode mode) {
@@ -188,89 +163,21 @@ namespace patchestry::passes {
 } // namespace patchestry::passes
 
 namespace patchestry::yaml {
+    using namespace patchestry::passes;
+
     namespace utils {
-
-        [[maybe_unused]] static std::optional< passes::PatchConfiguration >
-        loadPatchConfiguration(const std::string &file_path) {
-            YAMLParser parser;
-            auto result = parser.parse_from_file< passes::PatchConfiguration >(file_path);
-
-            if (!result) {
-                LOG(ERROR) << "Failed to load patch configuration: " << file_path << "\n";
-                return std::nullopt;
-            }
-
-            return result;
-        }
-
-        [[maybe_unused]] static std::optional< passes::PatchLibrary >
+        [[maybe_unused]] static std::optional< PatchLibrary >
         loadPatchLibrary(const std::string &file_path) {
             YAMLParser parser;
-            auto result = parser.parse_from_file< passes::PatchLibrary >(file_path);
+            auto result = parser.parse_from_file< PatchLibrary >(file_path);
             if (!result) {
                 LOG(ERROR) << "Failed to load patch library: " << file_path << "\n";
                 return std::nullopt;
             }
             return result;
         }
-
-        [[maybe_unused]] static bool savePatchConfiguration(
-            const passes::PatchConfiguration &config, const std::string &file_path
-        ) {
-            YAMLParser parser;
-            std::string yaml_content = parser.serialize_to_string(config);
-
-            if (yaml_content.empty()) {
-                LOG(ERROR) << "Failed to serialize patch configuration";
-                return false;
-            }
-
-            std::ofstream file(file_path);
-            if (!file.is_open()) {
-                LOG(ERROR) << "Failed to open file for writing: " << file_path;
-                return false;
-            }
-
-            file << yaml_content;
-            file.close();
-
-            if (file.fail()) {
-                LOG(ERROR) << "Failed to write to file: " << file_path;
-                return false;
-            }
-
-            return true;
-        }
-
-        [[maybe_unused]] static bool
-        validatePatchConfiguration(const passes::PatchConfiguration &config) {
-            if (config.libraries.patches.patches.empty()) {
-                LOG(WARNING) << "Patch configuration has no patches";
-            }
-
-            // Validate each patch
-            for (const auto &patch : config.libraries.patches.patches) {
-                if (patch.name.empty()) {
-                    LOG(ERROR) << "Patch specification missing name";
-                    return false;
-                }
-
-                // Validate patch file exists if specified
-                if (!patch.implementation.code_file.empty()) {
-                    if (!llvm::sys::fs::exists(patch.implementation.code_file)) {
-                        LOG(ERROR)
-                            << "Patch file does not exist: " << patch.implementation.code_file;
-                        return false;
-                    }
-                }
-            }
-
-            return true;
-        }
-
-    } // namespace utils
-
-} // namespace patchestry::yaml
+    }
+}
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchSpec)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::VariableMatch)
@@ -334,20 +241,6 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse Metadata
-    template<>
-    struct MappingTraits< patchestry::passes::Metadata >
-    {
-        static void mapping(IO &io, patchestry::passes::Metadata &metadata) {
-            io.mapOptional("name", metadata.name);
-            io.mapOptional("description", metadata.description);
-            io.mapOptional("version", metadata.version);
-            io.mapOptional("author", metadata.author);
-            io.mapOptional("created", metadata.created);
-            io.mapOptional("organization", metadata.organization);
-        }
-    };
-
     // Parse Parameter
     template<>
     struct MappingTraits< patchestry::passes::Parameter >
@@ -369,6 +262,20 @@ namespace llvm::yaml {
             io.mapOptional("function_name", impl.function_name);
             io.mapOptional("parameters", impl.parameters);
             io.mapOptional("dependencies", impl.dependencies);
+        }
+    };
+
+    // Parse Metadata
+    template<>
+    struct MappingTraits< patchestry::passes::Metadata >
+    {
+        static void mapping(IO &io, patchestry::passes::Metadata &metadata) {
+            io.mapOptional("name", metadata.name);
+            io.mapOptional("description", metadata.description);
+            io.mapOptional("version", metadata.version);
+            io.mapOptional("author", metadata.author);
+            io.mapOptional("created", metadata.created);
+            io.mapOptional("organization", metadata.organization);
         }
     };
 
@@ -445,15 +352,7 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse Target
-    template<>
-    struct MappingTraits< patchestry::passes::Target >
-    {
-        static void mapping(IO &io, patchestry::passes::Target &target) {
-            io.mapOptional("binary", target.binary);
-            io.mapRequired("arch", target.arch);
-        }
-    };
+
 
     // Parse PatchLibrary
     template<>
@@ -463,36 +362,6 @@ namespace llvm::yaml {
             io.mapOptional("apiVersion", library.api_version);
             io.mapOptional("metadata", library.metadata);
             io.mapOptional("patches", library.patches);
-        }
-    };
-
-    // Parse Libraries
-    template<>
-    struct MappingTraits< patchestry::passes::Libraries >
-    {
-        static void mapping(IO &io, patchestry::passes::Libraries &libraries) {
-            // recursively parse libraries yaml files
-            std::string patches_file;
-            std::string contracts_file;
-            io.mapOptional("patches", patches_file);
-            io.mapOptional("contracts", contracts_file);
-            if (!patches_file.empty()) {
-                auto patches_config = patchestry::yaml::utils::loadPatchLibrary(patches_file);
-                if (!patches_config) {
-                    LOG(ERROR) << "Failed to load patch library: " << patches_file << "\n";
-                    return;
-                }
-                libraries.patches = patches_config.value();
-            }
-            if (!contracts_file.empty()) {
-                auto contracts_config =
-                    patchestry::yaml::utils::loadContractLibrary(contracts_file);
-                if (!contracts_config) {
-                    LOG(ERROR) << "Failed to load contract library: " << contracts_file << "\n";
-                    return;
-                }
-                libraries.contracts = contracts_config.value();
-            }
         }
     };
 
@@ -513,20 +382,4 @@ namespace llvm::yaml {
             io.mapOptional("patch_actions", meta_patch.patch_actions);
         }
     };
-
-    // Parse PatchConfiguration
-    template<>
-    struct MappingTraits< patchestry::passes::PatchConfiguration >
-    {
-        static void mapping(IO &io, patchestry::passes::PatchConfiguration &config) {
-            io.mapOptional("apiVersion", config.api_version);
-            io.mapOptional("metadata", config.metadata);
-            io.mapOptional("target", config.target);
-            io.mapOptional("libraries", config.libraries);
-            io.mapOptional("execution_order", config.execution_order);
-            io.mapOptional("meta_patches", config.meta_patches);
-            io.mapOptional("meta_contracts", config.meta_contracts);
-        }
-    };
-
 } // namespace llvm::yaml
