@@ -18,6 +18,7 @@
 #include <llvm/Support/Path.h>
 #include <llvm/Support/YAMLTraits.h>
 
+#include <patchestry/Passes/BaseSpec.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/YAML/YAMLParser.hpp>
 
@@ -64,15 +65,6 @@ namespace patchestry::passes {
 
         using SymbolMatch     = VariableMatch;
         using FunctionContext = VariableMatch;
-
-        struct Metadata {
-            std::string name;
-            std::string description;
-            std::string version;
-            std::string author;
-            std::string created;
-            std::string organization;
-        };
 
         struct Parameter {
             std::string name;
@@ -229,20 +221,6 @@ namespace llvm::yaml {
         static void mapping(IO &io, contract::VariableMatch &var) {
             io.mapRequired("name", var.name);
             io.mapOptional("type", var.type);
-        }
-    };
-
-    // Parse Metadata
-    template<>
-    struct MappingTraits< contract::Metadata >
-    {
-        static void mapping(IO &io, contract::Metadata &metadata) {
-            io.mapOptional("name", metadata.name);
-            io.mapOptional("description", metadata.description);
-            io.mapOptional("version", metadata.version);
-            io.mapOptional("author", metadata.author);
-            io.mapOptional("created", metadata.created);
-            io.mapOptional("organization", metadata.organization);
         }
     };
 

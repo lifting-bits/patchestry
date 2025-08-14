@@ -5,7 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
- #pragma once
+#pragma once
 
 #include <cstdint>
 #include <fstream>
@@ -18,6 +18,7 @@
 #include <llvm/Support/Path.h>
 #include <llvm/Support/YAMLTraits.h>
 
+#include <patchestry/Passes/BaseSpec.hpp>
 #include <patchestry/Passes/ContractSpec.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
@@ -62,15 +63,6 @@ namespace patchestry::passes {
     struct Libraries {
         patch::PatchLibrary patches;
         contract::ContractLibrary contracts;
-    };
-
-    struct Metadata {
-        std::string name;
-        std::string description;
-        std::string version;
-        std::string author;
-        std::string created;
-        std::string organization;
     };
 
     struct Configuration {
@@ -158,20 +150,6 @@ namespace patchestry::yaml {
 } // namespace patchestry::yaml
 
 namespace llvm::yaml {
-    // Parse Metadata
-    template<>
-    struct MappingTraits< patchestry::passes::Metadata >
-    {
-        static void mapping(IO &io, patchestry::passes::Metadata &metadata) {
-            io.mapOptional("name", metadata.name);
-            io.mapOptional("description", metadata.description);
-            io.mapOptional("version", metadata.version);
-            io.mapOptional("author", metadata.author);
-            io.mapOptional("created", metadata.created);
-            io.mapOptional("organization", metadata.organization);
-        }
-    };
-
     // Parse Target
     template<>
     struct MappingTraits< patchestry::passes::Target >
