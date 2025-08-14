@@ -335,7 +335,7 @@ namespace patchestry::passes {
             llvm::sys::path::filename(configuration_file).str()
         );
         if (!config_or_err) {
-            LOG(ERROR) << "Error: Failed to parse patch specification file: " << configuration_file
+            LOG(ERROR) << "Error: Failed to parse patch specification file: " << configuration_file 
                        << "\n";
             return;
         }

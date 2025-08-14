@@ -18,6 +18,7 @@
 
 #include <patchestry/Passes/ConfigurationFile.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
+
 #include <patchestry/Util/Log.hpp>
 
 namespace patchestry::yaml {
