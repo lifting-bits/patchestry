@@ -97,8 +97,8 @@ namespace patchestry::yaml {
     YAMLParser::parse_from_file< patchestry::passes::PatchLibrary >(const std::string &file_path
     );
 
-    template std::optional< patchestry::passes::ContractLibrary >
-    YAMLParser::parse_from_file< patchestry::passes::ContractLibrary >(
+    template std::optional< patchestry::passes::contract::ContractLibrary >
+    YAMLParser::parse_from_file< patchestry::passes::contract::ContractLibrary >(
         const std::string &file_path
     );
 
@@ -112,8 +112,8 @@ namespace patchestry::yaml {
         const std::string &yaml_content
     );
 
-    template std::optional< patchestry::passes::ContractLibrary >
-    YAMLParser::parse_from_string< patchestry::passes::ContractLibrary >(
+    template std::optional< patchestry::passes::contract::ContractLibrary >
+    YAMLParser::parse_from_string< patchestry::passes::contract::ContractLibrary >(
         const std::string &yaml_content
     );
 

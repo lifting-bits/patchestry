@@ -18,6 +18,7 @@
 #include <llvm/Support/Path.h>
 #include <llvm/Support/YAMLTraits.h>
 
+#include <patchestry/Passes/ContractSpec.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/YAML/YAMLParser.hpp>
 
@@ -120,12 +121,6 @@ namespace patchestry::passes {
         std::vector< Action > action;
     };
 
-    struct ContractAction
-    {
-        std::string action_id;
-        std::string description;
-    };
-
     struct PatchSpec
     {
         std::string name;
@@ -137,13 +132,6 @@ namespace patchestry::passes {
         std::optional< std::string > patch_module;
     };
 
-    struct ContractSpec
-    {
-        std::string name;
-        std::string id;
-        std::string description;
-    };
-
     struct PatchLibrary
     {
         std::string api_version;
@@ -151,17 +139,10 @@ namespace patchestry::passes {
         std::vector< PatchSpec > patches;
     };
 
-    struct ContractLibrary
-    {
-        std::string api_version;
-        Metadata metadata;
-        std::vector< ContractSpec > contracts;
-    };
-
     struct Libraries
     {
         PatchLibrary patches;
-        ContractLibrary contracts;
+        contract::ContractLibrary contracts;
     };
 
     struct Target
@@ -179,13 +160,6 @@ namespace patchestry::passes {
         std::vector< PatchAction > patch_actions;
     };
 
-    struct MetaContractConfig
-    {
-        std::string name;
-        std::string id;
-        std::string description;
-    };
-
     struct PatchConfiguration
     {
         std::string api_version;
@@ -194,7 +168,7 @@ namespace patchestry::passes {
         Libraries libraries;
         std::vector< std::string > execution_order;
         std::vector< MetaPatchConfig > meta_patches;
-        std::vector< MetaContractConfig > meta_contracts;
+        std::vector< contract::MetaContractConfig > meta_contracts;
     };
 
     [[maybe_unused]] inline std::string_view patchInfoModeToString(PatchInfoMode mode) {
@@ -235,17 +209,6 @@ namespace patchestry::yaml {
             auto result = parser.parse_from_file< passes::PatchLibrary >(file_path);
             if (!result) {
                 LOG(ERROR) << "Failed to load patch library: " << file_path << "\n";
-                return std::nullopt;
-            }
-            return result;
-        }
-
-        [[maybe_unused]] static std::optional< passes::ContractLibrary >
-        loadContractLibrary(const std::string &file_path) {
-            YAMLParser parser;
-            auto result = parser.parse_from_file< passes::ContractLibrary >(file_path);
-            if (!result) {
-                LOG(ERROR) << "Failed to load contract library: " << file_path << "\n";
                 return std::nullopt;
             }
             return result;
@@ -317,10 +280,7 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::MatchConfig)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::Parameter)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::Action)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchAction)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ContractAction)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ContractSpec)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::MetaPatchConfig)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::MetaContractConfig)
 
 namespace llvm::yaml {
     // Parse ArgumentSource
@@ -426,17 +386,6 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse ContractSpec
-    template<>
-    struct MappingTraits< patchestry::passes::ContractSpec >
-    {
-        static void mapping(IO &io, patchestry::passes::ContractSpec &spec) {
-            io.mapRequired("name", spec.name);
-            io.mapOptional("id", spec.id);
-            io.mapOptional("description", spec.description);
-        }
-    };
-
     // Parse Action
     template<>
     struct MappingTraits< patchestry::passes::Action >
@@ -484,16 +433,6 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse ContractAction
-    template<>
-    struct MappingTraits< patchestry::passes::ContractAction >
-    {
-        static void mapping(IO &io, patchestry::passes::ContractAction &contract_action) {
-            io.mapOptional("id", contract_action.action_id);
-            io.mapOptional("description", contract_action.description);
-        }
-    };
-
     // Parse PatchAction
     template<>
     struct MappingTraits< patchestry::passes::PatchAction >
@@ -524,17 +463,6 @@ namespace llvm::yaml {
             io.mapOptional("apiVersion", library.api_version);
             io.mapOptional("metadata", library.metadata);
             io.mapOptional("patches", library.patches);
-        }
-    };
-
-    // Parse ContractLibrary
-    template<>
-    struct MappingTraits< patchestry::passes::ContractLibrary >
-    {
-        static void mapping(IO &io, patchestry::passes::ContractLibrary &library) {
-            io.mapOptional("apiVersion", library.api_version);
-            io.mapOptional("metadata", library.metadata);
-            io.mapOptional("contracts", library.contracts);
         }
     };
 
@@ -583,17 +511,6 @@ namespace llvm::yaml {
                 meta_patch.optimization.insert(opt);
             }
             io.mapOptional("patch_actions", meta_patch.patch_actions);
-        }
-    };
-
-    // Parse MetaContractConfig
-    template<>
-    struct MappingTraits< patchestry::passes::MetaContractConfig >
-    {
-        static void mapping(IO &io, patchestry::passes::MetaContractConfig &meta_contract) {
-            io.mapOptional("name", meta_contract.name);
-            io.mapOptional("id", meta_contract.id);
-            io.mapOptional("description", meta_contract.description);
         }
     };
 
