@@ -60,8 +60,17 @@ namespace patchestry::passes {
     };
 
     struct Libraries {
-        PatchLibrary patches;
+        patch::PatchLibrary patches;
         contract::ContractLibrary contracts;
+    };
+
+    struct Metadata {
+        std::string name;
+        std::string description;
+        std::string version;
+        std::string author;
+        std::string created;
+        std::string organization;
     };
 
     struct Configuration {
@@ -70,7 +79,7 @@ namespace patchestry::passes {
         Target target;
         Libraries libraries;
         std::vector< std::string > execution_order;
-        std::vector< MetaPatchConfig > meta_patches;
+        std::vector< patch::MetaPatchConfig > meta_patches;
         std::vector< contract::MetaContractConfig > meta_contracts;
     };
 } // namespace patchestry::passes
@@ -149,13 +158,25 @@ namespace patchestry::yaml {
 } // namespace patchestry::yaml
 
 namespace llvm::yaml {
-    using namespace patchestry::passes;
+    // Parse Metadata
+    template<>
+    struct MappingTraits< patchestry::passes::Metadata >
+    {
+        static void mapping(IO &io, patchestry::passes::Metadata &metadata) {
+            io.mapOptional("name", metadata.name);
+            io.mapOptional("description", metadata.description);
+            io.mapOptional("version", metadata.version);
+            io.mapOptional("author", metadata.author);
+            io.mapOptional("created", metadata.created);
+            io.mapOptional("organization", metadata.organization);
+        }
+    };
 
     // Parse Target
     template<>
-    struct MappingTraits< Target >
+    struct MappingTraits< patchestry::passes::Target >
     {
-        static void mapping(IO &io, Target &target) {
+        static void mapping(IO &io, patchestry::passes::Target &target) {
             io.mapOptional("binary", target.binary);
             io.mapRequired("arch", target.arch);
         }
@@ -163,9 +184,9 @@ namespace llvm::yaml {
 
     // Parse Libraries
     template<>
-    struct MappingTraits< Libraries >
+    struct MappingTraits< patchestry::passes::Libraries >
     {
-        static void mapping(IO &io, Libraries &libraries) {
+        static void mapping(IO &io, patchestry::passes::Libraries &libraries) {
             // recursively parse libraries yaml files
             std::string patches_file;
             std::string contracts_file;
@@ -193,9 +214,9 @@ namespace llvm::yaml {
 
     // Parse Configuration
     template<>
-    struct MappingTraits< Configuration >
+    struct MappingTraits< patchestry::passes::Configuration >
     {
-        static void mapping(IO &io, Configuration &config) {
+        static void mapping(IO &io, patchestry::passes::Configuration &config) {
             io.mapOptional("apiVersion", config.api_version);
             io.mapOptional("metadata", config.metadata);
             io.mapOptional("target", config.target);

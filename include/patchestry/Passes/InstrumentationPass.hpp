@@ -22,6 +22,7 @@
 
 #include <patchestry/Passes/ConfigurationFile.hpp>
 #include <patchestry/Passes/OperationMatcher.hpp>
+#include <patchestry/Passes/PatchSpec.hpp>
 
 // Forward declarations to minimize header dependencies
 namespace mlir {
@@ -72,8 +73,8 @@ namespace patchestry::passes { // NOLINT
 
     struct PatchInformation
     {
-        std::optional< PatchSpec > spec;
-        std::optional< PatchAction > patch_action;
+        std::optional< patch::PatchSpec > spec;
+        std::optional< patch::PatchAction > patch_action;
     };
 
     /**
@@ -169,7 +170,7 @@ namespace patchestry::passes { // NOLINT
         void apply_patch_action_to_targets(
             llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
             llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
-            const MetaPatchConfig &meta_patch, const PatchInformation &modified_patch
+            const patch::MetaPatchConfig &meta_patch, const PatchInformation &modified_patch
         );
 
       private:

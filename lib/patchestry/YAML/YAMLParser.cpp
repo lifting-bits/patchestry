@@ -17,6 +17,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <patchestry/Passes/ConfigurationFile.hpp>
+#include <patchestry/Passes/ContractSpec.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 
 #include <patchestry/Util/Log.hpp>
@@ -93,8 +94,8 @@ namespace patchestry::yaml {
         const std::string &file_path
     );
 
-    template std::optional< patchestry::passes::PatchLibrary >
-    YAMLParser::parse_from_file< patchestry::passes::PatchLibrary >(const std::string &file_path
+    template std::optional< patchestry::passes::patch::PatchLibrary >
+    YAMLParser::parse_from_file< patchestry::passes::patch::PatchLibrary >(const std::string &file_path
     );
 
     template std::optional< patchestry::passes::contract::ContractLibrary >
@@ -107,8 +108,8 @@ namespace patchestry::yaml {
         const std::string &yaml_content
     );
 
-    template std::optional< patchestry::passes::PatchLibrary >
-    YAMLParser::parse_from_string< patchestry::passes::PatchLibrary >(
+    template std::optional< patchestry::passes::patch::PatchLibrary >
+    YAMLParser::parse_from_string< patchestry::passes::patch::PatchLibrary >(
         const std::string &yaml_content
     );
 

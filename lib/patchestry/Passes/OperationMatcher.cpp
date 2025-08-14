@@ -6,6 +6,7 @@
  */
 
 #include <patchestry/Passes/OperationMatcher.hpp>
+#include <patchestry/Passes/PatchSpec.hpp>
 
 #include <regex>
 #include <string>
@@ -20,7 +21,7 @@
 namespace patchestry::passes {
 
     bool OperationMatcher::matches(
-        mlir::Operation *op, cir::FuncOp func, const PatchAction &action,
+        mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &action,
         OperationMatcher::Mode mode // NOLINT
     ) {
         const auto &match = action.match[0];
@@ -36,10 +37,10 @@ namespace patchestry::passes {
     }
 
     bool OperationMatcher::matches_operation(
-        mlir::Operation *op, cir::FuncOp func, const MatchConfig &match
+        mlir::Operation *op, cir::FuncOp func, const patch::MatchConfig &match
     ) {
         // If the match kind is not operation, return false
-        if (match.name.empty() || match.kind != MatchKind::OPERATION) {
+        if (match.name.empty() || match.kind != patch::MatchKind::OPERATION) {
             return false;
         }
 
@@ -67,10 +68,10 @@ namespace patchestry::passes {
     }
 
     bool OperationMatcher::matches_function_call(
-        mlir::Operation *op, cir::FuncOp func, const MatchConfig &match
+        mlir::Operation *op, cir::FuncOp func, const patch::MatchConfig &match
     ) {
         // If the match kind is not function, return false
-        if (match.name.empty() || match.kind != MatchKind::FUNCTION) {
+        if (match.name.empty() || match.kind != patch::MatchKind::FUNCTION) {
             return false;
         }
 
@@ -125,7 +126,7 @@ namespace patchestry::passes {
     }
 
     bool OperationMatcher::matches_function_context(
-        cir::FuncOp func, const std::vector< FunctionContext > &function_context
+        cir::FuncOp func, const std::vector< patch::FunctionContext > &function_context
     ) {
         // If no function context specified, match all functions
         if (function_context.empty()) {
@@ -153,7 +154,7 @@ namespace patchestry::passes {
     }
 
     bool OperationMatcher::matches_operands(
-        mlir::Operation *op, const std::vector< OperandMatch > &operand_matches
+        mlir::Operation *op, const std::vector< patch::OperandMatch > &operand_matches
     ) {
         // If no argument matches specified, consider it a match
         if (operand_matches.empty()) {
@@ -190,7 +191,7 @@ namespace patchestry::passes {
     }
 
     bool OperationMatcher::matches_symbols(
-        mlir::Operation *op, const std::vector< SymbolMatch > &symbol_matches
+        mlir::Operation *op, const std::vector< patch::SymbolMatch > &symbol_matches
     ) {
         // If no variable matches specified, consider it a match
         if (symbol_matches.empty()) {
@@ -240,7 +241,7 @@ namespace patchestry::passes {
     }
 
     bool OperationMatcher::matches_arguments(
-        mlir::Operation *op, const std::vector< ArgumentMatch > &argument_matches
+        mlir::Operation *op, const std::vector< patch::ArgumentMatch > &argument_matches
     ) {
         // If no argument matches specified, consider it a match
         if (argument_matches.empty()) {
@@ -277,7 +278,7 @@ namespace patchestry::passes {
     }
 
     bool OperationMatcher::matches_variables(
-        mlir::Operation *op, const std::vector< VariableMatch > &variable_matches
+        mlir::Operation *op, const std::vector< patch::VariableMatch > &variable_matches
     ) {
         // If no variable matches specified, consider it a match
         if (variable_matches.empty()) {

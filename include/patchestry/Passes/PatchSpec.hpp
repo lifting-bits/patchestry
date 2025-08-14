@@ -22,148 +22,148 @@
 #include <patchestry/YAML/YAMLParser.hpp>
 
 namespace patchestry::passes {
+    namespace patch {
+        enum class PatchInfoMode : uint8_t {
+            NONE = 0, // No patch
+            APPLY_BEFORE,
+            APPLY_AFTER,
+            REPLACE
+        };
 
-    enum class PatchInfoMode : uint8_t {
-        NONE = 0, // No patch
-        APPLY_BEFORE,
-        APPLY_AFTER,
-        REPLACE
-    };
+        enum class MatchKind : uint8_t { NONE = 0, OPERATION, FUNCTION };
 
-    enum class MatchKind : uint8_t { NONE = 0, OPERATION, FUNCTION };
+        enum class ArgumentSourceType : uint8_t {
+            OPERAND = 0, // Reference to operation operand by index
+            VARIABLE,    // Reference to variable by name
+            SYMBOL,      // Reference to symbol by name
+            CONSTANT,    // Literal constant value
+            RETURN_VALUE // Return value of function or operation
+        };
 
-    enum class ArgumentSourceType : uint8_t {
-        OPERAND = 0, // Reference to operation operand by index
-        VARIABLE,    // Reference to variable by name
-        SYMBOL,      // Reference to symbol by name
-        CONSTANT,    // Literal constant value
-        RETURN_VALUE // Return value of function or operation
-    };
+        struct ArgumentSource
+        {
+            ArgumentSourceType source;
+            std::string name;                // Descriptive name for the argument
+            std::optional< unsigned > index; // Operand/argument index (required for OPERAND type)
+            std::optional< std::string > symbol; // Symbol name (required for VARIABLE/SYMBOL type)
+            std::optional< std::string > value;  // Constant value (required for CONSTANT type)
+        };
 
-    struct ArgumentSource
-    {
-        ArgumentSourceType source;
-        std::string name;                // Descriptive name for the argument
-        std::optional< unsigned > index; // Operand/argument index (required for OPERAND type)
-        std::optional< std::string > symbol; // Symbol name (required for VARIABLE/SYMBOL type)
-        std::optional< std::string > value;  // Constant value (required for CONSTANT type)
-    };
+        struct ArgumentMatch
+        {
+            unsigned index;
+            std::string name;
+            std::string type;
+        };
 
-    struct ArgumentMatch
-    {
-        unsigned index;
-        std::string name;
-        std::string type;
-    };
+        using OperandMatch = ArgumentMatch;
 
-    using OperandMatch = ArgumentMatch;
+        struct VariableMatch
+        {
+            std::string name;
+            std::string type;
+        };
 
-    struct VariableMatch
-    {
-        std::string name;
-        std::string type;
-    };
+        using SymbolMatch     = VariableMatch;
+        using FunctionContext = VariableMatch;
 
-    using SymbolMatch     = VariableMatch;
-    using FunctionContext = VariableMatch;
+        struct Parameter
+        {
+            std::string name;
+            std::string type;
+            std::string description;
+        };
 
-    struct Parameter
-    {
-        std::string name;
-        std::string type;
-        std::string description;
-    };
+        struct Implementation
+        {
+            std::string language;
+            std::string code_file;
+            std::string function_name;
+            std::vector< Parameter > parameters;
+            std::vector< std::string > dependencies;
+        };
 
-    struct Implementation
-    {
-        std::string language;
-        std::string code_file;
-        std::string function_name;
-        std::vector< Parameter > parameters;
-        std::vector< std::string > dependencies;
-    };
+        struct MatchConfig
+        {
+            std::string name;
+            MatchKind kind;
+            std::vector< FunctionContext > function_context;
+            std::vector< ArgumentMatch > argument_matches;
+            std::vector< VariableMatch > variable_matches;
+            std::vector< SymbolMatch > symbol_matches;
+            std::vector< OperandMatch > operand_matches;
+        };
 
-    struct MatchConfig
-    {
-        std::string name;
-        MatchKind kind;
-        std::vector< FunctionContext > function_context;
-        std::vector< ArgumentMatch > argument_matches;
-        std::vector< VariableMatch > variable_matches;
-        std::vector< SymbolMatch > symbol_matches;
-        std::vector< OperandMatch > operand_matches;
-    };
+        struct Action
+        {
+            PatchInfoMode mode = PatchInfoMode::NONE;
+            std::string patch_id;
+            std::string description;
+            std::vector< ArgumentSource > arguments;
+        };
 
-    struct Action
-    {
-        PatchInfoMode mode = PatchInfoMode::NONE;
-        std::string patch_id;
-        std::string description;
-        std::vector< ArgumentSource > arguments;
-    };
+        struct PatchAction
+        {
+            std::string action_id;
+            std::string description;
+            std::vector< MatchConfig > match;
+            std::vector< Action > action;
+        };
 
-    struct PatchAction
-    {
-        std::string action_id;
-        std::string description;
-        std::vector< MatchConfig > match;
-        std::vector< Action > action;
-    };
+        struct Metadata {
+            std::string name;
+            std::string description;
+            std::string version;
+            std::string author;
+            std::string created;
+            std::string organization;
+        };
 
-    struct Metadata {
-        std::string name;
-        std::string description;
-        std::string version;
-        std::string author;
-        std::string created;
-        std::string organization;
-    };
+        struct PatchSpec
+        {
+            std::string name;
+            std::string id;
+            std::string description;
+            std::string category;
+            std::string severity;
+            Implementation implementation;
+            std::optional< std::string > patch_module;
+        };
 
-    struct PatchSpec
-    {
-        std::string name;
-        std::string id;
-        std::string description;
-        std::string category;
-        std::string severity;
-        Implementation implementation;
-        std::optional< std::string > patch_module;
-    };
+        struct PatchLibrary
+        {
+            std::string api_version;
+            Metadata metadata;
+            std::vector< PatchSpec > patches;
+        };
 
-    struct PatchLibrary
-    {
-        std::string api_version;
-        Metadata metadata;
-        std::vector< PatchSpec > patches;
-    };
+        struct MetaPatchConfig
+        {
+            std::string name;
+            std::string id;
+            std::string description;
+            std::set< std::string > optimization;
+            std::vector< PatchAction > patch_actions;
+        };
 
-    struct MetaPatchConfig
-    {
-        std::string name;
-        std::string id;
-        std::string description;
-        std::set< std::string > optimization;
-        std::vector< PatchAction > patch_actions;
-    };
-
-    [[maybe_unused]] inline std::string_view patchInfoModeToString(PatchInfoMode mode) {
-        switch (mode) {
-            case PatchInfoMode::NONE:
-                return "NONE";
-            case PatchInfoMode::APPLY_BEFORE:
-                return "APPLY_BEFORE";
-            case PatchInfoMode::APPLY_AFTER:
-                return "APPLY_AFTER";
-            case PatchInfoMode::REPLACE:
-                return "REPLACE";
+        [[maybe_unused]] inline std::string_view patchInfoModeToString(PatchInfoMode mode) {
+            switch (mode) {
+                case PatchInfoMode::NONE:
+                    return "NONE";
+                case PatchInfoMode::APPLY_BEFORE:
+                    return "APPLY_BEFORE";
+                case PatchInfoMode::APPLY_AFTER:
+                    return "APPLY_AFTER";
+                case PatchInfoMode::REPLACE:
+                    return "REPLACE";
+            }
+            return "UNKNOWN";
         }
-        return "UNKNOWN";
-    }
-
+    } // namespace patchestry::passes::patch
 } // namespace patchestry::passes
 
 namespace patchestry::yaml {
-    using namespace patchestry::passes;
+    using namespace patchestry::passes::patch;
 
     namespace utils {
         [[maybe_unused]] static std::optional< PatchLibrary >
@@ -179,38 +179,40 @@ namespace patchestry::yaml {
     }
 }
 
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchSpec)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::VariableMatch)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ArgumentMatch)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ArgumentSource)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::MatchConfig)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::Parameter)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::Action)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::PatchAction)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::MetaPatchConfig)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::PatchSpec)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::VariableMatch)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::ArgumentMatch)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::ArgumentSource)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::MatchConfig)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::Parameter)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::Action)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::PatchAction)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::MetaPatchConfig)
 
 namespace llvm::yaml {
+    using namespace patchestry::passes;
+
     // Parse ArgumentSource
     template<>
-    struct MappingTraits< patchestry::passes::ArgumentSource >
+    struct MappingTraits< patch::ArgumentSource >
     {
-        static void mapping(IO &io, patchestry::passes::ArgumentSource &arg) {
+        static void mapping(IO &io, patch::ArgumentSource &arg) {
             std::string source_str;
             io.mapRequired("source", source_str);
 
             if (source_str == "operand") {
-                arg.source = patchestry::passes::ArgumentSourceType::OPERAND;
+                arg.source = patch::ArgumentSourceType::OPERAND;
             } else if (source_str == "argument") {
-                arg.source = patchestry::passes::ArgumentSourceType::OPERAND; // Treat argument
+                arg.source = patch::ArgumentSourceType::OPERAND; // Treat argument
                                                                               // same as operand
             } else if (source_str == "variable") {
-                arg.source = patchestry::passes::ArgumentSourceType::VARIABLE;
+                arg.source = patch::ArgumentSourceType::VARIABLE;
             } else if (source_str == "symbol") {
-                arg.source = patchestry::passes::ArgumentSourceType::SYMBOL;
+                arg.source = patch::ArgumentSourceType::SYMBOL;
             } else if (source_str == "constant") {
-                arg.source = patchestry::passes::ArgumentSourceType::CONSTANT;
+                arg.source = patch::ArgumentSourceType::CONSTANT;
             } else if (source_str == "return_value") {
-                arg.source = patchestry::passes::ArgumentSourceType::RETURN_VALUE;
+                arg.source = patch::ArgumentSourceType::RETURN_VALUE;
             }
 
             io.mapRequired("name", arg.name);
@@ -222,9 +224,9 @@ namespace llvm::yaml {
 
     // Prase ArgumentMatch
     template<>
-    struct MappingTraits< patchestry::passes::ArgumentMatch >
+    struct MappingTraits< patch::ArgumentMatch >
     {
-        static void mapping(IO &io, patchestry::passes::ArgumentMatch &arg) {
+        static void mapping(IO &io, patch::ArgumentMatch &arg) {
             io.mapRequired("index", arg.index);
             io.mapRequired("name", arg.name);
             io.mapOptional("type", arg.type);
@@ -233,9 +235,9 @@ namespace llvm::yaml {
 
     // Prase VariableMatch
     template<>
-    struct MappingTraits< patchestry::passes::VariableMatch >
+    struct MappingTraits< patch::VariableMatch >
     {
-        static void mapping(IO &io, patchestry::passes::VariableMatch &var) {
+        static void mapping(IO &io, patch::VariableMatch &var) {
             io.mapRequired("name", var.name);
             io.mapOptional("type", var.type);
         }
@@ -243,9 +245,9 @@ namespace llvm::yaml {
 
     // Parse Parameter
     template<>
-    struct MappingTraits< patchestry::passes::Parameter >
+    struct MappingTraits< patch::Parameter >
     {
-        static void mapping(IO &io, patchestry::passes::Parameter &param) {
+        static void mapping(IO &io, patch::Parameter &param) {
             io.mapOptional("name", param.name);
             io.mapOptional("type", param.type);
             io.mapOptional("description", param.description);
@@ -254,9 +256,9 @@ namespace llvm::yaml {
 
     // Parse Implementation
     template<>
-    struct MappingTraits< patchestry::passes::Implementation >
+    struct MappingTraits< patch::Implementation >
     {
-        static void mapping(IO &io, patchestry::passes::Implementation &impl) {
+        static void mapping(IO &io, patch::Implementation &impl) {
             io.mapOptional("language", impl.language);
             io.mapOptional("code_file", impl.code_file);
             io.mapOptional("function_name", impl.function_name);
@@ -267,9 +269,9 @@ namespace llvm::yaml {
 
     // Parse Metadata
     template<>
-    struct MappingTraits< patchestry::passes::Metadata >
+    struct MappingTraits< patch::Metadata >
     {
-        static void mapping(IO &io, patchestry::passes::Metadata &metadata) {
+        static void mapping(IO &io, patch::Metadata &metadata) {
             io.mapOptional("name", metadata.name);
             io.mapOptional("description", metadata.description);
             io.mapOptional("version", metadata.version);
@@ -281,9 +283,9 @@ namespace llvm::yaml {
 
     // Parse PatchSpec
     template<>
-    struct MappingTraits< patchestry::passes::PatchSpec >
+    struct MappingTraits< patch::PatchSpec >
     {
-        static void mapping(IO &io, patchestry::passes::PatchSpec &spec) {
+        static void mapping(IO &io, patch::PatchSpec &spec) {
             io.mapRequired("name", spec.name);
             io.mapOptional("id", spec.id);
             io.mapOptional("description", spec.description);
@@ -295,9 +297,9 @@ namespace llvm::yaml {
 
     // Parse Action
     template<>
-    struct MappingTraits< patchestry::passes::Action >
+    struct MappingTraits< patch::Action >
     {
-        static void mapping(IO &io, patchestry::passes::Action &action) {
+        static void mapping(IO &io, patch::Action &action) {
             io.mapOptional("patch_id", action.patch_id);
             io.mapOptional("description", action.description);
             io.mapOptional("arguments", action.arguments);
@@ -305,22 +307,22 @@ namespace llvm::yaml {
             std::string mode_str;
             io.mapRequired("mode", mode_str);
             if (mode_str == "ApplyBefore" || mode_str == "apply_before") {
-                action.mode = patchestry::passes::PatchInfoMode::APPLY_BEFORE;
+                action.mode = patch::PatchInfoMode::APPLY_BEFORE;
             } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
-                action.mode = patchestry::passes::PatchInfoMode::APPLY_AFTER;
+                action.mode = patch::PatchInfoMode::APPLY_AFTER;
             } else if (mode_str == "Replace" || mode_str == "replace") {
-                action.mode = patchestry::passes::PatchInfoMode::REPLACE;
+                action.mode = patch::PatchInfoMode::REPLACE;
             } else {
-                action.mode = patchestry::passes::PatchInfoMode::NONE;
+                action.mode = patch::PatchInfoMode::NONE;
             }
         }
     };
 
     // Parse PatchMatch
     template<>
-    struct MappingTraits< patchestry::passes::MatchConfig >
+    struct MappingTraits< patch::MatchConfig >
     {
-        static void mapping(IO &io, patchestry::passes::MatchConfig &match) {
+        static void mapping(IO &io, patch::MatchConfig &match) {
             io.mapOptional("name", match.name);
             io.mapOptional("function_context", match.function_context);
             io.mapOptional("argument_matches", match.argument_matches);
@@ -331,20 +333,20 @@ namespace llvm::yaml {
             std::string kind_str;
             io.mapRequired("kind", kind_str);
             if (kind_str == "operation") {
-                match.kind = patchestry::passes::MatchKind::OPERATION;
+                match.kind = patch::MatchKind::OPERATION;
             } else if (kind_str == "function") {
-                match.kind = patchestry::passes::MatchKind::FUNCTION;
+                match.kind = patch::MatchKind::FUNCTION;
             } else { // Default to NONE
-                match.kind = patchestry::passes::MatchKind::NONE;
+                match.kind = patch::MatchKind::NONE;
             }
         }
     };
 
     // Parse PatchAction
     template<>
-    struct MappingTraits< patchestry::passes::PatchAction >
+    struct MappingTraits< patch::PatchAction >
     {
-        static void mapping(IO &io, patchestry::passes::PatchAction &patch_action) {
+        static void mapping(IO &io, patch::PatchAction &patch_action) {
             io.mapOptional("id", patch_action.action_id);
             io.mapOptional("description", patch_action.description);
             io.mapOptional("match", patch_action.match);
@@ -356,9 +358,9 @@ namespace llvm::yaml {
 
     // Parse PatchLibrary
     template<>
-    struct MappingTraits< patchestry::passes::PatchLibrary >
+    struct MappingTraits< patch::PatchLibrary >
     {
-        static void mapping(IO &io, patchestry::passes::PatchLibrary &library) {
+        static void mapping(IO &io, patch::PatchLibrary &library) {
             io.mapOptional("apiVersion", library.api_version);
             io.mapOptional("metadata", library.metadata);
             io.mapOptional("patches", library.patches);
@@ -367,9 +369,9 @@ namespace llvm::yaml {
 
     // Parse MetaPatchConfig
     template<>
-    struct MappingTraits< patchestry::passes::MetaPatchConfig >
+    struct MappingTraits< patch::MetaPatchConfig >
     {
-        static void mapping(IO &io, patchestry::passes::MetaPatchConfig &meta_patch) {
+        static void mapping(IO &io, patch::MetaPatchConfig &meta_patch) {
             io.mapOptional("name", meta_patch.name);
             io.mapOptional("id", meta_patch.id);
             io.mapOptional("description", meta_patch.description);

@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "PatchSpec.hpp"
+#include <patchestry/Passes/PatchSpec.hpp>
 
 // Forward declarations
 namespace mlir {
@@ -52,7 +52,7 @@ namespace patchestry::passes {
          * @return true if the operation matches the specification
          */
         static bool
-        matches(mlir::Operation *op, cir::FuncOp func, const PatchAction &spec, Mode mode);
+        matches(mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &spec, Mode mode);
 
         /**
          * @brief Checks if an operation name matches the specified operation pattern.
@@ -73,7 +73,7 @@ namespace patchestry::passes {
          * @return true if the function matches the criteria
          */
         static bool matches_function_context( // NOLINT
-            cir::FuncOp func, const std::vector< FunctionContext > &function_context
+            cir::FuncOp func, const std::vector< patch::FunctionContext > &function_context
         );
 
         /**
@@ -84,7 +84,7 @@ namespace patchestry::passes {
          * @return true if the arguments match the criteria
          */
         static bool matches_arguments( // NOLINT
-            mlir::Operation *op, const std::vector< ArgumentMatch > &argument_matches
+            mlir::Operation *op, const std::vector< patch::ArgumentMatch > &argument_matches
         );
 
         /**
@@ -95,7 +95,7 @@ namespace patchestry::passes {
          * @return true if the operands match the criteria
          */
         static bool matches_operands( // NOLINT
-            mlir::Operation *op, const std::vector< OperandMatch > &operand_matches
+            mlir::Operation *op, const std::vector< patch::OperandMatch > &operand_matches
         );
 
         /**
@@ -109,7 +109,7 @@ namespace patchestry::passes {
          * @return true if the variables match the criteria
          */
         static bool matches_variables( // NOLINT
-            mlir::Operation *op, const std::vector< VariableMatch > &variable_matches
+            mlir::Operation *op, const std::vector< patch::VariableMatch > &variable_matches
         );
 
         /**
@@ -120,7 +120,7 @@ namespace patchestry::passes {
          * @return true if the symbols match the criteria
          */
         static bool matches_symbols( // NOLINT
-            mlir::Operation *op, const std::vector< SymbolMatch > &symbol_matches
+            mlir::Operation *op, const std::vector< patch::SymbolMatch > &symbol_matches
         );
 
         /**
@@ -132,7 +132,7 @@ namespace patchestry::passes {
          * @return true if the operation matches the criteria
          */
         static bool matches_operation( // NOLINT
-            mlir::Operation *op, cir::FuncOp func, const MatchConfig &match
+            mlir::Operation *op, cir::FuncOp func, const patch::MatchConfig &match
         );
 
         /**
@@ -144,7 +144,7 @@ namespace patchestry::passes {
          * @return true if the function call matches the criteria
          */
         static bool matches_function_call( // NOLINT
-            mlir::Operation *op, cir::FuncOp func, const MatchConfig &match
+            mlir::Operation *op, cir::FuncOp func, const patch::MatchConfig &match
         );
 
         /**

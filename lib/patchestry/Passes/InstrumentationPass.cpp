@@ -519,13 +519,13 @@ namespace patchestry::passes {
     void InstrumentationPass::apply_patch_action_to_targets(
         llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
         llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
-        const MetaPatchConfig &meta_patch, const PatchInformation &patch_to_apply
+        const patch::MetaPatchConfig &meta_patch, const PatchInformation &patch_to_apply
     ) {
         const auto &patch_action = patch_to_apply.patch_action.value();
         const auto &match        = patch_action.match[0];
         const auto &action       = patch_action.action[0];
 
-        if (match.kind == MatchKind::FUNCTION) {
+        if (match.kind == patch::MatchKind::FUNCTION) {
             // Apply to function calls
             for (auto func : function_worklist) {
                 func.walk([&](cir::CallOp call_op) {
@@ -545,19 +545,19 @@ namespace patchestry::passes {
                         }
 
                         switch (action.mode) {
-                            case PatchInfoMode::APPLY_BEFORE:
+                            case patch::PatchInfoMode::APPLY_BEFORE:
                                 apply_before_patch(
                                     call_op, patch_to_apply, patch_module.get(),
                                     meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
-                            case PatchInfoMode::APPLY_AFTER:
+                            case patch::PatchInfoMode::APPLY_AFTER:
                                 apply_after_patch(
                                     call_op, patch_to_apply, patch_module.get(),
                                     meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
-                            case PatchInfoMode::REPLACE:
+                            case patch::PatchInfoMode::REPLACE:
                                 replace_call(
                                     call_op, patch_to_apply, patch_module.get(),
                                     meta_patch.optimization.contains("inline-patches")
@@ -570,7 +570,7 @@ namespace patchestry::passes {
                     }
                 });
             }
-        } else if (match.kind == MatchKind::OPERATION) {
+        } else if (match.kind == patch::MatchKind::OPERATION) {
             // Apply to operations
             for (auto *op : operation_worklist) {
                 auto func = op->getParentOfType< cir::FuncOp >();
@@ -592,7 +592,7 @@ namespace patchestry::passes {
                     }
 
                     switch (action.mode) {
-                        case PatchInfoMode::APPLY_BEFORE:
+                        case patch::PatchInfoMode::APPLY_BEFORE:
                             apply_before_patch(
                                 op, patch_to_apply, patch_module.get(),
                                 meta_patch.optimization.contains("inline-patches")
@@ -647,7 +647,7 @@ namespace patchestry::passes {
             mlir::Value arg_value;
 
             switch (arg_spec.source) {
-                case ArgumentSourceType::OPERAND: {
+                case patch::ArgumentSourceType::OPERAND: {
                     // Get operand by index
                     if (!arg_spec.index.has_value()) {
                         LOG(ERROR) << "OPERAND source requires index field\n";
@@ -670,7 +670,7 @@ namespace patchestry::passes {
                     }
                     break;
                 }
-                case ArgumentSourceType::VARIABLE: {
+                case patch::ArgumentSourceType::VARIABLE: {
                     // Handle local variables only
                     if (!arg_spec.symbol.has_value()) {
                         LOG(ERROR) << "VARIABLE source requires symbol field\n";
@@ -710,7 +710,7 @@ namespace patchestry::passes {
                     arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), var_value);
                     break;
                 }
-                case ArgumentSourceType::SYMBOL: {
+                case patch::ArgumentSourceType::SYMBOL: {
                     // Handle global variables, functions, and any symbol in symbol table
                     if (!arg_spec.symbol.has_value()) {
                         LOG(ERROR) << "SYMBOL source requires symbol field\n";
@@ -775,7 +775,7 @@ namespace patchestry::passes {
                     arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), symbol_value);
                     break;
                 }
-                case ArgumentSourceType::RETURN_VALUE: {
+                case patch::ArgumentSourceType::RETURN_VALUE: {
                     // Handle return value of function or operation
                     if (call_op->getNumResults() == 0) {
                         LOG(ERROR) << "Operation/function does not have a return value\n";
@@ -786,7 +786,7 @@ namespace patchestry::passes {
                     arg_value = call_op->getResult(0);
                     break;
                 }
-                case ArgumentSourceType::CONSTANT: {
+                case patch::ArgumentSourceType::CONSTANT: {
                     // Create constant value
                     if (!arg_spec.value.has_value()) {
                         LOG(ERROR) << "CONSTANT source requires value field\n";
