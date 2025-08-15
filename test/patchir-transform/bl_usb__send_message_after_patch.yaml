@@ -44,11 +44,20 @@ meta_patches:
          action:
           - mode: "apply_after"
             patch_id: "USB-PATCH-AFTER-001"
-            description: "Pre-validation security check"
+            description: "Checks function return value"
             arguments:
               - name: "function_return_value"
                 source: "return_value"
 
 meta_contracts:
   - name: usb_security_meta_contracts
+    id: "usb_security_meta_contracts"
     description: "Meta contracts for USB security"
+
+    contract_actions:
+      - id: "USB-CONTRACT-BEFORE-001"
+        description: "Asserts message to send is less than maximum size"
+
+        match:
+
+        action:
