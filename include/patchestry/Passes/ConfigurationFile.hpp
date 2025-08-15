@@ -86,7 +86,7 @@ namespace patchestry::yaml {
             auto result = parser.parse_from_file< Configuration >(file_path);
 
             if (!result) {
-                LOG(ERROR) << "Failed to load patch configuration: " << file_path << "\n";
+                LOG(ERROR) << "Failed to load Patchestry configuration: " << file_path << "\n";
                 return std::nullopt;
             }
 
@@ -100,13 +100,13 @@ namespace patchestry::yaml {
             std::string yaml_content = parser.serialize_to_string(config);
 
             if (yaml_content.empty()) {
-                LOG(ERROR) << "Failed to serialize patch configuration";
+                LOG(ERROR) << "Failed to serialize Patchestry configuration to: " << file_path << "\n";
                 return false;
             }
 
             std::ofstream file(file_path);
             if (!file.is_open()) {
-                LOG(ERROR) << "Failed to open file for writing: " << file_path;
+                LOG(ERROR) << "Failed to open file for writing: " << file_path << "\n";
                 return false;
             }
 
@@ -114,7 +114,7 @@ namespace patchestry::yaml {
             file.close();
 
             if (file.fail()) {
-                LOG(ERROR) << "Failed to write to file: " << file_path;
+                LOG(ERROR) << "Failed to write to file: " << file_path << "\n";
                 return false;
             }
 
@@ -124,13 +124,17 @@ namespace patchestry::yaml {
         [[maybe_unused]] static bool
         validateConfiguration(const Configuration &config) {
             if (config.libraries.patches.patches.empty()) {
-                LOG(WARNING) << "Patch configuration has no patches";
+                LOG(WARNING) << "Patchestry configuration contains no patches\n";
+            }
+
+            if (config.libraries.contracts.contracts.empty()) {
+                LOG(WARNING) << "Patchestry configuration contains no contracts\n";
             }
 
             // Validate each patch
             for (const auto &patch : config.libraries.patches.patches) {
                 if (patch.name.empty()) {
-                    LOG(ERROR) << "Patch specification missing name";
+                    LOG(ERROR) << "Patch specification missing name\n";
                     return false;
                 }
 
@@ -138,7 +142,7 @@ namespace patchestry::yaml {
                 if (!patch.implementation.code_file.empty()) {
                     if (!llvm::sys::fs::exists(patch.implementation.code_file)) {
                         LOG(ERROR)
-                            << "Patch file does not exist: " << patch.implementation.code_file;
+                            << "Patch file does not exist: " << patch.implementation.code_file << "\n";
                         return false;
                     }
                 }
