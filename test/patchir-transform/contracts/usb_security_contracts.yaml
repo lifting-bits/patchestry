@@ -1,17 +1,30 @@
+# contracts/usb_security_contracts.yaml
+
 apiVersion: patchestry.io/v1
 
 metadata:
   name: "usb-security-contracts"
   version: "1.0.0"
   description: "USB security contracts for medical devices"
-  created: "2025-06-31"
+  created: "2025-08-15"
   author: "Security Team"
 
+# ContractSpec defined in include/patchestry/Passes/ContractSpec.hpp
 contracts:
   - name: "usb_endpoint_write_validation_contract"
     id: "usb_endpoint_write_validation_contract"
     description: "Validate USB endpoint write"
+    category: "write_validation"
+    severity: "medium"
 
-  - name: "apply_before_write_packet_before_contract"
-    id: "apply_before_write_packet_before_contract"
-    description: "Apply before write packet"
+    implementation:
+      language: C
+      code_file: "contracts/usb_endpoint_write_validation.c"
+      function_name: "contract::before::usbd_ep_write_packet"
+      parameters:
+        - name: usb_device
+          type: "usb_device_t*"
+          description: "USB device context"
+        - name: buffer
+          type: "const void*"
+          description: "Data buffer to write"
