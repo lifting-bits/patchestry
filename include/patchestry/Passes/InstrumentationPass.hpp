@@ -189,7 +189,7 @@ namespace patchestry::passes { // NOLINT
          */
         void prepare_call_arguments(
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
-            const PatchInformation &patch, llvm::SmallVector< mlir::Value > &args
+            const PatchInformation &patch, llvm::DenseMap< mlir::Value, mlir::Value > &args_map
         );
 
         /**
@@ -293,6 +293,82 @@ namespace patchestry::passes { // NOLINT
          * @param target_op The original operation being instrumented
          */
         void set_patch_call_attributes(cir::CallOp patch_call_op, mlir::Operation *target_op);
+
+        /**
+         * @brief Creates a cast operation if types differ, otherwise returns the original
+         * value.
+         */
+        mlir::Value create_cast_if_needed(
+            mlir::OpBuilder &builder, mlir::Operation *call_op, mlir::Value value,
+            mlir::Type target_type
+        );
+
+        /**
+         * @brief Creates a reference (alloca + store) for a given value.
+         */
+        mlir::Value
+        create_reference(mlir::OpBuilder &builder, mlir::Operation *call_op, mlir::Value value);
+
+        /**
+         * @brief Handles OPERAND argument source type.
+         */
+        void handle_operand_argument(
+            mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
+            mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        );
+
+        /**
+         * @brief Handles VARIABLE argument source type.
+         */
+        void handle_variable_argument(
+            mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
+            mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        );
+
+        /**
+         * @brief Handles SYMBOL argument source type.
+         */
+        void handle_symbol_argument(
+            mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
+            mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        );
+
+        /**
+         * @brief Handles RETURN_VALUE argument source type.
+         */
+        void handle_return_value_argument(
+            mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
+            mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        );
+
+        /**
+         * @brief Handles CONSTANT argument source type.
+         */
+        void handle_constant_argument(
+            mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
+            mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        );
+
+        /**
+         * @brief Parses a constant operand from string based on the target type.
+         */
+        mlir::Value parse_constant_operand(
+            mlir::OpBuilder &builder, mlir::Operation *call_op, const std::string &value,
+            mlir::Type target_type
+        );
+
+        /**
+         * @brief Finds a local variable by name in the current function scope.
+         */
+        std::optional< mlir::Value >
+        find_local_variable(mlir::Operation *call_op, const std::string &var_name);
+
+        /**
+         * @brief Finds a global symbol (variable or function) by name.
+         */
+        std::optional< mlir::Value > find_global_symbol(
+            mlir::OpBuilder &builder, mlir::Operation *call_op, const std::string &symbol_name
+        );
     };
 
 } // namespace patchestry::passes

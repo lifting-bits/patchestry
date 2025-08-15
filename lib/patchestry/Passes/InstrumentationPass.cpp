@@ -618,23 +618,37 @@ namespace patchestry::passes {
      * @param patch The patch information.
      * @param args The vector to store the prepared arguments.
      */
+    mlir::Value InstrumentationPass::create_cast_if_needed(
+        mlir::OpBuilder &builder, mlir::Operation *call_op, mlir::Value value,
+        mlir::Type target_type
+    ) {
+        if (value.getType() == target_type) {
+            return value;
+        }
+
+        auto cast_op = builder.create< cir::CastOp >(
+            call_op->getLoc(), target_type, getCastKind(value.getType(), target_type), value
+        );
+        return cast_op->getResults().front();
+    }
+
+    mlir::Value InstrumentationPass::create_reference(
+        mlir::OpBuilder &builder, mlir::Operation *call_op, mlir::Value value
+    ) {
+        auto abi_align = call_op->getAttrOfType< mlir::IntegerAttr >("abi_align");
+        auto addr_type = cir::PointerType::get(builder.getContext(), value.getType());
+        auto addr_op   = builder.create< cir::AllocaOp >(
+            call_op->getLoc(), addr_type, value.getType(), "", abi_align
+        );
+        builder.create< cir::StoreOp >(call_op->getLoc(), value, addr_op.getResult());
+        return addr_op.getResult();
+    }
+
     void InstrumentationPass::prepare_call_arguments(
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
-        const PatchInformation &patch, llvm::SmallVector< mlir::Value > &args
+        const PatchInformation &patch, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
     ) {
-        auto create_cast = [&](mlir::Value value, mlir::Type type) -> mlir::Value {
-            if (value.getType() == type) {
-                return value;
-            }
-
-            auto cast_op = builder.create< cir::CastOp >(
-                call_op->getLoc(), type, getCastKind(value.getType(), type), value
-            );
-            return cast_op->getResults().front();
-        };
-
         const auto &patch_action = patch.patch_action.value();
-        // const auto &patch_spec   = patch.spec.value();
 
         // Handle structured argument specifications
         for (size_t i = 0;
@@ -643,218 +657,278 @@ namespace patchestry::passes {
         {
             const auto &arg_spec = patch_action.action[0].arguments[i];
             auto patch_arg_type  = patch_func.getArgumentTypes()[i];
-            mlir::Value arg_value;
 
             switch (arg_spec.source) {
-                case ArgumentSourceType::OPERAND: {
-                    // Get operand by index
-                    if (!arg_spec.index.has_value()) {
-                        LOG(ERROR) << "OPERAND source requires index field\n";
-                        continue;
-                    }
-                    unsigned idx = arg_spec.index.value();
-
-                    if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
-                        if (idx >= orig_call_op.getArgOperands().size()) {
-                            LOG(ERROR) << "Operand index " << idx << " out of range\n";
-                            continue;
-                        }
-                        arg_value = orig_call_op.getArgOperands()[idx];
-                    } else {
-                        if (idx >= call_op->getNumOperands()) {
-                            LOG(ERROR) << "Operand index " << idx << " out of range\n";
-                            continue;
-                        }
-                        arg_value = call_op->getOperand(idx);
-                    }
+                case ArgumentSourceType::OPERAND:
+                    handle_operand_argument(
+                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                    );
                     break;
-                }
-                case ArgumentSourceType::VARIABLE: {
-                    // Handle local variables only
-                    if (!arg_spec.symbol.has_value()) {
-                        LOG(ERROR) << "VARIABLE source requires symbol field\n";
-                        continue;
-                    }
-
-                    const std::string &var_name = arg_spec.symbol.value();
-                    mlir::Value var_value;
-                    bool found = false;
-
-                    // Look for local variables in function scope only
-                    auto func = call_op->getParentOfType< cir::FuncOp >();
-                    if (!func) {
-                        LOG(ERROR) << "Cannot find parent function for local variable lookup\n";
-                        continue;
-                    }
-
-                    // Search for local variables in function scope
-                    func.walk([&](mlir::Operation *op) {
-                        if (auto alloca_op = mlir::dyn_cast< cir::AllocaOp >(op)) {
-                            if (auto name_attr = op->getAttrOfType< mlir::StringAttr >("name"))
-                            {
-                                if (name_attr.getValue() == var_name) {
-                                    var_value = alloca_op.getResult();
-                                    found     = true;
-                                    return mlir::WalkResult::interrupt();
-                                }
-                            }
-                        }
-                        return mlir::WalkResult::advance();
-                    });
-
-                    if (!found) {
-                        LOG(WARNING) << "Local variable '" << var_name << "' not found\n";
-                        continue;
-                    }
-                    arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), var_value);
+                case ArgumentSourceType::VARIABLE:
+                    handle_variable_argument(
+                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                    );
                     break;
-                }
-                case ArgumentSourceType::SYMBOL: {
-                    // Handle global variables, functions, and any symbol in symbol table
-                    if (!arg_spec.symbol.has_value()) {
-                        LOG(ERROR) << "SYMBOL source requires symbol field\n";
-                        continue;
-                    }
-
-                    const std::string &symbol_name = arg_spec.symbol.value();
-                    mlir::Value symbol_value;
-                    bool found = false;
-
-                    auto module = call_op->getParentOfType< mlir::ModuleOp >();
-                    if (!module) {
-                        LOG(ERROR) << "Cannot find parent module for symbol lookup\n";
-                        continue;
-                    }
-
-                    // Look for global variables
-                    if (auto global_op = module.lookupSymbol< cir::GlobalOp >(symbol_name)) {
-                        // Create a GetGlobal operation to access the global variable
-                        auto global_type = global_op.getSymType();
-                        if (auto global_ptr_type =
-                                mlir::dyn_cast< cir::PointerType >(global_type))
-                        {
-                            symbol_value = builder.create< cir::GetGlobalOp >(
-                                call_op->getLoc(), global_ptr_type, symbol_name
-                            );
-                            found = true;
-                        } else {
-                            // For non-pointer globals, create a pointer type
-                            auto ptr_type =
-                                cir::PointerType::get(builder.getContext(), global_type);
-                            symbol_value = builder.create< cir::GetGlobalOp >(
-                                call_op->getLoc(), ptr_type, symbol_name
-                            );
-                            found = true;
-                        }
-                    }
-
-                    // Look for functions
-                    if (!found) {
-                        if (auto func_op = module.lookupSymbol< cir::FuncOp >(symbol_name)) {
-                            // Create a function reference
-                            auto func_type = func_op.getFunctionType();
-                            auto func_ptr_type =
-                                cir::PointerType::get(builder.getContext(), func_type);
-                            auto symbol_ref =
-                                mlir::FlatSymbolRefAttr::get(builder.getContext(), symbol_name);
-
-                            // Create a constant operation for the function pointer
-                            symbol_value = builder.create< cir::GetGlobalOp >(
-                                call_op->getLoc(), func_ptr_type, symbol_ref
-                            );
-                            found = true;
-                        }
-                    }
-
-                    if (!found) {
-                        LOG(WARNING)
-                            << "Symbol '" << symbol_name << "' not found in symbol table\n";
-                        continue;
-                    }
-                    arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), symbol_value);
+                case ArgumentSourceType::SYMBOL:
+                    handle_symbol_argument(builder, call_op, arg_spec, patch_arg_type, arg_map);
                     break;
-                }
-                case ArgumentSourceType::RETURN_VALUE: {
-                    // Handle return value of function or operation
-                    if (call_op->getNumResults() == 0) {
-                        LOG(ERROR) << "Operation/function does not have a return value\n";
-                        continue;
-                    }
-
-                    // Get the first result (most common case)
-                    arg_value = call_op->getResult(0);
+                case ArgumentSourceType::RETURN_VALUE:
+                    handle_return_value_argument(
+                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                    );
                     break;
-                }
-                case ArgumentSourceType::CONSTANT: {
-                    // Create constant value
-                    if (!arg_spec.value.has_value()) {
-                        LOG(ERROR) << "CONSTANT source requires value field\n";
-                        continue;
-                    }
-
-                    const std::string &const_value = arg_spec.value.value();
-
-                    // Parse constant based on patch function argument type
-                    if (auto int_type = mlir::dyn_cast< cir::IntType >(patch_arg_type)) {
-                        try {
-                            // Parse integer constant
-                            int64_t int_val =
-                                std::stoll(const_value, nullptr, 0); // Support hex, oct, dec
-
-                            auto attr = cir::IntAttr::get(
-                                cir::IntType::get(
-                                    builder.getContext(), int_type.getWidth(),
-                                    int_type.isSigned()
-                                ),
-                                llvm::APSInt(int_type.getWidth(), int_val)
-                            );
-                            arg_value = builder.create< cir::ConstantOp >(
-                                call_op->getLoc(), patch_arg_type, attr
-                            );
-                        } catch (const std::exception &e) {
-                            LOG(ERROR) << "Failed to parse integer constant '" << const_value
-                                       << "': " << e.what() << "\n";
-                            continue;
-                        }
-                    } else if (auto ptr_type =
-                                   mlir::dyn_cast< cir::PointerType >(patch_arg_type))
-                    {
-                        try {
-                            // Parse pointer constant (usually hex address)
-                            uint64_t ptr_val = std::stoull(const_value, nullptr, 0);
-                            auto int_type = cir::IntType::get(builder.getContext(), 64, false);
-                            auto int_attr = cir::IntAttr::get(
-                                cir::IntType::get(
-                                    builder.getContext(), int_type.getWidth(),
-                                    int_type.isSigned()
-                                ),
-                                llvm::APSInt(int_type.getWidth(), ptr_val)
-                            );
-                            auto int_const = builder.create< cir::ConstantOp >(
-                                call_op->getLoc(), int_type, int_attr
-                            );
-                            arg_value = builder.create< cir::CastOp >(
-                                call_op->getLoc(), patch_arg_type, cir::CastKind::int_to_ptr,
-                                int_const
-                            );
-                        } catch (const std::exception &e) {
-                            LOG(ERROR) << "Failed to parse pointer constant '" << const_value
-                                       << "': " << e.what() << "\n";
-                            continue;
-                        }
-                    } else {
-                        LOG(ERROR)
-                            << "Unsupported constant type for value '" << const_value << "'\n";
-                        continue;
-                    }
+                case ArgumentSourceType::CONSTANT:
+                    handle_constant_argument(
+                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                    );
                     break;
-                }
-            }
-
-            if (arg_value) {
-                args.push_back(create_cast(arg_value, patch_arg_type));
             }
         }
+    }
+
+    void InstrumentationPass::handle_operand_argument(
+        mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
+        mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+    ) {
+        if (!arg_spec.index.has_value()) {
+            LOG(ERROR) << "OPERAND source requires index field\n";
+            return;
+        }
+        unsigned idx = arg_spec.index.value();
+        mlir::Value operand_value;
+
+        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
+            if (idx >= orig_call_op.getArgOperands().size()) {
+                LOG(ERROR) << "Operand index " << idx << " out of range\n";
+                return;
+            }
+            operand_value = orig_call_op.getArgOperands()[idx];
+        } else {
+            if (idx >= call_op->getNumOperands()) {
+                LOG(ERROR) << "Operand index " << idx << " out of range\n";
+                return;
+            }
+            operand_value = call_op->getOperand(idx);
+        }
+
+        if (arg_spec.is_reference) {
+            arg_map[operand_value] = create_cast_if_needed(
+                builder, call_op, create_reference(builder, call_op, operand_value),
+                patch_arg_type
+            );
+        } else {
+            arg_map[operand_value] =
+                create_cast_if_needed(builder, call_op, operand_value, patch_arg_type);
+        }
+    }
+
+    void InstrumentationPass::handle_variable_argument(
+        mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
+        mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+    ) {
+        if (!arg_spec.symbol.has_value()) {
+            LOG(ERROR) << "VARIABLE source requires symbol field\n";
+            return;
+        }
+
+        const std::string &var_name = arg_spec.symbol.value();
+        auto variable_ref           = find_local_variable(call_op, var_name);
+        if (!variable_ref.has_value()) {
+            LOG(WARNING) << "Local variable '" << var_name << "' not found\n";
+            return;
+        }
+
+        mlir::Value variable_reference = variable_ref.value();
+        if (arg_spec.is_reference) {
+            arg_map[variable_reference] = create_cast_if_needed(builder, call_op, variable_reference, patch_arg_type);
+        } else {
+            auto load_op = builder.create< cir::LoadOp >(
+                call_op->getLoc(), variable_reference, /*isDeref=*/false, /*isVolatile=*/false,
+                /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{}, /*tbaa=*/mlir::ArrayAttr{}
+            );
+            arg_map[variable_reference] =
+                create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
+        }
+    }
+
+    void InstrumentationPass::handle_symbol_argument(
+        mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
+        mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+    ) {
+        if (!arg_spec.symbol.has_value()) {
+            LOG(ERROR) << "SYMBOL source requires symbol field\n";
+            return;
+        }
+
+        const std::string &symbol_name = arg_spec.symbol.value();
+        auto symbol_ref                = find_global_symbol(builder, call_op, symbol_name);
+        if (!symbol_ref.has_value()) {
+            LOG(WARNING) << "Symbol '" << symbol_name << "' not found in symbol table\n";
+            return;
+        }
+
+        mlir::Value symbol_reference = symbol_ref.value();
+        if (arg_spec.is_reference) {
+            arg_map[symbol_reference] =
+                create_cast_if_needed(builder, call_op, symbol_reference, patch_arg_type);
+        } else {
+            auto load_op = builder.create< cir::LoadOp >(
+                call_op->getLoc(), symbol_reference, /*isDeref=*/false, /*isVolatile=*/false,
+                /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{}, /*tbaa=*/mlir::ArrayAttr{}
+            );
+            arg_map[symbol_reference] =
+                create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
+        }
+    }
+
+    void InstrumentationPass::handle_return_value_argument(
+        mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
+        mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+    ) {
+        if (call_op->getNumResults() == 0) {
+            LOG(ERROR) << "Operation/function does not have a return value\n";
+            return;
+        }
+
+        auto arg_value = call_op->getResult(0);
+        if (arg_spec.is_reference) {
+            arg_map[arg_value] = create_cast_if_needed(
+                builder, call_op, create_reference(builder, call_op, arg_value), patch_arg_type
+            );
+        } else {
+            arg_map[arg_value] =
+                create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
+        }
+    }
+
+    void InstrumentationPass::handle_constant_argument(
+        mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
+        mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+    ) {
+        if (!arg_spec.value.has_value()) {
+            LOG(ERROR) << "CONSTANT source requires value field\n";
+            return;
+        }
+
+        const std::string &const_value = arg_spec.value.value();
+        mlir::Value arg_value;
+
+        arg_value = parse_constant_operand(builder, call_op, const_value, patch_arg_type);
+        if (!arg_value) {
+            return;
+        }
+
+        arg_map[arg_value] = create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
+    }
+
+    mlir::Value InstrumentationPass::parse_constant_operand(
+        mlir::OpBuilder &builder, mlir::Operation *call_op, const std::string &value,
+        mlir::Type target_type
+    ) {
+        if (auto int_type = mlir::dyn_cast< cir::IntType >(target_type)) {
+            try {
+                int64_t int_val = std::stoll(value, nullptr, 0); // Support hex, oct, dec
+                auto attr       = cir::IntAttr::get(
+                    cir::IntType::get(
+                        builder.getContext(), int_type.getWidth(), int_type.isSigned()
+                    ),
+                    llvm::APSInt(int_type.getWidth(), int_val)
+                );
+                return builder.create< cir::ConstantOp >(call_op->getLoc(), int_type, attr);
+            } catch (const std::exception &e) {
+                LOG(ERROR) << "Failed to parse integer constant '" << value << "': " << e.what()
+                           << "\n";
+                return nullptr;
+            }
+        } else if (auto ptr_type = mlir::dyn_cast< cir::PointerType >(target_type)) {
+            try {
+                uint64_t ptr_val = std::stoull(value, nullptr, 0);
+                auto int_type    = cir::IntType::get(builder.getContext(), 64, false);
+                auto int_attr    = cir::IntAttr::get(
+                    cir::IntType::get(
+                        builder.getContext(), int_type.getWidth(), int_type.isSigned()
+                    ),
+                    llvm::APSInt(int_type.getWidth(), ptr_val)
+                );
+                auto int_const =
+                    builder.create< cir::ConstantOp >(call_op->getLoc(), int_type, int_attr);
+                return builder.create< cir::CastOp >(
+                    call_op->getLoc(), ptr_type, cir::CastKind::int_to_ptr, int_const
+                );
+            } catch (const std::exception &e) {
+                LOG(ERROR) << "Failed to parse pointer constant '" << value << "': " << e.what()
+                           << "\n";
+                return nullptr;
+            }
+        } else {
+            LOG(ERROR) << "Unsupported constant type for value '" << value << "'\n";
+            return nullptr;
+        }
+    }
+
+    std::optional< mlir::Value > InstrumentationPass::find_local_variable(
+        mlir::Operation *call_op, const std::string &var_name
+    ) {
+        auto func = call_op->getParentOfType< cir::FuncOp >();
+        if (!func) {
+            LOG(ERROR) << "Cannot find parent function for local variable lookup\n";
+            return std::nullopt;
+        }
+
+        mlir::Value variable_reference;
+        bool found = false;
+
+        func.walk([&](mlir::Operation *op) {
+            if (auto alloca_op = mlir::dyn_cast< cir::AllocaOp >(op)) {
+                if (auto name_attr = op->getAttrOfType< mlir::StringAttr >("name")) {
+                    if (name_attr.getValue() == var_name) {
+                        variable_reference = alloca_op.getResult();
+                        found              = true;
+                        return mlir::WalkResult::interrupt();
+                    }
+                }
+            }
+            return mlir::WalkResult::advance();
+        });
+
+        return found ? std::optional< mlir::Value >(variable_reference) : std::nullopt;
+    }
+
+    std::optional< mlir::Value > InstrumentationPass::find_global_symbol(
+        mlir::OpBuilder &builder, mlir::Operation *call_op, const std::string &symbol_name
+    ) {
+        auto module = call_op->getParentOfType< mlir::ModuleOp >();
+        if (!module) {
+            LOG(ERROR) << "Cannot find parent module for symbol lookup\n";
+            return std::nullopt;
+        }
+
+        // Look for global variables
+        if (auto global_op = module.lookupSymbol< cir::GlobalOp >(symbol_name)) {
+            auto global_type = global_op.getSymType();
+            if (auto global_ptr_type = mlir::dyn_cast< cir::PointerType >(global_type)) {
+                return builder.create< cir::GetGlobalOp >(
+                    call_op->getLoc(), global_ptr_type, symbol_name
+                );
+            } else {
+                auto ptr_type = cir::PointerType::get(builder.getContext(), global_type);
+                return builder.create< cir::GetGlobalOp >(
+                    call_op->getLoc(), ptr_type, symbol_name
+                );
+            }
+        }
+
+        // Look for functions
+        if (auto func_op = module.lookupSymbol< cir::FuncOp >(symbol_name)) {
+            auto func_type     = func_op.getFunctionType();
+            auto func_ptr_type = cir::PointerType::get(builder.getContext(), func_type);
+            auto symbol_ref = mlir::FlatSymbolRefAttr::get(builder.getContext(), symbol_name);
+            return builder.create< cir::GetGlobalOp >(
+                call_op->getLoc(), func_ptr_type, symbol_ref
+            );
+        }
+
+        return std::nullopt;
     }
 
     /**
@@ -912,15 +986,36 @@ namespace patchestry::passes {
 
         auto symbol_ref =
             mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-        llvm::SmallVector< mlir::Value > function_args;
-        prepare_call_arguments(builder, target_op, patch_func, patch, function_args);
+        llvm::DenseMap< mlir::Value, mlir::Value > function_args_map;
+        prepare_call_arguments(builder, target_op, patch_func, patch, function_args_map);
+        llvm::SmallVector< mlir::Value > new_function_args;
+        for (auto &[old_arg, new_arg] : function_args_map) {
+            new_function_args.push_back(new_arg);
+        }
+
         auto patch_call_op = builder.create< cir::CallOp >(
             target_op->getLoc(), symbol_ref,
             patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
                                                      : mlir::Type(),
-            function_args
+            new_function_args
         );
 
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointAfter(patch_call_op);
+        mlir::DominanceInfo DT(patch_call_op->getParentOfType< mlir::FunctionOpInterface >());
+
+        unsigned arg_index = 0;
+        // Replace all uses of old arguments with new arguments after patch function call
+        for (auto &[old_arg, new_arg] : function_args_map) {
+            auto arg_spec = patch_action.action[0].arguments[arg_index];
+            if (arg_spec.is_reference && arg_spec.source == ArgumentSourceType::OPERAND) {
+                auto new_value = builder.create< cir::LoadOp >(old_arg.getLoc(), new_arg);
+                old_arg.replaceUsesWithIf(new_value, [&DT, &new_value](mlir::OpOperand &use) {
+                    return DT.dominates(new_value.getResult(), use.getOwner());
+                });
+            }
+            arg_index++;
+        }
         // Set appropriate attributes based on operation type
         set_patch_call_attributes(patch_call_op, target_op);
 
@@ -982,8 +1077,12 @@ namespace patchestry::passes {
 
         auto symbol_ref =
             mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
+        llvm::DenseMap< mlir::Value, mlir::Value > function_args_map;
+        prepare_call_arguments(builder, target_op, patch_func, patch, function_args_map);
         llvm::SmallVector< mlir::Value > function_args;
-        prepare_call_arguments(builder, target_op, patch_func, patch, function_args);
+        for (auto &[old_arg, new_arg] : function_args_map) {
+            function_args.push_back(new_arg);
+        }
         auto patch_call_op = builder.create< cir::CallOp >(
             target_op->getLoc(), symbol_ref,
             patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()

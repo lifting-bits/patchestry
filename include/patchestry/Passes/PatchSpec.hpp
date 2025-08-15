@@ -44,6 +44,7 @@ namespace patchestry::passes {
     {
         ArgumentSourceType source;
         std::string name;                // Descriptive name for the argument
+        bool is_reference = false;       // Whether the argument is a reference
         std::optional< unsigned > index; // Operand/argument index (required for OPERAND type)
         std::optional< std::string > symbol; // Symbol name (required for VARIABLE/SYMBOL type)
         std::optional< std::string > value;  // Constant value (required for CONSTANT type)
@@ -381,6 +382,7 @@ namespace llvm::yaml {
             io.mapOptional("index", arg.index);
             io.mapOptional("symbol", arg.symbol);
             io.mapOptional("value", arg.value);
+            io.mapOptional("is_reference", arg.is_reference);
         }
     };
 
@@ -410,7 +412,7 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::Metadata >
     {
         static void mapping(IO &io, patchestry::passes::Metadata &metadata) {
-            io.mapOptional("name", metadata.name);
+            io.mapRequired("name", metadata.name);
             io.mapOptional("description", metadata.description);
             io.mapOptional("version", metadata.version);
             io.mapOptional("author", metadata.author);
@@ -424,8 +426,8 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::Parameter >
     {
         static void mapping(IO &io, patchestry::passes::Parameter &param) {
-            io.mapOptional("name", param.name);
-            io.mapOptional("type", param.type);
+            io.mapRequired("name", param.name);
+            io.mapRequired("type", param.type);
             io.mapOptional("description", param.description);
         }
     };
@@ -436,8 +438,8 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, patchestry::passes::Implementation &impl) {
             io.mapOptional("language", impl.language);
-            io.mapOptional("code_file", impl.code_file);
-            io.mapOptional("function_name", impl.function_name);
+            io.mapRequired("code_file", impl.code_file);
+            io.mapRequired("function_name", impl.function_name);
             io.mapOptional("parameters", impl.parameters);
             io.mapOptional("dependencies", impl.dependencies);
         }
@@ -453,7 +455,7 @@ namespace llvm::yaml {
             io.mapOptional("description", spec.description);
             io.mapOptional("category", spec.category);
             io.mapOptional("severity", spec.severity);
-            io.mapOptional("implementation", spec.implementation);
+            io.mapRequired("implementation", spec.implementation);
         }
     };
 
@@ -473,7 +475,7 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::Action >
     {
         static void mapping(IO &io, patchestry::passes::Action &action) {
-            io.mapOptional("patch_id", action.patch_id);
+            io.mapRequired("patch_id", action.patch_id);
             io.mapOptional("description", action.description);
             io.mapOptional("arguments", action.arguments);
 
@@ -496,7 +498,7 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::MatchConfig >
     {
         static void mapping(IO &io, patchestry::passes::MatchConfig &match) {
-            io.mapOptional("name", match.name);
+            io.mapRequired("name", match.name);
             io.mapOptional("function_context", match.function_context);
             io.mapOptional("argument_matches", match.argument_matches);
             io.mapOptional("variable_matches", match.variable_matches);
@@ -520,7 +522,7 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::ContractAction >
     {
         static void mapping(IO &io, patchestry::passes::ContractAction &contract_action) {
-            io.mapOptional("id", contract_action.action_id);
+            io.mapRequired("id", contract_action.action_id);
             io.mapOptional("description", contract_action.description);
         }
     };
@@ -530,10 +532,14 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::PatchAction >
     {
         static void mapping(IO &io, patchestry::passes::PatchAction &patch_action) {
-            io.mapOptional("id", patch_action.action_id);
+            io.mapRequired("id", patch_action.action_id);
             io.mapOptional("description", patch_action.description);
-            io.mapOptional("match", patch_action.match);
-            io.mapOptional("action", patch_action.action);
+            io.mapRequired("match", patch_action.match);
+            io.mapRequired("action", patch_action.action);
+            if (patch_action.match.empty() || patch_action.action.empty()) {
+                LOG(ERROR) << "Patch action has no match or action";
+                return;
+            }
         }
     };
 
@@ -552,9 +558,9 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::PatchLibrary >
     {
         static void mapping(IO &io, patchestry::passes::PatchLibrary &library) {
-            io.mapOptional("apiVersion", library.api_version);
-            io.mapOptional("metadata", library.metadata);
-            io.mapOptional("patches", library.patches);
+            io.mapRequired("apiVersion", library.api_version);
+            io.mapRequired("metadata", library.metadata);
+            io.mapRequired("patches", library.patches);
         }
     };
 
@@ -563,9 +569,9 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::ContractLibrary >
     {
         static void mapping(IO &io, patchestry::passes::ContractLibrary &library) {
-            io.mapOptional("apiVersion", library.api_version);
-            io.mapOptional("metadata", library.metadata);
-            io.mapOptional("contracts", library.contracts);
+            io.mapRequired("apiVersion", library.api_version);
+            io.mapRequired("metadata", library.metadata);
+            io.mapRequired("contracts", library.contracts);
         }
     };
 
@@ -596,6 +602,10 @@ namespace llvm::yaml {
                 }
                 libraries.contracts = contracts_config.value();
             }
+            if (libraries.patches.patches.empty() && libraries.contracts.contracts.empty()) {
+                LOG(ERROR) << "Libraries has no patches or contracts";
+                return;
+            }
         }
     };
 
@@ -604,7 +614,7 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::MetaPatchConfig >
     {
         static void mapping(IO &io, patchestry::passes::MetaPatchConfig &meta_patch) {
-            io.mapOptional("name", meta_patch.name);
+            io.mapRequired("name", meta_patch.name);
             io.mapOptional("id", meta_patch.id);
             io.mapOptional("description", meta_patch.description);
 
@@ -613,7 +623,11 @@ namespace llvm::yaml {
             for (const auto &opt : optimization) {
                 meta_patch.optimization.insert(opt);
             }
-            io.mapOptional("patch_actions", meta_patch.patch_actions);
+            io.mapRequired("patch_actions", meta_patch.patch_actions);
+            if (meta_patch.patch_actions.empty()) {
+                LOG(ERROR) << "Meta patch has no patch actions";
+                return;
+            }
         }
     };
 
@@ -622,7 +636,7 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::MetaContractConfig >
     {
         static void mapping(IO &io, patchestry::passes::MetaContractConfig &meta_contract) {
-            io.mapOptional("name", meta_contract.name);
+            io.mapRequired("name", meta_contract.name);
             io.mapOptional("id", meta_contract.id);
             io.mapOptional("description", meta_contract.description);
         }
@@ -633,13 +647,18 @@ namespace llvm::yaml {
     struct MappingTraits< patchestry::passes::PatchConfiguration >
     {
         static void mapping(IO &io, patchestry::passes::PatchConfiguration &config) {
-            io.mapOptional("apiVersion", config.api_version);
-            io.mapOptional("metadata", config.metadata);
-            io.mapOptional("target", config.target);
-            io.mapOptional("libraries", config.libraries);
+            io.mapRequired("apiVersion", config.api_version);
+            io.mapRequired("metadata", config.metadata);
+            io.mapRequired("target", config.target);
+            io.mapRequired("libraries", config.libraries);
             io.mapOptional("execution_order", config.execution_order);
             io.mapOptional("meta_patches", config.meta_patches);
             io.mapOptional("meta_contracts", config.meta_contracts);
+
+            if (config.meta_patches.empty() && config.meta_contracts.empty()) {
+                LOG(ERROR) << "Patch configuration has no meta patches or meta contracts";
+                return;
+            }
         }
     };
 

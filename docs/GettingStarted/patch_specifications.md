@@ -78,6 +78,7 @@ meta_patches:                            # Meta-patch configurations
               - name: "..."
                 source: "..."
                 index: "0"
+                is_reference=true
 
 meta_contracts:                          # Meta-contract configurations
   - name: ...
@@ -389,10 +390,6 @@ meta_patches:
               - name: "variable_2"
                 source: "variable"
                 symbol: "var1"
-
-    exclude:
-      - "test_*"
-      - "debug_*"
 
 meta_contracts:
   - name: usb_security_meta_contracts
