@@ -10,7 +10,7 @@ metadata:
 
 target:
   binary: "test_binary.bin"
-  arch: "ARM:LE:32"
+  arch: "ARM:LE:32:Cortex"
 
 libraries:
   patches: "patches/usb_security_patches.yaml"
