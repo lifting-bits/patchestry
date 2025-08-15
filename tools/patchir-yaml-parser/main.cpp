@@ -48,7 +48,7 @@ namespace {
 
 // Pretty print patch configuration
 void prettyPrint(const passes::Configuration &config) {
-    llvm::outs() << "=== Patchestry Configuration ===\n";
+    llvm::outs() << "\n=== Patchestry Configuration ===\n";
 
     llvm::outs() << "apiVersion: " << config.api_version << "\n";
 
@@ -137,20 +137,20 @@ int main(int argc, char **argv) {
     auto file_path = llvm::sys::path::filename(InputFile.getValue()).str();
     auto config    = yaml::utils::loadConfiguration(file_path);
     if (!config) {
-        LOG(ERROR) << "Failed to parse YAML file: " << file_path << "\n";
+        LOG(ERROR) << "\nFailed to parse YAML file: " << file_path << "\n";
         return 1;
     }
 
-    LOG(INFO) << "Successfully parsed YAML file: " << InputFile.getValue();
+    LOG(INFO) << "\nSuccessfully parsed YAML file: " << InputFile.getValue() << "\n";
 
     // Handle validation only
     if (Validate) {
         bool isValid = yaml::utils::validateConfiguration(*config);
         if (isValid) {
-            llvm::outs() << "YAML file is valid\n";
+            llvm::outs() << "\nYAML file is valid\n";
             return 0;
         } else {
-            llvm::outs() << "YAML file validation failed\n";
+            llvm::outs() << "\nYAML file validation failed\n";
             return 1;
         }
     }
@@ -165,7 +165,7 @@ int main(int argc, char **argv) {
         if (!yaml.empty()) {
             writeOutput(yaml, OutputFile.getValue());
         } else {
-            LOG(ERROR) << "Failed to serialize configuration";
+            LOG(ERROR) << "\nFailed to serialize configuration\n";
             return 1;
         }
     }
