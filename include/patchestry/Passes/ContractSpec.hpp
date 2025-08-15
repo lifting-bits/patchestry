@@ -124,6 +124,7 @@ namespace patchestry::passes {
             std::string name;
             std::string id;
             std::string description;
+            std::vector< ContractAction > contract_actions;
         };
 
 
@@ -291,7 +292,7 @@ namespace llvm::yaml {
     struct MappingTraits< contract::MatchConfig >
     {
         static void mapping(IO &io, contract::MatchConfig &match) {
-            io.mapOptional("name", match.name);
+            io.mapRequired("name", match.name);
             io.mapOptional("function_context", match.function_context);
             io.mapOptional("argument_matches", match.argument_matches);
             io.mapOptional("variable_matches", match.variable_matches);
@@ -315,8 +316,8 @@ namespace llvm::yaml {
         static void mapping(IO &io, contract::ContractAction &contract_action) {
             io.mapOptional("id", contract_action.action_id);
             io.mapOptional("description", contract_action.description);
-            io.mapOptional("match", contract_action.match);
-            io.mapOptional("action", contract_action.action);
+            io.mapRequired("match", contract_action.match);
+            io.mapRequired("action", contract_action.action);
         }
     };
 
@@ -336,16 +337,10 @@ namespace llvm::yaml {
     struct MappingTraits< contract::MetaContractConfig >
     {
         static void mapping(IO &io, contract::MetaContractConfig &meta_contract) {
-            io.mapOptional("name", meta_contract.name);
+            io.mapRequired("name", meta_contract.name);
             io.mapOptional("id", meta_contract.id);
             io.mapOptional("description", meta_contract.description);
-
-            // std::vector< std::string > optimization;
-            // io.mapOptional("optimization", optimization);
-            // for (const auto &opt : optimization) {
-            //     meta_patch.optimization.insert(opt);
-            // }
-            // io.mapOptional("patch_actions", meta_patch.patch_actions);
+            io.mapRequired("contract_actions", meta_contract.contract_actions);
         }
     };
 } // namespace llvm::yaml
