@@ -240,7 +240,7 @@ namespace llvm::yaml {
     struct MappingTraits< patch::Parameter >
     {
         static void mapping(IO &io, patch::Parameter &param) {
-            io.mapOptional("name", param.name);
+            io.mapRequired("name", param.name);
             io.mapOptional("type", param.type);
             io.mapOptional("description", param.description);
         }
@@ -252,9 +252,9 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, patch::Implementation &impl) {
             io.mapOptional("language", impl.language);
-            io.mapOptional("code_file", impl.code_file);
+            io.mapRequired("code_file", impl.code_file);
             io.mapOptional("function_name", impl.function_name);
-            io.mapOptional("parameters", impl.parameters);
+            io.mapRequired("parameters", impl.parameters);
             io.mapOptional("dependencies", impl.dependencies);
         }
     };
@@ -265,11 +265,11 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, patch::PatchSpec &spec) {
             io.mapRequired("name", spec.name);
-            io.mapOptional("id", spec.id);
+            io.mapRequired("id", spec.id);
             io.mapOptional("description", spec.description);
             io.mapOptional("category", spec.category);
             io.mapOptional("severity", spec.severity);
-            io.mapOptional("implementation", spec.implementation);
+            io.mapRequired("implementation", spec.implementation);
         }
     };
 
@@ -278,7 +278,7 @@ namespace llvm::yaml {
     struct MappingTraits< patch::Action >
     {
         static void mapping(IO &io, patch::Action &action) {
-            io.mapOptional("patch_id", action.patch_id);
+            io.mapRequired("patch_id", action.patch_id);
             io.mapOptional("description", action.description);
             io.mapOptional("arguments", action.arguments);
 
@@ -301,7 +301,7 @@ namespace llvm::yaml {
     struct MappingTraits< patch::MatchConfig >
     {
         static void mapping(IO &io, patch::MatchConfig &match) {
-            io.mapOptional("name", match.name);
+            io.mapRequired("name", match.name);
             io.mapOptional("function_context", match.function_context);
             io.mapOptional("argument_matches", match.argument_matches);
             io.mapOptional("variable_matches", match.variable_matches);
@@ -325,10 +325,10 @@ namespace llvm::yaml {
     struct MappingTraits< patch::PatchAction >
     {
         static void mapping(IO &io, patch::PatchAction &patch_action) {
-            io.mapOptional("id", patch_action.action_id);
+            io.mapRequired("id", patch_action.action_id);
             io.mapOptional("description", patch_action.description);
-            io.mapOptional("match", patch_action.match);
-            io.mapOptional("action", patch_action.action);
+            io.mapRequired("match", patch_action.match);
+            io.mapRequired("action", patch_action.action);
         }
     };
 
@@ -341,7 +341,7 @@ namespace llvm::yaml {
         static void mapping(IO &io, patch::PatchLibrary &library) {
             io.mapOptional("apiVersion", library.api_version);
             io.mapOptional("metadata", library.metadata);
-            io.mapOptional("patches", library.patches);
+            io.mapRequired("patches", library.patches);
         }
     };
 
@@ -350,8 +350,8 @@ namespace llvm::yaml {
     struct MappingTraits< patch::MetaPatchConfig >
     {
         static void mapping(IO &io, patch::MetaPatchConfig &meta_patch) {
-            io.mapOptional("name", meta_patch.name);
-            io.mapOptional("id", meta_patch.id);
+            io.mapRequired("name", meta_patch.name);
+            io.mapRequired("id", meta_patch.id);
             io.mapOptional("description", meta_patch.description);
 
             std::vector< std::string > optimization;
@@ -359,7 +359,7 @@ namespace llvm::yaml {
             for (const auto &opt : optimization) {
                 meta_patch.optimization.insert(opt);
             }
-            io.mapOptional("patch_actions", meta_patch.patch_actions);
+            io.mapRequired("patch_actions", meta_patch.patch_actions);
         }
     };
 } // namespace llvm::yaml

@@ -230,7 +230,7 @@ namespace llvm::yaml {
     struct MappingTraits< contract::Parameter >
     {
         static void mapping(IO &io, contract::Parameter &param) {
-            io.mapOptional("name", param.name);
+            io.mapRequired("name", param.name);
             io.mapOptional("type", param.type);
             io.mapOptional("description", param.description);
         }
@@ -242,8 +242,8 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, contract::Implementation &impl) {
             io.mapOptional("language", impl.language);
-            io.mapOptional("code_file", impl.code_file);
-            io.mapOptional("function_name", impl.function_name);
+            io.mapRequired("code_file", impl.code_file);
+            io.mapRequired("function_name", impl.function_name);
             io.mapOptional("parameters", impl.parameters);
             io.mapOptional("dependencies", impl.dependencies);
         }
@@ -255,11 +255,11 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, contract::ContractSpec &spec) {
             io.mapRequired("name", spec.name);
-            io.mapOptional("id", spec.id);
+            io.mapRequired("id", spec.id);
             io.mapOptional("description", spec.description);
             io.mapOptional("category", spec.category);
             io.mapOptional("severity", spec.severity);
-            io.mapOptional("implementation", spec.implementation);
+            io.mapRequired("implementation", spec.implementation);
             io.mapOptional("contract_module", spec.contract_module);
         }
     };
@@ -269,7 +269,7 @@ namespace llvm::yaml {
     struct MappingTraits< contract::Action >
     {
         static void mapping(IO &io, contract::Action &action) {
-            io.mapOptional("contract_id", action.contract_id);
+            io.mapRequired("contract_id", action.contract_id);
             io.mapOptional("description", action.description);
             io.mapOptional("arguments", action.arguments);
 
@@ -293,7 +293,7 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, contract::MatchConfig &match) {
             io.mapRequired("name", match.name);
-            io.mapOptional("function_context", match.function_context);
+            io.mapRequired("function_context", match.function_context);
             io.mapOptional("argument_matches", match.argument_matches);
             io.mapOptional("variable_matches", match.variable_matches);
             io.mapOptional("symbol_matches", match.symbol_matches);
@@ -314,7 +314,7 @@ namespace llvm::yaml {
     struct MappingTraits< contract::ContractAction >
     {
         static void mapping(IO &io, contract::ContractAction &contract_action) {
-            io.mapOptional("id", contract_action.action_id);
+            io.mapRequired("id", contract_action.action_id);
             io.mapOptional("description", contract_action.description);
             io.mapRequired("match", contract_action.match);
             io.mapRequired("action", contract_action.action);
@@ -328,7 +328,7 @@ namespace llvm::yaml {
         static void mapping(IO &io, contract::ContractLibrary &library) {
             io.mapOptional("apiVersion", library.api_version);
             io.mapOptional("metadata", library.metadata);
-            io.mapOptional("contracts", library.contracts);
+            io.mapRequired("contracts", library.contracts);
         }
     };
 
