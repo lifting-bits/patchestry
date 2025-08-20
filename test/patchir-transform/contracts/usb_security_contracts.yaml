@@ -19,11 +19,13 @@ contracts:
 
     implementation:
       language: C
+      # this reference is in relation to the location of the meta-contract!
       code_file: "contracts/usb_endpoint_write_validation.c"
       function_name: "contract::before::usbd_ep_write_packet"
       parameters:
+      # https://www.kernel.org/doc/html/latest/driver-api/usb/usb.html#c.usb_device
         - name: usb_device
-          type: "usb_device_t*"
+          type: "usb_device*"
           description: "USB device context"
         - name: buffer
           type: "const void*"

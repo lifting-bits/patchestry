@@ -209,9 +209,9 @@ namespace llvm::yaml {
     struct MappingTraits< contract::ArgumentMatch >
     {
         static void mapping(IO &io, contract::ArgumentMatch &arg) {
-            io.mapRequired("index", arg.index);
+            io.mapOptional("index", arg.index);
             io.mapRequired("name", arg.name);
-            io.mapOptional("type", arg.type);
+            io.mapRequired("type", arg.type);
         }
     };
 
