@@ -20,6 +20,7 @@
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <clang/Frontend/CompilerInstance.h>
 
+#include <patchestry/Passes/ContractOperationMatcher.hpp>
 #include <patchestry/Passes/PatchOperationMatcher.hpp>
 #include <patchestry/YAML/ConfigurationFile.hpp>
 #include <patchestry/YAML/PatchSpec.hpp>
