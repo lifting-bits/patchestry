@@ -22,7 +22,7 @@ patches:
       function_name: "patch::before::usbd_ep_write_packet"
       parameters:
         - name: usb_device
-          type: "usb_device_t*"
+          type: "void*"
           description: "USB device context"
         - name: buffer
           type: "const void*"
@@ -43,3 +43,21 @@ patches:
         - name: return_value
           type: "uint32_t"
           description: "Return value from USB endpoint write operation"
+
+  - name: usb_endpoint_write_validation_before_update_state
+    id: "USB-PATCH-BEFORE-UPDATE-STATE-001"
+    description: "Validate USB endpoint write operations"
+    category: usb_security
+    severity: high
+
+    implementation:
+      language: c
+      code_file: "patches/patch_usbd_ep_write_packet.c"
+      function_name: "patch::before::usbd_cp_write_packet::update_state"
+      parameters:
+        - name: usb_device_pointer
+          type: "void**"
+          description: "USB device context pointer"
+        - name: buffer_pointer
+          type: "void**"
+          description: "Data buffer to write"
