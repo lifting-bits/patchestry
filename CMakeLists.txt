@@ -63,7 +63,7 @@ setup_package_version_variables(patchestry)
 
 set(PATCHESTRY_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(PATCHESTRY_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
-set(PATCHESTRY_INCLUDE_DIR ${PATCHESTRY_BINARY_DIR}/include)
+set(PATCHESTRY_INCLUDE_DIR ${PATCHESTRY_SOURCE_DIR}/include)
 
 # Configure Patchestry Version.inc file.
 configure_file(
