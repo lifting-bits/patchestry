@@ -87,7 +87,6 @@ namespace patchestry::passes {
             std::vector< ArgumentMatch > argument_matches;
             std::vector< VariableMatch > variable_matches;
             std::vector< SymbolMatch > symbol_matches;
-            std::vector< OperandMatch > operand_matches;
         };
 
         struct Action {
@@ -297,7 +296,6 @@ namespace llvm::yaml {
             io.mapOptional("argument_matches", match.argument_matches);
             io.mapOptional("variable_matches", match.variable_matches);
             io.mapOptional("symbol_matches", match.symbol_matches);
-            io.mapOptional("operand_matches", match.operand_matches);
 
             std::string kind_str;
             io.mapRequired("kind", kind_str);
