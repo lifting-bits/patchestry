@@ -211,7 +211,7 @@ namespace llvm::yaml {
         static void mapping(IO &io, contract::ArgumentMatch &arg) {
             io.mapOptional("index", arg.index);
             io.mapRequired("name", arg.name);
-            io.mapRequired("type", arg.type);
+            io.mapOptional("type", arg.type);
         }
     };
 
