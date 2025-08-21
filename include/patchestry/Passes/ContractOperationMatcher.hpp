@@ -40,14 +40,14 @@ namespace patchestry::passes {
             enum Mode : uint8_t { FUNCTION };
 
             /**
-             * @brief Checks if an operation matches the given patch specification.
+             * @brief Checks if an operation matches the given contract specification.
              *
              * This is the main entry point for operation matching. It evaluates all
-             * matching criteria in the patch specification against the given operation.
+             * matching criteria in the contract specification against the given operation.
              *
              * @param op The operation to evaluate
              * @param func The function containing the operation
-             * @param spec The patch specification to match against
+             * @param spec The contract specification to match against
              * @return true if the operation matches the specification
              */
             static bool
