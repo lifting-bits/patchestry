@@ -30,12 +30,12 @@ namespace patchestry::passes {
     /**
      * @brief Provides matching capabilities for MLIR operations.
      *
-     * The OperationMatcher class encapsulates logic for determining whether
+     * The PatchOperationMatcher class encapsulates logic for determining whether
      * an operation should be instrumented based on patch specifications. It supports
      * various matching criteria including operation names, function context,
      * argument patterns, and variable patterns.
      */
-    class OperationMatcher
+    class PatchOperationMatcher
     {
       public:
         enum Mode : uint8_t { OPERATION, FUNCTION };

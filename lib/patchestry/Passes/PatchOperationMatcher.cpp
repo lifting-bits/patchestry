@@ -5,7 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include <patchestry/Passes/OperationMatcher.hpp>
+#include <patchestry/Passes/PatchOperationMatcher.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 
 #include <regex>
@@ -20,23 +20,23 @@
 
 namespace patchestry::passes {
 
-    bool OperationMatcher::matches(
+    bool PatchOperationMatcher::matches(
         mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &action,
-        OperationMatcher::Mode mode // NOLINT
+        PatchOperationMatcher::Mode mode // NOLINT
     ) {
         const auto &match = action.match[0];
 
         // Handle different match kinds
         switch (mode) {
-            case OperationMatcher::Mode::OPERATION:
+            case PatchOperationMatcher::Mode::OPERATION:
                 return matches_operation(op, func, match);
-            case OperationMatcher::Mode::FUNCTION:
+            case PatchOperationMatcher::Mode::FUNCTION:
                 return matches_function_call(op, func, match);
         }
         return false;
     }
 
-    bool OperationMatcher::matches_operation(
+    bool PatchOperationMatcher::matches_operation(
         mlir::Operation *op, cir::FuncOp func, const patch::MatchConfig &match
     ) {
         // If the match kind is not operation, return false
@@ -67,7 +67,7 @@ namespace patchestry::passes {
         return true;
     }
 
-    bool OperationMatcher::matches_function_call(
+    bool PatchOperationMatcher::matches_function_call(
         mlir::Operation *op, cir::FuncOp func, const patch::MatchConfig &match
     ) {
         // If the match kind is not function, return false
@@ -107,7 +107,7 @@ namespace patchestry::passes {
         return true;
     }
 
-    bool OperationMatcher::matches_operation_name(
+    bool PatchOperationMatcher::matches_operation_name(
         mlir::Operation *op, const std::string &operation_pattern
     ) {
         // If operation pattern is empty, whitespace-only, or effectively null, it will match
@@ -125,7 +125,7 @@ namespace patchestry::passes {
         return matches_pattern(op->getName().getStringRef().str(), operation_pattern);
     }
 
-    bool OperationMatcher::matches_function_context(
+    bool PatchOperationMatcher::matches_function_context(
         cir::FuncOp func, const std::vector< patch::FunctionContext > &function_context
     ) {
         // If no function context specified, match all functions
@@ -153,7 +153,7 @@ namespace patchestry::passes {
         return false;
     }
 
-    bool OperationMatcher::matches_operands(
+    bool PatchOperationMatcher::matches_operands(
         mlir::Operation *op, const std::vector< patch::OperandMatch > &operand_matches
     ) {
         // If no argument matches specified, consider it a match
@@ -190,7 +190,7 @@ namespace patchestry::passes {
         return true;
     }
 
-    bool OperationMatcher::matches_symbols(
+    bool PatchOperationMatcher::matches_symbols(
         mlir::Operation *op, const std::vector< patch::SymbolMatch > &symbol_matches
     ) {
         // If no variable matches specified, consider it a match
@@ -240,7 +240,7 @@ namespace patchestry::passes {
         return false;
     }
 
-    bool OperationMatcher::matches_arguments(
+    bool PatchOperationMatcher::matches_arguments(
         mlir::Operation *op, const std::vector< patch::ArgumentMatch > &argument_matches
     ) {
         // If no argument matches specified, consider it a match
@@ -277,7 +277,7 @@ namespace patchestry::passes {
         return true;
     }
 
-    bool OperationMatcher::matches_variables(
+    bool PatchOperationMatcher::matches_variables(
         mlir::Operation *op, const std::vector< patch::VariableMatch > &variable_matches
     ) {
         // If no variable matches specified, consider it a match
@@ -307,7 +307,7 @@ namespace patchestry::passes {
         return false;
     }
 
-    std::string OperationMatcher::extract_callee_name(cir::CallOp call_op) {
+    std::string PatchOperationMatcher::extract_callee_name(cir::CallOp call_op) {
         // Extract the called function name from the call operation
         if (auto callee = call_op.getCalleeAttr()) {
             return callee.getLeafReference().str();
@@ -327,7 +327,7 @@ namespace patchestry::passes {
     }
 
     bool
-    OperationMatcher::matches_pattern(const std::string &text, const std::string &pattern) {
+    PatchOperationMatcher::matches_pattern(const std::string &text, const std::string &pattern) {
         // If no pattern, match all (this is intentionally different from matches_operation_name
         // which rejects empty patterns - here empty patterns mean "don't filter by this
         // criterion")
@@ -351,7 +351,7 @@ namespace patchestry::passes {
         return text == pattern;
     }
 
-    bool OperationMatcher::matches_type(mlir::Type type, const std::string &type_pattern) {
+    bool PatchOperationMatcher::matches_type(mlir::Type type, const std::string &type_pattern) {
         // if no type pattern, match all types
         if (type_pattern.empty()) {
             return true;
@@ -361,7 +361,7 @@ namespace patchestry::passes {
         return matches_pattern(type_str, type_pattern);
     }
 
-    std::string OperationMatcher::extract_variable_name(mlir::Operation *op, unsigned index) {
+    std::string PatchOperationMatcher::extract_variable_name(mlir::Operation *op, unsigned index) {
         auto operands = op->getOperands();
 
         // Determine if we're looking at an operand or result
@@ -387,7 +387,7 @@ namespace patchestry::passes {
         return "var_" + std::to_string(index);
     }
 
-    std::string OperationMatcher::extract_ssa_value_name(mlir::Value value) {
+    std::string PatchOperationMatcher::extract_ssa_value_name(mlir::Value value) {
         // Check if the value has a location with name information
         // Clangir does not uses NameLoc for associating names with values and it should go
         // to fallback
@@ -432,7 +432,7 @@ namespace patchestry::passes {
         return "";
     }
 
-    std::string OperationMatcher::extract_symbol_name(mlir::Operation *op) {
+    std::string PatchOperationMatcher::extract_symbol_name(mlir::Operation *op) {
         // Check for standard symbol attributes
         if (auto symbol_name =
                 op->getAttrOfType< mlir::StringAttr >(mlir::SymbolTable::getSymbolAttrName()))
@@ -455,7 +455,7 @@ namespace patchestry::passes {
         return {};
     }
 
-    std::string OperationMatcher::extract_variable_attribute(mlir::Operation *op) {
+    std::string PatchOperationMatcher::extract_variable_attribute(mlir::Operation *op) {
         // check for name or symbol_name attributes
         const std::vector< std::string > var_attr_names = { "name", "symbol_name" };
 
@@ -524,7 +524,7 @@ namespace patchestry::passes {
         return "";
     }
 
-    std::string OperationMatcher::type_to_string(mlir::Type type) {
+    std::string PatchOperationMatcher::type_to_string(mlir::Type type) {
         std::string type_str;
         llvm::raw_string_ostream os(type_str);
         type.print(os);

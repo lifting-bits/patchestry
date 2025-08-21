@@ -54,7 +54,7 @@
 
 #include <patchestry/Passes/ConfigurationFile.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
-#include <patchestry/Passes/OperationMatcher.hpp>
+#include <patchestry/Passes/PatchOperationMatcher.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/YAML/YAMLParser.hpp>
@@ -531,8 +531,8 @@ namespace patchestry::passes {
                 func.walk([&](cir::CallOp call_op) {
                     // Create a temporary spec with the patch action match
 
-                    if (OperationMatcher::matches(
-                            call_op, func, patch_action, OperationMatcher::Mode::FUNCTION
+                    if (PatchOperationMatcher::matches(
+                            call_op, func, patch_action, PatchOperationMatcher::Mode::FUNCTION
                         ))
                     {
                         auto patch_module = load_patch_module(
@@ -578,8 +578,8 @@ namespace patchestry::passes {
                     continue;
                 }
 
-                if (OperationMatcher::matches(
-                        op, func, patch_action, OperationMatcher::Mode::OPERATION
+                if (PatchOperationMatcher::matches(
+                        op, func, patch_action, PatchOperationMatcher::Mode::OPERATION
                     ))
                 {
                     auto patch_module = load_patch_module(

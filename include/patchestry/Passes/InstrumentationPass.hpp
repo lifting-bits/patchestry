@@ -21,7 +21,7 @@
 #include <clang/Frontend/CompilerInstance.h>
 
 #include <patchestry/Passes/ConfigurationFile.hpp>
-#include <patchestry/Passes/OperationMatcher.hpp>
+#include <patchestry/Passes/PatchOperationMatcher.hpp>
 #include <patchestry/Passes/PatchSpec.hpp>
 
 // Forward declarations to minimize header dependencies

@@ -6,7 +6,7 @@
 add_library(patchestry_passes STATIC
     InstrumentationPass.cpp
     Compiler.cpp
-    OperationMatcher.cpp
+    PatchOperationMatcher.cpp
 )
 
 set(CLANG_IR_LIBS
