@@ -29,7 +29,17 @@ add_lit_testsuite(patchir-decomp-tests
   ${CMAKE_CURRENT_SOURCE_DIR}/patchir-decomp
 )
 
-add_test(NAME lit
+add_test(NAME ghidra-output-tests
   COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/ghidra"
+  --param BUILD_TYPE=$<CONFIG>
+)
+
+add_test(NAME pcode-translation-tests
+  COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/pcode-translate"
+  --param BUILD_TYPE=$<CONFIG>
+)
+
+add_test(NAME patchir-decomp-tests
+  COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/patchir-decomp"
   --param BUILD_TYPE=$<CONFIG>
 )
