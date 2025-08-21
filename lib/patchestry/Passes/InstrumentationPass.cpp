@@ -265,12 +265,12 @@ namespace patchestry::passes {
      * configuration_file, and use the given inline options for controlling inlining behavior.
      *
      * @param configuration_file Path to the YAML patch specification file
-     * @param inline_options Configuration options for controlling function inlining behavior
+     * @param ∂options Configuration options for controlling how instrumentation is generally applied
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
     std::unique_ptr< mlir::Pass >
-    createInstrumentationPass(const std::string &configuration_file, const PatchOptions &patch_options) {
-        return std::make_unique< InstrumentationPass >(configuration_file, patch_options);
+    createInstrumentationPass(const std::string &configuration_file, const InstrumentationOptions &options) {
+        return std::make_unique< InstrumentationPass >(configuration_file, options);
     }
 
     template< typename T >
@@ -311,20 +311,20 @@ namespace patchestry::passes {
      * @param patch_options Reference to inlining configuration options
      */
     InstrumentationPass::InstrumentationPass(
-        std::string spec_, const PatchOptions &patch_options_
+        std::string spec_, const InstrumentationOptions &options_
     )
-        : configuration_file(std::move(spec_)), patch_options(patch_options_) {
+        : configuration_file(std::move(spec_)), options(options_) {
         patchestry::yaml::YAMLParser parser;
         ConfigurationFile::getInstance().set_file_path(configuration_file);
         if (!parser.validate_yaml_file< patchestry::passes::Configuration >(configuration_file)) {
-            LOG(ERROR) << "Error: Failed to parse patch specification file: " << configuration_file
+            LOG(ERROR) << "Error: Failed to parse Patchestry configuration file: " << configuration_file
                        << "\n";
             return;
         }
 
         auto buffer_or_err = llvm::MemoryBuffer::getFile(configuration_file);
         if (!buffer_or_err) {
-            LOG(ERROR) << "Error: Failed to read patch specification file: " << configuration_file
+            LOG(ERROR) << "Error: Failed to read Patchestry configuration file: " << configuration_file
                        << "\n";
             return;
         }
@@ -333,7 +333,7 @@ namespace patchestry::passes {
             llvm::sys::path::filename(configuration_file).str()
         );
         if (!config_or_err) {
-            LOG(ERROR) << "Error: Failed to parse patch specification file: " << configuration_file 
+            LOG(ERROR) << "Error: Failed to parse Patchestry configuration file: " << configuration_file 
                        << "\n";
             return;
         }
@@ -355,7 +355,7 @@ namespace patchestry::passes {
                 continue;
             }
         }
-        (void) patch_options;
+        (void) options;
     }
 
     /**
@@ -373,7 +373,7 @@ namespace patchestry::passes {
 
         // check if the configuration is loaded; if not, return
         if (!config) {
-            LOG(ERROR) << "No patch configuration loaded. Skipping instrumentation.\n";
+            LOG(ERROR) << "No Patchestry configuration loaded. Skipping instrumentation.\n";
             return;
         }
 
@@ -867,7 +867,7 @@ namespace patchestry::passes {
      */
     void InstrumentationPass::apply_before_patch(
         mlir::Operation *target_op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-        bool inline_patches
+        bool should_inline
     ) {
         if (target_op == nullptr) {
             LOG(ERROR) << "Patch before: Operation is null";
@@ -923,7 +923,7 @@ namespace patchestry::passes {
         // Set appropriate attributes based on operation type
         set_patch_call_attributes(patch_call_op, target_op);
 
-        if (inline_patches) {
+        if (should_inline) {
             inline_worklists.push_back(patch_call_op);
         }
     }

@@ -34,7 +34,7 @@ namespace mlir {
 
 namespace patchestry::passes { // NOLINT
 
-    struct PatchOptions;
+    struct InstrumentationOptions;
 
     /**
      * @brief Registers instrumentation passes with the MLIR pass registry.
@@ -45,7 +45,7 @@ namespace patchestry::passes { // NOLINT
      * instrumentation rules.
      *
      * @param configuration_file Path to the YAML Patchestry configuration file containing 
-     * instrumentation rules
+     * instrumentation rules for applying patches, contracts, or both
      */
     void registerInstrumentationPasses(std::string configuration_file);
 
@@ -56,18 +56,18 @@ namespace patchestry::passes { // NOLINT
      * instance.
      *
      * @param configuration_file Path to the YAML configuration file
-     * @param patch_options Configuration options for controlling function inlining behavior
+     * @param options Configuration options for controlling how instrumentation is generally applied
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
     std::unique_ptr< mlir::Pass >
-    createInstrumentationPass(const std::string &configuration_file, const PatchOptions &patch_options);
+    createInstrumentationPass(const std::string &configuration_file, const InstrumentationOptions &options);
 
     /**
-     * @brief Configuration options for controlling patching behavior.
+     * @brief Configuration options for controlling instrumentation behavior.
      */
-    struct PatchOptions
+    struct InstrumentationOptions
     {
-        /** @brief Flag to enable or disable function inlining of patch functions */
+        /** @brief Flag to enable or disable function inlining of instrumentation functions */
         bool enable_inlining;
     };
 
@@ -81,9 +81,9 @@ namespace patchestry::passes { // NOLINT
      * @brief MLIR pass that applies code instrumentation based on configuration.
      *
      * The InstrumentationPass is an MLIR transformation pass that modifies MLIR modules
-     * by applying patches according to specifications defined in a YAML configuration file.
-     * It can instrument function calls and operations by inserting patch code before, after,
-     * or replacing the original operations entirely.
+     * by instrumenting according to specifications defined in a YAML configuration file.
+     * It can instrument function calls and operations by inserting patch or contract code
+     * before or after, or by replacing an original operation entirely with a patch.
      *
      * The pass supports three main instrumentation modes:
      * - APPLY_BEFORE: Insert patch code before the matched operation
@@ -100,28 +100,28 @@ namespace patchestry::passes { // NOLINT
         /** @brief Path to the YAML Patchestry configuration file */
         std::string configuration_file;
 
-        /** @brief Parsed patch configuration from the file */
+        /** @brief Parsed patch- or contract-specific configuration from the file */
         std::optional< Configuration > config;
 
         /** @brief List of operations to be inlined after instrumentation */
         std::vector< mlir::Operation * > inline_worklists;
 
         /** @brief Reference to inlining configuration options */
-        const PatchOptions &patch_options;
+        const InstrumentationOptions &options;
 
       public:
         /**
          * @brief Constructs an InstrumentationPass with the given configuration file and
          * options.
          *
-         * The constructor loads and parses the configuration YAML file, validates patch files,
-         * and prepares the pass for execution. If a file cannot be loaded or
-         * parsed, appropriate error messages are logged.
+         * The constructor loads and parses the configuration YAML file, validates the indicated
+         * patches and/or contracts, and prepares the pass for execution. If a file cannot be 
+         * loaded or parsed, appropriate error messages are logged.
          *
          * @param configuration_file Path to the YAML configuration file
          * @param inline_options Reference to inlining configuration options
          */
-        explicit InstrumentationPass(std::string configuration_file, const PatchOptions &patch_options);
+        explicit InstrumentationPass(std::string configuration_file, const InstrumentationOptions &options);
 
         /**
          * @brief Main entry point for the pass execution.
