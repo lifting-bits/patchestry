@@ -22,7 +22,7 @@ patches:
       function_name: "patch::before::usbd_ep_write_packet"
       parameters:
         - name: usb_device
-          type: "usb_device_t*"
+          type: "void*"
           description: "USB device context"
         - name: buffer
           type: "const void*"
@@ -56,7 +56,7 @@ patches:
       function_name: "patch::before::usbd_cp_write_packet::update_state"
       parameters:
         - name: usb_device_pointer
-          type: "usb_device_t**"
+          type: "void**"
           description: "USB device context pointer"
         - name: buffer_pointer
           type: "void**"
