@@ -22,6 +22,7 @@ namespace mlir {
 
 namespace cir {
     class FuncOp;
+    class CallOp;
 } // namespace cir
 
 namespace patchestry::passes {
@@ -52,6 +53,121 @@ namespace patchestry::passes {
             static bool
             matches(mlir::Operation *op, cir::FuncOp func, const contract::ContractAction &spec, Mode mode);
 
+            /**
+             * @brief Checks if a function matches the specified function context criteria.
+             *
+             * @param func The function to evaluate
+             * @param function_context The function context criteria to match against
+             * @return true if the function matches the criteria
+             */
+            static bool matches_function_context( // NOLINT
+                cir::FuncOp func, const std::vector< contract::FunctionContext > &function_context
+            );
+
+            /**
+             * @brief Checks if operation arguments match the specified argument patterns.
+             *
+             * @param op The operation whose arguments to check
+             * @param argument_matches The argument match criteria
+             * @return true if the arguments match the criteria
+             */
+            static bool matches_arguments( // NOLINT
+                mlir::Operation *op, const std::vector< contract::ArgumentMatch > &argument_matches
+            );
+
+            /**
+             * @brief Checks if operation variables match the specified variable patterns.
+             *
+             * This checks variables used or defined by the operation against the
+             * variable match criteria.
+             *
+             * @param op The operation to check
+             * @param variable_matches The variable match criteria
+             * @return true if the variables match the criteria
+             */
+            static bool matches_variables( // NOLINT
+                mlir::Operation *op, const std::vector< contract::VariableMatch > &variable_matches
+            );
+
+            /**
+             * @brief Matches function call-based criteria.
+             *
+             * @param op The operation to check (should be a call operation)
+             * @param func The function containing the call
+             * @param match The function match criteria
+             * @return true if the function call matches the criteria
+             */
+            static bool matches_function_call( // NOLINT
+                mlir::Operation *op, cir::FuncOp func, const contract::MatchConfig &match
+            );
+
+            /**
+             * @brief Extracts the called function name from a call operation.
+             *
+             * @param call_op The call operation
+             * @return The name of the called function
+             */
+            static std::string extract_callee_name(cir::CallOp call_op); // NOLINT
+
         private:
-    }
+            /**
+             * @brief Performs pattern matching with support for regex.
+             *
+             * @param text The text to match against
+             * @param pattern The pattern (plain string or regex in /pattern/ format)
+             * @return true if the text matches the pattern
+             */
+            static bool
+            matches_pattern(const std::string &text, const std::string &pattern); // NOLINT
+
+            /**
+             * @brief Checks if a type matches the specified type pattern.
+             *
+             * @param type The MLIR type to check
+             * @param type_pattern The type pattern to match against
+             * @return true if the type matches the pattern
+             */
+            static bool matches_type(mlir::Type type, const std::string &type_pattern); // NOLINT
+
+            /**
+             * @brief Extracts the variable name from an operation's operands or results.
+             *
+             * @param op The operation to extract variable names from
+             * @param index The operand/result index
+             * @return The variable name if available, empty string otherwise
+             */
+            static std::string extract_variable_name(mlir::Operation *op, unsigned index); // NOLINT
+
+            /**
+             * @brief Extracts the name from an SSA value.
+             *
+             * @param value The SSA value to extract name from
+             * @return The variable name if available, empty string otherwise
+             */
+            static std::string extract_ssa_value_name(mlir::Value value); // NOLINT
+
+            /**
+             * @brief Extracts symbol name from operation attributes.
+             *
+             * @param op The operation to extract symbol name from
+             * @return The symbol name if available, empty string otherwise
+             */
+            static std::string extract_symbol_name(mlir::Operation *op); // NOLINT
+
+            /**
+             * @brief Extracts variable-related attributes from an operation.
+             *
+             * @param op The operation to extract variable attributes from
+             * @return The variable name if available, empty string otherwise
+             */
+            static std::string extract_variable_attribute(mlir::Operation *op); // NOLINT
+
+            /**
+             * @brief Converts an MLIR type to its string representation.
+             *
+             * @param type The MLIR type to convert
+             * @return String representation of the type
+             */
+            static std::string type_to_string(mlir::Type type); // NOLINT
+    };
 } // namespace patchestry::passes
