@@ -18,10 +18,10 @@
 #include <llvm/Support/Path.h>
 #include <llvm/Support/YAMLTraits.h>
 
-#include <patchestry/Passes/BaseSpec.hpp>
-#include <patchestry/Passes/ContractSpec.hpp>
-#include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
+#include <patchestry/YAML/BaseSpec.hpp>
+#include <patchestry/YAML/ContractSpec.hpp>
+#include <patchestry/YAML/PatchSpec.hpp>
 #include <patchestry/YAML/YAMLParser.hpp>
 
 class ConfigurationFile {

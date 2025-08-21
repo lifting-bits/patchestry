@@ -20,9 +20,9 @@
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <clang/Frontend/CompilerInstance.h>
 
-#include <patchestry/Passes/ConfigurationFile.hpp>
 #include <patchestry/Passes/PatchOperationMatcher.hpp>
-#include <patchestry/Passes/PatchSpec.hpp>
+#include <patchestry/YAML/ConfigurationFile.hpp>
+#include <patchestry/YAML/PatchSpec.hpp>
 
 // Forward declarations to minimize header dependencies
 namespace mlir {

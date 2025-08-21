@@ -18,8 +18,8 @@
 #include <llvm/Support/Path.h>
 #include <llvm/Support/YAMLTraits.h>
 
-#include <patchestry/Passes/BaseSpec.hpp>
 #include <patchestry/Util/Log.hpp>
+#include <patchestry/YAML/BaseSpec.hpp>
 #include <patchestry/YAML/YAMLParser.hpp>
 
 namespace patchestry::passes {

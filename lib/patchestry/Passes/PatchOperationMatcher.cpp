@@ -6,7 +6,7 @@
  */
 
 #include <patchestry/Passes/PatchOperationMatcher.hpp>
-#include <patchestry/Passes/PatchSpec.hpp>
+#include <patchestry/YAML/PatchSpec.hpp>
 
 #include <regex>
 #include <string>

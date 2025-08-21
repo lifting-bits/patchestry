@@ -16,10 +16,9 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 
-#include <patchestry/Passes/ConfigurationFile.hpp>
-#include <patchestry/Passes/ContractSpec.hpp>
-#include <patchestry/Passes/PatchSpec.hpp>
-
+#include <patchestry/YAML/ConfigurationFile.hpp>
+#include <patchestry/YAML/ContractSpec.hpp>
+#include <patchestry/YAML/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
 
 namespace patchestry::yaml {

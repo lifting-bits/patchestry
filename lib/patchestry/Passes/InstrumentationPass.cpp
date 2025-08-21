@@ -52,12 +52,10 @@
 #include <mlir/Pass/PassRegistry.h>
 #include <mlir/Support/LLVM.h>
 
-#include <patchestry/Passes/ConfigurationFile.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/Passes/PatchOperationMatcher.hpp>
-#include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
-#include <patchestry/YAML/YAMLParser.hpp>
+#include <patchestry/YAML/ConfigurationFile.hpp>
 
 namespace patchestry::passes {
 

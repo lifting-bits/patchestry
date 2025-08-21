@@ -9,7 +9,7 @@ metadata:
   created: "2025-08-15"
   author: "Security Team"
 
-# ContractSpec defined in include/patchestry/Passes/ContractSpec.hpp
+# ContractSpec defined in include/patchestry/YAML/ContractSpec.hpp
 contracts:
   - name: "usb_endpoint_write_validation_contract"
     id: "usb_endpoint_write_validation_contract"

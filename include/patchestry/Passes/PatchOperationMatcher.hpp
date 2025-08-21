@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include <patchestry/Passes/PatchSpec.hpp>
+#include <patchestry/YAML/PatchSpec.hpp>
 
 // Forward declarations
 namespace mlir {

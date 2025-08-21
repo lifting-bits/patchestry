@@ -12,10 +12,10 @@
 #include <llvm/Support/InitLLVM.h>
 #include <llvm/Support/raw_ostream.h>
 
-#include <patchestry/Passes/PatchSpec.hpp>
 
-#include <patchestry/Passes/ConfigurationFile.hpp>
 #include <patchestry/Util/Log.hpp>
+#include <patchestry/YAML/ConfigurationFile.hpp>
+#include <patchestry/YAML/PatchSpec.hpp>
 #include <patchestry/YAML/YAMLParser.hpp>
 
 using namespace patchestry;
