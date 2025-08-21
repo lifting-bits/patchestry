@@ -14,12 +14,13 @@ configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py
 )
 
-add_lit_testsuite(headless-ghidra
+# registering the test suites with add_lit_testsuite()
+add_lit_testsuite(ghidra-output-tests
   "Running headless Ghidra decompilation tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/ghidra
 )
 
-add_lit_testsuite(pcode-translate-tests
+add_lit_testsuite(pcode-translation-tests
   "Running pcode-translate tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/pcode-translate
 )
@@ -29,7 +30,28 @@ add_lit_testsuite(patchir-decomp-tests
   ${CMAKE_CURRENT_SOURCE_DIR}/patchir-decomp
 )
 
-add_test(NAME lit
+add_lit_testsuite(patchir-transform-tests
+  "Running patchir-transform tests"
+  ${CMAKE_CURRENT_SOURCE_DIR}/patchir-transform
+)
+
+# tell ctest how to run the defined test suites with add_test()
+add_test(NAME ghidra-output-tests
   COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/ghidra"
+  --param BUILD_TYPE=$<CONFIG>
+)
+
+add_test(NAME pcode-translation-tests
+  COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/pcode-translate"
+  --param BUILD_TYPE=$<CONFIG>
+)
+
+add_test(NAME patchir-decomp-tests
+  COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/patchir-decomp"
+  --param BUILD_TYPE=$<CONFIG>
+)
+
+add_test(NAME patchir-transform-tests
+  COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/patchir-transform"
   --param BUILD_TYPE=$<CONFIG>
 )

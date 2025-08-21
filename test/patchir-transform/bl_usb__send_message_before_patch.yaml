@@ -13,6 +13,7 @@ target:
   arch: "ARM:LE:32"
 
 libraries:
+ # these references are in relation to the location of this file
   patches: "patches/usb_security_patches.yaml"
   contracts: "contracts/usb_security_contracts.yaml"
 
@@ -57,3 +58,11 @@ meta_patches:
 meta_contracts:
   - name: usb_security_meta_contracts
     description: "Meta contracts for USB security"
+
+    contract_actions:
+      - id: "USB-CONTRACT-BEFORE-001"
+        description: "Asserts message to send is less than maximum size"
+
+        match:
+
+        action:

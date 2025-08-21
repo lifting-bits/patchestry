@@ -53,10 +53,9 @@
 #include <mlir/Support/LLVM.h>
 
 #include <patchestry/Passes/InstrumentationPass.hpp>
-#include <patchestry/Passes/OperationMatcher.hpp>
-#include <patchestry/Passes/PatchSpec.hpp>
+#include <patchestry/Passes/PatchOperationMatcher.hpp>
 #include <patchestry/Util/Log.hpp>
-#include <patchestry/YAML/YAMLParser.hpp>
+#include <patchestry/YAML/ConfigurationFile.hpp>
 
 namespace patchestry::passes {
 
@@ -263,15 +262,15 @@ namespace patchestry::passes {
      *
      * Factory function that creates and returns a unique pointer to an InstrumentationPass
      * instance. The pass will apply patches according to the specifications in the provided
-     * spec_file and use the given inline options for controlling inlining behavior.
+     * configuration_file, and use the given inline options for controlling inlining behavior.
      *
-     * @param spec_file Path to the YAML patch specification file
-     * @param inline_options Configuration options for controlling function inlining behavior
+     * @param configuration_file Path to the YAML patch specification file
+     * @param ∂options Configuration options for controlling how instrumentation is generally applied
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
     std::unique_ptr< mlir::Pass >
-    createInstrumentationPass(const std::string &spec_file, const PatchOptions &patch_options) {
-        return std::make_unique< InstrumentationPass >(spec_file, patch_options);
+    createInstrumentationPass(const std::string &configuration_file, const InstrumentationOptions &options) {
+        return std::make_unique< InstrumentationPass >(configuration_file, options);
     }
 
     template< typename T >
@@ -302,39 +301,39 @@ namespace patchestry::passes {
     }
 
     /**
-     * @brief Constructs an InstrumentationPass with the given specification file and options.
+     * @brief Constructs an InstrumentationPass with the given configuration file and options.
      *
-     * The constructor loads and parses the patch specification file, validates patch files,
-     * and prepares the pass for execution. If the specification file cannot be loaded or
-     * parsed, appropriate error messages are logged.
+     * The constructor loads and parses the Patchestry configuration file, validates any patch 
+     * files, validates any contract files, and prepares the pass for execution. If the file 
+     * cannot be loaded or parsed, appropriate error messages are logged.
      *
-     * @param spec Path to the YAML patch specification file
+     * @param configuration_file Path to the top-level YAML configuration file
      * @param patch_options Reference to inlining configuration options
      */
     InstrumentationPass::InstrumentationPass(
-        std::string spec_, const PatchOptions &patch_options_
+        std::string spec_, const InstrumentationOptions &options_
     )
-        : spec_file(std::move(spec_)), patch_options(patch_options_) {
+        : configuration_file(std::move(spec_)), options(options_) {
         patchestry::yaml::YAMLParser parser;
-        PatchSpecContext::getInstance().set_spec_path(spec_file);
-        if (!parser.validate_yaml_file< patchestry::passes::PatchConfiguration >(spec_file)) {
-            LOG(ERROR) << "Error: Failed to parse patch specification file: " << spec_file
+        ConfigurationFile::getInstance().set_file_path(configuration_file);
+        if (!parser.validate_yaml_file< patchestry::passes::Configuration >(configuration_file)) {
+            LOG(ERROR) << "Error: Failed to parse Patchestry configuration file: " << configuration_file
                        << "\n";
             return;
         }
 
-        auto buffer_or_err = llvm::MemoryBuffer::getFile(spec_file);
+        auto buffer_or_err = llvm::MemoryBuffer::getFile(configuration_file);
         if (!buffer_or_err) {
-            LOG(ERROR) << "Error: Failed to read patch specification file: " << spec_file
+            LOG(ERROR) << "Error: Failed to read Patchestry configuration file: " << configuration_file
                        << "\n";
             return;
         }
 
-        auto config_or_err = patchestry::yaml::utils::loadPatchConfiguration(
-            llvm::sys::path::filename(spec_file).str()
+        auto config_or_err = patchestry::yaml::utils::loadConfiguration(
+            llvm::sys::path::filename(configuration_file).str()
         );
         if (!config_or_err) {
-            LOG(ERROR) << "Error: Failed to parse patch specification file: " << spec_file
+            LOG(ERROR) << "Error: Failed to parse Patchestry configuration file: " << configuration_file 
                        << "\n";
             return;
         }
@@ -342,21 +341,21 @@ namespace patchestry::passes {
         config = std::move(config_or_err.value());
         for (auto &spec : config->libraries.patches.patches) {
             auto patches_file_path =
-                PatchSpecContext::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
             if (!llvm::sys::fs::exists(patches_file_path)) {
                 LOG(ERROR) << "Patch file " << patches_file_path << " does not exist\n";
                 continue;
             }
 
             auto patch_file_path =
-                PatchSpecContext::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
             spec.patch_module = emitModuleAsString(patch_file_path, config->target.arch);
             if (!spec.patch_module) {
                 LOG(ERROR) << "Failed to emit patch module for " << spec.name << "\n";
                 continue;
             }
         }
-        (void) patch_options;
+        (void) options;
     }
 
     /**
@@ -374,7 +373,7 @@ namespace patchestry::passes {
 
         // check if the configuration is loaded; if not, return
         if (!config) {
-            LOG(ERROR) << "No patch configuration loaded. Skipping instrumentation.\n";
+            LOG(ERROR) << "No Patchestry configuration loaded. Skipping instrumentation.\n";
             return;
         }
 
@@ -518,20 +517,20 @@ namespace patchestry::passes {
     void InstrumentationPass::apply_patch_action_to_targets(
         llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
         llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
-        const MetaPatchConfig &meta_patch, const PatchInformation &patch_to_apply
+        const patch::MetaPatchConfig &meta_patch, const PatchInformation &patch_to_apply
     ) {
         const auto &patch_action = patch_to_apply.patch_action.value();
         const auto &match        = patch_action.match[0];
         const auto &action       = patch_action.action[0];
 
-        if (match.kind == MatchKind::FUNCTION) {
+        if (match.kind == patch::MatchKind::FUNCTION) {
             // Apply to function calls
             for (auto func : function_worklist) {
                 func.walk([&](cir::CallOp call_op) {
                     // Create a temporary spec with the patch action match
 
-                    if (OperationMatcher::matches(
-                            call_op, func, patch_action, OperationMatcher::Mode::FUNCTION
+                    if (PatchOperationMatcher::matches(
+                            call_op, func, patch_action, PatchOperationMatcher::Mode::FUNCTION
                         ))
                     {
                         auto patch_module = load_patch_module(
@@ -544,19 +543,19 @@ namespace patchestry::passes {
                         }
 
                         switch (action.mode) {
-                            case PatchInfoMode::APPLY_BEFORE:
+                            case patch::PatchInfoMode::APPLY_BEFORE:
                                 apply_before_patch(
                                     call_op, patch_to_apply, patch_module.get(),
                                     meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
-                            case PatchInfoMode::APPLY_AFTER:
+                            case patch::PatchInfoMode::APPLY_AFTER:
                                 apply_after_patch(
                                     call_op, patch_to_apply, patch_module.get(),
                                     meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
-                            case PatchInfoMode::REPLACE:
+                            case patch::PatchInfoMode::REPLACE:
                                 replace_call(
                                     call_op, patch_to_apply, patch_module.get(),
                                     meta_patch.optimization.contains("inline-patches")
@@ -569,7 +568,7 @@ namespace patchestry::passes {
                     }
                 });
             }
-        } else if (match.kind == MatchKind::OPERATION) {
+        } else if (match.kind == patch::MatchKind::OPERATION) {
             // Apply to operations
             for (auto *op : operation_worklist) {
                 auto func = op->getParentOfType< cir::FuncOp >();
@@ -577,8 +576,8 @@ namespace patchestry::passes {
                     continue;
                 }
 
-                if (OperationMatcher::matches(
-                        op, func, patch_action, OperationMatcher::Mode::OPERATION
+                if (PatchOperationMatcher::matches(
+                        op, func, patch_action, PatchOperationMatcher::Mode::OPERATION
                     ))
                 {
                     auto patch_module = load_patch_module(
@@ -591,7 +590,7 @@ namespace patchestry::passes {
                     }
 
                     switch (action.mode) {
-                        case PatchInfoMode::APPLY_BEFORE:
+                        case patch::PatchInfoMode::APPLY_BEFORE:
                             apply_before_patch(
                                 op, patch_to_apply, patch_module.get(),
                                 meta_patch.optimization.contains("inline-patches")
@@ -646,7 +645,7 @@ namespace patchestry::passes {
             mlir::Value arg_value;
 
             switch (arg_spec.source) {
-                case ArgumentSourceType::OPERAND: {
+                case patch::ArgumentSourceType::OPERAND: {
                     // Get operand by index
                     if (!arg_spec.index.has_value()) {
                         LOG(ERROR) << "OPERAND source requires index field\n";
@@ -669,7 +668,7 @@ namespace patchestry::passes {
                     }
                     break;
                 }
-                case ArgumentSourceType::VARIABLE: {
+                case patch::ArgumentSourceType::VARIABLE: {
                     // Handle local variables only
                     if (!arg_spec.symbol.has_value()) {
                         LOG(ERROR) << "VARIABLE source requires symbol field\n";
@@ -709,7 +708,7 @@ namespace patchestry::passes {
                     arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), var_value);
                     break;
                 }
-                case ArgumentSourceType::SYMBOL: {
+                case patch::ArgumentSourceType::SYMBOL: {
                     // Handle global variables, functions, and any symbol in symbol table
                     if (!arg_spec.symbol.has_value()) {
                         LOG(ERROR) << "SYMBOL source requires symbol field\n";
@@ -774,7 +773,7 @@ namespace patchestry::passes {
                     arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), symbol_value);
                     break;
                 }
-                case ArgumentSourceType::RETURN_VALUE: {
+                case patch::ArgumentSourceType::RETURN_VALUE: {
                     // Handle return value of function or operation
                     if (call_op->getNumResults() == 0) {
                         LOG(ERROR) << "Operation/function does not have a return value\n";
@@ -785,7 +784,7 @@ namespace patchestry::passes {
                     arg_value = call_op->getResult(0);
                     break;
                 }
-                case ArgumentSourceType::CONSTANT: {
+                case patch::ArgumentSourceType::CONSTANT: {
                     // Create constant value
                     if (!arg_spec.value.has_value()) {
                         LOG(ERROR) << "CONSTANT source requires value field\n";
@@ -868,7 +867,7 @@ namespace patchestry::passes {
      */
     void InstrumentationPass::apply_before_patch(
         mlir::Operation *target_op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-        bool inline_patches
+        bool should_inline
     ) {
         if (target_op == nullptr) {
             LOG(ERROR) << "Patch before: Operation is null";
@@ -924,7 +923,7 @@ namespace patchestry::passes {
         // Set appropriate attributes based on operation type
         set_patch_call_attributes(patch_call_op, target_op);
 
-        if (inline_patches) {
+        if (should_inline) {
             inline_worklists.push_back(patch_call_op);
         }
     }
