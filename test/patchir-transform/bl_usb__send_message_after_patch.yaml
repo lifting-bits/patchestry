@@ -56,7 +56,7 @@ meta_contracts:
     description: "Meta contracts for USB security"
 
     contract_actions:
-      - id: "USB-CONTRACT-AFTER-001"
+      - id: "USB-CONTRACT-001"
         description: "Asserts no error on response"
 
         match:
