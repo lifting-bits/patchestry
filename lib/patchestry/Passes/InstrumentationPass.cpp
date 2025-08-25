@@ -1846,6 +1846,69 @@ namespace patchestry::passes {
         }
     }
 
+    void InstrumentationPass::apply_contract_at_entrypoint(cir::CallOp call_op, 
+        const ContractInformation &contract, mlir::ModuleOp contract_module, bool should_inline) {
+
+        if (call_op == nullptr) {
+            LOG(ERROR) << "apply_contract_at_entrypoint: the passed function to be instrumented was null";
+            return;
+        }    
+
+        const auto &contract_spec = contract.spec.value();
+        std::string contract_function_name =
+            namifyFunction(contract_spec.implementation.function_name);
+        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
+            LOG(ERROR) << "Contract module not found or contract function not defined\n";
+            return;
+        }
+        
+        auto module = call_op->getParentOfType< mlir::ModuleOp >();
+        assert(module && "Wrap around patch: no module found");
+        std::string callee_name = call_op.getCallee()->str();
+        cir::FuncOp callee_function = module.lookupSymbol< cir::FuncOp >(callee_name);
+        mlir::Block &entry_block = callee_function.getBody().front();
+
+        auto target_op = entry_block.getParentOp();
+        mlir::OpBuilder builder(target_op);
+        builder.setInsertionPointToStart(&entry_block);
+
+        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
+            auto result = merge_module_symbol(module, contract_module, contract_function_name);
+            if (mlir::failed(result)) {
+                LOG(ERROR) << "Failed to insert symbol into module\n";
+                return;
+            }
+        } else {
+            LOG(INFO) << "Contract function " << contract_function_name
+                      << " already exists in module, skipping merge\n";
+        }
+
+        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
+        if (!contract_func) {
+            LOG(ERROR) << "Contract function " << contract_function_name
+                       << " not defined. Patching failed...\n";
+            return;
+        }
+
+        auto symbol_ref =
+            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
+        llvm::SmallVector< mlir::Value > function_args;
+        prepare_contract_call_arguments(builder, target_op, contract_func, contract, function_args);
+        auto contract_call_op = builder.create< cir::CallOp >(
+            callee_function->getLoc(), symbol_ref,
+            contract_func->getResultTypes().size() != 0 ? contract_func->getResultTypes().front()
+                                                     : mlir::Type(),
+            function_args
+        );
+
+        // Set appropriate attributes based on operation type
+        set_instrumentation_call_attributes(contract_call_op, call_op);
+        
+        if (should_inline) {
+            inline_worklists.push_back(contract_call_op);
+        }
+    }
+
     void InstrumentationPass::apply_contract_action_to_targets(
             llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
             const contract::MetaContractConfig &meta_contract, 
@@ -1883,13 +1946,12 @@ namespace patchestry::passes {
                                 meta_contract.optimization.contains("inline-patches")
                             );
                             break;
-                        // todo (kaoudis) not sure about whether this is quite 'right' yet
-                        // case contract::InfoMode::APPLY_AT_ENTRYPOINT:
-                        //     apply_contract_at_entrypoint(
-                        //         call_op, contract_to_apply, contract_module.get(),
-                        //         meta_contract.optimization.contains("inline-patches")
-                        //     );
-                        //     break;
+                        case contract::InfoMode::APPLY_AT_ENTRYPOINT:
+                            apply_contract_at_entrypoint(
+                                call_op, contract_to_apply, contract_module.get(),
+                                meta_contract.optimization.contains("inline-patches")
+                            );
+                            break;
                         default:
                             LOG(ERROR) << "Unsupported contract mode (see ContractSpec for details on support)\n";
                             break;

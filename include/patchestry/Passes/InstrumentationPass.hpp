@@ -42,10 +42,11 @@ namespace patchestry::passes { // NOLINT
      * This function registers the instrumentation pass with the global MLIR pass registry,
      * making it available for use in pass pipelines. The configuration_file parameter specifies
      * the Patchestry configuration file that defines the meta-patches, meta-contracts, and other
-     * instrumentation rules.
+     * instrumentation rules. The actual instrumentation is sourced following patch and contract
+     * information in patch and contract YAML files referred to from meta-patches and meta-contracts.
      *
-     * @param configuration_file Path to the YAML Patchestry configuration file containing 
-     * instrumentation rules for applying patches, contracts, or both
+     * @param configuration_file Path to a YAML Patchestry configuration file containing 
+     * instrumentation rules and links to further YAML for applying patches, contracts, or both.
      */
     void registerInstrumentationPasses(std::string configuration_file);
 
@@ -282,7 +283,7 @@ namespace patchestry::passes { // NOLINT
          /**
          * @brief Applies a contract before the target function.
          *
-         * This method inserts a call to the patch function immediately before the target
+         * This method inserts a call to the contract function immediately before the target
          * operation. It handles module symbol merging, argument preparation, and call creation.
          * The inserted call is added to the inline worklist if inlining is enabled.
          *
@@ -297,7 +298,7 @@ namespace patchestry::passes { // NOLINT
         /**
          * @brief Applies a contract after the target function.
          *
-         * This method inserts a call to the patch function immediately after the target
+         * This method inserts a call to the contract function immediately after the target
          * operation. It handles module symbol merging, argument preparation, and call creation.
          * The inserted call is added to the inline worklist if inlining is enabled.
          *
@@ -309,7 +310,7 @@ namespace patchestry::passes { // NOLINT
         void apply_contract_after(mlir::Operation *target_op, const ContractInformation &contract, 
             mlir::ModuleOp contract_module, bool should_inline);
 
-        /** todo (kaoudis) still thinking about whether this makes sense
+        /**
          * @brief Applies a contract directly after the target function entrypoint, 
          * just "inside" the entrypoint, before the rest of the original function.
          *
@@ -319,10 +320,10 @@ namespace patchestry::passes { // NOLINT
          * @param op The target function to be instrumented
          * @param contract The contract information containing the contract function details
          * @param contract_module The module containing the contract function
-         * @param inline_contracts Whether or not to inline at application.
+         * @param should_inline Whether or not to inline at application.
          */
-        void apply_contract_at_entrypoint(mlir::Function *op, const ContractInformation &contract, 
-            mlir::ModuleOp contract_module, bool inline_contracts);
+        void apply_contract_at_entrypoint(cir::CallOp op, const ContractInformation &contract, 
+            mlir::ModuleOp contract_module, bool should_inline);
 
         /**
          * @brief Inlines a function call operation.
