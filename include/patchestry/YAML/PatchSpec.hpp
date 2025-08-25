@@ -197,8 +197,19 @@ namespace llvm::yaml {
         static void mapping(IO &io, patch::PatchAction &patch_action) {
             io.mapRequired("id", patch_action.action_id);
             io.mapOptional("description", patch_action.description);
+
+            // required block doesn't mean the block must be populated, so check.
             io.mapRequired("match", patch_action.match);
+            if (patch_action.match.empty()) {
+                io.setError("PatchAction '" + patch_action.action_id +
+                            "' must include at least one 'match' entry.");
+            }
+
             io.mapRequired("action", patch_action.action);
+            if (patch_action.action.empty()) {
+                io.setError("PatchAction '" + patch_action.action_id +
+                            "' must include at least one 'action' entry.");
+            }
         }
     };
 
@@ -211,7 +222,13 @@ namespace llvm::yaml {
         static void mapping(IO &io, patch::PatchLibrary &library) {
             io.mapOptional("apiVersion", library.api_version);
             io.mapOptional("metadata", library.metadata);
+
+            // if the patches: block is included, there must be at least one patch
             io.mapRequired("patches", library.patches);
+            if (library.patches.empty()) {
+                io.setError("PatchLibrary '" + library.metadata.name +
+                            "' must include at least one 'patches' entry.");
+            }
         }
     };
 
@@ -223,13 +240,13 @@ namespace llvm::yaml {
             io.mapRequired("name", meta_patch.name);
             io.mapRequired("id", meta_patch.id);
             io.mapOptional("description", meta_patch.description);
+            io.mapRequired("patch_actions", meta_patch.patch_actions);
 
             std::vector< std::string > optimization;
             io.mapOptional("optimization", optimization);
             for (const auto &opt : optimization) {
                 meta_patch.optimization.insert(opt);
             }
-            io.mapRequired("patch_actions", meta_patch.patch_actions);
         }
     };
 } // namespace llvm::yaml

@@ -191,8 +191,19 @@ namespace llvm::yaml {
         static void mapping(IO &io, contract::ContractAction &contract_action) {
             io.mapRequired("id", contract_action.action_id);
             io.mapOptional("description", contract_action.description);
+
+            // required block doesn't mean the block must be populated, so check.
             io.mapRequired("match", contract_action.match);
+            if (contract_action.match.empty()) {
+                io.setError("ContractAction '" + contract_action.action_id +
+                            "' must include at least one 'match' entry.");
+            }
+
             io.mapRequired("action", contract_action.action);
+            if (contract_action.action.empty()) {
+                io.setError("ContractAction '" + contract_action.action_id +
+                            "' must include at least one 'action' entry.");
+            }
         }
     };
 
@@ -203,7 +214,13 @@ namespace llvm::yaml {
         static void mapping(IO &io, contract::ContractLibrary &library) {
             io.mapOptional("apiVersion", library.api_version);
             io.mapOptional("metadata", library.metadata);
+
+            // if the contracts: block is included, there must be at least one contract
             io.mapRequired("contracts", library.contracts);
+            if (library.contracts.empty()) {
+                io.setError("ContractLibrary '" + library.metadata.name +
+                            "' must include at least one 'contracts' entry.");
+            }
         }
     };
 
