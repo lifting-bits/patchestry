@@ -11,6 +11,11 @@
 
 #include <llvm/Support/YAMLTraits.h>
 
+/* This file contains domain objects that are common to both patches and contracts.
+ * These objects express the same kind of YAML input, parsed from different locations
+ * in the configuration file. The objects here are in use within the OperationMatcher,
+ * so it's convenient for them to be the same for both patches and contracts.
+ */
 namespace patchestry::passes {
     struct Metadata {
         std::string name;
@@ -20,9 +25,64 @@ namespace patchestry::passes {
         std::string created;
         std::string organization;
     };
+
+    enum class ArgumentSourceType : uint8_t {
+        OPERAND = 0, // Reference to operation operand by index
+        VARIABLE,    // Reference to variable by name
+        SYMBOL,      // Reference to symbol by name
+        CONSTANT,    // Literal constant value
+        RETURN_VALUE // Return value of function or operation
+    };
+
+    struct ArgumentSource {
+        ArgumentSourceType source;
+        std::string name;                // Descriptive name for the argument
+        std::optional< unsigned > index; // Operand/argument index (required for OPERAND type)
+        std::optional< std::string > symbol; // Symbol name (required for VARIABLE/SYMBOL type)
+        std::optional< std::string > value;  // Constant value (required for CONSTANT type)
+    };
+
+    struct ArgumentMatch
+    {
+        unsigned index;
+        std::string name;
+        std::string type;
+    };
+
+    using OperandMatch = ArgumentMatch;
+
+    struct VariableMatch
+    {
+        std::string name;
+        std::string type;
+    };
+
+    using SymbolMatch     = VariableMatch;
+    using FunctionContext = VariableMatch;
+
+    struct Parameter {
+        std::string name;
+        std::string type;
+        std::string description;
+    };
+
+    struct Implementation {
+        std::string language;
+        std::string code_file;
+        std::string function_name;
+        std::vector< Parameter > parameters;
+        std::vector< std::string > dependencies;
+    };
 }
 
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::VariableMatch)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ArgumentMatch)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ArgumentSource)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::Parameter)
+
 namespace llvm::yaml {
+    using namespace patchestry::passes;
+
     // Parse Metadata
     template<>
     struct MappingTraits< patchestry::passes::Metadata >
@@ -34,6 +94,81 @@ namespace llvm::yaml {
             io.mapOptional("author", metadata.author);
             io.mapOptional("created", metadata.created);
             io.mapOptional("organization", metadata.organization);
+        }
+    };
+
+    // Parse ArgumentSource
+    template<>
+    struct MappingTraits< ArgumentSource >
+    {
+        static void mapping(IO &io, ArgumentSource &arg) {
+            std::string source_str;
+            io.mapRequired("source", source_str);
+
+            if (source_str == "operand") {
+                arg.source = ArgumentSourceType::OPERAND;
+            } else if (source_str == "argument") {
+                arg.source = ArgumentSourceType::OPERAND; // Treat argument
+                                                                              // same as operand
+            } else if (source_str == "variable") {
+                arg.source = ArgumentSourceType::VARIABLE;
+            } else if (source_str == "symbol") {
+                arg.source = ArgumentSourceType::SYMBOL;
+            } else if (source_str == "constant") {
+                arg.source = ArgumentSourceType::CONSTANT;
+            } else if (source_str == "return_value") {
+                arg.source = ArgumentSourceType::RETURN_VALUE;
+            }
+
+            io.mapRequired("name", arg.name);
+            io.mapOptional("index", arg.index);
+            io.mapOptional("symbol", arg.symbol);
+            io.mapOptional("value", arg.value);
+        }
+    };
+
+    // Prase ArgumentMatch
+    template<>
+    struct MappingTraits< ArgumentMatch >
+    {
+        static void mapping(IO &io, ArgumentMatch &arg) {
+            io.mapRequired("index", arg.index);
+            io.mapRequired("name", arg.name);
+            io.mapOptional("type", arg.type);
+        }
+    };
+
+    // Prase VariableMatch
+    template<>
+    struct MappingTraits< VariableMatch >
+    {
+        static void mapping(IO &io, VariableMatch &var) {
+            io.mapRequired("name", var.name);
+            io.mapOptional("type", var.type);
+        }
+    };
+
+    // Parse Parameter
+    template<>
+    struct MappingTraits< Parameter >
+    {
+        static void mapping(IO &io, Parameter &param) {
+            io.mapRequired("name", param.name);
+            io.mapOptional("type", param.type);
+            io.mapOptional("description", param.description);
+        }
+    };
+
+    // Parse Implementation
+    template<>
+    struct MappingTraits< Implementation >
+    {
+        static void mapping(IO &io, Implementation &impl) {
+            io.mapOptional("language", impl.language);
+            io.mapRequired("code_file", impl.code_file);
+            io.mapOptional("function_name", impl.function_name);
+            io.mapRequired("parameters", impl.parameters);
+            io.mapOptional("dependencies", impl.dependencies);
         }
     };
 }

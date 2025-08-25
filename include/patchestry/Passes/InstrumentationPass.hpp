@@ -20,12 +20,12 @@
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <clang/Frontend/CompilerInstance.h>
 
-#include <patchestry/Passes/ContractOperationMatcher.hpp>
-#include <patchestry/Passes/PatchOperationMatcher.hpp>
+#include <patchestry/Passes/OperationMatcher.hpp>
 #include <patchestry/YAML/ConfigurationFile.hpp>
 
 // Forward declarations to minimize header dependencies
 namespace mlir {
+    class Function;
     class Operation;
     class Pass;
     class Type;
@@ -75,6 +75,12 @@ namespace patchestry::passes { // NOLINT
     {
         std::optional< patch::PatchSpec > spec;
         std::optional< patch::PatchAction > patch_action;
+    };
+
+    struct ContractInformation 
+    { // the use of optional here takes care of some typing errors
+        std::optional< contract::ContractSpec > spec;
+        std::optional< contract::ContractAction > action;
     };
 
     /**
@@ -150,12 +156,10 @@ namespace patchestry::passes { // NOLINT
          * @brief Applies meta contracts in execution order.
          *
          * @param function_worklist List of functions to process
-         * @param operation_worklist List of operations to process
          * @param meta_contract_name Name of the meta contract to apply
          */
         void apply_meta_contracts(
             llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
-            llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
             const std::string &meta_contract_name
         );
 
@@ -173,6 +177,20 @@ namespace patchestry::passes { // NOLINT
             const patch::MetaPatchConfig &meta_patch, const PatchInformation &modified_patch
         );
 
+        /**
+         * @brief Applies a specific contract action to target functions.
+         *
+         * @param function_worklist List of functions to process
+         * @param meta_contract
+         * @param modified_contract
+         */
+        void apply_contract_action_to_targets(
+            llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+            const contract::MetaContractConfig &meta_contract, 
+            const ContractInformation &modified_contract
+        );
+
+
       private:
         /**
          * @brief Prepares arguments for a patch function call.
@@ -188,9 +206,28 @@ namespace patchestry::passes { // NOLINT
          * @param patch Patch information containing argument specifications
          * @param args Output vector to store the prepared arguments
          */
-        void prepare_call_arguments(
+        void prepare_patch_call_arguments(
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
             const PatchInformation &patch, llvm::SmallVector< mlir::Value > &args
+        );
+
+        /**
+         * @brief Prepares arguments for a contract function call.
+         *
+         * This method handles argument preparation for contract function calls, including
+         * type casting when necessary. It supports special argument handling such as
+         * passing return values and ensures type compatibility between original and patch
+         * functions.
+         *
+         * @param builder MLIR operation builder for creating new operations
+         * @param op The original operation being patched
+         * @param contract_func The contract function to be called
+         * @param contract Contract information containing argument specifications
+         * @param args Output vector to store the prepared arguments
+         */
+        void prepare_contract_call_arguments(
+            mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp contract_func,
+            const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args
         );
 
         /**
@@ -242,6 +279,51 @@ namespace patchestry::passes { // NOLINT
             bool inline_patches
         );
 
+         /**
+         * @brief Applies a contract before the target function.
+         *
+         * This method inserts a call to the patch function immediately before the target
+         * operation. It handles module symbol merging, argument preparation, and call creation.
+         * The inserted call is added to the inline worklist if inlining is enabled.
+         *
+         * @param target_op The target function to be instrumented
+         * @param contract The contract information containing the contract function details
+         * @param contract_module The module containing the contract function
+         * @param should_inline Whether or not to inline at application.
+         */
+        void apply_contract_before(mlir::Operation *target_op, const ContractInformation &contract, 
+            mlir::ModuleOp contract_module, bool should_inline);
+
+        /**
+         * @brief Applies a contract after the target function.
+         *
+         * This method inserts a call to the patch function immediately after the target
+         * operation. It handles module symbol merging, argument preparation, and call creation.
+         * The inserted call is added to the inline worklist if inlining is enabled.
+         *
+         * @param op The target function to be instrumented
+         * @param contract The contract information containing the contract function details
+         * @param contract_module The module containing the contract function
+         * @param should_inline Whether or not to inline at application.
+         */
+        void apply_contract_after(mlir::Operation *target_op, const ContractInformation &contract, 
+            mlir::ModuleOp contract_module, bool should_inline);
+
+        /** todo (kaoudis) still thinking about whether this makes sense
+         * @brief Applies a contract directly after the target function entrypoint, 
+         * just "inside" the entrypoint, before the rest of the original function.
+         *
+         * This method handles module symbol merging, argument preparation, and call creation.
+         * The inserted call is added to the inline worklist if inlining is enabled.
+         *
+         * @param op The target function to be instrumented
+         * @param contract The contract information containing the contract function details
+         * @param contract_module The module containing the contract function
+         * @param inline_contracts Whether or not to inline at application.
+         */
+        void apply_contract_at_entrypoint(mlir::Function *op, const ContractInformation &contract, 
+            mlir::ModuleOp contract_module, bool inline_contracts);
+
         /**
          * @brief Inlines a function call operation.
          *
@@ -256,18 +338,19 @@ namespace patchestry::passes { // NOLINT
         mlir::LogicalResult inline_call(mlir::ModuleOp module, cir::CallOp call_op);
 
         /**
-         * @brief Loads a patch module from its string representation.
+         * @brief Loads a code module from its string representation. This can be either a
+         * patch, or a contract!
          *
          * This method parses an MLIR module from its textual representation and returns
          * an owning reference to the parsed module. The module contains the patch functions
          * that will be merged into the target module.
          *
          * @param ctx The MLIR context for parsing
-         * @param patch_string The textual representation of the patch module
+         * @param module_string The textual representation of the patch module
          * @return mlir::OwningOpRef<mlir::ModuleOp> The parsed patch module
          */
         mlir::OwningOpRef< mlir::ModuleOp >
-        load_patch_module(mlir::MLIRContext &ctx, const std::string &patch_string);
+        load_code_module(mlir::MLIRContext &ctx, const std::string &module_string);
 
         /**
          * @brief Merges a specific symbol from source module into destination module.
@@ -284,17 +367,18 @@ namespace patchestry::passes { // NOLINT
         mlir::LogicalResult merge_module_symbol(
             mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
         );
+    
         /**
-         * @brief Sets appropriate attributes for the patch call operation.
+         * @brief Sets appropriate attributes for the instrumentation call operation.
+         * This can be a call to a patch or a contract.
          *
-         * This method handles setting attributes on the patch call based on the
-         * type of the original operation being instrumented. It preserves relevant
-         * attributes from CallOp operations and adds debugging information.
+         * This function handles setting attributes on the call based on the
+         * type of the original operation being instrumented.
          *
          * @param patch_call_op The patch call operation to set attributes on
          * @param target_op The original operation being instrumented
          */
-        void set_patch_call_attributes(cir::CallOp patch_call_op, mlir::Operation *target_op);
+        void set_instrumentation_call_attributes(cir::CallOp instr_call_op, mlir::Operation *target_op);
     };
 
 } // namespace patchestry::passes

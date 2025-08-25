@@ -28,57 +28,11 @@ namespace patchestry::passes {
             NONE = 0, // No contract
             APPLY_BEFORE,
             APPLY_AFTER,
-            APPLY_INSIDE_ENTRYPOINT
+            APPLY_AT_ENTRYPOINT
         };
 
         // Contracts can only match at the function level.
         enum class MatchKind : uint8_t { NONE = 0, FUNCTION };
-
-        enum class ArgumentSourceType : uint8_t {
-            OPERAND = 0, // Reference to operation operand by index
-            VARIABLE,    // Reference to variable by name
-            SYMBOL,      // Reference to symbol by name
-            CONSTANT,    // Literal constant value
-            RETURN_VALUE // Return value of function or operation
-        };
-
-        struct ArgumentSource {
-            ArgumentSourceType source;
-            std::string name;                // Descriptive name for the argument
-            std::optional< unsigned > index; // Operand/argument index (required for OPERAND type)
-            std::optional< std::string > symbol; // Symbol name (required for VARIABLE/SYMBOL type)
-            std::optional< std::string > value;  // Constant value (required for CONSTANT type)
-        };
-
-        struct ArgumentMatch {
-            unsigned index;
-            std::string name;
-            std::string type;
-        };
-
-        using OperandMatch = ArgumentMatch;
-
-        struct VariableMatch {
-            std::string name;
-            std::string type;
-        };
-
-        using SymbolMatch     = VariableMatch;
-        using FunctionContext = VariableMatch;
-
-        struct Parameter {
-            std::string name;
-            std::string type;
-            std::string description;
-        };
-
-        struct Implementation {
-            std::string language;
-            std::string code_file;
-            std::string function_name;
-            std::vector< Parameter > parameters;
-            std::vector< std::string > dependencies;
-        };
 
         struct MatchConfig {
             std::string name;
@@ -124,6 +78,7 @@ namespace patchestry::passes {
             std::string id;
             std::string description;
             std::vector< ContractAction > contract_actions;
+            std::set< std::string > optimization;
         };
 
 
@@ -135,8 +90,8 @@ namespace patchestry::passes {
                     return "APPLY_BEFORE";
                 case InfoMode::APPLY_AFTER:
                     return "APPLY_AFTER";
-                case InfoMode::APPLY_INSIDE_ENTRYPOINT:
-                    return "APPLY_INSIDE_ENTRYPOINT";
+                case InfoMode::APPLY_AT_ENTRYPOINT:
+                    return "APPLY_AT_ENTRYPOINT";
             }
             return "UNKNOWN";
         }
@@ -161,11 +116,7 @@ namespace patchestry::yaml {
     } // namespace utils
 } // namespace patchestry::yaml
 
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::VariableMatch)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::ArgumentMatch)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::ArgumentSource)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::MatchConfig)
-LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::Parameter)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::Action)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::ContractAction)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::ContractSpec)
@@ -173,80 +124,6 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::MetaContractConfig)
 
 namespace llvm::yaml {
     using namespace patchestry::passes;
-    // Parse ArgumentSource
-    template<>
-    struct MappingTraits< contract::ArgumentSource >
-    {
-        static void mapping(IO &io, contract::ArgumentSource &arg) {
-            std::string source_str;
-            io.mapRequired("source", source_str);
-
-            if (source_str == "operand") {
-                arg.source = contract::ArgumentSourceType::OPERAND;
-            } else if (source_str == "argument") {
-                arg.source = contract::ArgumentSourceType::OPERAND; // Treat argument
-                                                                              // same as operand
-            } else if (source_str == "variable") {
-                arg.source = contract::ArgumentSourceType::VARIABLE;
-            } else if (source_str == "symbol") {
-                arg.source = contract::ArgumentSourceType::SYMBOL;
-            } else if (source_str == "constant") {
-                arg.source = contract::ArgumentSourceType::CONSTANT;
-            } else if (source_str == "return_value") {
-                arg.source = contract::ArgumentSourceType::RETURN_VALUE;
-            }
-
-            io.mapRequired("name", arg.name);
-            io.mapOptional("index", arg.index);
-            io.mapOptional("symbol", arg.symbol);
-            io.mapOptional("value", arg.value);
-        }
-    };
-
-    // Prase ArgumentMatch
-    template<>
-    struct MappingTraits< contract::ArgumentMatch >
-    {
-        static void mapping(IO &io, contract::ArgumentMatch &arg) {
-            io.mapOptional("index", arg.index);
-            io.mapRequired("name", arg.name);
-            io.mapOptional("type", arg.type);
-        }
-    };
-
-    // Prase VariableMatch
-    template<>
-    struct MappingTraits< contract::VariableMatch >
-    {
-        static void mapping(IO &io, contract::VariableMatch &var) {
-            io.mapRequired("name", var.name);
-            io.mapOptional("type", var.type);
-        }
-    };
-
-    // Parse Parameter
-    template<>
-    struct MappingTraits< contract::Parameter >
-    {
-        static void mapping(IO &io, contract::Parameter &param) {
-            io.mapRequired("name", param.name);
-            io.mapOptional("type", param.type);
-            io.mapOptional("description", param.description);
-        }
-    };
-
-    // Parse Implementation
-    template<>
-    struct MappingTraits< contract::Implementation >
-    {
-        static void mapping(IO &io, contract::Implementation &impl) {
-            io.mapOptional("language", impl.language);
-            io.mapRequired("code_file", impl.code_file);
-            io.mapRequired("function_name", impl.function_name);
-            io.mapOptional("parameters", impl.parameters);
-            io.mapOptional("dependencies", impl.dependencies);
-        }
-    };
 
     // Parse ContractSpec
     template<>
@@ -278,8 +155,8 @@ namespace llvm::yaml {
                 action.mode = contract::InfoMode::APPLY_BEFORE;
             } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
                 action.mode = contract::InfoMode::APPLY_AFTER;
-            } else if (mode_str == "ApplyInsideEntrypoint" || mode_str == "apply_inside_entrypoint") {
-                action.mode = contract::InfoMode::APPLY_INSIDE_ENTRYPOINT;
+            } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
+                action.mode = contract::InfoMode::APPLY_AT_ENTRYPOINT;
             } else {
                 action.mode = contract::InfoMode::NONE;
             }
@@ -339,6 +216,12 @@ namespace llvm::yaml {
             io.mapOptional("id", meta_contract.id);
             io.mapOptional("description", meta_contract.description);
             io.mapRequired("contract_actions", meta_contract.contract_actions);
+
+            std::vector< std::string > optimization;
+            io.mapOptional("optimization", optimization);
+            for (const auto &opt : optimization) {
+                meta_contract.optimization.insert(opt);
+            }
         }
     };
 } // namespace llvm::yaml
