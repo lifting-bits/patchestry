@@ -39,6 +39,7 @@ meta_patches:
             argument_matches:
               - index: 0
                 name: "usb_g"
+                type: "struct struct_anon_struct_4_1_58265f66*"
 
          # Actions to Apply
          action:

@@ -193,6 +193,15 @@ namespace patchestry::passes {
         static std::string extract_ssa_value_name(mlir::Value value); // NOLINT
 
         /**
+         * @brief Extracts the type from an SSA value, following the definition chain.
+         *
+         * @param value The SSA value to extract type from
+         * @return The variable type, following through operations that may modify the original
+         * type
+         */
+        static mlir::Type extract_ssa_value_type(mlir::Value value); // NOLINT
+
+        /**
          * @brief Extracts symbol name from operation attributes.
          *
          * @param op The operation to extract symbol name from

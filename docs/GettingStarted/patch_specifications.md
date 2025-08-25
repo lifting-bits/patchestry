@@ -172,14 +172,13 @@ For operation-based matching, the following additional fields are available:
 | Field | Description | Example |
 |-------|-------------|---------|
 | `name` | Function name pattern (supports regex with `/pattern/`) | `"/.*secure.*/`, `"authenticate"` |
-| `type` | Function type pattern (optional) | `"!cir.func<!cir.void ()>"` |
 
 #### Symbol Match Fields  (Operation-Based Matching)
 
 | Field | Description | Example |
 |-------|-------------|---------|
 | `name` | Symbol name pattern (supports regex with `/pattern/`) | `"/.*password.*/`, `"secret_key"` |
-| `type` | Symbol type pattern (optional) | `"!cir.ptr<!cir.int<u, 32>>"` |
+| `type` | Symbol type pattern (optional) | `"int32*"` |
 
 #### Operand Match Fields (Operation-Based Matching)
 
@@ -187,7 +186,7 @@ For operation-based matching, the following additional fields are available:
 |-------|-------------|---------|
 | `index` | Position of the operand (0-based) | `0` (first operand), `1` (second operand) |
 | `name` | Name of the operand variable | `"addr"`, `"/.*buffer.*/` |
-| `type` | Type of the operand | `"!cir.ptr<!cir.int<u, 32>>"` |
+| `type` | Type of the operand | `"int32*"` |
 
 Common operand patterns:
 - `cir.load`: operand 0 = address to load from
@@ -208,7 +207,7 @@ Common operand patterns:
 | Field | Description | Example |
 |-------|-------------|---------|
 | `name` | Variable name pattern (supports regex with `/pattern/`) | `"/.*password.*/`, `"secret_key"` |
-| `type` | Variable type pattern (optional) | `"!cir.ptr<!cir.int<u, 32>>"` |
+| `type` | Variable type pattern (optional) | `"struct struct_anon_struct_4_1_58265f66*"` |
 
 ### Action Fields
 
@@ -378,6 +377,7 @@ meta_patches:
             argument_matches:
               - index: 0
                 name: "usb_g"
+                type: "struct struct_anon_struct_4_1_58265f66*"
 
         action:
           - mode: "apply_before"
@@ -409,7 +409,7 @@ meta_contracts:
       - name: "authenticate"  # Exact function name
     symbol_matches:
       - name: "/.*password.*/"  # Variables containing "password"
-        type: "!cir.ptr<!cir.int<u, 32>>"
+        type: "int32*"
 ```
 
 ### Example 2: Match Store Operations with Specific Operands
@@ -423,10 +423,10 @@ meta_contracts:
     operand_matches:
       - index: 0  # The value being stored (first operand)
         name: "user_input"
-        type: "!cir.ptr<!cir.char>"
+        type: "char*"
       - index: 1  # The address being stored to (second operand)
         name: "buffer"
-        type: "!cir.ptr<!cir.array<!cir.char x 256>>"
+        type: "char[256]"
 ```
 
 ### Pattern Matching

@@ -17,6 +17,8 @@
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/SymbolTable.h>
 
+#include <patchestry/Passes/Utils.hpp>
+
 namespace patchestry::passes {
 
     bool OperationMatcher::matches(
@@ -133,16 +135,9 @@ namespace patchestry::passes {
         }
 
         std::string func_name = func.getName().str();
-        std::string func_type = type_to_string(func.getFunctionType());
-
         for (const auto &context : function_context) {
             // Check function name match
             if (!matches_pattern(func_name, context.name)) {
-                continue;
-            }
-
-            // Check function type match if specified
-            if (!context.type.empty() && !matches_pattern(func_type, context.type)) {
                 continue;
             }
 
@@ -180,7 +175,8 @@ namespace patchestry::passes {
 
             // Check argument type if specified
             if (!operand_match.type.empty()) {
-                if (!matches_type(operand.getType(), operand_match.type)) {
+                auto variable_type = extract_ssa_value_type(operand);
+                if (!matches_type(variable_type, operand_match.type)) {
                     return false;
                 }
             }
@@ -222,7 +218,7 @@ namespace patchestry::passes {
             auto result = results[i];
             std::string var_name =
                 extract_variable_name(op, static_cast< unsigned >(operands.size() + i));
-            std::string var_type = type_to_string(result.getType());
+            std::string var_type = utils::convertCIRTypesToCTypes(result.getType());
 
             for (const auto &var_match : symbol_matches) {
                 bool name_matches =
@@ -267,7 +263,13 @@ namespace patchestry::passes {
 
             // Check argument type if specified
             if (!arg_match.type.empty()) {
-                if (!matches_type(operand.getType(), arg_match.type)) {
+                auto variable_type = extract_ssa_value_type(operand);
+                // Note: The type matching here is relaxed and checks for matching types both
+                // following the chain of operations or the direct type of the operand; if the
+                // match is found with any one, it will go ahead with patching.
+                if (!matches_type(variable_type, arg_match.type)
+                    && !matches_type(operand.getType(), arg_match.type))
+                {
                     return false;
                 }
             }
@@ -289,7 +291,7 @@ namespace patchestry::passes {
         for (unsigned i = 0; i < operands.size(); ++i) {
             auto operand         = operands[i];
             std::string var_name = extract_variable_name(op, i);
-            std::string var_type = type_to_string(operand.getType());
+            std::string var_type = utils::convertCIRTypesToCTypes(operand.getType());
 
             for (const auto &var_match : variable_matches) {
                 bool name_matches =
@@ -356,7 +358,8 @@ namespace patchestry::passes {
             return true;
         }
 
-        std::string type_str = type_to_string(type);
+        // convert mlir types to c types
+        std::string type_str = utils::convertCIRTypesToCTypes(type);
         return matches_pattern(type_str, type_pattern);
     }
 
@@ -429,6 +432,55 @@ namespace patchestry::passes {
         }
 
         return "";
+    }
+
+    mlir::Type OperationMatcher::extract_ssa_value_type(mlir::Value value) {
+        // Check if the value is defined by an operation that might modify the original type
+        if (auto defining_op = value.getDefiningOp()) {
+            // For cast operations, try to get the original type
+            if (auto cast_op = mlir::dyn_cast< cir::CastOp >(defining_op)) {
+                // Follow the cast chain to get the original type
+                auto src_value = cast_op.getSrc();
+                return extract_ssa_value_type(src_value);
+            }
+
+            // For load operations, get the pointed-to type
+            if (auto load_op = mlir::dyn_cast< cir::LoadOp >(defining_op)) {
+                auto ptr_value = load_op.getAddr();
+                auto ptr_type  = ptr_value.getType();
+                if (auto cir_ptr_type = mlir::dyn_cast< cir::PointerType >(ptr_type)) {
+                    return cir_ptr_type.getPointee();
+                }
+            }
+
+            // For get member operations, try to get the member type
+            if (auto get_member_op = mlir::dyn_cast< cir::GetMemberOp >(defining_op)) {
+                // Return the type of the member being accessed
+                return get_member_op.getType();
+            }
+
+            // For other operations, recursively check operands
+            auto operands = defining_op->getOperands();
+            if (!operands.empty()) {
+                // For simple operations, follow the first operand
+                return extract_ssa_value_type(operands[0]);
+            }
+        }
+
+        // For block arguments, check if they represent function parameters with original types
+        if (auto block_arg = mlir::dyn_cast< mlir::BlockArgument >(value)) {
+            auto block = block_arg.getOwner();
+            if (auto parent_op = block->getParentOp()) {
+                // For function arguments, the block argument type should be the actual
+                // parameter type
+                if (auto func_op = mlir::dyn_cast< cir::FuncOp >(parent_op)) {
+                    return block_arg.getType();
+                }
+            }
+        }
+
+        // Default: return the direct type of the value
+        return value.getType();
     }
 
     std::string OperationMatcher::extract_symbol_name(mlir::Operation *op) {
