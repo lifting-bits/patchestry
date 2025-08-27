@@ -14,14 +14,12 @@ namespace mlir {
     class Type;
 } // namespace mlir
 
-namespace patchestry {
-    namespace utils {
+namespace patchestry::typing {
 
-        /// Convert C-like type names to CIR types
-        mlir::Type convertCTypesToCIRTypes(mlir::MLIRContext *context, std::string type_name);
+    /// Convert C-like type names to CIR types
+    mlir::Type convertCTypesToCIRTypes(mlir::MLIRContext *context, std::string type_name);
 
-        /// Convert CIR type back to C-like type name string
-        std::string convertCIRTypesToCTypes(mlir::Type cir_type);
+    /// Convert CIR type back to C-like type name string
+    std::string convertCIRTypesToCTypes(mlir::Type cir_type);
 
-    } // namespace utils
-} // namespace patchestry
+} // namespace patchestry::typing

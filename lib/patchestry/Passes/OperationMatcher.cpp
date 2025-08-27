@@ -218,7 +218,7 @@ namespace patchestry::passes {
             auto result = results[i];
             std::string var_name =
                 extract_variable_name(op, static_cast< unsigned >(operands.size() + i));
-            std::string var_type = utils::convertCIRTypesToCTypes(result.getType());
+            std::string var_type = typing::convertCIRTypesToCTypes(result.getType());
 
             for (const auto &var_match : symbol_matches) {
                 bool name_matches =
@@ -291,7 +291,7 @@ namespace patchestry::passes {
         for (unsigned i = 0; i < operands.size(); ++i) {
             auto operand         = operands[i];
             std::string var_name = extract_variable_name(op, i);
-            std::string var_type = utils::convertCIRTypesToCTypes(operand.getType());
+            std::string var_type = typing::convertCIRTypesToCTypes(operand.getType());
 
             for (const auto &var_match : variable_matches) {
                 bool name_matches =
@@ -359,7 +359,7 @@ namespace patchestry::passes {
         }
 
         // convert mlir types to c types
-        std::string type_str = utils::convertCIRTypesToCTypes(type);
+        std::string type_str = typing::convertCIRTypesToCTypes(type);
         return matches_pattern(type_str, type_pattern);
     }
 
