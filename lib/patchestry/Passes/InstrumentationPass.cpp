@@ -740,11 +740,13 @@ namespace patchestry::passes {
 
         mlir::Value variable_reference = variable_ref.value();
         if (arg_spec.is_reference) {
-            arg_map[variable_reference] = create_cast_if_needed(builder, call_op, variable_reference, patch_arg_type);
+            arg_map[variable_reference] =
+                create_cast_if_needed(builder, call_op, variable_reference, patch_arg_type);
         } else {
             auto load_op = builder.create< cir::LoadOp >(
-                call_op->getLoc(), variable_reference, /*isDeref=*/false, /*isVolatile=*/false,
-                /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{}, /*tbaa=*/mlir::ArrayAttr{}
+                call_op->getLoc(), variable_reference, /*isDeref=*/true, /*isVolatile=*/false,
+                /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
+                /*tbaa=*/mlir::ArrayAttr{}
             );
             arg_map[variable_reference] =
                 create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
@@ -773,8 +775,9 @@ namespace patchestry::passes {
                 create_cast_if_needed(builder, call_op, symbol_reference, patch_arg_type);
         } else {
             auto load_op = builder.create< cir::LoadOp >(
-                call_op->getLoc(), symbol_reference, /*isDeref=*/false, /*isVolatile=*/false,
-                /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{}, /*tbaa=*/mlir::ArrayAttr{}
+                call_op->getLoc(), symbol_reference, /*isDeref=*/true, /*isVolatile=*/false,
+                /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
+                /*tbaa=*/mlir::ArrayAttr{}
             );
             arg_map[symbol_reference] =
                 create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
@@ -1009,13 +1012,20 @@ namespace patchestry::passes {
         for (auto &[old_arg, new_arg] : function_args_map) {
             auto arg_spec = patch_action.action[0].arguments[arg_index];
             if (arg_spec.is_reference && arg_spec.source == ArgumentSourceType::OPERAND) {
-                auto new_value = builder.create< cir::LoadOp >(old_arg.getLoc(), new_arg);
+                auto load_op = builder.create< cir::LoadOp >(
+                    old_arg.getLoc(), new_arg, /*isDeref=*/true, /*isVolatile=*/false,
+                    /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
+                    /*tbaa=*/mlir::ArrayAttr{}
+                );
+                auto new_value =
+                    create_cast_if_needed(builder, target_op, load_op, old_arg.getType());
                 old_arg.replaceUsesWithIf(new_value, [&DT, &new_value](mlir::OpOperand &use) {
-                    return DT.dominates(new_value.getResult(), use.getOwner());
+                    return DT.dominates(new_value, use.getOwner());
                 });
             }
             arg_index++;
         }
+
         // Set appropriate attributes based on operation type
         set_patch_call_attributes(patch_call_op, target_op);
 
