@@ -280,6 +280,7 @@ namespace patchestry::passes {
                 return item;
             }
         }
+        LOG(WARNING) << "Unable to look up by name: '" << name << "'\n";
         return std::nullopt;
     }
 
@@ -297,6 +298,7 @@ namespace patchestry::passes {
                 return item;
             }
         }
+        LOG(WARNING) << "Falling back to lookup by name: '" << name << "'\n";
         return lookup_by_name(items, name);
     }
 
@@ -359,7 +361,7 @@ namespace patchestry::passes {
     }
 
     /**
-     * @brief Applies instrumentation to the MLIR module based on the patch specifications.
+     * @brief Applies instrumentation to the MLIR module based on provided specifications.
      *        The function follows the execution order and applies meta patches and contracts.
      *
      * @note The function list in module can grow during instrumentation. We collect the
@@ -390,9 +392,11 @@ namespace patchestry::passes {
         // if the execution order is empty, apply meta patches and contracts in order
         if (config->execution_order.empty()) {
             for (const auto &meta_patch : config->meta_patches) {
+                LOG(INFO) << "Applying patch: " << meta_patch.name << "\n";
                 apply_meta_patches(function_worklist, operation_worklist, meta_patch.name);
             }
             for (const auto &meta_contract : config->meta_contracts) {
+                LOG(INFO) << "Applying contract: " << meta_contract.name << "\n";
                 apply_meta_contracts(function_worklist, meta_contract.name);
             }
         } else {
@@ -413,8 +417,10 @@ namespace patchestry::passes {
                 name.erase(name.find_last_not_of(" \t") + 1);
 
                 if (type == "meta_patches") {
+                    LOG(INFO) << "Applying patch: " << name << "\n";
                     apply_meta_patches(function_worklist, operation_worklist, name);
                 } else if (type == "meta_contracts") {
+                    LOG(INFO) << "Applying contract: " << name << "\n";
                     apply_meta_contracts(function_worklist, name);
                 } else {
                     LOG(ERROR) << "Unknown execution type: " << type << "\n";
@@ -462,19 +468,22 @@ namespace patchestry::passes {
 
             // Find the corresponding patch specification by patch_id
             auto patch_spec = lookup(config->libraries.patches.patches, action.patch_id);
-            if (!patch_spec) {
+            if (!patch_spec || patch_spec == std::nullopt) {
                 LOG(ERROR) << "Patch specification for ID '" << action.patch_id
                            << "' not found\n";
+                // todo (kaoudis) just silently eating the patch if it isn't found
+                // is very confusing since one could simply expect the software to be
+                // patched at this point, throwing an error here would be more appropriate
                 continue;
+            } else {
+                // Create a modified patch info with the action's mode and arguments
+                PatchInformation patch_to_apply = { .spec         = patch_spec,
+                                                    .patch_action = patch_action };
+                // Apply the patch to matching functions and operations
+                apply_patch_action_to_targets(
+                    function_worklist, operation_worklist, *target_meta_patch, patch_to_apply
+                );
             }
-
-            // Create a modified patch info with the action's mode and arguments
-            PatchInformation patch_to_apply = { .spec         = patch_spec,
-                                                .patch_action = patch_action };
-            // Apply the patch to matching functions and operations
-            apply_patch_action_to_targets(
-                function_worklist, operation_worklist, *target_meta_patch, patch_to_apply
-            );
         }
     }
 
@@ -1703,25 +1712,32 @@ namespace patchestry::passes {
 
         // Process each action in the meta contract
         for (const auto &contract_action : target_meta_contract->contract_actions) {
-            LOG(INFO) << "Processing contract action: " << contract_action.action_id << "\n";
 
             auto &action = contract_action.action[0];
+            LOG(INFO) << "Processing contract action: " << action.contract_id << "\n";
 
-            // Find the corresponding specification by contract_id
+            // Find the corresponding specification by contract_id if possible, falling
+            // back to name if needed
             auto spec = lookup(config->libraries.contracts.contracts, action.contract_id);
-            if (!spec) {
+            if (!spec || spec == std::nullopt) {
                 LOG(ERROR) << "Contract specification for ID '" << action.contract_id
                            << "' not found\n";
+                // todo (kaoudis) just silently eating the contract if it isn't found
+                // is very confusing since one could simply expect the software to be
+                // patched at this point, throwing an error here would be more appropriate
                 continue;
-            }
+            } else {
+                LOG(INFO) << "Found specification: '" << spec->name << "'\n";
 
-            // join the specification and action instructions for ease of application
-            ContractInformation contract_to_apply = { .spec   = spec,
-                                                      .action = contract_action };
-            // Apply the contract to matching functions
-            apply_contract_action_to_targets(
-                function_worklist, *target_meta_contract, contract_to_apply
-            );
+                // join the specification and action instructions for ease of application
+                ContractInformation contract_to_apply = { .spec   = spec,
+                                                          .action = contract_action };
+
+                // Apply the contract to matching functions
+                apply_contract_action_to_targets(
+                    function_worklist, *target_meta_contract, contract_to_apply
+                );
+            }
         }
     }
 
@@ -1917,6 +1933,9 @@ namespace patchestry::passes {
         const auto &contract_action = contract_to_apply.action.value();
         const auto &action       = contract_action.action[0];
 
+        LOG(INFO) << "Applying contract action '" << action.contract_id << "' in mode '"
+                  << patchestry::passes::contract::infoModeToString(action.mode) << "' \n";
+
         // Apply to function calls
         for (auto func : function_worklist) {
             func.walk([&](cir::CallOp call_op) {
@@ -1956,6 +1975,8 @@ namespace patchestry::passes {
                             LOG(ERROR) << "Unsupported contract mode (see ContractSpec for details on support)\n";
                             break;
                     }
+                } else {
+                    LOG(INFO) << "function worklist entry '" << func.getSymName().str() << "' did not match the contract action; continuing\n"; 
                 }
             });
         }
