@@ -44,9 +44,6 @@ uint32_t __patchestry_get_thread_id(void);
 uint32_t __patchestry_get_cpu_id(void);
 uint32_t __patchestry_get_process_id(void);
 
-// Function Metadata
-bool __patchestry_has_function_attr(const char* func_name, const char* attr);
-int __patchestry_get_param_count(const char* func_name);
 const char* __patchestry_get_return_type(const char* func_name);
 ```
 
@@ -54,7 +51,7 @@ const char* __patchestry_get_return_type(const char* func_name);
 
 ```c
 // Pointer Validation
-bool __patchestry_is_null(void* ptr);
+bool __patchestry_is_null_pointer(void* ptr);
 bool __patchestry_is_valid_pointer(void* ptr);
 bool __patchestry_is_readable(void* ptr, size_t size);
 bool __patchestry_is_writable(void* ptr, size_t size);
@@ -89,11 +86,6 @@ bool __patchestry_is_initialized(void* ptr, size_t size);
 #define PATCHESTRY_GET_FIELD(struct_ptr, field_name, field_type)
 #define PATCHESTRY_SET_FIELD(struct_ptr, field_name, value, field_type)
 
-// Field Introspection
-bool __patchestry_has_field(void* struct_ptr, const char* field_name);
-size_t __patchestry_get_field_offset(void* struct_ptr, const char* field_name);
-const char* __patchestry_get_field_type(void* struct_ptr, const char* field_name);
-
 // Array Operations
 #define PATCHESTRY_ARRAY_GET(array, index, size, type)
 bool __patchestry_check_array_bounds(void* array, size_t array_size, size_t index, size_t elem_size);
@@ -116,17 +108,12 @@ patchestry_device_state_t __patchestry_device_state(void* device);
 uint32_t __patchestry_read_reg32(volatile uint32_t* reg);
 void __patchestry_write_reg32(volatile uint32_t* reg, uint32_t value);
 bool __patchestry_is_valid_register(void* reg_addr);
-
-// Capability Checking (extensible for domain-specific needs)
-bool __patchestry_device_has_capability(void* device, const char* capability);
 ```
 
 ### 6. Mutability and Access Control APIs
 
 ```c
 // Mutability Control
-void __patchestry_mark_mutable(void* ptr, size_t size);
-void __patchestry_mark_immutable(void* ptr, size_t size);
 bool __patchestry_is_mutable(void* ptr, size_t size);
 
 // Access Permissions
@@ -175,7 +162,7 @@ patchestry_context_t* __patchestry_get_context(void);
 const char* __patchestry_get_patch_name(void);
 const char* __patchestry_get_patch_version(void);
 
-// ClangIR Metadata Generation
+// ClangIR Metadata Generation (Not implemented yet)
 void __patchestry_emit_metadata(const char* key, const char* value);
 void __patchestry_emit_annotation(const char* annotation);
 

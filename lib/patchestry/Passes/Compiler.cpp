@@ -6,14 +6,24 @@
  */
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <clang/AST/ASTConsumer.h>
 #include <clang/AST/ASTContext.h>
+#include <clang/Basic/DiagnosticIDs.h>
+#include <clang/Basic/DiagnosticOptions.h>
 #include <clang/Frontend/CompilerInstance.h>
+#include <clang/Lex/HeaderSearch.h>
+#include <clang/Lex/HeaderSearchOptions.h>
+#include <clang/Lex/PreprocessorOptions.h>
 #include <clang/Parse/ParseAST.h>
 
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
 
@@ -154,6 +164,77 @@ namespace patchestry::passes {
             return target_triple.str();
         }
 
+        std::vector< std::string > getPatchestryIncludePaths() {
+            std::vector< std::string > paths;
+
+// 1. Use CMake configured path first
+#ifdef PATCHESTRY_INCLUDE_DIR
+            paths.push_back(PATCHESTRY_INCLUDE_DIR);
+#endif
+
+            // 2. Check environment variable
+            if (const char *patchestry_root = std::getenv("PATCHESTRY_ROOT")) {
+                paths.push_back(std::string(patchestry_root) + "/include");
+            }
+
+            // 3. Check CMAKE_INSTALL_PREFIX if available at runtime
+            if (const char *install_prefix = std::getenv("CMAKE_INSTALL_PREFIX")) {
+                paths.push_back(std::string(install_prefix) + "/include");
+            }
+
+// 4. macOS SDK path detection
+#ifdef __APPLE__
+            if (const char *sdk_path = std::getenv("SDKROOT")) {
+                paths.push_back(std::string(sdk_path) + "/usr/include");
+                paths.push_back(std::string(sdk_path) + "/usr/local/include");
+            } else {
+                // Try to detect SDK using xcrun
+                std::string xcrun_output;
+                FILE *pipe = popen("xcrun --show-sdk-path 2>/dev/null", "r");
+                if (pipe) {
+                    char buffer[1024];
+                    if (fgets(buffer, sizeof(buffer), pipe)) {
+                        xcrun_output = buffer;
+                        // Remove newline
+                        if (!xcrun_output.empty() && xcrun_output.back() == '\n') {
+                            xcrun_output.pop_back();
+                        }
+                        paths.push_back(xcrun_output + "/usr/include");
+                        paths.push_back(xcrun_output + "/usr/local/include");
+                    }
+                    pclose(pipe);
+                }
+            }
+#endif
+
+            // 5. Try standard system paths
+            paths.push_back("/usr/local/include");
+            paths.push_back("/usr/include");
+            paths.push_back("../include");
+            paths.push_back("../../include");
+            paths.push_back("../../../include");
+            paths.push_back("include");
+
+            // 6. Try relative to executable (for development builds)
+            std::string exe_path = llvm::sys::fs::getMainExecutable(nullptr, nullptr);
+            if (!exe_path.empty()) {
+                llvm::SmallString< 256 > exe_dir = llvm::sys::path::parent_path(exe_path);
+                llvm::sys::path::append(exe_dir, "..", "include");
+                paths.push_back(std::string(exe_dir));
+            }
+
+            // Filter to only existing paths with patchestry intrinsics
+            std::vector< std::string > valid_paths;
+            for (const auto &path : paths) {
+                llvm::SmallString< 256 > intrinsics_path(path);
+                if (llvm::sys::fs::exists(intrinsics_path)) {
+                    valid_paths.push_back(path); // Use first valid path found
+                }
+            }
+
+            return valid_paths;
+        }
+
         std::unique_ptr< clang::CompilerInstance >
         createCompilerInstance(const std::string &filename, const std::string &lang) { // NOLINT
             auto ci                = std::make_unique< clang::CompilerInstance >();
@@ -161,8 +242,17 @@ namespace patchestry::passes {
             auto &inv_target_opts  = invocation.getTargetOpts();
             inv_target_opts.Triple = llvm::sys::getDefaultTargetTriple();
 
-            ci->createDiagnostics(*llvm::vfs::getRealFileSystem());
-            ci->getDiagnostics().setClient(new patchestry::DiagnosticClient());
+            // Create diagnostics with our custom client that doesn't assert
+            auto diag_opts   = new clang::DiagnosticOptions();
+            auto diag_client = std::make_unique< patchestry::DiagnosticClient >();
+            auto diag_ids    = new clang::DiagnosticIDs();
+            auto diagnostics = new clang::DiagnosticsEngine(
+                llvm::IntrusiveRefCntPtr< clang::DiagnosticIDs >(diag_ids),
+                llvm::IntrusiveRefCntPtr< clang::DiagnosticOptions >(diag_opts),
+                diag_client.release(), true
+            );
+            ci->setDiagnostics(diagnostics);
+
             if (!ci->hasDiagnostics()) {
                 llvm::errs() << "Failed to initialize diagnostics.\n";
                 return nullptr;
@@ -177,25 +267,64 @@ namespace patchestry::passes {
 
             ci->createFileManager();
             ci->createSourceManager(ci->getFileManager());
-            auto buffer = llvm::MemoryBuffer::getFileOrSTDIN(filename);
-            if (!buffer) {
+            auto buffer_or_error = llvm::MemoryBuffer::getFileOrSTDIN(filename);
+            if (!buffer_or_error) {
                 llvm::errs() << "Failed to open file: " << filename << "\n";
                 return nullptr;
             }
+            auto buffer = std::move(*buffer_or_error);
+
             llvm::ErrorOr< clang::FileEntryRef > file_entry_ref_or_err =
                 ci->getFileManager().getVirtualFileRef(
-                    filename, static_cast< off_t >(buffer->get()->getBufferSize()), 0
+                    filename, static_cast< off_t >(buffer->getBufferSize()), 0
                 );
+
+            if (!file_entry_ref_or_err) {
+                llvm::errs() << "Failed to create file entry ref: "
+                             << file_entry_ref_or_err.getError().message() << "\n";
+                return nullptr;
+            }
+
+            ci->getSourceManager().overrideFileContents(
+                *file_entry_ref_or_err, std::move(buffer)
+            );
 
             clang::FileID file_id = ci->getSourceManager().createFileID(
                 *file_entry_ref_or_err, clang::SourceLocation(), clang::SrcMgr::C_User
             );
+
             ci->getSourceManager().setMainFileID(file_id);
 
             ci->getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
             ci->getLangOpts().C99               = true;
 
+            auto &header_search_opts = ci->getHeaderSearchOpts();
+            auto include_paths       = getPatchestryIncludePaths();
+            for (const auto &path : include_paths) {
+                if (llvm::sys::fs::exists(path)) {
+                    header_search_opts.AddPath(path, clang::frontend::System, false, false);
+                }
+            }
+
             ci->createPreprocessor(clang::TU_Complete);
+
+            // Initialize HeaderSearch properly after creating preprocessor
+            auto &pp      = ci->getPreprocessor();
+            auto &headers = pp.getHeaderSearchInfo();
+
+            // Re-add the patchestry include path to the preprocessor's header search
+            for (const auto &header_path : include_paths) {
+                if (llvm::sys::fs::exists(header_path)) {
+                    auto dir_ref = pp.getFileManager().getOptionalDirectoryRef(header_path);
+                    if (dir_ref) {
+                        headers.AddSearchPath(
+                            clang::DirectoryLookup(*dir_ref, clang::SrcMgr::C_System, false),
+                            true // isAngled
+                        );
+                    }
+                }
+            }
+
             ci->createASTContext();
             ci->setASTConsumer(std::make_unique< clang::ASTConsumer >());
             ci->createSema(clang::TU_Complete, nullptr);

@@ -9,3 +9,5 @@ add_subdirectory(Dialect)
 add_subdirectory(Ghidra)
 add_subdirectory(Passes)
 add_subdirectory(YAML)
+
+add_subdirectory(intrinsics)

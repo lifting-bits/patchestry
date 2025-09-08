@@ -20,6 +20,9 @@ if platform.system() == 'Darwin':
     sdk_path = subprocess.check_output(['xcrun', '--show-sdk-path']).decode().strip()
     config.environment['SDKROOT'] = sdk_path
 
+# Set PATCHESTRY_ROOT environment variable for runtime access
+config.environment['PATCHESTRY_ROOT'] = config.patchestry_src_root
+
 config.python_executable = config.python_executable if config.python_executable else sys.executable
 
 # Define file suffixes for test files
@@ -38,8 +41,14 @@ config.patchestry_tools_dir = os.path.join(config.patchestry_obj_root, 'tools')
 # Set the directory for the test scripts
 config.test_scripts_dir = os.path.join(config.patchestry_src_root, 'test', 'scripts')
 
+# Set the directory for the patchestry include files
+config.patchestry_include_dir = os.path.join(config.patchestry_src_root, 'include')
+
 # Add the Ghidra scripts directory to the substitutions list
 config.substitutions.append(('%PATH%', config.patchestry_script_dir))
+
+# Add the patchestry include directory to the substitutions list
+# config.substitutions.append(('%PATH%', config.patchestry_include_dir))
 
 if 'BUILD_TYPE' in lit_config.params:
     config.patchestry_build_type = lit_config.params['BUILD_TYPE']
