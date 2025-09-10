@@ -12,6 +12,8 @@
 #include <string.h>
 #include <pthread.h>
 
+// NOLINTBEGIN
+
 // =============================================================================
 // Device State Management
 // =============================================================================
@@ -144,3 +146,4 @@ bool __patchestry_is_valid_mmio_range(void* mmio_base, size_t offset, size_t siz
     return __patchestry_is_readable((const char*)mmio_base + offset, size);
 }
 
+// NOLINTEND

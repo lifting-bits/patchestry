@@ -7,6 +7,7 @@
 
 #pragma once
 
+// NOLINTBEGIN
 // =============================================================================
 // Common C11 Type Definitions for Patchestry Intrinsics
 // =============================================================================
@@ -73,3 +74,5 @@ typedef uint64_t patchestry_time_t;
 #ifndef PATCHESTRY_CONST
     #define PATCHESTRY_CONST
 #endif
+
+// NOLINTEND

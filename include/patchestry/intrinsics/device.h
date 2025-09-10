@@ -73,13 +73,6 @@ static inline void __patchestry_mmio_write32_fast(void *base, size_t offset, uin
     *(volatile uint32_t *) ((uint8_t *) base + offset) = value;
 }
 
-// device MMIO range validation
-static inline bool __patchestry_mmio_valid_range(void *base, size_t offset) {
-    uintptr_t addr = (uintptr_t) base + offset;
-    return base != NULL && offset < 0x1000 &&       // Reasonable peripheral offset
-        (addr >= 0x40000000 && addr <= 0x5FFFFFFF); // ARM peripheral space
-}
-
 // Traditional MMIO operations with full validation
 uint32_t __patchestry_mmio_read32(void *mmio_base, size_t offset);
 void __patchestry_mmio_write32(void *mmio_base, size_t offset, uint32_t value);

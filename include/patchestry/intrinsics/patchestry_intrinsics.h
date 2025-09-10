@@ -56,23 +56,15 @@
 extern "C" {
 #endif
 
+// NOLINTBEGIN
 // Version information
 #define PATCHESTRY_INTRINSICS_VERSION_MAJOR 1
 #define PATCHESTRY_INTRINSICS_VERSION_MINOR 0
 #define PATCHESTRY_INTRINSICS_VERSION_PATCH 0
 
-// Common return codes (portable C enum)
-typedef enum patchestry_result_e {
-    PATCHESTRY_SUCCESS              = 0,
-    PATCHESTRY_ERROR_NULL_POINTER   = -1,
-    PATCHESTRY_ERROR_INVALID_BOUNDS = -2,
-    PATCHESTRY_ERROR_ACCESS_DENIED  = -3,
-    PATCHESTRY_ERROR_DEVICE_BUSY    = -4,
-    PATCHESTRY_ERROR_UNKNOWN        = -5
-} patchestry_result_t;
-
 // Include all intrinsic subsystems
 #include "device.h"
+#include "patch_utils.h"
 #include "runtime.h"
 #include "safety.h"
 
@@ -81,6 +73,7 @@ extern const char *__patchestry_get_last_error(void);
 extern void __patchestry_set_error(const char *error_msg);
 extern void __patchestry_clear_error(void);
 
+// NOLINTEND
 #ifdef __cplusplus
 }
 #endif

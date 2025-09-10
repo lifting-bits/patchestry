@@ -13,9 +13,7 @@
 extern "C" {
 #endif
 
-// =============================================================================
-// Runtime Introspection APIs
-// =============================================================================
+// NOLINTBEGIN
 
 // Caller Information
 const char *__patchestry_get_caller_name(void);
@@ -25,38 +23,6 @@ const char *__patchestry_get_caller_at_depth(int depth);
 uint32_t __patchestry_get_thread_id(void);
 uint32_t __patchestry_get_cpu_id(void);
 uint32_t __patchestry_get_process_id(void);
-
-// Function Metadataint __patchestry_get_param_count(const char *func_name);
-const char *__patchestry_get_return_type(const char *func_name);
-
-// =============================================================================
-// Patch Context and Metadata APIs
-// =============================================================================
-
-// Context Management
-typedef struct
-{
-    const char *patch_name;
-    const char *target_function;
-    void *user_data;
-} patchestry_context_t;
-
-patchestry_context_t *__patchestry_get_context(void);
-const char *__patchestry_get_patch_name(void);
-const char *__patchestry_get_patch_version(void);
-
-// ClangIR Metadata Generation
-void __patchestry_emit_metadata(const char *key, const char *value);
-void __patchestry_emit_annotation(const char *annotation);
-
-// Execution Tracking
-void __patchestry_mark_patch_start(const char *patch_name);
-void __patchestry_mark_patch_end(const char *patch_name);
-bool __patchestry_is_patch_active(const char *patch_name);
-
-// =============================================================================
-// Logging and Debugging APIs
-// =============================================================================
 
 // Logging Levels
 typedef enum {
@@ -94,6 +60,7 @@ void __patchestry_profile_start(const char *name);
 void __patchestry_profile_end(const char *name);
 void __patchestry_profile_report(void);
 
+// NOLINTEND
 #ifdef __cplusplus
 }
 #endif

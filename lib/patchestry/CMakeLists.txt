@@ -10,4 +10,6 @@ add_subdirectory(Ghidra)
 add_subdirectory(Passes)
 add_subdirectory(YAML)
 
-add_subdirectory(intrinsics)
+# intrinsic library should be build standalone
+# and should not be part of main project
+# add_subdirectory(intrinsics)

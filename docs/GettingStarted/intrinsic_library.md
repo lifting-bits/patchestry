@@ -175,11 +175,6 @@ bool __patchestry_is_patch_active(const char* patch_name);
 ### 9. Security APIs
 
 ```c
-// Checksums and Hashing
-uint32_t __patchestry_crc32(void* data, size_t size);
-uint64_t __patchestry_hash64(void* data, size_t size);
-bool __patchestry_verify_checksum(void* data, size_t size, uint32_t expected_crc);
-
 // Random Number Generation
 uint32_t __patchestry_random_u32(void);
 void __patchestry_random_bytes(void* buffer, size_t size);

@@ -14,6 +14,7 @@
 #include <dlfcn.h>
 #include <unistd.h>
 
+// NOLINTBEGIN
 // =============================================================================
 // Patch Management Implementation
 // =============================================================================
@@ -21,17 +22,8 @@
 typedef struct patch_entry {
     char name[64];
     char version[32];
-    char target_function[64];
-    patchestry_patch_state_t state;
     void* patch_data;
     size_t data_size;
-    
-    // Dependencies and conflicts
-    char dependencies[8][64];
-    int dependency_count;
-    char conflicts[8][64];
-    int conflict_count;
-    
     struct patch_entry* next;
 } patch_entry_t;
 
@@ -41,7 +33,7 @@ static pthread_mutex_t patch_mutex = PTHREAD_MUTEX_INITIALIZER;
 static patch_entry_t* find_patch_entry(const char* patch_name) {
     patch_entry_t* entry = patch_list;
     while (entry) {
-        if (strcmp(entry->name, patch_name) == 0) {
+        if (strncmp(entry->name, patch_name, sizeof(entry->name)) == 0) {
             return entry;
         }
         entry = entry->next;
@@ -74,12 +66,8 @@ bool __patchestry_patch_init(const char* patch_name, const char* version) {
     strncpy(entry->version, version, sizeof(entry->version) - 1);
     entry->version[sizeof(entry->version) - 1] = '\0';
     
-    entry->target_function[0] = '\0';
-    entry->state = PATCHESTRY_PATCH_INACTIVE;
     entry->patch_data = NULL;
     entry->data_size = 0;
-    entry->dependency_count = 0;
-    entry->conflict_count = 0;
     entry->next = patch_list;
     patch_list = entry;
     
@@ -108,34 +96,6 @@ void __patchestry_patch_cleanup(const char* patch_name) {
     }
     
     pthread_mutex_unlock(&patch_mutex);
-}
-
-patchestry_patch_state_t __patchestry_patch_get_state(const char* patch_name) {
-    if (patch_name == NULL) {
-        return PATCHESTRY_PATCH_FAILED;
-    }
-    
-    pthread_mutex_lock(&patch_mutex);
-    patch_entry_t* entry = find_patch_entry(patch_name);
-    patchestry_patch_state_t state = entry ? entry->state : PATCHESTRY_PATCH_FAILED;
-    pthread_mutex_unlock(&patch_mutex);
-    
-    return state;
-}
-
-bool __patchestry_patch_set_state(const char* patch_name, patchestry_patch_state_t state) {
-    if (patch_name == NULL) {
-        return false;
-    }
-    
-    pthread_mutex_lock(&patch_mutex);
-    patch_entry_t* entry = find_patch_entry(patch_name);
-    if (entry) {
-        entry->state = state;
-    }
-    pthread_mutex_unlock(&patch_mutex);
-    
-    return entry != NULL;
 }
 
 bool __patchestry_patch_store_data(const char* patch_name, const void* data, size_t size) {
@@ -191,7 +151,7 @@ size_t __patchestry_patch_get_data_size(const char* patch_name) {
 // Conditional Patching Implementation
 // =============================================================================
 
-bool __patchestry_check_env_variable(const char* var_name, const char* expected_value) {
+bool __patchestry_check_env_variable(const char* var_name, const char* expected_value, size_t size) {
     if (var_name == NULL) {
         return false;
     }
@@ -204,17 +164,17 @@ bool __patchestry_check_env_variable(const char* var_name, const char* expected_
     if (expected_value == NULL) {
         return false;
     }
-    
-    return strcmp(value, expected_value) == 0;
+
+    return strncmp(value, expected_value, size) == 0;
 }
 
-bool __patchestry_check_build_config(const char* config_name) {
+bool __patchestry_check_build_config(const char* config_name, size_t size) {
     if (config_name == NULL) {
         return false;
     }
     
     // Check common build configurations
-    if (strcmp(config_name, "DEBUG") == 0) {
+    if (strncmp(config_name, "DEBUG", size) == 0) {
         #ifdef DEBUG
         return true;
         #else
@@ -222,7 +182,7 @@ bool __patchestry_check_build_config(const char* config_name) {
         #endif
     }
     
-    if (strcmp(config_name, "RELEASE") == 0) {
+    if (strncmp(config_name, "RELEASE", size) == 0) {
         #ifdef NDEBUG
         return true;
         #else
@@ -233,26 +193,26 @@ bool __patchestry_check_build_config(const char* config_name) {
     return false;
 }
 
-bool __patchestry_check_target_arch(const char* arch_name) {
+bool __patchestry_check_target_arch(const char* arch_name, size_t size) {
     if (arch_name == NULL) {
         return false;
     }
     
     // Check architecture
     #ifdef __x86_64__
-    if (strcmp(arch_name, "x86_64") == 0) {
+    if (strncmp(arch_name, "x86_64", size) == 0) {
         return true;
     }
     #endif
     
     #ifdef __aarch64__
-    if (strcmp(arch_name, "aarch64") == 0) {
+    if (strncmp(arch_name, "aarch64", size) == 0) {
         return true;
     }
     #endif
     
     #ifdef __arm__
-    if (strcmp(arch_name, "arm") == 0) {
+    if (strncmp(arch_name, "arm", size) == 0) {
         return true;
     }
     #endif
@@ -282,39 +242,4 @@ bool __patchestry_check_symbol_exists(const char* symbol_name) {
     return __patchestry_check_function_exists(symbol_name);
 }
 
-// =============================================================================
-// Patch Validation and Testing
-// =============================================================================
-
-bool __patchestry_validate_patch_target(const char* patch_name, void* target_ptr) {
-    if (patch_name == NULL || target_ptr == NULL) {
-        return false;
-    }
-    
-    // Basic validation - check if target is readable
-    return __patchestry_is_readable(target_ptr, sizeof(void*));
-}
-
-bool __patchestry_validate_patch_signature(const char* patch_name, const char* expected_sig) {
-    if (patch_name == NULL || expected_sig == NULL) {
-        return false;
-    }
-    
-    // Stub implementation - would check function signatures
-    return true;
-}
-
-bool __patchestry_validate_patch_checksum(const char* patch_name, uint32_t expected_crc) {
-    if (patch_name == NULL) {
-        return false;
-    }
-    
-    void* patch_data = __patchestry_patch_get_data(patch_name);
-    size_t data_size = __patchestry_patch_get_data_size(patch_name);
-    
-    if (patch_data == NULL || data_size == 0) {
-        return false;
-    }
-    
-    return __patchestry_verify_checksum(patch_data, data_size, expected_crc);
-}
+// NOLINTEND

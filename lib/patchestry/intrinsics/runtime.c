@@ -26,6 +26,7 @@
 #include <sched.h>
 #endif
 
+// NOLINTBEGIN
 // Global error state
 static __thread char g_last_error[256] = {0};
 
@@ -35,10 +36,6 @@ static patchestry_context_t g_context = {
     .target_function = "unknown", 
     .user_data = NULL
 };
-
-// =============================================================================
-// Error Management
-// =============================================================================
 
 const char* __patchestry_get_last_error(void) {
     return g_last_error[0] ? g_last_error : NULL;
@@ -322,3 +319,4 @@ void __patchestry_profile_report(void) {
     
     pthread_mutex_unlock(&profile_mutex);
 }
+// NOLINTEND

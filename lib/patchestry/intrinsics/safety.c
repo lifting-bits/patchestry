@@ -181,74 +181,14 @@ bool __patchestry_check_access(const void* ptr, patchestry_access_t access) {
     return true;
 }
 
-// =============================================================================
-// Security Implementation
-// =============================================================================
-
-// Simple CRC32 implementation
-static uint32_t crc32_table[256];
-static bool crc32_table_initialized = false;
-
-static void init_crc32_table(void) {
-    if (crc32_table_initialized) return;
-    
-    for (uint32_t i = 0; i < 256; i++) {
-        uint32_t crc = i;
-        for (int j = 0; j < 8; j++) {
-            if (crc & 1) {
-                crc = (crc >> 1) ^ 0xEDB88320;
-            } else {
-                crc = crc >> 1;
-            }
-        }
-        crc32_table[i] = crc;
-    }
-    crc32_table_initialized = true;
-}
-
-uint32_t __patchestry_crc32(void* data, size_t size) {
-    if (data == NULL || size == 0) return 0;
-    
-    init_crc32_table();
-    
-    uint32_t crc = 0xFFFFFFFF;
-    unsigned char* bytes = (unsigned char*)data;
-    
-    for (size_t i = 0; i < size; i++) {
-        crc = crc32_table[(crc ^ bytes[i]) & 0xFF] ^ (crc >> 8);
-    }
-    
-    return crc ^ 0xFFFFFFFF;
-}
-
-uint64_t __patchestry_hash64(void* data, size_t size) {
-    if (data == NULL || size == 0) return 0;
-    
-    // Simple FNV-1a hash
-    uint64_t hash = 14695981039346656037ULL;
-    unsigned char* bytes = (unsigned char*)data;
-    
-    for (size_t i = 0; i < size; i++) {
-        hash ^= bytes[i];
-        hash *= 1099511628211ULL;
-    }
-    
-    return hash;
-}
-
-bool __patchestry_verify_checksum(void* data, size_t size, uint32_t expected_crc) {
-    return __patchestry_crc32(data, size) == expected_crc;
-}
-
-// Simple PRNG state
-static uint64_t rng_state = 1;
-
 uint32_t __patchestry_random_u32(void) {
-    // Simple xorshift64
-    rng_state ^= rng_state << 13;
-    rng_state ^= rng_state >> 7;
-    rng_state ^= rng_state << 17;
-    return (uint32_t)rng_state;
+    // Use standard library rand() function
+    // rand() returns int in range [0, RAND_MAX]
+    // Combine two rand() calls to get full 32-bit range
+
+    uint32_t high = (uint32_t)rand() & 0xFFFF;
+    uint32_t low = (uint32_t)rand() & 0xFFFF;
+    return (high << 16) | low;
 }
 
 void __patchestry_random_bytes(void* buffer, size_t size) {
