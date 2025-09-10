@@ -20,6 +20,9 @@ if platform.system() == 'Darwin':
     sdk_path = subprocess.check_output(['xcrun', '--show-sdk-path']).decode().strip()
     config.environment['SDKROOT'] = sdk_path
 
+# Set PATCHESTRY_ROOT environment variable for runtime access
+config.environment['PATCHESTRY_ROOT'] = config.patchestry_src_root
+
 config.python_executable = config.python_executable if config.python_executable else sys.executable
 
 # Define file suffixes for test files

@@ -54,6 +54,13 @@ jobs:
       - name: Build ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: cmake --build --preset ci --config ${{ matrix.build-type }} -j$(nproc)
 
+      - name: Build the intrinsic library
+        run: |
+          cd lib/patchestry/intrinsics
+          cmake -B build_standalone -DCMAKE_BUILD_TYPE=Release
+          cmake --build build_standalone -j$(nproc)
+          cd -
+
       - name: Build the headless decompilation docker image
         run: |
           bash ./scripts/ghidra/build-headless-docker.sh

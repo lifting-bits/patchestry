@@ -1,8 +1,7 @@
 // RUN: true
 
-// Self-contained patch function with basic type definitions
-typedef unsigned int uint32_t;
-typedef unsigned char uint8_t;
+#define USE_C99_TYPES
+#include <patchestry/intrinsics/patchestry_intrinsics.h>
 
 // Simple assert implementation with error messages
 void patch_assert_fail(const char* message, const char* file, int line) {
@@ -28,6 +27,14 @@ void patch__before__usbd_ep_write_packet(void* operand_0, void* variable_2) {
 }
 
 void patch__before__usbd_cp_write_packet__update_state(void** operand_0, void** variable_2/*, uint32_t *variable_4*/) {
+    if (__patchestry_is_null_pointer(variable_2)) {
+        __patchestry_set_error("USB write packet: buffer pointer is NULL");
+        return;
+    }
+    if (__patchestry_is_null_pointer(operand_0)) {
+        __patchestry_set_error("USB write packet: endpoint pointer is NULL");
+        return;
+    }
     // update buffer pointer with the new value
     *variable_2 = (void*)0x1000;
     // update endpoint pointer with the new value
