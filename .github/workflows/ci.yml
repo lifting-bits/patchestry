@@ -56,10 +56,10 @@ jobs:
 
       - name: Build the intrinsic library
         run: |
-          pushd lib/patchestry/intrinsics
+          cd lib/patchestry/intrinsics
           cmake -B build_standalone -DCMAKE_BUILD_TYPE=Release
           cmake --build build_standalone -j$(nproc)
-          popd
+          cd -
 
       - name: Build the headless decompilation docker image
         run: |
