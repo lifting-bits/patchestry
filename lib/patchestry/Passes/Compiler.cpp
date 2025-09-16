@@ -247,12 +247,11 @@ namespace patchestry::passes {
 
             // install custom diagnostic client
             auto diag_opts   = new clang::DiagnosticOptions();
-            auto diag_client = std::make_unique< patchestry::DiagnosticClient >();
             auto diag_ids    = new clang::DiagnosticIDs();
             auto diagnostics = new clang::DiagnosticsEngine(
                 llvm::IntrusiveRefCntPtr< clang::DiagnosticIDs >(diag_ids),
                 llvm::IntrusiveRefCntPtr< clang::DiagnosticOptions >(diag_opts),
-                diag_client.release(), true
+                new patchestry::DiagnosticClient(), true
             );
             ci->setDiagnostics(diagnostics);
             if (!ci->hasDiagnostics()) {
