@@ -85,7 +85,8 @@ namespace patchestry::passes {
                     pclose(pipe);
                 }
             };
-            std::unique_ptr< FILE, decltype(pipe_deleter) > pipe(nullptr, pipe_deleter);
+            std::unique_ptr< FILE, decltype(pipe_deleter) > pipe(
+                popen("xcrun --show-sdk-path", "r"), pipe_deleter);
             if (!pipe) {
                 return {};
             }
