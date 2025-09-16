@@ -73,6 +73,37 @@ namespace patchestry::passes {
             return llvm::Triple::NoSubArch;
         }
 
+#ifdef __APPLE__
+        std::string getSDKPath() {
+            if (const char *sdk_path = std::getenv("SDKROOT")) {
+                return std::string(sdk_path);
+            }
+            // Try to detect SDK using xcrun
+
+            auto pipe_deleter = [](FILE *pipe) {
+                if (pipe) {
+                    pclose(pipe);
+                }
+            };
+            std::unique_ptr< FILE, decltype(pipe_deleter) > pipe(
+                popen("xcrun --show-sdk-path", "r"), pipe_deleter);
+            if (!pipe) {
+                return {};
+            }
+
+            std::string xcrun_line;
+            std::array< char, 1024 > buffer;
+            while (std::fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+                xcrun_line += buffer.data();
+            }
+
+            if (!xcrun_line.empty() && xcrun_line.back() == '\n') {
+                xcrun_line.pop_back();
+            }
+
+            return xcrun_line;
+        }
+#endif
         std::string createTargetTriple(const std::string &lang) {
             llvm::Triple target_triple;
 
@@ -154,6 +185,60 @@ namespace patchestry::passes {
             return target_triple.str();
         }
 
+        std::vector< std::string > getPatchestryIncludePaths() {
+            std::vector< std::string > paths;
+
+            // 1. Use CMake configured path first
+#ifdef PATCHESTRY_INCLUDE_DIR
+            paths.push_back(PATCHESTRY_INCLUDE_DIR);
+#endif
+
+            // 2. Check environment variable
+            if (const char *patchestry_root = std::getenv("PATCHESTRY_ROOT")) {
+                paths.push_back(std::string(patchestry_root) + "/include");
+            }
+
+            // 3. Check CMAKE_INSTALL_PREFIX if available at runtime
+            if (const char *install_prefix = std::getenv("CMAKE_INSTALL_PREFIX")) {
+                paths.push_back(std::string(install_prefix) + "/include");
+            }
+
+            // 4. macOS SDK path detection
+#ifdef __APPLE__
+            std::string sdk_path = getSDKPath();
+            if (!sdk_path.empty()) {
+                paths.push_back(sdk_path + "/usr/include");
+                paths.push_back(sdk_path + "/usr/local/include");
+            }
+#endif
+
+            // 5. Try standard system paths
+            paths.push_back("/usr/local/include");
+            paths.push_back("/usr/include");
+            paths.push_back("../include");
+            paths.push_back("../../include");
+            paths.push_back("../../../include");
+            paths.push_back("include");
+
+            // 6. Try relative to executable (for development builds)
+            std::string exe_path = llvm::sys::fs::getMainExecutable(nullptr, nullptr);
+            if (!exe_path.empty()) {
+                llvm::SmallString< 256 > exe_dir = llvm::sys::path::parent_path(exe_path);
+                llvm::sys::path::append(exe_dir, "..", "include");
+                paths.push_back(std::string(exe_dir));
+            }
+
+            std::vector< std::string > valid_paths;
+            for (const auto &path : paths) {
+                llvm::SmallString< 256 > intrinsics_path(path);
+                if (llvm::sys::fs::exists(intrinsics_path)) {
+                    valid_paths.push_back(path);
+                }
+            }
+
+            return valid_paths;
+        }
+
         std::unique_ptr< clang::CompilerInstance >
         createCompilerInstance(const std::string &filename, const std::string &lang) { // NOLINT
             auto ci                = std::make_unique< clang::CompilerInstance >();
@@ -161,8 +246,15 @@ namespace patchestry::passes {
             auto &inv_target_opts  = invocation.getTargetOpts();
             inv_target_opts.Triple = llvm::sys::getDefaultTargetTriple();
 
-            ci->createDiagnostics(*llvm::vfs::getRealFileSystem());
-            ci->getDiagnostics().setClient(new patchestry::DiagnosticClient());
+            // install custom diagnostic client
+            auto diag_opts   = new clang::DiagnosticOptions();
+            auto diag_ids    = new clang::DiagnosticIDs();
+            auto diagnostics = new clang::DiagnosticsEngine(
+                llvm::IntrusiveRefCntPtr< clang::DiagnosticIDs >(diag_ids),
+                llvm::IntrusiveRefCntPtr< clang::DiagnosticOptions >(diag_opts),
+                new patchestry::DiagnosticClient(), true
+            );
+            ci->setDiagnostics(diagnostics);
             if (!ci->hasDiagnostics()) {
                 llvm::errs() << "Failed to initialize diagnostics.\n";
                 return nullptr;
@@ -195,7 +287,31 @@ namespace patchestry::passes {
             ci->getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
             ci->getLangOpts().C99               = true;
 
+            auto &header_search_opts = ci->getHeaderSearchOpts();
+            auto include_paths       = getPatchestryIncludePaths();
+            for (const auto &path : include_paths) {
+                if (llvm::sys::fs::exists(path)) {
+                    header_search_opts.AddPath(path, clang::frontend::System, false, false);
+                }
+            }
+
             ci->createPreprocessor(clang::TU_Complete);
+            auto &pp      = ci->getPreprocessor();
+            auto &headers = pp.getHeaderSearchInfo();
+
+            // Re-add the patchestry include path to the preprocessor's header search
+            for (const auto &header_path : include_paths) {
+                if (llvm::sys::fs::exists(header_path)) {
+                    auto dir_ref = pp.getFileManager().getOptionalDirectoryRef(header_path);
+                    if (dir_ref) {
+                        headers.AddSearchPath(
+                            clang::DirectoryLookup(*dir_ref, clang::SrcMgr::C_System, false),
+                            true // isAngled
+                        );
+                    }
+                }
+            }
+
             ci->createASTContext();
             ci->setASTConsumer(std::make_unique< clang::ASTConsumer >());
             ci->createSema(clang::TU_Complete, nullptr);
