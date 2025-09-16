@@ -73,6 +73,36 @@ namespace patchestry::passes {
             return llvm::Triple::NoSubArch;
         }
 
+#ifdef __APPLE__
+        std::string getSDKPath() {
+            if (const char *sdk_path = std::getenv("SDKROOT")) {
+                return std::string(sdk_path);
+            }
+            // Try to detect SDK using xcrun
+
+            auto pipe_deleter = [](FILE *pipe) {
+                if (pipe) {
+                    pclose(pipe);
+                }
+            };
+            std::unique_ptr< FILE, decltype(pipe_deleter) > pipe(nullptr, pipe_deleter);
+            if (!pipe) {
+                return {};
+            }
+
+            std::string xcrun_line;
+            std::array< char, 1024 > buffer;
+            while (std::fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+                xcrun_line += buffer.data();
+            }
+
+            if (!xcrun_line.empty() && xcrun_line.back() == '\n') {
+                xcrun_line.pop_back();
+            }
+
+            return xcrun_line;
+        }
+#endif
         std::string createTargetTriple(const std::string &lang) {
             llvm::Triple target_triple;
 
@@ -174,26 +204,10 @@ namespace patchestry::passes {
 
             // 4. macOS SDK path detection
 #ifdef __APPLE__
-            if (const char *sdk_path = std::getenv("SDKROOT")) {
-                paths.push_back(std::string(sdk_path) + "/usr/include");
-                paths.push_back(std::string(sdk_path) + "/usr/local/include");
-            } else {
-                // Try to detect SDK using xcrun
-                std::string xcrun_output;
-                FILE *pipe = popen("xcrun --show-sdk-path 2>/dev/null", "r");
-                if (pipe) {
-                    std::string xcrun_line;
-                    int c;
-                    while ((c = fgetc(pipe)) != EOF && c != '\n') {
-                        xcrun_line += static_cast<char>(c);
-                    }
-                    if (!xcrun_line.empty()) {
-                        xcrun_output = xcrun_line;
-                        paths.push_back(xcrun_output + "/usr/include");
-                        paths.push_back(xcrun_output + "/usr/local/include");
-                    }
-                    pclose(pipe);
-                }
+            std::string sdk_path = getSDKPath();
+            if (!sdk_path.empty()) {
+                paths.push_back(sdk_path + "/usr/include");
+                paths.push_back(sdk_path + "/usr/local/include");
             }
 #endif
 

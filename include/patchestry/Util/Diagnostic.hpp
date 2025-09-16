@@ -190,6 +190,7 @@ namespace patchestry {
             return result;
         }
 
+      private:
         bool last_note_was_previous_definition{ false };
         std::string last_error_location{ "" };
         std::string last_error_message{ "" };
