@@ -182,13 +182,13 @@ namespace patchestry::passes {
                 std::string xcrun_output;
                 FILE *pipe = popen("xcrun --show-sdk-path 2>/dev/null", "r");
                 if (pipe) {
-                    char buffer[1024];
-                    if (fgets(buffer, sizeof(buffer), pipe)) {
-                        xcrun_output = buffer;
-                        // Remove newline
-                        if (!xcrun_output.empty() && xcrun_output.back() == '\n') {
-                            xcrun_output.pop_back();
-                        }
+                    std::string xcrun_line;
+                    int c;
+                    while ((c = fgetc(pipe)) != EOF && c != '\n') {
+                        xcrun_line += static_cast<char>(c);
+                    }
+                    if (!xcrun_line.empty()) {
+                        xcrun_output = xcrun_line;
                         paths.push_back(xcrun_output + "/usr/include");
                         paths.push_back(xcrun_output + "/usr/local/include");
                     }
