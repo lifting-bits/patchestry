@@ -154,6 +154,76 @@ namespace patchestry::passes {
             return target_triple.str();
         }
 
+        std::vector< std::string > getPatchestryIncludePaths() {
+            std::vector< std::string > paths;
+
+            // 1. Use CMake configured path first
+#ifdef PATCHESTRY_INCLUDE_DIR
+            paths.push_back(PATCHESTRY_INCLUDE_DIR);
+#endif
+
+            // 2. Check environment variable
+            if (const char *patchestry_root = std::getenv("PATCHESTRY_ROOT")) {
+                paths.push_back(std::string(patchestry_root) + "/include");
+            }
+
+            // 3. Check CMAKE_INSTALL_PREFIX if available at runtime
+            if (const char *install_prefix = std::getenv("CMAKE_INSTALL_PREFIX")) {
+                paths.push_back(std::string(install_prefix) + "/include");
+            }
+
+            // 4. macOS SDK path detection
+#ifdef __APPLE__
+            if (const char *sdk_path = std::getenv("SDKROOT")) {
+                paths.push_back(std::string(sdk_path) + "/usr/include");
+                paths.push_back(std::string(sdk_path) + "/usr/local/include");
+            } else {
+                // Try to detect SDK using xcrun
+                std::string xcrun_output;
+                FILE *pipe = popen("xcrun --show-sdk-path 2>/dev/null", "r");
+                if (pipe) {
+                    char buffer[1024];
+                    if (fgets(buffer, sizeof(buffer), pipe)) {
+                        xcrun_output = buffer;
+                        // Remove newline
+                        if (!xcrun_output.empty() && xcrun_output.back() == '\n') {
+                            xcrun_output.pop_back();
+                        }
+                        paths.push_back(xcrun_output + "/usr/include");
+                        paths.push_back(xcrun_output + "/usr/local/include");
+                    }
+                    pclose(pipe);
+                }
+            }
+#endif
+
+            // 5. Try standard system paths
+            paths.push_back("/usr/local/include");
+            paths.push_back("/usr/include");
+            paths.push_back("../include");
+            paths.push_back("../../include");
+            paths.push_back("../../../include");
+            paths.push_back("include");
+
+            // 6. Try relative to executable (for development builds)
+            std::string exe_path = llvm::sys::fs::getMainExecutable(nullptr, nullptr);
+            if (!exe_path.empty()) {
+                llvm::SmallString< 256 > exe_dir = llvm::sys::path::parent_path(exe_path);
+                llvm::sys::path::append(exe_dir, "..", "include");
+                paths.push_back(std::string(exe_dir));
+            }
+
+            std::vector< std::string > valid_paths;
+            for (const auto &path : paths) {
+                llvm::SmallString< 256 > intrinsics_path(path);
+                if (llvm::sys::fs::exists(intrinsics_path)) {
+                    valid_paths.push_back(path);
+                }
+            }
+
+            return valid_paths;
+        }
+
         std::unique_ptr< clang::CompilerInstance >
         createCompilerInstance(const std::string &filename, const std::string &lang) { // NOLINT
             auto ci                = std::make_unique< clang::CompilerInstance >();
@@ -161,8 +231,16 @@ namespace patchestry::passes {
             auto &inv_target_opts  = invocation.getTargetOpts();
             inv_target_opts.Triple = llvm::sys::getDefaultTargetTriple();
 
-            ci->createDiagnostics(*llvm::vfs::getRealFileSystem());
-            ci->getDiagnostics().setClient(new patchestry::DiagnosticClient());
+            // install custom diagnostic client
+            auto diag_opts   = new clang::DiagnosticOptions();
+            auto diag_client = std::make_unique< patchestry::DiagnosticClient >();
+            auto diag_ids    = new clang::DiagnosticIDs();
+            auto diagnostics = new clang::DiagnosticsEngine(
+                llvm::IntrusiveRefCntPtr< clang::DiagnosticIDs >(diag_ids),
+                llvm::IntrusiveRefCntPtr< clang::DiagnosticOptions >(diag_opts),
+                diag_client.release(), true
+            );
+            ci->setDiagnostics(diagnostics);
             if (!ci->hasDiagnostics()) {
                 llvm::errs() << "Failed to initialize diagnostics.\n";
                 return nullptr;
@@ -195,7 +273,31 @@ namespace patchestry::passes {
             ci->getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
             ci->getLangOpts().C99               = true;
 
+            auto &header_search_opts = ci->getHeaderSearchOpts();
+            auto include_paths       = getPatchestryIncludePaths();
+            for (const auto &path : include_paths) {
+                if (llvm::sys::fs::exists(path)) {
+                    header_search_opts.AddPath(path, clang::frontend::System, false, false);
+                }
+            }
+
             ci->createPreprocessor(clang::TU_Complete);
+            auto &pp      = ci->getPreprocessor();
+            auto &headers = pp.getHeaderSearchInfo();
+
+            // Re-add the patchestry include path to the preprocessor's header search
+            for (const auto &header_path : include_paths) {
+                if (llvm::sys::fs::exists(header_path)) {
+                    auto dir_ref = pp.getFileManager().getOptionalDirectoryRef(header_path);
+                    if (dir_ref) {
+                        headers.AddSearchPath(
+                            clang::DirectoryLookup(*dir_ref, clang::SrcMgr::C_System, false),
+                            true // isAngled
+                        );
+                    }
+                }
+            }
+
             ci->createASTContext();
             ci->setASTConsumer(std::make_unique< clang::ASTConsumer >());
             ci->createSema(clang::TU_Complete, nullptr);
