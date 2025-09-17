@@ -86,7 +86,8 @@ namespace patchestry::passes {
                 }
             };
             std::unique_ptr< FILE, decltype(pipe_deleter) > pipe(
-                popen("xcrun --show-sdk-path", "r"), pipe_deleter);
+                popen("xcrun --show-sdk-path", "r"), pipe_deleter
+            );
             if (!pipe) {
                 return {};
             }
@@ -269,19 +270,32 @@ namespace patchestry::passes {
 
             ci->createFileManager();
             ci->createSourceManager(ci->getFileManager());
-            auto buffer = llvm::MemoryBuffer::getFileOrSTDIN(filename);
-            if (!buffer) {
+            auto buffer_or_error = llvm::MemoryBuffer::getFileOrSTDIN(filename);
+            if (!buffer_or_error) {
                 llvm::errs() << "Failed to open file: " << filename << "\n";
                 return nullptr;
             }
+            auto buffer = std::move(*buffer_or_error);
+
             llvm::ErrorOr< clang::FileEntryRef > file_entry_ref_or_err =
                 ci->getFileManager().getVirtualFileRef(
-                    filename, static_cast< off_t >(buffer->get()->getBufferSize()), 0
+                    filename, static_cast< off_t >(buffer->getBufferSize()), 0
                 );
+
+            if (!file_entry_ref_or_err) {
+                llvm::errs() << "Failed to create file entry ref: "
+                             << file_entry_ref_or_err.getError().message() << "\n";
+                return nullptr;
+            }
+
+            ci->getSourceManager().overrideFileContents(
+                *file_entry_ref_or_err, std::move(buffer)
+            );
 
             clang::FileID file_id = ci->getSourceManager().createFileID(
                 *file_entry_ref_or_err, clang::SourceLocation(), clang::SrcMgr::C_User
             );
+
             ci->getSourceManager().setMainFileID(file_id);
 
             ci->getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;

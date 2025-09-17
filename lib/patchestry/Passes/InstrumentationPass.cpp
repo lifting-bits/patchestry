@@ -637,8 +637,13 @@ namespace patchestry::passes {
     ) {
         auto abi_align = call_op->getAttrOfType< mlir::IntegerAttr >("abi_align");
         auto addr_type = cir::PointerType::get(builder.getContext(), value.getType());
-        auto addr_op   = builder.create< cir::AllocaOp >(
-            call_op->getLoc(), addr_type, value.getType(), "", abi_align
+
+        if (!abi_align) {
+            abi_align =
+                mlir::IntegerAttr::get(mlir::IntegerType::get(builder.getContext(), 64), 1);
+        }
+        auto addr_op = builder.create< cir::AllocaOp >(
+            call_op->getLoc(), addr_type, value.getType(), "arg_ref", abi_align
         );
         builder.create< cir::StoreOp >(call_op->getLoc(), value, addr_op.getResult());
         return addr_op.getResult();
