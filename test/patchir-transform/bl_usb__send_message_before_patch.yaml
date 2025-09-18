@@ -64,7 +64,7 @@ meta_contracts:
         description: "Asserts message to send is less than maximum size"
 
         match:
-        - name: "contract::before::message_check_contract"
+        - name: "usbd_ep_write_packet"
           kind: "function"
           function_context:
             - name: "bl_usb__send_message"
@@ -77,8 +77,8 @@ meta_contracts:
           contract_id: "USB-CONTRACT-BEFORE-001"
           arguments:
             - name: usb_device
-              type: "usb_device*"
-              description: "USB device context"
+              source: "argument"
+              index: "0"
             - name: buffer
-              type: "const void*"
-              description: "Data buffer to write"
+              source: "argument"
+              index: "1"

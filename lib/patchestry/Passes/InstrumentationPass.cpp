@@ -524,6 +524,10 @@ namespace patchestry::passes {
                             return;
                         }
 
+                        LOG(INFO) << "Applying patch '" << patch_to_apply.spec->name
+                                  << "' in mode '"
+                                  << patchestry::passes::patch::infoModeToString(action.mode)
+                                  << "' \n";
                         switch (action.mode) {
                             case patch::PatchInfoMode::APPLY_BEFORE:
                                 apply_before_patch(
@@ -1940,9 +1944,11 @@ namespace patchestry::passes {
         for (auto func : function_worklist) {
             func.walk([&](cir::CallOp call_op) {
                 // Create a temporary spec with the action match
-                if (OperationMatcher::contract_action_matches(
+                bool isMatch = OperationMatcher::contract_action_matches(
                         call_op, func, contract_action, OperationMatcher::Mode::FUNCTION
-                )) {
+                ); 
+
+                if (isMatch) {
                     auto contract_module = load_code_module(
                         *call_op->getContext(), *contract_to_apply.spec->contract_module
                     );
@@ -1952,6 +1958,10 @@ namespace patchestry::passes {
                         return;
                     }
 
+                    LOG(INFO) << "Applying contract '" << contract_to_apply.spec->name
+                              << "' in mode '"
+                              << patchestry::passes::contract::infoModeToString(action.mode)
+                              << "' \n";
                     switch (action.mode) {
                         case contract::InfoMode::APPLY_BEFORE:
                             apply_contract_before(
@@ -1976,7 +1986,7 @@ namespace patchestry::passes {
                             break;
                     }
                 } else {
-                    LOG(INFO) << "function worklist entry '" << func.getSymName().str() << "' did not match the contract action; continuing\n"; 
+                    LOG(INFO) << "function worklist entry '" << func.getSymName().str() << "' did not match the contract action's expected target; continuing\n"; 
                 }
             });
         }

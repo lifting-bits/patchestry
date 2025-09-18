@@ -87,7 +87,7 @@ namespace patchestry::passes {
             std::vector< PatchAction > patch_actions;
         };
 
-        [[maybe_unused]] inline std::string_view patchInfoModeToString(PatchInfoMode mode) {
+        [[maybe_unused]] inline std::string_view infoModeToString(PatchInfoMode mode) {
             switch (mode) {
                 case PatchInfoMode::NONE:
                     return "NONE";

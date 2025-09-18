@@ -114,40 +114,59 @@ namespace patchestry::passes {
 
         // For now, only function matching mode is supported for contracts
         if (mode == OperationMatcher::Mode::FUNCTION) {
+
             if (match.name.empty()) {
+                LOG(WARNING) << "Match name was empty\n";
                 return false;
             }
+
             // For function-based matching, we expect a cir.call operation
             auto call_op = mlir::dyn_cast< cir::CallOp >(op);
             if (!call_op) {
+                LOG(WARNING) << "Match op could not be cast to cir::CallOp\n";
                 return false;
             }
 
             // Check if the called function name matches
+            LOG(INFO) << "Match: " << match.name << "\n";
             if (!match.name.empty()) {
+                LOG(INFO) << "Match name was populated: '" << match.name << "'\n";
                 std::string callee_name = extract_callee_name(call_op);
+                LOG(INFO) << "Obtained callee name: '" << callee_name << "'\n";
                 if (!matches_pattern(callee_name, match.name)) {
+                    LOG(ERROR) << "Callee name did not match expected match name! Ending match check\n";
                     return false;
                 }
             }
 
             // Check function context match (the function containing the call)
             if (!matches_function_context(func, match.function_context)) {
+                LOG(
+                    ERROR
+                ) << "Callee function context did not match expected function context! Ending match check\n";
                 return false;
             }
 
+            LOG(INFO) << "got past matches_function_context\n";
             // Check argument matches for function calls
             if (!matches_arguments(op, match.argument_matches)) {
+                LOG(ERROR) << "Callee function arguments did not match expected function "
+                              "arguments! Ending match check\n";
                 return false;
             }
 
+            LOG(INFO) << "got past matches_arguments\n";
             // Check variable matches as one of the arguments
             if (!matches_variables(op, match.variable_matches)) {
+                LOG(ERROR) << "Callee function variables did not match expected function "
+                              "variables! Ending match check\n";
                 return false;
             }
 
+            LOG(INFO) << "Found a match\n";
             return true;
         } else {
+            LOG(ERROR) << "Nothing matched - could not complete the contract action match check\n";
             return false;
         }
     }
@@ -175,26 +194,36 @@ namespace patchestry::passes {
     ) {
         // If no function context specified, match all functions
         if (function_context.empty()) {
+            LOG(ERROR) << "Tragically, there was not function context, anything matches\n";
+
             return true;
         }
+        LOG(INFO) << "function context was NOT empty\n";
 
         std::string func_name = func.getName().str();
         std::string func_type = type_to_string(func.getFunctionType());
 
         for (const auto &context : function_context) {
+            LOG(INFO) << "Checking '" << func_name << "' against '" << context.name << "'\n";
             // Check function name match
             if (!matches_pattern(func_name, context.name)) {
+                LOG(ERROR) << "Didn't match!\n";
                 continue;
             }
 
             // Check function type match if specified
             if (!context.type.empty() && !matches_pattern(func_type, context.type)) {
+                LOG(ERROR) << "Function type pattern did not match\n";
                 continue;
+            } else {
+                LOG(INFO) << "Matched type pattern\n";
             }
 
+            LOG(INFO) << "Matched\n";
             return true;
         }
 
+        LOG(ERROR) << "Could not match anything :(\n";
         return false;
     }
 
@@ -377,6 +406,7 @@ namespace patchestry::passes {
         // which rejects empty patterns - here empty patterns mean "don't filter by this
         // criterion")
         if (pattern.empty()) {
+            LOG(ERROR) << "No pattern provided to match; matching empty string\n";
             return true;
         }
 
@@ -388,11 +418,13 @@ namespace patchestry::passes {
                 return std::regex_search(text, regex);
             } catch (const std::regex_error &) {
                 // If regex is invalid, fall back to exact match
+                LOG(ERROR) << "Pattern regex was invalid, falling back to string equality check\n";
                 return text == pattern;
             }
         }
 
         // Exact string match
+        LOG(INFO) << "Defaulting to string equality check\n";
         return text == pattern;
     }
 
