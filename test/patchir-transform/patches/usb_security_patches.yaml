@@ -18,11 +18,13 @@ patches:
     
     implementation:
       language: c
+      # this reference is in relation to the location of the meta-patch!
       code_file: "patches/patch_usbd_ep_write_packet.c"
       function_name: "patch::before::usbd_ep_write_packet"
       parameters:
+      # https://www.kernel.org/doc/html/latest/driver-api/usb/usb.html#c.usb_device
         - name: usb_device
-          type: "void*"
+          type: "usb_device*"
           description: "USB device context"
         - name: buffer
           type: "const void*"

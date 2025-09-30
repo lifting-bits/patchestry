@@ -82,7 +82,25 @@ meta_patches:                            # Meta-patch configurations
 
 meta_contracts:                          # Meta-contract configurations
   - name: ...
+    id: "..."
     description: "..."
+    contract_actions:                    # Individual contract actions
+      - name: "..."
+        id: "CONTRACT-001"
+        description: "..."
+        match:                          # Contract match criteria
+          - name: "..."
+            kind: "..."
+          # Additional match criteria...
+        action:                         # Contract actions
+          - mode: "..."
+            contract_id: "..."
+            description: "..."
+            arguments:                  # Contract arguments
+              - name: "..."
+                source: "..."
+                index: 0
+
 ```
 
 ## Field Descriptions
@@ -131,8 +149,16 @@ meta_contracts:                          # Meta-contract configurations
 | `id` | Internal identifier for the patch group | `"usb_security_patches"` |
 | `description` | Description of the patch group purpose | `"USB security monitoring patches"` |
 | `optimization` | List of optimization flags | `["inline-patches", "inline-contracts"]` |
-| `patch_actions` | List of individual patch actions | See patch action fields below |
-| `exclude` | List of exclusion patterns | `["test_*", "debug_*"]` |
+| `patch_actions` | List of individual patch actions | See [patch action fields](#patch-action-fields) below |
+
+### Meta-Contract Entry Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `name` | Unique identifier for the contract group | `"usb_control_flow_contracts"` |
+| `id` | Internal identifier for the contract group | `"usb_control_flow_contracts"` |
+| `description` | Description of the contract group purpose | `"USB control flow integrity contracts"` |
+| `contract_actions` | List of individual contract actions | See [contract action fields](#contract-action-fields) below |
 
 ### Patch Action Fields
 
@@ -140,8 +166,17 @@ meta_contracts:                          # Meta-contract configurations
 |-------|-------------|---------|
 | `id` | Unique identifier for the patch action | `"USB-PATCH-001"` |
 | `description` | Description of what the patch does | `"Add USB security validation"` |
-| `match` | List of match criteria | See match fields below |
-| `action` | List of actions to apply | See action fields below |
+| `match` | List of match criteria | See [match fields](#match-fields) below |
+| `action` | List of actions to apply | See [action fields](#action-fields) below |
+
+### Contract Action Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `id` | Unique identifier for the contract action | `"USB-CONTRACT-001"` |
+| `description` | Description of what the contract does | `"Add USB control flow integrity checking"` |
+| `match` | List of match criteria | See [match fields](#match-fields) below |
+| `action` | List of actions to apply | See [action fields](#action-fields) below |
 
 ### Match Fields
 
@@ -152,13 +187,13 @@ meta_contracts:                          # Meta-contract configurations
 | `match.operation` | Operation type to match (for operation-based matching) | `"cir.load"`, `"cir.store"`, `"cir.binop"` |
 | `match.function_context` | Functions where operation matches should be applied | `name: "/.*secure.*/"` |
 | `match.variable_matches` | Variables used in the operation (for function-based matching) | `name: "/.*password.*/"` |
-| `match.argument_matches` | Function arguments or Opearnds to match (for function-based matching) | See below |
+| `match.argument_matches` | Function arguments or Operands to match (for function-based matching) | See below |
 | `match.symbol_matches` | Variables used in the operation (for operation-based matching) | `name: "/.*password.*/"` |
-| `match.operand_matches` | Function arguments or Opearnds to match (for operation-based matching) | See below |
+| `match.operand_matches` | Function arguments or Operands to match (for operation-based matching) | See below |
 
 #### Operation-Based Matching
 
-For operation-based matching, the following additional fields are available:
+Operation-based matching is supported only for patches, meaning it is not supported for contract matching and insertion. For operation-based matching for patches, the following additional fields are available:
 
 | Field | Description | Example |
 |-------|-------------|---------|
@@ -231,7 +266,7 @@ The `optimization` field accepts a list of optimization settings:
 
 ## Argument Specification
 
-Arguments passed to patch functions can come from different sources and are specified using a structured format that supports operands, function arguments, variables, and constants.
+Arguments passed to patch or contract functions can come from different sources and are specified using a structured format that in general supports operands, function arguments, variables, and constants.
 
 ### Argument Structure
 
@@ -333,7 +368,7 @@ arguments:
 
 ### Example 1: USB Security Monitoring Deployment
 
-Based on the actual specification from `bl_usb__send_message_before_patch.yaml`:
+While patches and contracts don't need to be used together, they can; here is an example involving both. Based on the actual specification from `bl_usb__send_message_before_patch.yaml`:
 
 ```yaml
 apiVersion: patchestry.io/v1
@@ -368,7 +403,6 @@ meta_patches:
     patch_actions:
       - id: "USB-PATCH-001"
         description: "Patch to add USB security validation"
-
         match:
           - symbol: "usbd_ep_write_packet"
             kind: "function"
@@ -380,9 +414,9 @@ meta_patches:
                 type: "struct struct_anon_struct_4_1_58265f66*"
 
         action:
-          - mode: "apply_before"
+          - mode: "replace"
             patch_id: "USB-PATCH-001"
-            description: "Pre-validation security check"
+            description: "Pre-validation security patch"
             arguments:
               - name: "operand_0"
                 source: "operand"
@@ -393,7 +427,22 @@ meta_patches:
 
 meta_contracts:
   - name: usb_security_meta_contracts
-    description: "Meta contracts for USB security validation"
+    id: "usb_security_meta_contracts"
+    description: "Contracts for USB security validation"
+    contract_actions:
+    - id: "USB-CONTRACTS"
+      description: "Assert allocation size is suitable"
+      match:
+        - name: "bl_usb__send_message"
+          kind: "function"
+      action:
+        - mode: "apply_before"
+          contract_id: "USB-CONTRACT-001"
+          description: "Pre-validation security contract"
+          arguments:
+              - name: "operand_0"
+                source: "operand"
+                index: "0"
 ```
 
 ## Operation-Based Matching Examples

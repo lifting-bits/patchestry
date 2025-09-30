@@ -9,6 +9,7 @@ metadata:
   created: "2025-07-28"
 
 libraries:
+  # this reference is in relation to the location of this file
   patches: "patches/measurement_update_patch.yaml"
 
 target:

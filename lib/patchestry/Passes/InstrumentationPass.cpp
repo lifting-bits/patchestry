@@ -54,9 +54,8 @@
 
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/Passes/OperationMatcher.hpp>
-#include <patchestry/Passes/PatchSpec.hpp>
 #include <patchestry/Util/Log.hpp>
-#include <patchestry/YAML/YAMLParser.hpp>
+#include <patchestry/YAML/ConfigurationFile.hpp>
 
 namespace patchestry::passes {
 
@@ -85,7 +84,7 @@ namespace patchestry::passes {
          * @param str The input string to convert
          * @return std::string The converted function name
          */
-        std::string namifyPatchFunction(const std::string &str) {
+        std::string namifyFunction(const std::string &str) {
             std::string result;
             for (char c : str) {
                 if ((isalnum(c) != 0) || c == '_') {
@@ -159,11 +158,11 @@ namespace patchestry::passes {
             {
                 return cir::CastKind::integral;
             }
-            if (from_category == TypeCategory::Integer || to_category == TypeCategory::Boolean)
+            if (from_category == TypeCategory::Integer && to_category == TypeCategory::Boolean)
             {
                 return cir::CastKind::int_to_bool;
             }
-            if (from_category == TypeCategory::Boolean || to_category == TypeCategory::Integer)
+            if (from_category == TypeCategory::Boolean && to_category == TypeCategory::Integer)
             {
                 return cir::CastKind::bool_to_int;
             }
@@ -263,15 +262,18 @@ namespace patchestry::passes {
      *
      * Factory function that creates and returns a unique pointer to an InstrumentationPass
      * instance. The pass will apply patches according to the specifications in the provided
-     * spec_file and use the given inline options for controlling inlining behavior.
+     * configuration_file, and use the given inline options for controlling inlining behavior.
      *
-     * @param spec_file Path to the YAML patch specification file
-     * @param inline_options Configuration options for controlling function inlining behavior
+     * @param configuration_file Path to the YAML patch specification file
+     * @param ∂options Configuration options for controlling how instrumentation is generally
+     * applied
+don't yet pass)
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
-    std::unique_ptr< mlir::Pass >
-    createInstrumentationPass(const std::string &spec_file, const PatchOptions &patch_options) {
-        return std::make_unique< InstrumentationPass >(spec_file, patch_options);
+    std::unique_ptr< mlir::Pass > createInstrumentationPass(
+        const std::string &configuration_file, const InstrumentationOptions &options
+    ) {
+        return std::make_unique< InstrumentationPass >(configuration_file, options);
     }
 
     template< typename T >
@@ -281,6 +283,7 @@ namespace patchestry::passes {
                 return item;
             }
         }
+        LOG(WARNING) << "Unable to look up by name: '" << name << "'\n";
         return std::nullopt;
     }
 
@@ -298,69 +301,86 @@ namespace patchestry::passes {
                 return item;
             }
         }
+        LOG(WARNING) << "Falling back to lookup by name: '" << name << "'\n";
         return lookup_by_name(items, name);
     }
 
     /**
-     * @brief Constructs an InstrumentationPass with the given specification file and options.
+     * @brief Constructs an InstrumentationPass with the given configuration file and options.
      *
-     * The constructor loads and parses the patch specification file, validates patch files,
-     * and prepares the pass for execution. If the specification file cannot be loaded or
-     * parsed, appropriate error messages are logged.
+     * The constructor loads and parses the Patchestry configuration file, validates any patch
+     * files, validates any contract files, and prepares the pass for execution. If the file
+     * cannot be loaded or parsed, appropriate error messages are logged.
      *
-     * @param spec Path to the YAML patch specification file
+     * @param configuration_file Path to the top-level YAML configuration file
      * @param patch_options Reference to inlining configuration options
      */
     InstrumentationPass::InstrumentationPass(
-        std::string spec_, const PatchOptions &patch_options_
+        std::string spec_, const InstrumentationOptions &options_
     )
-        : spec_file(std::move(spec_)), patch_options(patch_options_) {
+        : configuration_file(std::move(spec_)), options(options_) {
         patchestry::yaml::YAMLParser parser;
-        PatchSpecContext::getInstance().set_spec_path(spec_file);
-        if (!parser.validate_yaml_file< patchestry::passes::PatchConfiguration >(spec_file)) {
-            LOG(ERROR) << "Error: Failed to parse patch specification file: " << spec_file
-                       << "\n";
+        ConfigurationFile::getInstance().set_file_path(configuration_file);
+        if (!parser.validate_yaml_file< patchestry::passes::Configuration >(configuration_file))
+        {
+            LOG(ERROR) << "Error: Failed to parse Patchestry configuration file: "
+                       << configuration_file << "\n";
             return;
         }
 
-        auto buffer_or_err = llvm::MemoryBuffer::getFile(spec_file);
+        auto buffer_or_err = llvm::MemoryBuffer::getFile(configuration_file);
         if (!buffer_or_err) {
-            LOG(ERROR) << "Error: Failed to read patch specification file: " << spec_file
-                       << "\n";
+            LOG(ERROR) << "Error: Failed to read Patchestry configuration file: "
+                       << configuration_file << "\n";
             return;
         }
 
-        auto config_or_err = patchestry::yaml::utils::loadPatchConfiguration(
-            llvm::sys::path::filename(spec_file).str()
+        auto config_or_err = patchestry::yaml::utils::loadConfiguration(
+            llvm::sys::path::filename(configuration_file).str()
         );
         if (!config_or_err) {
-            LOG(ERROR) << "Error: Failed to parse patch specification file: " << spec_file
-                       << "\n";
+            LOG(ERROR) << "Error: Failed to parse Patchestry configuration file: "
+                       << configuration_file << "\n";
             return;
         }
 
         config = std::move(config_or_err.value());
         for (auto &spec : config->libraries.patches.patches) {
             auto patches_file_path =
-                PatchSpecContext::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
             if (!llvm::sys::fs::exists(patches_file_path)) {
                 LOG(ERROR) << "Patch file " << patches_file_path << " does not exist\n";
                 continue;
             }
 
             auto patch_file_path =
-                PatchSpecContext::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
             spec.patch_module = emitModuleAsString(patch_file_path, config->target.arch);
             if (!spec.patch_module) {
                 LOG(ERROR) << "Failed to emit patch module for " << spec.name << "\n";
                 continue;
             }
         }
-        (void) patch_options;
+        for (auto &spec : config->libraries.contracts.contracts) {
+            auto contracts_file_path =
+                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
+            if (!llvm::sys::fs::exists(contracts_file_path)) {
+                LOG(ERROR) << "Contract file " << contracts_file_path << " does not exist\n";
+                continue;
+            }
+
+            auto contract_module = emitModuleAsString(contracts_file_path, config->target.arch);
+            if (!contract_module) {
+                LOG(ERROR) << "Failed to emit contract module for " << spec.name << "\n";
+                continue;
+            }
+            spec.contract_module = contract_module;
+        }
+        (void) options;
     }
 
     /**
-     * @brief Applies instrumentation to the MLIR module based on the patch specifications.
+     * @brief Applies instrumentation to the MLIR module based on provided specifications.
      *        The function follows the execution order and applies meta patches and contracts.
      *
      * @note The function list in module can grow during instrumentation. We collect the
@@ -374,7 +394,7 @@ namespace patchestry::passes {
 
         // check if the configuration is loaded; if not, return
         if (!config) {
-            LOG(ERROR) << "No patch configuration loaded. Skipping instrumentation.\n";
+            LOG(ERROR) << "No Patchestry configuration loaded. Skipping instrumentation.\n";
             return;
         }
 
@@ -391,10 +411,12 @@ namespace patchestry::passes {
         // if the execution order is empty, apply meta patches and contracts in order
         if (config->execution_order.empty()) {
             for (const auto &meta_patch : config->meta_patches) {
+                LOG(INFO) << "Applying patch: " << meta_patch.name << "\n";
                 apply_meta_patches(function_worklist, operation_worklist, meta_patch.name);
             }
             for (const auto &meta_contract : config->meta_contracts) {
-                apply_meta_contracts(function_worklist, operation_worklist, meta_contract.name);
+                LOG(INFO) << "Applying contract: " << meta_contract.name << "\n";
+                apply_meta_contracts(function_worklist, meta_contract.name);
             }
         } else {
             // process execution order if specified
@@ -414,9 +436,11 @@ namespace patchestry::passes {
                 name.erase(name.find_last_not_of(" \t") + 1);
 
                 if (type == "meta_patches") {
+                    LOG(INFO) << "Applying patch: " << name << "\n";
                     apply_meta_patches(function_worklist, operation_worklist, name);
                 } else if (type == "meta_contracts") {
-                    apply_meta_contracts(function_worklist, operation_worklist, name);
+                    LOG(INFO) << "Applying contract: " << name << "\n";
+                    apply_meta_contracts(function_worklist, name);
                 } else {
                     LOG(ERROR) << "Unknown execution type: " << type << "\n";
                 }
@@ -463,47 +487,23 @@ namespace patchestry::passes {
 
             // Find the corresponding patch specification by patch_id
             auto patch_spec = lookup(config->libraries.patches.patches, action.patch_id);
-            if (!patch_spec) {
+            if (!patch_spec || patch_spec == std::nullopt) {
                 LOG(ERROR) << "Patch specification for ID '" << action.patch_id
                            << "' not found\n";
+                // todo (kaoudis) just silently eating the patch if it isn't found
+                // is very confusing since one could simply expect the software to be
+                // patched at this point, throwing an error here would be more appropriate
                 continue;
+            } else {
+                // Create a modified patch info with the action's mode and arguments
+                PatchInformation patch_to_apply = { .spec         = patch_spec,
+                                                    .patch_action = patch_action };
+                // Apply the patch to matching functions and operations
+                apply_patch_action_to_targets(
+                    function_worklist, operation_worklist, *target_meta_patch, patch_to_apply
+                );
             }
-
-            // Create a modified patch info with the action's mode and arguments
-            PatchInformation patch_to_apply = { .spec         = patch_spec,
-                                                .patch_action = patch_action };
-            // Apply the patch to matching functions and operations
-            apply_patch_action_to_targets(
-                function_worklist, operation_worklist, *target_meta_patch, patch_to_apply
-            );
         }
-    }
-
-    /**
-     * @brief Applies meta contracts in execution order.
-     *
-     * @param function_worklist List of functions to process
-     * @param operation_worklist List of operations to process
-     * @param meta_contract_name Name of the meta contract to apply
-     */
-    void InstrumentationPass::apply_meta_contracts(
-        llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
-        llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
-        const std::string &meta_contract_name
-    ) {
-        // Find the meta contract by name
-        auto target_meta_contract = lookup(config->meta_contracts, meta_contract_name);
-        if (!target_meta_contract) {
-            LOG(ERROR) << "Meta contract '" << meta_contract_name << "' not found\n";
-            return;
-        }
-
-        LOG(INFO) << "Applying meta contract: " << meta_contract_name << "\n";
-
-        // TODO: Implement meta contract application
-        (void) function_worklist;
-        (void) operation_worklist;
-        (void) target_meta_contract;
     }
 
     /**
@@ -518,7 +518,7 @@ namespace patchestry::passes {
     void InstrumentationPass::apply_patch_action_to_targets(
         llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
         llvm::SmallVector< mlir::Operation *, 8 > &operation_worklist,
-        const MetaPatchConfig &meta_patch, const PatchInformation &patch_to_apply
+        const patch::MetaPatchConfig &meta_patch, const PatchInformation &patch_to_apply
     ) {
         const auto &patch_action = patch_to_apply.patch_action.value();
         const auto &match        = patch_action.match[0];
@@ -530,11 +530,11 @@ namespace patchestry::passes {
                 func.walk([&](cir::CallOp call_op) {
                     // Create a temporary spec with the patch action match
 
-                    if (OperationMatcher::matches(
+                    if (OperationMatcher::patch_action_matches(
                             call_op, func, patch_action, OperationMatcher::Mode::FUNCTION
                         ))
                     {
-                        auto patch_module = load_patch_module(
+                        auto patch_module = load_code_module(
                             *call_op->getContext(), *patch_to_apply.spec->patch_module
                         );
                         if (!patch_module) {
@@ -543,6 +543,10 @@ namespace patchestry::passes {
                             return;
                         }
 
+                        LOG(INFO)
+                            << "Applying patch '" << patch_to_apply.spec->name << "' in mode '"
+                            << patchestry::passes::patch::infoModeToString(action.mode)
+                            << "' \n";
                         switch (action.mode) {
                             case PatchInfoMode::APPLY_BEFORE:
                                 apply_before_patch(
@@ -577,13 +581,12 @@ namespace patchestry::passes {
                     continue;
                 }
 
-                if (OperationMatcher::matches(
+                if (OperationMatcher::patch_action_matches(
                         op, func, patch_action, OperationMatcher::Mode::OPERATION
                     ))
                 {
-                    auto patch_module = load_patch_module(
-                        *op->getContext(), *patch_to_apply.spec->patch_module
-                    );
+                    auto patch_module =
+                        load_code_module(*op->getContext(), *patch_to_apply.spec->patch_module);
                     if (!patch_module) {
                         LOG(ERROR) << "Failed to load patch module for operation: "
                                    << op->getName().getStringRef().str() << "\n";
@@ -626,9 +629,16 @@ namespace patchestry::passes {
             return value;
         }
 
-        auto cast_op = builder.create< cir::CastOp >(
-            call_op->getLoc(), target_type, getCastKind(value.getType(), target_type), value
-        );
+        auto cast_kind = getCastKind(value.getType(), target_type);
+        // For *_to_bool casts, the result type must be !cir.bool
+        if (cast_kind == cir::CastKind::int_to_bool || cast_kind == cir::CastKind::float_to_bool
+            || cast_kind == cir::CastKind::ptr_to_bool)
+        {
+            target_type = cir::BoolType::get(builder.getContext());
+        }
+
+        auto cast_op =
+            builder.create< cir::CastOp >(call_op->getLoc(), target_type, cast_kind, value);
         return cast_op->getResults().front();
     }
 
@@ -649,7 +659,7 @@ namespace patchestry::passes {
         return addr_op.getResult();
     }
 
-    void InstrumentationPass::prepare_call_arguments(
+    void InstrumentationPass::prepare_patch_call_arguments(
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
         const PatchInformation &patch, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
     ) {
@@ -692,8 +702,9 @@ namespace patchestry::passes {
     }
 
     void InstrumentationPass::handle_operand_argument(
-        mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
-        mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        mlir::OpBuilder &builder, mlir::Operation *call_op,
+        const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+        llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
     ) {
         if (!arg_spec.index.has_value()) {
             LOG(ERROR) << "OPERAND source requires index field\n";
@@ -728,8 +739,9 @@ namespace patchestry::passes {
     }
 
     void InstrumentationPass::handle_variable_argument(
-        mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
-        mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        mlir::OpBuilder &builder, mlir::Operation *call_op,
+        const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+        llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
     ) {
         if (!arg_spec.symbol.has_value()) {
             LOG(ERROR) << "VARIABLE source requires symbol field\n";
@@ -759,8 +771,9 @@ namespace patchestry::passes {
     }
 
     void InstrumentationPass::handle_symbol_argument(
-        mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
-        mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        mlir::OpBuilder &builder, mlir::Operation *call_op,
+        const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+        llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
     ) {
         if (!arg_spec.symbol.has_value()) {
             LOG(ERROR) << "SYMBOL source requires symbol field\n";
@@ -790,8 +803,9 @@ namespace patchestry::passes {
     }
 
     void InstrumentationPass::handle_return_value_argument(
-        mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
-        mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        mlir::OpBuilder &builder, mlir::Operation *call_op,
+        const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+        llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
     ) {
         if (call_op->getNumResults() == 0) {
             LOG(ERROR) << "Operation/function does not have a return value\n";
@@ -810,8 +824,9 @@ namespace patchestry::passes {
     }
 
     void InstrumentationPass::handle_constant_argument(
-        mlir::OpBuilder &builder, mlir::Operation *call_op, const ArgumentSource &arg_spec,
-        mlir::Type patch_arg_type, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        mlir::OpBuilder &builder, mlir::Operation *call_op,
+        const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+        llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
     ) {
         if (!arg_spec.value.has_value()) {
             LOG(ERROR) << "CONSTANT source requires value field\n";
@@ -940,6 +955,255 @@ namespace patchestry::passes {
     }
 
     /**
+     * @brief Prepares arguments for a contract function call.
+     *
+     * This method handles argument preparation for contract function calls, including
+     * type casting when necessary. It supports special argument handling such as
+     * passing return values and ensures type compatibility between original and instrumentation
+     * functions.
+     *
+     * @param builder MLIR operation builder for creating new operations
+     * @param call_op The original operation being instrumented
+     * @param contract_func The contract function to be called
+     * @param contract Contract information containing argument specifications
+     * @param args Output vector to store the prepared arguments
+     */
+    void InstrumentationPass::prepare_contract_call_arguments(
+        mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp contract_func,
+        const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args
+    ) {
+        auto create_cast = [&](mlir::Value value, mlir::Type type) -> mlir::Value {
+            if (value.getType() == type) {
+                return value;
+            }
+
+            auto cast_op = builder.create< cir::CastOp >(
+                call_op->getLoc(), type, getCastKind(value.getType(), type), value
+            );
+            return cast_op->getResults().front();
+        };
+
+        const auto &action = contract.action.value();
+
+        // Handle structured argument specifications
+        for (size_t i = 0;
+             i < action.action[0].arguments.size() && i < contract_func.getNumArguments(); ++i)
+        {
+            const auto &arg_spec = action.action[0].arguments[i];
+            auto arg_type        = contract_func.getArgumentTypes()[i];
+            mlir::Value arg_value;
+
+            switch (arg_spec.source) {
+                case ArgumentSourceType::OPERAND: {
+                    // Get operand by index
+                    if (!arg_spec.index.has_value()) {
+                        LOG(ERROR) << "OPERAND source requires index field\n";
+                        continue;
+                    }
+                    unsigned idx = arg_spec.index.value();
+
+                    if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
+                        if (idx >= orig_call_op.getArgOperands().size()) {
+                            LOG(ERROR) << "Operand index " << idx << " out of range\n";
+                            continue;
+                        }
+                        arg_value = orig_call_op.getArgOperands()[idx];
+                    } else {
+                        if (idx >= call_op->getNumOperands()) {
+                            LOG(ERROR) << "Operand index " << idx << " out of range\n";
+                            continue;
+                        }
+                        arg_value = call_op->getOperand(idx);
+                    }
+                    break;
+                }
+                case ArgumentSourceType::VARIABLE: {
+                    // Handle local variables only
+                    if (!arg_spec.symbol.has_value()) {
+                        LOG(ERROR) << "VARIABLE source requires symbol field\n";
+                        continue;
+                    }
+
+                    const std::string &var_name = arg_spec.symbol.value();
+                    mlir::Value var_value;
+                    bool found = false;
+
+                    // Look for local variables in function scope only
+                    auto func = call_op->getParentOfType< cir::FuncOp >();
+                    if (!func) {
+                        LOG(ERROR) << "Cannot find parent function for local variable lookup\n";
+                        continue;
+                    }
+
+                    // Search for local variables in function scope
+                    func.walk([&](mlir::Operation *op) {
+                        if (auto alloca_op = mlir::dyn_cast< cir::AllocaOp >(op)) {
+                            if (auto name_attr = op->getAttrOfType< mlir::StringAttr >("name"))
+                            {
+                                if (name_attr.getValue() == var_name) {
+                                    var_value = alloca_op.getResult();
+                                    found     = true;
+                                    return mlir::WalkResult::interrupt();
+                                }
+                            }
+                        }
+                        return mlir::WalkResult::advance();
+                    });
+
+                    if (!found) {
+                        LOG(WARNING) << "Local variable '" << var_name << "' not found\n";
+                        continue;
+                    }
+                    arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), var_value);
+                    break;
+                }
+                case ArgumentSourceType::SYMBOL: {
+                    // Handle global variables, functions, and any symbol in symbol table
+                    if (!arg_spec.symbol.has_value()) {
+                        LOG(ERROR) << "SYMBOL source requires symbol field\n";
+                        continue;
+                    }
+
+                    const std::string &symbol_name = arg_spec.symbol.value();
+                    mlir::Value symbol_value;
+                    bool found = false;
+
+                    auto module = call_op->getParentOfType< mlir::ModuleOp >();
+                    if (!module) {
+                        LOG(ERROR) << "Cannot find parent module for symbol lookup\n";
+                        continue;
+                    }
+
+                    // Look for global variables
+                    if (auto global_op = module.lookupSymbol< cir::GlobalOp >(symbol_name)) {
+                        // Create a GetGlobal operation to access the global variable
+                        auto global_type = global_op.getSymType();
+                        if (auto global_ptr_type =
+                                mlir::dyn_cast< cir::PointerType >(global_type))
+                        {
+                            symbol_value = builder.create< cir::GetGlobalOp >(
+                                call_op->getLoc(), global_ptr_type, symbol_name
+                            );
+                            found = true;
+                        } else {
+                            // For non-pointer globals, create a pointer type
+                            auto ptr_type =
+                                cir::PointerType::get(builder.getContext(), global_type);
+                            symbol_value = builder.create< cir::GetGlobalOp >(
+                                call_op->getLoc(), ptr_type, symbol_name
+                            );
+                            found = true;
+                        }
+                    }
+
+                    // Look for functions
+                    if (!found) {
+                        if (auto func_op = module.lookupSymbol< cir::FuncOp >(symbol_name)) {
+                            // Create a function reference
+                            auto func_type = func_op.getFunctionType();
+                            auto func_ptr_type =
+                                cir::PointerType::get(builder.getContext(), func_type);
+                            auto symbol_ref =
+                                mlir::FlatSymbolRefAttr::get(builder.getContext(), symbol_name);
+
+                            // Create a constant operation for the function pointer
+                            symbol_value = builder.create< cir::GetGlobalOp >(
+                                call_op->getLoc(), func_ptr_type, symbol_ref
+                            );
+                            found = true;
+                        }
+                    }
+
+                    if (!found) {
+                        LOG(WARNING)
+                            << "Symbol '" << symbol_name << "' not found in symbol table\n";
+                        continue;
+                    }
+                    arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), symbol_value);
+                    break;
+                }
+                case ArgumentSourceType::RETURN_VALUE: {
+                    // Handle return value of function or operation
+                    if (call_op->getNumResults() == 0) {
+                        LOG(ERROR) << "Operation/function does not have a return value\n";
+                        continue;
+                    }
+
+                    // Get the first result (most common case)
+                    arg_value = call_op->getResult(0);
+                    break;
+                }
+                case ArgumentSourceType::CONSTANT: {
+                    // Create constant value
+                    if (!arg_spec.value.has_value()) {
+                        LOG(ERROR) << "CONSTANT source requires value field\n";
+                        continue;
+                    }
+
+                    const std::string &const_value = arg_spec.value.value();
+
+                    // Parse constant based on contract function argument type
+                    if (auto int_type = mlir::dyn_cast< cir::IntType >(arg_type)) {
+                        try {
+                            // Parse integer constant
+                            int64_t int_val =
+                                std::stoll(const_value, nullptr, 0); // Support hex, oct, dec
+
+                            auto attr = cir::IntAttr::get(
+                                cir::IntType::get(
+                                    builder.getContext(), int_type.getWidth(),
+                                    int_type.isSigned()
+                                ),
+                                llvm::APSInt(int_type.getWidth(), int_val)
+                            );
+                            arg_value = builder.create< cir::ConstantOp >(
+                                call_op->getLoc(), arg_type, attr
+                            );
+                        } catch (const std::exception &e) {
+                            LOG(ERROR) << "Failed to parse integer constant '" << const_value
+                                       << "': " << e.what() << "\n";
+                            continue;
+                        }
+                    } else if (auto ptr_type = mlir::dyn_cast< cir::PointerType >(arg_type)) {
+                        try {
+                            // Parse pointer constant (usually hex address)
+                            uint64_t ptr_val = std::stoull(const_value, nullptr, 0);
+                            auto int_type = cir::IntType::get(builder.getContext(), 64, false);
+                            auto int_attr = cir::IntAttr::get(
+                                cir::IntType::get(
+                                    builder.getContext(), int_type.getWidth(),
+                                    int_type.isSigned()
+                                ),
+                                llvm::APSInt(int_type.getWidth(), ptr_val)
+                            );
+                            auto int_const = builder.create< cir::ConstantOp >(
+                                call_op->getLoc(), int_type, int_attr
+                            );
+                            arg_value = builder.create< cir::CastOp >(
+                                call_op->getLoc(), arg_type, cir::CastKind::int_to_ptr,
+                                int_const
+                            );
+                        } catch (const std::exception &e) {
+                            LOG(ERROR) << "Failed to parse pointer constant '" << const_value
+                                       << "': " << e.what() << "\n";
+                            continue;
+                        }
+                    } else {
+                        LOG(ERROR)
+                            << "Unsupported constant type for value '" << const_value << "'\n";
+                        continue;
+                    }
+                    break;
+                }
+            }
+
+            if (arg_value) {
+                args.push_back(create_cast(arg_value, arg_type));
+            }
+        }
+    }
+
+    /**
      * @brief Applies a patch before the function call. This function inserts a call to the
      * patch function before the original function call.
      *
@@ -950,7 +1214,7 @@ namespace patchestry::passes {
      */
     void InstrumentationPass::apply_before_patch(
         mlir::Operation *target_op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-        bool inline_patches
+        bool should_inline
     ) {
         if (target_op == nullptr) {
             LOG(ERROR) << "Patch before: Operation is null";
@@ -966,7 +1230,7 @@ namespace patchestry::passes {
         auto module = target_op->getParentOfType< mlir::ModuleOp >();
 
         std::string patch_function_name =
-            namifyPatchFunction(patch_spec.implementation.function_name);
+            namifyFunction(patch_spec.implementation.function_name);
         auto input_types = llvm::to_vector(target_op->getOperandTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
@@ -995,7 +1259,7 @@ namespace patchestry::passes {
         auto symbol_ref =
             mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
         llvm::DenseMap< mlir::Value, mlir::Value > function_args_map;
-        prepare_call_arguments(builder, target_op, patch_func, patch, function_args_map);
+        prepare_patch_call_arguments(builder, target_op, patch_func, patch, function_args_map);
         llvm::SmallVector< mlir::Value > new_function_args;
         for (auto &[old_arg, new_arg] : function_args_map) {
             new_function_args.push_back(new_arg);
@@ -1032,9 +1296,9 @@ namespace patchestry::passes {
         }
 
         // Set appropriate attributes based on operation type
-        set_patch_call_attributes(patch_call_op, target_op);
+        set_instrumentation_call_attributes(patch_call_op, target_op);
 
-        if (inline_patches) {
+        if (should_inline) {
             inline_worklists.push_back(patch_call_op);
         }
     }
@@ -1064,7 +1328,7 @@ namespace patchestry::passes {
         builder.setInsertionPointAfter(target_op);
 
         std::string patch_function_name =
-            namifyPatchFunction(patch_spec.implementation.function_name);
+            namifyFunction(patch_spec.implementation.function_name);
         auto input_types = llvm::to_vector(target_op->getResultTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
@@ -1093,7 +1357,7 @@ namespace patchestry::passes {
         auto symbol_ref =
             mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
         llvm::DenseMap< mlir::Value, mlir::Value > function_args_map;
-        prepare_call_arguments(builder, target_op, patch_func, patch, function_args_map);
+        prepare_patch_call_arguments(builder, target_op, patch_func, patch, function_args_map);
         llvm::SmallVector< mlir::Value > function_args;
         for (auto &[old_arg, new_arg] : function_args_map) {
             function_args.push_back(new_arg);
@@ -1106,7 +1370,7 @@ namespace patchestry::passes {
         );
 
         // Set appropriate attributes based on operation type
-        set_patch_call_attributes(patch_call_op, target_op);
+        set_instrumentation_call_attributes(patch_call_op, target_op);
 
         if (inline_patches) {
             inline_worklists.push_back(patch_call_op);
@@ -1140,7 +1404,7 @@ namespace patchestry::passes {
         auto callee_name = call_op.getCallee()->str();
         assert(!callee_name.empty() && "Wrap around patch: callee name is empty");
 
-        auto patch_function_name = namifyPatchFunction(patch_spec.implementation.function_name);
+        auto patch_function_name = namifyFunction(patch_spec.implementation.function_name);
         auto result_types        = llvm::to_vector(call_op.getResultTypes());
 
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
@@ -1175,7 +1439,7 @@ namespace patchestry::passes {
         );
 
         // Set appropriate attributes based on operation type
-        set_patch_call_attributes(wrap_call_op, call_op);
+        set_instrumentation_call_attributes(wrap_call_op, call_op);
 
         call_op.replaceAllUsesWith(wrap_call_op);
         call_op.erase();
@@ -1186,24 +1450,25 @@ namespace patchestry::passes {
     }
 
     /**
-     * @brief Sets appropriate attributes for the patch call operation.
+     * @brief Sets appropriate attributes for the instrumentation call operation.
+     * This can be a call to a patch or a contract.
      *
-     * This function handles setting attributes on the patch call based on the
+     * This function handles setting attributes on the call based on the
      * type of the original operation being instrumented.
      *
      * @param patch_call_op The patch call operation to set attributes on
      * @param target_op The original operation being instrumented
      */
-    void InstrumentationPass::set_patch_call_attributes(
-        cir::CallOp patch_call_op, mlir::Operation *target_op
+    void InstrumentationPass::set_instrumentation_call_attributes(
+        cir::CallOp instr_call_op, mlir::Operation *target_op
     ) {
         if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(target_op)) {
             // For CallOp operations, preserve the original extra attributes
-            patch_call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
+            instr_call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
         } else {
             // For non-CallOp operations, create empty extra attributes
             mlir::NamedAttrList empty;
-            patch_call_op->setAttr(
+            instr_call_op->setAttr(
                 "extra_attrs",
                 cir::ExtraFuncAttributesAttr::get(
                     target_op->getContext(), empty.getDictionary(target_op->getContext())
@@ -1212,8 +1477,8 @@ namespace patchestry::passes {
         }
 
         // Add operation-specific attributes for debugging
-        patch_call_op->setAttr(
-            "patched_operation",
+        instr_call_op->setAttr(
+            "patchestry_operation",
             mlir::StringAttr::get(target_op->getContext(), target_op->getName().getStringRef())
         );
     }
@@ -1222,13 +1487,13 @@ namespace patchestry::passes {
      * @brief Loads a patch module from a string representation.
      *
      * @param ctx The MLIR context.
-     * @param patch_string The string representation of the patch module.
+     * @param module_string The string representation of the patch module.
      * @return mlir::OwningOpRef< mlir::ModuleOp > The loaded patch module.
      */
-    mlir::OwningOpRef< mlir::ModuleOp > InstrumentationPass::load_patch_module(
-        mlir::MLIRContext &ctx, const std::string &patch_string
+    mlir::OwningOpRef< mlir::ModuleOp > InstrumentationPass::load_code_module(
+        mlir::MLIRContext &ctx, const std::string &module_string
     ) {
-        return mlir::parseSourceString< mlir::ModuleOp >(patch_string, &ctx);
+        return mlir::parseSourceString< mlir::ModuleOp >(module_string, &ctx);
     }
 
     /**
@@ -1564,6 +1829,318 @@ namespace patchestry::passes {
         call_op.erase();
         callee.erase();
         return mlir::success();
+    }
+
+    /**
+     * @brief Applies meta contracts in execution order.
+     *
+     * @param function_worklist List of functions to process
+     * @param operation_worklist List of operations to process
+     * @param meta_contract_name Name of the meta contract to apply
+     */
+    void InstrumentationPass::apply_meta_contracts(
+        llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+        const std::string &meta_contract_name
+    ) {
+        // Find the meta contract by name
+        auto target_meta_contract = lookup(config->meta_contracts, meta_contract_name);
+        if (!target_meta_contract) {
+            LOG(ERROR) << "Meta contract '" << meta_contract_name << "' not found\n";
+            return;
+        }
+
+        LOG(INFO) << "Applying meta contract: " << meta_contract_name << "\n";
+
+        // Process each action in the meta contract
+        for (const auto &contract_action : target_meta_contract->contract_actions) {
+            auto &action = contract_action.action[0];
+            LOG(INFO) << "Processing contract action: " << action.contract_id << "\n";
+
+            // Find the corresponding specification by contract_id if possible, falling
+            // back to name if needed
+            auto spec = lookup(config->libraries.contracts.contracts, action.contract_id);
+            if (!spec || spec == std::nullopt) {
+                LOG(ERROR) << "Contract specification for ID '" << action.contract_id
+                           << "' not found\n";
+                // todo (kaoudis) just silently eating the contract if it isn't found
+                // is very confusing since one could simply expect the software to be
+                // patched at this point, throwing an error here would be more appropriate
+                continue;
+            } else {
+                LOG(INFO) << "Found specification: '" << spec->name << "'\n";
+
+                // join the specification and action instructions for ease of application
+                ContractInformation contract_to_apply = { .spec   = spec,
+                                                          .action = contract_action };
+
+                // Apply the contract to matching functions
+                apply_contract_action_to_targets(
+                    function_worklist, *target_meta_contract, contract_to_apply
+                );
+            }
+        }
+    }
+
+    void InstrumentationPass::apply_contract_before(
+        mlir::Operation *target_op, const ContractInformation &contract,
+        mlir::ModuleOp contract_module, bool should_inline
+    ) {
+        if (target_op == nullptr) {
+            LOG(ERROR
+            ) << "apply_contract_before: the passed function to be instrumented was null";
+            return;
+        }
+
+        const auto &spec = contract.spec.value();
+
+        mlir::OpBuilder builder(target_op);
+        builder.setInsertionPoint(target_op);
+        auto module = target_op->getParentOfType< mlir::ModuleOp >();
+
+        std::string contract_function_name = namifyFunction(spec.implementation.function_name);
+        auto input_types                   = llvm::to_vector(target_op->getOperandTypes());
+        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
+            LOG(ERROR) << "Contract module not found or contract function not defined: "
+                       << contract_function_name << "\n";
+            return;
+        }
+
+        // check if the contract function is already in the module, if not, merge it
+        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
+            auto result = merge_module_symbol(module, contract_module, contract_function_name);
+            if (mlir::failed(result)) {
+                LOG(ERROR) << "Failed to insert symbol into module\n";
+                return;
+            }
+        } else {
+            LOG(INFO) << "Contract function " << contract_function_name
+                      << " already exists in module, skipping merge\n";
+        }
+
+        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
+        if (!contract_func) {
+            LOG(ERROR) << "Contract function " << contract_function_name
+                       << " not defined after insertion. Insertion failed...\n";
+            return;
+        }
+
+        auto symbol_ref =
+            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
+        llvm::SmallVector< mlir::Value > function_args;
+        prepare_contract_call_arguments(
+            builder, target_op, contract_func, contract, function_args
+        );
+        auto contract_call_op = builder.create< cir::CallOp >(
+            target_op->getLoc(), symbol_ref,
+            contract_func->getResultTypes().size() != 0
+                ? contract_func->getResultTypes().front()
+                : mlir::Type(),
+            function_args
+        );
+
+        // Set appropriate attributes based on operation type
+        set_instrumentation_call_attributes(contract_call_op, target_op);
+
+        if (should_inline) {
+            inline_worklists.push_back(contract_call_op);
+        }
+    }
+
+    void InstrumentationPass::apply_contract_after(
+        mlir::Operation *target_op, const ContractInformation &contract,
+        mlir::ModuleOp contract_module, bool should_inline
+    ) {
+        if (target_op == nullptr) {
+            LOG(ERROR
+            ) << "apply_contract_after: the passed function to be instrumented was null";
+            return;
+        }
+
+        const auto &spec = contract.spec.value();
+
+        mlir::OpBuilder builder(target_op);
+        auto module = target_op->getParentOfType< mlir::ModuleOp >();
+        builder.setInsertionPointAfter(target_op);
+
+        std::string contract_function_name = namifyFunction(spec.implementation.function_name);
+        auto input_types                   = llvm::to_vector(target_op->getResultTypes());
+        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
+            LOG(ERROR) << "Contract module not found or contract function not defined\n";
+            return;
+        }
+
+        // check if the patch function is already in the module, if not, merge it
+        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
+            auto result = merge_module_symbol(module, contract_module, contract_function_name);
+            if (mlir::failed(result)) {
+                LOG(ERROR) << "Failed to insert symbol into module\n";
+                return;
+            }
+        } else {
+            LOG(INFO) << "Contract function " << contract_function_name
+                      << " already exists in module, skipping merge\n";
+        }
+
+        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
+        if (!contract_func) {
+            LOG(ERROR) << "Contract function " << contract_function_name
+                       << " not defined. Patching failed...\n";
+            return;
+        }
+
+        auto symbol_ref =
+            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
+        llvm::SmallVector< mlir::Value > function_args;
+        prepare_contract_call_arguments(
+            builder, target_op, contract_func, contract, function_args
+        );
+        auto contract_call_op = builder.create< cir::CallOp >(
+            target_op->getLoc(), symbol_ref,
+            contract_func->getResultTypes().size() != 0
+                ? contract_func->getResultTypes().front()
+                : mlir::Type(),
+            function_args
+        );
+
+        // Set appropriate attributes based on operation type
+        set_instrumentation_call_attributes(contract_call_op, target_op);
+
+        if (should_inline) {
+            inline_worklists.push_back(contract_call_op);
+        }
+    }
+
+    void InstrumentationPass::apply_contract_at_entrypoint(
+        cir::CallOp call_op, const ContractInformation &contract,
+        mlir::ModuleOp contract_module, bool should_inline
+    ) {
+        if (call_op == nullptr) {
+            LOG(ERROR) << "apply_contract_at_entrypoint: the passed function to be "
+                          "instrumented was null";
+            return;
+        }
+
+        const auto &contract_spec = contract.spec.value();
+        std::string contract_function_name =
+            namifyFunction(contract_spec.implementation.function_name);
+        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
+            LOG(ERROR) << "Contract module not found or contract function not defined\n";
+            return;
+        }
+
+        auto module = call_op->getParentOfType< mlir::ModuleOp >();
+        assert(module && "Wrap around patch: no module found");
+        std::string callee_name     = call_op.getCallee()->str();
+        cir::FuncOp callee_function = module.lookupSymbol< cir::FuncOp >(callee_name);
+        mlir::Block &entry_block    = callee_function.getBody().front();
+
+        auto target_op = entry_block.getParentOp();
+        mlir::OpBuilder builder(target_op);
+        builder.setInsertionPointToStart(&entry_block);
+
+        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
+            auto result = merge_module_symbol(module, contract_module, contract_function_name);
+            if (mlir::failed(result)) {
+                LOG(ERROR) << "Failed to insert symbol into module\n";
+                return;
+            }
+        } else {
+            LOG(INFO) << "Contract function " << contract_function_name
+                      << " already exists in module, skipping merge\n";
+        }
+
+        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
+        if (!contract_func) {
+            LOG(ERROR) << "Contract function " << contract_function_name
+                       << " not defined. Patching failed...\n";
+            return;
+        }
+
+        auto symbol_ref =
+            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
+        llvm::SmallVector< mlir::Value > function_args;
+        prepare_contract_call_arguments(
+            builder, target_op, contract_func, contract, function_args
+        );
+        auto contract_call_op = builder.create< cir::CallOp >(
+            callee_function->getLoc(), symbol_ref,
+            contract_func->getResultTypes().size() != 0
+                ? contract_func->getResultTypes().front()
+                : mlir::Type(),
+            function_args
+        );
+
+        // Set appropriate attributes based on operation type
+        set_instrumentation_call_attributes(contract_call_op, call_op);
+
+        if (should_inline) {
+            inline_worklists.push_back(contract_call_op);
+        }
+    }
+
+    void InstrumentationPass::apply_contract_action_to_targets(
+        llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
+        const contract::MetaContractConfig &meta_contract,
+        const ContractInformation &contract_to_apply
+    ) {
+        const auto &contract_action = contract_to_apply.action.value();
+        const auto &action          = contract_action.action[0];
+
+        LOG(INFO) << "Applying contract action '" << action.contract_id << "' in mode '"
+                  << patchestry::passes::contract::infoModeToString(action.mode) << "' \n";
+
+        // Apply to function calls
+        for (auto func : function_worklist) {
+            func.walk([&](cir::CallOp call_op) {
+                // Create a temporary spec with the action match
+                bool isMatch = OperationMatcher::contract_action_matches(
+                    call_op, func, contract_action, OperationMatcher::Mode::FUNCTION
+                );
+
+                if (isMatch) {
+                    auto contract_module = load_code_module(
+                        *call_op->getContext(), *contract_to_apply.spec->contract_module
+                    );
+                    if (!contract_module) {
+                        LOG(ERROR) << "Failed to load contract module for function: "
+                                   << call_op.getCallee()->str() << "\n";
+                        return;
+                    }
+
+                    LOG(INFO) << "Applying contract '" << contract_to_apply.spec->name
+                              << "' in mode '"
+                              << patchestry::passes::contract::infoModeToString(action.mode)
+                              << "' \n";
+                    switch (action.mode) {
+                        case contract::InfoMode::APPLY_BEFORE:
+                            apply_contract_before(
+                                call_op, contract_to_apply, contract_module.get(),
+                                meta_contract.optimization.contains("inline-patches")
+                            );
+                            break;
+                        case contract::InfoMode::APPLY_AFTER:
+                            apply_contract_after(
+                                call_op, contract_to_apply, contract_module.get(),
+                                meta_contract.optimization.contains("inline-patches")
+                            );
+                            break;
+                        case contract::InfoMode::APPLY_AT_ENTRYPOINT:
+                            apply_contract_at_entrypoint(
+                                call_op, contract_to_apply, contract_module.get(),
+                                meta_contract.optimization.contains("inline-patches")
+                            );
+                            break;
+                        default:
+                            LOG(ERROR) << "Unsupported contract mode (see ContractSpec for "
+                                          "details on support)\n";
+                            break;
+                    }
+                } else {
+                    LOG(INFO) << "function worklist entry '" << func.getSymName().str()
+                              << "' did not match the contract action; continuing\n";
+                }
+            });
+        }
     }
 
 } // namespace patchestry::passes
