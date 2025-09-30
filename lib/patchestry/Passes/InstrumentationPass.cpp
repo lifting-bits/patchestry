@@ -52,6 +52,7 @@
 #include <mlir/Pass/PassRegistry.h>
 #include <mlir/Support/LLVM.h>
 
+#include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/Passes/OperationMatcher.hpp>
 #include <patchestry/Util/Log.hpp>
@@ -1993,6 +1994,31 @@ don't yet pass)
                 : mlir::Type(),
             function_args
         );
+
+        // Set contract metadata as a dictionary attribute
+        auto ctx = target_op->getContext();
+
+        // Create a dictionary attribute for the contract spec
+        llvm::SmallVector< mlir::NamedAttribute > specAttrs;
+        specAttrs.push_back(mlir::NamedAttribute(
+            mlir::StringAttr::get(ctx, "name"), mlir::StringAttr::get(ctx, spec.name)
+        ));
+        specAttrs.push_back(mlir::NamedAttribute(
+            mlir::StringAttr::get(ctx, "id"), mlir::StringAttr::get(ctx, spec.id)
+        ));
+        specAttrs.push_back(mlir::NamedAttribute(
+            mlir::StringAttr::get(ctx, "description"),
+            mlir::StringAttr::get(ctx, spec.description)
+        ));
+        specAttrs.push_back(mlir::NamedAttribute(
+            mlir::StringAttr::get(ctx, "category"), mlir::StringAttr::get(ctx, spec.category)
+        ));
+        specAttrs.push_back(mlir::NamedAttribute(
+            mlir::StringAttr::get(ctx, "severity"), mlir::StringAttr::get(ctx, spec.severity)
+        ));
+
+        auto specDictAttr = mlir::DictionaryAttr::get(ctx, specAttrs);
+        contract_call_op->setAttr("contract.spec", specDictAttr);
 
         // Set appropriate attributes based on operation type
         set_instrumentation_call_attributes(contract_call_op, target_op);

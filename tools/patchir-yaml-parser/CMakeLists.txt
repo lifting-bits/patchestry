@@ -20,6 +20,7 @@ target_link_libraries(patchir-yaml-parser
         patchestry::codegen
         clangFrontend
         patchestry::passes
+        MLIRContracts
         MLIROptLib
 )
 
