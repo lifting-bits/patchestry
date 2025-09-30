@@ -21,6 +21,7 @@
 #include <mlir/Tools/mlir-opt/MlirOptMain.h>
 
 #include <patchestry/Codegen/Codegen.hpp>
+#include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/Util/Options.hpp>
@@ -37,8 +38,8 @@ namespace patchestry::cl {
     );
 
     const cl::opt< std::string > output_filename( // NOLINT(cert-err58-cpp)
-        "o", llvm::cl::desc("Output filename for the patched CIR"), llvm::cl::value_desc("filename"),
-        llvm::cl::init("-"), cl::cat(category)
+        "o", llvm::cl::desc("Output filename for the patched CIR"),
+        llvm::cl::value_desc("filename"), llvm::cl::init("-"), cl::cat(category)
     );
 
     const cl::opt< std::string > spec_filename( // NOLINT(cert-err58-cpp)
@@ -78,7 +79,9 @@ namespace patchestry::instrumentation {
         }
 
         if (enable_instrumentation.getValue()) {
-            patchestry::passes::InstrumentationOptions inline_options = { enable_inlining.getValue() };
+            patchestry::passes::InstrumentationOptions inline_options = {
+                enable_inlining.getValue()
+            };
             mlir::PassManager pm(&context);
             pm.addPass(patchestry::passes::createInstrumentationPass(
                 spec_filename.getValue(), inline_options
@@ -93,9 +96,11 @@ namespace patchestry::instrumentation {
         llvm::raw_fd_ostream os(output_filename, ec, llvm::sys::fs::OF_None);
         if (ec) {
             if (ec.value() == ENOENT) {
-                LOG(ERROR) << "Error: Cannot open " << output_filename << " - parent directory does not exist\n";
+                LOG(ERROR) << "Error: Cannot open " << output_filename
+                           << " - parent directory does not exist\n";
             } else {
-                LOG(ERROR) << "Error opening " << output_filename << ": " << ec.message() << "\n";
+                LOG(ERROR) << "Error opening " << output_filename << ": " << ec.message()
+                           << "\n";
             }
             return llvm::failure();
         }
@@ -117,6 +122,7 @@ int main(int argc, char **argv) {
     registry.insert< mlir::DLTIDialect, mlir::func::FuncDialect >();
 
     registry.insert< cir::CIRDialect >();
+    registry.insert< contracts::ContractsDialect >();
 
     mlir::MLIRContext context(registry);
 

@@ -20,6 +20,7 @@ target_link_libraries(pcode-translate
         MLIRPass
         MLIRTranslateLib
         MLIRSupport
+        MLIRContracts
         patchestry::ghidra
 )
 

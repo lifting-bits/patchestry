@@ -23,6 +23,7 @@ target_link_libraries(patchir-decomp
         rellic::rellic
         glog::glog
         clangFrontend
+        MLIRContracts
 )
 
 mlir_check_link_libraries(patchir-decomp)

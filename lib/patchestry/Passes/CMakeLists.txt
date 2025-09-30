@@ -17,6 +17,8 @@ set(CLANG_IR_LIBS
 )
 
 target_link_libraries(patchestry_passes
+    PUBLIC
+        MLIRContracts
     PRIVATE
         patchestry_settings
         patchestry_yaml
