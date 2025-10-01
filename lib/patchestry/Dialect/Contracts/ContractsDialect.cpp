@@ -8,11 +8,13 @@
 #include "patchestry/Dialect/Contracts/ContractsDialect.hpp"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 // Pull in enum definitions
 #include "contracts/ContractsEnums.cpp.inc"
 
 // Pull in attribute definitions
+#define GET_ATTRDEF_CLASSES
 #include "contracts/ContractsAttrs.cpp.inc"
 
 using namespace mlir;

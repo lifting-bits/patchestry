@@ -7,9 +7,9 @@
 
 #pragma once
 
+#include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/Dialect.h>
 #include <mlir/IR/OpDefinition.h>
-#include <mlir/IR/BuiltinAttributes.h>
 
 namespace contracts {
     class ContractsDialect : public mlir::Dialect
@@ -24,10 +24,10 @@ namespace contracts {
 } // namespace contracts
 
 // Pull in the dialect definition.
-#include "contracts/ContractsDialect.h.inc"
+#include "patchestry/Dialect/Contracts/ContractsDialect.h.inc"
 
 // Pull in enum definitions
-#include "contracts/ContractsEnums.h.inc"
+#include "patchestry/Dialect/Contracts/contracts/ContractsEnums.h.inc"
 
 // Forward declarations for attributes (before including the generated code)
 namespace contracts {
@@ -38,15 +38,15 @@ namespace contracts {
     class any_ofAttr;
     class staticAttr;
 
-    // Type aliases to match what the generated code expects
-    using VarRefAttr = varrefAttr;
-    using ConstIntAttr = iconstAttr;
-    using CmpClauseAttr = cmpAttr;
-    using AllOfAttr = all_ofAttr;
-    using AnyOfAttr = any_ofAttr;
+    // Provide aliases matching the generated C++ accessor names.
+    using VarRefAttr         = varrefAttr;
+    using ConstIntAttr       = iconstAttr;
+    using CmpClauseAttr      = cmpAttr;
+    using AllOfAttr          = all_ofAttr;
+    using AnyOfAttr          = any_ofAttr;
     using StaticContractAttr = staticAttr;
-}
+} // namespace contracts
 
 // Pull in attribute definitions
 #define GET_ATTRDEF_CLASSES
-#include "contracts/ContractsAttrs.h.inc"
+#include "patchestry/Dialect/Contracts/contracts/ContractsAttrs.h.inc"
