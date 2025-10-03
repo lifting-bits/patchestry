@@ -234,7 +234,7 @@ namespace patchestry::passes {
         const auto &contract_spec = contract.spec.value();
         auto contract_type        = contract_spec.type;
         if (contract_type == ContractType::STATIC) {
-            LOG(ERROR) << "Static contracts are not supported yet\n";
+            LOG(ERROR) << "Static contracts are not supported in entrypoint mode\n";
             return;
         }
         assert(
