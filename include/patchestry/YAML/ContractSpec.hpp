@@ -97,7 +97,6 @@ namespace patchestry::passes {
         };
 
         struct ContractLibrary
-
         {
             std::string api_version;
             Metadata metadata;
