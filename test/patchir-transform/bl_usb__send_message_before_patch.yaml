@@ -75,11 +75,4 @@ meta_contracts:
 
         action:
         - mode: "apply_before"
-          contract_id: "USB-CONTRACT-BEFORE-001"
-          arguments:
-            - name: usb_device
-              source: "argument"
-              index: "0"
-            - name: buffer
-              source: "argument"
-              index: "1"
+          contract_id: "USB-CONTRACT-STATIC-001"

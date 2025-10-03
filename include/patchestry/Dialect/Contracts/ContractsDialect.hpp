@@ -20,11 +20,15 @@ namespace contracts {
         static constexpr mlir::StringRef getDialectNamespace() { return "contracts"; }
 
         void initialize();
+
+        // Attribute parsing and printing hooks
+        mlir::Attribute parseAttribute(mlir::DialectAsmParser &parser, mlir::Type type) const override;
+        void printAttribute(mlir::Attribute attr, mlir::DialectAsmPrinter &os) const override;
     };
 } // namespace contracts
 
 // Pull in the dialect definition.
-#include "patchestry/Dialect/Contracts/ContractsDialect.h.inc"
+#include "patchestry/Dialect/Contracts/contracts/ContractsDialect.h.inc"
 
 // Pull in enum definitions
 #include "patchestry/Dialect/Contracts/contracts/ContractsEnums.h.inc"

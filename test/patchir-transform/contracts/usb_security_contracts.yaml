@@ -16,26 +16,43 @@ contracts:
     description: "Validate USB endpoint write"
     category: "write_validation"
     severity: "medium"
+    type: "RUNTIME"
 
     implementation:
       language: C
-      # this reference is in relation to the location of the meta-contract!
       code_file: "contracts/usb_endpoint_write_validation.c"
       function_name: "contract::before::test_contract"
       parameters:
-      # https://www.kernel.org/doc/html/latest/driver-api/usb/usb.html#c.usb_device
         - name: usb_device
           type: "usb_device*"
           description: "USB device context"
         - name: buffer
           type: "const void*"
           description: "Data buffer to write"
+
+  - name: "usb_endpoint_write_validation_contract_static"
+    id: "USB-CONTRACT-STATIC-001"
+    description: "Validate USB endpoint write"
+    category: "write_validation"
+    severity: "medium"
+    type: "STATIC"
+
+    constraints:
+      - condition: "buffer_length > 0"
+        description: "Endpoint buffer length metadata is provided"
+      - condition: "nonnull(arg0)"
+        description: "USB device is not null"
+      - condition: "nonnull(arg1)"
+        description: "Buffer is not null"
+  
   
   - name: "test_entrypoint_insertion"
     id: "test_entrypoint_insertion_contract"
     description: "Validate USB endpoint write at function entrypoint"
     category: "write_validation"
     severity: "medium"
+    type: "RUNTIME"
+
 
     implementation:
       language: C
@@ -50,3 +67,16 @@ contracts:
         - name: buffer
           type: "const void*"
           description: "Data buffer to write"
+
+  - name: "test_entrypoint_insertion_contract_static"
+    id: "test_entrypoint_insertion_contract_static"
+    description: "Validate USB endpoint write at function entrypoint"
+    category: "write_validation"
+    severity: "medium"
+    type: "STATIC"
+
+    constraints:
+      - condition: "function_entrypoint_exposes_usb_device"
+        description: "Function entrypoint must expose the USB device argument"
+      - condition: "function_entrypoint_establishes_buffer_metadata"
+        description: "Function entrypoint establishes buffer argument metadata"

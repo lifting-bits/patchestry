@@ -64,6 +64,9 @@ using namespace patchestry::cl;
 namespace patchestry::instrumentation {
 
     static mlir::LogicalResult run(mlir::MLIRContext &context) {
+        // Explicitly load the Contracts dialect to ensure attributes are registered
+        context.getOrLoadDialect<::contracts::ContractsDialect>();
+
         auto file_or_err = llvm::MemoryBuffer::getFileOrSTDIN(input_filename.getValue());
         if (auto err = file_or_err.getError()) {
             LOG(ERROR) << "Error opening file: " << input_filename << "\n";
@@ -124,7 +127,9 @@ int main(int argc, char **argv) {
     registry.insert< cir::CIRDialect >();
     registry.insert< contracts::ContractsDialect >();
 
-    mlir::MLIRContext context(registry);
+    mlir::MLIRContext context;
+    context.appendDialectRegistry(registry);
+    context.loadAllAvailableDialects();
 
     return mlir::failed(patchestry::instrumentation::run(context)) ? EXIT_FAILURE
                                                                    : EXIT_SUCCESS;
