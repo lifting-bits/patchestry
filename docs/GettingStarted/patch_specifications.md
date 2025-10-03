@@ -103,6 +103,23 @@ meta_contracts:                          # Meta-contract configurations
 
 ```
 
+## Contract Types
+
+Patchestry supports two types of contracts:
+
+1. **Runtime Contracts**: Implemented as C/C++ functions that are called at runtime to validate conditions
+2. **Static Contracts**: Declarative specifications attached as MLIR attributes for static analysis and verification
+
+### Runtime vs Static Contracts
+
+| Aspect | Runtime Contracts | Static Contracts |
+|--------|------------------|------------------|
+| **Implementation** | C/C++ function code | Declarative predicates in YAML |
+| **Verification** | Runtime checks during execution | Static analysis at compile time |
+| **Performance** | Runtime overhead | No runtime overhead |
+| **Expressiveness** | Full programming language | Limited to supported predicates |
+| **Use Cases** | Complex validations, security checks | Type constraints, null checks, range checks |
+
 ## Field Descriptions
 
 ### Top-Level Fields
@@ -548,6 +565,375 @@ action:
       - name: "original_arg2"
         source: "operand"
         index: "1"
+```
+
+## Contract Library Specification
+
+Contract libraries are separate YAML files that define reusable contracts. They can be referenced by multiple deployment specifications.
+
+### Contract Library Structure
+
+```yaml
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "contract-library-name"
+  version: "1.0.0"
+  description: "Description of contract library"
+  author: "Author Name"
+  created: "YYYY-MM-DD"
+
+contracts:
+  - name: "contract_name"
+    id: "CONTRACT-ID-001"
+    description: "Contract description"
+    category: "validation_category"
+    severity: "critical|high|medium|low"
+    type: "STATIC|RUNTIME"
+
+    # For STATIC contracts
+    preconditions: [...]
+    postconditions: [...]
+
+    # For RUNTIME contracts
+    implementation: {...}
+    contract_module: "path/to/module"
+```
+
+### Contract Library Fields
+
+| Field | Description | Required | Example |
+|-------|-------------|----------|---------|
+| `apiVersion` | API version | Yes | `"patchestry.io/v1"` |
+| `metadata` | Library metadata | Yes | See metadata fields |
+| `contracts` | List of contract specifications | Yes | See contract spec fields |
+
+### Contract Specification Fields
+
+| Field | Description | Required | Type | Example |
+|-------|-------------|----------|------|---------|
+| `name` | Contract identifier | Yes | All | `"usb_validation_contract"` |
+| `id` | Unique contract ID | Yes | All | `"USB-CONTRACT-001"` |
+| `description` | Contract description | No | All | `"Validates USB parameters"` |
+| `category` | Contract category | No | All | `"validation"`, `"security"` |
+| `severity` | Severity level | No | All | `"critical"`, `"high"`, `"medium"`, `"low"` |
+| `type` | Contract type | Yes | All | `"STATIC"` or `"RUNTIME"` |
+| `preconditions` | Static preconditions | STATIC only | STATIC | List of precondition specs |
+| `postconditions` | Static postconditions | STATIC only | STATIC | List of postcondition specs |
+| `implementation` | Runtime implementation | RUNTIME only | RUNTIME | Implementation details |
+| `contract_module` | Path to contract module | RUNTIME only | RUNTIME | `"contracts/security.o"` |
+
+### Static Contract Predicates
+
+Static contracts use declarative predicates that are attached as MLIR attributes. Each predicate specifies a condition that must hold.
+
+#### Predicate Structure
+
+```yaml
+preconditions:
+  - id: "precondition_1"
+    description: "Description of the precondition"
+    pred:
+      kind: "nonnull|relation|alignment|expr|range"
+      # Fields depend on kind - see "Predicate Kind Requirements" below
+      target: "arg0|arg1|...|return_value|symbol"  # Required for: nonnull, relation, range
+      relation: "eq|neq|lt|lte|gt|gte|none"        # Required for: relation
+      value: "constant_value"                      # Required for: relation
+      symbol: "symbol_name"                        # Optional: descriptive symbol name
+      align: "alignment_bytes"                     # Required for: alignment
+      expr: "expression_string"                    # Required for: expr
+      range:                                       # Required for: range
+        min: "min_value"
+        max: "max_value"
+
+postconditions:
+  - id: "postcondition_1"
+    description: "Description of the postcondition"
+    pred:
+      # Same structure as preconditions
+```
+
+#### Static Contract Predicate Fields
+
+| Field | Description | Required | Example |
+|-------|-------------|----------|---------|
+| `id` | Unique identifier for the condition | Yes | `"precondition_1"` |
+| `description` | Human-readable description | No | `"Ensure pointer is non-null"` |
+| `pred` | Predicate specification | Yes | See predicate fields below |
+
+#### Predicate Fields
+
+| Field | Description | Required | Valid Values | Example |
+|-------|-------------|----------|--------------|---------|
+| `kind` | Type of predicate | Yes | `nonnull`, `relation`, `alignment`, `expr`, `range` | `"relation"` |
+| `target` | What the predicate applies to | `nonnull`, `relation`, `range` | `arg0`, `arg1`, ..., `return_value`, `symbol` | `"arg0"` |
+| `relation` | Comparison relation | `relation` only | `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `none` | `"neq"` |
+| `value` | Constant value for comparison | `relation` only | String representation of value | `"0"`, `"NULL"` |
+| `symbol` | Symbol name reference (descriptive) | If target is symbol | Symbol name | `"usb_device"` |
+| `align` | Alignment requirement in bytes | `alignment` only | String representation of bytes | `"4"`, `"8"` |
+| `expr` | Expression string | `expr` only | Expression string | `"usb_device != NULL"` |
+| `range` | Range constraint | `range` only | Range object | See range fields |
+
+#### Range Fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `min` | Minimum value (inclusive) | `"0"` |
+| `max` | Maximum value (inclusive) | `"USB_MAX_PACKET_SIZE"` |
+
+#### Predicate Kinds and Required Fields
+
+Each predicate kind requires specific fields. **Only include the fields listed for each kind** to avoid parser errors:
+
+| Kind | Description | Required Fields | Optional Fields | Example Use Case |
+|------|-------------|-----------------|-----------------|------------------|
+| `nonnull` | Verify target is not null | `kind`, `target` (arg or return_value) | `symbol` | Pointer validation |
+| `relation` | Compare target against a value | `kind`, `target` (arg, return_value, or symbol), `relation`, `value` | `symbol` | Bounds checking, comparisons |
+| `alignment` | Verify memory alignment | `kind`, `target`, `align` | `symbol` | Memory alignment requirements |
+| `expr` | Free-form expression | `kind`, `expr` | `target`, `symbol` | Complex conditions |
+| `range` | Verify value is within range | `kind`, `target` (arg, return_value, or symbol), `range` (with `min` and `max`) | `symbol` | Input validation, bounds |
+
+#### Quick Reference: Field Requirements by Predicate Kind
+
+| Predicate Kind | `kind` | `target` | `relation` | `value` | `align` | `expr` | `range` | `symbol` |
+|----------------|--------|----------|------------|---------|---------|--------|---------|----------|
+| **nonnull**    | ✓      | ✓        | ✗          | ✗       | ✗       | ✗      | ✗       | Optional |
+| **relation**   | ✓      | ✓        | ✓          | ✓       | ✗       | ✗      | ✗       | Optional |
+| **alignment**  | ✓      | ✓        | ✗          | ✗       | ✓       | ✗      | ✗       | Optional |
+| **expr**       | ✓      | Optional | ✗          | ✗       | ✗       | ✓      | ✗       | ✗        |
+| **range**      | ✓      | ✓        | ✗          | ✗       | ✗       | ✗      | ✓       | Optional |
+
+**Legend**: ✓ = Required, ✗ = Not allowed/Not used, Optional = May be included
+
+**Important Notes:**
+- **`nonnull`**: Only set `target` to an argument (e.g., `arg0`) or `return_value`. The `symbol` field is optional for documentation purposes.
+- **`relation`**: Must specify `target`, `relation` operator, and `value` to compare against. Target can be an argument, return value, or symbol reference.
+- **`alignment`**: Must specify `target` and `align` (alignment in bytes). Typically used with pointer arguments.
+- **`expr`**: Only requires the `expr` field with a free-form expression string. Target and symbol are optional for context.
+- **`range`**: Must specify `target` and a `range` object with both `min` and `max` values.
+- **`symbol`**: This field is always optional and serves as a descriptive reference to document what variable or symbol the predicate refers to.
+
+#### Target Specification
+
+The `target` field specifies what the predicate applies to:
+
+- **`arg0`, `arg1`, etc.**: Function arguments (0-indexed)
+- **`return_value`**: Return value of the function
+- **`symbol`**: A named symbol (requires `symbol` field)
+
+#### Relation Types
+
+For `relation` kind predicates:
+
+| Relation | Operators | Description |
+|----------|-----------|-------------|
+| `eq` | `==` | Equal to |
+| `neq` | `!=` | Not equal to |
+| `lt` | `<` | Less than |
+| `lte` | `<=` | Less than or equal to |
+| `gt` | `>` | Greater than |
+| `gte` | `>=` | Greater than or equal to |
+| `none` | - | No relation (for existence checks) |
+
+### Static Contract Examples
+
+#### Example 1: Non-null Pointer Check (nonnull)
+
+```yaml
+preconditions:
+  - id: "ptr_nonnull"
+    description: "USB device pointer must not be null"
+    pred:
+      kind: "nonnull"
+      target: "arg0"
+      symbol: "usb_device"  # Optional: for documentation
+```
+
+**Required fields for `nonnull`**: `kind`, `target`
+
+#### Example 2: Range Validation (range)
+
+```yaml
+preconditions:
+  - id: "size_range"
+    description: "Buffer size must be within valid range"
+    pred:
+      kind: "range"
+      target: "arg1"
+      range:
+        min: "0"
+        max: "USB_MAX_PACKET_SIZE"
+      symbol: "buffer_size"  # Optional: for documentation
+```
+
+**Required fields for `range`**: `kind`, `target`, `range` (with `min` and `max`)
+
+#### Example 3: Comparison Relation (relation)
+
+```yaml
+preconditions:
+  - id: "size_positive"
+    description: "Size must be greater than zero"
+    pred:
+      kind: "relation"
+      target: "arg1"
+      relation: "gt"
+      value: "0"
+      symbol: "size"  # Optional: for documentation
+```
+
+**Required fields for `relation`**: `kind`, `target`, `relation`, `value`
+
+#### Example 4: Memory Alignment (alignment)
+
+```yaml
+preconditions:
+  - id: "buffer_aligned"
+    description: "Buffer must be 4-byte aligned"
+    pred:
+      kind: "alignment"
+      target: "arg0"
+      align: "4"
+      symbol: "buffer"  # Optional: for documentation
+```
+
+**Required fields for `alignment`**: `kind`, `target`, `align`
+
+#### Example 5: Complex Expression (expr)
+
+```yaml
+preconditions:
+  - id: "device_valid"
+    description: "USB device must be in configured state"
+    pred:
+      kind: "expr"
+      expr: "usb_device->state == USB_STATE_CONFIGURED"
+```
+
+**Required fields for `expr`**: `kind`, `expr`
+**Optional fields**: `target`, `symbol` (for documentation)
+
+#### Example 6: Return Value Check (relation)
+
+```yaml
+postconditions:
+  - id: "success_return"
+    description: "Function must return success code"
+    pred:
+      kind: "relation"
+      target: "return_value"
+      relation: "eq"
+      value: "0"
+```
+
+**Required fields for `relation` on return value**: `kind`, `target` (set to `return_value`), `relation`, `value`
+
+### Complete Static Contract Example
+
+This example demonstrates all predicate kinds with correct field usage:
+
+```yaml
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "usb-security-contracts"
+  version: "1.0.0"
+  description: "USB security contracts for medical devices"
+  author: "Security Team"
+  created: "2025-01-15"
+
+contracts:
+  - name: "usb_endpoint_write_validation"
+    id: "USB-CONTRACT-STATIC-001"
+    description: "Validate USB endpoint write parameters"
+    category: "write_validation"
+    severity: "critical"
+    type: "STATIC"
+
+    preconditions:
+      # Example 1: nonnull predicate
+      - id: "device_nonnull"
+        description: "USB device pointer must not be null"
+        pred:
+          kind: "nonnull"
+          symbol: "usb_device"  # Optional
+
+      # Example 2: nonnull predicate
+      - id: "buffer_nonnull"
+        description: "Buffer pointer must not be null"
+        pred:
+          kind: "nonnull"
+          symbol: "buffer"  # Optional
+
+      # Example 3: range predicate
+      - id: "size_range"
+        description: "Write size must be within valid range"
+        pred:
+          kind: "range"
+          target: "arg2"
+          range:
+            min: "1"
+            max: "USB_MAX_PACKET_SIZE"
+
+      # Example 4: alignment predicate
+      - id: "buffer_aligned"
+        description: "Buffer must be properly aligned"
+        pred:
+          kind: "alignment"
+          target: "arg1"
+          align: "4"
+
+    postconditions:
+      # Example 5: relation predicate on return value
+      - id: "return_success"
+        description: "Function must return success or error code"
+        pred:
+          kind: "relation"
+          target: "return_value"
+          relation: "gte"
+          value: "-1"
+
+      # Example 6: expr predicate
+      - id: "state_valid"
+        description: "Device state must remain valid"
+        pred:
+          kind: "expr"
+          expr: "usb_device->state != USB_STATE_ERROR"
+          # Note: target and symbol are optional for expr predicates
+```
+
+**Summary of field usage by predicate kind:**
+- **nonnull**: `kind` + `target` (`arg<N>`, `return_value`, or `symbol`)
+- **relation**: `kind` + `target` + `relation` + `value` (`arg<N>`, `return_value`, or `symbol`)
+- **alignment**: `kind` + `target` + `align` (`arg<N>`, `return_value`, or `symbol`)
+- **expr**: `kind` + `expr`
+- **range**: `kind` + `target` + `range` (with `min`/`max`) (`arg<N>`, `return_value`, or `symbol`)
+
+### Runtime Contract Implementation
+
+For runtime contracts, specify the implementation details:
+
+```yaml
+contracts:
+  - name: "usb_endpoint_write_contract"
+    id: "USB-CONTRACT-001"
+    description: "Runtime validation for USB endpoint write"
+    type: "RUNTIME"
+
+    implementation:
+      language: "C"
+      code_file: "contracts/usb_validation.c"
+      function_name: "contract::usb_endpoint_write_validation"
+      parameters:
+        - name: "usb_device"
+          type: "usb_device_t*"
+          description: "USB device context"
+        - name: "buffer"
+          type: "const void*"
+          description: "Data buffer"
+        - name: "size"
+          type: "uint32_t"
+          description: "Buffer size"
 ```
 
 ## Deployment Architecture

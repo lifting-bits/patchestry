@@ -25,6 +25,11 @@ namespace patchestry::passes {
         REPLACE
     };
 
+    enum class ContractType : uint8_t {
+        RUNTIME = 0, // Runtime contract validation
+        STATIC,      // Static contract verification
+    };
+
     enum class ArgumentSourceType : uint8_t {
         OPERAND = 0, // Reference to operation operand by index
         VARIABLE,    // Reference to variable by name
@@ -83,6 +88,7 @@ namespace patchestry::passes {
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::VariableMatch)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::ArgumentMatch)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::Parameter)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::Implementation)
 
 namespace llvm::yaml {
     using namespace patchestry::passes;

@@ -16,25 +16,63 @@ contracts:
     description: "Validate USB endpoint write"
     category: "write_validation"
     severity: "medium"
+    type: "RUNTIME"
 
     implementation:
       # this reference is in relation to the location of the meta-contract!
       code_file: "contracts/usb_endpoint_write_validation.c"
       function_name: "contract::before::test_contract"
       parameters:
-      # https://www.kernel.org/doc/html/latest/driver-api/usb/usb.html#c.usb_device
         - name: usb_device
           type: "usb_device*"
           description: "USB device context"
         - name: buffer
           type: "const void*"
           description: "Data buffer to write"
+
+  - name: "usb_endpoint_write_validation_contract_static"
+    id: "USB-CONTRACT-STATIC-001"
+    description: "Validate USB endpoint write"
+    category: "write_validation"
+    severity: "medium"
+    type: "STATIC"
+
+    preconditions:
+      - id: "precondition_1"
+        pred:
+          kind: "relation"
+          target: "arg0"
+          relation: "eq"
+          value: "0"
+          symbol: "usb_device"
+          align: "1"
+          expr: "usb_device != NULL"
+          range:
+            min: "0"
+            max: "USB_MAX_PACKET_SIZE"
+
+    postconditions:
+      - id: "postcondition_1"
+        pred:
+          kind: "relation"
+          target: "arg0"
+          relation: "gt"
+          value: "0"
+          symbol: "buffer_length"
+          align: "1"
+          expr: "buffer_length > 0"
+          range:
+            min: "0"
+            max: "USB_MAX_PACKET_SIZE"
+  
   
   - name: "test_entrypoint_insertion"
     id: "test_entrypoint_insertion_contract"
     description: "Validate USB endpoint write at function entrypoint"
     category: "write_validation"
     severity: "medium"
+    type: "RUNTIME"
+
 
     implementation:
       # this reference is in relation to the location of the meta-contract!
@@ -48,3 +86,38 @@ contracts:
         - name: buffer
           type: "const void*"
           description: "Data buffer to write"
+
+  - name: "test_entrypoint_insertion_contract_static"
+    id: "test_entrypoint_insertion_contract_static"
+    description: "Validate USB endpoint write at function entrypoint"
+    category: "write_validation"
+    severity: "medium"
+    type: "STATIC"
+
+    preconditions:
+      - id: "precondition_1"
+        pred:
+          kind: "relation"
+          target: "arg0"
+          relation: "eq"
+          value: "1"
+          symbol: "usb_device"
+          align: "1"
+          expr: "usb_device != NULL"
+          range:
+            min: "0"
+            max: "USB_MAX_PACKET_SIZE"
+
+    postconditions:
+      - id: "postcondition_1"
+        pred:
+          kind: "relation"
+          target: "arg0"
+          relation: "eq"
+          value: "1"
+          symbol: "usb_device"
+          align: "1"
+          expr: "usb_device != NULL"
+          range:
+            min: "0"
+            max: "USB_MAX_PACKET_SIZE"

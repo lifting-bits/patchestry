@@ -58,6 +58,9 @@
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/YAML/ConfigurationFile.hpp>
 
+#include "ContractOperationImpl.hpp"
+#include "PatchOperationImpl.hpp"
+
 namespace patchestry::passes {
 
     enum class TypeCategory : std::uint8_t {
@@ -74,28 +77,29 @@ namespace patchestry::passes {
     std::optional< std::string >
     emitModuleAsString(const std::string &filename, const std::string &lang); // NOLINT
 
-    namespace {
-        /**
-         * @brief Converts a string to a valid function name by replacing invalid characters.
-         *
-         * This function takes a string and converts it to a valid function name by replacing
-         * any non-alphanumeric characters (except underscores) with underscores. This is used
-         * to ensure patch function names are valid identifiers.
-         *
-         * @param str The input string to convert
-         * @return std::string The converted function name
-         */
-        std::string namifyFunction(const std::string &str) {
-            std::string result;
-            for (char c : str) {
-                if ((isalnum(c) != 0) || c == '_') {
-                    result += c;
-                } else {
-                    result += '_';
-                }
+    /**
+     * @brief Converts a string to a valid function name by replacing invalid characters.
+     *
+     * This function takes a string and converts it to a valid function name by replacing
+     * any non-alphanumeric characters (except underscores) with underscores. This is used
+     * to ensure patch function names are valid identifiers.
+     *
+     * @param str The input string to convert
+     * @return std::string The converted function name
+     */
+    std::string namifyFunction(const std::string &str) {
+        std::string result;
+        for (char c : str) {
+            if ((isalnum(c) != 0) || c == '_') {
+                result += c;
+            } else {
+                result += '_';
             }
-            return result;
         }
+        return result;
+    }
+
+    namespace {
 
         /*std::string valueToString(mlir::Value value) {
             std::string result;
@@ -277,9 +281,7 @@ namespace patchestry::passes {
      * configuration_file, and use the given inline options for controlling inlining behavior.
      *
      * @param configuration_file Path to the YAML patch specification file
-     * @param ∂options Configuration options for controlling how instrumentation is generally
-     * applied
-don't yet pass)
+     * @param options Configuration options for controlling how instrumentation is applied
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
     std::unique_ptr< mlir::Pass > createInstrumentationPass(
@@ -374,8 +376,21 @@ don't yet pass)
             }
         }
         for (auto &spec : config->libraries.contracts) {
+            // Check contract type; assume 'type' field exists and can be "static" or "dynamic"
+            if (spec.type == ContractType::STATIC) {
+                // Perform any required validation or processing for static contracts here.
+                // For now, just log that a static contract was found.
+                LOG(INFO) << "Static contract '" << spec.name
+                          << "' does not require implementation file.\n";
+                continue;
+            }
+            if (!spec.implementation) {
+                LOG(ERROR) << "Non-static contract '" << spec.name
+                           << "' is missing implementation.\n";
+                continue;
+            }
             auto contracts_file_path =
-                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.implementation->code_file);
             if (!llvm::sys::fs::exists(contracts_file_path)) {
                 LOG(ERROR) << "Contract file " << contracts_file_path << " does not exist\n";
                 continue;
@@ -561,20 +576,20 @@ don't yet pass)
                             << "' \n";
                         switch (action.mode) {
                             case PatchInfoMode::APPLY_BEFORE:
-                                apply_before_patch(
-                                    call_op, patch_to_apply, patch_module.get(),
+                                PatchOperationImpl::applyPatchBefore(
+                                    *this, call_op, patch_to_apply, patch_module.get(),
                                     meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
                             case PatchInfoMode::APPLY_AFTER:
-                                apply_after_patch(
-                                    call_op, patch_to_apply, patch_module.get(),
+                                PatchOperationImpl::applyPatchAfter(
+                                    *this, call_op, patch_to_apply, patch_module.get(),
                                     meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
                             case PatchInfoMode::REPLACE:
-                                replace_call(
-                                    call_op, patch_to_apply, patch_module.get(),
+                                PatchOperationImpl::replaceCall(
+                                    *this, call_op, patch_to_apply, patch_module.get(),
                                     meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
@@ -607,8 +622,8 @@ don't yet pass)
 
                     switch (action.mode) {
                         case PatchInfoMode::APPLY_BEFORE:
-                            apply_before_patch(
-                                op, patch_to_apply, patch_module.get(),
+                            PatchOperationImpl::applyPatchBefore(
+                                *this, op, patch_to_apply, patch_module.get(),
                                 meta_patch.optimization.contains("inline-patches")
                             );
                             break;
@@ -1938,228 +1953,6 @@ don't yet pass)
         }
     }
 
-    void InstrumentationPass::apply_contract_before(
-        mlir::Operation *target_op, const ContractInformation &contract,
-        mlir::ModuleOp contract_module, bool should_inline
-    ) {
-        if (target_op == nullptr) {
-            LOG(ERROR
-            ) << "apply_contract_before: the passed function to be instrumented was null";
-            return;
-        }
-
-        const auto &spec = contract.spec.value();
-
-        mlir::OpBuilder builder(target_op);
-        builder.setInsertionPoint(target_op);
-        auto module = target_op->getParentOfType< mlir::ModuleOp >();
-
-        std::string contract_function_name = namifyFunction(spec.implementation.function_name);
-        auto input_types                   = llvm::to_vector(target_op->getOperandTypes());
-        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            LOG(ERROR) << "Contract module not found or contract function not defined: "
-                       << contract_function_name << "\n";
-            return;
-        }
-
-        // check if the contract function is already in the module, if not, merge it
-        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            auto result = merge_module_symbol(module, contract_module, contract_function_name);
-            if (mlir::failed(result)) {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-        } else {
-            LOG(INFO) << "Contract function " << contract_function_name
-                      << " already exists in module, skipping merge\n";
-        }
-
-        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
-        if (!contract_func) {
-            LOG(ERROR) << "Contract function " << contract_function_name
-                       << " not defined after insertion. Insertion failed...\n";
-            return;
-        }
-
-        auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
-        llvm::SmallVector< mlir::Value > function_args;
-        prepare_contract_call_arguments(
-            builder, target_op, contract_func, contract, function_args
-        );
-        auto contract_call_op = builder.create< cir::CallOp >(
-            target_op->getLoc(), symbol_ref,
-            contract_func->getResultTypes().size() != 0
-                ? contract_func->getResultTypes().front()
-                : mlir::Type(),
-            function_args
-        );
-
-        // Set contract metadata as a dictionary attribute
-        auto ctx = target_op->getContext();
-
-        // Create a dictionary attribute for the contract spec
-        llvm::SmallVector< mlir::NamedAttribute > specAttrs;
-        specAttrs.push_back(mlir::NamedAttribute(
-            mlir::StringAttr::get(ctx, "name"), mlir::StringAttr::get(ctx, spec.name)
-        ));
-        specAttrs.push_back(mlir::NamedAttribute(
-            mlir::StringAttr::get(ctx, "id"), mlir::StringAttr::get(ctx, spec.id)
-        ));
-        specAttrs.push_back(mlir::NamedAttribute(
-            mlir::StringAttr::get(ctx, "description"),
-            mlir::StringAttr::get(ctx, spec.description)
-        ));
-        specAttrs.push_back(mlir::NamedAttribute(
-            mlir::StringAttr::get(ctx, "category"), mlir::StringAttr::get(ctx, spec.category)
-        ));
-        specAttrs.push_back(mlir::NamedAttribute(
-            mlir::StringAttr::get(ctx, "severity"), mlir::StringAttr::get(ctx, spec.severity)
-        ));
-
-        auto specDictAttr = mlir::DictionaryAttr::get(ctx, specAttrs);
-        contract_call_op->setAttr("contract.spec", specDictAttr);
-
-        // Set appropriate attributes based on operation type
-        set_instrumentation_call_attributes(contract_call_op, target_op);
-
-        if (should_inline) {
-            inline_worklists.push_back(contract_call_op);
-        }
-    }
-
-    void InstrumentationPass::apply_contract_after(
-        mlir::Operation *target_op, const ContractInformation &contract,
-        mlir::ModuleOp contract_module, bool should_inline
-    ) {
-        if (target_op == nullptr) {
-            LOG(ERROR
-            ) << "apply_contract_after: the passed function to be instrumented was null";
-            return;
-        }
-
-        const auto &spec = contract.spec.value();
-
-        mlir::OpBuilder builder(target_op);
-        auto module = target_op->getParentOfType< mlir::ModuleOp >();
-        builder.setInsertionPointAfter(target_op);
-
-        std::string contract_function_name = namifyFunction(spec.implementation.function_name);
-        auto input_types                   = llvm::to_vector(target_op->getResultTypes());
-        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            LOG(ERROR) << "Contract module not found or contract function not defined\n";
-            return;
-        }
-
-        // check if the patch function is already in the module, if not, merge it
-        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            auto result = merge_module_symbol(module, contract_module, contract_function_name);
-            if (mlir::failed(result)) {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-        } else {
-            LOG(INFO) << "Contract function " << contract_function_name
-                      << " already exists in module, skipping merge\n";
-        }
-
-        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
-        if (!contract_func) {
-            LOG(ERROR) << "Contract function " << contract_function_name
-                       << " not defined. Patching failed...\n";
-            return;
-        }
-
-        auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
-        llvm::SmallVector< mlir::Value > function_args;
-        prepare_contract_call_arguments(
-            builder, target_op, contract_func, contract, function_args
-        );
-        auto contract_call_op = builder.create< cir::CallOp >(
-            target_op->getLoc(), symbol_ref,
-            contract_func->getResultTypes().size() != 0
-                ? contract_func->getResultTypes().front()
-                : mlir::Type(),
-            function_args
-        );
-
-        // Set appropriate attributes based on operation type
-        set_instrumentation_call_attributes(contract_call_op, target_op);
-
-        if (should_inline) {
-            inline_worklists.push_back(contract_call_op);
-        }
-    }
-
-    void InstrumentationPass::apply_contract_at_entrypoint(
-        cir::CallOp call_op, const ContractInformation &contract,
-        mlir::ModuleOp contract_module, bool should_inline
-    ) {
-        if (call_op == nullptr) {
-            LOG(ERROR) << "apply_contract_at_entrypoint: the passed function to be "
-                          "instrumented was null";
-            return;
-        }
-
-        const auto &contract_spec = contract.spec.value();
-        std::string contract_function_name =
-            namifyFunction(contract_spec.implementation.function_name);
-        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            LOG(ERROR) << "Contract module not found or contract function not defined\n";
-            return;
-        }
-
-        auto module = call_op->getParentOfType< mlir::ModuleOp >();
-        assert(module && "Wrap around patch: no module found");
-        std::string callee_name     = call_op.getCallee()->str();
-        cir::FuncOp callee_function = module.lookupSymbol< cir::FuncOp >(callee_name);
-        mlir::Block &entry_block    = callee_function.getBody().front();
-
-        auto target_op = entry_block.getParentOp();
-        mlir::OpBuilder builder(target_op);
-        builder.setInsertionPointToStart(&entry_block);
-
-        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            auto result = merge_module_symbol(module, contract_module, contract_function_name);
-            if (mlir::failed(result)) {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-        } else {
-            LOG(INFO) << "Contract function " << contract_function_name
-                      << " already exists in module, skipping merge\n";
-        }
-
-        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
-        if (!contract_func) {
-            LOG(ERROR) << "Contract function " << contract_function_name
-                       << " not defined. Patching failed...\n";
-            return;
-        }
-
-        auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
-        llvm::SmallVector< mlir::Value > function_args;
-        prepare_contract_call_arguments(
-            builder, target_op, contract_func, contract, function_args
-        );
-        auto contract_call_op = builder.create< cir::CallOp >(
-            callee_function->getLoc(), symbol_ref,
-            contract_func->getResultTypes().size() != 0
-                ? contract_func->getResultTypes().front()
-                : mlir::Type(),
-            function_args
-        );
-
-        // Set appropriate attributes based on operation type
-        set_instrumentation_call_attributes(contract_call_op, call_op);
-
-        if (should_inline) {
-            inline_worklists.push_back(contract_call_op);
-        }
-    }
-
     void InstrumentationPass::apply_contract_action_to_targets(
         llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
         const contract::MetaContractConfig &meta_contract,
@@ -2195,20 +1988,20 @@ don't yet pass)
                               << "' \n";
                     switch (action.mode) {
                         case contract::InfoMode::APPLY_BEFORE:
-                            apply_contract_before(
-                                call_op, contract_to_apply, contract_module.get(),
+                            ContractOperationImpl::applyContractBefore(
+                                *this, call_op, contract_to_apply, contract_module.get(),
                                 meta_contract.optimization.contains("inline-patches")
                             );
                             break;
                         case contract::InfoMode::APPLY_AFTER:
-                            apply_contract_after(
-                                call_op, contract_to_apply, contract_module.get(),
+                            ContractOperationImpl::applyContractAfter(
+                                *this, call_op, contract_to_apply, contract_module.get(),
                                 meta_contract.optimization.contains("inline-patches")
                             );
                             break;
                         case contract::InfoMode::APPLY_AT_ENTRYPOINT:
-                            apply_contract_at_entrypoint(
-                                call_op, contract_to_apply, contract_module.get(),
+                            ContractOperationImpl::applyContractAtEntrypoint(
+                                *this, call_op, contract_to_apply, contract_module.get(),
                                 meta_contract.optimization.contains("inline-patches")
                             );
                             break;

@@ -6,45 +6,81 @@
  */
 
 #include "patchestry/Dialect/Contracts/ContractsDialect.hpp"
+
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/DialectImplementation.h"
 
 using namespace mlir;
 using namespace contracts;
 
-// Verify: exactly one of rhsVar or rhsConst
-static LogicalResult verifyCmpClauseAttr(
-    CmpKind pred, VarRefAttr lhs, VarRefAttr rhsVar, ConstIntAttr rhsConst,
-    function_ref< InFlightDiagnostic() > emitError
-) {
-    bool hasVar   = static_cast< bool >(rhsVar);
-    bool hasConst = static_cast< bool >(rhsConst);
-    if (hasVar == hasConst) {
-        return emitError() << "`cmp` needs exactly one of rhsVar or rhsConst";
+Attribute TargetAttr::parse(AsmParser &p, Type) {
+    if (failed(p.parseLess())) {
+        return {};
     }
-    return success();
-}
 
-LogicalResult cmpAttr::verify(
-    function_ref< InFlightDiagnostic() > emitError, CmpKind pred, VarRefAttr lhs,
-    VarRefAttr rhsVar, ConstIntAttr rhsConst
-) {
-    return verifyCmpClauseAttr(pred, lhs, rhsVar, rhsConst, emitError);
-}
-
-LogicalResult staticAttr::verify(
-    function_ref< InFlightDiagnostic() > emitError, mlir::StringAttr message,
-    mlir::Attribute expr
-) {
-    if (!llvm::isa< cmpAttr, all_ofAttr, any_ofAttr >(expr)) {
-        return emitError() << "expr must be cmp/all_of/any_of";
+    StringRef kw;
+    if (failed(p.parseKeyword(&kw))) {
+        return {};
     }
-    if (auto c = llvm::dyn_cast< cmpAttr >(expr)) {
-        if (failed(verifyCmpClauseAttr(
-                c.getPred(), c.getLhs(), c.getRhsVar(), c.getRhsConst(), emitError
-            )))
-        {
-            return failure();
+
+    TargetKind kind = TargetKind::ReturnValue;
+    uint64_t idx    = 0;
+    FlatSymbolRefAttr sym;
+
+    if (kw == "return_value") {
+        kind = TargetKind::ReturnValue;
+    } else if (kw == "symbol") {
+        kind = TargetKind::Symbol;
+        if (failed(p.parseOptionalKeyword("@"))) {
+            return (p.emitError(p.getCurrentLocation())
+                    << "expected '@' followed by symbol name"),
+                   Attribute();
         }
+
+        StringAttr symName;
+        if (failed(p.parseSymbolName(symName))) {
+            return {};
+        }
+        sym = FlatSymbolRefAttr::get(symName);
+    } else if (kw.consume_front("arg")) {
+        kind = TargetKind::Arg;
+        if (failed(p.parseInteger(idx))) {
+            return {};
+        }
+    } else {
+        p.emitError(p.getCurrentLocation()) << "expected 'return_value', 'symbol', or 'arg<N>'";
+        return {};
     }
-    return success();
+
+    if (failed(p.parseGreater())) {
+        return {};
+    }
+
+    return TargetAttr::get(
+        p.getContext(), kind, (kind == TargetKind::Arg) ? idx : 0,
+        (kind == TargetKind::Symbol) ? sym : FlatSymbolRefAttr()
+    );
+}
+
+void TargetAttr::print(AsmPrinter &printer) const {
+    printer << "<";
+    switch (getKind()) {
+        case TargetKind::ReturnValue:
+            printer << "return_value";
+            break;
+        case TargetKind::Symbol:
+            printer << "symbol ";
+            if (getSymbol()) {
+                printer.printAttributeWithoutType(getSymbol());
+            }
+            break;
+        case TargetKind::Arg:
+            printer << "arg";
+            if (getIndex() >= 0) {
+                printer << getIndex();
+            }
+            break;
+    }
+    printer << ">";
 }

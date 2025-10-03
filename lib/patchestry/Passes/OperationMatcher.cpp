@@ -155,7 +155,6 @@ namespace patchestry::passes {
                 return false;
             }
 
-            LOG(INFO) << "got past matches_arguments\n";
             // Check variable matches as one of the arguments
             if (!matches_variables(op, match.variable_matches)) {
                 LOG(ERROR) << "Callee function variables did not match expected function "

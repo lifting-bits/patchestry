@@ -22,12 +22,28 @@ using namespace contracts;
 
 ContractsDialect::ContractsDialect(MLIRContext *ctx)
     : Dialect(getDialectNamespace(), ctx, mlir::TypeID::get< ContractsDialect >()) {
-    addAttributes<
-#define GET_ATTRDEF_LIST
-#include "contracts/ContractsAttrs.h.inc"
-        >();
+    initialize();
 }
 
 void ContractsDialect::initialize() {
-    // Nothing else for attributes-only initial bring-up
+    addAttributes<
+#define GET_ATTRDEF_LIST
+#include "contracts/ContractsAttrs.cpp.inc"
+        >();
+}
+
+mlir::Attribute ContractsDialect::parseAttribute(mlir::DialectAsmParser &parser, mlir::Type type) const {
+    mlir::StringRef mnemonic;
+    mlir::Attribute attr;
+    auto parseResult = generatedAttributeParser(parser, &mnemonic, type, attr);
+    if (parseResult.has_value())
+        return attr;
+    parser.emitError(parser.getNameLoc(), "unknown contracts attribute: ") << mnemonic;
+    return {};
+}
+
+void ContractsDialect::printAttribute(mlir::Attribute attr, mlir::DialectAsmPrinter &os) const {
+    if (mlir::succeeded(generatedAttributePrinter(attr, os)))
+        return;
+    os << "<unknown contracts attribute>";
 }
