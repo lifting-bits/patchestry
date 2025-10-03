@@ -71,6 +71,17 @@ namespace patchestry::passes {
             std::vector< Action > action;
         };
 
+        struct StaticContractRequirement
+        {
+            std::string condition;
+            std::string description;
+        };
+
+        struct StaticContractSpec
+        {
+            std::vector< StaticContractRequirement > conditions_required;
+        };
+
         struct ContractSpec
         {
             std::string name;
@@ -78,7 +89,10 @@ namespace patchestry::passes {
             std::string description;
             std::string category;
             std::string severity;
-            Implementation implementation;
+            ContractType type; // "STATIC" or "RUNTIME"
+            std::optional< std::vector< StaticContractRequirement > >
+                constraints;                                // For static contracts
+            std::optional< Implementation > implementation; // For runtime contracts
             std::optional< std::string > contract_module;
         };
 
@@ -137,6 +151,8 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::MatchConfig)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::Action)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::ContractAction)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::ContractSpec)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::StaticContractRequirement)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::StaticContractSpec)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::MetaContractConfig)
 
 namespace llvm::yaml {
@@ -152,7 +168,19 @@ namespace llvm::yaml {
             io.mapOptional("description", spec.description);
             io.mapOptional("category", spec.category);
             io.mapOptional("severity", spec.severity);
-            io.mapRequired("implementation", spec.implementation);
+
+            std::string type_str;
+            io.mapRequired("type", type_str);
+            if (type_str == "STATIC") {
+                spec.type = ContractType::STATIC;
+            } else if (type_str == "RUNTIME") {
+                spec.type = ContractType::RUNTIME;
+            }
+            if (spec.type == ContractType::STATIC) {
+                io.mapOptional("constraints", spec.constraints);
+            } else if (spec.type == ContractType::RUNTIME) {
+                io.mapOptional("implementation", spec.implementation);
+            }
             io.mapOptional("contract_module", spec.contract_module);
         }
     };
@@ -244,6 +272,28 @@ namespace llvm::yaml {
                     + "' must include at least one 'contracts' entry."
                 );
             }
+        }
+    };
+
+    // Parse StaticContractSpec
+    template<>
+    struct MappingTraits< contract::StaticContractSpec >
+    {
+        static void mapping(IO &io, contract::StaticContractSpec &static_contract) {
+            io.mapRequired("requires", static_contract.conditions_required);
+            if (static_contract.conditions_required.empty()) {
+                io.setError("StaticContractSpec must include at least one 'requires' entry.");
+            }
+        }
+    };
+
+    // Parse StaticContractRequirement
+    template<>
+    struct MappingTraits< contract::StaticContractRequirement >
+    {
+        static void mapping(IO &io, contract::StaticContractRequirement &requirement) {
+            io.mapRequired("condition", requirement.condition);
+            io.mapOptional("description", requirement.description);
         }
     };
 
