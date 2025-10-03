@@ -366,14 +366,16 @@ namespace patchestry::passes {
         }
         for (auto &spec : config->libraries.contracts.contracts) {
             // Check contract type; assume 'type' field exists and can be "static" or "dynamic"
-            if (spec.type == "static") {
+            if (spec.type == ContractType::STATIC) {
                 // Perform any required validation or processing for static contracts here.
                 // For now, just log that a static contract was found.
-                LOG(INFO) << "Static contract '" << spec.name << "' does not require implementation file.\n";
+                LOG(INFO) << "Static contract '" << spec.name
+                          << "' does not require implementation file.\n";
                 continue;
             }
             if (!spec.implementation) {
-                LOG(ERROR) << "Non-static contract '" << spec.name << "' is missing implementation.\n";
+                LOG(ERROR) << "Non-static contract '" << spec.name
+                           << "' is missing implementation.\n";
                 continue;
             }
             auto contracts_file_path =
