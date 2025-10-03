@@ -125,7 +125,7 @@ namespace patchestry::passes {
         ));
         specAttrs.push_back(mlir::NamedAttribute(
             mlir::StringAttr::get(ctx, "mode"),
-            mlir::StringAttr::get(ctx, infoModeToString(mode))
+            mlir::StringAttr::get(ctx, std::string(infoModeToString(mode)))
         ));
 
         // add all_of attribute to the spec attributes
