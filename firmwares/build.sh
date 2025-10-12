@@ -8,7 +8,7 @@ mkdir -p "${script_dir}/repos"
 
 # Repository commit hashes
 PULSEOX_COMMIT="54ed8ca6bec36cc13db8f6594e3bd9941937922a"
-BLOODLIGHT_COMMIT="def737f481d6f0d16db4e94d7b26cbaae9838b41"
+BLOODLIGHT_COMMIT="a72435a52791cbbaec4dca9bbbc131b2b299bd61"
 
 # Clone/update repositories if needed
 if [ ! -d "${script_dir}/repos/pulseox-firmware" ]; then
@@ -22,7 +22,7 @@ if [ ! -d "${script_dir}/repos/pulseox-firmware" ]; then
 fi
 
 if [ ! -d "${script_dir}/repos/bloodlight-firmware" ]; then
-    git clone --depth 1 https://github.com/CodethinkLabs/bloodlight-firmware.git \
+    git clone --depth 1 https://github.com/kumarak/bloodlight-firmware.git \
         "${script_dir}/repos/bloodlight-firmware"
     cd "${script_dir}/repos/bloodlight-firmware"
     git fetch --depth=1 origin ${BLOODLIGHT_COMMIT}
@@ -38,7 +38,8 @@ docker run --rm \
     -v "${script_dir}/repos/pulseox-firmware:/work/pulseox-firmware" \
     -v "${script_dir}/output:/output" \
     firmware-builder \
-    bash -c "cd pulseox-firmware && \
+    -c "git config --global --add safe.directory /work/pulseox-firmware && \
+             cd pulseox-firmware && \
              cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake && \
              cmake --build build -j\$(nproc) && \
              cp build/src/firmware.elf /output/pulseox-firmware.elf"
@@ -48,7 +49,15 @@ docker run --rm \
     -v "${script_dir}/repos/bloodlight-firmware:/work/bloodlight-firmware" \
     -v "${script_dir}/output:/output" \
     firmware-builder \
-    bash -c "cd bloodlight-firmware && \
+    -c "git config --global --add safe.directory /work/bloodlight-firmware && \
+             cd bloodlight-firmware && \
              make -C firmware/libopencm3 && \
              make -C firmware -j\$(nproc) && \
-             cp firmware/bloodlight-firmware.elf /output/bloodlight-firmware.elf"
+             make -C host -j\$(nproc) && \
+             cp firmware/bloodlight-firmware.elf /output/bloodlight-firmware.elf && \
+             mkdir -p /output/bloodlight && \
+             cp -r host/build/bpm /output/bloodlight/bpm && \
+             cp -r host/build/normalize /output/bloodlight/normalize && \
+             cp -r host/build/bloodview /output/bloodlight/bloodview && \
+             cp -r host/build/fft /output/bloodlight/fft && \
+             cp -r host/build/calibrate /output/bloodlight/calibrate"
