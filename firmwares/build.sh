@@ -8,7 +8,7 @@ mkdir -p "${script_dir}/repos"
 
 # Repository commit hashes
 PULSEOX_COMMIT="54ed8ca6bec36cc13db8f6594e3bd9941937922a"
-BLOODLIGHT_COMMIT="a72435a52791cbbaec4dca9bbbc131b2b299bd61"
+BLOODLIGHT_COMMIT="fcc0daef9119ab09914b0c523e7d9d93aad36ea4"
 
 # Clone/update repositories if needed
 if [ ! -d "${script_dir}/repos/pulseox-firmware" ]; then
@@ -28,6 +28,7 @@ if [ ! -d "${script_dir}/repos/bloodlight-firmware" ]; then
     git fetch --depth=1 origin ${BLOODLIGHT_COMMIT}
     git checkout ${BLOODLIGHT_COMMIT}
     git submodule update --init --recursive
+    patch -s -p1 < "${script_dir}/bloodlight-firmware-patch.diff"
 fi
 
 # Build using Docker
@@ -53,7 +54,11 @@ docker run --rm \
              cd bloodlight-firmware && \
              make -C firmware/libopencm3 && \
              make -C firmware -j\$(nproc) && \
-             make -C host -j\$(nproc) && \
+             export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig && \
+             export PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig && \
+             BL_COMMIT=\$(git rev-parse --verify HEAD) && \
+             export CFLAGS=\"-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -DBL_REVISION=1 -DBL_COMMIT_SHA=\\\"\$BL_COMMIT\\\"\" && \
+             make -C host CC=arm-linux-gnueabihf-gcc REVISION=1 -j\$(nproc) && \
              cp firmware/bloodlight-firmware.elf /output/bloodlight-firmware.elf && \
              mkdir -p /output/bloodlight && \
              cp -r host/build/bpm /output/bloodlight/bpm && \

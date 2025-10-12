@@ -1,0 +1,22 @@
+diff --git a/host/Makefile b/host/Makefile
+--- a/host/Makefile
++++ b/host/Makefile
+@@ -2,7 +2,8 @@ VARIANT = release
+
+ BUILDDIR = build/$(VARIANT)
+
+-CFLAGS = -Wall -Wextra -pedantic --std=gnu11 -I..
++# Allow CFLAGS to be passed from environment/command line, append default flags
++CFLAGS += -Wall -Wextra -pedantic --std=gnu11 -I..
+
+ CFLAGS += -MMD -MP
+
+@@ -28,7 +29,7 @@ BV_LDFLAGS += -Lbloodview/libcyaml/$(BUILDDIR)/ -lcyaml
+ BLOODVIEW_ENV += XDG_RUNTIME_DIR=$(XDG_RUNTIME_DIR)
+
+ ifeq ($(VARIANT), release)
+-	CFLAGS += -O2 -DNDEBUG
++#	CFLAGS += -O2 -DNDEBUG
+ else
+ 	CFLAGS += -O0 -g -fsanitize=address -fsanitize=undefined -fno-sanitize-recover
+ 	LDFLAGS += -g -fsanitize=address -fsanitize=undefined -fno-sanitize-recover

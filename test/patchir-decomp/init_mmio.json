@@ -10,7 +10,7 @@
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // LL: define dso_local void @init_mmio(ptr %0, ptr %1, ptr %2)
 {
-  "arch": "x86",
+  "architecture": "x86",
   "id": "x86:LE:64:default",
   "format": "Executable and Linking Format (ELF)",
   "functions": {

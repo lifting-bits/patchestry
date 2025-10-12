@@ -10,7 +10,7 @@
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // LL: define dso_local i64 @open_memmap(i64 %0)
 {
-  "arch": "AARCH64",
+  "architecture": "AARCH64",
   "id": "AARCH64:LE:64:v8A",
   "format": "Executable and Linking Format (ELF)",
   "functions": {

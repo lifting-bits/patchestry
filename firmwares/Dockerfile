@@ -4,6 +4,9 @@ FROM ${IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# Enable armhf architecture for cross-compilation libraries
+RUN dpkg --add-architecture armhf
+
 # Install dependencies
 RUN apt-get update && \
     export DEBIAN_FRONTEND=noninteractive && \
@@ -11,6 +14,9 @@ RUN apt-get update && \
     build-essential \
     gcc-arm-none-eabi \
     libnewlib-arm-none-eabi \
+    gcc-arm-linux-gnueabihf \
+    g++-arm-linux-gnueabihf \
+    libc6-dev-armhf-cross \
     cmake \
     git \
     python3 \
@@ -21,7 +27,12 @@ RUN apt-get update && \
     libfftw3-dev \
     libsdl2-dev \
     libsdl2-ttf-dev \
-    libyaml-dev && \
+    libcyaml-dev:armhf \
+    libudev-dev:armhf \
+    libfftw3-dev:armhf \
+    libsdl2-dev:armhf \
+    libsdl2-ttf-dev:armhf \
+    libyaml-dev:armhf && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
     update-alternatives --install /usr/bin/python python /usr/bin/python3 1
