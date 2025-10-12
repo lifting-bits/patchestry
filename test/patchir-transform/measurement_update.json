@@ -22,7 +22,7 @@
 
 
 {
-  "arch": "ARM",
+  "architecture": "ARM",
   "id": "ARM:LE:32:v8",
   "format": "Executable and Linking Format (ELF)",
   "functions": {
