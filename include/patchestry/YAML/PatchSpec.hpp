@@ -73,13 +73,6 @@ namespace patchestry::passes {
             std::optional< std::string > patch_module;
         };
 
-        struct PatchLibrary
-        {
-            std::string api_version;
-            Metadata metadata;
-            std::vector< PatchSpec > patches;
-        };
-
         struct MetaPatchConfig
         {
             std::string name;
@@ -198,25 +191,6 @@ namespace llvm::yaml {
                 io.setError(
                     "PatchAction '" + patch_action.action_id
                     + "' must include at least one 'action' entry."
-                );
-            }
-        }
-    };
-
-    // Parse PatchLibrary
-    template<>
-    struct MappingTraits< patch::PatchLibrary >
-    {
-        static void mapping(IO &io, patch::PatchLibrary &library) {
-            io.mapOptional("apiVersion", library.api_version);
-            io.mapOptional("metadata", library.metadata);
-
-            // if the patches: block is included, there must be at least one patch
-            io.mapRequired("patches", library.patches);
-            if (library.patches.empty()) {
-                io.setError(
-                    "PatchLibrary '" + library.metadata.name
-                    + "' must include at least one 'patches' entry."
                 );
             }
         }

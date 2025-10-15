@@ -17,7 +17,6 @@ patches:
     severity: "high"
 
     implementation:
-      language: c
       code_file: "patches/patch_bl_spi_mode.c"
       function_name: "patch::before::cmp__bl_spi_mode"
       parameters:

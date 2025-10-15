@@ -17,7 +17,6 @@ patches:
     severity: high
     
     implementation:
-      language: c
       # this reference is in relation to the location of the meta-patch!
       code_file: "patches/patch_usbd_ep_write_packet.c"
       function_name: "patch::before::usbd_ep_write_packet"
@@ -38,7 +37,6 @@ patches:
     severity: high
 
     implementation:
-      language: c
       code_file: "patches/patch_usbd_ep_write_packet.c"
       function_name: "patch::after::usbd_ep_write_packet"
       parameters:
@@ -53,7 +51,6 @@ patches:
     severity: high
 
     implementation:
-      language: c
       code_file: "patches/patch_usbd_ep_write_packet.c"
       function_name: "patch::before::usbd_cp_write_packet::update_state"
       parameters:

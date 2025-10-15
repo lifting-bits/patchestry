@@ -8,7 +8,6 @@
 #pragma once
 
 #include <cstdint>
-#include <fstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -82,13 +81,6 @@ namespace patchestry::passes {
             std::optional< std::string > contract_module;
         };
 
-        struct ContractLibrary
-        {
-            std::string api_version;
-            Metadata metadata;
-            std::vector< ContractSpec > contracts;
-        };
-
         struct MetaContractConfig
         {
             std::string name;
@@ -113,24 +105,6 @@ namespace patchestry::passes {
         }
     } // namespace contract
 } // namespace patchestry::passes
-
-namespace patchestry::yaml {
-    using namespace patchestry::passes;
-
-    namespace utils {
-        [[maybe_unused]] static std::optional< contract::ContractLibrary >
-        loadContractLibrary(const std::string &file_path) {
-            YAMLParser parser;
-            auto result = parser.parse_from_file< contract::ContractLibrary >(file_path);
-            if (!result) {
-                LOG(ERROR) << "Failed to load contract library: " << file_path << "\n";
-                return std::nullopt;
-            }
-            return result;
-        }
-
-    } // namespace utils
-} // namespace patchestry::yaml
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::ArgumentSource)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::MatchConfig)
@@ -228,25 +202,6 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse ContractLibrary
-    template<>
-    struct MappingTraits< contract::ContractLibrary >
-    {
-        static void mapping(IO &io, contract::ContractLibrary &library) {
-            io.mapOptional("apiVersion", library.api_version);
-            io.mapOptional("metadata", library.metadata);
-
-            // if the contracts: block is included, there must be at least one contract
-            io.mapRequired("contracts", library.contracts);
-            if (library.contracts.empty()) {
-                io.setError(
-                    "ContractLibrary '" + library.metadata.name
-                    + "' must include at least one 'contracts' entry."
-                );
-            }
-        }
-    };
-
     // Parse MetaContractConfig
     template<>
     struct MappingTraits< contract::MetaContractConfig >
@@ -291,6 +246,7 @@ namespace llvm::yaml {
             io.mapRequired("name", arg.name);
             io.mapOptional("index", arg.index);
             io.mapOptional("symbol", arg.symbol);
+            io.mapOptional("value", arg.value);
         }
     };
 } // namespace llvm::yaml

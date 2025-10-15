@@ -17,7 +17,6 @@ patches:
     severity: "high"
 
     implementation:
-      language: c
       code_file: "patches/patch_spo2_lookup.c"
       function_name: "patch::before::spo2_lookup"
       parameters:
@@ -34,7 +33,6 @@ patches:
     severity: "high"
 
     implementation:
-      language: c
       code_file: "patches/patch_spo2_lookup.c"
       function_name: "patch::after::spo2_lookup"
       parameters:
@@ -50,7 +48,6 @@ patches:
     severity: "high"
 
     implementation:
-      language: c
       code_file: "patches/patch_spo2_lookup.c"
       function_name: "patch::before::spo2_lookup"
       parameters:
@@ -65,7 +62,6 @@ patches:
     severity: "high"
 
     implementation:
-      language: c
       code_file: "patches/patch_spo2_lookup.c"
       function_name: "patch::replace::spo2_lookup"
       parameters:

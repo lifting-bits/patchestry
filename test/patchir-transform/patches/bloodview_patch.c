@@ -2,7 +2,9 @@
 // Simplified implementation for cross-compilation without relying on libc headers
 // We'll provide minimal forward declarations needed for vsnprintf forwarding.
 // For ARM32, size_t is typically unsigned int (32-bit).
-typedef unsigned int size_t;
+
+#define USE_C99_TYPES
+#include "patchestry/intrinsics/patchestry_intrinsics.h"
 
 // Manual variadic argument handling for ARM32 AAPCS
 // Variadic arguments are passed on the stack after named parameters
@@ -54,13 +56,12 @@ int patch__replace__sprintf(char *dest, size_t dest_size, const char *format, ..
     return result;
 }
 
-/*
-#include "patchestry/intrinsics/patchestry_intrinsics.h"
 
-void contract__sprintf(int return_value, int dest_size)
+
+void contract__sprintf(int return_value, size_t dest_size)
 {
     // assert if return value is less than 0 or more than dest size
-    if(return_value < 0 || return_value > dest_size) {
-        patchestry_assert(0, "sprintf returned invalid value");
+    if(return_value < 0 || (size_t)return_value > dest_size) {
+        PATCHESTRY_ASSERT(0, "sprintf returned invalid value");
     }
-}*/
+}

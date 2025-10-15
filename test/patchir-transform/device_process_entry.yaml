@@ -15,12 +15,10 @@ target:
 libraries:
   # these references are in relation to the location of this file
   - "patches/bloodview_device_entry_patches.yaml"
-  - "contracts/bloodview_device_entry_contracts.yaml"
-# contracts: "patches/bloodview_device_entry_patches.yaml"
 
 execution_order:
   - "meta_patches::bloodview_device_entry_meta_patch"
- # - "meta_contracts::bloodview_device_entry_meta_contract"
+  - "meta_contracts::bloodview_device_entry_meta_contract"
 
 meta_patches:
   - name: bloodview_device_entry_meta_patch
@@ -58,26 +56,29 @@ meta_patches:
                 source: "operand"
                 index: 2
 
-#meta_contracts:
-#  - name: bloodview_device_entry_meta_contract
-#    id: "bloodview_device_entry_meta_contract"
-#    description: "Meta contracts for verifying the get device list in bloodview"
+meta_contracts:
+  - name: bloodview_device_entry_meta_contract
+    id: "bloodview_device_entry_meta_contract"
+    description: "Meta contracts for verifying the get device list in bloodview"
 
     # Contract Configuration
-#    contract_actions:
-#      - id: "USB-SECURITY-001"
-#        description: "Contract to verify the get device list in bloodview"
+    contract_actions:
+      - id: "SPRINTF-CONTRACT-001"
+        description: "Contract to verify the get device list in bloodview"
 
-#        match:
-#        - name: "patch__replace__sprintf"
-#          kind: "function"
-#          function_context:
-#            - name: "bl_device__process_entry"
+        match:
+        - name: "patch__replace__sprintf"
+          kind: "function"
+          function_context:
+            - name: "bl_device__process_entry"
 
-#        action:
-#        - mode: "apply_after"
-#          contract_id: "USB-CONTRACT-AFTER-001"
-#          description: "Post-execution verification"
-#          arguments:
-#            - name: "return_value"
-#              source: "return_value"
+        action:
+        - mode: "apply_after"
+          contract_id: "DEVICE-LIST-REPLACE-SPRINTF-CONTRACT-001"
+          description: "Post-execution verification"
+          arguments:
+            - name: "return_value"
+              source: "return_value"
+            - name: "dest_size"
+              source: "constant"
+              value: 32
