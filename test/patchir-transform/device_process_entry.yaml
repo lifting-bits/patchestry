@@ -13,9 +13,10 @@ target:
   arch: "ARM:LE:32"
 
 libraries:
- # these references are in relation to the location of this file
-  patches: "patches/bloodview_device_entry_patches.yaml"
-#  contracts: "patches/bloodview_device_entry_patches.yaml"
+  # these references are in relation to the location of this file
+  - "patches/bloodview_device_entry_patches.yaml"
+  - "contracts/bloodview_device_entry_contracts.yaml"
+# contracts: "patches/bloodview_device_entry_patches.yaml"
 
 execution_order:
   - "meta_patches::bloodview_device_entry_meta_patch"
@@ -28,34 +29,34 @@ meta_patches:
 
     # Patch Action Configuration
     patch_actions:
-       - id: "REPLACE-SPRINTF-001"
-         description: "Patch to add USB security"
+      - id: "REPLACE-SPRINTF-001"
+        description: "Patch to add USB security"
 
          # Match Configuration
-         match:
+        match:
           - name: "sprintf"
             kind: "function"
             function_context:
               - name: "bl_device__process_entry"
 
          # Actions to Apply
-         action:
+        action:
           - mode: "replace"
             patch_id: "DEVICE-LIST-REPLACE-SPRINTF-001"
             description: "Pre-validation security check"
             arguments:
               - name: "argument0"
                 source: "operand"
-                index: "0"
+                index: 0
               - name: "argument1"
                 source: "constant"
-                value: "32"
+                value: 32
               - name: "argument2"
                 source: "operand"
-                index: "1"
+                index: 1
               - name: "argument3"
                 source: "operand"
-                index: "2"
+                index: 2
 
 #meta_contracts:
 #  - name: bloodview_device_entry_meta_contract

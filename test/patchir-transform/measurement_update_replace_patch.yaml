@@ -9,7 +9,7 @@ metadata:
   created: "2025-07-28"
 
 libraries:
-  patches: "patches/measurement_update_patch.yaml"
+  - "patches/measurement_update_patch.yaml"
 
 target:
   binary: "test_binary.bin"

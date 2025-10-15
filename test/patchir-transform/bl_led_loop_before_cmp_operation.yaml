@@ -13,7 +13,7 @@ target:
   arch: "ARM:LE:32"
 
 libraries:
-  patches: "patches/led_loop_before_cmp_operation.yaml"
+  - "patches/led_loop_before_cmp_operation.yaml"
 
 execution_order:
   - "meta_patches::LED-LOOP-BEFORE-CMP-OPERATION"

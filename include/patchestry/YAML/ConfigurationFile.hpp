@@ -60,10 +60,12 @@ namespace patchestry::passes {
         std::string arch;
     };
 
-    struct Libraries
+    struct Library
     {
-        patch::PatchLibrary patches;
-        contract::ContractLibrary contracts;
+        std::string api_version;
+        Metadata metadata;
+        std::vector< patch::PatchSpec > patches;
+        std::vector< contract::ContractSpec > contracts;
     };
 
     struct Configuration
@@ -71,7 +73,7 @@ namespace patchestry::passes {
         std::string api_version;
         Metadata metadata;
         Target target;
-        Libraries libraries;
+        Library libraries;
         std::vector< std::string > execution_order;
         std::vector< patch::MetaPatchConfig > meta_patches;
         std::vector< contract::MetaContractConfig > meta_contracts;
@@ -82,6 +84,18 @@ namespace patchestry::yaml {
     using namespace patchestry::passes;
 
     namespace utils {
+
+        [[maybe_unused]] static std::optional< Library >
+        loadLibrary(const std::string &file_path) {
+            YAMLParser parser;
+            auto result = parser.parse_from_file< Library >(file_path);
+            if (!result) {
+                LOG(ERROR) << "Failed to load library: " << file_path << "\n";
+                return std::nullopt;
+            }
+            return result;
+        }
+
         [[maybe_unused]] static std::optional< Configuration >
         loadConfiguration(const std::string &file_path) {
             YAMLParser parser;
@@ -124,16 +138,16 @@ namespace patchestry::yaml {
         }
 
         [[maybe_unused]] static bool validateConfiguration(const Configuration &config) {
-            if (config.libraries.patches.patches.empty()) {
+            if (config.libraries.patches.empty()) {
                 LOG(WARNING) << "Patchestry configuration contains no patches\n";
             }
 
-            if (config.libraries.contracts.contracts.empty()) {
+            if (config.libraries.contracts.empty()) {
                 LOG(WARNING) << "Patchestry configuration contains no contracts\n";
             }
 
             // Validate each patch
-            for (const auto &patch : config.libraries.patches.patches) {
+            for (const auto &patch : config.libraries.patches) {
                 if (patch.name.empty()) {
                     LOG(ERROR) << "Patch specification missing name\n";
                     return false;
@@ -156,6 +170,7 @@ namespace patchestry::yaml {
 } // namespace patchestry::yaml
 
 namespace llvm::yaml {
+
     // Parse Target
     template<>
     struct MappingTraits< patchestry::passes::Target >
@@ -166,32 +181,21 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse Libraries
+    // Parse Library
     template<>
-    struct MappingTraits< patchestry::passes::Libraries >
+    struct MappingTraits< patchestry::passes::Library >
     {
-        static void mapping(IO &io, patchestry::passes::Libraries &libraries) {
-            // recursively parse libraries yaml files
-            std::string patches_file;
-            std::string contracts_file;
-            io.mapOptional("patches", patches_file);
-            io.mapOptional("contracts", contracts_file);
-            if (!patches_file.empty()) {
-                auto patches_config = patchestry::yaml::utils::loadPatchLibrary(patches_file);
-                if (!patches_config) {
-                    LOG(ERROR) << "Failed to load patch library: " << patches_file << "\n";
-                    return;
-                }
-                libraries.patches = patches_config.value();
-            }
-            if (!contracts_file.empty()) {
-                auto contracts_config =
-                    patchestry::yaml::utils::loadContractLibrary(contracts_file);
-                if (!contracts_config) {
-                    LOG(ERROR) << "Failed to load contract library: " << contracts_file << "\n";
-                    return;
-                }
-                libraries.contracts = contracts_config.value();
+        static void mapping(IO &io, patchestry::passes::Library &library) {
+            io.mapOptional("apiVersion", library.api_version);
+            io.mapOptional("metadata", library.metadata);
+            io.mapOptional("patches", library.patches);
+            io.mapOptional("contracts", library.contracts);
+
+            if (library.contracts.empty() && library.patches.empty()) {
+                io.setError(
+                    "Library '" + library.metadata.name
+                    + "' must include at least one 'patches' or 'contracts' entry."
+                );
             }
         }
     };
@@ -204,7 +208,37 @@ namespace llvm::yaml {
             io.mapOptional("apiVersion", config.api_version);
             io.mapOptional("metadata", config.metadata);
             io.mapOptional("target", config.target);
-            io.mapOptional("libraries", config.libraries);
+
+            // Parse libraries as array of file paths
+            std::vector< std::string > library_files;
+            io.mapOptional("libraries", library_files);
+
+            for (const auto &file : library_files) {
+                std::string resolved_path = ConfigurationFile::getInstance().resolve_path(file);
+
+                // Try loading as patch library
+                auto library = patchestry::yaml::utils::loadLibrary(resolved_path);
+                if (!library) {
+                    LOG(ERROR) << "Failed to load library: " << resolved_path << "\n";
+                    continue;
+                }
+                // check for api version mismatch
+                if (config.api_version != library.value().api_version) {
+                    LOG(ERROR) << "API version mismatch: " << config.libraries.api_version
+                               << " != " << library.value().api_version << "\n";
+                    continue;
+                }
+
+                config.libraries.patches.insert(
+                    config.libraries.patches.end(), library.value().patches.begin(),
+                    library.value().patches.end()
+                );
+                config.libraries.contracts.insert(
+                    config.libraries.contracts.end(), library.value().contracts.begin(),
+                    library.value().contracts.end()
+                );
+            }
+
             io.mapOptional("execution_order", config.execution_order);
             io.mapOptional("meta_patches", config.meta_patches);
             io.mapOptional("meta_contracts", config.meta_contracts);

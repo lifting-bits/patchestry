@@ -105,23 +105,6 @@ namespace patchestry::passes {
     } // namespace patch
 } // namespace patchestry::passes
 
-namespace patchestry::yaml {
-    using namespace patchestry::passes::patch;
-
-    namespace utils {
-        [[maybe_unused]] static std::optional< PatchLibrary >
-        loadPatchLibrary(const std::string &file_path) {
-            YAMLParser parser;
-            auto result = parser.parse_from_file< PatchLibrary >(file_path);
-            if (!result) {
-                LOG(ERROR) << "Failed to load patch library: " << file_path << "\n";
-                return std::nullopt;
-            }
-            return result;
-        }
-    } // namespace utils
-} // namespace patchestry::yaml
-
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::ArgumentSource)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::PatchSpec)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::MatchConfig)

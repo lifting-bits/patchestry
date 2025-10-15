@@ -14,8 +14,8 @@ target:
 
 libraries:
  # these references are in relation to the location of this file
-  patches: "patches/usb_security_patches.yaml"
-  contracts: "contracts/usb_security_contracts.yaml"
+  - "patches/usb_security_patches.yaml"
+  - "contracts/usb_security_contracts.yaml"
 
 execution_order:
   - "meta_patches::usb_security_meta_patches"

@@ -10,7 +10,7 @@ metadata:
 
 libraries:
   # this reference is in relation to the location of this file
-  patches: "patches/measurement_update_patch.yaml"
+  - "patches/measurement_update_patch.yaml"
 
 target:
   binary: "test_binary.bin"

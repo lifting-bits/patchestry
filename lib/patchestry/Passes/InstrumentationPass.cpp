@@ -356,7 +356,7 @@ don't yet pass)
         }
 
         config = std::move(config_or_err.value());
-        for (auto &spec : config->libraries.patches.patches) {
+        for (auto &spec : config->libraries.patches) {
             auto patches_file_path =
                 ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
             if (!llvm::sys::fs::exists(patches_file_path)) {
@@ -372,7 +372,7 @@ don't yet pass)
                 continue;
             }
         }
-        for (auto &spec : config->libraries.contracts.contracts) {
+        for (auto &spec : config->libraries.contracts) {
             auto contracts_file_path =
                 ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
             if (!llvm::sys::fs::exists(contracts_file_path)) {
@@ -497,7 +497,7 @@ don't yet pass)
             auto &action = patch_action.action[0];
 
             // Find the corresponding patch specification by patch_id
-            auto patch_spec = lookup(config->libraries.patches.patches, action.patch_id);
+            auto patch_spec = lookup(config->libraries.patches, action.patch_id);
             if (!patch_spec || patch_spec == std::nullopt) {
                 LOG(ERROR) << "Patch specification for ID '" << action.patch_id
                            << "' not found\n";
@@ -1960,7 +1960,7 @@ don't yet pass)
 
             // Find the corresponding specification by contract_id if possible, falling
             // back to name if needed
-            auto spec = lookup(config->libraries.contracts.contracts, action.contract_id);
+            auto spec = lookup(config->libraries.contracts, action.contract_id);
             if (!spec || spec == std::nullopt) {
                 LOG(ERROR) << "Contract specification for ID '" << action.contract_id
                            << "' not found\n";

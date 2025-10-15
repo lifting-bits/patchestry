@@ -84,8 +84,8 @@ void prettyPrint(const passes::Configuration &config) {
     }
 
     // Print patches
-    for (size_t i = 0; i < config.libraries.patches.patches.size(); ++i) {
-        const auto &patch = config.libraries.patches.patches[i];
+    for (size_t i = 0; i < config.libraries.patches.size(); ++i) {
+        const auto &patch = config.libraries.patches[i];
         llvm::outs() << "Patch " << (i + 1) << ": " << patch.name << "\n";
 
         llvm::outs() << "  Patch:\n";
@@ -99,7 +99,7 @@ void prettyPrint(const passes::Configuration &config) {
 
         // Print contracts
         llvm::outs() << "  Contracts:\n";
-        for (const auto &contract : config.libraries.contracts.contracts) {
+        for (const auto &contract : config.libraries.contracts) {
             llvm::outs() << "    Name: " << contract.name << "\n";
         }
 
@@ -170,11 +170,10 @@ int main(int argc, char **argv) {
 
     // Default action: show basic info
     if (!Pretty && !Serialize) {
-        llvm::outs() << "Number of patches: " << config->libraries.patches.patches.size()
-                     << "\n";
+        llvm::outs() << "Number of patches: " << config->libraries.patches.size() << "\n";
 
         llvm::outs() << "\nPatch names:\n";
-        for (const auto &patch : config->libraries.patches.patches) {
+        for (const auto &patch : config->libraries.patches) {
             llvm::outs() << "  - " << patch.name << "\n";
         }
     }
