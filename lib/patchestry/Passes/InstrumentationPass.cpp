@@ -96,6 +96,17 @@ namespace patchestry::passes {
             return result;
         }
 
+        std::string valueToString(mlir::Value value) {
+            std::string result;
+            llvm::raw_string_ostream os(result);
+            if (value) {
+                value.print(os);
+            } else {
+                os << "<null>";
+            }
+            return result;
+        }
+
         /**
          * @brief Classifies an MLIR type into a category for cast kind determination.
          *
@@ -661,17 +672,21 @@ don't yet pass)
 
     void InstrumentationPass::prepare_patch_call_arguments(
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
-        const PatchInformation &patch, llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
     ) {
         const auto &patch_action = patch.patch_action.value();
+        auto patch_func_type     = patch_func.getFunctionType();
+        bool is_variadic         = patch_func_type.isVarArg();
 
         // Handle structured argument specifications
-        for (size_t i = 0;
-             i < patch_action.action[0].arguments.size() && i < patch_func.getNumArguments();
+        for (size_t i = 0; i < patch_action.action[0].arguments.size()
+             && (i < patch_func.getNumArguments() || is_variadic);
              ++i)
         {
             const auto &arg_spec = patch_action.action[0].arguments[i];
-            auto patch_arg_type  = patch_func.getArgumentTypes()[i];
+            auto patch_arg_type  = is_variadic && (i > patch_func.getNumArguments() - 1)
+                 ? patch_func.getArgumentTypes().back()
+                 : patch_func.getArgumentTypes()[i];
 
             switch (arg_spec.source) {
                 case ArgumentSourceType::OPERAND:
@@ -701,10 +716,50 @@ don't yet pass)
         }
     }
 
+    void InstrumentationPass::update_state_after_patch(
+        mlir::OpBuilder &builder, cir::CallOp patch_call_op, mlir::Operation *target_op,
+        const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+    ) {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointAfter(patch_call_op);
+
+        mlir::DominanceInfo dominance_info(
+            patch_call_op->getParentOfType< mlir::FunctionOpInterface >()
+        );
+
+        const auto &patch_action = patch.patch_action.value();
+
+        for (auto &&[index, mapping] : llvm::enumerate(arg_map)) {
+            auto &arg_spec = patch_action.action[0].arguments[index];
+            if (!(arg_spec.is_reference && arg_spec.source == ArgumentSourceType::OPERAND)) {
+                continue;
+            }
+
+            mlir::Value old_arg = mapping.first;
+            mlir::Value new_arg = mapping.second;
+
+            auto load_op = builder.create< cir::LoadOp >(
+                old_arg.getLoc(), new_arg, /*isDeref=*/true, /*isVolatile=*/false,
+                /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
+                /*tbaa=*/mlir::ArrayAttr{}
+            );
+
+            auto cast_value =
+                create_cast_if_needed(builder, target_op, load_op, old_arg.getType());
+
+            old_arg.replaceUsesWithIf(
+                cast_value,
+                [&dominance_info, &cast_value](mlir::OpOperand &use) {
+                    return dominance_info.dominates(cast_value, use.getOwner());
+                }
+            );
+        }
+    }
+
     void InstrumentationPass::handle_operand_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
     ) {
         if (!arg_spec.index.has_value()) {
             LOG(ERROR) << "OPERAND source requires index field\n";
@@ -736,12 +791,15 @@ don't yet pass)
             arg_map[operand_value] =
                 create_cast_if_needed(builder, call_op, operand_value, patch_arg_type);
         }
+
+        LOG(DEBUG) << "arg_map[operand] key=" << valueToString(operand_value)
+                   << " value=" << valueToString(arg_map[operand_value]) << "\n";
     }
 
     void InstrumentationPass::handle_variable_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
     ) {
         if (!arg_spec.symbol.has_value()) {
             LOG(ERROR) << "VARIABLE source requires symbol field\n";
@@ -768,12 +826,15 @@ don't yet pass)
             arg_map[variable_reference] =
                 create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
         }
+
+        LOG(DEBUG) << "arg_map[variable] key=" << valueToString(variable_reference)
+                   << " value=" << valueToString(arg_map[variable_reference]) << "\n";
     }
 
     void InstrumentationPass::handle_symbol_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
     ) {
         if (!arg_spec.symbol.has_value()) {
             LOG(ERROR) << "SYMBOL source requires symbol field\n";
@@ -800,12 +861,15 @@ don't yet pass)
             arg_map[symbol_reference] =
                 create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
         }
+
+        LOG(DEBUG) << "arg_map[symbol] key=" << valueToString(symbol_reference)
+                   << " value=" << valueToString(arg_map[symbol_reference]) << "\n";
     }
 
     void InstrumentationPass::handle_return_value_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
     ) {
         if (call_op->getNumResults() == 0) {
             LOG(ERROR) << "Operation/function does not have a return value\n";
@@ -821,12 +885,15 @@ don't yet pass)
             arg_map[arg_value] =
                 create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
         }
+
+        LOG(DEBUG) << "arg_map[return] key=" << valueToString(arg_value)
+                   << " value=" << valueToString(arg_map[arg_value]) << "\n";
     }
 
     void InstrumentationPass::handle_constant_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
     ) {
         if (!arg_spec.value.has_value()) {
             LOG(ERROR) << "CONSTANT source requires value field\n";
@@ -842,6 +909,9 @@ don't yet pass)
         }
 
         arg_map[arg_value] = create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
+
+        LOG(DEBUG) << "arg_map[constant] key=" << valueToString(arg_value)
+                   << " value=" << valueToString(arg_map[arg_value]) << "\n";
     }
 
     mlir::Value InstrumentationPass::parse_constant_operand(
@@ -855,7 +925,9 @@ don't yet pass)
                     cir::IntType::get(
                         builder.getContext(), int_type.getWidth(), int_type.isSigned()
                     ),
-                    llvm::APSInt(int_type.getWidth(), int_val)
+                    llvm::APSInt(
+                        llvm::APInt(int_type.getWidth(), static_cast< uint64_t >(int_val)), int_type.isSigned()
+                    )
                 );
                 return builder.create< cir::ConstantOp >(call_op->getLoc(), int_type, attr);
             } catch (const std::exception &e) {
@@ -871,7 +943,7 @@ don't yet pass)
                     cir::IntType::get(
                         builder.getContext(), int_type.getWidth(), int_type.isSigned()
                     ),
-                    llvm::APSInt(int_type.getWidth(), ptr_val)
+                    llvm::APSInt(llvm::APInt(int_type.getWidth(), ptr_val), int_type.isSigned())
                 );
                 auto int_const =
                     builder.create< cir::ConstantOp >(call_op->getLoc(), int_type, int_attr);
@@ -1258,7 +1330,7 @@ don't yet pass)
 
         auto symbol_ref =
             mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-        llvm::DenseMap< mlir::Value, mlir::Value > function_args_map;
+        llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
         prepare_patch_call_arguments(builder, target_op, patch_func, patch, function_args_map);
         llvm::SmallVector< mlir::Value > new_function_args;
         for (auto &[old_arg, new_arg] : function_args_map) {
@@ -1267,33 +1339,11 @@ don't yet pass)
 
         auto patch_call_op = builder.create< cir::CallOp >(
             target_op->getLoc(), symbol_ref,
-            patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
-                                                     : mlir::Type(),
+            mlir::Type(), // return type is void for all apply before and after patches
             new_function_args
         );
 
-        mlir::OpBuilder::InsertionGuard guard(builder);
-        builder.setInsertionPointAfter(patch_call_op);
-        mlir::DominanceInfo DT(patch_call_op->getParentOfType< mlir::FunctionOpInterface >());
-
-        unsigned arg_index = 0;
-        // Replace all uses of old arguments with new arguments after patch function call
-        for (auto &[old_arg, new_arg] : function_args_map) {
-            auto arg_spec = patch_action.action[0].arguments[arg_index];
-            if (arg_spec.is_reference && arg_spec.source == ArgumentSourceType::OPERAND) {
-                auto load_op = builder.create< cir::LoadOp >(
-                    old_arg.getLoc(), new_arg, /*isDeref=*/true, /*isVolatile=*/false,
-                    /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
-                    /*tbaa=*/mlir::ArrayAttr{}
-                );
-                auto new_value =
-                    create_cast_if_needed(builder, target_op, load_op, old_arg.getType());
-                old_arg.replaceUsesWithIf(new_value, [&DT, &new_value](mlir::OpOperand &use) {
-                    return DT.dominates(new_value, use.getOwner());
-                });
-            }
-            arg_index++;
-        }
+        update_state_after_patch(builder, patch_call_op, target_op, patch, function_args_map);
 
         // Set appropriate attributes based on operation type
         set_instrumentation_call_attributes(patch_call_op, target_op);
@@ -1356,7 +1406,7 @@ don't yet pass)
 
         auto symbol_ref =
             mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-        llvm::DenseMap< mlir::Value, mlir::Value > function_args_map;
+        llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
         prepare_patch_call_arguments(builder, target_op, patch_func, patch, function_args_map);
         llvm::SmallVector< mlir::Value > function_args;
         for (auto &[old_arg, new_arg] : function_args_map) {
@@ -1364,10 +1414,11 @@ don't yet pass)
         }
         auto patch_call_op = builder.create< cir::CallOp >(
             target_op->getLoc(), symbol_ref,
-            patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
-                                                     : mlir::Type(),
+            mlir::Type(), // return type is void for all apply before and after patches
             function_args
         );
+
+        update_state_after_patch(builder, patch_call_op, target_op, patch, function_args_map);
 
         // Set appropriate attributes based on operation type
         set_instrumentation_call_attributes(patch_call_op, target_op);
@@ -1433,15 +1484,66 @@ don't yet pass)
         }
 
         auto wrap_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
-        auto wrap_call_op  = builder.create< cir::CallOp >(
-            loc, wrap_func_ref, result_types.size() != 0 ? result_types.front() : mlir::Type(),
-            call_op.getArgOperands()
+        llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+        prepare_patch_call_arguments(builder, call_op, wrap_func, patch, function_args_map);
+        llvm::SmallVector< mlir::Value > wrap_call_args;
+        for (auto &[old_arg, new_arg] : function_args_map) {
+            wrap_call_args.push_back(new_arg);
+        }
+        auto wrap_function_type = wrap_func.getFunctionType();
+        auto wrap_call_op = builder.create< cir::CallOp >(
+            loc, wrap_func_ref,
+            wrap_function_type ? wrap_function_type.getReturnType() : mlir::Type(),
+            wrap_call_args
         );
+
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointAfter(wrap_call_op);
+        mlir::DominanceInfo DT(wrap_call_op->getParentOfType< mlir::FunctionOpInterface >());
+
+        // Replace all uses of old call results with new call results
+        // Handle type mismatches by inserting casts as needed
+        auto call_num_results = call_op.getNumResults();
+        auto wrap_num_results = wrap_call_op.getNumResults();
+
+        if (call_num_results > 0) {
+            if (wrap_num_results == 0) {
+                LOG(ERROR) << "Patch function returns void but original function has "
+                           << call_num_results << " result(s)\n";
+                // For void replacement, we can't replace the uses, so this is an error
+                // But we'll try to continue by removing the old call if it's unused
+            } else {
+                unsigned result_index = 0;
+                for (auto result : wrap_call_op.getResults()) {
+                    if (result_index >= call_num_results) {
+                        break;
+                    }
+                    auto original_result = call_op.getResults()[result_index];
+                    if (original_result.getType() != result.getType()) {
+                        auto new_value = create_cast_if_needed(
+                            builder, wrap_call_op, result, original_result.getType()
+                        );
+                        original_result.replaceAllUsesWith(new_value);
+                    } else {
+                        // Types match, directly replace uses
+                        original_result.replaceAllUsesWith(result);
+                    }
+                    result_index++;
+                }
+            }
+        }
 
         // Set appropriate attributes based on operation type
         set_instrumentation_call_attributes(wrap_call_op, call_op);
 
-        call_op.replaceAllUsesWith(wrap_call_op);
+        // Check if there are any remaining uses before erasing
+        if (!call_op->use_empty()) {
+            LOG(ERROR) << "Cannot erase call_op, it still has uses. "
+                       << "Original results: " << call_num_results
+                       << ", Patch results: " << wrap_num_results << "\n";
+            return;
+        }
+
         call_op.erase();
 
         if (inline_patches) {

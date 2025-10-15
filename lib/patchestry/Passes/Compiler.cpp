@@ -14,6 +14,9 @@
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Parse/ParseAST.h>
 
+#include <llvm/ADT/StringRef.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
 
@@ -73,38 +76,8 @@ namespace patchestry::passes {
             return llvm::Triple::NoSubArch;
         }
 
-#ifdef __APPLE__
-        std::string getSDKPath() {
-            if (const char *sdk_path = std::getenv("SDKROOT")) {
-                return std::string(sdk_path);
-            }
-            // Try to detect SDK using xcrun
-
-            auto pipe_deleter = [](FILE *pipe) {
-                if (pipe) {
-                    pclose(pipe);
-                }
-            };
-            std::unique_ptr< FILE, decltype(pipe_deleter) > pipe(
-                popen("xcrun --show-sdk-path", "r"), pipe_deleter
-            );
-            if (!pipe) {
-                return {};
-            }
-
-            std::string xcrun_line;
-            std::array< char, 1024 > buffer;
-            while (std::fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-                xcrun_line += buffer.data();
-            }
-
-            if (!xcrun_line.empty() && xcrun_line.back() == '\n') {
-                xcrun_line.pop_back();
-            }
-
-            return xcrun_line;
-        }
-#endif
+        // Note: getSDKPath() function removed as we no longer use macOS SDK paths
+        // for cross-compilation to avoid platform-specific header conflicts
         std::string createTargetTriple(const std::string &lang) {
             llvm::Triple target_triple;
 
@@ -186,48 +159,82 @@ namespace patchestry::passes {
             return target_triple.str();
         }
 
+        std::optional< std::string > getClangResourceDir() {
+            if (const char *clang_resource = std::getenv("CLANG_RESOURCE_DIR")) {
+                if (!std::string(clang_resource).empty()) {
+                    return std::string(clang_resource);
+                }
+            }
+
+            std::array< char, 1024 > buffer{};
+            auto close_pipe = [](FILE *pipe) {
+                if (pipe != nullptr) {
+                    pclose(pipe);
+                }
+            };
+            std::unique_ptr< FILE, decltype(close_pipe) > pipe(
+                popen("clang --print-resource-dir 2>/dev/null", "r"), close_pipe
+            );
+
+            if (!pipe) {
+                return std::nullopt;
+            }
+
+            if (std::fgets(buffer.data(), static_cast< int >(buffer.size()), pipe.get())
+                == nullptr)
+            {
+                return std::nullopt;
+            }
+
+            std::string resource_dir = buffer.data();
+            if (!resource_dir.empty() && resource_dir.back() == '\n') {
+                resource_dir.pop_back();
+            }
+
+            if (resource_dir.empty()) {
+                return std::nullopt;
+            }
+
+            return resource_dir;
+        }
+
         std::vector< std::string > getPatchestryIncludePaths() {
             std::vector< std::string > paths;
 
-            // 1. Use CMake configured path first
+            if (auto resource_dir = getClangResourceDir()) {
+                llvm::SmallString< 256 > resource_include(resource_dir.value());
+                llvm::sys::path::append(resource_include, "include");
+                if (llvm::sys::fs::exists(resource_include)) {
+                    paths.push_back(std::string(resource_include));
+                }
+            }
+
+            // 2. Use CMake configured path
 #ifdef PATCHESTRY_INCLUDE_DIR
             paths.push_back(PATCHESTRY_INCLUDE_DIR);
 #endif
 
-            // 2. Check environment variable
+            // 3. Check environment variable
             if (const char *patchestry_root = std::getenv("PATCHESTRY_ROOT")) {
                 paths.push_back(std::string(patchestry_root) + "/include");
             }
 
-            // 3. Check CMAKE_INSTALL_PREFIX if available at runtime
+            // 4. Check CMAKE_INSTALL_PREFIX if available at runtime
             if (const char *install_prefix = std::getenv("CMAKE_INSTALL_PREFIX")) {
                 paths.push_back(std::string(install_prefix) + "/include");
             }
 
-            // 4. macOS SDK path detection
-#ifdef __APPLE__
-            std::string sdk_path = getSDKPath();
-            if (!sdk_path.empty()) {
-                paths.push_back(sdk_path + "/usr/include");
-                paths.push_back(sdk_path + "/usr/local/include");
-            }
-#endif
+            // 5. Note: We skip macOS SDK and system paths (/usr/include, etc.)
+            // because they are platform-specific and cause conflicts when
+            // cross-compiling for other platforms like ARM Linux.
+            // The Clang resource directory (added above) provides the necessary
+            // compiler built-in headers like stdarg.h.
 
-            // 5. Try standard system paths
-            paths.push_back("/usr/local/include");
-            paths.push_back("/usr/include");
+            // 6. Try relative include paths for project-specific headers
             paths.push_back("../include");
             paths.push_back("../../include");
             paths.push_back("../../../include");
             paths.push_back("include");
-
-            // 6. Try relative to executable (for development builds)
-            std::string exe_path = llvm::sys::fs::getMainExecutable(nullptr, nullptr);
-            if (!exe_path.empty()) {
-                llvm::SmallString< 256 > exe_dir = llvm::sys::path::parent_path(exe_path);
-                llvm::sys::path::append(exe_dir, "..", "include");
-                paths.push_back(std::string(exe_dir));
-            }
 
             std::vector< std::string > valid_paths;
             for (const auto &path : paths) {
@@ -300,8 +307,20 @@ namespace patchestry::passes {
 
             ci->getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
             ci->getLangOpts().C99               = true;
+            ci->getLangOpts().GNUMode   = true;  // Enable GNU extensions including builtins
+            ci->getLangOpts().NoBuiltin = false; // Enable builtin functions (NoBuiltin=false)
 
             auto &header_search_opts = ci->getHeaderSearchOpts();
+
+            // Set Clang's resource directory for built-in headers
+            // Try environment variable first, then clang command
+            auto resource_dir_opt    = getClangResourceDir();
+            std::string resource_dir = resource_dir_opt.value_or("");
+
+            if (!resource_dir.empty() && llvm::sys::fs::exists(resource_dir)) {
+                header_search_opts.ResourceDir = resource_dir;
+            }
+
             auto include_paths       = getPatchestryIncludePaths();
             for (const auto &path : include_paths) {
                 if (llvm::sys::fs::exists(path)) {

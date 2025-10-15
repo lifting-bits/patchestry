@@ -10,10 +10,11 @@
 #include <llvm/Support/FormatVariadic.h>
 #include <llvm/Support/raw_ostream.h>
 
-enum LogLevel { INFO, WARNING, ERROR };
+enum LogLevel { DEBUG, INFO, WARNING, ERROR };
 
 #define LOG(level) \
-    (((level) == INFO)          ? llvm::outs() << "[INFO] " \
+    (((level) == DEBUG)         ? llvm::outs() << "[DEBUG] " \
+         : ((level) == INFO)    ? llvm::outs() << "[INFO] " \
          : ((level) == WARNING) ? llvm::outs() << "[WARNING] " \
          : ((level) == ERROR)   ? llvm::errs() << "[ERROR] " \
                                 : llvm::outs() \
