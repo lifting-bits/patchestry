@@ -1,3 +1,4 @@
+// RUN: true
 // Simplified implementation for cross-compilation without relying on libc headers
 // We'll provide minimal forward declarations needed for vsnprintf forwarding.
 // For ARM32, size_t is typically unsigned int (32-bit).
@@ -18,6 +19,7 @@ typedef char* va_list;
 
 // External declarations - will be provided by the target system's C library
 int vsnprintf(char *str, size_t size, const char *format, va_list ap);
+
 
 /*
  * Replacement for legacy sprintf usage that enforces buffer length handling.
@@ -49,4 +51,14 @@ int patch__replace__sprintf(char *dest, size_t dest_size, const char *format, ..
     }
 
     return result;
+}
+
+#include "patchestry/intrinsics/safety.h"
+
+void contract__sprintf(int return_value, int dest_size)
+{
+    // assert if return value is less than 0 or more than dest size
+    if(return_value < 0 || return_value > dest_size) {
+        patchestry_assert(0, "sprintf returned invalid value");
+    }
 }
