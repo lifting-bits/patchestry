@@ -926,7 +926,7 @@ don't yet pass)
                         builder.getContext(), int_type.getWidth(), int_type.isSigned()
                     ),
                     llvm::APSInt(
-                        llvm::APInt(int_type.getWidth(), static_cast< uint64_t >(int_val)), true
+                        llvm::APInt(int_type.getWidth(), static_cast< uint64_t >(int_val)), int_type.isSigned()
                     )
                 );
                 return builder.create< cir::ConstantOp >(call_op->getLoc(), int_type, attr);
