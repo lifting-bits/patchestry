@@ -943,7 +943,7 @@ don't yet pass)
                     cir::IntType::get(
                         builder.getContext(), int_type.getWidth(), int_type.isSigned()
                     ),
-                    llvm::APSInt(llvm::APInt(int_type.getWidth(), ptr_val), false)
+                    llvm::APSInt(llvm::APInt(int_type.getWidth(), ptr_val), int_type.isSigned())
                 );
                 auto int_const =
                     builder.create< cir::ConstantOp >(call_op->getLoc(), int_type, int_attr);
