@@ -15,7 +15,6 @@ patches:
     severity: "high"
 
     implementation:
-      language: c
       code_file: "patches/bloodview_patch.c"
       function_name: "patch::replace::sprintf"
       parameters:
@@ -28,3 +27,22 @@ patches:
         - name: "argument2"
           type: "!cir.string"
           description: "Argument 2"
+
+
+contracts:
+  - name: "device_list_replace_sprintf_contract"
+    id: "DEVICE-LIST-REPLACE-SPRINTF-CONTRACT-001"
+    description: "Device list replace sprintf patch"
+    category: "device"
+    severity: "high"
+
+    implementation:
+      code_file: "patches/bloodview_patch.c"
+      function_name: "contract::sprintf"
+      parameters:
+        - name: "return_value"
+          type: "!cir.s32i"
+          description: "Return value"
+        - name: "dest_size"
+          type: "!cir.s32i"
+          description: "Destination size"

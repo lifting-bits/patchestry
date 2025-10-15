@@ -18,7 +18,6 @@ contracts:
     severity: "medium"
 
     implementation:
-      language: C
       # this reference is in relation to the location of the meta-contract!
       code_file: "contracts/usb_endpoint_write_validation.c"
       function_name: "contract::before::test_contract"
@@ -38,7 +37,6 @@ contracts:
     severity: "medium"
 
     implementation:
-      language: C
       # this reference is in relation to the location of the meta-contract!
       code_file: "contracts/usb_endpoint_write_validation.c"
       function_name: "contract::before::message_check_contract"

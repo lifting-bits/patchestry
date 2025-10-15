@@ -1062,7 +1062,7 @@ don't yet pass)
              i < action.action[0].arguments.size() && i < contract_func.getNumArguments(); ++i)
         {
             const auto &arg_spec = action.action[0].arguments[i];
-            auto arg_type        = contract_func.getArgumentTypes()[i];
+            auto contract_arg_type = contract_func.getArgumentTypes()[i];
             mlir::Value arg_value;
 
             switch (arg_spec.source) {
@@ -1211,58 +1211,12 @@ don't yet pass)
                         LOG(ERROR) << "CONSTANT source requires value field\n";
                         continue;
                     }
-
                     const std::string &const_value = arg_spec.value.value();
 
-                    // Parse constant based on contract function argument type
-                    if (auto int_type = mlir::dyn_cast< cir::IntType >(arg_type)) {
-                        try {
-                            // Parse integer constant
-                            int64_t int_val =
-                                std::stoll(const_value, nullptr, 0); // Support hex, oct, dec
-
-                            auto attr = cir::IntAttr::get(
-                                cir::IntType::get(
-                                    builder.getContext(), int_type.getWidth(),
-                                    int_type.isSigned()
-                                ),
-                                llvm::APSInt(int_type.getWidth(), int_val)
-                            );
-                            arg_value = builder.create< cir::ConstantOp >(
-                                call_op->getLoc(), arg_type, attr
-                            );
-                        } catch (const std::exception &e) {
-                            LOG(ERROR) << "Failed to parse integer constant '" << const_value
-                                       << "': " << e.what() << "\n";
-                            continue;
-                        }
-                    } else if (auto ptr_type = mlir::dyn_cast< cir::PointerType >(arg_type)) {
-                        try {
-                            // Parse pointer constant (usually hex address)
-                            uint64_t ptr_val = std::stoull(const_value, nullptr, 0);
-                            auto int_type = cir::IntType::get(builder.getContext(), 64, false);
-                            auto int_attr = cir::IntAttr::get(
-                                cir::IntType::get(
-                                    builder.getContext(), int_type.getWidth(),
-                                    int_type.isSigned()
-                                ),
-                                llvm::APSInt(int_type.getWidth(), ptr_val)
-                            );
-                            auto int_const = builder.create< cir::ConstantOp >(
-                                call_op->getLoc(), int_type, int_attr
-                            );
-                            arg_value = builder.create< cir::CastOp >(
-                                call_op->getLoc(), arg_type, cir::CastKind::int_to_ptr,
-                                int_const
-                            );
-                        } catch (const std::exception &e) {
-                            LOG(ERROR) << "Failed to parse pointer constant '" << const_value
-                                       << "': " << e.what() << "\n";
-                            continue;
-                        }
-                    } else {
-                        LOG(ERROR)
-                            << "Unsupported constant type for value '" << const_value << "'\n";
+                    arg_value = parse_constant_operand(
+                        builder, call_op, const_value, contract_arg_type
+                    );
+                    if (!arg_value) {
                         continue;
                     }
                     break;
@@ -1270,7 +1224,7 @@ don't yet pass)
             }
 
             if (arg_value) {
-                args.push_back(create_cast(arg_value, arg_type));
+                args.push_back(create_cast(arg_value, contract_arg_type));
             }
         }
     }
