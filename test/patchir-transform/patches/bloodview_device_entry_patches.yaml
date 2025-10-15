@@ -1,0 +1,30 @@
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "led_loop_before_cmp_operation"
+  version: "1.0.0"
+  description: "LED loop before cmp operation"
+  author: "Security Team"
+
+patches:
+  - name: "device_list_replace_sprintf_patch"
+    id: "DEVICE-LIST-REPLACE-SPRINTF-001"
+    description: "Device list replace sprintf patch"
+    category: "device"
+    severity: "high"
+
+    implementation:
+      language: c
+      code_file: "patches/bloodview_patch.c"
+      function_name: "patch::replace::sprintf"
+      parameters:
+        - name: "argument0"
+          type: "!cir.string"
+          description: "Argument 0"
+        - name: "argument1"
+          type: "!cir.size_t"
+          description: "Argument 1"
+        - name: "argument2"
+          type: "!cir.string"
+          description: "Argument 2"

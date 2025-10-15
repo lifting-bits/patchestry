@@ -211,7 +211,12 @@ namespace patchestry::passes { // NOLINT
          */
         void prepare_patch_call_arguments(
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
-            const PatchInformation &patch, llvm::DenseMap< mlir::Value, mlir::Value > &args_map
+            const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &args_map
+        );
+
+        void update_state_after_patch(
+            mlir::OpBuilder &builder, cir::CallOp patch_call_op, mlir::Operation *target_op,
+            const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
@@ -410,7 +415,7 @@ namespace patchestry::passes { // NOLINT
         void handle_operand_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
@@ -419,7 +424,7 @@ namespace patchestry::passes { // NOLINT
         void handle_variable_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
@@ -428,7 +433,7 @@ namespace patchestry::passes { // NOLINT
         void handle_symbol_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
@@ -437,7 +442,7 @@ namespace patchestry::passes { // NOLINT
         void handle_return_value_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
@@ -446,7 +451,7 @@ namespace patchestry::passes { // NOLINT
         void handle_constant_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::DenseMap< mlir::Value, mlir::Value > &arg_map
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
         );
 
         /**
