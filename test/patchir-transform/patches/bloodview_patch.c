@@ -53,6 +53,7 @@ int patch__replace__sprintf(char *dest, size_t dest_size, const char *format, ..
     return result;
 }
 
+/*
 #include "patchestry/intrinsics/patchestry_intrinsics.h"
 
 void contract__sprintf(int return_value, int dest_size)
@@ -61,4 +62,4 @@ void contract__sprintf(int return_value, int dest_size)
     if(return_value < 0 || return_value > dest_size) {
         patchestry_assert(0, "sprintf returned invalid value");
     }
-}
+}*/
