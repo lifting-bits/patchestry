@@ -53,7 +53,7 @@ int patch__replace__sprintf(char *dest, size_t dest_size, const char *format, ..
     return result;
 }
 
-#include "patchestry/intrinsics/safety.h"
+#include "patchestry/intrinsics/patchestry_intrinsics.h"
 
 void contract__sprintf(int return_value, int dest_size)
 {
