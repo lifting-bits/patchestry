@@ -6,12 +6,15 @@
  */
 
 #include <cstdlib>
+#include <map>
 #include <system_error>
-
 #include <clang/Basic/TargetInfo.h>
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <clang/CIR/LowerToLLVM.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/IR/DIBuilder.h>
+#include <llvm/IR/DebugInfoMetadata.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/InitLLVM.h>
@@ -19,6 +22,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/Dialect/LLVMIR/Transforms/Passes.h>
+#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/InitAllDialects.h>
 #include <mlir/Parser/Parser.h>
@@ -116,6 +120,219 @@ namespace {
         return prepareModuleDataLayout(module, triple);
     }
 
+    // Structure to hold collected string attributes from MLIR operations
+    struct OperationMetadata {
+        std::string operation_name;
+        std::string patchestry_operation;
+        // MLIR location information
+        std::string mlir_file;
+        unsigned mlir_line = 0;
+        unsigned mlir_column = 0;
+    };
+
+    // Collects string attributes from MLIR operations
+    std::vector< OperationMetadata > collectAttributes(mlir::ModuleOp module) {
+        std::vector< OperationMetadata > metadata_list;
+
+        // Get module name for fallback when mlir_file is empty or "-"
+        std::string module_name = module.getName() ? module.getName()->str() : "module";
+
+        module.walk([&](mlir::Operation *op) {
+            OperationMetadata metadata;
+            metadata.operation_name = op->getName().getStringRef().str();
+
+            // Extract MLIR location information
+            auto loc = op->getLoc();
+            if (auto file_loc = mlir::dyn_cast< mlir::FileLineColLoc >(loc)) {
+                metadata.mlir_file   = file_loc.getFilename().str();
+                // Replace empty or "-" with module name
+                if (metadata.mlir_file.empty() || metadata.mlir_file == "-") {
+                    metadata.mlir_file = module_name;
+                }
+                metadata.mlir_line   = file_loc.getLine();
+                metadata.mlir_column = file_loc.getColumn();
+            } else if (auto fused_loc = mlir::dyn_cast< mlir::FusedLoc >(loc)) {
+                // For fused locations, try to get the first file location
+                for (auto sub_loc : fused_loc.getLocations()) {
+                    if (auto file_loc = mlir::dyn_cast< mlir::FileLineColLoc >(sub_loc)) {
+                        metadata.mlir_file   = file_loc.getFilename().str();
+                        // Replace empty or "-" with module name
+                        if (metadata.mlir_file.empty() || metadata.mlir_file == "-") {
+                            metadata.mlir_file = module_name;
+                        }
+                        metadata.mlir_line   = file_loc.getLine();
+                        metadata.mlir_column = file_loc.getColumn();
+                        break;
+                    }
+                }
+            }
+
+            // Check for patchestry_operation attribute
+            if (auto attr = op->getAttrOfType<mlir::StringAttr>("patchestry_operation")) {
+                metadata.patchestry_operation = attr.getValue().str();
+                metadata_list.push_back(metadata);
+                LOG(INFO) << "Found patchestry_operation attribute: "
+                          << metadata.patchestry_operation
+                          << " on operation: " << metadata.operation_name;
+                if (!metadata.mlir_file.empty()) {
+                    LOG(INFO) << " at " << metadata.mlir_file << ":" << metadata.mlir_line << ":"
+                              << metadata.mlir_column;
+                }
+                LOG(INFO) << "\n";
+            }
+        });
+
+        return metadata_list;
+    }
+
+    // Structure to uniquely identify a source location
+    struct LocationKey {
+        std::string file;
+        unsigned line;
+        unsigned column;
+
+        bool operator<(const LocationKey &other) const {
+            if (file != other.file) {
+                return file < other.file;
+            }
+            if (line != other.line) {
+                return line < other.line;
+            }
+            return column < other.column;
+        }
+
+        bool operator==(const LocationKey &other) const {
+            return file == other.file && line == other.line && column == other.column;
+        }
+    };
+
+    // Embeds collected string attributes as debug information in LLVM IR
+    void embedDebugInformation(
+        llvm::Module &module, const std::vector<OperationMetadata> &metadata_list
+    ) {
+        if (metadata_list.empty()) {
+            LOG(INFO) << "No string attributes to embed as debug information\n";
+            return;
+        }
+
+        llvm::LLVMContext &context = module.getContext();
+
+        // Build a map from source location to metadata
+        // This allows us to match LLVM instructions with their original MLIR operations
+        std::map<LocationKey, const OperationMetadata *> location_to_metadata;
+
+        // Also build a map from line number only (for fallback matching)
+        std::multimap<unsigned, const OperationMetadata *> line_to_metadata;
+
+        for (const auto &metadata : metadata_list) {
+            if (!metadata.mlir_file.empty() && metadata.mlir_line > 0) {
+                LocationKey key{ metadata.mlir_file, metadata.mlir_line, metadata.mlir_column };
+                location_to_metadata[key] = &metadata;
+                line_to_metadata.insert({ metadata.mlir_line, &metadata });
+
+                LOG(INFO) << "Registered metadata for location: " << metadata.mlir_file << ":"
+                          << metadata.mlir_line << ":" << metadata.mlir_column
+                          << " op=" << metadata.operation_name;
+                if (!metadata.patchestry_operation.empty()) {
+                    LOG(INFO) << " patchestry_op=" << metadata.patchestry_operation;
+                }
+                LOG(INFO) << "\n";
+            }
+        }
+
+        unsigned matched_count      = 0;
+        unsigned total_instructions = 0;
+
+        // Iterate through all LLVM instructions
+        for (auto &func : module.functions()) {
+            for (auto &bb : func) {
+                for (auto &inst : bb) {
+                    total_instructions++;
+
+                    // Get the current debug location of the instruction (set during lowering)
+                    auto current_loc = inst.getDebugLoc();
+                    if (!current_loc) {
+                        continue; // Skip instructions without debug info
+                    }
+
+                    // Extract location information from the LLVM instruction
+                    unsigned llvm_line = current_loc.getLine();
+                    unsigned llvm_col  = current_loc.getCol();
+                    llvm::StringRef llvm_file =
+                        current_loc->getFile() ? current_loc->getFile()->getFilename() : "";
+
+                    if (llvm_file.empty() || llvm_line == 0) {
+                        continue;
+                    }
+
+                    // if llvm_file == "-" then use the source file name
+                    if (llvm_file == "-") {
+                        llvm_file = module.getSourceFileName();
+                    }
+
+                    // Try to find matching metadata based on location
+                    LocationKey key{ llvm_file.str(), llvm_line, llvm_col };
+                    auto it = location_to_metadata.find(key);
+
+                    const OperationMetadata *matched_metadata = nullptr;
+
+                    if (it != location_to_metadata.end()) {
+                        // Exact match found (file:line:column)
+                        matched_metadata = it->second;
+                        LOG(INFO) << "Exact match found for " << llvm_file.str() << ":"
+                                  << llvm_line << ":" << llvm_col << "\n";
+                    } else {
+                        // Try matching by file and line only (ignore column)
+                        for (auto &[loc_key, metadata] : location_to_metadata) {
+                            if (loc_key.file == llvm_file.str() && loc_key.line == llvm_line) {
+                                matched_metadata = metadata;
+                                LOG(INFO) << "Line match found for " << llvm_file.str() << ":"
+                                          << llvm_line << "\n";
+                                break;
+                            }
+                        }
+                    }
+
+                    // If we found matching metadata, attach custom patchestry metadata
+                    if (matched_metadata && !matched_metadata->patchestry_operation.empty()) {
+                        llvm::MDNode *md_node = llvm::MDNode::get(
+                            context,
+                            { llvm::MDString::get(context, "patchestry_operation"),
+                              llvm::MDString::get(
+                                  context, matched_metadata->patchestry_operation
+                              ) }
+                        );
+                        inst.setMetadata("patchestry", md_node);
+
+                        // Also add MLIR location information as metadata
+                        llvm::MDNode *mlir_loc_node = llvm::MDNode::get(
+                            context,
+                            { llvm::MDString::get(context, "mlir_location"),
+                              llvm::MDString::get(context, matched_metadata->mlir_file),
+                              llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+                                  llvm::Type::getInt32Ty(context), matched_metadata->mlir_line
+                              )),
+                              llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+                                  llvm::Type::getInt32Ty(context), matched_metadata->mlir_column
+                              )) }
+                        );
+                        inst.setMetadata("mlir_loc", mlir_loc_node);
+
+                        matched_count++;
+
+                        LOG(INFO)
+                            << "Attached patchestry metadata '"
+                            << matched_metadata->patchestry_operation << "' to instruction at "
+                            << llvm_file.str() << ":" << llvm_line << ":" << llvm_col << "\n";
+                    }
+                }
+            }
+        }
+
+        LOG(INFO) << "Embedded " << matched_count << " out of " << metadata_list.size()
+                  << " metadata entries (total instructions: " << total_instructions << ")\n";
+    }
+
     // Writes LLVM module to file either as bitcode or LLVM IR
     llvm::LogicalResult
     writeBitcodeToFile(llvm::Module &module, llvm::StringRef output_filename) {
@@ -166,12 +383,21 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    // Collect string attributes from MLIR operations before lowering
+    LOG(INFO) << "Collecting string attributes from MLIR module\n";
+    auto metadata_list = collectAttributes(module.get());
+
     llvm::LLVMContext llvm_context;
     auto llvm_module = cir::direct::lowerDirectlyFromCIRToLLVMIR(*module, llvm_context);
     if (!llvm_module) {
         LOG(ERROR) << "Failed to lower cir to llvm\n";
         return EXIT_FAILURE;
     }
+
+    // Embed collected string attributes as debug information in LLVM IR
+    LOG(INFO) << "Embedding string attributes as debug information\n";
+    embedDebugInformation(*llvm_module, metadata_list);
+
     auto err = writeBitcodeToFile(*llvm_module, output_filename);
     if (mlir::failed(err)) {
         LOG(ERROR) << "Failed to write bitcode to file\n";
