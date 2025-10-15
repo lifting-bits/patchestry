@@ -96,7 +96,7 @@ namespace patchestry::passes {
             return result;
         }
 
-        std::string valueToString(mlir::Value value) {
+        /*std::string valueToString(mlir::Value value) {
             std::string result;
             llvm::raw_string_ostream os(result);
             if (value) {
@@ -105,7 +105,7 @@ namespace patchestry::passes {
                 os << "<null>";
             }
             return result;
-        }
+        }*/
 
         /**
          * @brief Classifies an MLIR type into a category for cast kind determination.
