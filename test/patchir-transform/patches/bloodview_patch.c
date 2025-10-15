@@ -46,7 +46,8 @@ int patch__replace__sprintf(char *dest, size_t dest_size, const char *format, ..
     int result = vsnprintf(dest, dest_size, format, args);
     va_end(args);
 
-    if (dest_size > 0) {
+    // Only forcibly null-terminate if truncation occurred
+    if (dest_size > 0 && result >= (int)dest_size) {
         dest[dest_size - 1] = '\0';
     }
 
