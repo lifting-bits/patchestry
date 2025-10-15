@@ -214,12 +214,10 @@ namespace llvm::yaml {
             io.mapOptional("libraries", library_files);
 
             for (const auto &file : library_files) {
-                std::string resolved_path = ConfigurationFile::getInstance().resolve_path(file);
-
                 // Try loading as patch library
-                auto library = patchestry::yaml::utils::loadLibrary(resolved_path);
+                auto library = patchestry::yaml::utils::loadLibrary(file);
                 if (!library) {
-                    LOG(ERROR) << "Failed to load library: " << resolved_path << "\n";
+                    LOG(ERROR) << "Failed to load library: " << file << "\n";
                     continue;
                 }
                 // check for api version mismatch
