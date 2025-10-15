@@ -792,8 +792,8 @@ don't yet pass)
                 create_cast_if_needed(builder, call_op, operand_value, patch_arg_type);
         }
 
-        LOG(DEBUG) << "arg_map[operand] key=" << valueToString(operand_value)
-                   << " value=" << valueToString(arg_map[operand_value]) << "\n";
+        // LOG(DEBUG) << "arg_map[operand] key=" << valueToString(operand_value)
+        //            << " value=" << valueToString(arg_map[operand_value]) << "\n";
     }
 
     void InstrumentationPass::handle_variable_argument(
@@ -827,8 +827,8 @@ don't yet pass)
                 create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
         }
 
-        LOG(DEBUG) << "arg_map[variable] key=" << valueToString(variable_reference)
-                   << " value=" << valueToString(arg_map[variable_reference]) << "\n";
+        // LOG(DEBUG) << "arg_map[variable] key=" << valueToString(variable_reference)
+        //            << " value=" << valueToString(arg_map[variable_reference]) << "\n";
     }
 
     void InstrumentationPass::handle_symbol_argument(
@@ -862,8 +862,8 @@ don't yet pass)
                 create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
         }
 
-        LOG(DEBUG) << "arg_map[symbol] key=" << valueToString(symbol_reference)
-                   << " value=" << valueToString(arg_map[symbol_reference]) << "\n";
+        // LOG(DEBUG) << "arg_map[symbol] key=" << valueToString(symbol_reference)
+        //            << " value=" << valueToString(arg_map[symbol_reference]) << "\n";
     }
 
     void InstrumentationPass::handle_return_value_argument(
@@ -886,8 +886,8 @@ don't yet pass)
                 create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
         }
 
-        LOG(DEBUG) << "arg_map[return] key=" << valueToString(arg_value)
-                   << " value=" << valueToString(arg_map[arg_value]) << "\n";
+        // LOG(DEBUG) << "arg_map[return] key=" << valueToString(arg_value)
+        //        << " value=" << valueToString(arg_map[arg_value]) << "\n";
     }
 
     void InstrumentationPass::handle_constant_argument(
@@ -910,8 +910,8 @@ don't yet pass)
 
         arg_map[arg_value] = create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
 
-        LOG(DEBUG) << "arg_map[constant] key=" << valueToString(arg_value)
-                   << " value=" << valueToString(arg_map[arg_value]) << "\n";
+        // LOG(DEBUG) << "arg_map[constant] key=" << valueToString(arg_value)
+        //        << " value=" << valueToString(arg_map[arg_value]) << "\n";
     }
 
     mlir::Value InstrumentationPass::parse_constant_operand(
