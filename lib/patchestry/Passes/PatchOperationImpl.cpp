@@ -80,7 +80,7 @@ namespace patchestry::passes {
 
         auto symbol_ref =
             mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-        llvm::DenseMap< mlir::Value, mlir::Value > function_args_map;
+        llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
         pass.prepare_patch_call_arguments(
             builder, target_op, patch_func, patch, function_args_map
         );
@@ -173,7 +173,7 @@ namespace patchestry::passes {
 
         auto symbol_ref =
             mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-        llvm::DenseMap< mlir::Value, mlir::Value > function_args_map;
+        llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
         pass.prepare_patch_call_arguments(
             builder, target_op, patch_func, patch, function_args_map
         );
