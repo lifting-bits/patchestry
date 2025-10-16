@@ -264,18 +264,6 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse StaticContractSpec
-    template<>
-    struct MappingTraits< contract::StaticContractSpec >
-    {
-        static void mapping(IO &io, contract::StaticContractSpec &static_contract) {
-            io.mapRequired("requires", static_contract.conditions_required);
-            if (static_contract.conditions_required.empty()) {
-                io.setError("StaticContractSpec must include at least one 'requires' entry.");
-            }
-        }
-    };
-
     // Parse StaticContractRequirement
     template<>
     struct MappingTraits< contract::StaticContractRequirement >
