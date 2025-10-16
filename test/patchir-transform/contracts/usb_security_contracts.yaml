@@ -35,7 +35,7 @@ contracts:
     description: "Validate USB endpoint write"
     category: "write_validation"
     severity: "medium"
-    type: "STATIC"
+    type: "static"
 
     preconditions:
       - id: "precondition_1"
@@ -71,7 +71,7 @@ contracts:
     description: "Validate USB endpoint write at function entrypoint"
     category: "write_validation"
     severity: "medium"
-    type: "RUNTIME"
+    type: "runtime"
 
 
     implementation:
@@ -92,7 +92,7 @@ contracts:
     description: "Validate USB endpoint write at function entrypoint"
     category: "write_validation"
     severity: "medium"
-    type: "STATIC"
+    type: "static"
 
     preconditions:
       - id: "precondition_1"
