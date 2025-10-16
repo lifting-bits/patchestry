@@ -148,16 +148,7 @@ def Contract_PredicateAttr : AttrDef<Contract_Dialect, "predicate"> {
   );
   let mnemonic = "pred";
   let cppClassName = "PredicateAttr";
-  let assemblyFormat = [{
-    `<` $kind
-      ( `,` `target` `=` $target^ )?
-      ( `,` `relation` `=` $relation^ )?
-      ( `,` `value` `=` $value^ )?
-      ( `,` `align` `=` $align^ )?
-      ( `,` `expr` `=` $expr^ )?
-      ( `,` `range` `=` $range^ )?
-    `>`
-  }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 // Precondition with id and predicate
@@ -193,8 +184,7 @@ def Contract_StaticContractAttr : AttrDef<Contract_Dialect, "static"> {
   );
   let mnemonic = "static";
   let cppClassName = "StaticContractAttr";
-  let assemblyFormat = "`<` `pre` `=` `[` $preconditions `]` `,` "
-                       "`post` `=` `[` $postconditions `]` `>`";
+  let hasCustomAssemblyFormat = 1;
 }
 
 #endif // CONTRACT_DIALECT
