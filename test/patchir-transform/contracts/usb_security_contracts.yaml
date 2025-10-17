@@ -21,7 +21,7 @@ contracts:
     implementation:
       # this reference is in relation to the location of the meta-contract!
       code_file: "contracts/usb_endpoint_write_validation.c"
-      function_name: "contract::before::test_contract"
+      function_name: "contract::validate_buffer_write_before"
       parameters:
         - name: usb_device
           type: "usb_device*"
@@ -29,6 +29,9 @@ contracts:
         - name: buffer
           type: "const void*"
           description: "Data buffer to write"
+        - name: buffer_length
+          type: "unsigned int"
+          description: "Length of the data buffer to write"
 
   - name: "usb_endpoint_write_validation_contract_static"
     id: "USB-CONTRACT-STATIC-001"
@@ -42,28 +45,35 @@ contracts:
         pred:
           kind: "relation"
           target: "arg0"
-          relation: "eq"
+          relation: "ne"
           value: "0"
           symbol: "usb_device"
-          align: "1"
-          expr: "usb_device != NULL"
+      - id: "precondition_2"
+        pred:
+          kind: "relation"
+          target: "arg1"
+          relation: "ne"
+          value: "0"
+          symbol: "buffer"
+      - id: "precondition_3"
+        pred:
+          kind: "range"
+          target: "arg2"
+          relation: "none"
+          symbol: "buffer_length"
           range:
             min: "0"
-            max: "USB_MAX_PACKET_SIZE"
+            max: "512"
 
     postconditions:
       - id: "postcondition_1"
         pred:
-          kind: "relation"
-          target: "arg0"
-          relation: "gt"
-          value: "0"
-          symbol: "buffer_length"
-          align: "1"
-          expr: "buffer_length > 0"
+          kind: "range"
+          target: "return_value"
+          relation: "none"
           range:
             min: "0"
-            max: "USB_MAX_PACKET_SIZE"
+            max: "512"
   
   
   - name: "test_entrypoint_insertion"
