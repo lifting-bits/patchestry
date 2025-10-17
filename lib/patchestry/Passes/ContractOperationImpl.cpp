@@ -297,47 +297,34 @@ namespace patchestry::passes {
             }
         }
 
-        // Create the static contract attribute using the new dialect structure
-        // The new StaticContractAttr takes arrays of PreconditionAttr and PostconditionAttr
-        switch (mode) {
-            case ContractMode::APPLY_BEFORE:
-                // Preconditions are checked before the operation
-                if (!preconditionAttrs.empty()) {
-                    auto staticContract = ::contracts::StaticContractAttr::get(
-                        ctx, preconditionAttrs, llvm::ArrayRef< mlir::Attribute >{}
-                    );
-                    targetOp->setAttr("contract.static", staticContract);
-                } else {
-                    LOG(WARNING) << "No preconditions to apply for contract " << spec.id
-                                 << "\n";
-                    return;
-                }
-                break;
-
-            case ContractMode::APPLY_AFTER:
-                // Postconditions are checked after the operation
-                if (!postconditionAttrs.empty()) {
-                    auto staticContract = ::contracts::StaticContractAttr::get(
-                        ctx, llvm::ArrayRef< mlir::Attribute >{}, postconditionAttrs
-                    );
-                    targetOp->setAttr("contract.static", staticContract);
-                } else {
-                    LOG(WARNING) << "No postconditions to apply for contract " << spec.id
-                                 << "\n";
-                    return;
-                }
-                break;
-
-            default:
-                LOG(ERROR) << "Unsupported contract mode for static contracts: "
-                           << infoModeToString(mode) << "\n";
-                return;
+        // apply both preconditions and postconditions attributes without mode also handle if
+        // one is empty
+        if (!preconditionAttrs.empty() && !postconditionAttrs.empty()) {
+            auto staticContract = ::contracts::StaticContractAttr::get(
+                ctx, preconditionAttrs, postconditionAttrs
+            );
+            targetOp->setAttr("contract.static", staticContract);
+        } else if (!preconditionAttrs.empty()) {
+            auto staticContract = ::contracts::StaticContractAttr::get(
+                ctx, preconditionAttrs, llvm::ArrayRef< mlir::Attribute >{}
+            );
+            targetOp->setAttr("contract.static", staticContract);
+        } else if (!postconditionAttrs.empty()) {
+            auto staticContract = ::contracts::StaticContractAttr::get(
+                ctx, llvm::ArrayRef< mlir::Attribute >{}, postconditionAttrs
+            );
+            targetOp->setAttr("contract.static", staticContract);
+        } else {
+            LOG(WARNING) << "No preconditions or postconditions to apply for contract "
+                         << spec.id << "\n";
+            return;
         }
 
         (void) contractModule;
         (void) shouldInline;
         (void) pass;
         (void) builder;
+        (void) mode;
     }
 
     void ContractOperationImpl::applyContractBefore(
