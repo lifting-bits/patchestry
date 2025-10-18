@@ -377,6 +377,20 @@ namespace patchestry::passes { // NOLINT
         mlir::LogicalResult merge_module_symbol(
             mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
         );
+
+        /**
+         * @brief Ensures a function declaration exists in the destination module.
+         *
+         * This method checks if a function declaration exists in the destination module,
+         * and if not, creates one based on the function signature from the source module.
+         * This is useful for ensuring that patch and contract functions have proper
+         * declarations before they are called.
+         *
+         * @param dest The destination module
+         * @param func The function to create a declaration for
+         * @return mlir::LogicalResult Success or failure of the operation
+         */
+        mlir::LogicalResult insert_function_declaration(mlir::ModuleOp dest, cir::FuncOp func);
     };
 
 } // namespace patchestry::passes

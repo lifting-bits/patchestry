@@ -54,8 +54,18 @@ namespace patchestry::passes {
         std::string patch_function_name =
             namifyFunction(patch_spec.implementation.function_name);
         auto input_types = llvm::to_vector(target_op->getOperandTypes());
-        if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
+
+        auto patch_func_from_module =
+            patch_module.lookupSymbol< cir::FuncOp >(patch_function_name);
+        if (!patch_func_from_module) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
+            return;
+        }
+
+        // Ensure function declaration exists in the module first
+        if (mlir::failed(pass.insert_function_declaration(module, patch_func_from_module))) {
+            LOG(ERROR) << "Failed to ensure function declaration for " << patch_function_name
+                       << "\n";
             return;
         }
 
@@ -125,8 +135,18 @@ namespace patchestry::passes {
         std::string patch_function_name =
             namifyFunction(patch_spec.implementation.function_name);
         auto input_types = llvm::to_vector(target_op->getResultTypes());
-        if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
+
+        auto patch_func_from_module =
+            patch_module.lookupSymbol< cir::FuncOp >(patch_function_name);
+        if (!patch_func_from_module) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
+            return;
+        }
+
+        // Ensure function declaration exists in the module first
+        if (mlir::failed(pass.insert_function_declaration(module, patch_func_from_module))) {
+            LOG(ERROR) << "Failed to ensure function declaration for " << patch_function_name
+                       << "\n";
             return;
         }
 
@@ -195,8 +215,17 @@ namespace patchestry::passes {
         auto patch_function_name = namifyFunction(patch_spec.implementation.function_name);
         auto result_types        = llvm::to_vector(call_op.getResultTypes());
 
-        if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
+        auto patch_func_from_module =
+            patch_module.lookupSymbol< cir::FuncOp >(patch_function_name);
+        if (!patch_func_from_module) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
+            return;
+        }
+
+        // Ensure function declaration exists in the module first
+        if (mlir::failed(pass.insert_function_declaration(module, patch_func_from_module))) {
+            LOG(ERROR) << "Failed to ensure function declaration for " << patch_function_name
+                       << "\n";
             return;
         }
 

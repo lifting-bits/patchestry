@@ -47,9 +47,18 @@ namespace patchestry::passes {
         auto module                      = targetOp->getParentOfType< mlir::ModuleOp >();
         std::string contractFunctionName = namifyFunction(spec.implementation->function_name);
 
-        if (!contractModule.lookupSymbol< cir::FuncOp >(contractFunctionName)) {
+        auto contractFuncFromModule =
+            contractModule.lookupSymbol< cir::FuncOp >(contractFunctionName);
+        if (!contractFuncFromModule) {
             LOG(ERROR) << "Contract module not found or contract function not defined: "
                        << contractFunctionName << "\n";
+            return;
+        }
+
+        // Ensure function declaration exists in the module first
+        if (mlir::failed(pass.insert_function_declaration(module, contractFuncFromModule))) {
+            LOG(ERROR) << "Failed to ensure function declaration for " << contractFunctionName
+                       << "\n";
             return;
         }
 
@@ -409,13 +418,24 @@ namespace patchestry::passes {
         );
         std::string contract_function_name =
             namifyFunction(contract_spec.implementation->function_name);
-        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
+
+        auto contractFuncFromModule =
+            contract_module.lookupSymbol< cir::FuncOp >(contract_function_name);
+        if (!contractFuncFromModule) {
             LOG(ERROR) << "Contract module not found or contract function not defined\n";
             return;
         }
 
         auto module = call_op->getParentOfType< mlir::ModuleOp >();
         assert(module && "Wrap around patch: no module found");
+
+        // Ensure function declaration exists in the module first
+        if (mlir::failed(pass.insert_function_declaration(module, contractFuncFromModule))) {
+            LOG(ERROR) << "Failed to ensure function declaration for " << contract_function_name
+                       << "\n";
+            return;
+        }
+
         std::string callee_name     = call_op.getCallee()->str();
         cir::FuncOp callee_function = module.lookupSymbol< cir::FuncOp >(callee_name);
         mlir::Block &entry_block    = callee_function.getBody().front();
