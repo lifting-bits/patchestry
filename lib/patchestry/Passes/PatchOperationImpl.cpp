@@ -62,13 +62,6 @@ namespace patchestry::passes {
             return;
         }
 
-        // Ensure function declaration exists in the module first
-        if (mlir::failed(pass.insert_function_declaration(module, patch_func_from_module))) {
-            LOG(ERROR) << "Failed to ensure function declaration for " << patch_function_name
-                       << "\n";
-            return;
-        }
-
         // check if the patch function is already in the module, if not, merge it
         if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             auto result = pass.merge_module_symbol(module, patch_module, patch_function_name);
@@ -143,13 +136,6 @@ namespace patchestry::passes {
             return;
         }
 
-        // Ensure function declaration exists in the module first
-        if (mlir::failed(pass.insert_function_declaration(module, patch_func_from_module))) {
-            LOG(ERROR) << "Failed to ensure function declaration for " << patch_function_name
-                       << "\n";
-            return;
-        }
-
         // check if the patch function is already in the module, if not, merge it
         if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
             auto result = pass.merge_module_symbol(module, patch_module, patch_function_name);
@@ -219,13 +205,6 @@ namespace patchestry::passes {
             patch_module.lookupSymbol< cir::FuncOp >(patch_function_name);
         if (!patch_func_from_module) {
             LOG(ERROR) << "Patch module not found or patch function not defined\n";
-            return;
-        }
-
-        // Ensure function declaration exists in the module first
-        if (mlir::failed(pass.insert_function_declaration(module, patch_func_from_module))) {
-            LOG(ERROR) << "Failed to ensure function declaration for " << patch_function_name
-                       << "\n";
             return;
         }
 

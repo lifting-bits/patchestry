@@ -1513,67 +1513,6 @@ namespace patchestry::passes {
     }
 
     /**
-     * @brief Ensures a function declaration exists in the destination module.
-     *
-     * This method checks if a function declaration exists in the destination module,
-     * and if not, creates one based on the function signature from the source function.
-     * This is particularly useful for patch and contract functions where we want to
-     * ensure a declaration is available before calls are made.
-     *
-     * @param dest The destination module
-     * @param func The function to ensure a declaration for
-     * @return mlir::LogicalResult Success or failure of the operation
-     */
-    mlir::LogicalResult
-    InstrumentationPass::insert_function_declaration(mlir::ModuleOp dest, cir::FuncOp func) {
-        if (!func) {
-            LOG(ERROR) << "Cannot create declaration for null function\n";
-            return mlir::failure();
-        }
-
-        auto func_name = func.getSymName().str();
-        mlir::SymbolTable dest_sym_table(dest);
-
-        // Check if function already exists in destination
-        // TODO: Can the patch function name collide with the other functions in the module?
-        // Make sure the patch and contract function name is unique
-        if (auto existing = dest_sym_table.lookup< cir::FuncOp >(func_name)) {
-            // Function already exists (either declaration or definition)
-            // Make sure the declaration is inserted before the definition
-            LOG(INFO) << "Function " << func_name << " already exists in module\n";
-            return mlir::success();
-        }
-
-        // Create a function declaration (function without body)
-        mlir::OpBuilder builder(dest.getContext());
-        builder.setInsertionPointToEnd(dest.getBody());
-
-        // Clone the function without its body (declaration only)
-        auto func_type = func.getFunctionType();
-        auto new_func  = builder.create< cir::FuncOp >(
-            func.getLoc(), func_name, func_type,
-            /*linkage=*/cir::GlobalLinkageKind::ExternalLinkage
-        );
-
-        // Set visibility to private for declarations (public visibility not allowed)
-        new_func.setSymVisibilityAttr(mlir::StringAttr::get(dest.getContext(), "private"));
-
-        // Set extra_attrs attribute (required by cir.func)
-        if (auto extra_attrs = func.getExtraAttrsAttr()) {
-            new_func.setExtraAttrsAttr(extra_attrs);
-        } else {
-            // Create empty extra attributes if source function doesn't have them
-            mlir::NamedAttrList empty;
-            new_func.setExtraAttrsAttr(cir::ExtraFuncAttributesAttr::get(
-                dest.getContext(), empty.getDictionary(dest.getContext())
-            ));
-        }
-
-        LOG(INFO) << "Created declaration for function " << func_name << " in module\n";
-        return mlir::success();
-    }
-
-    /**
      * @brief Inlines a function call operation.
      *
      * This method performs function inlining by replacing a call operation with the
