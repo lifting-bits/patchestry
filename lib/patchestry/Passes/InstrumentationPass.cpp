@@ -74,6 +74,18 @@ namespace patchestry::passes {
         ComplexFloat
     };
 
+    /**
+     * @brief Emits a module from a source file as a string representation.
+     *
+     * This function compiles a source file (C/C++) to MLIR CIR and returns its
+     * string representation. Used to load patch and contract implementation files.
+     *
+     * @param filename Path to the source file to compile
+     * @param lang Target architecture and language specification (format:
+     * arch:endian:bits:variant)
+     * @return std::optional<std::string> The MLIR module string if successful, std::nullopt
+     * otherwise
+     */
     std::optional< std::string >
     emitModuleAsString(const std::string &filename, const std::string &lang); // NOLINT
 
@@ -1473,9 +1485,91 @@ namespace patchestry::passes {
 
         // Second pass: copy all collected symbols
         for (auto *op : symbols_to_copy) {
-            dest.push_back(op->clone());
+            auto cloned_op = op->clone();
+
+            // Ensure cir.func operations have the required extra_attrs attribute
+            // and proper visibility settings
+            if (auto func_op = mlir::dyn_cast< cir::FuncOp >(cloned_op)) {
+                if (!func_op.getExtraAttrsAttr()) {
+                    // Create empty extra attributes if not present
+                    mlir::NamedAttrList empty;
+                    func_op.setExtraAttrsAttr(cir::ExtraFuncAttributesAttr::get(
+                        dest.getContext(), empty.getDictionary(dest.getContext())
+                    ));
+                }
+
+                // If this is a declaration (no body), set visibility to private
+                if (func_op.isDeclaration()) {
+                    func_op.setSymVisibilityAttr(
+                        mlir::StringAttr::get(dest.getContext(), "private")
+                    );
+                }
+            }
+
+            dest.push_back(cloned_op);
         }
 
+        return mlir::success();
+    }
+
+    /**
+     * @brief Ensures a function declaration exists in the destination module.
+     *
+     * This method checks if a function declaration exists in the destination module,
+     * and if not, creates one based on the function signature from the source function.
+     * This is particularly useful for patch and contract functions where we want to
+     * ensure a declaration is available before calls are made.
+     *
+     * @param dest The destination module
+     * @param func The function to ensure a declaration for
+     * @return mlir::LogicalResult Success or failure of the operation
+     */
+    mlir::LogicalResult
+    InstrumentationPass::insert_function_declaration(mlir::ModuleOp dest, cir::FuncOp func) {
+        if (!func) {
+            LOG(ERROR) << "Cannot create declaration for null function\n";
+            return mlir::failure();
+        }
+
+        auto func_name = func.getSymName().str();
+        mlir::SymbolTable dest_sym_table(dest);
+
+        // Check if function already exists in destination
+        // TODO: Can the patch function name collide with the other functions in the module?
+        // Make sure the patch and contract function name is unique
+        if (auto existing = dest_sym_table.lookup< cir::FuncOp >(func_name)) {
+            // Function already exists (either declaration or definition)
+            // Make sure the declaration is inserted before the definition
+            LOG(INFO) << "Function " << func_name << " already exists in module\n";
+            return mlir::success();
+        }
+
+        // Create a function declaration (function without body)
+        mlir::OpBuilder builder(dest.getContext());
+        builder.setInsertionPointToEnd(dest.getBody());
+
+        // Clone the function without its body (declaration only)
+        auto func_type = func.getFunctionType();
+        auto new_func  = builder.create< cir::FuncOp >(
+            func.getLoc(), func_name, func_type,
+            /*linkage=*/cir::GlobalLinkageKind::ExternalLinkage
+        );
+
+        // Set visibility to private for declarations (public visibility not allowed)
+        new_func.setSymVisibilityAttr(mlir::StringAttr::get(dest.getContext(), "private"));
+
+        // Set extra_attrs attribute (required by cir.func)
+        if (auto extra_attrs = func.getExtraAttrsAttr()) {
+            new_func.setExtraAttrsAttr(extra_attrs);
+        } else {
+            // Create empty extra attributes if source function doesn't have them
+            mlir::NamedAttrList empty;
+            new_func.setExtraAttrsAttr(cir::ExtraFuncAttributesAttr::get(
+                dest.getContext(), empty.getDictionary(dest.getContext())
+            ));
+        }
+
+        LOG(INFO) << "Created declaration for function " << func_name << " in module\n";
         return mlir::success();
     }
 
