@@ -55,13 +55,6 @@ namespace patchestry::passes {
             return;
         }
 
-        // Ensure function declaration exists in the module first
-        if (mlir::failed(pass.insert_function_declaration(module, contractFuncFromModule))) {
-            LOG(ERROR) << "Failed to ensure function declaration for " << contractFunctionName
-                       << "\n";
-            return;
-        }
-
         auto contractFunc = module.lookupSymbol< cir::FuncOp >(contractFunctionName);
         if (!contractFunc) {
             if (mlir::failed(
@@ -428,13 +421,6 @@ namespace patchestry::passes {
 
         auto module = call_op->getParentOfType< mlir::ModuleOp >();
         assert(module && "Wrap around patch: no module found");
-
-        // Ensure function declaration exists in the module first
-        if (mlir::failed(pass.insert_function_declaration(module, contractFuncFromModule))) {
-            LOG(ERROR) << "Failed to ensure function declaration for " << contract_function_name
-                       << "\n";
-            return;
-        }
 
         std::string callee_name     = call_op.getCallee()->str();
         cir::FuncOp callee_function = module.lookupSymbol< cir::FuncOp >(callee_name);
