@@ -91,33 +91,11 @@ namespace patchestry::passes {
 
         auto patch_call_op = builder.create< cir::CallOp >(
             target_op->getLoc(), symbol_ref,
-            patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
-                                                     : mlir::Type(),
+            mlir::Type(), // return type is void for all apply before and after patches
             new_function_args
         );
 
-        mlir::OpBuilder::InsertionGuard guard(builder);
-        builder.setInsertionPointAfter(patch_call_op);
-        mlir::DominanceInfo DT(patch_call_op->getParentOfType< mlir::FunctionOpInterface >());
-
-        unsigned arg_index = 0;
-        // Replace all uses of old arguments with new arguments after patch function call
-        for (auto &[old_arg, new_arg] : function_args_map) {
-            auto arg_spec = patch_action.action[0].arguments[arg_index];
-            if (arg_spec.is_reference && arg_spec.source == ArgumentSourceType::OPERAND) {
-                auto load_op = builder.create< cir::LoadOp >(
-                    old_arg.getLoc(), new_arg, /*isDeref=*/true, /*isVolatile=*/false,
-                    /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
-                    /*tbaa=*/mlir::ArrayAttr{}
-                );
-                auto new_value =
-                    pass.create_cast_if_needed(builder, target_op, load_op, old_arg.getType());
-                old_arg.replaceUsesWithIf(new_value, [&DT, &new_value](mlir::OpOperand &use) {
-                    return DT.dominates(new_value, use.getOwner());
-                });
-            }
-            arg_index++;
-        }
+        pass.update_state_after_patch(builder, patch_call_op, target_op, patch, function_args_map);
 
         // Set appropriate attributes based on operation type
         pass.set_instrumentation_call_attributes(patch_call_op, target_op);
@@ -183,10 +161,11 @@ namespace patchestry::passes {
         }
         auto patch_call_op = builder.create< cir::CallOp >(
             target_op->getLoc(), symbol_ref,
-            patch_func->getResultTypes().size() != 0 ? patch_func->getResultTypes().front()
-                                                     : mlir::Type(),
+            mlir::Type(), // return type is void for all apply before and after patches
             function_args
         );
+
+        pass.update_state_after_patch(builder, patch_call_op, target_op, patch, function_args_map);
 
         // Set appropriate attributes based on operation type
         pass.set_instrumentation_call_attributes(patch_call_op, target_op);
@@ -242,15 +221,66 @@ namespace patchestry::passes {
         }
 
         auto wrap_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
-        auto wrap_call_op  = builder.create< cir::CallOp >(
-            loc, wrap_func_ref, result_types.size() != 0 ? result_types.front() : mlir::Type(),
-            call_op.getArgOperands()
+        llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+        pass.prepare_patch_call_arguments(builder, call_op, wrap_func, patch, function_args_map);
+        llvm::SmallVector< mlir::Value > wrap_call_args;
+        for (auto &[old_arg, new_arg] : function_args_map) {
+            wrap_call_args.push_back(new_arg);
+        }
+        auto wrap_function_type = wrap_func.getFunctionType();
+        auto wrap_call_op = builder.create< cir::CallOp >(
+            loc, wrap_func_ref,
+            wrap_function_type ? wrap_function_type.getReturnType() : mlir::Type(),
+            wrap_call_args
         );
+
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointAfter(wrap_call_op);
+        mlir::DominanceInfo DT(wrap_call_op->getParentOfType< mlir::FunctionOpInterface >());
+
+        // Replace all uses of old call results with new call results
+        // Handle type mismatches by inserting casts as needed
+        auto call_num_results = call_op.getNumResults();
+        auto wrap_num_results = wrap_call_op.getNumResults();
+
+        if (call_num_results > 0) {
+            if (wrap_num_results == 0) {
+                LOG(ERROR) << "Patch function returns void but original function has "
+                           << call_num_results << " result(s)\n";
+                // For void replacement, we can't replace the uses, so this is an error
+                // But we'll try to continue by removing the old call if it's unused
+            } else {
+                unsigned result_index = 0;
+                for (auto result : wrap_call_op.getResults()) {
+                    if (result_index >= call_num_results) {
+                        break;
+                    }
+                    auto original_result = call_op.getResults()[result_index];
+                    if (original_result.getType() != result.getType()) {
+                        auto new_value = pass.create_cast_if_needed(
+                            builder, wrap_call_op, result, original_result.getType()
+                        );
+                        original_result.replaceAllUsesWith(new_value);
+                    } else {
+                        // Types match, directly replace uses
+                        original_result.replaceAllUsesWith(result);
+                    }
+                    result_index++;
+                }
+            }
+        }
 
         // Set appropriate attributes based on operation type
         pass.set_instrumentation_call_attributes(wrap_call_op, call_op);
 
-        call_op.replaceAllUsesWith(wrap_call_op);
+        // Check if there are any remaining uses before erasing
+        if (!call_op->use_empty()) {
+            LOG(ERROR) << "Cannot erase call_op, it still has uses. "
+                       << "Original results: " << call_num_results
+                       << ", Patch results: " << wrap_num_results << "\n";
+            return;
+        }
+
         call_op.erase();
 
         if (inline_patches) {
