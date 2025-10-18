@@ -35,6 +35,7 @@ contracts:
     description: "Device list replace sprintf patch"
     category: "device"
     severity: "high"
+    type: "runtime"
 
     implementation:
       code_file: "patches/bloodview_patch.c"

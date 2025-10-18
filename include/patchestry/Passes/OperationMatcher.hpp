@@ -7,9 +7,7 @@
 
 #pragma once
 
-#include <regex>
 #include <string>
-#include <vector>
 
 #include <patchestry/YAML/BaseSpec.hpp>
 #include <patchestry/YAML/ContractSpec.hpp>
