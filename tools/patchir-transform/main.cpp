@@ -52,8 +52,8 @@ namespace patchestry::cl {
         llvm::cl::init(true), llvm::cl::cat(category)
     );
 
-    const cl::opt< bool > enable_inlining( // NOLINT(cert-err58-cpp)
-        "enable-inlining", llvm::cl::desc("Enable inlining of patch functions"),
+    const cl::opt< bool > disable_inlining( // NOLINT(cert-err58-cpp)
+        "disable-inlining", llvm::cl::desc("Disable aggressive inlining of patch and contract functions"),
         llvm::cl::init(false), llvm::cl::cat(category)
     );
 
@@ -83,7 +83,7 @@ namespace patchestry::instrumentation {
 
         if (enable_instrumentation.getValue()) {
             patchestry::passes::InstrumentationOptions inline_options = {
-                enable_inlining.getValue()
+                !disable_inlining.getValue()
             };
             mlir::PassManager pm(&context);
             pm.addPass(patchestry::passes::createInstrumentationPass(
