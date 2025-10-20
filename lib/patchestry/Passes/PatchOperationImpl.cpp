@@ -104,7 +104,7 @@ namespace patchestry::passes {
         pass.set_instrumentation_call_attributes(patch_call_op, target_op);
 
         if (should_inline) {
-            pass.inline_worklists.push_back(patch_call_op);
+            pass.inline_worklists.insert(patch_call_op);
         }
     }
 
@@ -177,7 +177,7 @@ namespace patchestry::passes {
         pass.set_instrumentation_call_attributes(patch_call_op, target_op);
 
         if (inline_patches) {
-            pass.inline_worklists.push_back(patch_call_op);
+            pass.inline_worklists.insert(patch_call_op);
         }
     }
 
@@ -292,7 +292,7 @@ namespace patchestry::passes {
         call_op.erase();
 
         if (inline_patches) {
-            pass.inline_worklists.push_back(wrap_call_op);
+            pass.inline_worklists.insert(wrap_call_op);
         }
     }
 

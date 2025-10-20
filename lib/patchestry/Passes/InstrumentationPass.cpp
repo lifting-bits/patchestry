@@ -484,17 +484,33 @@ namespace patchestry::passes {
                     LOG(ERROR) << "Unknown execution type: " << type << "\n";
                 }
             }
+        }
 
-            // Inline inserted call operation
-            // if (patch_options.enable_inlining) {
+        // Inline inserted call operation
+        // if (patch_options.enable_inlining) {
+        std::set< mlir::Operation * > nested_calls;
+        std::set< cir::FuncOp > callees_to_erase;
+        do {
+            nested_calls.clear();
+            callees_to_erase.clear();
+
             for (auto *op : inline_worklists) {
-                std::ignore = inline_call(mod, mlir::cast< cir::CallOp >(op));
+                std::ignore = inline_call(
+                    mod, mlir::cast< cir::CallOp >(op), nested_calls, callees_to_erase
+                );
             }
 
+            // Erase all callees after all inlining operations are complete
+            for (auto callee : callees_to_erase) {
+                LOG(INFO) << "Erasing inlined function: " << callee.getSymName().str() << "\n";
+                callee.erase();
+            }
             // clear the worklist after inlining
             inline_worklists.clear();
-            //}
-        }
+
+            // Update worklist with newly discovered nested calls
+            inline_worklists = std::move(nested_calls);
+        } while (!inline_worklists.empty());
     }
 
     /**
@@ -590,19 +606,19 @@ namespace patchestry::passes {
                             case PatchInfoMode::APPLY_BEFORE:
                                 PatchOperationImpl::applyPatchBefore(
                                     *this, call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                    options.enable_inlining
                                 );
                                 break;
                             case PatchInfoMode::APPLY_AFTER:
                                 PatchOperationImpl::applyPatchAfter(
                                     *this, call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                    options.enable_inlining
                                 );
                                 break;
                             case PatchInfoMode::REPLACE:
                                 PatchOperationImpl::replaceCall(
                                     *this, call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                    options.enable_inlining
                                 );
                                 break;
                             default:
@@ -647,6 +663,7 @@ namespace patchestry::passes {
                 }
             }
         }
+        (void) meta_patch;
     }
 
     /**
@@ -1361,14 +1378,16 @@ namespace patchestry::passes {
 
                 // Check for conflicts
                 if (dest_sym_table.lookup(sym_name)) {
-                    if (is_global_symbol(op)) {
-                        // For global symbols, keep the one in dest and warn
-                        LOG(WARNING)
-                            << "Global symbol " << sym_name
+                    // Check if this is a global symbol that doesn't start with "." also if
+                    // symbol is a function
+                    bool should_rename = !is_global_symbol(op) || sym_name.starts_with(".")
+                        || mlir::dyn_cast< cir::FuncOp >(op);
+                    if (!should_rename) {
+                        LOG(INFO)
+                            << "Symbol " << sym_name
                             << " already exists in destination module, keeping existing\n";
                         return;
                     }
-                    // For local symbols, rename
                     auto maybe_new_name = src_sym_table.renameToUnique(op, { &dest_sym_table });
                     if (mlir::failed(maybe_new_name)) {
                         LOG(ERROR) << "Failed to rename symbol " << sym_name << "\n";
@@ -1513,27 +1532,45 @@ namespace patchestry::passes {
     }
 
     /**
-     * @brief Inlines a function call operation.
+     * @brief Aggressively inlines a function call operation and all nested calls.
      *
      * This method performs function inlining by replacing a call operation with the
      * body of the called function. It handles control flow, argument mapping, and
-     * block management to properly integrate the inlined code.
+     * block management to properly integrate the inlined code. After inlining the
+     * initial function, it recursively inlines all nested function calls until
+     * reaching functions that have no definition (declarations only).
+     *
+     * All operations cloned from an inlined function are marked with an "inlined_from"
+     * attribute containing the name of the source function. This allows tracking which
+     * operations came from which inlined function.
+     *
+     * The aggressive inlining stops when:
+     * - A function is only a declaration (no body/definition)
+     * - An error occurs during inlining
      *
      * @param module The module containing both caller and callee
      * @param call_op The call operation to be inlined
      * @return mlir::LogicalResult Success or failure of the inlining operation
      */
-    mlir::LogicalResult
-    InstrumentationPass::inline_call(mlir::ModuleOp module, cir::CallOp call_op) {
+    mlir::LogicalResult InstrumentationPass::inline_call(
+        mlir::ModuleOp module, cir::CallOp call_op,
+        std::set< mlir::Operation * > &nested_calls_out,
+        std::set< cir::FuncOp > &callees_to_erase
+    ) {
         mlir::OpBuilder builder(call_op);
         mlir::Location loc = call_op.getLoc();
 
-        auto callee = mlir::dyn_cast< cir::FuncOp >(
-            module.lookupSymbol< cir::FuncOp >(call_op.getCallee()->str())
-        );
+        LOG(INFO) << "Inlining call to: " << call_op.getCallee()->str() << "\n";
+
+        auto callee = module.lookupSymbol< cir::FuncOp >(call_op.getCallee()->str());
         if (!callee) {
             LOG(ERROR) << "Callee not found in module\n";
             return mlir::failure();
+        }
+
+        // Skip inlining if the function has no definition (is a declaration only)
+        if (callee.isDeclaration()) {
+            return mlir::success();
         }
 
         mlir::IRMapping mapper;
@@ -1583,6 +1620,10 @@ namespace patchestry::passes {
             block_map[&block] = cloned_block;
         }
 
+        // Get the function name to add as attribute
+        std::string callee_name            = callee.getSymName().str();
+        mlir::StringAttr inlined_from_attr = builder.getStringAttr(callee_name);
+
         // Second pass: clone operations and fix up block references
         for (mlir::Block &orig_block : callee_region) {
             mlir::Block *cloned_block = block_map[&orig_block];
@@ -1618,7 +1659,8 @@ namespace patchestry::passes {
                             callResult.replaceAllUsesWith(returnValue);
                         }
 
-                        builder.create< cir::BrOp >(loc, split_block);
+                        auto br_op = builder.create< cir::BrOp >(loc, split_block);
+                        br_op->setAttr("inlined_from", inlined_from_attr);
                     } else if (auto branch_op = dyn_cast< cir::BrOp >(&op)) {
                         // Fix branch destinations
                         mlir::Block *targetBlock = block_map[branch_op.getDest()];
@@ -1635,11 +1677,16 @@ namespace patchestry::passes {
                             }
                             operands.push_back(mapped_operand);
                         }
-                        builder.create< cir::BrOp >(loc, targetBlock, operands);
+                        auto new_br_op =
+                            builder.create< cir::BrOp >(loc, targetBlock, operands);
+                        new_br_op->setAttr("inlined_from", inlined_from_attr);
                     }
                 } else {
                     // Clone regular operations
-                    builder.clone(op, mapper);
+                    mlir::Operation *cloned_op = builder.clone(op, mapper);
+
+                    // Add attribute to mark this operation as inlined from the callee
+                    cloned_op->setAttr("inlined_from", inlined_from_attr);
                 }
             }
         }
@@ -1652,11 +1699,33 @@ namespace patchestry::passes {
         for (mlir::Value arg : callee.getArguments()) {
             entry_args.push_back(mapper.lookup(arg));
         }
-        builder.create< cir::BrOp >(loc, callee_entry_block, entry_args);
+        auto entry_br_op = builder.create< cir::BrOp >(loc, callee_entry_block, entry_args);
+        entry_br_op->setAttr("inlined_from", inlined_from_attr);
+
+        // Collect all CallOps from the cloned blocks for aggressive inlining
+        // Walk recursively through all operations in all cloned blocks
+        llvm::SmallVector< cir::CallOp > nested_calls;
+        for (auto &[orig_block, cloned_block] : block_map) {
+            cloned_block->walk([&](cir::CallOp call) {
+                LOG(INFO) << "Found nested call to: " << call.getCallee()->str()
+                          << " in inlined function " << callee_name << "\n";
+                nested_calls.push_back(call);
+            });
+        }
+
+        LOG(INFO) << "Collected " << nested_calls.size()
+                  << " nested calls from inlined function " << callee_name << "\n";
 
         // Remove the original call
         call_op.erase();
-        callee.erase();
+
+        // Defer callee erasure if requested, otherwise erase immediately
+        callees_to_erase.insert(callee);
+        // Collect nested calls for inlining
+        for (auto nested_call : nested_calls) {
+            nested_calls_out.insert(nested_call);
+        }
+
         return mlir::success();
     }
 
@@ -1747,19 +1816,19 @@ namespace patchestry::passes {
                         case contract::InfoMode::APPLY_BEFORE:
                             ContractOperationImpl::applyContractBefore(
                                 *this, call_op, contract_to_apply, contract_module.get(),
-                                meta_contract.optimization.contains("inline-patches")
+                                options.enable_inlining
                             );
                             break;
                         case contract::InfoMode::APPLY_AFTER:
                             ContractOperationImpl::applyContractAfter(
                                 *this, call_op, contract_to_apply, contract_module.get(),
-                                meta_contract.optimization.contains("inline-patches")
+                                options.enable_inlining
                             );
                             break;
                         case contract::InfoMode::APPLY_AT_ENTRYPOINT:
                             ContractOperationImpl::applyContractAtEntrypoint(
                                 *this, call_op, contract_to_apply, contract_module.get(),
-                                meta_contract.optimization.contains("inline-patches")
+                                options.enable_inlining
                             );
                             break;
                         default:
@@ -1772,6 +1841,7 @@ namespace patchestry::passes {
                               << "' did not match the contract action; continuing\n";
                 }
             });
+            (void) meta_contract;
         }
     }
 

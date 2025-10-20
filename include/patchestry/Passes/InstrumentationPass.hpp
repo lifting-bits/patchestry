@@ -8,6 +8,7 @@
 #pragma once
 
 #include <memory>
+#include <set>
 #include <string>
 
 #include <mlir/IR/BuiltinOps.h>
@@ -111,8 +112,8 @@ namespace patchestry::passes { // NOLINT
         /** @brief Parsed patch- or contract-specific configuration from the file */
         std::optional< Configuration > config;
 
-        /** @brief List of operations to be inlined after instrumentation */
-        std::vector< mlir::Operation * > inline_worklists;
+        /** @brief Set of operations to be inlined after instrumentation */
+        std::set< mlir::Operation * > inline_worklists;
 
         /** @brief Reference to inlining configuration options */
         const InstrumentationOptions &options;
@@ -239,17 +240,31 @@ namespace patchestry::passes { // NOLINT
         );
 
         /**
-         * @brief Inlines a function call operation.
+         * @brief Aggressively inlines a function call operation and all nested calls.
          *
          * This method performs function inlining by replacing a call operation with the
          * body of the called function. It handles control flow, argument mapping, and
-         * block management to properly integrate the inlined code.
+         * block management to properly integrate the inlined code. After inlining the
+         * initial function, it recursively inlines all nested function calls until
+         * reaching functions that have no definition (declarations only).
+         *
+         * All operations cloned from an inlined function are marked with an "inlined_from"
+         * attribute containing the name of the source function. This allows tracking which
+         * operations came from which inlined function.
+         *
+         * The aggressive inlining stops when:
+         * - A function is only a declaration (no body/definition)
+         * - An error occurs during inlining
          *
          * @param module The module containing both caller and callee
          * @param call_op The call operation to be inlined
          * @return mlir::LogicalResult Success or failure of the inlining operation
          */
-        mlir::LogicalResult inline_call(mlir::ModuleOp module, cir::CallOp call_op);
+        mlir::LogicalResult inline_call(
+            mlir::ModuleOp module, cir::CallOp call_op,
+            std::set< mlir::Operation * > &nested_calls_out,
+            std::set< cir::FuncOp > &callees_to_erase
+        );
 
         /**
          * @brief Loads a code module from its string representation. This can be either a

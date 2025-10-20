@@ -90,7 +90,7 @@ namespace patchestry::passes {
         pass.set_instrumentation_call_attributes(contractCallOp, targetOp);
 
         if (shouldInline) {
-            pass.inline_worklists.push_back(contractCallOp);
+            pass.inline_worklists.insert(contractCallOp);
         }
     }
 
@@ -467,7 +467,7 @@ namespace patchestry::passes {
         pass.set_instrumentation_call_attributes(contract_call_op, call_op);
 
         if (should_inline) {
-            pass.inline_worklists.push_back(contract_call_op);
+            pass.inline_worklists.insert(contract_call_op);
         }
     }
 
