@@ -41,6 +41,11 @@ typedef struct usb_device {
     usb_device_state_t state;
 } usb_device_t;
 
-void contract__before__test_contract(usb_device_t *usb_device, const void *buffer) {
-    ASSERT(usb_device->state == USB_STATE_CONFIGURED, "USB not ready for use");
+#define USB_MAX_PACKET_SIZE 512
+#ifndef NULL
+#define NULL 0
+#endif
+
+void contract__validate_buffer_write_before(usb_device_t *usb_device, const void *buffer, unsigned int buffer_length) {
+    ASSERT(usb_device != NULL || buffer != NULL || buffer_length > 0 || buffer_length <= USB_MAX_PACKET_SIZE, "failed to validate buffer before writing to usb device");
 }

@@ -8,7 +8,7 @@
 #pragma once
 
 #include <memory>
-#include <optional>
+#include <set>
 #include <string>
 
 #include <mlir/IR/BuiltinOps.h>
@@ -22,6 +22,7 @@
 
 #include <patchestry/Passes/OperationMatcher.hpp>
 #include <patchestry/YAML/ConfigurationFile.hpp>
+#include <patchestry/YAML/ContractSpec.hpp>
 
 // Forward declarations to minimize header dependencies
 namespace mlir {
@@ -35,6 +36,10 @@ namespace mlir {
 namespace patchestry::passes { // NOLINT
 
     struct InstrumentationOptions;
+    class ContractOperationImpl;
+    class PatchOperationImpl;
+
+    struct ContractInformation;
 
     /**
      * @brief Registers instrumentation passes with the MLIR pass registry.
@@ -79,12 +84,6 @@ namespace patchestry::passes { // NOLINT
         std::optional< patch::PatchAction > patch_action;
     };
 
-    struct ContractInformation
-    { // the use of optional here takes care of some typing errors
-        std::optional< contract::ContractSpec > spec;
-        std::optional< contract::ContractAction > action;
-    };
-
     /**
      * @brief MLIR pass that applies code instrumentation based on configuration.
      *
@@ -103,16 +102,18 @@ namespace patchestry::passes { // NOLINT
      */
     class InstrumentationPass
         : public mlir::PassWrapper< InstrumentationPass, mlir::OperationPass< mlir::ModuleOp > >
-
     {
+        friend class ContractOperationImpl;
+        friend class PatchOperationImpl;
+
         /** @brief Path to the YAML Patchestry configuration file */
         std::string configuration_file;
 
         /** @brief Parsed patch- or contract-specific configuration from the file */
         std::optional< Configuration > config;
 
-        /** @brief List of operations to be inlined after instrumentation */
-        std::vector< mlir::Operation * > inline_worklists;
+        /** @brief Set of operations to be inlined after instrumentation */
+        std::set< mlir::Operation * > inline_worklists;
 
         /** @brief Reference to inlining configuration options */
         const InstrumentationOptions &options;
@@ -239,117 +240,31 @@ namespace patchestry::passes { // NOLINT
         );
 
         /**
-         * @brief Applies a patch before the target operation.
-         *
-         * This method inserts a call to the patch function immediately before the target
-         * operation. It handles module symbol merging, argument preparation, and call creation.
-         * The inserted call is added to the inline worklist if inlining is enabled.
-         *
-         * @param op The target operation to be instrumented
-         * @param patch The patch information containing the patch function details
-         * @param patch_module The module containing the patch function
-         * @param inline_patches Whether or not to inline at application.
-         */
-        void apply_before_patch(
-            mlir::Operation *op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-            bool inline_patches
-        );
-
-        /**
-         * @brief Applies a patch after the target operation.
-         *
-         * This method inserts a call to the patch function immediately after the target
-         * operation. It handles module symbol merging, argument preparation, and call creation.
-         * The inserted call is added to the inline worklist if inlining is enabled.
-         *
-         * @param op The target operation to be instrumented
-         * @param patch The patch information containing the patch function details
-         * @param patch_module The module containing the patch function
-         */
-        void apply_after_patch(
-            mlir::Operation *op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-            bool inline_patches
-        );
-
-        /**
-         * @brief Replaces a function call with a patch function call.
-         *
-         * This method completely replaces the original function call with a call to the
-         * patch function. It preserves the original call's arguments and return types
-         * while redirecting the call to the patch function.
-         *
-         * @param call_op The original call operation to be replaced
-         * @param patch The patch information containing the replacement function details
-         * @param patch_module The module containing the patch function
-         */
-        void replace_call(
-            cir::CallOp op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-            bool inline_patches
-        );
-
-        /**
-         * @brief Applies a contract before the target function.
-         *
-         * This method inserts a call to the contract function immediately before the target
-         * operation. It handles module symbol merging, argument preparation, and call creation.
-         * The inserted call is added to the inline worklist if inlining is enabled.
-         *
-         * @param target_op The target function to be instrumented
-         * @param contract The contract information containing the contract function details
-         * @param contract_module The module containing the contract function
-         * @param should_inline Whether or not to inline at application.
-         */
-        void apply_contract_before(
-            mlir::Operation *target_op, const ContractInformation &contract,
-            mlir::ModuleOp contract_module, bool should_inline
-        );
-
-        /**
-         * @brief Applies a contract after the target function.
-         *
-         * This method inserts a call to the contract function immediately after the target
-         * operation. It handles module symbol merging, argument preparation, and call creation.
-         * The inserted call is added to the inline worklist if inlining is enabled.
-         *
-         * @param op The target function to be instrumented
-         * @param contract The contract information containing the contract function details
-         * @param contract_module The module containing the contract function
-         * @param should_inline Whether or not to inline at application.
-         */
-        void apply_contract_after(
-            mlir::Operation *target_op, const ContractInformation &contract,
-            mlir::ModuleOp contract_module, bool should_inline
-        );
-
-        /** todo (kaoudis) still thinking about whether this makes sense
-         * @brief Applies a contract directly after the target function entrypoint,
-         * just "inside" the entrypoint, before the rest of the original function.
-         *
-         * This method handles module symbol merging, argument preparation, and call creation.
-         * The inserted call is added to the inline worklist if inlining is enabled.
-         *
-         * @param op The target function to be instrumented
-         * @param contract The contract information containing the contract function details
-         * @param contract_module The module containing the contract function
-         * @param should_inline Whether or not to inline at application.
-         */
-        void apply_contract_at_entrypoint(
-            cir::CallOp call_op, const ContractInformation &contract,
-            mlir::ModuleOp contract_module, bool should_inline
-        );
-
-        /**
-         * @brief Inlines a function call operation.
+         * @brief Aggressively inlines a function call operation and all nested calls.
          *
          * This method performs function inlining by replacing a call operation with the
          * body of the called function. It handles control flow, argument mapping, and
-         * block management to properly integrate the inlined code.
+         * block management to properly integrate the inlined code. After inlining the
+         * initial function, it recursively inlines all nested function calls until
+         * reaching functions that have no definition (declarations only).
+         *
+         * All operations cloned from an inlined function are marked with an "inlined_from"
+         * attribute containing the name of the source function. This allows tracking which
+         * operations came from which inlined function.
+         *
+         * The aggressive inlining stops when:
+         * - A function is only a declaration (no body/definition)
+         * - An error occurs during inlining
          *
          * @param module The module containing both caller and callee
          * @param call_op The call operation to be inlined
          * @return mlir::LogicalResult Success or failure of the inlining operation
          */
-        mlir::LogicalResult inline_call(mlir::ModuleOp module, cir::CallOp call_op);
+        mlir::LogicalResult inline_call(
+            mlir::ModuleOp module, cir::CallOp call_op,
+            std::set< mlir::Operation * > &nested_calls_out,
+            std::set< cir::FuncOp > &callees_to_erase
+        );
 
         /**
          * @brief Loads a code module from its string representation. This can be either a
@@ -365,22 +280,6 @@ namespace patchestry::passes { // NOLINT
          */
         mlir::OwningOpRef< mlir::ModuleOp >
         load_code_module(mlir::MLIRContext &ctx, const std::string &module_string);
-
-        /**
-         * @brief Merges a specific symbol from source module into destination module.
-         *
-         * This method copies a named symbol (function, global, etc.) from the source module
-         * to the destination module, handling symbol conflicts through renaming when necessary.
-         * It also recursively copies any symbols that the target symbol depends on.
-         *
-         * @param dest The destination module to merge symbols into
-         * @param src The source module containing the symbol to merge
-         * @param symbol_name The name of the symbol to merge
-         * @return mlir::LogicalResult Success or failure of the merge operation
-         */
-        mlir::LogicalResult merge_module_symbol(
-            mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
-        );
 
         /**
          * @brief Sets appropriate attributes for the instrumentation call operation.
@@ -476,6 +375,22 @@ namespace patchestry::passes { // NOLINT
         );
         void set_instrumentation_call_attributes(
             cir::CallOp instr_call_op, mlir::Operation *target_op
+        );
+
+        /**
+         * @brief Merges a specific symbol from source module into destination module.
+         *
+         * This method copies a named symbol (function, global, etc.) from the source module
+         * to the destination module, handling symbol conflicts through renaming when necessary.
+         * It also recursively copies any symbols that the target symbol depends on.
+         *
+         * @param dest The destination module to merge symbols into
+         * @param src The source module containing the symbol to merge
+         * @param symbol_name The name of the symbol to merge
+         * @return mlir::LogicalResult Success or failure of the merge operation
+         */
+        mlir::LogicalResult merge_module_symbol(
+            mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
         );
     };
 
