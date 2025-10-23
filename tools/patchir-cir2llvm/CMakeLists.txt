@@ -20,3 +20,10 @@ target_link_libraries(patchir-cir2llvm
         MLIRX86VectorToLLVMIRTranslation
         MLIROpenACCToLLVMIRTranslation
 )
+
+if(PATCHESTRY_INSTALL)
+  install(TARGETS patchir-cir2llvm
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT patchestry-tools
+  )
+endif()
