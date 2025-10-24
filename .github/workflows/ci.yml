@@ -37,6 +37,11 @@ jobs:
           DOCKER_BUILDKIT=1 docker build -t trailofbits/decompile-test:latest -f test/decompile-test.dockerfile . && \
           docker run trailofbits/decompile-test
 
+      - name: Clean up Docker artifacts
+        if: always()
+        run: |
+          docker system prune -af --volumes
+
   llvm-build-and-test:
     needs: ghidra-script-tests
     strategy:
