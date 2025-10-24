@@ -39,24 +39,6 @@ endif()
 
 execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${build_dir}")
 
-# CRITICAL: Find LLVM/Clang packages to get the actual include directories
-find_package(LLVM 20 REQUIRED CONFIG HINTS "${REMILL_PREFIX_PATH}/lib/cmake/llvm")
-find_package(MLIR 20 REQUIRED CONFIG HINTS "${REMILL_PREFIX_PATH}/lib/cmake/mlir")
-find_package(Clang 20 REQUIRED CONFIG HINTS "${REMILL_PREFIX_PATH}/lib/cmake/clang")
-
-message(STATUS "rellic: LLVM Install Prefix: ${LLVM_INSTALL_PREFIX}")
-message(STATUS "rellic: LLVM Include Dirs: ${LLVM_INCLUDE_DIRS}")
-
-# Build the include flags for ClangIR headers
-# We need to add these to CMAKE_CXX_FLAGS because rellic's CMakeLists.txt
-# doesn't properly use the LLVM include directories from the found package
-set(CLANGIR_INCLUDE_FLAGS "-isystem${LLVM_INSTALL_PREFIX}/include")
-foreach(inc_dir ${LLVM_INCLUDE_DIRS})
-  set(CLANGIR_INCLUDE_FLAGS "${CLANGIR_INCLUDE_FLAGS} -isystem${inc_dir}")
-endforeach()
-
-message(STATUS "rellic: Adding ClangIR include flags: ${CLANGIR_INCLUDE_FLAGS}")
-
 execute_process(COMMAND ${CMAKE_COMMAND}
                         -G "${CMAKE_GENERATOR}"
                         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
@@ -66,7 +48,6 @@ execute_process(COMMAND ${CMAKE_COMMAND}
                         "-DCMAKE_INSTALL_RPATH=${CMAKE_INSTALL_RPATH}"
                         "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
                         "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-                        "-DCMAKE_CXX_FLAGS=${CLANGIR_INCLUDE_FLAGS}"
                         "-Dglog_DIR=${PE_VENDOR_INSTALL_DIR}/lib/cmake/glog"
                         -DRELLIC_ENABLE_INSTALL=ON
                         -DRELLIC_ENABLE_TESTING=OFF
