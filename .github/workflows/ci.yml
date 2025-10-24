@@ -17,7 +17,28 @@ on:
       - '*'
 
 jobs:
+  ghidra-script-tests:
+    strategy:
+      matrix:
+        image-version: [22.04]
+    runs-on: ubuntu-${{ matrix.image-version }}
+    timeout-minutes: 30
+    env:
+      CI: true
+    steps:
+      - name: Clone the Patchestry repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: Build the Ghidra testing Docker image and run tests via Gradle
+        run: |
+          DOCKER_BUILDKIT=1 docker build -t trailofbits/decompile-test:latest -f test/decompile-test.dockerfile . && \
+          docker run trailofbits/decompile-test
+
   llvm-build-and-test:
+    needs: ghidra-script-tests
     strategy:
       matrix:
         llvm-version: [20]
@@ -73,23 +94,4 @@ jobs:
       - name: Test ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: |
           lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=${{ github.workspace }}/builds/ci/test/ghidra/Output
-  
-  ghidra-script-tests:
-    strategy:
-      matrix:
-        image-version: [22.04]
-    runs-on: ubuntu-${{ matrix.image-version }}
-    timeout-minutes: 30
-    env:
-      CI: true
-    steps:
-      - name: Clone the Patchestry repository
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-
-      - name: Build the Ghidra testing Docker image and run tests via Gradle
-        run: |
-          DOCKER_BUILDKIT=1 docker build -t trailofbits/decompile-test:latest -f test/decompile-test.dockerfile . && \
-          docker run trailofbits/decompile-test
+ 
