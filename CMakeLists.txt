@@ -282,7 +282,7 @@ if (PATCHESTRY_INSTALL)
   # Executables are handled in the respective tools/CMakeLists.txt files.
   # TODO: Should we be moving over html docs and other files?
   install(DIRECTORY ${PE_VENDOR_INSTALL_DIR}/
-    DESTINATION ${CMAKE_INSTALL_PREFIX}
+    DESTINATION .
     USE_SOURCE_PERMISSIONS
     FILES_MATCHING
     PATTERN "*.h"
