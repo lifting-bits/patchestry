@@ -25,5 +25,10 @@ target_link_libraries(patchir-decomp
         clangFrontend
 )
 
-
 mlir_check_link_libraries(patchir-decomp)
+
+if(PATCHESTRY_INSTALL)
+  install(TARGETS patchir-decomp
+    COMPONENT patchestry-tools
+  )
+endif()

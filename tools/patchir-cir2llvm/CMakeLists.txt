@@ -20,3 +20,9 @@ target_link_libraries(patchir-cir2llvm
         MLIRX86VectorToLLVMIRTranslation
         MLIROpenACCToLLVMIRTranslation
 )
+
+if(PATCHESTRY_INSTALL)
+  install(TARGETS patchir-cir2llvm
+    COMPONENT patchestry-tools
+  )
+endif()

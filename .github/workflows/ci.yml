@@ -17,7 +17,33 @@ on:
       - '*'
 
 jobs:
+  ghidra-script-tests:
+    strategy:
+      matrix:
+        image-version: [22.04]
+    runs-on: ubuntu-${{ matrix.image-version }}
+    timeout-minutes: 30
+    env:
+      CI: true
+    steps:
+      - name: Clone the Patchestry repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: Build the Ghidra testing Docker image and run tests via Gradle
+        run: |
+          DOCKER_BUILDKIT=1 docker build -t trailofbits/decompile-test:latest -f test/decompile-test.dockerfile . && \
+          docker run trailofbits/decompile-test
+
+      - name: Clean up Docker artifacts
+        if: always()
+        run: |
+          docker system prune -af --volumes
+
   llvm-build-and-test:
+    needs: ghidra-script-tests
     strategy:
       matrix:
         llvm-version: [20]
@@ -48,6 +74,16 @@ jobs:
           submodules: true
           fetch-depth: 1
 
+      - name: Free up disk space
+        run: |
+          docker volume prune -f || true
+          docker system prune -af --volumes || true
+          sudo apt-get clean || true
+          sudo rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+          rm -rf /gha-runner/usr/local/lib/android
+          rm -rf /gha-runner/usr/local/share/boost
+          df -h
+
       - name: Configure build - sanitizers ${{ matrix.sanitizers }}
         run: cmake --preset ci -DPE_USE_VENDORED_Z3=OFF -DLLVM_EXTERNAL_LIT=$(which lit) -DLLVM_Z3_INSTALL_DIR=/usr/local
 
@@ -61,11 +97,6 @@ jobs:
           cmake --build build_standalone -j$(nproc)
           cd -
 
-      - name: Free up disk space
-        run: |
-          sudo apt-get clean
-          docker system prune -af
-
       - name: Build the headless decompilation docker image
         run: |
           bash ./scripts/ghidra/build-headless-docker.sh
@@ -73,23 +104,4 @@ jobs:
       - name: Test ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: |
           lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=${{ github.workspace }}/builds/ci/test/ghidra/Output
-  
-  ghidra-script-tests:
-    strategy:
-      matrix:
-        image-version: [22.04]
-    runs-on: ubuntu-${{ matrix.image-version }}
-    timeout-minutes: 30
-    env:
-      CI: true
-    steps:
-      - name: Clone the Patchestry repository
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-
-      - name: Build the Ghidra testing Docker image and run tests via Gradle
-        run: |
-          DOCKER_BUILDKIT=1 docker build -t trailofbits/decompile-test:latest -f test/decompile-test.dockerfile . && \
-          docker run trailofbits/decompile-test
+ 

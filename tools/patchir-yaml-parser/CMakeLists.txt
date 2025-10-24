@@ -24,3 +24,9 @@ target_link_libraries(patchir-yaml-parser
 )
 
 mlir_check_link_libraries(patchir-yaml-parser)
+
+if(PATCHESTRY_INSTALL)
+  install(TARGETS patchir-yaml-parser
+    COMPONENT patchestry-tools
+  )
+endif()

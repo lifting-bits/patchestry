@@ -49,6 +49,7 @@ execute_process(COMMAND ${CMAKE_COMMAND}
                         "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
                         "-DCMAKE_LINKER_TYPE=${CMAKE_LINKER_TYPE}"
                         "-DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}"
+                        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
                         -DBUILD_SHARED_LIBS=OFF
                         -DBUILD_STATIC_LIBS=ON
                         -DBUILD_gflags_LIB=ON

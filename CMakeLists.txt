@@ -277,4 +277,24 @@ if (PATCHESTRY_INSTALL)
     DESTINATION ${PATCHESTRY_CMAKE_INSTALL_DIR}
   )
 
+  message(STATUS CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX})
+
+  # Executables are handled in the respective tools/CMakeLists.txt files.
+  # TODO: Should we be moving over html docs and other files?
+  install(DIRECTORY ${PE_VENDOR_INSTALL_DIR}/
+    DESTINATION .
+    USE_SOURCE_PERMISSIONS
+    FILES_MATCHING
+    PATTERN "*.h"
+    PATTERN "*.hpp"
+    PATTERN "*.h.inc"
+    PATTERN "*.hpp.inc"
+    PATTERN "*.a"
+    PATTERN "*.so"
+    PATTERN "*.dylib"
+    PATTERN "*.dll"
+    PATTERN "*.lib"
+    PATTERN "*.cmake"
+  )
+
 endif()

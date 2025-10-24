@@ -24,3 +24,9 @@ target_link_libraries(pcode-translate
 )
 
 mlir_check_link_libraries(pcode-translate)
+
+if (PATCHESTRY_INSTALL)
+  install(TARGETS pcode-translate
+    COMPONENT patchestry-tools
+  )
+endif()
