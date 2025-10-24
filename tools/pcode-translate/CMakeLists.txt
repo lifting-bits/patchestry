@@ -27,7 +27,6 @@ mlir_check_link_libraries(pcode-translate)
 
 if (PATCHESTRY_INSTALL)
   install(TARGETS pcode-translate
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT patchestry-tools
   )
 endif()
