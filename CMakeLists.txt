@@ -29,10 +29,6 @@ if(POLICY CMP0127)
   cmake_policy(SET CMP0127 NEW)
 endif()
 
-if(POLICY CMP0177)
-  cmake_policy(SET CMP0177 NEW)
-endif()
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 include(prevent_in_source_builds)
@@ -286,7 +282,7 @@ if (PATCHESTRY_INSTALL)
   # Executables are handled in the respective tools/CMakeLists.txt files.
   # TODO: Should we be moving over html docs and other files?
   install(DIRECTORY ${PE_VENDOR_INSTALL_DIR}/
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/../
+    DESTINATION ${CMAKE_INSTALL_PREFIX}
     USE_SOURCE_PERMISSIONS
     FILES_MATCHING
     PATTERN "*.h"
