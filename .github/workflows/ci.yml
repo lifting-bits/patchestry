@@ -74,6 +74,16 @@ jobs:
           submodules: true
           fetch-depth: 1
 
+      - name: Free up disk space
+        run: |
+          docker volume prune -f || true
+          docker system prune -af --volumes || true
+          sudo apt-get clean || true
+          sudo rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+          rm -rf /gha-runner/usr/local/lib/android
+          rm -rf /gha-runner/usr/local/share/boost
+          df -h
+
       - name: Configure build - sanitizers ${{ matrix.sanitizers }}
         run: cmake --preset ci -DPE_USE_VENDORED_Z3=OFF -DLLVM_EXTERNAL_LIT=$(which lit) -DLLVM_Z3_INSTALL_DIR=/usr/local
 
@@ -86,11 +96,6 @@ jobs:
           cmake -B build_standalone -DCMAKE_BUILD_TYPE=Release
           cmake --build build_standalone -j$(nproc)
           cd -
-
-      - name: Free up disk space
-        run: |
-          sudo apt-get clean
-          docker system prune -af
 
       - name: Build the headless decompilation docker image
         run: |
