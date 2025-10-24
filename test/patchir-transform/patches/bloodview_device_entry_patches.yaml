@@ -47,3 +47,29 @@ contracts:
         - name: "dest_size"
           type: "!cir.s32i"
           description: "Destination size"
+
+
+  - name: "sprintf_contract_static"
+    id: "SPRINTF-CONTRACT-STATIC-001"
+    description: "Static contract for sprintf"
+    category: "device"
+    severity: "medium"
+    type: "STATIC"
+
+    preconditions:
+      - id: "dest_size_nonzero"
+        pred:
+          kind: "relation"
+          target: "arg1"
+          relation: "ne"
+          value: "0"
+
+    postconditions:
+      - id: "return_value_range"
+        pred:
+          kind: "range"
+          target: "return_value"
+          relation: "none"
+          range:
+            min: "0"
+            max: "32"
