@@ -60,8 +60,11 @@ int patch__replace__sprintf(char *dest, size_t dest_size, const char *format, ..
 
 void contract__sprintf(int return_value, size_t dest_size)
 {
-    // assert if return value is less than 0 or more than dest size
-    if(return_value < 0 || (size_t)return_value > dest_size) {
-        PATCHESTRY_ASSERT(0, "sprintf returned invalid value");
+    if (dest_size == 0) {
+        PATCHESTRY_ASSERT(false, "sprintf contract: zero-length dest");
+    } else if (return_value < 0) {
+        PATCHESTRY_ASSERT(false, "sprintf contract: encoding error");
+    } else if ((size_t)return_value >= dest_size) {
+        PATCHESTRY_ASSERT(false, "sprintf contract: truncated output");
     }
 }
