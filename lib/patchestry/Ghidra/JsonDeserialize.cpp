@@ -64,6 +64,17 @@ namespace patchestry::ghidra {
         return default_value;
     }
 
+    [[maybe_unused]] static std::string
+    dump_json_object(const JsonObject &object) {
+        std::string result;
+        llvm::raw_string_ostream os(result);
+
+        llvm::json::Object copy = object;  // Make a copy
+        os << llvm::json::Value(std::move(copy));
+
+        return result;
+    }
+
     std::optional< Program > JsonParser::deserialize_program(const JsonObject &root) {
         Program program;
         program.arch   = get_string_if_valid(root, "architecture");
