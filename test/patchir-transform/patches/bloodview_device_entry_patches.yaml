@@ -19,13 +19,13 @@ patches:
       function_name: "patch::replace::sprintf"
       parameters:
         - name: "argument0"
-          type: "!cir.string"
+          type: "string"
           description: "Argument 0"
         - name: "argument1"
-          type: "!cir.size_t"
+          type: "size_t"
           description: "Argument 1"
         - name: "argument2"
-          type: "!cir.string"
+          type: "string"
           description: "Argument 2"
 
 
@@ -42,10 +42,10 @@ contracts:
       function_name: "contract::sprintf"
       parameters:
         - name: "return_value"
-          type: "!cir.s32i"
+          type: "signed int"
           description: "Return value"
         - name: "dest_size"
-          type: "!cir.s32i"
+          type: "signed int"
           description: "Destination size"
 
 

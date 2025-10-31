@@ -43,15 +43,29 @@ typedef enum {
 
 bool __patchestry_check_access(const void *ptr, patchestry_access_t access);
 
-void __patchestry_assert_fail(
-    const char *assertion, const char *file, int line, const char *msg
-);
+extern long write(int, const void*, unsigned long);
+
+static inline unsigned long strlen_custom(const char *s) {
+    unsigned long n = 0;
+    while (s && s[n]) n++;
+    return n;
+}
+
+static inline void
+__patchestry_assert_fail(const char *a, const char *f, int l, const char *m)
+{
+    if (a) write(2, "Assert: ", 8), write(2, a, strlen_custom(a)), write(2, "\n", 1);
+    if (f) write(2, " at ", 4),   write(2, f, strlen_custom(f)), write(2, ":", 1);
+    if (m) write(2, "  ", 2), write(2, m, strlen_custom(m)), write(2, "\n", 1);
+    *(volatile int *)0 = 0;
+}
 
 // Assertion Macros
 #define PATCHESTRY_ASSERT(cond, msg) \
     do { \
         if (!(cond)) { \
-            __patchestry_assert_fail(#cond, __FILE__, __LINE__, msg); \
+	    if(msg) write(2, "Assert: ", 8), write(2, msg, strlen_custom(msg)), write(2, "\n", 1); \
+            *(volatile int *)0 = 0; \
         } \
     } while (0)
 

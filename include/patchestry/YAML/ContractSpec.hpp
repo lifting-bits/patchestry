@@ -211,7 +211,7 @@ namespace llvm::yaml {
             } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
                 action.mode = contract::InfoMode::APPLY_AT_ENTRYPOINT;
             } else {
-                action.mode = contract::InfoMode::NONE;
+                action.mode = contract::InfoMode::APPLY_BEFORE;
             }
         }
     };
@@ -359,7 +359,7 @@ namespace llvm::yaml {
 
             // Parse relation
             std::string relation_str;
-            io.mapRequired("relation", relation_str);
+            io.mapOptional("relation", relation_str);
             if (relation_str == "eq" || relation_str == "==") {
                 pred.relation = ::contracts::RelationKind::eq;
             } else if (relation_str == "neq" || relation_str == "ne" || relation_str == "!=") {
@@ -372,11 +372,8 @@ namespace llvm::yaml {
                 pred.relation = ::contracts::RelationKind::gt;
             } else if (relation_str == "gte" || relation_str == "ge" || relation_str == ">=") {
                 pred.relation = ::contracts::RelationKind::gte;
-            } else if (relation_str == "none") {
-                pred.relation = ::contracts::RelationKind::none;
             } else {
-                io.setError("Unsupported relation: " + relation_str);
-                return;
+                pred.relation = ::contracts::RelationKind::none;
             }
 
             // Parse optional fields
