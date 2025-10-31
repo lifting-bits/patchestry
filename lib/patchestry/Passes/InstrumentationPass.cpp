@@ -1799,12 +1799,23 @@ namespace patchestry::passes {
                 );
 
                 if (isMatch) {
-                    auto contract_module = load_code_module(
-                        *call_op->getContext(), *contract_to_apply.spec->contract_module
-                    );
-                    if (!contract_module) {
-                        LOG(ERROR) << "Failed to load contract module for function: "
-                                   << call_op.getCallee()->str() << "\n";
+                    // For static contracts, no contract module is needed
+                    mlir::OwningOpRef<mlir::ModuleOp> contract_module;
+                    if (contract_to_apply.spec->type == ContractType::STATIC) {
+                        LOG(INFO) << "Static contract '" << contract_to_apply.spec->name
+                                  << "' does not require contract module\n";
+                    } else if (contract_to_apply.spec->contract_module) {
+                        contract_module = load_code_module(
+                            *call_op->getContext(), *contract_to_apply.spec->contract_module
+                        );
+                        if (!contract_module) {
+                            LOG(ERROR) << "Failed to load contract module for function: "
+                                       << call_op.getCallee()->str() << "\n";
+                            return;
+                        }
+                    } else {
+                        LOG(ERROR) << "Non-static contract '" << contract_to_apply.spec->name
+                                   << "' is missing contract_module\n";
                         return;
                     }
 

@@ -7,6 +7,13 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Enable armhf architecture for cross-compilation libraries
 RUN dpkg --add-architecture armhf
 
+# Configure apt sources to use ports.ubuntu.com for armhf
+RUN sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list && \
+    echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy main universe multiverse restricted" >> /etc/apt/sources.list && \
+    echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe multiverse restricted" >> /etc/apt/sources.list && \
+    echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-security main universe multiverse restricted" >> /etc/apt/sources.list && \
+    echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-backports main universe multiverse restricted" >> /etc/apt/sources.list
+
 # Install dependencies
 RUN apt-get update && \
     export DEBIAN_FRONTEND=noninteractive && \
