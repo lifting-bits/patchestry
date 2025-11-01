@@ -9,7 +9,7 @@ name: "Pre Release"
 
 on:
     workflow_run:
-      workflows: ["Build"]
+      workflows: ["CI"]
       types:
         - completed
       branches:
