@@ -24,7 +24,7 @@ jobs:
         llvm-version: [20]
         image-version: [22.04]
 
-    name: "Pre Release"
+    name: "Pre Release and Build Doc"
     runs-on: ubuntu-${{ matrix.image-version }}
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     timeout-minutes: 60
@@ -44,11 +44,28 @@ jobs:
           submodules: true
           fetch-depth: 1
 
+      - name: Free up disk space
+        run: |
+          docker system prune -af --volumes || true
+          sudo apt-get clean || true
+          sudo rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* || true
+          rm -rf /gha-runner/usr/local/lib/android || true
+          rm -rf /gha-runner/usr/local/share/boost || true
+
       - name: Configure build
-        run: cmake --preset ci
+        run: cmake --preset ci -DLLVM_Z3_INSTALL_DIR=/usr/local
 
       - name: Build release
         run: cmake --build --preset ci-release -j $(nproc)
+
+      - name: Build Patchestry Doc
+        run: cmake --build --preset ci-release --target mlir-doc
+
+      - name: Build Patchestry Pages
+        run: |
+            sh ./www/setup.sh _site ./builds/ci/
+            pip install mkdocs mkdocs-material
+            mkdocs build --config-file _site/mkdocs.yml --site-dir _site/site
 
       - name: Package
         run: cpack --preset ci
@@ -70,45 +87,33 @@ jobs:
             ./LICENSE
             ./builds/ci/package/*
 
-  build_doc:
-    strategy:
-      matrix:
-        llvm-version: [20]
-        image-version: [22.04]
-    name: "Build Patchestry doc"
-    runs-on: ubuntu-${{ matrix.image-version }}
-    timeout-minutes: 60
-    container:
-      image:
-        ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
+      - name: Upload Patchestry sites
+        uses: actions/upload-artifact@v4
+        with:
+          name: mkdocs-sites
+          path: _site
+          if-no-files-found: error
 
-    env:
-        CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
-        TOOLCHAIN: ${{ github.workspace }}/cmake/lld.toolchain.cmake
-        LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
+  deploy_doc:
+    needs: build_prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-      - name: Clean Docker to prevent space issues
-        run: |
-          docker system prune -af --volumes || true
-
       - name: Clone the Patchestry repository
         uses: actions/checkout@v4
         with:
-          submodules: true
           fetch-depth: 1
 
-      - name: Configure build
-        run: cmake --preset ci -DLLVM_Z3_INSTALL_DIR=/usr/local
+      - name: Download Patchestry sites
+        uses: actions/download-artifact@v4
+        with:
+          name: mkdocs-sites
+          path: _site
 
-      - name: Build Patchestry Doc
-        run: cmake --build --preset ci-release --target mlir-doc
-
-      - name: Build Pages
-        run: |
-          sh ./www/setup.sh _site ./builds/ci/
-
-      - name: Deploy docs
+      # Deploy with the Docker-based action in a non-containerized job
+      - name: Deploy Patchestry sites to gh-pages
         uses: mhausenblas/mkdocs-deploy-gh-pages@master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
