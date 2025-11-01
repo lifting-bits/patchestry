@@ -14,6 +14,10 @@ on:
         - completed
       branches:
         - "main"
+    workflow_dispatch:
+    pull_request:
+      branches:
+        - "main"
 
 permissions: write-all
 
