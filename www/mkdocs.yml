@@ -14,7 +14,6 @@ nav:
 theme:
   name: material
   language: en
-  favicon: assets/img/favicon.ico
 
   palette:
     # Palette toggle for automatic mode
