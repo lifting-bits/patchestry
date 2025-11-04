@@ -6,7 +6,9 @@
 add_library(patchestry_passes STATIC
     InstrumentationPass.cpp
     Compiler.cpp
+    ContractOperationImpl.cpp
     OperationMatcher.cpp
+    PatchOperationImpl.cpp
     Utils.cpp
 )
 
@@ -17,9 +19,12 @@ set(CLANG_IR_LIBS
 )
 
 target_link_libraries(patchestry_passes
+    PUBLIC
+        MLIRContracts
     PRIVATE
         patchestry_settings
         patchestry_yaml
+        MLIRContracts
         MLIRSupport
         MLIRIR
         MLIRPass

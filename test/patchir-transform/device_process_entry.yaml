@@ -5,8 +5,6 @@ metadata:
   name: "bl-device-process-entry"
   description: "Fix usage of sprintf while processing device entries"
   version: "1.0.0"
-  author: "Security Team"
-  created: "2025-10-10"
 
 target:
   binary: "bloodview"
@@ -19,6 +17,7 @@ libraries:
 execution_order:
   - "meta_patches::bloodview_device_entry_meta_patch"
   - "meta_contracts::bloodview_device_entry_meta_contract"
+  - "meta_contracts::bloodview_device_entry_meta_contract_static"
 
 meta_patches:
   - name: bloodview_device_entry_meta_patch
@@ -64,7 +63,6 @@ meta_contracts:
     # Contract Configuration
     contract_actions:
       - id: "SPRINTF-CONTRACT-001"
-        description: "Contract to verify the get device list in bloodview"
 
         match:
         - name: "patch__replace__sprintf"
@@ -75,10 +73,27 @@ meta_contracts:
         action:
         - mode: "apply_after"
           contract_id: "DEVICE-LIST-REPLACE-SPRINTF-CONTRACT-001"
-          description: "Post-execution verification"
           arguments:
             - name: "return_value"
               source: "return_value"
             - name: "dest_size"
               source: "constant"
               value: 32
+
+  - name: bloodview_device_entry_meta_contract_static
+    id: "bloodview_device_entry_meta_contract_static"
+    description: "Meta contracts for verifying the get device list in bloodview"
+
+    # Contract Configuration
+    contract_actions:
+      - id: "SPRINTF-CONTRACT-STATIC-001"
+        match:
+        - name: "patch__replace__sprintf" 
+          kind: "function"
+          function_context:
+            - name: "bl_device__process_entry"
+
+        action:
+        - contract_id: "SPRINTF-CONTRACT-STATIC-001"
+          mode: "none"
+          description: "Static contract to verify the get device list in bloodview"

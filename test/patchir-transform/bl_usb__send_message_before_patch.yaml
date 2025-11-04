@@ -20,6 +20,7 @@ libraries:
 execution_order:
   - "meta_patches::usb_security_meta_patches"
   - "meta_contracts::usb_security_meta_contracts"
+  #- "meta_contracts::usb_security_meta_contracts_static"
 
 meta_patches:
   - name: usb_security_meta_patches
@@ -76,10 +77,41 @@ meta_contracts:
         action:
         - mode: "apply_before"
           contract_id: "USB-CONTRACT-BEFORE-001"
+          description: "Static contract for USB security"
           arguments:
             - name: usb_device
-              source: "argument"
+              source: "operand"
               index: "0"
             - name: buffer
-              source: "argument"
-              index: "1"
+              source: "operand"
+              index: "2"
+            - name: buffer_length
+              source: "operand"
+              index: "3"
+
+  - name: usb_security_meta_contracts_static
+    description: "Meta contracts for USB security"
+
+    contract_actions:
+        - id: "USB-CONTRACT-STATIC-001"
+          description: "Static contract for USB security"
+          match:
+            - name: "usbd_ep_write_packet"
+              kind: "function"
+              function_context:
+                - name: "bl_usb__send_message"
+
+          action:
+            - mode: "apply_before"
+              contract_id: "USB-CONTRACT-STATIC-001"
+              description: "Static contract for USB security validation"
+              arguments:
+                - name: usb_device
+                  source: "operand"
+                  index: "0"
+                - name: buffer
+                  source: "operand"
+                  index: "2"
+                - name: buffer_length
+                  source: "operand"
+                  index: "3"

@@ -52,10 +52,14 @@
 #include <mlir/Pass/PassRegistry.h>
 #include <mlir/Support/LLVM.h>
 
+#include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/Passes/OperationMatcher.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/YAML/ConfigurationFile.hpp>
+
+#include "ContractOperationImpl.hpp"
+#include "PatchOperationImpl.hpp"
 
 namespace patchestry::passes {
 
@@ -70,31 +74,44 @@ namespace patchestry::passes {
         ComplexFloat
     };
 
+    /**
+     * @brief Emits a module from a source file as a string representation.
+     *
+     * This function compiles a source file (C/C++) to MLIR CIR and returns its
+     * string representation. Used to load patch and contract implementation files.
+     *
+     * @param filename Path to the source file to compile
+     * @param lang Target architecture and language specification (format:
+     * arch:endian:bits:variant)
+     * @return std::optional<std::string> The MLIR module string if successful, std::nullopt
+     * otherwise
+     */
     std::optional< std::string >
     emitModuleAsString(const std::string &filename, const std::string &lang); // NOLINT
 
-    namespace {
-        /**
-         * @brief Converts a string to a valid function name by replacing invalid characters.
-         *
-         * This function takes a string and converts it to a valid function name by replacing
-         * any non-alphanumeric characters (except underscores) with underscores. This is used
-         * to ensure patch function names are valid identifiers.
-         *
-         * @param str The input string to convert
-         * @return std::string The converted function name
-         */
-        std::string namifyFunction(const std::string &str) {
-            std::string result;
-            for (char c : str) {
-                if ((isalnum(c) != 0) || c == '_') {
-                    result += c;
-                } else {
-                    result += '_';
-                }
+    /**
+     * @brief Converts a string to a valid function name by replacing invalid characters.
+     *
+     * This function takes a string and converts it to a valid function name by replacing
+     * any non-alphanumeric characters (except underscores) with underscores. This is used
+     * to ensure patch function names are valid identifiers.
+     *
+     * @param str The input string to convert
+     * @return std::string The converted function name
+     */
+    std::string namifyFunction(const std::string &str) {
+        std::string result;
+        for (char c : str) {
+            if ((isalnum(c) != 0) || c == '_') {
+                result += c;
+            } else {
+                result += '_';
             }
-            return result;
         }
+        return result;
+    }
+
+    namespace {
 
         /*std::string valueToString(mlir::Value value) {
             std::string result;
@@ -276,9 +293,7 @@ namespace patchestry::passes {
      * configuration_file, and use the given inline options for controlling inlining behavior.
      *
      * @param configuration_file Path to the YAML patch specification file
-     * @param ∂options Configuration options for controlling how instrumentation is generally
-     * applied
-don't yet pass)
+     * @param options Configuration options for controlling how instrumentation is applied
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
     std::unique_ptr< mlir::Pass > createInstrumentationPass(
@@ -373,8 +388,21 @@ don't yet pass)
             }
         }
         for (auto &spec : config->libraries.contracts) {
+            // Check contract type; assume 'type' field exists and can be "static" or "dynamic"
+            if (spec.type == ContractType::STATIC) {
+                // Perform any required validation or processing for static contracts here.
+                // For now, just log that a static contract was found.
+                LOG(INFO) << "Static contract '" << spec.name
+                          << "' does not require implementation file.\n";
+                continue;
+            }
+            if (!spec.implementation) {
+                LOG(ERROR) << "Non-static contract '" << spec.name
+                           << "' is missing implementation.\n";
+                continue;
+            }
             auto contracts_file_path =
-                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.implementation->code_file);
             if (!llvm::sys::fs::exists(contracts_file_path)) {
                 LOG(ERROR) << "Contract file " << contracts_file_path << " does not exist\n";
                 continue;
@@ -456,17 +484,33 @@ don't yet pass)
                     LOG(ERROR) << "Unknown execution type: " << type << "\n";
                 }
             }
+        }
 
-            // Inline inserted call operation
-            // if (patch_options.enable_inlining) {
+        // Inline inserted call operation
+        // if (patch_options.enable_inlining) {
+        std::set< mlir::Operation * > nested_calls;
+        std::set< cir::FuncOp > callees_to_erase;
+        do {
+            nested_calls.clear();
+            callees_to_erase.clear();
+
             for (auto *op : inline_worklists) {
-                std::ignore = inline_call(mod, mlir::cast< cir::CallOp >(op));
+                std::ignore = inline_call(
+                    mod, mlir::cast< cir::CallOp >(op), nested_calls, callees_to_erase
+                );
             }
 
+            // Erase all callees after all inlining operations are complete
+            for (auto callee : callees_to_erase) {
+                LOG(INFO) << "Erasing inlined function: " << callee.getSymName().str() << "\n";
+                callee.erase();
+            }
             // clear the worklist after inlining
             inline_worklists.clear();
-            //}
-        }
+
+            // Update worklist with newly discovered nested calls
+            inline_worklists = std::move(nested_calls);
+        } while (!inline_worklists.empty());
     }
 
     /**
@@ -560,21 +604,21 @@ don't yet pass)
                             << "' \n";
                         switch (action.mode) {
                             case PatchInfoMode::APPLY_BEFORE:
-                                apply_before_patch(
-                                    call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                PatchOperationImpl::applyPatchBefore(
+                                    *this, call_op, patch_to_apply, patch_module.get(),
+                                    options.enable_inlining
                                 );
                                 break;
                             case PatchInfoMode::APPLY_AFTER:
-                                apply_after_patch(
-                                    call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                PatchOperationImpl::applyPatchAfter(
+                                    *this, call_op, patch_to_apply, patch_module.get(),
+                                    options.enable_inlining
                                 );
                                 break;
                             case PatchInfoMode::REPLACE:
-                                replace_call(
-                                    call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                PatchOperationImpl::replaceCall(
+                                    *this, call_op, patch_to_apply, patch_module.get(),
+                                    options.enable_inlining
                                 );
                                 break;
                             default:
@@ -606,8 +650,8 @@ don't yet pass)
 
                     switch (action.mode) {
                         case PatchInfoMode::APPLY_BEFORE:
-                            apply_before_patch(
-                                op, patch_to_apply, patch_module.get(),
+                            PatchOperationImpl::applyPatchBefore(
+                                *this, op, patch_to_apply, patch_module.get(),
                                 meta_patch.optimization.contains("inline-patches")
                             );
                             break;
@@ -619,6 +663,7 @@ don't yet pass)
                 }
             }
         }
+        (void) meta_patch;
     }
 
     /**
@@ -1230,282 +1275,6 @@ don't yet pass)
     }
 
     /**
-     * @brief Applies a patch before the function call. This function inserts a call to the
-     * patch function before the original function call.
-     *
-     * @param op The call operation to be instrumented.
-     * @param match The match information for the function call.
-     * @param patch The patch information.
-     * @param patch_module The module containing the patch function.
-     */
-    void InstrumentationPass::apply_before_patch(
-        mlir::Operation *target_op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-        bool should_inline
-    ) {
-        if (target_op == nullptr) {
-            LOG(ERROR) << "Patch before: Operation is null";
-            return;
-        }
-
-        const auto &patch_action = patch.patch_action.value();
-        const auto &patch_spec   = patch.spec.value();
-        (void) patch_action; // Suppress unused warning
-
-        mlir::OpBuilder builder(target_op);
-        builder.setInsertionPoint(target_op);
-        auto module = target_op->getParentOfType< mlir::ModuleOp >();
-
-        std::string patch_function_name =
-            namifyFunction(patch_spec.implementation.function_name);
-        auto input_types = llvm::to_vector(target_op->getOperandTypes());
-        if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-            LOG(ERROR) << "Patch module not found or patch function not defined\n";
-            return;
-        }
-
-        // check if the patch function is already in the module, if not, merge it
-        if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-            auto result = merge_module_symbol(module, patch_module, patch_function_name);
-            if (mlir::failed(result)) {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-        } else {
-            LOG(INFO) << "Patch function " << patch_function_name
-                      << " already exists in module, skipping merge\n";
-        }
-
-        auto patch_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
-        if (!patch_func) {
-            LOG(ERROR) << "Patch function " << patch_function_name
-                       << " not defined. Patching failed...\n";
-            return;
-        }
-
-        auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-        llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
-        prepare_patch_call_arguments(builder, target_op, patch_func, patch, function_args_map);
-        llvm::SmallVector< mlir::Value > new_function_args;
-        for (auto &[old_arg, new_arg] : function_args_map) {
-            new_function_args.push_back(new_arg);
-        }
-
-        auto patch_call_op = builder.create< cir::CallOp >(
-            target_op->getLoc(), symbol_ref,
-            mlir::Type(), // return type is void for all apply before and after patches
-            new_function_args
-        );
-
-        update_state_after_patch(builder, patch_call_op, target_op, patch, function_args_map);
-
-        // Set appropriate attributes based on operation type
-        set_instrumentation_call_attributes(patch_call_op, target_op);
-
-        if (should_inline) {
-            inline_worklists.push_back(patch_call_op);
-        }
-    }
-
-    /**
-     * @brief Applies a patch after the target operation.
-     *
-     * @param op The target operation to be instrumented
-     * @param patch The patch information containing the patch function details
-     * @param patch_module The module containing the patch function
-     */
-    void InstrumentationPass::apply_after_patch(
-        mlir::Operation *target_op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-        bool inline_patches
-    ) {
-        if (target_op == nullptr) {
-            LOG(ERROR) << "Patch after: Operation is null";
-            return;
-        }
-
-        const auto &patch_action = patch.patch_action.value();
-        const auto &patch_spec   = patch.spec.value();
-        (void) patch_action; // Suppress unused warning
-
-        mlir::OpBuilder builder(target_op);
-        auto module = target_op->getParentOfType< mlir::ModuleOp >();
-        builder.setInsertionPointAfter(target_op);
-
-        std::string patch_function_name =
-            namifyFunction(patch_spec.implementation.function_name);
-        auto input_types = llvm::to_vector(target_op->getResultTypes());
-        if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-            LOG(ERROR) << "Patch module not found or patch function not defined\n";
-            return;
-        }
-
-        // check if the patch function is already in the module, if not, merge it
-        if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-            auto result = merge_module_symbol(module, patch_module, patch_function_name);
-            if (mlir::failed(result)) {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-        } else {
-            LOG(INFO) << "Patch function " << patch_function_name
-                      << " already exists in module, skipping merge\n";
-        }
-
-        auto patch_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
-        if (!patch_func) {
-            LOG(ERROR) << "Patch function " << patch_function_name
-                       << " not defined. Patching failed...\n";
-            return;
-        }
-
-        auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-        llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
-        prepare_patch_call_arguments(builder, target_op, patch_func, patch, function_args_map);
-        llvm::SmallVector< mlir::Value > function_args;
-        for (auto &[old_arg, new_arg] : function_args_map) {
-            function_args.push_back(new_arg);
-        }
-        auto patch_call_op = builder.create< cir::CallOp >(
-            target_op->getLoc(), symbol_ref,
-            mlir::Type(), // return type is void for all apply before and after patches
-            function_args
-        );
-
-        update_state_after_patch(builder, patch_call_op, target_op, patch, function_args_map);
-
-        // Set appropriate attributes based on operation type
-        set_instrumentation_call_attributes(patch_call_op, target_op);
-
-        if (inline_patches) {
-            inline_worklists.push_back(patch_call_op);
-        }
-    }
-
-    /**
-     * @brief Replaces the function call with a patch function. This function replaces the
-     * original function call with a call to the patch function.
-     *
-     * @param op The call operation to be instrumented.
-     * @param match The match information for the function call.
-     * @param patch The patch information.
-     * @param patch_module The module containing the patch function.
-     */
-
-    void InstrumentationPass::replace_call(
-        cir::CallOp call_op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-        bool inline_patches
-    ) {
-        mlir::OpBuilder builder(call_op);
-        auto loc    = call_op.getLoc();
-        auto *ctx   = call_op->getContext();
-        auto module = call_op->getParentOfType< mlir::ModuleOp >();
-        assert(module && "Wrap around patch: no module found");
-
-        builder.setInsertionPoint(call_op);
-
-        const auto &patch_spec = patch.spec.value();
-
-        auto callee_name = call_op.getCallee()->str();
-        assert(!callee_name.empty() && "Wrap around patch: callee name is empty");
-
-        auto patch_function_name = namifyFunction(patch_spec.implementation.function_name);
-        auto result_types        = llvm::to_vector(call_op.getResultTypes());
-
-        if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-            LOG(ERROR) << "Patch module not found or patch function not defined\n";
-            return;
-        }
-
-        // check if the patch function is already in the module, if not, merge it
-        if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-            auto result = merge_module_symbol(module, patch_module, patch_function_name);
-            if (mlir::failed(result)) {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-        } else {
-            LOG(INFO) << "Patch function " << patch_function_name
-                      << " already exists in module, skipping merge\n";
-        }
-
-        auto wrap_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
-        if (!wrap_func) {
-            LOG(ERROR) << "Wrap around patch: patch function "
-                       << patch_spec.implementation.function_name
-                       << " not defined. Patching failed...\n";
-            return;
-        }
-
-        auto wrap_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
-        llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
-        prepare_patch_call_arguments(builder, call_op, wrap_func, patch, function_args_map);
-        llvm::SmallVector< mlir::Value > wrap_call_args;
-        for (auto &[old_arg, new_arg] : function_args_map) {
-            wrap_call_args.push_back(new_arg);
-        }
-        auto wrap_function_type = wrap_func.getFunctionType();
-        auto wrap_call_op = builder.create< cir::CallOp >(
-            loc, wrap_func_ref,
-            wrap_function_type ? wrap_function_type.getReturnType() : mlir::Type(),
-            wrap_call_args
-        );
-
-        mlir::OpBuilder::InsertionGuard guard(builder);
-        builder.setInsertionPointAfter(wrap_call_op);
-        mlir::DominanceInfo DT(wrap_call_op->getParentOfType< mlir::FunctionOpInterface >());
-
-        // Replace all uses of old call results with new call results
-        // Handle type mismatches by inserting casts as needed
-        auto call_num_results = call_op.getNumResults();
-        auto wrap_num_results = wrap_call_op.getNumResults();
-
-        if (call_num_results > 0) {
-            if (wrap_num_results == 0) {
-                LOG(ERROR) << "Patch function returns void but original function has "
-                           << call_num_results << " result(s)\n";
-                // For void replacement, we can't replace the uses, so this is an error
-                // But we'll try to continue by removing the old call if it's unused
-            } else {
-                unsigned result_index = 0;
-                for (auto result : wrap_call_op.getResults()) {
-                    if (result_index >= call_num_results) {
-                        break;
-                    }
-                    auto original_result = call_op.getResults()[result_index];
-                    if (original_result.getType() != result.getType()) {
-                        auto new_value = create_cast_if_needed(
-                            builder, wrap_call_op, result, original_result.getType()
-                        );
-                        original_result.replaceAllUsesWith(new_value);
-                    } else {
-                        // Types match, directly replace uses
-                        original_result.replaceAllUsesWith(result);
-                    }
-                    result_index++;
-                }
-            }
-        }
-
-        // Set appropriate attributes based on operation type
-        set_instrumentation_call_attributes(wrap_call_op, call_op);
-
-        // Check if there are any remaining uses before erasing
-        if (!call_op->use_empty()) {
-            LOG(ERROR) << "Cannot erase call_op, it still has uses. "
-                       << "Original results: " << call_num_results
-                       << ", Patch results: " << wrap_num_results << "\n";
-            return;
-        }
-
-        call_op.erase();
-
-        if (inline_patches) {
-            inline_worklists.push_back(wrap_call_op);
-        }
-    }
-
-    /**
      * @brief Sets appropriate attributes for the instrumentation call operation.
      * This can be a call to a patch or a contract.
      *
@@ -1609,14 +1378,16 @@ don't yet pass)
 
                 // Check for conflicts
                 if (dest_sym_table.lookup(sym_name)) {
-                    if (is_global_symbol(op)) {
-                        // For global symbols, keep the one in dest and warn
-                        LOG(WARNING)
-                            << "Global symbol " << sym_name
+                    // Check if this is a global symbol that doesn't start with "." also if
+                    // symbol is a function
+                    bool should_rename = !is_global_symbol(op) || sym_name.starts_with(".")
+                        || mlir::dyn_cast< cir::FuncOp >(op);
+                    if (!should_rename) {
+                        LOG(INFO)
+                            << "Symbol " << sym_name
                             << " already exists in destination module, keeping existing\n";
                         return;
                     }
-                    // For local symbols, rename
                     auto maybe_new_name = src_sym_table.renameToUnique(op, { &dest_sym_table });
                     if (mlir::failed(maybe_new_name)) {
                         LOG(ERROR) << "Failed to rename symbol " << sym_name << "\n";
@@ -1733,34 +1504,73 @@ don't yet pass)
 
         // Second pass: copy all collected symbols
         for (auto *op : symbols_to_copy) {
-            dest.push_back(op->clone());
+            auto cloned_op = op->clone();
+
+            // Ensure cir.func operations have the required extra_attrs attribute
+            // and proper visibility settings
+            if (auto func_op = mlir::dyn_cast< cir::FuncOp >(cloned_op)) {
+                if (!func_op.getExtraAttrsAttr()) {
+                    // Create empty extra attributes if not present
+                    mlir::NamedAttrList empty;
+                    func_op.setExtraAttrsAttr(cir::ExtraFuncAttributesAttr::get(
+                        dest.getContext(), empty.getDictionary(dest.getContext())
+                    ));
+                }
+
+                // If this is a declaration (no body), set visibility to private
+                if (func_op.isDeclaration()) {
+                    func_op.setSymVisibilityAttr(
+                        mlir::StringAttr::get(dest.getContext(), "private")
+                    );
+                }
+            }
+
+            dest.push_back(cloned_op);
         }
 
         return mlir::success();
     }
 
     /**
-     * @brief Inlines a function call operation.
+     * @brief Aggressively inlines a function call operation and all nested calls.
      *
      * This method performs function inlining by replacing a call operation with the
      * body of the called function. It handles control flow, argument mapping, and
-     * block management to properly integrate the inlined code.
+     * block management to properly integrate the inlined code. After inlining the
+     * initial function, it recursively inlines all nested function calls until
+     * reaching functions that have no definition (declarations only).
+     *
+     * All operations cloned from an inlined function are marked with an "inlined_from"
+     * attribute containing the name of the source function. This allows tracking which
+     * operations came from which inlined function.
+     *
+     * The aggressive inlining stops when:
+     * - A function is only a declaration (no body/definition)
+     * - An error occurs during inlining
      *
      * @param module The module containing both caller and callee
      * @param call_op The call operation to be inlined
      * @return mlir::LogicalResult Success or failure of the inlining operation
      */
-    mlir::LogicalResult
-    InstrumentationPass::inline_call(mlir::ModuleOp module, cir::CallOp call_op) {
+    mlir::LogicalResult InstrumentationPass::inline_call(
+        mlir::ModuleOp module, cir::CallOp call_op,
+        std::set< mlir::Operation * > &nested_calls_out,
+        std::set< cir::FuncOp > &callees_to_erase
+    ) {
         mlir::OpBuilder builder(call_op);
         mlir::Location loc = call_op.getLoc();
 
-        auto callee = mlir::dyn_cast< cir::FuncOp >(
-            module.lookupSymbol< cir::FuncOp >(call_op.getCallee()->str())
-        );
+        LOG(INFO) << "Inlining call to: " << call_op.getCallee()->str() << "\n";
+
+        auto callee = module.lookupSymbol< cir::FuncOp >(call_op.getCallee()->str());
         if (!callee) {
             LOG(ERROR) << "Callee not found in module\n";
             return mlir::failure();
+        }
+
+        // Skip inlining if the function has no definition (is a declaration only)
+        if (callee.isDeclaration()) {
+            return mlir::success();
         }
 
         mlir::IRMapping mapper;
@@ -1810,6 +1620,10 @@ don't yet pass)
             block_map[&block] = cloned_block;
         }
 
+        // Get the function name to add as attribute
+        std::string callee_name            = callee.getSymName().str();
+        mlir::StringAttr inlined_from_attr = builder.getStringAttr(callee_name);
+
         // Second pass: clone operations and fix up block references
         for (mlir::Block &orig_block : callee_region) {
             mlir::Block *cloned_block = block_map[&orig_block];
@@ -1845,7 +1659,8 @@ don't yet pass)
                             callResult.replaceAllUsesWith(returnValue);
                         }
 
-                        builder.create< cir::BrOp >(loc, split_block);
+                        auto br_op = builder.create< cir::BrOp >(loc, split_block);
+                        br_op->setAttr("inlined_from", inlined_from_attr);
                     } else if (auto branch_op = dyn_cast< cir::BrOp >(&op)) {
                         // Fix branch destinations
                         mlir::Block *targetBlock = block_map[branch_op.getDest()];
@@ -1862,11 +1677,16 @@ don't yet pass)
                             }
                             operands.push_back(mapped_operand);
                         }
-                        builder.create< cir::BrOp >(loc, targetBlock, operands);
+                        auto new_br_op =
+                            builder.create< cir::BrOp >(loc, targetBlock, operands);
+                        new_br_op->setAttr("inlined_from", inlined_from_attr);
                     }
                 } else {
                     // Clone regular operations
-                    builder.clone(op, mapper);
+                    mlir::Operation *cloned_op = builder.clone(op, mapper);
+
+                    // Add attribute to mark this operation as inlined from the callee
+                    cloned_op->setAttr("inlined_from", inlined_from_attr);
                 }
             }
         }
@@ -1879,11 +1699,33 @@ don't yet pass)
         for (mlir::Value arg : callee.getArguments()) {
             entry_args.push_back(mapper.lookup(arg));
         }
-        builder.create< cir::BrOp >(loc, callee_entry_block, entry_args);
+        auto entry_br_op = builder.create< cir::BrOp >(loc, callee_entry_block, entry_args);
+        entry_br_op->setAttr("inlined_from", inlined_from_attr);
+
+        // Collect all CallOps from the cloned blocks for aggressive inlining
+        // Walk recursively through all operations in all cloned blocks
+        llvm::SmallVector< cir::CallOp > nested_calls;
+        for (auto &[orig_block, cloned_block] : block_map) {
+            cloned_block->walk([&](cir::CallOp call) {
+                LOG(INFO) << "Found nested call to: " << call.getCallee()->str()
+                          << " in inlined function " << callee_name << "\n";
+                nested_calls.push_back(call);
+            });
+        }
+
+        LOG(INFO) << "Collected " << nested_calls.size()
+                  << " nested calls from inlined function " << callee_name << "\n";
 
         // Remove the original call
         call_op.erase();
-        callee.erase();
+
+        // Defer callee erasure if requested, otherwise erase immediately
+        callees_to_erase.insert(callee);
+        // Collect nested calls for inlining
+        for (auto nested_call : nested_calls) {
+            nested_calls_out.insert(nested_call);
+        }
+
         return mlir::success();
     }
 
@@ -1937,203 +1779,6 @@ don't yet pass)
         }
     }
 
-    void InstrumentationPass::apply_contract_before(
-        mlir::Operation *target_op, const ContractInformation &contract,
-        mlir::ModuleOp contract_module, bool should_inline
-    ) {
-        if (target_op == nullptr) {
-            LOG(ERROR
-            ) << "apply_contract_before: the passed function to be instrumented was null";
-            return;
-        }
-
-        const auto &spec = contract.spec.value();
-
-        mlir::OpBuilder builder(target_op);
-        builder.setInsertionPoint(target_op);
-        auto module = target_op->getParentOfType< mlir::ModuleOp >();
-
-        std::string contract_function_name = namifyFunction(spec.implementation.function_name);
-        auto input_types                   = llvm::to_vector(target_op->getOperandTypes());
-        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            LOG(ERROR) << "Contract module not found or contract function not defined: "
-                       << contract_function_name << "\n";
-            return;
-        }
-
-        // check if the contract function is already in the module, if not, merge it
-        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            auto result = merge_module_symbol(module, contract_module, contract_function_name);
-            if (mlir::failed(result)) {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-        } else {
-            LOG(INFO) << "Contract function " << contract_function_name
-                      << " already exists in module, skipping merge\n";
-        }
-
-        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
-        if (!contract_func) {
-            LOG(ERROR) << "Contract function " << contract_function_name
-                       << " not defined after insertion. Insertion failed...\n";
-            return;
-        }
-
-        auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
-        llvm::SmallVector< mlir::Value > function_args;
-        prepare_contract_call_arguments(
-            builder, target_op, contract_func, contract, function_args
-        );
-        auto contract_call_op = builder.create< cir::CallOp >(
-            target_op->getLoc(), symbol_ref,
-            contract_func->getResultTypes().size() != 0
-                ? contract_func->getResultTypes().front()
-                : mlir::Type(),
-            function_args
-        );
-
-        // Set appropriate attributes based on operation type
-        set_instrumentation_call_attributes(contract_call_op, target_op);
-
-        if (should_inline) {
-            inline_worklists.push_back(contract_call_op);
-        }
-    }
-
-    void InstrumentationPass::apply_contract_after(
-        mlir::Operation *target_op, const ContractInformation &contract,
-        mlir::ModuleOp contract_module, bool should_inline
-    ) {
-        if (target_op == nullptr) {
-            LOG(ERROR
-            ) << "apply_contract_after: the passed function to be instrumented was null";
-            return;
-        }
-
-        const auto &spec = contract.spec.value();
-
-        mlir::OpBuilder builder(target_op);
-        auto module = target_op->getParentOfType< mlir::ModuleOp >();
-        builder.setInsertionPointAfter(target_op);
-
-        std::string contract_function_name = namifyFunction(spec.implementation.function_name);
-        auto input_types                   = llvm::to_vector(target_op->getResultTypes());
-        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            LOG(ERROR) << "Contract module not found or contract function not defined\n";
-            return;
-        }
-
-        // check if the patch function is already in the module, if not, merge it
-        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            auto result = merge_module_symbol(module, contract_module, contract_function_name);
-            if (mlir::failed(result)) {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-        } else {
-            LOG(INFO) << "Contract function " << contract_function_name
-                      << " already exists in module, skipping merge\n";
-        }
-
-        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
-        if (!contract_func) {
-            LOG(ERROR) << "Contract function " << contract_function_name
-                       << " not defined. Patching failed...\n";
-            return;
-        }
-
-        auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
-        llvm::SmallVector< mlir::Value > function_args;
-        prepare_contract_call_arguments(
-            builder, target_op, contract_func, contract, function_args
-        );
-        auto contract_call_op = builder.create< cir::CallOp >(
-            target_op->getLoc(), symbol_ref,
-            contract_func->getResultTypes().size() != 0
-                ? contract_func->getResultTypes().front()
-                : mlir::Type(),
-            function_args
-        );
-
-        // Set appropriate attributes based on operation type
-        set_instrumentation_call_attributes(contract_call_op, target_op);
-
-        if (should_inline) {
-            inline_worklists.push_back(contract_call_op);
-        }
-    }
-
-    void InstrumentationPass::apply_contract_at_entrypoint(
-        cir::CallOp call_op, const ContractInformation &contract,
-        mlir::ModuleOp contract_module, bool should_inline
-    ) {
-        if (call_op == nullptr) {
-            LOG(ERROR) << "apply_contract_at_entrypoint: the passed function to be "
-                          "instrumented was null";
-            return;
-        }
-
-        const auto &contract_spec = contract.spec.value();
-        std::string contract_function_name =
-            namifyFunction(contract_spec.implementation.function_name);
-        if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            LOG(ERROR) << "Contract module not found or contract function not defined\n";
-            return;
-        }
-
-        auto module = call_op->getParentOfType< mlir::ModuleOp >();
-        assert(module && "Wrap around patch: no module found");
-        std::string callee_name     = call_op.getCallee()->str();
-        cir::FuncOp callee_function = module.lookupSymbol< cir::FuncOp >(callee_name);
-        mlir::Block &entry_block    = callee_function.getBody().front();
-
-        auto target_op = entry_block.getParentOp();
-        mlir::OpBuilder builder(target_op);
-        builder.setInsertionPointToStart(&entry_block);
-
-        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            auto result = merge_module_symbol(module, contract_module, contract_function_name);
-            if (mlir::failed(result)) {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-        } else {
-            LOG(INFO) << "Contract function " << contract_function_name
-                      << " already exists in module, skipping merge\n";
-        }
-
-        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
-        if (!contract_func) {
-            LOG(ERROR) << "Contract function " << contract_function_name
-                       << " not defined. Patching failed...\n";
-            return;
-        }
-
-        auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
-        llvm::SmallVector< mlir::Value > function_args;
-        prepare_contract_call_arguments(
-            builder, target_op, contract_func, contract, function_args
-        );
-        auto contract_call_op = builder.create< cir::CallOp >(
-            callee_function->getLoc(), symbol_ref,
-            contract_func->getResultTypes().size() != 0
-                ? contract_func->getResultTypes().front()
-                : mlir::Type(),
-            function_args
-        );
-
-        // Set appropriate attributes based on operation type
-        set_instrumentation_call_attributes(contract_call_op, call_op);
-
-        if (should_inline) {
-            inline_worklists.push_back(contract_call_op);
-        }
-    }
-
     void InstrumentationPass::apply_contract_action_to_targets(
         llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
         const contract::MetaContractConfig &meta_contract,
@@ -2154,12 +1799,23 @@ don't yet pass)
                 );
 
                 if (isMatch) {
-                    auto contract_module = load_code_module(
-                        *call_op->getContext(), *contract_to_apply.spec->contract_module
-                    );
-                    if (!contract_module) {
-                        LOG(ERROR) << "Failed to load contract module for function: "
-                                   << call_op.getCallee()->str() << "\n";
+                    // For static contracts, no contract module is needed
+                    mlir::OwningOpRef<mlir::ModuleOp> contract_module;
+                    if (contract_to_apply.spec->type == ContractType::STATIC) {
+                        LOG(INFO) << "Static contract '" << contract_to_apply.spec->name
+                                  << "' does not require contract module\n";
+                    } else if (contract_to_apply.spec->contract_module) {
+                        contract_module = load_code_module(
+                            *call_op->getContext(), *contract_to_apply.spec->contract_module
+                        );
+                        if (!contract_module) {
+                            LOG(ERROR) << "Failed to load contract module for function: "
+                                       << call_op.getCallee()->str() << "\n";
+                            return;
+                        }
+                    } else {
+                        LOG(ERROR) << "Non-static contract '" << contract_to_apply.spec->name
+                                   << "' is missing contract_module\n";
                         return;
                     }
 
@@ -2169,21 +1825,21 @@ don't yet pass)
                               << "' \n";
                     switch (action.mode) {
                         case contract::InfoMode::APPLY_BEFORE:
-                            apply_contract_before(
-                                call_op, contract_to_apply, contract_module.get(),
-                                meta_contract.optimization.contains("inline-patches")
+                            ContractOperationImpl::applyContractBefore(
+                                *this, call_op, contract_to_apply, contract_module.get(),
+                                options.enable_inlining
                             );
                             break;
                         case contract::InfoMode::APPLY_AFTER:
-                            apply_contract_after(
-                                call_op, contract_to_apply, contract_module.get(),
-                                meta_contract.optimization.contains("inline-patches")
+                            ContractOperationImpl::applyContractAfter(
+                                *this, call_op, contract_to_apply, contract_module.get(),
+                                options.enable_inlining
                             );
                             break;
                         case contract::InfoMode::APPLY_AT_ENTRYPOINT:
-                            apply_contract_at_entrypoint(
-                                call_op, contract_to_apply, contract_module.get(),
-                                meta_contract.optimization.contains("inline-patches")
+                            ContractOperationImpl::applyContractAtEntrypoint(
+                                *this, call_op, contract_to_apply, contract_module.get(),
+                                options.enable_inlining
                             );
                             break;
                         default:
@@ -2196,6 +1852,7 @@ don't yet pass)
                               << "' did not match the contract action; continuing\n";
                 }
             });
+            (void) meta_contract;
         }
     }
 
