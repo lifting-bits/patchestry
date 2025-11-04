@@ -1252,6 +1252,34 @@ namespace patchestry::ast {
         return create_builtin_call_expr(ctx, function, op, clang::Builtin::BIroundf);
     }
 
+    std::pair< clang::Stmt *, bool > OpBuilder::create_popcount(
+        clang::ASTContext &ctx, const Function &function, const Operation &op
+    ) {
+        if (op.inputs.size() != 1U || op.mnemonic != Mnemonic::OP_POPCOUNT) {
+            LOG(ERROR) << "POPCOUNT operation is invalid or has invalid input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        // Use __builtin_popcount for population count
+        return create_builtin_call_expr(
+            ctx, function, op, clang::Builtin::BI__builtin_popcount
+        );
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_lzcount(
+        clang::ASTContext &ctx, const Function &function, const Operation &op
+    ) {
+        if (op.inputs.size() != 1U || op.mnemonic != Mnemonic::OP_LZCOUNT) {
+            LOG(ERROR) << "LZCOUNT operation is invalid or has invalid input operand. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        // Use __builtin_clz for count leading zeros
+        return create_builtin_call_expr(ctx, function, op, clang::Builtin::BI__builtin_clz);
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_builtin_call_expr(
         clang::ASTContext &ctx, const Function &function, const Operation &op,
         clang::Builtin::ID id

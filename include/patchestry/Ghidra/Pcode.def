@@ -76,4 +76,6 @@
         X(DECLARE_PARAMETER) \
         X(DECLARE_LOCAL) \
         X(DECLARE_TEMPORARY) \
-        X(ADDRESS_OF)
+        X(ADDRESS_OF) \
+        X(POPCOUNT) \
+        X(LZCOUNT)

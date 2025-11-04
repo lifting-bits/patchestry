@@ -643,6 +643,10 @@ namespace patchestry::ast {
                 return op_builder->create_declare_local(ctx, op);
             case Mnemonic::OP_ADDRESS_OF:
                 return op_builder->create_unary_operation(ctx, function, op, clang::UO_AddrOf);
+            case Mnemonic::OP_POPCOUNT:
+                return op_builder->create_popcount(ctx, function, op);
+            case Mnemonic::OP_LZCOUNT:
+                return op_builder->create_lzcount(ctx, function, op);
             case Mnemonic::OP_UNKNOWN:
                 assert(false);
                 break;
