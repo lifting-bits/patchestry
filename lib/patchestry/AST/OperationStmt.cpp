@@ -22,6 +22,7 @@
 #include <clang/Basic/LangOptions.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/Specifiers.h>
+#include <clang/Sema/Lookup.h>
 #include <clang/Sema/Sema.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/Support/Casting.h>
@@ -87,6 +88,42 @@ namespace patchestry::ast {
                 LOG(ERROR) << "Failed to create default value for paramer\n";
                 return nullptr;
             }
+        }
+
+        /**
+         * Helper function to create a builtin call expression.
+         */
+        clang::Expr *create_builtin_call(
+            const clang::ASTContext &ctx, clang::Sema &sema,
+            const clang::Builtin::ID builtin_id, std::vector< clang::Expr * > &args,
+            const clang::SourceLocation loc
+        ) {
+            // Get the builtin name and create a lookup result
+            const auto name = ctx.BuiltinInfo.getName(builtin_id);
+            const clang::LookupResult r(
+                sema, &ctx.Idents.get(name), loc, clang::Sema::LookupOrdinaryName
+            );
+            auto *II = r.getLookupName().getAsIdentifierInfo();
+
+            // Get the builtin type
+            clang::ASTContext::GetBuiltinTypeError error{};
+            const auto ty = ctx.GetBuiltinType(builtin_id, error);
+            assert(!error && "Failed to get builtin type");
+
+            // Create the builtin declaration
+            auto *builtin_decl = sema.CreateBuiltin(II, ty, builtin_id, loc);
+
+            // Create a DeclRefExpr for the builtin
+            auto *decl_ref = clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), builtin_decl,
+                false, loc, builtin_decl->getType(), clang::VK_PRValue
+            );
+
+            // Build the call expression
+            auto result = sema.BuildCallExpr(nullptr, decl_ref, loc, args, loc);
+            assert(!result.isInvalid() && "Failed to build builtin call expr");
+
+            return result.getAs< clang::Expr >();
         }
 
     } // namespace
@@ -1225,6 +1262,9 @@ namespace patchestry::ast {
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
         auto *call_expr = sema().BuildBuiltinCallExpr(op_loc, id, { input_expr });
+        std::vector args = { input_expr };
+        auto *call_expr = create_builtin_call(ctx, sema(), id, args, op_loc);
+
         if (op.output.has_value()) {
             return { call_expr, true };
         }
