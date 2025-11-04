@@ -1289,7 +1289,6 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        auto *call_expr = sema().BuildBuiltinCallExpr(op_loc, id, { input_expr });
         std::vector args = { input_expr };
         auto *call_expr = create_builtin_call(ctx, sema(), id, args, op_loc);
 
