@@ -58,7 +58,6 @@ execution_order:                         # Order of patch/contract execution
 
 meta_patches:                            # Meta-patch configurations
   - name: ...
-    id: "..."
     description: "..."
     optimization:                        # Optimization settings
       - "inline-patches"
@@ -82,7 +81,6 @@ meta_patches:                            # Meta-patch configurations
 
 meta_contracts:                          # Meta-contract configurations
   - name: ...
-    id: "..."
     description: "..."
     contract_actions:                    # Individual contract actions
       - name: "..."
@@ -146,7 +144,6 @@ meta_contracts:                          # Meta-contract configurations
 | Field | Description | Example |
 |-------|-------------|---------|
 | `name` | Unique identifier for the patch group | `"usb_security_patches"` |
-| `id` | Internal identifier for the patch group | `"usb_security_patches"` |
 | `description` | Description of the patch group purpose | `"USB security monitoring patches"` |
 | `optimization` | List of optimization flags | `["inline-patches", "inline-contracts"]` |
 | `patch_actions` | List of individual patch actions | See [patch action fields](#patch-action-fields) below |
@@ -156,7 +153,6 @@ meta_contracts:                          # Meta-contract configurations
 | Field | Description | Example |
 |-------|-------------|---------|
 | `name` | Unique identifier for the contract group | `"usb_control_flow_contracts"` |
-| `id` | Internal identifier for the contract group | `"usb_control_flow_contracts"` |
 | `description` | Description of the contract group purpose | `"USB control flow integrity contracts"` |
 | `contract_actions` | List of individual contract actions | See [contract action fields](#contract-action-fields) below |
 

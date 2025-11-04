@@ -89,12 +89,12 @@ void prettyPrint(const passes::Configuration &config) {
         llvm::outs() << "Patch " << (i + 1) << ": " << patch.name << "\n";
 
         llvm::outs() << "  Patch:\n";
-        if (!patch.implementation.code_file.empty()) {
-            llvm::outs() << "    File: " << patch.implementation.code_file << "\n";
+        if (!patch.code_file.empty()) {
+            llvm::outs() << "    File: " << patch.code_file << "\n";
         }
 
-        if (!patch.implementation.function_name.empty()) {
-            llvm::outs() << "    Function: " << patch.implementation.function_name << "\n";
+        if (!patch.function_name.empty()) {
+            llvm::outs() << "    Function: " << patch.function_name << "\n";
         }
 
         // Print contracts

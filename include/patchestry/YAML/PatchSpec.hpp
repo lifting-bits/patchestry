@@ -65,18 +65,18 @@ namespace patchestry::passes {
         struct PatchSpec
         {
             std::string name;
-            std::string id;
             std::string description;
             std::string category;
             std::string severity;
-            Implementation implementation;
+            std::string code_file;
+            std::string function_name;
+            std::vector< Parameter > parameters;
             std::optional< std::string > patch_module;
         };
 
         struct MetaPatchConfig
         {
             std::string name;
-            std::string id;
             std::string description;
             std::set< std::string > optimization;
             std::vector< PatchAction > patch_actions;
@@ -114,11 +114,12 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, patch::PatchSpec &spec) {
             io.mapRequired("name", spec.name);
-            io.mapRequired("id", spec.id);
             io.mapOptional("description", spec.description);
             io.mapOptional("category", spec.category);
             io.mapOptional("severity", spec.severity);
-            io.mapRequired("implementation", spec.implementation);
+            io.mapRequired("code_file", spec.code_file);
+            io.mapRequired("function_name", spec.function_name);
+            io.mapOptional("parameters", spec.parameters);
         }
     };
 
@@ -202,7 +203,6 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, patch::MetaPatchConfig &meta_patch) {
             io.mapRequired("name", meta_patch.name);
-            io.mapRequired("id", meta_patch.id);
             io.mapOptional("description", meta_patch.description);
             io.mapRequired("patch_actions", meta_patch.patch_actions);
 

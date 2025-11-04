@@ -69,15 +69,6 @@ namespace patchestry::passes {
         std::string type;
         std::string description;
     };
-
-    struct Implementation
-    {
-        std::string language;
-        std::string code_file;
-        std::string function_name;
-        std::vector< Parameter > parameters;
-        std::vector< std::string > dependencies;
-    };
 } // namespace patchestry::passes
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::VariableMatch)
@@ -130,19 +121,6 @@ namespace llvm::yaml {
             io.mapRequired("name", param.name);
             io.mapOptional("type", param.type);
             io.mapOptional("description", param.description);
-        }
-    };
-
-    // Parse Implementation
-    template<>
-    struct MappingTraits< Implementation >
-    {
-        static void mapping(IO &io, Implementation &impl) {
-            io.mapOptional("language", impl.language);
-            io.mapRequired("code_file", impl.code_file);
-            io.mapOptional("function_name", impl.function_name);
-            io.mapRequired("parameters", impl.parameters);
-            io.mapOptional("dependencies", impl.dependencies);
         }
     };
 } // namespace llvm::yaml

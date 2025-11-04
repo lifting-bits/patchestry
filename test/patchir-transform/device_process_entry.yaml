@@ -22,7 +22,6 @@ execution_order:
 
 meta_patches:
   - name: bloodview_device_entry_meta_patch
-    id: "bloodview_device_entry_meta_patch"
     description: "Meta patches for fixing get device list in bloodview"
 
     # Patch Action Configuration
@@ -40,7 +39,7 @@ meta_patches:
          # Actions to Apply
         action:
           - mode: "replace"
-            patch_id: "DEVICE-LIST-REPLACE-SPRINTF-001"
+            patch_id: "device_list_replace_sprintf_patch"
             description: "Pre-validation security check"
             arguments:
               - name: "argument0"
@@ -58,7 +57,6 @@ meta_patches:
 
 meta_contracts:
   - name: bloodview_device_entry_meta_contract
-    id: "bloodview_device_entry_meta_contract"
     description: "Meta contracts for verifying the get device list in bloodview"
 
     # Contract Configuration
@@ -74,7 +72,7 @@ meta_contracts:
 
         action:
         - mode: "apply_after"
-          contract_id: "DEVICE-LIST-REPLACE-SPRINTF-CONTRACT-001"
+          contract_id: "device_list_replace_sprintf_contract"
           description: "Post-execution verification"
           arguments:
             - name: "return_value"

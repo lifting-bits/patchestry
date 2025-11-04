@@ -307,12 +307,6 @@ don't yet pass)
      */
     template< typename T >
     std::optional< T > lookup(const std::vector< T > &items, const std::string &name) {
-        for (const auto &item : items) {
-            if (item.id == name) {
-                return item;
-            }
-        }
-        LOG(WARNING) << "Falling back to lookup by name: '" << name << "'\n";
         return lookup_by_name(items, name);
     }
 
@@ -358,14 +352,14 @@ don't yet pass)
         config = std::move(config_or_err.value());
         for (auto &spec : config->libraries.patches) {
             auto patches_file_path =
-                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.code_file);
             if (!llvm::sys::fs::exists(patches_file_path)) {
                 LOG(ERROR) << "Patch file " << patches_file_path << " does not exist\n";
                 continue;
             }
 
             auto patch_file_path =
-                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.code_file);
             spec.patch_module = emitModuleAsString(patch_file_path, config->target.arch);
             if (!spec.patch_module) {
                 LOG(ERROR) << "Failed to emit patch module for " << spec.name << "\n";
@@ -374,7 +368,7 @@ don't yet pass)
         }
         for (auto &spec : config->libraries.contracts) {
             auto contracts_file_path =
-                ConfigurationFile::getInstance().resolve_path(spec.implementation.code_file);
+                ConfigurationFile::getInstance().resolve_path(spec.code_file);
             if (!llvm::sys::fs::exists(contracts_file_path)) {
                 LOG(ERROR) << "Contract file " << contracts_file_path << " does not exist\n";
                 continue;
@@ -861,9 +855,6 @@ don't yet pass)
             arg_map[symbol_reference] =
                 create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
         }
-
-        // LOG(DEBUG) << "arg_map[symbol] key=" << valueToString(symbol_reference)
-        //            << " value=" << valueToString(arg_map[symbol_reference]) << "\n";
     }
 
     void InstrumentationPass::handle_return_value_argument(
@@ -909,9 +900,6 @@ don't yet pass)
         }
 
         arg_map[arg_value] = create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
-
-        // LOG(DEBUG) << "arg_map[constant] key=" << valueToString(arg_value)
-        //        << " value=" << valueToString(arg_map[arg_value]) << "\n";
     }
 
     mlir::Value InstrumentationPass::parse_constant_operand(
@@ -1255,11 +1243,11 @@ don't yet pass)
         builder.setInsertionPoint(target_op);
         auto module = target_op->getParentOfType< mlir::ModuleOp >();
 
-        std::string patch_function_name =
-            namifyFunction(patch_spec.implementation.function_name);
+        std::string patch_function_name = namifyFunction(patch_spec.function_name);
         auto input_types = llvm::to_vector(target_op->getOperandTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-            LOG(ERROR) << "Patch module not found or patch function not defined\n";
+            LOG(ERROR) << "Patch module not found or patch function not defined: "
+                       << patch_function_name << "\n";
             return;
         }
 
@@ -1331,11 +1319,11 @@ don't yet pass)
         auto module = target_op->getParentOfType< mlir::ModuleOp >();
         builder.setInsertionPointAfter(target_op);
 
-        std::string patch_function_name =
-            namifyFunction(patch_spec.implementation.function_name);
+        std::string patch_function_name = namifyFunction(patch_spec.function_name);
         auto input_types = llvm::to_vector(target_op->getResultTypes());
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-            LOG(ERROR) << "Patch module not found or patch function not defined\n";
+            LOG(ERROR) << "Patch module not found or patch function not defined: "
+                       << patch_function_name << "\n";
             return;
         }
 
@@ -1409,11 +1397,12 @@ don't yet pass)
         auto callee_name = call_op.getCallee()->str();
         assert(!callee_name.empty() && "Wrap around patch: callee name is empty");
 
-        auto patch_function_name = namifyFunction(patch_spec.implementation.function_name);
+        auto patch_function_name = namifyFunction(patch_spec.function_name);
         auto result_types        = llvm::to_vector(call_op.getResultTypes());
 
         if (!patch_module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-            LOG(ERROR) << "Patch module not found or patch function not defined\n";
+            LOG(ERROR) << "Patch module not found or patch function not defined: "
+                       << patch_function_name << "\n";
             return;
         }
 
@@ -1431,8 +1420,7 @@ don't yet pass)
 
         auto wrap_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
         if (!wrap_func) {
-            LOG(ERROR) << "Wrap around patch: patch function "
-                       << patch_spec.implementation.function_name
+            LOG(ERROR) << "Wrap around patch: patch function " << patch_function_name
                        << " not defined. Patching failed...\n";
             return;
         }
@@ -1953,7 +1941,7 @@ don't yet pass)
         builder.setInsertionPoint(target_op);
         auto module = target_op->getParentOfType< mlir::ModuleOp >();
 
-        std::string contract_function_name = namifyFunction(spec.implementation.function_name);
+        std::string contract_function_name = namifyFunction(spec.function_name);
         auto input_types                   = llvm::to_vector(target_op->getOperandTypes());
         if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
             LOG(ERROR) << "Contract module not found or contract function not defined: "
@@ -2018,10 +2006,11 @@ don't yet pass)
         auto module = target_op->getParentOfType< mlir::ModuleOp >();
         builder.setInsertionPointAfter(target_op);
 
-        std::string contract_function_name = namifyFunction(spec.implementation.function_name);
+        std::string contract_function_name = namifyFunction(spec.function_name);
         auto input_types                   = llvm::to_vector(target_op->getResultTypes());
         if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            LOG(ERROR) << "Contract module not found or contract function not defined\n";
+            LOG(ERROR) << "Contract module not found or contract function not defined: "
+                       << contract_function_name << "\n";
             return;
         }
 
@@ -2077,10 +2066,10 @@ don't yet pass)
         }
 
         const auto &contract_spec = contract.spec.value();
-        std::string contract_function_name =
-            namifyFunction(contract_spec.implementation.function_name);
+        std::string contract_function_name = namifyFunction(contract_spec.function_name);
         if (!contract_module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            LOG(ERROR) << "Contract module not found or contract function not defined\n";
+            LOG(ERROR) << "Contract module not found or contract function not defined: "
+                       << contract_function_name << "\n";
             return;
         }
 
