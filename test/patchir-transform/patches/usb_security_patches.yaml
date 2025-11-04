@@ -11,52 +11,64 @@ metadata:
 
 patches:
   - name: usb_endpoint_write_validation_before
-    id: "USB-PATCH-BEFORE-001"
     description: "Validate USB endpoint write operations"
     category: usb_security
-    severity: high
-    
-    implementation:
-      # this reference is in relation to the location of the meta-patch!
-      code_file: "patches/patch_usbd_ep_write_packet.c"
-      function_name: "patch::before::usbd_ep_write_packet"
-      parameters:
-      # https://www.kernel.org/doc/html/latest/driver-api/usb/usb.html#c.usb_device
-        - name: usb_device
-          type: "usb_device*"
-          description: "USB device context"
-        - name: buffer
-          type: "const void*"
-          description: "Data buffer to write"
-          
+    function_name: "patch::before::usbd_ep_write_packet"
+    code_file: "patches/patch_usbd_ep_write_packet.c"
+    parameters: # Parameters are optional and is for reference only
+      - name: usb_device
+        type: "usb_device*"
+        description: "USB device context"
+      - name: buffer
+        type: "const void*"
+        description: "Data buffer to write"
 
   - name: usb_endpoint_write_validation_after
-    id: "USB-PATCH-AFTER-001"
     description: "Validate USB endpoint write return value"
     category: usb_security
-    severity: high
-
-    implementation:
-      code_file: "patches/patch_usbd_ep_write_packet.c"
-      function_name: "patch::after::usbd_ep_write_packet"
-      parameters:
-        - name: return_value
-          type: "uint32_t"
-          description: "Return value from USB endpoint write operation"
+    code_file: "patches/patch_usbd_ep_write_packet.c"
+    function_name: "patch::after::usbd_ep_write_packet"
+    parameters: # Parameters are optional and is for reference only
+      - name: "return_value"
+        type: "uint32_t"
+        description: "Return value from USB endpoint write operation"
 
   - name: usb_endpoint_write_validation_before_update_state
-    id: "USB-PATCH-BEFORE-UPDATE-STATE-001"
     description: "Validate USB endpoint write operations"
     category: usb_security
-    severity: high
+    code_file: "patches/patch_usbd_ep_write_packet.c"
+    function_name: "patch::before::usbd_cp_write_packet::update_state"
+    parameters: # Parameters are optional and is for reference only
+      - name: usb_device_pointer
+        type: "void**"
+        description: "USB device context pointer"
+      - name: buffer_pointer
+        type: "void**"
+        description: "Data buffer to write"
 
-    implementation:
-      code_file: "patches/patch_usbd_ep_write_packet.c"
-      function_name: "patch::before::usbd_cp_write_packet::update_state"
-      parameters:
-        - name: usb_device_pointer
-          type: "void**"
-          description: "USB device context pointer"
-        - name: buffer_pointer
-          type: "void**"
-          description: "Data buffer to write"
+contracts:
+  - name: "usb_endpoint_write_validation_contract_before"
+    description: "Validate USB endpoint write"
+    category: "write_validation"
+    code_file: "contracts/usb_endpoint_write_validation.c"
+    function_name: "contract::before::test_contract"
+    parameters: # Parameters are optional and is for reference only
+      - name: usb_device
+        type: "usb_device*"
+        description: "USB device context"
+      - name: buffer
+        type: "const void*"
+        description: "Data buffer to write"
+  
+  - name: "test_entrypoint_insertion"
+    description: "Validate USB endpoint write at function entrypoint"
+    category: "write_validation"
+    code_file: "contracts/usb_endpoint_write_validation.c"
+    function_name: "contract::before::message_check_contract"
+    parameters:
+      - name: usb_device
+        type: "usb_device*"
+        description: "USB device context"
+      - name: buffer
+        type: "const void*"
+        description: "Data buffer to write"

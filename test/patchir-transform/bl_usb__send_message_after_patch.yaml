@@ -15,7 +15,6 @@ target:
 libraries:
  # these references are in relation to the location of this file
   - "patches/usb_security_patches.yaml"
-#  contracts: "contracts/usb_security_contracts.yaml"
 
 execution_order:
   - "meta_patches::usb_security_meta_patches"
@@ -23,7 +22,6 @@ execution_order:
 
 meta_patches:
   - name: usb_security_meta_patches
-    id: "usb_security_meta_patches"
     description: "Meta patches for USB security"
 
     # Patch Action Configuration
@@ -45,7 +43,7 @@ meta_patches:
          # Actions to Apply
          action:
           - mode: "apply_after"
-            patch_id: "USB-PATCH-AFTER-001"
+            patch_id: "usb_endpoint_write_validation_after"
             description: "Checks function return value"
             arguments:
               - name: "function_return_value"

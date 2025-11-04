@@ -11,60 +11,43 @@ metadata:
 
 patches:
   - name: "measurement_update_before_patch"
-    id: "MEASUREMENT-UPDATE-BEFORE-PATCH-001"
     description: "Measurement update patch"
     category: "measurement"
-    severity: "high"
-
-    implementation:
-      code_file: "patches/patch_spo2_lookup.c"
-      function_name: "patch::before::spo2_lookup"
-      parameters:
-        - name: "function_argument"
-          type: "!cir.float"
-          description: "Function argument"
-
+    code_file: "patches/patch_spo2_lookup.c"
+    function_name: "patch::before::spo2_lookup"
+    parameters: # Parameters are optional and is for reference only
+      - name: "function_argument"
+        type: "float"
+        description: "Function argument"
 
 
   - name: "measurement_update_after_patch"
-    id: "MEASUREMENT-UPDATE-AFTER-PATCH-001"
     description: "Measurement update patch"
     category: "measurement"
-    severity: "high"
-
-    implementation:
-      code_file: "patches/patch_spo2_lookup.c"
-      function_name: "patch::after::spo2_lookup"
-      parameters:
-        - name: "function_return_value"
-          type: "!cir.uint8"
-          description: "Function return value"
+    code_file: "patches/patch_spo2_lookup.c"
+    function_name: "patch::after::spo2_lookup"
+    parameters: # Parameters are optional and is for reference only
+      - name: "function_return_value"
+        type: "uint8_t"
+        description: "Function return value"
 
 
   - name: "measurement_update_before_operation"
-    id: "MEASUREMENT-UPDATE-BEFORE-OPERATION-001"
     description: "Measurement update patch"
     category: "measurement"
-    severity: "high"
-
-    implementation:
-      code_file: "patches/patch_spo2_lookup.c"
-      function_name: "patch::before::spo2_lookup"
-      parameters:
-        - name: "function_argument"
-          type: "!cir.float"
-          description: "Function argument"
+    code_file: "patches/patch_spo2_lookup.c"
+    function_name: "patch::before::spo2_lookup"
+    parameters: # Parameters are optional and is for reference only
+      - name: "function_argument"
+        type: "float"
+        description: "Function argument"
 
   - name: "measurement_update_replace_patch"
-    id: "MEASUREMENT-UPDATE-REPLACE-PATCH-001"
     description: "Measurement update patch"
     category: "measurement"
-    severity: "high"
-
-    implementation:
-      code_file: "patches/patch_spo2_lookup.c"
-      function_name: "patch::replace::spo2_lookup"
-      parameters:
-        - name: "function_argument"
-          type: "!cir.float"
-          description: "Function argument"
+    code_file: "patches/patch_spo2_lookup.c"
+    function_name: "patch::replace::spo2_lookup"
+    parameters: # Parameters are optional and is for reference only
+      - name: "function_argument"
+        type: "float"
+        description: "Function argument"

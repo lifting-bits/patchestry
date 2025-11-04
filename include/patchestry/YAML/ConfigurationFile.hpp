@@ -154,11 +154,9 @@ namespace patchestry::yaml {
                 }
 
                 // Validate patch file exists if specified
-                if (!patch.implementation.code_file.empty()) {
-                    if (!llvm::sys::fs::exists(patch.implementation.code_file)) {
-                        LOG(ERROR)
-                            << "Patch file does not exist: " << patch.implementation.code_file
-                            << "\n";
+                if (!patch.code_file.empty()) {
+                    if (!llvm::sys::fs::exists(patch.code_file)) {
+                        LOG(ERROR) << "Patch file does not exist: " << patch.code_file << "\n";
                         return false;
                     }
                 }

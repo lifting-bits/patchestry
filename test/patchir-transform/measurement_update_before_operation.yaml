@@ -18,7 +18,6 @@ target:
 
 meta_patches:
   - name: "measurement_update_before_operation"
-    id: "MEASUREMENT-UPDATE-BEFORE-OPERATION-001"
     description: "Patch measurement update before operation"
 
     patch_actions:
@@ -42,7 +41,7 @@ meta_patches:
         # Actions to Apply
         action:
           - mode: "apply_before"
-            patch_id: "MEASUREMENT-UPDATE-BEFORE-OPERATION-001"
+            patch_id: "measurement_update_before_operation"
             description: "Patch measurement update before operation"
 
             # Arguments

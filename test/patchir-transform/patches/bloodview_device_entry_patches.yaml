@@ -9,40 +9,33 @@ metadata:
 
 patches:
   - name: "device_list_replace_sprintf_patch"
-    id: "DEVICE-LIST-REPLACE-SPRINTF-001"
     description: "Device list replace sprintf patch"
     category: "device"
-    severity: "high"
-
-    implementation:
-      code_file: "patches/bloodview_patch.c"
-      function_name: "patch::replace::sprintf"
-      parameters:
-        - name: "argument0"
-          type: "!cir.string"
-          description: "Argument 0"
-        - name: "argument1"
-          type: "!cir.size_t"
-          description: "Argument 1"
-        - name: "argument2"
-          type: "!cir.string"
-          description: "Argument 2"
+    code_file: "patches/bloodview_patch.c"
+    function_name: "patch::replace::sprintf"
+    parameters: # Parameters are optional and is for reference only
+      - name: "argument0"
+        type: "string"
+        description: "Argument 0"
+      - name: "argument1"
+        type: "size_t"
+        description: "Argument 1"
+      - name: "argument2"
+        type: "string"
+        description: "Argument 2"
 
 
 contracts:
   - name: "device_list_replace_sprintf_contract"
-    id: "DEVICE-LIST-REPLACE-SPRINTF-CONTRACT-001"
     description: "Device list replace sprintf patch"
     category: "device"
     severity: "high"
-
-    implementation:
-      code_file: "patches/bloodview_patch.c"
-      function_name: "contract::sprintf"
-      parameters:
-        - name: "return_value"
-          type: "!cir.s32i"
-          description: "Return value"
-        - name: "dest_size"
-          type: "!cir.s32i"
-          description: "Destination size"
+    code_file: "patches/bloodview_patch.c"
+    function_name: "contract::sprintf"
+    parameters: # Parameters are optional and is for reference only
+      - name: "return_value"
+        type: "int"
+        description: "Return value"
+      - name: "dest_size"
+        type: "size_t"
+        description: "Destination size"

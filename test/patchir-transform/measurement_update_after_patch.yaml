@@ -18,7 +18,6 @@ target:
 
 meta_patches:
   - name: "measurement_update_after_patch"
-    id: "MEASUREMENT-UPDATE-AFTER-PATCH-001"
     description: "Patch measurement update after function"
 
     patch_actions:
@@ -33,7 +32,7 @@ meta_patches:
         # Actions to Apply
         action:
           - mode: "apply_after"
-            patch_id: "MEASUREMENT-UPDATE-AFTER-PATCH-001"
+            patch_id: "measurement_update_after_patch"
             description: "Patch measurement update after function"
 
             # Arguments

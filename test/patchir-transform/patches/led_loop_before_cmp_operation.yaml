@@ -11,15 +11,11 @@ metadata:
 
 patches:
   - name: "led_loop_before_cmp_operation"
-    id: "LED-LOOP-BEFORE-CMP-OPERATION-001"
     description: "LED loop before cmp operation"
     category: "led"
-    severity: "high"
-
-    implementation:
-      code_file: "patches/patch_bl_spi_mode.c"
-      function_name: "patch::before::cmp__bl_spi_mode"
-      parameters:
-        - name: "global_var"
-          type: "uint32_t"
-          description: "Global variable"
+    code_file: "patches/patch_bl_spi_mode.c"
+    function_name: "patch::before::cmp__bl_spi_mode"
+    parameters: # Parameters are optional and is for reference only
+      - name: "global_var"
+        type: "uint32_t"
+        description: "Global variable"

@@ -73,18 +73,18 @@ namespace patchestry::passes {
         struct ContractSpec
         {
             std::string name;
-            std::string id;
             std::string description;
             std::string category;
             std::string severity;
-            Implementation implementation;
+            std::string code_file;
+            std::string function_name;
+            std::vector< Parameter > parameters;
             std::optional< std::string > contract_module;
         };
 
         struct MetaContractConfig
         {
             std::string name;
-            std::string id;
             std::string description;
             std::vector< ContractAction > contract_actions;
             std::set< std::string > optimization;
@@ -122,12 +122,12 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, contract::ContractSpec &spec) {
             io.mapRequired("name", spec.name);
-            io.mapRequired("id", spec.id);
             io.mapOptional("description", spec.description);
             io.mapOptional("category", spec.category);
             io.mapOptional("severity", spec.severity);
-            io.mapRequired("implementation", spec.implementation);
-            io.mapOptional("contract_module", spec.contract_module);
+            io.mapRequired("code_file", spec.code_file);
+            io.mapRequired("function_name", spec.function_name);
+            io.mapOptional("parameters", spec.parameters);
         }
     };
 
@@ -208,7 +208,6 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, contract::MetaContractConfig &meta_contract) {
             io.mapRequired("name", meta_contract.name);
-            io.mapOptional("id", meta_contract.id);
             io.mapOptional("description", meta_contract.description);
             io.mapRequired("contract_actions", meta_contract.contract_actions);
 

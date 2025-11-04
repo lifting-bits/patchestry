@@ -18,7 +18,6 @@ target:
 
 meta_patches:
   - name: "measurement_update_before_patch"
-    id: "MEASUREMENT-UPDATE-BEFORE-PATCH-001"
     description: "Patch measurement update before function"
 
     patch_actions:
@@ -37,7 +36,7 @@ meta_patches:
         # Actions to Apply
         action:
           - mode: "apply_before"
-            patch_id: "MEASUREMENT-UPDATE-BEFORE-PATCH-001"
+            patch_id: "measurement_update_before_patch"
             description: "Patch measurement update before function"
 
             # Arguments

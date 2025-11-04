@@ -16,16 +16,15 @@ libraries:
   - "patches/led_loop_before_cmp_operation.yaml"
 
 execution_order:
-  - "meta_patches::LED-LOOP-BEFORE-CMP-OPERATION"
+  - "meta_patches::led_loop_before_cmp_operation"
 
 
 meta_patches:
   - name: "led_loop_before_cmp_operation"
-    id: "LED-LOOP-BEFORE-CMP-OPERATION"
     description: "Apply before cmp operation"
 
     patch_actions:
-      - id: "LED-LOOP-BEFORE-CMP-OPERATION"
+      - id: "led_loop_before_cmp_operation"
         description: "Apply before cmp operation"
 
         # Match Configuration
@@ -39,7 +38,7 @@ meta_patches:
         # Actions to Apply
         action:
           - mode: "apply_before"
-            patch_id: "LED-LOOP-BEFORE-CMP-OPERATION-001"
+            patch_id: "led_loop_before_cmp_operation"
             description: "Apply before cmp operation"
             arguments:
               - name: "global_var"
