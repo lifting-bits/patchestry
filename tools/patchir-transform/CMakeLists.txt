@@ -21,6 +21,7 @@ target_link_libraries(patchir-transform
         patchestry::passes
         patchestry::yaml
         MLIROptLib
+        MLIRContracts
 )
 
 mlir_check_link_libraries(patchir-transform)

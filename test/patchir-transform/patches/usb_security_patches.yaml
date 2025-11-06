@@ -50,6 +50,7 @@ contracts:
   - name: "usb_endpoint_write_validation_contract_before"
     description: "Validate USB endpoint write"
     category: "write_validation"
+    type: "RUNTIME"
     code_file: "contracts/usb_endpoint_write_validation.c"
     function_name: "contract::before::test_contract"
     parameters: # Parameters are optional and is for reference only
@@ -63,6 +64,7 @@ contracts:
   - name: "test_entrypoint_insertion"
     description: "Validate USB endpoint write at function entrypoint"
     category: "write_validation"
+    type: "RUNTIME"
     code_file: "contracts/usb_endpoint_write_validation.c"
     function_name: "contract::before::message_check_contract"
     parameters:
@@ -72,3 +74,64 @@ contracts:
       - name: buffer
         type: "const void*"
         description: "Data buffer to write"
+
+
+  - name: "usb_endpoint_write_validation_contract_static"
+    description: "Validate USB endpoint write"
+    category: "write_validation"
+    type: "STATIC"
+
+    preconditions:
+      - id: "precondition_1"
+        pred:
+          kind: "relation"
+          target: "arg0"
+          relation: "ne"
+          value: "0"
+          symbol: "usb_device"
+      - id: "precondition_2"
+        pred:
+          kind: "relation"
+          target: "arg1"
+          relation: "ne"
+          value: "0"
+          symbol: "buffer"
+      - id: "precondition_3"
+        pred:
+          kind: "range"
+          target: "arg2"
+          relation: "none"
+          symbol: "buffer_length"
+          range:
+            min: "0"
+            max: "512"
+
+    postconditions:
+      - id: "postcondition_1"
+        pred:
+          kind: "range"
+          target: "return_value"
+          relation: "none"
+          range:
+            min: "0"
+            max: "512"
+
+  - name: "test_entrypoint_insertion_contract_static"
+    description: "Validate USB endpoint write at function entrypoint"
+    category: "write_validation"
+    type: "STATIC"
+
+    preconditions:
+      - id: "precondition_1"
+        pred:
+          kind: "relation"
+          target: "arg0"
+          relation: "eq"
+          value: "1"
+
+    postconditions:
+      - id: "postcondition_1"
+        pred:
+          kind: "expr"
+          relation: "none"
+          expr: "usb_device != NULL"
