@@ -43,6 +43,7 @@ execute_process(COMMAND ${CMAKE_COMMAND}
                         -DWITH_THREADS=ON
                         -DWITH_TLS=ON
                         -DWITH_UNWIND=OFF
+                        -DBUILD_TESTING=OFF
                         "-Dgflags_DIR=${gflags_DIR}"
                         -DCMAKE_SUPPRESS_DEVELOPER_WARNINGS=TRUE
                         -Wno-error=dev
