@@ -100,7 +100,6 @@ contracts:
         pred:
           kind: "range"
           target: "arg2"
-          relation: "none"
           symbol: "buffer_length"
           range:
             min: "0"
@@ -111,7 +110,6 @@ contracts:
         pred:
           kind: "range"
           target: "return_value"
-          relation: "none"
           range:
             min: "0"
             max: "512"
@@ -133,5 +131,4 @@ contracts:
       - id: "postcondition_1"
         pred:
           kind: "expr"
-          relation: "none"
           expr: "usb_device != NULL"

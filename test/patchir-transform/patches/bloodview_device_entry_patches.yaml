@@ -59,7 +59,6 @@ contracts:
         pred:
           kind: "range"
           target: "return_value"
-          relation: "none"
           range:
             min: "0"
             max: "32"

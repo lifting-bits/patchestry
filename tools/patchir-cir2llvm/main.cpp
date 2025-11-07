@@ -30,6 +30,7 @@
 #include <mlir/Target/LLVMIR/Dialect/All.h>
 #include <mlir/Target/LLVMIR/Import.h>
 
+#include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Util/Log.hpp>
 
 namespace {
@@ -124,11 +125,110 @@ namespace {
     struct OperationMetadata {
         std::string operation_name;
         std::string patchestry_operation;
+        std::string static_contract;
         // MLIR location information
         std::string mlir_file;
         unsigned mlir_line = 0;
         unsigned mlir_column = 0;
     };
+
+    // Helper function to serialize a PredicateAttr to a human-readable string
+    std::string serializePredicateAttr(const ::contracts::PredicateAttr &pred) {
+        std::string result;
+        llvm::raw_string_ostream os(result);
+
+        // Write predicate kind
+        os << "kind=" << ::contracts::stringifyPredicateKind(pred.getKind());
+
+        if (pred.getTarget()) {
+            os << ", target=";
+            auto target = pred.getTarget();
+            os << ::contracts::stringifyTargetKind(target.getKind());
+            if (target.getKind() == ::contracts::TargetKind::Arg) {
+                os << "(" << target.getIndex() << ")";
+            } else if (target.getKind() == ::contracts::TargetKind::Symbol
+                       && target.getSymbol())
+            {
+                os << "(" << target.getSymbol().getValue() << ")";
+            }
+        }
+
+        // Write relation if present
+        if (pred.getRelation() != ::contracts::RelationKind::none) {
+            os << ", relation=" << ::contracts::stringifyRelationKind(pred.getRelation());
+        }
+
+        // Write alignment if present
+        if (pred.getAlign()) {
+            os << ", align=" << pred.getAlign().getAlignment();
+        }
+
+        // Write expression if present
+        if (pred.getExpr()) {
+            os << ", expr=\"" << pred.getExpr().getValue() << "\"";
+        }
+
+        // Write range if present
+        if (pred.getRange()) {
+            os << ", range=[";
+            if (pred.getRange().getMin()) {
+                os << "min=" << pred.getRange().getMin().getValue();
+            }
+            if (pred.getRange().getMax()) {
+                os << ", max=" << pred.getRange().getMax().getValue();
+            }
+            os << "]";
+        }
+
+        return os.str();
+    }
+
+    // Helper function to serialize a StaticContractAttr to a human-readable string
+    std::string serializeStaticContract(const ::contracts::StaticContractAttr &contract) {
+        std::string result;
+        llvm::raw_string_ostream os(result);
+
+        // Serialize preconditions
+        auto preconditions = contract.getPreconditions();
+        if (!preconditions.empty()) {
+            os << "preconditions=[";
+            bool first = true;
+            for (auto attr : preconditions) {
+                if (auto preAttr = mlir::dyn_cast< ::contracts::PreconditionAttr >(attr)) {
+                    if (!first) {
+                        os << "; ";
+                    }
+                    first = false;
+                    os << "{id=\"" << preAttr.getId().getValue() << "\", "
+                       << serializePredicateAttr(preAttr.getPred()) << "}";
+                }
+            }
+            os << "]";
+        }
+
+        // Serialize postconditions
+        auto postconditions = contract.getPostconditions();
+        if (!postconditions.empty()) {
+            if (!preconditions.empty()) {
+                os << ", ";
+            }
+            os << "postconditions=[";
+            bool first = true;
+            for (auto attr : postconditions) {
+                if (auto postAttr = mlir::dyn_cast< ::contracts::PostconditionAttr >(attr)) {
+                    if (!first) {
+                        os << "; ";
+                    }
+                    first = false;
+                    os << "{id=" << postAttr.getId().getValue() << ", "
+                       << serializePredicateAttr(postAttr.getPred()) << "}";
+                }
+            }
+            os << "]";
+        }
+
+        return os.str();
+    }
 
     // Collects string attributes from MLIR operations
     std::vector< OperationMetadata > collectAttributes(mlir::ModuleOp module) {
@@ -179,6 +279,21 @@ namespace {
                               << metadata.mlir_column;
                 }
                 LOG(INFO) << "\n";
+            }
+
+            if (auto attr =
+                    op->getAttrOfType< ::contracts::StaticContractAttr >("contract.static"))
+            {
+                metadata.static_contract = serializeStaticContract(attr);
+                metadata_list.push_back(metadata);
+                LOG(INFO) << "Found contract.static attribute on operation: "
+                          << metadata.operation_name
+                          << "\nContract details: " << metadata.static_contract << "\n";
+                if (!metadata.mlir_file.empty()) {
+                    LOG(INFO) << " at " << metadata.mlir_file << ":" << metadata.mlir_line
+                              << ":" << metadata.mlir_column;
+                }
+                LOG(INFO) << "\nStatic contract details: " << metadata.static_contract << "\n";
             }
         });
 
@@ -235,6 +350,9 @@ namespace {
                           << " op=" << metadata.operation_name;
                 if (!metadata.patchestry_operation.empty()) {
                     LOG(INFO) << " patchestry_op=" << metadata.patchestry_operation;
+                }
+                if (!metadata.static_contract.empty()) {
+                    LOG(INFO) << " static_contract=" << metadata.static_contract;
                 }
                 LOG(INFO) << "\n";
             }
@@ -294,17 +412,39 @@ namespace {
                     }
 
                     // If we found matching metadata, attach custom patchestry metadata
-                    if (matched_metadata && !matched_metadata->patchestry_operation.empty()) {
-                        llvm::MDNode *md_node = llvm::MDNode::get(
-                            context,
-                            { llvm::MDString::get(context, "patchestry_operation"),
-                              llvm::MDString::get(
-                                  context, matched_metadata->patchestry_operation
-                              ) }
-                        );
-                        inst.setMetadata("patchestry", md_node);
+                    if (matched_metadata) {
+                        if (!matched_metadata->patchestry_operation.empty()) {
+                            llvm::MDNode *md_node = llvm::MDNode::get(
+                                context,
+                                { llvm::MDString::get(context, "patchestry_operation"),
+                                  llvm::MDString::get(
+                                      context, matched_metadata->patchestry_operation
+                                  ) }
+                            );
+                            inst.setMetadata("patchestry", md_node);
+                        }
 
-                        // Also add MLIR location information as metadata
+                        LOG(INFO)
+                            << "Attached patchestry_operation metadata '"
+                            << matched_metadata->patchestry_operation << "' to instruction at "
+                            << llvm_file.str() << ":" << llvm_line << ":" << llvm_col << "\n";
+
+                        if (!matched_metadata->static_contract.empty()) {
+                            llvm::MDNode *contract_node = llvm::MDNode::get(
+                                context,
+                                { llvm::MDString::get(context, "static_contract"),
+                                  llvm::MDString::get(
+                                      context, matched_metadata->static_contract
+                                  ) }
+                            );
+                            inst.setMetadata("static_contract", contract_node);
+
+                            LOG(INFO)
+                                << "Attached static contract metadata to instruction at "
+                                << llvm_file.str() << ":" << llvm_line << ":" << llvm_col
+                                << "\nContract: " << matched_metadata->static_contract << "\n";
+                        }
+
                         llvm::MDNode *mlir_loc_node = llvm::MDNode::get(
                             context,
                             { llvm::MDString::get(context, "mlir_location"),
@@ -318,14 +458,14 @@ namespace {
                         );
                         inst.setMetadata("mlir_loc", mlir_loc_node);
 
-                        matched_count++;
-
-                        LOG(INFO)
-                            << "Attached patchestry metadata '"
-                            << matched_metadata->patchestry_operation << "' to instruction at "
-                            << llvm_file.str() << ":" << llvm_line << ":" << llvm_col << "\n";
+                        LOG(INFO) << "Attached MLIR location metadata to instruction at "
+                                  << llvm_file.str() << ":" << llvm_line << ":" << llvm_col
+                                  << "\nMLIR location: " << matched_metadata->mlir_file << ":"
+                                  << matched_metadata->mlir_line << ":"
+                                  << matched_metadata->mlir_column << "\n";
                     }
                 }
+                matched_count++;
             }
         }
 
@@ -364,6 +504,8 @@ int main(int argc, char **argv) {
 
     registry.insert< cir::CIRDialect >();
     cir::direct::registerCIRDialectTranslation(registry);
+
+    registry.insert< ::contracts::ContractsDialect >();
 
     mlir::MLIRContext context(registry);
     auto file_or_err = llvm::MemoryBuffer::getFileOrSTDIN(input_filename);

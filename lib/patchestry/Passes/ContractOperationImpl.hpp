@@ -34,31 +34,27 @@ namespace patchestry::passes {
 
         static void emitRuntimeContract(
             InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-            mlir::ModuleOp contractModule, const ContractInformation &contract,
-            ContractMode mode, bool shouldInline
+            const ContractInformation &contract, ContractMode mode, bool shouldInline
         );
 
         static void emitStaticContract(
             InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-            mlir::ModuleOp contractModule, const ContractInformation &contract,
-            ContractMode mode, bool shouldInline
+            const ContractInformation &contract, ContractMode mode, bool shouldInline
         );
 
         static void applyContractBefore(
             InstrumentationPass &pass, mlir::Operation *targetOp,
-            const ContractInformation &contract, mlir::ModuleOp contractModule,
-            bool shouldInline
+            const ContractInformation &contract, bool shouldInline
         );
 
         static void applyContractAfter(
             InstrumentationPass &pass, mlir::Operation *targetOp,
-            const ContractInformation &contract, mlir::ModuleOp contractModule,
-            bool shouldInline
+            const ContractInformation &contract, bool shouldInline
         );
 
         static void applyContractAtEntrypoint(
             InstrumentationPass &pass, cir::CallOp callOp, const ContractInformation &contract,
-            mlir::ModuleOp contractModule, bool shouldInline
+            bool shouldInline
         );
     };
 

@@ -7,8 +7,10 @@
 
  #pragma once
 
+#include <llvm/ADT/StringRef.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinOps.h>
+#include <string>
 
 namespace patchestry::passes {
 
@@ -78,6 +80,25 @@ namespace patchestry::passes {
          static void replaceCallWithPatch(
              InstrumentationPass &pass, cir::CallOp op, const PatchInformation &patch,
              mlir::ModuleOp patch_module, bool inline_patches
+         );
+
+         /**
+          * @brief Ensures that the patch function is available in the target module.
+          *
+          * This method checks if the patch function is available in the target module. If not,
+          * it loads the patch module and merges the patch function into the target module.
+          *
+          * @param pass The instrumentation pass instance
+          * @param target_module The target module to check
+          * @param patch_module The patch module to load
+          * @param patch_function_name The name of the patch function to check
+          * @param context_label The context label to use for logging
+          * @return The patch function if it is available, otherwise an empty cir::FuncOp
+          */
+         static cir::FuncOp ensurePatchFunctionAvailable(
+             InstrumentationPass &pass, mlir::ModuleOp target_module,
+             mlir::ModuleOp patch_module, const std::string &patch_function_name,
+             llvm::StringRef context_label = {}
          );
      };
 } // namespace patchestry::passes

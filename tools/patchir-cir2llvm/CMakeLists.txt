@@ -19,6 +19,7 @@ target_link_libraries(patchir-cir2llvm
         MLIRVCIXToLLVMIRTranslation
         MLIRX86VectorToLLVMIRTranslation
         MLIROpenACCToLLVMIRTranslation
+        MLIRContracts
 )
 
 if(PATCHESTRY_INSTALL)

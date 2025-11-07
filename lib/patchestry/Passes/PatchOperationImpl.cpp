@@ -10,10 +10,10 @@
  #include <mlir/IR/SymbolTable.h>
  
  #include <clang/CIR/Dialect/IR/CIRDialect.h>
- 
- #include <patchestry/Passes/InstrumentationPass.hpp>
- #include <patchestry/Util/Log.hpp>
- #include <patchestry/YAML/PatchSpec.hpp>
+
+#include <patchestry/Passes/InstrumentationPass.hpp>
+#include <patchestry/Util/Log.hpp>
+#include <patchestry/YAML/PatchSpec.hpp>
 
 #include "PatchOperationImpl.hpp"
 
@@ -21,6 +21,71 @@ namespace patchestry {
     namespace passes {
 
         extern std::string namifyFunction(const std::string &str);
+
+        namespace {
+            std::string make_log_prefix(llvm::StringRef context_label) {
+                if (context_label.empty()) {
+                    return {};
+                }
+                std::string prefix = context_label.str();
+                prefix.append(": ");
+                return prefix;
+            }
+        } // namespace
+
+        cir::FuncOp PatchOperationImpl::ensurePatchFunctionAvailable(
+            InstrumentationPass &pass, mlir::ModuleOp target_module,
+            mlir::ModuleOp patch_module, const std::string &patch_function_name,
+            llvm::StringRef context_label
+        ) {
+            const auto prefix = make_log_prefix(context_label);
+
+            if (!patch_module) {
+                LOG(ERROR) << prefix << "patch module is null";
+                return {};
+            }
+
+            if (patch_function_name.empty()) {
+                LOG(ERROR) << prefix << "patch function name is empty";
+                return {};
+            }
+
+            auto patch_func_from_module =
+                patch_module.lookupSymbol< cir::FuncOp >(patch_function_name);
+            if (!patch_func_from_module) {
+                LOG(ERROR) << prefix << "patch function " << patch_function_name
+                           << " not defined in patch module";
+                return {};
+            }
+
+            if (!target_module) {
+                LOG(ERROR) << prefix << "target module is null";
+                return {};
+            }
+
+            auto patch_func = target_module.lookupSymbol< cir::FuncOp >(patch_function_name);
+            if (!patch_func) {
+                auto merge_result =
+                    pass.merge_module_symbol(target_module, patch_module, patch_function_name);
+                if (mlir::failed(merge_result)) {
+                    LOG(ERROR) << prefix << "failed to merge patch function "
+                               << patch_function_name;
+                    return {};
+                }
+
+                patch_func = target_module.lookupSymbol< cir::FuncOp >(patch_function_name);
+                if (!patch_func) {
+                    LOG(ERROR) << prefix << "patch function " << patch_function_name
+                               << " missing after merge";
+                    return {};
+                }
+            } else {
+                LOG(INFO) << prefix << "patch function " << patch_function_name
+                          << " already present, skipping merge";
+            }
+
+            return patch_func;
+        }
 
         void PatchOperationImpl::applyBeforePatch(
             InstrumentationPass &pass, mlir::Operation *target_op,
@@ -40,32 +105,10 @@ namespace patchestry {
             auto module = target_op->getParentOfType< mlir::ModuleOp >();
 
             std::string patch_function_name = namifyFunction(patch_spec.function_name);
-            auto input_types                = llvm::to_vector(target_op->getOperandTypes());
-
-            auto patch_func_from_module =
-                patch_module.lookupSymbol< cir::FuncOp >(patch_function_name);
-            if (!patch_func_from_module) {
-                LOG(ERROR) << "Patch module not found or patch function not defined\n";
-                return;
-            }
-
-            // check if the patch function is already in the module, if not, merge it
-            if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-                auto result =
-                    pass.merge_module_symbol(module, patch_module, patch_function_name);
-                if (mlir::failed(result)) {
-                    LOG(ERROR) << "Failed to insert symbol into module\n";
-                    return;
-                }
-            } else {
-                LOG(INFO) << "Patch function " << patch_function_name
-                          << " already exists in module, skipping merge\n";
-            }
-
-            auto patch_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
+            auto patch_func                 = ensurePatchFunctionAvailable(
+                pass, module, patch_module, patch_function_name, "Patch before"
+            );
             if (!patch_func) {
-                LOG(ERROR) << "Patch function " << patch_function_name
-                           << " not defined. Patching failed...\n";
                 return;
             }
 
@@ -116,32 +159,10 @@ namespace patchestry {
             builder.setInsertionPointAfter(target_op);
 
             std::string patch_function_name = namifyFunction(patch_spec.function_name);
-            auto input_types                = llvm::to_vector(target_op->getResultTypes());
-
-            auto patch_func_from_module =
-                patch_module.lookupSymbol< cir::FuncOp >(patch_function_name);
-            if (!patch_func_from_module) {
-                LOG(ERROR) << "Patch module not found or patch function not defined\n";
-                return;
-            }
-
-            // check if the patch function is already in the module, if not, merge it
-            if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-                auto result =
-                    pass.merge_module_symbol(module, patch_module, patch_function_name);
-                if (mlir::failed(result)) {
-                    LOG(ERROR) << "Failed to insert symbol into module\n";
-                    return;
-                }
-            } else {
-                LOG(INFO) << "Patch function " << patch_function_name
-                          << " already exists in module, skipping merge\n";
-            }
-
-            auto patch_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
+            auto patch_func                 = ensurePatchFunctionAvailable(
+                pass, module, patch_module, patch_function_name, "Patch after"
+            );
             if (!patch_func) {
-                LOG(ERROR) << "Patch function " << patch_function_name
-                           << " not defined. Patching failed...\n";
                 return;
             }
 
@@ -191,32 +212,10 @@ namespace patchestry {
             assert(!callee_name.empty() && "Wrap around patch: callee name is empty");
 
             auto patch_function_name = namifyFunction(patch_spec.function_name);
-            auto result_types        = llvm::to_vector(call_op.getResultTypes());
-
-            auto patch_func_from_module =
-                patch_module.lookupSymbol< cir::FuncOp >(patch_function_name);
-            if (!patch_func_from_module) {
-                LOG(ERROR) << "Patch module not found or patch function not defined\n";
-                return;
-            }
-
-            // check if the patch function is already in the module, if not, merge it
-            if (!module.lookupSymbol< cir::FuncOp >(patch_function_name)) {
-                auto result =
-                    pass.merge_module_symbol(module, patch_module, patch_function_name);
-                if (mlir::failed(result)) {
-                    LOG(ERROR) << "Failed to insert symbol into module\n";
-                    return;
-                }
-            } else {
-                LOG(INFO) << "Patch function " << patch_function_name
-                          << " already exists in module, skipping merge\n";
-            }
-
-            auto wrap_func = module.lookupSymbol< cir::FuncOp >(patch_function_name);
+            auto wrap_func           = ensurePatchFunctionAvailable(
+                pass, module, patch_module, patch_function_name, "Wrap around patch"
+            );
             if (!wrap_func) {
-                LOG(ERROR) << "Wrap around patch: patch function " << patch_spec.function_name
-                           << " not defined. Patching failed...\n";
                 return;
             }
 

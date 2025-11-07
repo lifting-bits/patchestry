@@ -18,8 +18,7 @@ namespace patchestry::passes {
 
     void ContractOperationImpl::emitRuntimeContract(
         InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-        mlir::ModuleOp contractModule, const ContractInformation &contract, ContractMode mode,
-        bool shouldInline
+        const ContractInformation &contract, ContractMode mode, bool shouldInline
     ) {
         if (!targetOp) {
             LOG(ERROR
@@ -27,7 +26,13 @@ namespace patchestry::passes {
             return;
         }
 
-        const auto &spec = contract.spec.value();
+        if (!contract.spec->contract_module) {
+            LOG(ERROR) << "Non-static contract '" << contract.spec->name
+                       << "' is missing contract_module\n";
+            return;
+        }
+        auto contractModule =
+            pass.load_code_module(*targetOp->getContext(), *contract.spec->contract_module);
 
         switch (mode) {
             case ContractMode::APPLY_BEFORE:
@@ -45,10 +50,10 @@ namespace patchestry::passes {
         }
 
         auto module                      = targetOp->getParentOfType< mlir::ModuleOp >();
-        std::string contractFunctionName = namifyFunction(spec.function_name);
+        std::string contractFunctionName = namifyFunction(contract.spec->function_name);
 
         auto contractFuncFromModule =
-            contractModule.lookupSymbol< cir::FuncOp >(contractFunctionName);
+            contractModule->lookupSymbol< cir::FuncOp >(contractFunctionName);
         if (!contractFuncFromModule) {
             LOG(ERROR) << "Contract module not found or contract function not defined: "
                        << contractFunctionName << "\n";
@@ -58,7 +63,7 @@ namespace patchestry::passes {
         auto contractFunc = module.lookupSymbol< cir::FuncOp >(contractFunctionName);
         if (!contractFunc) {
             if (mlir::failed(
-                    pass.merge_module_symbol(module, contractModule, contractFunctionName)
+                    pass.merge_module_symbol(module, *contractModule, contractFunctionName)
                 ))
             {
                 LOG(ERROR) << "Failed to insert symbol into module\n";
@@ -243,8 +248,7 @@ namespace patchestry::passes {
     // apply static contract to the target operation
     void ContractOperationImpl::emitStaticContract(
         InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-        mlir::ModuleOp contractModule, const ContractInformation &contract, ContractMode mode,
-        bool shouldInline
+        const ContractInformation &contract, ContractMode mode, bool shouldInline
     ) {
         // check if the target operation is null
         if (targetOp == nullptr) {
@@ -321,7 +325,6 @@ namespace patchestry::passes {
             return;
         }
 
-        (void) contractModule;
         (void) shouldInline;
         (void) pass;
         (void) builder;
@@ -330,7 +333,7 @@ namespace patchestry::passes {
 
     void ContractOperationImpl::applyContractBefore(
         InstrumentationPass &pass, mlir::Operation *target_op,
-        const ContractInformation &contract, mlir::ModuleOp contract_module, bool should_inline
+        const ContractInformation &contract, bool should_inline
     ) {
         if (target_op == nullptr) {
             LOG(ERROR
@@ -343,16 +346,16 @@ namespace patchestry::passes {
             case ContractType::RUNTIME: {
                 mlir::OpBuilder builder(target_op);
                 emitRuntimeContract(
-                    pass, builder, target_op, contract_module, contract,
-                    ContractMode::APPLY_BEFORE, should_inline
+                    pass, builder, target_op, contract, ContractMode::APPLY_BEFORE,
+                    should_inline
                 );
                 break;
             }
             case ContractType::STATIC: {
                 mlir::OpBuilder builder(target_op);
                 emitStaticContract(
-                    pass, builder, target_op, contract_module, contract,
-                    ContractMode::APPLY_BEFORE, should_inline
+                    pass, builder, target_op, contract, ContractMode::APPLY_BEFORE,
+                    should_inline
                 );
                 break;
             }
@@ -361,7 +364,7 @@ namespace patchestry::passes {
 
     void ContractOperationImpl::applyContractAfter(
         InstrumentationPass &pass, mlir::Operation *target_op,
-        const ContractInformation &contract, mlir::ModuleOp contract_module, bool should_inline
+        const ContractInformation &contract, bool should_inline
     ) {
         if (target_op == nullptr) {
             LOG(ERROR) << "applyContractAfter: the passed function to be instrumented was null";
@@ -373,16 +376,14 @@ namespace patchestry::passes {
             case ContractType::RUNTIME: {
                 mlir::OpBuilder builder(target_op);
                 emitRuntimeContract(
-                    pass, builder, target_op, contract_module, contract,
-                    ContractMode::APPLY_AFTER, should_inline
+                    pass, builder, target_op, contract, ContractMode::APPLY_AFTER, should_inline
                 );
                 break;
             }
             case ContractType::STATIC: {
                 mlir::OpBuilder builder(target_op);
                 emitStaticContract(
-                    pass, builder, target_op, contract_module, contract,
-                    ContractMode::APPLY_AFTER, should_inline
+                    pass, builder, target_op, contract, ContractMode::APPLY_AFTER, should_inline
                 );
                 break;
             }
@@ -391,7 +392,7 @@ namespace patchestry::passes {
 
     void ContractOperationImpl::applyContractAtEntrypoint(
         InstrumentationPass &pass, cir::CallOp call_op, const ContractInformation &contract,
-        mlir::ModuleOp contract_module, bool should_inline
+        bool should_inline
     ) {
         if (call_op == nullptr) {
             LOG(ERROR) << "applyContractAtEntrypoint: the passed function to be "
@@ -409,8 +410,16 @@ namespace patchestry::passes {
         std::string contract_function_name =
             namifyFunction(contract_spec.function_name);
 
+        auto contract_module =
+            pass.load_code_module(*call_op->getContext(), *contract.spec->contract_module);
+        if (!contract_module) {
+            LOG(ERROR) << "Failed to load contract module for function: "
+                       << call_op.getCallee()->str() << "\n";
+            return;
+        }
+
         auto contractFuncFromModule =
-            contract_module.lookupSymbol< cir::FuncOp >(contract_function_name);
+            contract_module->lookupSymbol< cir::FuncOp >(contract_function_name);
         if (!contractFuncFromModule) {
             LOG(ERROR) << "Contract module not found or contract function not defined\n";
             return;
@@ -429,7 +438,7 @@ namespace patchestry::passes {
 
         if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
             auto result =
-                pass.merge_module_symbol(module, contract_module, contract_function_name);
+                pass.merge_module_symbol(module, *contract_module, contract_function_name);
             if (mlir::failed(result)) {
                 LOG(ERROR) << "Failed to insert symbol into module\n";
                 return;

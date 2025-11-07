@@ -213,7 +213,9 @@ namespace llvm::yaml {
             } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
                 action.mode = contract::InfoMode::APPLY_AT_ENTRYPOINT;
             } else {
-                action.mode = contract::InfoMode::NONE;
+                LOG(ERROR) << "Unsupported contract mode: " << mode_str
+                           << "\nApplying apply_before mode by default";
+                action.mode = contract::InfoMode::APPLY_BEFORE;
             }
         }
     };
