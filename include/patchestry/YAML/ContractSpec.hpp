@@ -213,7 +213,7 @@ namespace llvm::yaml {
             } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
                 action.mode = contract::InfoMode::APPLY_AT_ENTRYPOINT;
             } else {
-                action.mode = contract::InfoMode::NONE;
+                action.mode = contract::InfoMode::APPLY_BEFORE;
             }
         }
     };
