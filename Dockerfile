@@ -14,7 +14,7 @@ ARG LLVM_VERSION
 ENV LLVM_VERSION=${LLVM_VERSION}
 
 # Set CMake configuration
-ENV CMAKE_PREFIX_PATH="/usr/lib/llvm-${LLVM_VERSION}/lib/cmake/mlir/;/usr/lib/llvm-${LLVM_VERSION}/lib/cmake/clang/"
+ENV CMAKE_PREFIX_PATH="/usr/local/;/usr/local/lib/cmake/mlir/;/usr/local/lib/cmake/clang/;/usr/local/lib/cmake/llvm/"
 ENV LLVM_EXTERNAL_LIT="/usr/local/bin/lit"
 
 # Set working directory
