@@ -31,20 +31,20 @@ if(RELLIC_ENABLE_TESTING)
   FetchContent_MakeAvailable(doctest)
 endif()
 
-set(REMILL_PREFIX_PATH ${CMAKE_PREFIX_PATH})
+set(RELLIC_PREFIX_PATH ${CMAKE_PREFIX_PATH})
 
 if (PE_USE_VENDORED_CLANG)
-  set(REMILL_PREFIX_PATH ${PE_VENDOR_INSTALL_DIR})
+  set(RELLIC_PREFIX_PATH ${PE_VENDOR_INSTALL_DIR})
 endif()
 
 execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${build_dir}")
 
 execute_process(COMMAND ${CMAKE_COMMAND}
                         -G "${CMAKE_GENERATOR}"
-                        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
                         "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+                        "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
                         "-DCMAKE_INSTALL_PREFIX=${PE_VENDOR_INSTALL_DIR}"
-                        "-DCMAKE_PREFIX_PATH=${REMILL_PREFIX_PATH}"
+                        "-DCMAKE_PREFIX_PATH=${RELLIC_PREFIX_PATH}"
                         "-DCMAKE_INSTALL_RPATH=${CMAKE_INSTALL_RPATH}"
                         "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
                         "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
