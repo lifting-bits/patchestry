@@ -1662,7 +1662,8 @@ don't yet pass)
 
                 if (isMatch) {
                     // For static contracts, no contract module is needed
-                    mlir::OwningOpRef< mlir::ModuleOp > contract_module;
+                    std::optional< mlir::OwningOpRef< mlir::ModuleOp > > contract_module =
+                        std::nullopt;
                     if (contract_to_apply.spec->type == ContractType::STATIC) {
                         LOG(INFO) << "Static contract '" << contract_to_apply.spec->name
                                   << "' does not require contract module\n";
@@ -1670,7 +1671,7 @@ don't yet pass)
                         contract_module = load_code_module(
                             *call_op->getContext(), *contract_to_apply.spec->contract_module
                         );
-                        if (!contract_module) {
+                        if (!contract_module.has_value()) {
                             LOG(ERROR) << "Failed to load contract module for function: "
                                        << call_op.getCallee()->str() << "\n";
                             return;
@@ -1688,19 +1689,19 @@ don't yet pass)
                     switch (action.mode) {
                         case contract::InfoMode::APPLY_BEFORE:
                             ContractOperationImpl::applyContractBefore(
-                                *this, call_op, contract_to_apply, contract_module.get(),
+                                *this, call_op, contract_to_apply, contract_module->get(),
                                 meta_contract.optimization.contains("inline-patches")
                             );
                             break;
                         case contract::InfoMode::APPLY_AFTER:
                             ContractOperationImpl::applyContractAfter(
-                                *this, call_op, contract_to_apply, contract_module.get(),
+                                *this, call_op, contract_to_apply, contract_module->get(),
                                 meta_contract.optimization.contains("inline-patches")
                             );
                             break;
                         case contract::InfoMode::APPLY_AT_ENTRYPOINT:
                             ContractOperationImpl::applyContractAtEntrypoint(
-                                *this, call_op, contract_to_apply, contract_module.get(),
+                                *this, call_op, contract_to_apply, contract_module->get(),
                                 meta_contract.optimization.contains("inline-patches")
                             );
                             break;
