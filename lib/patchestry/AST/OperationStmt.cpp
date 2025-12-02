@@ -759,21 +759,24 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_callind(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
+        (void) ctx, (void) function;
+        UNIMPLEMENTED("create_callind not implemented. key: {0}", op.key); // NOLINT
         return {};
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_callother(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
+        (void) ctx, (void) function;
+        UNIMPLEMENTED("create_callother not implemented. key: {0}", op.key); // NOLINT
         return {};
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_userdefined(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
+        (void) ctx, (void) function;
+        UNIMPLEMENTED("create_userdefined not implemented. key: {0}", op.key); // NOLINT
         return {};
     }
 
