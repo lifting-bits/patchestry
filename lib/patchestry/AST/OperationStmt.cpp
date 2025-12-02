@@ -1458,9 +1458,9 @@ namespace patchestry::ast {
 
             const auto &layout = ctx.getASTRecordLayout(decl);
             for (auto *field : decl->fields()) {
-                auto offset =
+                const auto field_offset =
                     static_cast< unsigned int >(layout.getFieldOffset(field->getFieldIndex()));
-                if (offset >= target_offset * 8U) {
+                if (field_offset >= target_offset * 8U) {
                     return field;
                 }
             }
