@@ -57,35 +57,77 @@ namespace patchestry::ast {
     ) {
         auto varnode_operation = [&](clang::ASTContext &ctx, const Function &function,
                                      const Varnode &vnode) -> clang::Stmt * {
+            clang::Stmt *result = nullptr;
             switch (vnode.kind) {
                 case Varnode::VARNODE_UNKNOWN:
-                    break;
+                    LOG(ERROR) << "VARNODE_UNKNOWN encountered. size: " << vnode.size
+                               << ", type_key: " << vnode.type_key
+                               << ", operation: " << vnode.operation.value_or("(none)")
+                               << ", function: " << vnode.function.value_or("(none)")
+                               << ", global: " << vnode.global.value_or("(none)") << "\n";
+                    return nullptr;
                 case Varnode::VARNODE_GLOBAL:
-                    return create_global(ctx, vnode);
+                    result = create_global(ctx, vnode);
+                    if (!result) {
+                        LOG(ERROR) << "create_global returned nullptr. global: "
+                                   << vnode.global.value_or("(none)") << "\n";
+                    }
+                    return result;
                 case Varnode::VARNODE_PARAM:
-                    return create_parameter(ctx, vnode);
+                    result = create_parameter(ctx, vnode);
+                    if (!result) {
+                        LOG(ERROR) << "create_parameter returned nullptr. operation: "
+                                   << vnode.operation.value_or("(none)") << "\n";
+                    }
+                    return result;
                 case Varnode::VARNODE_FUNCTION:
-                    return create_function(ctx, vnode);
+                    result = create_function(ctx, vnode);
+                    if (!result) {
+                        LOG(ERROR) << "create_function returned nullptr. function: "
+                                   << vnode.function.value_or("(none)") << "\n";
+                    }
+                    return result;
                 case Varnode::VARNODE_LOCAL:
-                    return create_local(ctx, function, vnode);
+                    result = create_local(ctx, function, vnode);
+                    if (!result) {
+                        LOG(ERROR) << "create_local returned nullptr. operation: "
+                                   << vnode.operation.value_or("(none)") << "\n";
+                    }
+                    return result;
                 case Varnode::VARNODE_TEMPORARY:
-                    return create_temporary(ctx, function, vnode);
+                    result = create_temporary(ctx, function, vnode);
+                    if (!result) {
+                        LOG(ERROR) << "create_temporary returned nullptr. operation: "
+                                   << vnode.operation.value_or("(none)") << "\n";
+                    }
+                    return result;
                 case Varnode::VARNODE_CONSTANT:
-                    return create_constant(ctx, vnode);
+                    result = create_constant(ctx, vnode);
+                    if (!result) {
+                        LOG(ERROR) << "create_constant returned nullptr. size: " << vnode.size
+                                   << ", type_key: " << vnode.type_key << "\n";
+                    }
+                    return result;
                 case Varnode::VARNODE_STRING:
-                    return create_string(ctx, vnode);
+                    result = create_string(ctx, vnode);
+                    if (!result) {
+                        LOG(ERROR) << "create_string returned nullptr. string_value: "
+                                   << vnode.string_value.value_or("(none)") << "\n";
+                    }
+                    return result;
             }
 
+            LOG(ERROR) << "varnode_operation fell through switch. kind: "
+                       << static_cast< int >(vnode.kind) << "\n";
             return nullptr;
         };
 
-        if (auto *expr = varnode_operation(ctx, function, vnode)) {
-            return expr;
-        }
+        auto *expr = varnode_operation(ctx, function, vnode);
+        assert(expr != nullptr && "varnode_operation returned null");
 
         (void) loc;
 
-        return {};
+        return expr;
     }
 
     clang::Stmt *OpBuilder::create_parameter(clang::ASTContext &ctx, const Varnode &vnode) {
