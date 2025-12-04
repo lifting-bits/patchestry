@@ -312,18 +312,29 @@ function run_decompile_all {
 }
 
 
+function check_output_writable {
+    if [ -e "$OUTPUT_FILE" ]; then
+        # File exists - check if it's writable
+        if [ ! -w "$OUTPUT_FILE" ]; then
+            die "Output file '$OUTPUT_FILE' exists but is not writable."
+        fi
+    else
+        # File doesn't exist - check if parent directory is writable
+        local parent_dir=$(dirname "$OUTPUT_FILE")
+        if [ ! -d "$parent_dir" ]; then
+            die "Parent directory '$parent_dir' does not exist."
+        fi
+        if [ ! -w "$parent_dir" ]; then
+            die "Parent directory '$parent_dir' is not writable."
+        fi
+    fi
+}
+
 function main {
     parse_args $@
     validate_args
 
-    if [ ! -w "$OUTPUT_FILE" ]; then
-        sudo chmod 777 "$OUTPUT_FILE" 2>/dev/null
-        if [ $? -ne 0 ]; then
-            echo "Error: Failed to change permissions on output file '$OUTPUT_FILE'."
-            exit 1
-        fi
-    fi
-
+    check_output_writable
     detect_processor
 
     case "$COMMAND" in
