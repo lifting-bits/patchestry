@@ -28,47 +28,77 @@ jobs:
     runs-on: ubuntu-${{ matrix.image-version }}
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     timeout-minutes: 60
-    container:
-      image:
-        ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
 
     env:
+        DEV_IMAGE: ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
         CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
         TOOLCHAIN: ${{ github.workspace }}/cmake/lld.toolchain.cmake
         LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
 
     steps:
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+
       - name: Clone the Patchestry repository
         uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 1
 
-      - name: Free up disk space
-        run: |
-          docker system prune -af --volumes || true
-          sudo apt-get clean || true
-          sudo rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* || true
-          rm -rf /gha-runner/usr/local/lib/android || true
-          rm -rf /gha-runner/usr/local/share/boost || true
+      - name: Pull dev container image
+        run: docker pull $DEV_IMAGE
 
       - name: Configure build
-        run: cmake --preset ci -DLLVM_Z3_INSTALL_DIR=/usr/local
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            -e CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}" \
+            -e LLVM_EXTERNAL_LIT="${LLVM_EXTERNAL_LIT}" \
+            -e CI=true \
+            $DEV_IMAGE \
+            cmake --preset ci -DLLVM_Z3_INSTALL_DIR=/usr/local
 
       - name: Build release
-        run: cmake --build --preset ci-release -j $(nproc)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            -e CI=true \
+            $DEV_IMAGE \
+            cmake --build --preset ci-release -j $(nproc)
 
       - name: Build Patchestry Doc
-        run: cmake --build --preset ci-release --target mlir-doc
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            $DEV_IMAGE \
+            cmake --build --preset ci-release --target mlir-doc
 
       - name: Build Patchestry Pages
         run: |
-            sh ./www/setup.sh _site ./builds/ci/
-            pip install mkdocs mkdocs-material
-            mkdocs build --config-file _site/mkdocs.yml --site-dir _site/site
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            $DEV_IMAGE \
+            bash -c "sh ./www/setup.sh _site ./builds/ci/ && pip install mkdocs mkdocs-material && mkdocs build --config-file _site/mkdocs.yml --site-dir _site/site"
 
       - name: Package
-        run: cpack --preset ci
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            $DEV_IMAGE \
+            cpack --preset ci
 
       - name: Upload Patchestry build artifact
         uses: actions/upload-artifact@v4
