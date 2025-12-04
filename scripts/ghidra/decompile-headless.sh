@@ -151,6 +151,7 @@ build_docker_command() {
         INPUT_PATH=$(basename "$INPUT_PATH")
         OUTPUT_PATH=$(basename "$OUTPUT_PATH")
         RUN="docker run --rm \
+            --user $(id -u):$(id -g) \
             $CI \
             trailofbits/patchestry-decompilation:latest \
             --input /mnt/output/$INPUT_PATH \
