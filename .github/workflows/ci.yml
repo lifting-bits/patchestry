@@ -147,5 +147,6 @@ jobs:
             -w /workspace \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -e CI=true \
+            -e HOST_WORKSPACE=${{ github.workspace }} \
             $DEV_IMAGE \
             lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=/workspace/builds/ci/test/ghidra/Output

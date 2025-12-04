@@ -20,11 +20,26 @@ Options:
   -t, --interactive     Start Docker container in interactive mode
   -c, --ci              Run in CI mode
 
+Environment:
+  HOST_WORKSPACE        When running in Docker-in-Docker, set this to the host
+                        path that maps to /workspace in the container.
+
 Examples:
   ./decompile-headless.sh --input /path/to/file --output /path/to/output.json  // Decompile all functions
   ./decompile-headless.sh --input /path/to/file --function main --output /path/to/output.json // Decompile single function
   ./decompile-headless.sh --input /path/to/file --list-functions --output /path/to/output.json // List all functions from binary
 EOF
+}
+
+# Translate container path to host path for Docker-in-Docker scenarios.
+# When HOST_WORKSPACE is set, replaces /workspace prefix with the host path.
+translate_to_host_path() {
+    local path="$1"
+    if [ -n "$HOST_WORKSPACE" ]; then
+        echo "${path/#\/workspace/$HOST_WORKSPACE}"
+    else
+        echo "$path"
+    fi
 }
 
 parse_args() {
@@ -132,7 +147,9 @@ validate_paths() {
 build_docker_command() {
     CI=""
     if [ -n "$CI_OUTPUT_FOLDER" ]; then
-        CI="-v $CI_OUTPUT_FOLDER:/mnt/output:rw"
+        # Translate to host path for Docker-in-Docker scenarios
+        local HOST_CI_OUTPUT_FOLDER=$(translate_to_host_path "$CI_OUTPUT_FOLDER")
+        CI="-v $HOST_CI_OUTPUT_FOLDER:/mnt/output:rw"
     fi
 
     local ARGS=
