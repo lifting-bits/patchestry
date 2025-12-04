@@ -147,8 +147,14 @@ validate_paths() {
 build_docker_command() {
     CI=""
     if [ -n "$CI_OUTPUT_FOLDER" ]; then
+        # Debug: always show path translation info in CI mode
+        echo "DEBUG: HOST_WORKSPACE='${HOST_WORKSPACE:-}'"
+        echo "DEBUG: CI_OUTPUT_FOLDER='$CI_OUTPUT_FOLDER'"
+
         # Translate to host path for Docker-in-Docker scenarios
         local HOST_CI_OUTPUT_FOLDER=$(translate_to_host_path "$CI_OUTPUT_FOLDER")
+        echo "DEBUG: HOST_CI_OUTPUT_FOLDER='$HOST_CI_OUTPUT_FOLDER'"
+
         CI="-v $HOST_CI_OUTPUT_FOLDER:/mnt/output:rw"
     fi
 
