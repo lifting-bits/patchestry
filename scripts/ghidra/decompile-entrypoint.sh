@@ -257,6 +257,7 @@ function run_list_functions {
         -deleteProject \
         -import ${INPUT_FILE} \
         ${guess_architecture}\
+        -scriptPath ${GHIDRA_SCRIPTS} \
         -postScript "PatchestryListFunctions" \
         ${OUTPUT_FILE}
 
@@ -279,6 +280,7 @@ function run_decompile_single {
         -deleteProject \
         -import ${INPUT_FILE} \
         ${guess_architecture}\
+        -scriptPath ${GHIDRA_SCRIPTS} \
         -postScript "PatchestryDecompileFunctions" \
         single \
         ${FUNCTION_NAME} \
@@ -301,7 +303,8 @@ function run_decompile_all {
         -readOnly \
         -deleteProject \
         -import ${INPUT_FILE} \
-        ${guessArchitecture}\
+        ${guess_architecture}\
+        -scriptPath ${GHIDRA_SCRIPTS} \
         -postScript "PatchestryDecompileFunctions" \
         all \
         ${OUTPUT_FILE}
