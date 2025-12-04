@@ -90,6 +90,19 @@ jobs:
       - name: Pull dev container image
         run: docker pull $DEV_IMAGE
 
+      - name: Mark workspace as safe for git
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            $DEV_IMAGE \
+            bash -c "git config --global --add safe.directory /workspace && \
+                     git config --global --add safe.directory /workspace/vendor/rellic/src && \
+                     git config --global --add safe.directory /workspace/vendor/glog/src && \
+                     git config --global --add safe.directory /workspace/vendor/gflags/src && \
+                     git config --global --add safe.directory /workspace/vendor/z3/src && \
+                     git config --global --add safe.directory /workspace/vendor/clangir/src"
+
       - name: Configure build - sanitizers ${{ matrix.sanitizers }}
         run: |
           docker run --rm \
