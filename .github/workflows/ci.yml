@@ -90,23 +90,23 @@ jobs:
       - name: Pull dev container image
         run: docker pull $DEV_IMAGE
 
-      - name: Mark workspace as safe for git
+      - name: Create gitconfig for safe directories
         run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace \
-            $DEV_IMAGE \
-            bash -c "git config --global --add safe.directory /workspace && \
-                     git config --global --add safe.directory /workspace/vendor/rellic/src && \
-                     git config --global --add safe.directory /workspace/vendor/glog/src && \
-                     git config --global --add safe.directory /workspace/vendor/gflags/src && \
-                     git config --global --add safe.directory /workspace/vendor/z3/src && \
-                     git config --global --add safe.directory /workspace/vendor/clangir/src"
+          cat > /tmp/.gitconfig << 'EOF'
+          [safe]
+              directory = /workspace
+              directory = /workspace/vendor/rellic/src
+              directory = /workspace/vendor/glog/src
+              directory = /workspace/vendor/gflags/src
+              directory = /workspace/vendor/z3/src
+              directory = /workspace/vendor/clangir/src
+          EOF
 
       - name: Configure build - sanitizers ${{ matrix.sanitizers }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
             -w /workspace \
             -e CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}" \
             -e LLVM_EXTERNAL_LIT="${LLVM_EXTERNAL_LIT}" \
@@ -120,6 +120,7 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
             -w /workspace \
             -e CI=true \
             $DEV_IMAGE \
@@ -129,6 +130,7 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
             -w /workspace/lib/patchestry/intrinsics \
             $DEV_IMAGE \
             bash -c "cmake -B build_standalone -DCMAKE_BUILD_TYPE=Release && cmake --build build_standalone -j\$(nproc)"
@@ -141,6 +143,7 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
             -w /workspace \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -e CI=true \
