@@ -887,10 +887,11 @@ public class PcodeSerializer {
 								writer.name("kind").value("string");
 								writer.name("string_value").value(string);
 							} else {
-								assert false;
-								Data data = apiUtil.getListingFromAddressAndType(node, highVariable);
-								writer.name("kind").value("global");
-								writer.name("global").value(label(makeGlobalFromData(data)));
+								// No valid string found at address - treat as constant value.
+								// This happens when a small constant (e.g., 0x3) has a char pointer
+								// type but doesn't point to valid mapped memory.
+								writer.name("kind").value("constant");
+								writer.name("value").value(node.getOffset());
 							}
 						} else {
 							writer.name("kind").value("constant");

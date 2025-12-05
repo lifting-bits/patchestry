@@ -17,15 +17,11 @@ import ghidra.program.model.data.Pointer;
 import ghidra.program.model.data.StringDataInstance;
 
 import ghidra.program.model.listing.Data;
-import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 
 import ghidra.program.model.mem.MemoryBufferImpl;
 
-import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.Varnode;
-
-import java.io.IOException;
 
 /* Anything that isn't directly using JsonWriter to serialize stuff, 
  * especially if it works through the FlatProgramAPI. Goal is to 
@@ -99,10 +95,5 @@ class ApiUtil extends FlatProgramAPI {
         }
         String value = stringDataInstance.getStringValue();
         return value;
-    }
-
-    protected Data getListingFromAddressAndType(Varnode node, HighVariable highVariable) throws Exception {
-        Listing listing = currentProgram.getListing();
-		return listing.createData(convertAddressToRamSpace(node.getAddress()), highVariable.getDataType());
     }
 }
