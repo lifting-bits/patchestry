@@ -63,7 +63,7 @@ USER user
 WORKDIR /home/user/
 
 COPY --chown=user:user --from=build /ghidra ghidra
-COPY --chown=user:user --chmod=755 decompile-entrypoint.sh  .
+COPY --chmod=755 decompile-entrypoint.sh /usr/local/bin/
 COPY --chown=user:user --from=build /opt/gradle/ /opt/gradle/
 ENV PATH="/opt/gradle/bin:${PATH}"
 
@@ -84,4 +84,4 @@ RUN mkdir $GHIDRA_PROJECTS
 ENV GHIDRA_HEADLESS=${GHIDRA_HOME}/support/analyzeHeadless
 ENV USER=user
 
-ENTRYPOINT ["/home/user/decompile-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/decompile-entrypoint.sh"]

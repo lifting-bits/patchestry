@@ -26,6 +26,17 @@ jobs:
     env:
       CI: true
     steps:
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+
       - name: Clone the Patchestry repository
         uses: actions/checkout@v4
         with:
@@ -51,50 +62,78 @@ jobs:
         sanitizers: [OFF]
     runs-on: ubuntu-${{ matrix.image-version }}
     timeout-minutes: 30
-    container:
-      image:
-        ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
-    services:
-      docker:
-        image: docker:20.10-dind
-        options: --privileged
-        ports:
-          - 12375:2375
     env:
+      DEV_IMAGE: ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
       CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
       LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
       ENABLE_SANITIZER_UNDEFINED_BEHAVIOR: ${{ matrix.sanitizers }}
       ENABLE_SANITIZER_ADDRESS: ${{ matrix.sanitizers }}
       CI: true
     steps:
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+
       - name: Clone the Patchestry repository
         uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 1
 
-      - name: Free up disk space
+      - name: Pull dev container image
+        run: docker pull $DEV_IMAGE
+
+      - name: Create gitconfig for safe directories
         run: |
-          docker volume prune -f || true
-          docker system prune -af --volumes || true
-          sudo apt-get clean || true
-          sudo rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-          rm -rf /gha-runner/usr/local/lib/android
-          rm -rf /gha-runner/usr/local/share/boost
-          df -h
+          cat > /tmp/.gitconfig << 'EOF'
+          [safe]
+              directory = /workspace
+              directory = /workspace/vendor/rellic/src
+              directory = /workspace/vendor/glog/src
+              directory = /workspace/vendor/gflags/src
+              directory = /workspace/vendor/z3/src
+              directory = /workspace/vendor/clangir/src
+          EOF
 
       - name: Configure build - sanitizers ${{ matrix.sanitizers }}
-        run: cmake --preset ci -DPE_USE_VENDORED_Z3=OFF -DLLVM_EXTERNAL_LIT=$(which lit) -DLLVM_Z3_INSTALL_DIR=/usr/local
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
+            -w /workspace \
+            -e CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}" \
+            -e LLVM_EXTERNAL_LIT="${LLVM_EXTERNAL_LIT}" \
+            -e ENABLE_SANITIZER_UNDEFINED_BEHAVIOR="${ENABLE_SANITIZER_UNDEFINED_BEHAVIOR}" \
+            -e ENABLE_SANITIZER_ADDRESS="${ENABLE_SANITIZER_ADDRESS}" \
+            -e CI=true \
+            $DEV_IMAGE \
+            cmake --preset ci -DPE_USE_VENDORED_Z3=OFF -DLLVM_EXTERNAL_LIT=/usr/local/bin/lit -DLLVM_Z3_INSTALL_DIR=/usr/local
 
       - name: Build ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
-        run: cmake --build --preset ci --config ${{ matrix.build-type }} -j$(nproc)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
+            -w /workspace \
+            -e CI=true \
+            $DEV_IMAGE \
+            cmake --build --preset ci --config ${{ matrix.build-type }} -j$(nproc)
 
       - name: Build the intrinsic library
         run: |
-          cd lib/patchestry/intrinsics
-          cmake -B build_standalone -DCMAKE_BUILD_TYPE=Release
-          cmake --build build_standalone -j$(nproc)
-          cd -
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
+            -w /workspace/lib/patchestry/intrinsics \
+            $DEV_IMAGE \
+            bash -c "cmake -B build_standalone -DCMAKE_BUILD_TYPE=Release && cmake --build build_standalone -j\$(nproc)"
 
       - name: Build the headless decompilation docker image
         run: |
@@ -102,4 +141,12 @@ jobs:
 
       - name: Test ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: |
-          lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=${{ github.workspace }}/builds/ci/test/ghidra/Output
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
+            -w /workspace \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e CI=true \
+            -e HOST_WORKSPACE=${{ github.workspace }} \
+            $DEV_IMAGE \
+            lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=/workspace/builds/ci/test/ghidra/Output
