@@ -303,7 +303,7 @@ function run_decompile_all {
         -readOnly \
         -deleteProject \
         -import ${INPUT_FILE} \
-        ${guess_architecture}\
+        ${guessArchitecture}\
         -scriptPath ${GHIDRA_SCRIPTS} \
         -postScript "PatchestryDecompileFunctions" \
         all \
@@ -354,6 +354,9 @@ function main {
             die "Unknown command '$COMMAND'."
             ;;
     esac
+
+    # Make output readable by all users (for when container runs as different UID)
+    chmod 644 "$OUTPUT_FILE" 2>/dev/null || true
 }
 
 main "$@"
