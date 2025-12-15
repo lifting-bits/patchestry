@@ -316,20 +316,28 @@ function run_decompile_all {
 
 
 function check_output_writable {
-    if [ -e "$OUTPUT_FILE" ]; then
-        # File exists - check if it's writable
-        if [ ! -w "$OUTPUT_FILE" ]; then
-            die "Output file '$OUTPUT_FILE' exists but is not writable."
+    local parent_dir=$(dirname "$OUTPUT_FILE")
+
+    if [ ! -d "$parent_dir" ]; then
+        die "Parent directory '$parent_dir' does not exist."
+    fi
+
+    if [ -e "$OUTPUT_FILE" ] && [ ! -w "$OUTPUT_FILE" ]; then
+        # File exists but isn't writable - try to remove it so we can create a new one
+        rm -f "$OUTPUT_FILE" 2>/dev/null
+        if [ -e "$OUTPUT_FILE" ]; then
+            # Couldn't remove, check if directory is writable for error message
+            if [ ! -w "$parent_dir" ]; then
+                die "Output file '$OUTPUT_FILE' is not writable and parent directory '$parent_dir' is not writable."
+            fi
+            die "Output file '$OUTPUT_FILE' exists but is not writable and cannot be removed."
         fi
-    else
-        # File doesn't exist - check if parent directory is writable
-        local parent_dir=$(dirname "$OUTPUT_FILE")
-        if [ ! -d "$parent_dir" ]; then
-            die "Parent directory '$parent_dir' does not exist."
-        fi
-        if [ ! -w "$parent_dir" ]; then
-            die "Parent directory '$parent_dir' is not writable."
-        fi
+    fi
+
+    # At this point, either file doesn't exist or is writable
+    # Check parent directory is writable so we can create the file
+    if [ ! -e "$OUTPUT_FILE" ] && [ ! -w "$parent_dir" ]; then
+        die "Parent directory '$parent_dir' is not writable."
     fi
 }
 

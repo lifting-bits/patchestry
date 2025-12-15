@@ -98,14 +98,20 @@ prepare_paths() {
         exit 1
     fi
 
-    if [ ! -e "$OUTPUT_PATH" ]; then
-        if [ "$VERBOSE" = true ]; then
-            echo "Creating output file: $OUTPUT_PATH"
+    local output_dir=$(dirname "$OUTPUT_PATH")
+    local output_name=$(basename "$OUTPUT_PATH")
+    OUTPUT_PATH="$(realpath "$output_dir")/$output_name"
+
+    # In CI mode, don't pre-create file - let container create it to avoid permission issues
+    if [ -z "$CI_OUTPUT_FOLDER" ]; then
+        if [ ! -e "$OUTPUT_PATH" ]; then
+            if [ "$VERBOSE" = true ]; then
+                echo "Creating output file: $OUTPUT_PATH"
+            fi
+            touch "$OUTPUT_PATH"
         fi
-        touch "$OUTPUT_PATH"
+        chmod 666 "$OUTPUT_PATH" 2>/dev/null || true
     fi
-    # realpath may fail of OUTPUT_PATH does not exist
-    OUTPUT_PATH=$(realpath "$OUTPUT_PATH")
 }
 
 is_not_absolute_path() {
@@ -132,13 +138,13 @@ validate_paths() {
         fi
     fi
 
-    # Expect both input and output file to exist
     if [ ! -f "$INPUT_PATH" ]; then
         echo "Input file $INPUT_PATH doesn't exist. Exiting!"
         exit 1
     fi
 
-    if [ ! -f "$OUTPUT_PATH" ]; then
+    # In non-CI mode, output file should exist (we created it in prepare_paths)
+    if [ -z "$CI_OUTPUT_FOLDER" ] && [ ! -f "$OUTPUT_PATH" ]; then
         echo "Output file $OUTPUT_PATH doesn't exist. Exiting!"
         exit 1
     fi
@@ -149,6 +155,8 @@ build_docker_command() {
     if [ -n "$CI_OUTPUT_FOLDER" ]; then
         # Translate to host path for Docker-in-Docker scenarios
         local HOST_CI_OUTPUT_FOLDER=$(translate_to_host_path "$CI_OUTPUT_FOLDER")
+        # Make directory writable by container user (for DinD scenarios)
+        chmod 1777 "$CI_OUTPUT_FOLDER" 2>/dev/null || true
         CI="-v $HOST_CI_OUTPUT_FOLDER:/mnt/output:rw"
     fi
 
