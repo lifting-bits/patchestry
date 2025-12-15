@@ -20,11 +20,26 @@ Options:
   -t, --interactive     Start Docker container in interactive mode
   -c, --ci              Run in CI mode
 
+Environment:
+  HOST_WORKSPACE        When running in Docker-in-Docker, set this to the host
+                        path that maps to /workspace in the container.
+
 Examples:
   ./decompile-headless.sh --input /path/to/file --output /path/to/output.json  // Decompile all functions
   ./decompile-headless.sh --input /path/to/file --function main --output /path/to/output.json // Decompile single function
   ./decompile-headless.sh --input /path/to/file --list-functions --output /path/to/output.json // List all functions from binary
 EOF
+}
+
+# Translate container path to host path for Docker-in-Docker scenarios.
+# When HOST_WORKSPACE is set, replaces /workspace prefix with the host path.
+translate_to_host_path() {
+    local path="$1"
+    if [ -n "$HOST_WORKSPACE" ]; then
+        echo "${path/#\/workspace/$HOST_WORKSPACE}"
+    else
+        echo "$path"
+    fi
 }
 
 parse_args() {
@@ -83,14 +98,20 @@ prepare_paths() {
         exit 1
     fi
 
-    if [ ! -e "$OUTPUT_PATH" ]; then
-        if [ "$VERBOSE" = true ]; then
-            echo "Creating output file: $OUTPUT_PATH"
+    local output_dir=$(dirname "$OUTPUT_PATH")
+    local output_name=$(basename "$OUTPUT_PATH")
+    OUTPUT_PATH="$(realpath "$output_dir")/$output_name"
+
+    # In CI mode, don't pre-create file - let container create it to avoid permission issues
+    if [ -z "$CI_OUTPUT_FOLDER" ]; then
+        if [ ! -e "$OUTPUT_PATH" ]; then
+            if [ "$VERBOSE" = true ]; then
+                echo "Creating output file: $OUTPUT_PATH"
+            fi
+            touch "$OUTPUT_PATH"
         fi
-        touch "$OUTPUT_PATH"
+        chmod 666 "$OUTPUT_PATH" 2>/dev/null || true
     fi
-    # realpath may fail of OUTPUT_PATH does not exist
-    OUTPUT_PATH=$(realpath "$OUTPUT_PATH")
 }
 
 is_not_absolute_path() {
@@ -117,13 +138,13 @@ validate_paths() {
         fi
     fi
 
-    # Expect both input and output file to exist
     if [ ! -f "$INPUT_PATH" ]; then
         echo "Input file $INPUT_PATH doesn't exist. Exiting!"
         exit 1
     fi
 
-    if [ ! -f "$OUTPUT_PATH" ]; then
+    # In non-CI mode, output file should exist (we created it in prepare_paths)
+    if [ -z "$CI_OUTPUT_FOLDER" ] && [ ! -f "$OUTPUT_PATH" ]; then
         echo "Output file $OUTPUT_PATH doesn't exist. Exiting!"
         exit 1
     fi
@@ -132,7 +153,11 @@ validate_paths() {
 build_docker_command() {
     CI=""
     if [ -n "$CI_OUTPUT_FOLDER" ]; then
-        CI="-v $CI_OUTPUT_FOLDER:/mnt/output:rw"
+        # Translate to host path for Docker-in-Docker scenarios
+        local HOST_CI_OUTPUT_FOLDER=$(translate_to_host_path "$CI_OUTPUT_FOLDER")
+        # Make directory writable by container user (for DinD scenarios)
+        chmod 1777 "$CI_OUTPUT_FOLDER" 2>/dev/null || true
+        CI="-v $HOST_CI_OUTPUT_FOLDER:/mnt/output:rw"
     fi
 
     local ARGS=
