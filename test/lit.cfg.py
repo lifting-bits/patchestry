@@ -23,6 +23,10 @@ if platform.system() == 'Darwin':
 # Set PATCHESTRY_ROOT environment variable for runtime access
 config.environment['PATCHESTRY_ROOT'] = config.patchestry_src_root
 
+# Pass through HOST_WORKSPACE for Docker-in-Docker path translation
+if 'HOST_WORKSPACE' in os.environ:
+    config.environment['HOST_WORKSPACE'] = os.environ['HOST_WORKSPACE']
+
 config.python_executable = config.python_executable if config.python_executable else sys.executable
 
 # Define file suffixes for test files
