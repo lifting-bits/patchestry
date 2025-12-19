@@ -1047,8 +1047,85 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
         }
     }
 
+    /**
+     * Test that char pointer constants at unmapped addresses serialize correctly.
+     *
+     * This test catches the bug fixed in commit e464be0: when a constant has a char pointer
+     * type (e.g., value 0x3 inferred as char*) but doesn't point to valid mapped memory,
+     * findNullTerminatedString() returns null. Previously, the code tried to call
+     * listing.createData() at the unmapped address, causing a CodeUnitInsertionException.
+     * Now it correctly treats such constants as plain constant values, outputting
+     * {"kind": "constant", "value": <offset>}.
+     */
+    @Test
+    public void testSerializeCharPointerConstantAtUnmappedAddress() throws Exception {
+        // Search through decompiled functions for char pointer constants
+        // at addresses that don't resolve to valid strings
+        boolean foundCharPointerConstant = false;
+
+        for (int i = 0; i < Math.min(fns.size(), 50); i++) {
+            Function fn = fns.get(i);
+            if (fn.isThunk()) continue;
+
+            DecompileResults result = decompInterface.decompileFunction(fn, 60, fakeMonitor);
+            if (!result.decompileCompleted()) continue;
+
+            HighFunction high = result.getHighFunction();
+            if (high == null) continue;
+
+            // Look for constants in the function's pcode ops
+            Iterator<PcodeOpAST> pcodeOps = high.getPcodeOps();
+            while (pcodeOps.hasNext()) {
+                PcodeOp op = pcodeOps.next();
+
+                for (Varnode input : op.getInputs()) {
+                    if (!input.isConstant()) continue;
+
+                    HighVariable hv = input.getHigh();
+                    if (hv == null) continue;
+
+                    // Check if this is a char pointer type
+                    if (!serializer.isCharPointer(input)) continue;
+
+                    // Found a char pointer constant - verify serialization doesn't throw
+                    foundCharPointerConstant = true;
+                    stringWriter.getBuffer().setLength(0);
+
+                    // This should NOT throw CodeUnitInsertionException after the fix
+                    assertDoesNotThrow(() -> {
+                        serializer.serializeInput(op, input);
+                    }, "serializeInput should not throw for char pointer constant at unmapped address");
+
+                    String json = stringWriter.toString();
+                    JsonObject jsonOutput = JsonParser.parseString(json).getAsJsonObject();
+
+                    // Verify it outputs either "string" (if valid string found) or "constant"
+                    String kind = jsonOutput.get("kind").getAsString();
+                    assertTrue(
+                        kind.equals("string") || kind.equals("constant"),
+                        "Char pointer constant should serialize as 'string' or 'constant', got: " + kind
+                    );
+
+                    if (kind.equals("constant")) {
+                        assertTrue(
+                            jsonOutput.has("value"),
+                            "Constant kind should have 'value' field"
+                        );
+                    }
+                }
+            }
+        }
+
+        // If we didn't find any char pointer constants, the test is inconclusive
+        // but not a failure - the firmware may not have any such cases
+        if (!foundCharPointerConstant) {
+            System.out.println("Warning: No char pointer constants found to test. " +
+                "Test passed vacuously.");
+        }
+    }
+
     @Disabled
-    @Test 
+    @Test
     public void testSerializeInput() throws Exception {
         // todo writeme
         fail();

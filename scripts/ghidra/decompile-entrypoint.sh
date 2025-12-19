@@ -303,7 +303,7 @@ function run_decompile_all {
         -readOnly \
         -deleteProject \
         -import ${INPUT_FILE} \
-        ${guessArchitecture}\
+        ${guess_architecture}\
         -scriptPath ${GHIDRA_SCRIPTS} \
         -postScript "PatchestryDecompileFunctions" \
         all \
