@@ -759,8 +759,110 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_callind(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return {};
+        // 1. Validate operation
+        if (!op.target || op.mnemonic != Mnemonic::OP_CALLIND) {
+            LOG(ERROR) << "CALLIND operation or target is invalid. key: " << op.key << "\n";
+            return {};
+        }
+
+        auto op_loc            = sourceLocation(ctx.getSourceManager(), op.key);
+        clang::Expr *fn_ptr_expr = nullptr;
+
+        // 2. Get function pointer expression from target
+        if (op.target->global) {
+            // Target is a global variable containing the function pointer
+            if (!function_builder().global_var_list.get().contains(*op.target->global)) {
+                LOG(ERROR) << "CALLIND target global not found: " << *op.target->global
+                           << ". key: " << op.key << "\n";
+                return {};
+            }
+            auto *var_decl = function_builder().global_var_list.get().at(*op.target->global);
+            fn_ptr_expr    = clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
+                clang::SourceLocation(), var_decl->getType(), clang::VK_LValue
+            );
+        } else if (op.target->operation) {
+            // Target is a computed expression (temporary)
+            auto maybe_operation = operationFromKey(function, *op.target->operation);
+            if (!maybe_operation) {
+                LOG(ERROR) << "CALLIND target operation not found. key: " << op.key << "\n";
+                return {};
+            }
+            auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
+            fn_ptr_expr    = clang::dyn_cast< clang::Expr >(stmt);
+        } else {
+            LOG(ERROR) << "CALLIND target missing global or operation. key: " << op.key << "\n";
+            return {};
+        }
+
+        if (fn_ptr_expr == nullptr) {
+            LOG(ERROR) << "Failed to create function pointer expression. key: " << op.key << "\n";
+            return {};
+        }
+
+        // 3. Infer function pointer type and cast if needed
+        auto expr_type = fn_ptr_expr->getType();
+
+        // Check if we need to build an explicit function pointer type
+        const bool needs_type_inference =
+            !expr_type->isPointerType() || !expr_type->getPointeeType()->isFunctionType();
+
+        if (needs_type_inference) {
+            // Infer parameter types from inputs
+            std::vector< clang::QualType > param_types;
+            for (const auto &input : op.inputs) {
+                if (type_builder().get_serialized_types().contains(input.type_key)) {
+                    param_types.push_back(type_builder().get_serialized_types().at(input.type_key));
+                } else {
+                    param_types.push_back(ctx.IntTy); // Fallback
+                }
+            }
+
+            // Infer return type from op.type
+            clang::QualType return_type = ctx.VoidTy;
+            if (op.type && type_builder().get_serialized_types().contains(*op.type)) {
+                return_type = type_builder().get_serialized_types().at(*op.type);
+            }
+
+            // Build function type and pointer type
+            const clang::FunctionProtoType::ExtProtoInfo epi;
+            auto func_type     = ctx.getFunctionType(return_type, param_types, epi);
+            auto func_ptr_type = ctx.getPointerType(func_type);
+
+            // Cast callee to inferred function pointer type
+            fn_ptr_expr = make_cast(ctx, fn_ptr_expr, func_ptr_type, op_loc);
+            if (fn_ptr_expr == nullptr) {
+                LOG(ERROR) << "Failed to cast to function pointer type. key: " << op.key << "\n";
+                return {};
+            }
+        }
+
+        // 4. Build argument list from inputs
+        std::vector< clang::Expr * > arguments;
+        for (const auto &input : op.inputs) {
+            auto *arg_expr =
+                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+            if (arg_expr != nullptr) {
+                arguments.push_back(arg_expr);
+            }
+        }
+
+        // 5. Build the indirect call expression
+        auto result = sema().BuildCallExpr(nullptr, fn_ptr_expr, op_loc, arguments, op_loc);
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Failed to build CALLIND expression. key: " << op.key << "\n";
+            return {};
+        }
+        auto *call_expr = result.getAs< clang::Expr >();
+
+        // 6. Handle return value assignment if present
+        if (!op.output || !op.has_return_value.value_or(false)) {
+            return std::make_pair(call_expr, false);
+        }
+
+        auto *output_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        return { create_assign_operation(ctx, call_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_callother(

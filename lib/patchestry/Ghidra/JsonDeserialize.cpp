@@ -486,6 +486,18 @@ namespace patchestry::ghidra {
             target.operation = call_op->str();
         }
 
+        // For CALLIND: parse global variable target
+        auto global_key = maybe_target->getString("global");
+        if (global_key.has_value() && !global_key->empty()) {
+            target.global = global_key->str();
+        }
+
+        // For CALLIND: parse type of the target
+        auto type_key = maybe_target->getString("type");
+        if (type_key.has_value() && !type_key->empty()) {
+            target.type_key = type_key->str();
+        }
+
         target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
         op.target           = std::move(target);
         op.has_return_value = call_obj.getBoolean("has_return_value").value_or(false);
