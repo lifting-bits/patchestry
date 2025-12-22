@@ -759,21 +759,24 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_callind(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
+        (void) ctx, (void) function;
+        UNIMPLEMENTED("create_callind not implemented. key: {0}", op.key); // NOLINT
         return {};
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_callother(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
+        (void) ctx, (void) function;
+        UNIMPLEMENTED("create_callother not implemented. key: {0}", op.key); // NOLINT
         return {};
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_userdefined(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
+        (void) ctx, (void) function;
+        UNIMPLEMENTED("create_userdefined not implemented. key: {0}", op.key); // NOLINT
         return {};
     }
 
@@ -1292,7 +1295,7 @@ namespace patchestry::ast {
         std::vector args = { input_expr };
         auto *call_expr = create_builtin_call(ctx, sema(), id, args, op_loc);
 
-        if (op.output.has_value()) {
+        if (!op.output.has_value()) {
             return { call_expr, true };
         }
 
@@ -1458,9 +1461,9 @@ namespace patchestry::ast {
 
             const auto &layout = ctx.getASTRecordLayout(decl);
             for (auto *field : decl->fields()) {
-                auto offset =
+                const auto field_offset =
                     static_cast< unsigned int >(layout.getFieldOffset(field->getFieldIndex()));
-                if (offset >= target_offset * 8U) {
+                if (field_offset >= target_offset * 8U) {
                     return field;
                 }
             }
