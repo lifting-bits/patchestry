@@ -1177,9 +1177,66 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_sborrow(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED("create_int_sborrow not implemented"); // NOLINT
-        return {};
+        if (op.inputs.empty() || op.inputs.size() != 2U) {
+            LOG(ERROR) << "Skipping, sborrow operation due to input operands. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        auto op_loc  = sourceLocation(ctx.getSourceManager(), op.key);
+        auto *input0 =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        auto *input1 =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+
+        // Compute diff = input0 - input1
+        auto diff =
+            sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_Sub, input0, input1);
+        assert(!diff.isInvalid() && "Failed to create sub operation");
+
+        // Signed overflow occurs when input0 and input1 have different signs AND
+        // input0 and diff have different signs.
+        // Formula: ((input0 ^ input1) & (input0 ^ diff)) < 0
+
+        // xor_inputs = input0 ^ input1
+        auto xor_inputs =
+            sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_Xor, input0, input1);
+        assert(!xor_inputs.isInvalid() && "Failed to create xor operation");
+
+        // xor_result = input0 ^ diff
+        auto xor_result = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_Xor, input0,
+            diff.getAs< clang::Expr >()
+        );
+        assert(!xor_result.isInvalid() && "Failed to create xor operation");
+
+        // and_result = xor_inputs & xor_result
+        auto and_result = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_And, xor_inputs.getAs< clang::Expr >(),
+            xor_result.getAs< clang::Expr >()
+        );
+        assert(!and_result.isInvalid() && "Failed to create and operation");
+
+        // sborrow = and_result < 0
+        auto *zero = clang::IntegerLiteral::Create(
+            ctx, llvm::APInt(ctx.getIntWidth(input0->getType()), 0, true), input0->getType(),
+            op_loc
+        );
+        auto sborrow = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
+            zero
+        );
+        assert(!sborrow.isInvalid() && "Failed to create sborrow comparison");
+
+        if (!op.output.has_value()) {
+            return { sborrow.getAs< clang::Stmt >(), true };
+        }
+
+        auto *output =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+
+        return { create_assign_operation(ctx, sborrow.getAs< clang::Expr >(), output, op_loc),
+                 false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_2comp(
