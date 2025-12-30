@@ -30,6 +30,7 @@ contracts:
     description: "Device list replace sprintf patch"
     category: "device"
     severity: "high"
+    type: "RUNTIME"
     code_file: "patches/bloodview_patch.c"
     function_name: "contract::sprintf"
     parameters: # Parameters are optional and is for reference only
@@ -37,5 +38,27 @@ contracts:
         type: "int"
         description: "Return value"
       - name: "dest_size"
-        type: "size_t"
+        type: "unsigned int"
         description: "Destination size"
+
+  - name: "sprintf_contract_static"
+    description: "Static contract for sprintf"
+    category: "device"
+    type: "STATIC"
+
+    preconditions:
+      - id: "dest_size_nonzero"
+        pred:
+          kind: "relation"
+          target: "arg1"
+          relation: "ne"
+          value: "0"
+
+    postconditions:
+      - id: "return_value_range"
+        pred:
+          kind: "range"
+          target: "return_value"
+          range:
+            min: "0"
+            max: "32"

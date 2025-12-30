@@ -3,7 +3,7 @@
 
 // RUN: %patchir-transform %t1.cir --spec %S/device_process_entry.yaml -o %t2.cir
 // RUN: %file-check -vv -check-prefix=CHECK %s --input-file %t2.cir
-// CHECK: %{{[0-9]+}} = cir.call @patch__replace__sprintf({{.*}}) {patchestry_operation = "cir.call"} : (!cir.ptr<!s8i>, !u32i, !cir.ptr<!s8i>, !cir.ptr<!s8i>) -> !s32i{{.*}}
+// CHECK: %[[ID:[0-9]+]] = cir.call @patch__replace__sprintf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) {contract.static = #contracts.static<pre = [#contracts.pre<id = "dest_size_nonzero", {{.*}}relation = neq, {{.*}}value = 0 : i64>>], post = [#contracts.post<id = "return_value_range", {{.*}}max = 32 : i64>>>]>, patchestry_operation = "cir.call"} : (!cir.ptr<!s8i>, !u32i, !cir.ptr<!s8i>, !cir.ptr<!s8i>) -> !s32i {{.*}}extra(#fn_attr)
 // CHECK: cir.call @contract__sprintf(%{{[0-9]+}}, %{{[0-9]+}}) {patchestry_operation = "cir.call"}
 
 

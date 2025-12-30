@@ -21,6 +21,7 @@
 #include <mlir/Tools/mlir-opt/MlirOptMain.h>
 
 #include <patchestry/Codegen/Codegen.hpp>
+#include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/Util/Options.hpp>
@@ -117,8 +118,11 @@ int main(int argc, char **argv) {
     registry.insert< mlir::DLTIDialect, mlir::func::FuncDialect >();
 
     registry.insert< cir::CIRDialect >();
+    registry.insert< ::contracts::ContractsDialect >();
 
-    mlir::MLIRContext context(registry);
+    mlir::MLIRContext context;
+    context.appendDialectRegistry(registry);
+    context.loadAllAvailableDialects();
 
     return mlir::failed(patchestry::instrumentation::run(context)) ? EXIT_FAILURE
                                                                    : EXIT_SUCCESS;
