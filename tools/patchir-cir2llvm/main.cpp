@@ -158,6 +158,27 @@ namespace {
             os << ", relation=" << ::contracts::stringifyRelationKind(pred.getRelation());
         }
 
+        if (pred.getValue()) {
+            os << ", value=";
+            auto valueAttr = pred.getValue();
+            if (auto intAttr = mlir::dyn_cast< mlir::IntegerAttr >(valueAttr)) {
+                // Handle integer constants
+                os << intAttr.getValue();
+            } else if (auto strAttr = mlir::dyn_cast< mlir::StringAttr >(valueAttr)) {
+                // Handle string values
+                os << "\"" << strAttr.getValue() << "\"";
+            } else if (auto symRef = mlir::dyn_cast< mlir::FlatSymbolRefAttr >(valueAttr)) {
+                // Handle symbol references
+                os << "@" << symRef.getValue();
+            } else {
+                // Fallback: use MLIR's generic attribute printing
+                std::string attrStr;
+                llvm::raw_string_ostream attrOS(attrStr);
+                valueAttr.print(attrOS);
+                os << attrOS.str();
+            }
+        }
+
         // Write alignment if present
         if (pred.getAlign()) {
             os << ", align=" << pred.getAlign().getAlignment();
