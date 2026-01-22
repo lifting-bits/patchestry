@@ -83,7 +83,7 @@ namespace {
             if (end_pos != std::string::npos) {
                 std::string index_str = target_str.substr(4, end_pos - 4);
                 try {
-                    index = std::stoul(index_str);
+                    index = static_cast< unsigned >(std::stoul(index_str));
                     return true;
                 } catch (...) {
                     return false;
@@ -396,7 +396,9 @@ namespace {
             case PK_RelNeqArgConst: {
                 if (!A->getType()->isIntegerTy())
                     break;
-                Cond = Bpre.CreateICmpNE(A, llvm::ConstantInt::get(A->getType(), P.constant));
+                Cond = Bpre.CreateICmpNE(
+                    A, llvm::ConstantInt::get(A->getType(), static_cast< uint64_t >(P.constant))
+                );
                 if (verbose)
                     llvm::outs() << "  Precondition: arg" << P.arg_index << " != " << P.constant
                                  << "\n";
@@ -405,7 +407,9 @@ namespace {
             case PK_RelEqArgConst: {
                 if (!A->getType()->isIntegerTy())
                     break;
-                Cond = Bpre.CreateICmpEQ(A, llvm::ConstantInt::get(A->getType(), P.constant));
+                Cond = Bpre.CreateICmpEQ(
+                    A, llvm::ConstantInt::get(A->getType(), static_cast< uint64_t >(P.constant))
+                );
                 if (verbose)
                     llvm::outs() << "  Precondition: arg" << P.arg_index << " == " << P.constant
                                  << "\n";
@@ -414,7 +418,9 @@ namespace {
             case PK_RelLtArgConst: {
                 if (!A->getType()->isIntegerTy())
                     break;
-                Cond = Bpre.CreateICmpSLT(A, llvm::ConstantInt::get(A->getType(), P.constant));
+                Cond = Bpre.CreateICmpSLT(
+                    A, llvm::ConstantInt::get(A->getType(), static_cast< uint64_t >(P.constant))
+                );
                 if (verbose)
                     llvm::outs() << "  Precondition: arg" << P.arg_index << " < " << P.constant
                                  << "\n";
@@ -423,7 +429,9 @@ namespace {
             case PK_RelLeArgConst: {
                 if (!A->getType()->isIntegerTy())
                     break;
-                Cond = Bpre.CreateICmpSLE(A, llvm::ConstantInt::get(A->getType(), P.constant));
+                Cond = Bpre.CreateICmpSLE(
+                    A, llvm::ConstantInt::get(A->getType(), static_cast< uint64_t >(P.constant))
+                );
                 if (verbose)
                     llvm::outs() << "  Precondition: arg" << P.arg_index << " <= " << P.constant
                                  << "\n";
@@ -432,7 +440,9 @@ namespace {
             case PK_RelGtArgConst: {
                 if (!A->getType()->isIntegerTy())
                     break;
-                Cond = Bpre.CreateICmpSGT(A, llvm::ConstantInt::get(A->getType(), P.constant));
+                Cond = Bpre.CreateICmpSGT(
+                    A, llvm::ConstantInt::get(A->getType(), static_cast< uint64_t >(P.constant))
+                );
                 if (verbose)
                     llvm::outs() << "  Precondition: arg" << P.arg_index << " > " << P.constant
                                  << "\n";
@@ -441,7 +451,9 @@ namespace {
             case PK_RelGeArgConst: {
                 if (!A->getType()->isIntegerTy())
                     break;
-                Cond = Bpre.CreateICmpSGE(A, llvm::ConstantInt::get(A->getType(), P.constant));
+                Cond = Bpre.CreateICmpSGE(
+                    A, llvm::ConstantInt::get(A->getType(), static_cast< uint64_t >(P.constant))
+                );
                 if (verbose)
                     llvm::outs() << "  Precondition: arg" << P.arg_index << " >= " << P.constant
                                  << "\n";
@@ -454,8 +466,12 @@ namespace {
                 if (!A64)
                     break;
                 auto *i64     = llvm::Type::getInt64Ty(M.getContext());
-                llvm::Value *lo = Bpre.CreateICmpSGE(A64, llvm::ConstantInt::get(i64, P.min_val));
-                llvm::Value *hi = Bpre.CreateICmpSLE(A64, llvm::ConstantInt::get(i64, P.max_val));
+                llvm::Value *lo = Bpre.CreateICmpSGE(
+                    A64, llvm::ConstantInt::get(i64, static_cast< uint64_t >(P.min_val))
+                );
+                llvm::Value *hi = Bpre.CreateICmpSLE(
+                    A64, llvm::ConstantInt::get(i64, static_cast< uint64_t >(P.max_val))
+                );
                 Cond            = Bpre.CreateAnd(lo, hi);
                 if (verbose)
                     llvm::outs() << "  Precondition: " << P.min_val << " <= arg" << P.arg_index
@@ -514,8 +530,12 @@ namespace {
                     break;
 
                 auto *i64 = llvm::Type::getInt64Ty(M.getContext());
-                llvm::Value *lo = Bpost.CreateICmpSGE(Ri64, llvm::ConstantInt::get(i64, P.min_val));
-                llvm::Value *hi = Bpost.CreateICmpSLE(Ri64, llvm::ConstantInt::get(i64, P.max_val));
+                llvm::Value *lo = Bpost.CreateICmpSGE(
+                    Ri64, llvm::ConstantInt::get(i64, static_cast< uint64_t >(P.min_val))
+                );
+                llvm::Value *hi = Bpost.CreateICmpSLE(
+                    Ri64, llvm::ConstantInt::get(i64, static_cast< uint64_t >(P.max_val))
+                );
                 Cond            = Bpost.CreateAnd(lo, hi);
 
                 if (verbose)
@@ -588,13 +608,12 @@ namespace {
     }
 
     // Write module to output file
-    static llvm::LogicalResult
-    writeModuleToFile(llvm::Module &module, llvm::StringRef output_filename) {
+    static bool writeModuleToFile(llvm::Module &module, llvm::StringRef output_filename) {
         std::error_code ec;
         llvm::raw_fd_ostream os(output_filename, ec, llvm::sys::fs::OF_None);
         if (ec) {
             llvm::errs() << "Error opening " << output_filename << ": " << ec.message() << "\n";
-            return llvm::failure();
+            return false;
         }
 
         if (emit_ll) {
@@ -603,7 +622,7 @@ namespace {
             llvm::WriteBitcodeToFile(module, os);
         }
 
-        return llvm::success();
+        return true;
     }
 } // namespace
 
@@ -635,7 +654,7 @@ int main(int argc, char **argv) {
     }
 
     // Write output
-    if (llvm::failed(writeModuleToFile(*module, output_filename))) {
+    if (!writeModuleToFile(*module, output_filename)) {
         llvm::errs() << "Failed to write output\n";
         return EXIT_FAILURE;
     }

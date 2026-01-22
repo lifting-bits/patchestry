@@ -18,6 +18,7 @@ target_link_libraries(patchir-seahorn-verifier
 
 if(PATCHESTRY_INSTALL)
   install(TARGETS patchir-seahorn-verifier
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT patchestry-tools
   )
 endif()
