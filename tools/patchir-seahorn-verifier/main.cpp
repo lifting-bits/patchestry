@@ -483,8 +483,7 @@ namespace {
                     break;
                 llvm::Type *intptr_ty = Bpre.getIntPtrTy(M.getDataLayout());
                 llvm::Value *ptr_int  = Bpre.CreatePtrToInt(A, intptr_ty);
-                llvm::Value *align_val =
-                    llvm::ConstantInt::get(intptr_ty, static_cast< uint64_t >(P.alignment));
+                llvm::Value *align_val = llvm::ConstantInt::get(intptr_ty, P.alignment);
                 llvm::Value *mod       = Bpre.CreateURem(ptr_int, align_val);
                 llvm::Value *zero      = llvm::ConstantInt::get(intptr_ty, 0);
                 Cond                   = Bpre.CreateICmpEQ(mod, zero);
