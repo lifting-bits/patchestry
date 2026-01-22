@@ -24,6 +24,7 @@ target_link_libraries(patchir-cir2llvm
 
 if(PATCHESTRY_INSTALL)
   install(TARGETS patchir-cir2llvm
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT patchestry-tools
   )
 endif()

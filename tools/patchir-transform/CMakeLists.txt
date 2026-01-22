@@ -28,6 +28,7 @@ mlir_check_link_libraries(patchir-transform)
 
 if(PATCHESTRY_INSTALL)
   install(TARGETS patchir-transform
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT patchestry-tools
   )
 endif()
