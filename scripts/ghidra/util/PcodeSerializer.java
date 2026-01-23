@@ -155,6 +155,14 @@ public class PcodeSerializer {
     	public static final int DECLARE_TEMP_VAR = MIN_CALLOTHER + 2;
     	public static final int ADDRESS_OF = MIN_CALLOTHER + 3;
 
+		// Ghidra decompiler built-in userop indices (from userop.cc)
+		public static final int BUILTIN_STRINGDATA = 0x10000000;
+		public static final int BUILTIN_VOLATILE_READ = 0x10000001;
+		public static final int BUILTIN_VOLATILE_WRITE = 0x10000002;
+		public static final int BUILTIN_MEMCPY = 0x10000003;
+		public static final int BUILTIN_STRNCPY = 0x10000004;
+		public static final int BUILTIN_WCSNCPY = 0x10000005;
+
 		protected Program currentProgram;
 
 		private String architecture;
@@ -392,13 +400,46 @@ public class PcodeSerializer {
 			SequenceNumber sequenceNumber = pcodeOp.getSeqnum();
 			return sequenceNumber.getTarget();
 		}
-		
+
+		// Resolve a CALLOTHER userop index to its name.
+		// Handles SLEIGH-defined, synthetic, and decompiler built-in userops.
+		String resolveUseropName(int index) {
+			// Category 1: SLEIGH-defined userops (0 to ~100)
+			if (index < MIN_CALLOTHER) {
+				return language.getUserDefinedOpName(index);
+			}
+
+			// Category 2: Our synthetic ops (0x100000 - 0x100003)
+			switch (index) {
+				case DECLARE_PARAM_VAR: return "DECLARE_PARAMETER";
+				case DECLARE_LOCAL_VAR: return "DECLARE_LOCAL";
+				case DECLARE_TEMP_VAR: return "DECLARE_TEMP";
+				case ADDRESS_OF: return "ADDRESS_OF";
+			}
+
+			// Category 3: Ghidra decompiler built-ins (0x10000000+)
+			switch (index) {
+				case BUILTIN_STRINGDATA: return "stringdata";
+				case BUILTIN_VOLATILE_READ: return "volatile_read";
+				case BUILTIN_VOLATILE_WRITE: return "volatile_write";
+				case BUILTIN_MEMCPY: return "builtin_memcpy";
+				case BUILTIN_STRNCPY: return "builtin_strncpy";
+				case BUILTIN_WCSNCPY: return "builtin_wcsncpy";
+			}
+
+			return null;  // Unknown userop
+		}
+
 		// Return the label of an intrinsic with `CALLOTHER`. This is based
 		// off of the return value.
 		String intrinsicLabel(PcodeOp pcodeOp) throws Exception {
 			if (pcodeOp.getOpcode() == PcodeOp.CALLOTHER) {
 				int index = (int) pcodeOp.getInput(0).getOffset();
-				String name = language.getUserDefinedOpName(index);
+				String name = resolveUseropName(index);
+				if (name == null) {
+					throw new UnsupportedOperationException(
+						"Unknown CALLOTHER index: 0x" + Integer.toHexString(index));
+				}
 				return intrinsicLabel(name, intrinsicReturnType(pcodeOp));
 			} else {
 				throw new UnsupportedOperationException("Can only label a CALLOTHER PcodeOp, to which the first input should always be a constant representing the user-defined op index");
@@ -1667,15 +1708,18 @@ public class PcodeSerializer {
 
 					switch (pcodeOp.getOpcode()) {
 						case PcodeOp.CALLOTHER:
-							if (pcodeOp.getInput(0).getOffset() < MIN_CALLOTHER) {
-								int index = (int) pcodeOp.getInput(0).getOffset();
-								String userDefinedOpName = language.getUserDefinedOpName(index);
-								if (userDefinedOpName != null) {
-									callotherUsePcodeOps.add(pcodeOp);
-								} else {
-									System.out.println("Unsupported CALLOTHER at " + label(pcodeOp) + ": " + pcodeOp.toString());
-									return false;
-								}
+							int callotherIndex = (int) pcodeOp.getInput(0).getOffset();
+							// Skip our synthetic ops - handled separately in serializeCallOtherOp
+							if (callotherIndex >= MIN_CALLOTHER && callotherIndex < BUILTIN_STRINGDATA) {
+								break;
+							}
+							// Process SLEIGH userops and decompiler built-ins as intrinsics
+							String userDefinedOpName = resolveUseropName(callotherIndex);
+							if (userDefinedOpName != null) {
+								callotherUsePcodeOps.add(pcodeOp);
+							} else {
+								System.out.println("Unsupported CALLOTHER at " + label(pcodeOp) + ": " + pcodeOp.toString());
+								return false;
 							}
 							break;
 						case PcodeOp.CALL:
@@ -2564,7 +2608,7 @@ public class PcodeSerializer {
 			
 			for (PcodeOp pcodeOp : callotherUsePcodeOps) {
 				int index = (int) pcodeOp.getInput(0).getOffset();
-				String name = language.getUserDefinedOpName(index);
+				String name = resolveUseropName(index);
 				DataType returnType = intrinsicReturnType(pcodeOp);
 				String label = intrinsicLabel(name, returnType);
 				if (!seenIntrinsics.add(label)) {
