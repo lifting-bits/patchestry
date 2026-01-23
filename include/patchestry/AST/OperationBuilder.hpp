@@ -167,9 +167,17 @@ namespace patchestry::ast {
             clang::Builtin::ID id
         );
 
-      private:
-        clang::Expr *build_callexpr_from_function(
-            clang::ASTContext &ctx, const Function &function, const Operation &op
+        // Methods exposed for CALLOTHER intrinsic handlers
+        clang::Stmt *create_varnode(
+            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+            clang::SourceLocation loc = clang::SourceLocation()
+        );
+
+        clang::QualType get_varnode_type(clang::ASTContext &ctx, const Varnode &vnode);
+
+        clang::Expr *make_cast(
+            clang::ASTContext &ctx, clang::Expr *expr, const clang::QualType &to_type,
+            clang::SourceLocation loc
         );
 
         clang::Stmt *create_assign_operation(
@@ -177,25 +185,33 @@ namespace patchestry::ast {
             clang::SourceLocation loc = clang::SourceLocation()
         );
 
+        clang::Sema &sema(void) { return function_builder().sema(); }
+
+        // CALLOTHER intrinsic helper - exposed for custom handlers
+        std::pair< clang::Stmt *, bool > create_intrinsic_call(
+            clang::ASTContext &ctx, const Function &function, const Operation &op,
+            const std::string &name
+        );
+
+        // Create a call to __patchestry_missing_<name> with metadata annotation
+        std::pair< clang::Stmt *, bool > create_missing_intrinsic_call(
+            clang::ASTContext &ctx, const Function &function, const Operation &op,
+            const std::string &original_name, const std::string &original_label
+        );
+
+      private:
+        clang::FunctionDecl *get_or_create_intrinsic_decl(
+            clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,
+            bool is_variadic = true
+        );
+
+        clang::Expr *build_callexpr_from_function(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
         clang::Stmt *create_array_assignment_operation(
             clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
             clang::SourceLocation loc = clang::SourceLocation()
-        );
-
-        /**
-         * @brief Performs an implicit and explicit cast of an expression to a specified type,
-         * falling back to a manual pointer-based cast if necessary.
-         *
-         * @param ctx Reference to clang ASTContext.
-         * @param expr The input expression to be cast.
-         * @param to_type The target type to which the expression should be cast.
-         *
-         * @return Pointer to casted `Expr`. null if `to_type` is null, or an invalid cast
-         * occurs.
-         */
-        clang::Expr *make_cast(
-            clang::ASTContext &ctx, clang::Expr *expr, const clang::QualType &to_type,
-            clang::SourceLocation loc
         );
 
         clang::Expr *make_explicit_cast(
@@ -216,11 +232,6 @@ namespace patchestry::ast {
         clang::Expr *make_member_expr(
             clang::ASTContext &ctx, clang::Expr *base, unsigned offset,
             clang::SourceLocation loc = clang::SourceLocation()
-        );
-
-        clang::Stmt *create_varnode(
-            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-            clang::SourceLocation = clang::SourceLocation()
         );
 
         void extend_callexpr_agruments(
@@ -245,16 +256,15 @@ namespace patchestry::ast {
 
         clang::Stmt *create_string(clang::ASTContext &ctx, const Varnode &vnode);
 
-        clang::QualType get_varnode_type(clang::ASTContext &ctx, const Varnode &vnode);
-
         TypeBuilder &type_builder(void) { return builder->type_builder.get(); }
 
         FunctionBuilder &function_builder(void) { return *builder; }
 
-        clang::Sema &sema(void) { return function_builder().sema(); }
-
         std::reference_wrapper< const clang::ASTContext > context;
         std::shared_ptr< FunctionBuilder > builder;
+
+        // Cache for intrinsic function declarations
+        std::unordered_map< std::string, clang::FunctionDecl * > intrinsic_decls;
     };
 
 } // namespace patchestry::ast

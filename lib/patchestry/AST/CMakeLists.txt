@@ -5,6 +5,7 @@
 add_library(patchestry_ast STATIC
   ASTConsumer.cpp
   FunctionBuilder.cpp
+  IntrinsicHandlers.cpp
   OperationBuilder.cpp
   OperationStmt.cpp
   TypeBuilder.cpp

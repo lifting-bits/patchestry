@@ -59,6 +59,8 @@ namespace patchestry::ast {
                                      const Varnode &vnode) -> clang::Stmt * {
             switch (vnode.kind) {
                 case Varnode::VARNODE_UNKNOWN:
+                case Varnode::VARNODE_INTRINSIC:
+                    // Intrinsics are handled via OperationTarget, not as varnodes
                     break;
                 case Varnode::VARNODE_GLOBAL:
                     return create_global(ctx, vnode);
