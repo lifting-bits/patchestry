@@ -276,6 +276,10 @@ namespace patchestry::ast {
 
         // Handle exact type match: no cast required
         if (ctx.hasSameUnqualifiedType(input_type, output_type)) {
+            // Array types are not directly assignable in C; use element-wise copy
+            if (output_type->isArrayType() || output_type->isConstantArrayType()) {
+                return create_array_assignment_operation(ctx, input_expr, output_expr, loc);
+            }
             auto assign_operation =
                 sema().CreateBuiltinBinOp(loc, clang::BO_Assign, output_expr, input_expr);
             assert(!assign_operation.isInvalid());

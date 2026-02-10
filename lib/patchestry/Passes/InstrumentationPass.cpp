@@ -567,6 +567,10 @@ don't yet pass)
                                 LOG(ERROR) << "Unsupported patch mode for function call\n";
                                 break;
                         }
+                    } else {
+                        LOG(INFO) << "function worklist entry '"
+                                  << func.getSymName().str()
+                                  << "' did not match the patch action; continuing\n";
                     }
                 });
             }
