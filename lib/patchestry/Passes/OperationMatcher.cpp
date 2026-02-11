@@ -73,6 +73,7 @@ namespace patchestry::passes {
     ) {
         // If the match kind is not function, return false
         if (match.name.empty() || match.kind != MatchKind::FUNCTION) {
+            LOG(WARNING) << "Patch match name was empty or kind was not FUNCTION\n";
             return false;
         }
 
@@ -92,16 +93,23 @@ namespace patchestry::passes {
 
         // Check function context match (the function containing the call)
         if (!matches_function_context(func, match.function_context)) {
+            LOG(WARNING) << "Patch action: function context did not match\n";
             return false;
         }
 
         // Check argument matches for function calls
         if (!matches_arguments(op, match.argument_matches)) {
+            LOG(WARNING) << "Patch action: argument_matches did not match for callee '"
+                         << extract_callee_name(mlir::dyn_cast< cir::CallOp >(op))
+                         << "'\n";
             return false;
         }
 
         // Check variable matches as one of the arguments
         if (!matches_variables(op, match.variable_matches)) {
+            LOG(WARNING) << "Patch action: variable_matches did not match for callee '"
+                         << extract_callee_name(mlir::dyn_cast< cir::CallOp >(op))
+                         << "'\n";
             return false;
         }
 
@@ -334,6 +342,9 @@ namespace patchestry::passes {
             if (!arg_match.name.empty()) {
                 std::string var_name = extract_variable_name(op, arg_match.index);
                 if (!matches_pattern(var_name, arg_match.name)) {
+                    LOG(WARNING) << "argument_matches: operand " << arg_match.index
+                                 << " name '" << var_name << "' does not match expected '"
+                                 << arg_match.name << "'\n";
                     return false;
                 }
             }
@@ -347,6 +358,9 @@ namespace patchestry::passes {
                 if (!matches_type(variable_type, arg_match.type)
                     && !matches_type(operand.getType(), arg_match.type))
                 {
+                    LOG(WARNING) << "argument_matches: operand " << arg_match.index
+                                 << " type does not match expected '" << arg_match.type
+                                 << "'\n";
                     return false;
                 }
             }
