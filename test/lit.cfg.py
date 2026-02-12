@@ -30,7 +30,7 @@ if 'HOST_WORKSPACE' in os.environ:
 config.python_executable = config.python_executable if config.python_executable else sys.executable
 
 # Define file suffixes for test files
-config.suffixes = ['.c', '.cpp', '.json']
+config.suffixes = ['.c', '.cpp', '.json', '.ll']
 
 # Set the root directory where tests should be executed
 config.test_exec_root = os.path.join(config.patchestry_obj_root, 'test')
@@ -67,6 +67,8 @@ config.patchir_decomp_tool = patchestry_tool_path('patchir-decomp')
 config.patchir_transform_tool = patchestry_tool_path('patchir-transform')
 
 config.patchir_cir2llvm_tool = patchestry_tool_path('patchir-cir2llvm')
+
+config.patchir_seahorn_verifier_tool = patchestry_tool_path('patchir-seahorn-verifier')
 
 def get_musl_include_path(arch):
     """Get the musl include path for the given architecture on macOS.
@@ -123,6 +125,7 @@ tools = [
     ToolSubst('%patchir-decomp', command=config.patchir_decomp_tool),
     ToolSubst('%patchir-transform', command=config.patchir_transform_tool),
     ToolSubst('%patchir-cir2llvm', command=config.patchir_cir2llvm_tool),
+    ToolSubst('%patchir-seahorn-verifier', command=config.patchir_seahorn_verifier_tool),
     ToolSubst('%strip-json-comments', command=config.json_strip_comments),
 ]
 
