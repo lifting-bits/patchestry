@@ -374,6 +374,11 @@ namespace patchestry::passes { // NOLINT
          * to the destination module, handling symbol conflicts through renaming when necessary.
          * It also recursively copies any symbols that the target symbol depends on.
          *
+         * Function definitions (not declarations) are automatically assigned internal linkage
+         * to prevent symbol pollution in the final binary, enable better optimizations, and
+         * avoid naming conflicts. This makes instrumentation functions (patches/contracts)
+         * module-local implementation details rather than externally visible APIs.
+         *
          * @param dest The destination module to merge symbols into
          * @param src The source module containing the symbol to merge
          * @param symbol_name The name of the symbol to merge
