@@ -114,9 +114,12 @@ fi
 # Extract distribution tar.gz
 echo "Extracting SeaHorn distribution package..."
 docker run -v "$(pwd):/host" --rm seahorn/seahorn-builder:jammy-llvm20 \
-    /bin/sh -c "cp build/*.tar.gz /host/" 2>/dev/null
+    /bin/sh -c "cp build/*.tar.gz /host/"
 
-if [[ ! -f SeaHorn-20.*.tar.gz ]]; then
+# Check if any tar.gz file matching the pattern exists
+shopt -s nullglob
+TAR_FILES=(SeaHorn-20.*.tar.gz)
+if [[ ${#TAR_FILES[@]} -eq 0 ]]; then
     echo "✗ Stage 2 failed: Could not extract distribution package"
     exit 1
 fi
@@ -133,6 +136,7 @@ docker build \
     .
 
 # Cleanup distribution tar.gz
+shopt -s nullglob
 rm -f SeaHorn-20.*.tar.gz
 
 # Check if final build was successful
