@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Configuration
-DOCKER_IMAGE="${SEAHORN_IMAGE:-seahorn:dev20}"
+DOCKER_IMAGE="${SEAHORN_IMAGE:-ghcr.io/lifting-bits/patchestry-seahorn:latest}"
 WORK_DIR="/work"
 
 # Usage function
