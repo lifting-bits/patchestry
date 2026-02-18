@@ -10,6 +10,7 @@
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/SourceManager.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/MemoryBuffer.h>
 
 #include <patchestry/AST/Utils.hpp>
@@ -45,8 +46,7 @@ namespace patchestry::ast {
             case 80:
                 return ctx.LongDoubleTy;
             default:
-                assert(false);
-                return clang::QualType();
+                llvm_unreachable("Unsupported float bit size in getTypeFromSize");
         }
     }
 
