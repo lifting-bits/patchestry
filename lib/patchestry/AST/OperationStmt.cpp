@@ -1522,7 +1522,7 @@ namespace patchestry::ast {
         std::vector args = { input_expr };
         auto *call_expr = create_builtin_call(ctx, sema(), id, args, op_loc);
 
-        if (op.output.has_value()) {
+        if (!op.output.has_value()) {
             return { call_expr, true };
         }
 
