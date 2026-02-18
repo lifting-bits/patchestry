@@ -1,0 +1,81 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// CIR: cir.func @int_negate_test
+// CIR: cir.unary(not,
+// RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir
+// MLIR: llvm.func @int_negate_test
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// LL: define dso_local i32 @int_negate_test
+// LL: xor i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "int_negate_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "aa000001",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["aa000001"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "unique:000da100:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "param_1",
+              "type": "aa000001",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": ["unique:000da100:0:0", "entry.exit"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ram:10000004:1:0": {
+              "mnemonic": "INT_NEGATE",
+              "type": "aa000001",
+              "inputs": [
+                {
+                  "type": "aa000001",
+                  "kind": "parameter",
+                  "operation": "unique:000da100:0:0"
+                }
+              ]
+            },
+            "ram:10000008:2:0": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "aa000001",
+                  "kind": "temporary",
+                  "operation": "ram:10000004:1:0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": ["ram:10000004:1:0", "ram:10000008:2:0"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "aa000001": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    }
+  }
+}

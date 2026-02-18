@@ -1551,6 +1551,12 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
+        if (!input_expr->isPRValue()) {
+            input_expr = make_implicit_cast(
+                ctx, input_expr, input_expr->getType(), clang::CastKind::CK_LValueToRValue
+            );
+        }
+
         auto *cast_expr =
             make_implicit_cast(ctx, input_expr, op_type, clang::CK_IntegralToFloating);
         if (!op.output.has_value()) {
@@ -1620,6 +1626,12 @@ namespace patchestry::ast {
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        if (!input_expr->isPRValue()) {
+            input_expr = make_implicit_cast(
+                ctx, input_expr, input_expr->getType(), clang::CastKind::CK_LValueToRValue
+            );
+        }
 
         auto *cast_expr = make_implicit_cast(ctx, input_expr, op_type, clang::CK_FloatingCast);
         if (!op.output.has_value()) {

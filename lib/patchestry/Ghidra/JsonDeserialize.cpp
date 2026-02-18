@@ -81,6 +81,15 @@ namespace patchestry::ghidra {
         program.lang   = get_string_if_valid(root, "id");
         program.format = get_string_if_valid(root, "format");
 
+        if (!program.arch.has_value()) {
+            LOG(ERROR) << "Required field 'architecture' is absent from JSON\n";
+            return std::nullopt;
+        }
+        if (!program.lang.has_value()) {
+            LOG(ERROR) << "Required field 'id' is absent from JSON\n";
+            return std::nullopt;
+        }
+
         // Deserialize types recovered
         if (const auto *types_array = root.getObject("types")) {
             deserialize_types(*types_array, program.serialized_types);
@@ -329,7 +338,7 @@ namespace patchestry::ghidra {
         CompositeType &varnode, const JsonObject &composite_obj, const TypeMap &serialized_types
     ) {
         const auto *field_array = composite_obj.getArray("fields");
-        if (field_array->empty()) {
+        if (field_array == nullptr || field_array->empty()) {
             LOG(ERROR) << "No fields found in composite type object\n";
             return;
         }
@@ -389,18 +398,74 @@ namespace patchestry::ghidra {
     }
 
     void JsonParser::deserialize_enum(
-        EnumType &varnode, const JsonObject & /*unused*/, const TypeMap & /*unused*/
+        EnumType &varnode, const JsonObject &enum_obj, const TypeMap & /*unused*/
     ) {
         assert(varnode.kind == VarnodeType::Kind::VT_ENUM);
-        (void) varnode;
+
+        const auto *entries = enum_obj.getArray("entries");
+        if (entries == nullptr || entries->empty()) {
+            LOG(WARNING) << "Enum type '" << varnode.name << "' has no entries\n";
+            return;
+        }
+
+        unsigned entry_index = 0;
+        for (const auto &entry : *entries) {
+            const auto *entry_obj = entry.getAsObject();
+            if (entry_obj == nullptr) {
+                LOG(ERROR) << "Enum '" << varnode.name << "' entry #" << entry_index
+                           << ": Invalid format, skipping\n";
+                ++entry_index;
+                continue;
+            }
+
+            auto maybe_name = get_string_if_valid(*entry_obj, "name");
+            if (!maybe_name) {
+                LOG(ERROR) << "Enum '" << varnode.name << "' entry #" << entry_index
+                           << ": Missing 'name', skipping\n";
+                ++entry_index;
+                continue;
+            }
+
+            auto maybe_value = entry_obj->getInteger("value");
+            if (!maybe_value) {
+                LOG(ERROR) << "Enum '" << varnode.name << "' entry #" << entry_index
+                           << ": Missing 'value', skipping\n";
+                ++entry_index;
+                continue;
+            }
+
+            varnode.add_constant(*maybe_name, *maybe_value);
+            ++entry_index;
+        }
     }
 
     void JsonParser::deserialize_function_type(
-        FunctionType &varnode, const JsonObject & /*unused*/, const TypeMap &
-        /*unused*/
+        FunctionType &varnode, const JsonObject &func_obj, const TypeMap & /*unused*/
     ) {
         assert(varnode.kind == VarnodeType::Kind::VT_FUNCTION);
-        (void) varnode;
+
+        auto maybe_return_type = get_string_if_valid(func_obj, "return_type");
+        if (maybe_return_type) {
+            varnode.return_type_key = *maybe_return_type;
+        } else {
+            LOG(WARNING) << "Function type '" << varnode.name << "': Missing 'return_type'\n";
+        }
+
+        varnode.is_variadic = func_obj.getBoolean("is_variadic").value_or(false);
+        varnode.is_noreturn = func_obj.getBoolean("is_noreturn").value_or(false);
+
+        const auto *params = func_obj.getArray("parameter_types");
+        if (params != nullptr) {
+            for (const auto &param : *params) {
+                auto maybe_key = param.getAsString();
+                if (maybe_key) {
+                    varnode.param_type_keys.emplace_back(maybe_key->str());
+                } else {
+                    LOG(WARNING) << "Function type '" << varnode.name
+                                 << "': Invalid parameter type entry, skipping\n";
+                }
+            }
+        }
     }
 
     void JsonParser::deserialize_undefined_type(
