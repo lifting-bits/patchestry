@@ -589,7 +589,7 @@ namespace patchestry::ast {
             case Mnemonic::OP_INT_SREM:
                 return op_builder->create_binary_operation(ctx, function, op, clang::BO_Rem);
             case Mnemonic::OP_BOOL_NEGATE:
-                return op_builder->create_unary_operation(ctx, function, op, clang::UO_Not);
+                return op_builder->create_unary_operation(ctx, function, op, clang::UO_LNot);
             case Mnemonic::OP_BOOL_OR:
                 return op_builder->create_binary_operation(ctx, function, op, clang::BO_LOr);
             case Mnemonic::OP_BOOL_AND:
@@ -611,7 +611,7 @@ namespace patchestry::ast {
             case Mnemonic::OP_FLOAT_DIV:
                 return op_builder->create_binary_operation(ctx, function, op, clang::BO_Div);
             case Mnemonic::OP_FLOAT_NEG:
-                return op_builder->create_unary_operation(ctx, function, op, clang::UO_Not);
+                return op_builder->create_unary_operation(ctx, function, op, clang::UO_Minus);
             case Mnemonic::OP_FLOAT_ABS:
                 return op_builder->create_float_abs(ctx, function, op);
             case Mnemonic::OP_FLOAT_SQRT:

@@ -234,7 +234,8 @@ int main(int argc, char **argv) {
 
     auto program = patchestry::ghidra::JsonParser().deserialize_program(*json->getAsObject());
     if (!program.has_value()) {
-        LOG(ERROR) << "Failed to deserialize JSON as patchestry program\n";
+        LOG(ERROR) << "Failed to deserialize JSON file '" << options.input_file
+                   << "' as patchestry program\n";
         return EXIT_FAILURE;
     }
 
