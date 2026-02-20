@@ -113,6 +113,11 @@ int main(int argc, char **argv) {
     llvm::cl::HideUnrelatedOptions(patchestry::cl::category);
     llvm::cl::ParseCommandLineOptions(argc, argv, "Patch IR Instrumentation Driver");
 
+    if (enable_instrumentation.getValue() && spec_filename.getValue().empty()) {
+        llvm::errs() << "error: --spec is required when --enable-instrumentation is set\n";
+        return EXIT_FAILURE;
+    }
+
     mlir::DialectRegistry registry;
     mlir::registerAllDialects(registry);
     registry.insert< mlir::DLTIDialect, mlir::func::FuncDialect >();

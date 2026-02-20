@@ -240,6 +240,9 @@ namespace llvm::yaml {
                 arg.source = ArgumentSourceType::CONSTANT;
             } else if (source_str == "return_value") {
                 arg.source = ArgumentSourceType::RETURN_VALUE;
+            } else {
+                io.setError("Unknown argument source type: '" + source_str + "'");
+                return;
             }
 
             io.mapRequired("name", arg.name);

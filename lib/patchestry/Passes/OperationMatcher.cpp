@@ -11,6 +11,8 @@
 #include <regex>
 #include <string>
 
+#include <llvm/ADT/SmallPtrSet.h>
+
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/IR/BuiltinAttributes.h>
@@ -202,7 +204,7 @@ namespace patchestry::passes {
     ) {
         // If no function context specified, match all functions
         if (function_context.empty()) {
-            LOG(ERROR) << "Tragically, there was not function context, anything matches\n";
+            LOG(ERROR) << "No function context specified; anything matches\n";
 
             return true;
         }
@@ -213,7 +215,8 @@ namespace patchestry::passes {
             LOG(INFO) << "Checking '" << func_name << "' against '" << context.name << "'\n";
             // Check function name match
             if (!matches_pattern(func_name, context.name)) {
-                LOG(ERROR) << "Didn't match!\n";
+                LOG(ERROR) << "Function name '" << func_name << "' did not match context name '"
+                           << context.name << "'\n";
                 continue;
             }
 
@@ -228,7 +231,7 @@ namespace patchestry::passes {
             return true;
         }
 
-        LOG(ERROR) << "Could not match anything :(\n";
+        LOG(ERROR) << "Function '" << func_name << "' did not match any function context\n";
         return false;
     }
 
@@ -424,7 +427,7 @@ namespace patchestry::passes {
         // which rejects empty patterns - here empty patterns mean "don't filter by this
         // criterion")
         if (pattern.empty()) {
-            LOG(ERROR) << "No pattern provided to match; matching empty string\n";
+            LOG(DEBUG) << "No pattern provided; matching anything\n";
             return true;
         }
 
@@ -527,53 +530,56 @@ namespace patchestry::passes {
         return "";
     }
 
-    mlir::Type OperationMatcher::extract_ssa_value_type(mlir::Value value) {
-        // Check if the value is defined by an operation that might modify the original type
+    static mlir::Type extract_ssa_value_type_impl(
+        mlir::Value value, llvm::SmallPtrSetImpl< mlir::Value > &visited
+    ) {
+        // Guard against cycles and excessive depth: if we have already visited this value,
+        // fall back to its direct type rather than recursing forever.
+        if (!visited.insert(value).second) {
+            return value.getType();
+        }
+
         if (auto defining_op = value.getDefiningOp()) {
-            // For cast operations, try to get the original type
+            // For cast operations, follow the cast chain to get the original type
             if (auto cast_op = mlir::dyn_cast< cir::CastOp >(defining_op)) {
-                // Follow the cast chain to get the original type
-                auto src_value = cast_op.getSrc();
-                return extract_ssa_value_type(src_value);
+                return extract_ssa_value_type_impl(cast_op.getSrc(), visited);
             }
 
             // For load operations, get the pointed-to type
             if (auto load_op = mlir::dyn_cast< cir::LoadOp >(defining_op)) {
-                auto ptr_value = load_op.getAddr();
-                auto ptr_type  = ptr_value.getType();
+                auto ptr_type = load_op.getAddr().getType();
                 if (auto cir_ptr_type = mlir::dyn_cast< cir::PointerType >(ptr_type)) {
                     return cir_ptr_type.getPointee();
                 }
             }
 
-            // For get member operations, try to get the member type
+            // For get member operations, return the member type directly
             if (auto get_member_op = mlir::dyn_cast< cir::GetMemberOp >(defining_op)) {
-                // Return the type of the member being accessed
                 return get_member_op.getType();
             }
 
-            // For other operations, recursively check operands
+            // For other operations, follow the first operand
             auto operands = defining_op->getOperands();
             if (!operands.empty()) {
-                // For simple operations, follow the first operand
-                return extract_ssa_value_type(operands[0]);
+                return extract_ssa_value_type_impl(operands[0], visited);
             }
         }
 
-        // For block arguments, check if they represent function parameters with original types
+        // For block arguments that are function parameters, use the block argument type
         if (auto block_arg = mlir::dyn_cast< mlir::BlockArgument >(value)) {
-            auto block = block_arg.getOwner();
-            if (auto parent_op = block->getParentOp()) {
-                // For function arguments, the block argument type should be the actual
-                // parameter type
-                if (auto func_op = mlir::dyn_cast< cir::FuncOp >(parent_op)) {
+            if (auto parent_op = block_arg.getOwner()->getParentOp()) {
+                if (mlir::dyn_cast< cir::FuncOp >(parent_op)) {
                     return block_arg.getType();
                 }
             }
         }
 
-        // Default: return the direct type of the value
         return value.getType();
+    }
+
+    mlir::Type OperationMatcher::extract_ssa_value_type(mlir::Value value) {
+        llvm::SmallPtrSet< mlir::Value, 8 > visited;
+        return extract_ssa_value_type_impl(value, visited);
     }
 
     std::string OperationMatcher::extract_symbol_name(mlir::Operation *op) {

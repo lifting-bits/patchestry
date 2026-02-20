@@ -385,9 +385,11 @@ don't yet pass)
         llvm::SmallVector< cir::FuncOp, 8 > function_worklist;
         llvm::SmallVector< mlir::Operation *, 8 > operation_worklist;
 
-        // check if the configuration is loaded; if not, return
+        // check if the configuration is loaded; if not, signal failure
         if (!config) {
             LOG(ERROR) << "No Patchestry configuration loaded. Skipping instrumentation.\n";
+            mod.emitError("InstrumentationPass: failed to load config");
+            signalPassFailure();
             return;
         }
 
@@ -467,6 +469,7 @@ don't yet pass)
 
         if (!target_meta_patch) {
             LOG(ERROR) << "Meta patch '" << meta_patch_name << "' not found\n";
+            signalPassFailure();
             return;
         }
 
@@ -476,6 +479,12 @@ don't yet pass)
         for (const auto &patch_action : target_meta_patch->patch_actions) {
             LOG(INFO) << "Processing patch action: " << patch_action.action_id << "\n";
 
+            if (patch_action.action.empty()) {
+                LOG(ERROR) << "Patch action '" << patch_action.action_id
+                           << "' has empty action list\n";
+                signalPassFailure();
+                return;
+            }
             auto &action = patch_action.action[0];
 
             // Find the corresponding patch specification by patch_id
@@ -483,10 +492,8 @@ don't yet pass)
             if (!patch_spec || patch_spec == std::nullopt) {
                 LOG(ERROR) << "Patch specification for ID '" << action.patch_id
                            << "' not found\n";
-                // todo (kaoudis) just silently eating the patch if it isn't found
-                // is very confusing since one could simply expect the software to be
-                // patched at this point, throwing an error here would be more appropriate
-                continue;
+                signalPassFailure();
+                return;
             } else {
                 // Create a modified patch info with the action's mode and arguments
                 PatchInformation patch_to_apply = { .spec         = patch_spec,
@@ -514,8 +521,14 @@ don't yet pass)
         const patch::MetaPatchConfig &meta_patch, const PatchInformation &patch_to_apply
     ) {
         const auto &patch_action = patch_to_apply.patch_action.value();
-        const auto &match        = patch_action.match[0];
-        const auto &action       = patch_action.action[0];
+        if (patch_action.match.empty() || patch_action.action.empty()) {
+            LOG(ERROR) << "Patch action '" << patch_action.action_id
+                       << "' has empty match or action list\n";
+            signalPassFailure();
+            return;
+        }
+        const auto &match  = patch_action.match[0];
+        const auto &action = patch_action.action[0];
 
         if (match.kind == MatchKind::FUNCTION) {
             // Apply to function calls
@@ -664,8 +677,14 @@ don't yet pass)
         const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
     ) {
         const auto &patch_action = patch.patch_action.value();
-        auto patch_func_type     = patch_func.getFunctionType();
-        bool is_variadic         = patch_func_type.isVarArg();
+        if (patch_action.action.empty()) {
+            LOG(ERROR) << "Patch action '" << patch_action.action_id
+                       << "' has empty action list\n";
+            signalPassFailure();
+            return;
+        }
+        auto patch_func_type = patch_func.getFunctionType();
+        bool is_variadic     = patch_func_type.isVarArg();
 
         // Handle structured argument specifications
         for (size_t i = 0; i < patch_action.action[0].arguments.size()
@@ -717,6 +736,11 @@ don't yet pass)
         );
 
         const auto &patch_action = patch.patch_action.value();
+        if (patch_action.action.empty()) {
+            LOG(ERROR) << "Patch action '" << patch_action.action_id
+                       << "' has empty action list\n";
+            return;
+        }
 
         for (auto &&[index, mapping] : llvm::enumerate(arg_map)) {
             auto &arg_spec = patch_action.action[0].arguments[index];
@@ -1039,6 +1063,11 @@ don't yet pass)
         };
 
         const auto &action = contract.action.value();
+        if (action.action.empty()) {
+            LOG(ERROR) << "Contract action has empty action list\n";
+            signalPassFailure();
+            return;
+        }
 
         // Handle structured argument specifications
         for (size_t i = 0;
@@ -1609,6 +1638,7 @@ don't yet pass)
         auto target_meta_contract = lookup(config->meta_contracts, meta_contract_name);
         if (!target_meta_contract) {
             LOG(ERROR) << "Meta contract '" << meta_contract_name << "' not found\n";
+            signalPassFailure();
             return;
         }
 
@@ -1616,6 +1646,11 @@ don't yet pass)
 
         // Process each action in the meta contract
         for (const auto &contract_action : target_meta_contract->contract_actions) {
+            if (contract_action.action.empty()) {
+                LOG(ERROR) << "Contract action has empty action list\n";
+                signalPassFailure();
+                return;
+            }
             auto &action = contract_action.action[0];
             LOG(INFO) << "Processing contract action: " << action.contract_id << "\n";
 
@@ -1625,10 +1660,8 @@ don't yet pass)
             if (!spec || spec == std::nullopt) {
                 LOG(ERROR) << "Contract specification for ID '" << action.contract_id
                            << "' not found\n";
-                // todo (kaoudis) just silently eating the contract if it isn't found
-                // is very confusing since one could simply expect the software to be
-                // patched at this point, throwing an error here would be more appropriate
-                continue;
+                signalPassFailure();
+                return;
             } else {
                 LOG(INFO) << "Found specification: '" << spec->name << "'\n";
 
@@ -1650,7 +1683,12 @@ don't yet pass)
         const ContractInformation &contract_to_apply
     ) {
         const auto &contract_action = contract_to_apply.action.value();
-        const auto &action          = contract_action.action[0];
+        if (contract_action.action.empty()) {
+            LOG(ERROR) << "Contract action has empty action list\n";
+            signalPassFailure();
+            return;
+        }
+        const auto &action = contract_action.action[0];
 
         LOG(INFO) << "Applying contract action '" << action.contract_id << "' in mode '"
                   << patchestry::passes::contract::infoModeToString(action.mode) << "' \n";
