@@ -15,6 +15,7 @@
 #include <clang/AST/OperationKinds.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Frontend/CompilerInstance.h>
+#include <llvm/Support/ErrorHandling.h>
 
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/OperationBuilder.hpp>
@@ -565,7 +566,7 @@ namespace patchestry::ast {
             case Mnemonic::OP_INT_2COMP:
                 return op_builder->create_int_2comp(ctx, function, op);
             case Mnemonic::OP_INT_NEGATE:
-                return op_builder->create_unary_operation(ctx, function, op, clang::UO_LNot);
+                return op_builder->create_unary_operation(ctx, function, op, clang::UO_Not);
             case Mnemonic::OP_INT_XOR:
                 return op_builder->create_binary_operation(ctx, function, op, clang::BO_Xor);
             case Mnemonic::OP_INT_AND:
@@ -610,7 +611,7 @@ namespace patchestry::ast {
             case Mnemonic::OP_FLOAT_DIV:
                 return op_builder->create_binary_operation(ctx, function, op, clang::BO_Div);
             case Mnemonic::OP_FLOAT_NEG:
-                return op_builder->create_unary_operation(ctx, function, op, clang::UO_LNot);
+                return op_builder->create_unary_operation(ctx, function, op, clang::UO_Minus);
             case Mnemonic::OP_FLOAT_ABS:
                 return op_builder->create_float_abs(ctx, function, op);
             case Mnemonic::OP_FLOAT_SQRT:
@@ -648,8 +649,7 @@ namespace patchestry::ast {
             case Mnemonic::OP_LZCOUNT:
                 return op_builder->create_lzcount(ctx, function, op);
             case Mnemonic::OP_UNKNOWN:
-                assert(false);
-                break;
+                llvm_unreachable("Encountered OP_UNKNOWN P-Code mnemonic");
         }
 
         return {};

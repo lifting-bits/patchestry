@@ -20,6 +20,7 @@
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/Support/ErrorHandling.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/OperationBuilder.hpp>
@@ -47,8 +48,7 @@ namespace patchestry::ast {
             }
         }
 
-        assert(false); // assert if failed to find operation
-        return std::nullopt;
+        llvm_unreachable("Failed to find operation for varnode lookup key");
     }
 
     clang::Stmt *OpBuilder::create_varnode(

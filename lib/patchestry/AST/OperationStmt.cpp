@@ -1175,7 +1175,74 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_scarry(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        return create_int_carry(ctx, function, op);
+        if (op.inputs.empty() || op.inputs.size() != 2U) {
+            LOG(ERROR) << "Skipping, scarry operation due to input operands. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        auto op_loc  = sourceLocation(ctx.getSourceManager(), op.key);
+        auto *input0 =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        auto *input1 =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+
+        // Compute sum = input0 + input1
+        auto sum =
+            sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_Add, input0, input1);
+        assert(!sum.isInvalid() && "Failed to create add operation");
+
+        // Signed overflow on addition occurs when both inputs have the same sign AND
+        // the result has a different sign from the inputs.
+        // Formula: (~(input0 ^ input1)) & (input0 ^ sum) < 0
+
+        // xor_inputs = input0 ^ input1
+        auto xor_inputs =
+            sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_Xor, input0, input1);
+        assert(!xor_inputs.isInvalid() && "Failed to create xor operation");
+
+        // not_xor_inputs = ~(input0 ^ input1)
+        // MSB is 1 when both inputs have the same sign
+        auto not_xor_inputs = sema().BuildUnaryOp(
+            sema().getCurScope(), op_loc, clang::UO_Not, xor_inputs.getAs< clang::Expr >()
+        );
+        assert(!not_xor_inputs.isInvalid() && "Failed to create bitwise not operation");
+
+        // xor_result = input0 ^ sum
+        // MSB is 1 when the sum's sign differs from input0
+        auto xor_result = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_Xor, input0,
+            sum.getAs< clang::Expr >()
+        );
+        assert(!xor_result.isInvalid() && "Failed to create xor operation");
+
+        // and_result = not_xor_inputs & xor_result
+        auto and_result = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_And, not_xor_inputs.getAs< clang::Expr >(),
+            xor_result.getAs< clang::Expr >()
+        );
+        assert(!and_result.isInvalid() && "Failed to create and operation");
+
+        // scarry = and_result < 0
+        auto *zero = clang::IntegerLiteral::Create(
+            ctx, llvm::APInt(ctx.getIntWidth(input0->getType()), 0, true), input0->getType(),
+            op_loc
+        );
+        auto scarry = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
+            zero
+        );
+        assert(!scarry.isInvalid() && "Failed to create scarry comparison");
+
+        if (!op.output.has_value()) {
+            return { scarry.getAs< clang::Stmt >(), true };
+        }
+
+        auto *output =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+
+        return { create_assign_operation(ctx, scarry.getAs< clang::Expr >(), output, op_loc),
+                 false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_sborrow(
@@ -1364,7 +1431,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_floor(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if ((op.mnemonic != Mnemonic::OP_FLOAT_ROUND) || (op.inputs.size() != 1U)) {
+        if ((op.mnemonic != Mnemonic::OP_FLOAT_FLOOR) || (op.inputs.size() != 1U)) {
             LOG(ERROR) << "FLOAT_FLOOR operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -1382,7 +1449,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_ceil(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if ((op.mnemonic != Mnemonic::OP_FLOAT_ROUND) || (op.inputs.size() != 1U)) {
+        if ((op.mnemonic != Mnemonic::OP_FLOAT_CEIL) || (op.inputs.size() != 1U)) {
             LOG(ERROR) << "FLOAT_CEIL operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -1455,7 +1522,7 @@ namespace patchestry::ast {
         std::vector args = { input_expr };
         auto *call_expr = create_builtin_call(ctx, sema(), id, args, op_loc);
 
-        if (op.output.has_value()) {
+        if (!op.output.has_value()) {
             return { call_expr, true };
         }
 
@@ -1467,7 +1534,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int2float(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if ((op.mnemonic != Mnemonic::OP_FLOAT2FLOAT) || (op.inputs.size() != 1U)) {
+        if ((op.mnemonic != Mnemonic::OP_INT2FLOAT) || (op.inputs.size() != 1U)) {
             LOG(ERROR) << "INT2FLOAT operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -1483,6 +1550,12 @@ namespace patchestry::ast {
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        if (!input_expr->isPRValue()) {
+            input_expr = make_implicit_cast(
+                ctx, input_expr, input_expr->getType(), clang::CastKind::CK_LValueToRValue
+            );
+        }
 
         auto *cast_expr =
             make_implicit_cast(ctx, input_expr, op_type, clang::CK_IntegralToFloating);
@@ -1553,6 +1626,12 @@ namespace patchestry::ast {
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        if (!input_expr->isPRValue()) {
+            input_expr = make_implicit_cast(
+                ctx, input_expr, input_expr->getType(), clang::CastKind::CK_LValueToRValue
+            );
+        }
 
         auto *cast_expr = make_implicit_cast(ctx, input_expr, op_type, clang::CK_FloatingCast);
         if (!op.output.has_value()) {

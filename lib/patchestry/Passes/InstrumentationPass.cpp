@@ -50,6 +50,7 @@
 #include <mlir/Parser/Parser.h>
 #include <mlir/Pass/PassManager.h>
 #include <mlir/Pass/PassRegistry.h>
+#include <mlir/Interfaces/DataLayoutInterfaces.h>
 #include <mlir/Support/LLVM.h>
 
 #include <patchestry/Passes/InstrumentationPass.hpp>
@@ -184,11 +185,6 @@ namespace patchestry::passes {
             if (from_category == TypeCategory::Boolean && to_category == TypeCategory::Float) {
                 return cir::CastKind::bool_to_float;
             }
-            if (from_category == TypeCategory::Pointer && to_category == TypeCategory::Pointer)
-            {
-                return cir::CastKind::bitcast;
-            }
-
             if (from_category == TypeCategory::Pointer && to_category == TypeCategory::Integer)
             {
                 return cir::CastKind::ptr_to_int;
@@ -650,8 +646,11 @@ don't yet pass)
         auto addr_type = cir::PointerType::get(builder.getContext(), value.getType());
 
         if (!abi_align) {
-            abi_align =
-                mlir::IntegerAttr::get(mlir::IntegerType::get(builder.getContext(), 64), 1);
+            auto layout  = mlir::DataLayout::closest(call_op);
+            abi_align    = mlir::IntegerAttr::get(
+                mlir::IntegerType::get(builder.getContext(), 64),
+                static_cast< int64_t >(layout.getTypeABIAlignment(value.getType()))
+            );
         }
         auto addr_op = builder.create< cir::AllocaOp >(
             call_op->getLoc(), addr_type, value.getType(), "arg_ref", abi_align
