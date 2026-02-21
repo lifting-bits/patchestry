@@ -1469,7 +1469,25 @@ don't yet pass)
 
         // Second pass: copy all collected symbols
         for (auto *op : symbols_to_copy) {
-            dest.push_back(op->clone());
+            auto cloned_op = op->clone();
+
+            // Set internal linkage for instrumentation functions (patches/contracts)
+            // These are implementation details and should not be externally visible.
+            // Internal linkage prevents symbol pollution, enables optimizations, and
+            // avoids potential naming conflicts across modules.
+            if (auto func_op = mlir::dyn_cast< cir::FuncOp >(cloned_op)) {
+                // Only modify function definitions, not declarations
+                // Declarations reference external code and must remain external
+                if (!func_op.isDeclaration()) {
+                    func_op.setLinkage(cir::GlobalLinkageKind::InternalLinkage);
+#ifdef DEBUG
+                    LOG(INFO) << "Set internal linkage for merged function: "
+                              << func_op.getSymName().str() << "\n";
+#endif
+                }
+            }
+
+            dest.push_back(cloned_op);
         }
 
         return mlir::success();
