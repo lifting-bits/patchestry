@@ -26,7 +26,7 @@ Patchestry supports two types of matching:
 | **Granularity** | Entire function calls | Individual operations (load, store, arithmetic, etc.) |
 | **Match Criteria** | Function symbol, arguments | Operation type, function context, variables |
 | **Use Cases** | API monitoring, function replacement | Memory access tracking, operation validation |
-| **Required Fields** | `match.symbol` | `match.operation` |
+| **Required Fields** | `match.name` + `match.kind` | `match.name` + `match.kind` |
 | **Context** | Caller context | Function containing the operation |
 
 ## Specification Format
@@ -49,8 +49,7 @@ target:                                  # Target binary configuration
   arch: "ARCHITECTURE:ENDIANNESS:BITWIDTH:VARIANT"
 
 libraries:                               # External patch and contract libraries
-  patches: "path/to/patches.yaml"
-  contracts: "path/to/contracts.yaml"
+  - "path/to/library.yaml"             # Each file may contain patches, contracts, or both
 
 execution_order:                         # Order of patch/contract execution
   - "meta_patches::meta_patch_name"
@@ -66,7 +65,7 @@ meta_patches:                            # Meta-patch configurations
       - id: "PATCH-001"
         description: "..."
         match:                           # Match criteria
-          - symbol: "..."
+          - name: "..."
             kind: "..."
             # Additional match criteria...
         action:                          # Patch actions
@@ -77,7 +76,7 @@ meta_patches:                            # Meta-patch configurations
               - name: "..."
                 source: "..."
                 index: "0"
-                is_reference=true
+                is_reference: true
 
 meta_contracts:                          # Meta-contract configurations
   - name: ...
@@ -152,10 +151,17 @@ Patchestry supports two types of contracts:
 
 ### Libraries Fields
 
+`libraries` is a list of paths to external library YAML files. Each library file may define `patches`, `contracts`, or both. Paths are resolved relative to the location of the top-level spec file.
+
+```yaml
+libraries:
+  - "patches/my_patches.yaml"
+  - "patches/my_contracts.yaml"   # can also hold contracts despite the name
+```
+
 | Field | Description | Example |
 |-------|-------------|---------|
-| `patches` | Path to external patch library YAML file | `"patches/security_patches.yaml"` |
-| `contracts` | Path to external contract library YAML file | `"contracts/security_contracts.yaml"` |
+| `libraries` (list entry) | Path to a library YAML file containing `patches:` and/or `contracts:` definitions | `"patches/usb_security_patches.yaml"` |
 
 ### Meta-Patch Entry Fields
 
@@ -196,25 +202,27 @@ Patchestry supports two types of contracts:
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `match.symbol` | Symbol name to match (for function-based matching) | `"read"` |
+| `match.name` | Name pattern to match — a function name for `kind: "function"`, or an MLIR operation name (e.g. `"cir.call"`) for `kind: "operation"` | `"usbd_ep_write_packet"`, `"cir.call"` |
 | `match.kind` | Type of match target (`function` or `operation`) | `"function"` |
-| `match.operation` | Operation type to match (for operation-based matching) | `"cir.load"`, `"cir.store"`, `"cir.binop"` |
-| `match.function_context` | Functions where operation matches should be applied | `name: "/.*secure.*/"` |
+| `match.function_context` | Functions where matches should be applied | `name: "/.*secure.*/"` |
 | `match.variable_matches` | Variables used in the operation (for function-based matching) | `name: "/.*password.*/"` |
-| `match.argument_matches` | Function arguments or Operands to match (for function-based matching) | See below |
-| `match.symbol_matches` | Variables used in the operation (for operation-based matching) | `name: "/.*password.*/"` |
-| `match.operand_matches` | Function arguments or Operands to match (for operation-based matching) | See below |
+| `match.argument_matches` | Function arguments to match (for function-based matching) | See below |
+| `match.symbol_matches` | Symbols accessed by the operation (for operation-based matching) | `name: "/.*password.*/"` |
+| `match.operand_matches` | Operands to match (for operation-based matching) | See below |
+
+> **Multiple match entries**: When multiple entries are listed under `match:`, each entry is evaluated independently. The action is applied once for **each** entry that matches — entries are not AND-combined. Think of each entry as a separate trigger. If two entries both match, the action is applied twice.
 
 #### Operation-Based Matching
 
-Operation-based matching is supported only for patches, meaning it is not supported for contract matching and insertion. For operation-based matching for patches, the following additional fields are available:
+Operation-based matching is supported only for patches, meaning it is not supported for contract matching and insertion. For operation-based matching, set `kind: "operation"` and use `name` to specify the MLIR operation name to match. The following additional fields are available:
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `match.operation` | **Required** - MLIR operation name to match | `"cir.load"`, `"cir.store"`, `"cir.call"` |
+| `match.name` | **Required** - MLIR operation name to match | `"cir.load"`, `"cir.store"`, `"cir.call"` |
+| `match.kind` | **Required** - must be `"operation"` | `"operation"` |
 | `match.function_context` | List of functions where operation should be matched | `[{name: "/.*secure.*/"}]` |
-| `match.symbol_matches` | Variables accessed by the operation | `[{name: "/.*secret.*/", type: "!cir.ptr<...>"}]` |
-| `match.operand_matches` | Operands matches for the operation | `[{index: 0, name: "addr", type: "!cir.ptr<...>"}]` |
+| `match.symbol_matches` | Symbols accessed by the operation | `[{name: "/.*secret.*/", type: "!cir.ptr<...>"}]` |
+| `match.operand_matches` | Operands to match | `[{index: 0, name: "addr", type: "!cir.ptr<...>"}]` |
 
 #### Function Context Fields
 
@@ -262,7 +270,7 @@ Common operand patterns:
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `mode` | Patching mode to be applied (`apply_before`, `apply_after`, `replace`) | `"apply_before"` |
+| `mode` | Patching or contract mode to apply. Patch modes: `apply_before`, `apply_after`, `replace`. Contract-only mode: `apply_at_entrypoint` | `"apply_before"` |
 | `patch_id` | Reference to the patch implementation | `"USB-PATCH-001"` |
 | `description` | Description of the action being applied | `"Pre-validation security check"` |
 | `arguments` | List of arguments to pass to patch function | See [Argument Specification](#argument-specification) |
@@ -271,12 +279,10 @@ Common operand patterns:
 
 The `optimization` field accepts a list of optimization settings:
 
-| Flag | Description | Effect |
-|------|-------------|--------|
-| `"inline-patches"` | Inline patch function calls | Reduces function call overhead |
-| `"inline-contracts"` | Inline contract function calls | Reduces contract validation overhead |
-| `"debug-info"` | Preserve debug information | Maintains debugging symbols |
-| `"size-optimize"` | Optimize for binary size | Reduces final binary size |
+| Flag | Applies to | Description | Effect |
+|------|------------|-------------|--------|
+| `"inline-patches"` | `meta_patches` | Inline patch function calls after insertion | Reduces function call overhead |
+| `"inline-contracts"` | `meta_contracts` | Inline contract function calls after insertion | Reduces contract validation overhead |
 
 ## Argument Specification
 
@@ -302,20 +308,21 @@ arguments:
 | Field | Description | Required | Example |
 |-------|-------------|----------|---------|
 | `name` | Descriptive name for the argument | Yes | `"left_operand"`, `"store_address"` |
-| `source` | Where the argument comes from | Yes | `"operand"`, `"argument"`, `"variable"`, `"constant"` |
+| `source` | Where the argument comes from | Yes | `"operand"`, `"argument"`, `"variable"`, `"symbol"`, `"constant"` |
 | `index` | Index for operands/arguments | When `source` is `"operand"` or `"argument"` | `0`, `1`, `2` |
-| `symbol` | Symbol name for variables | When `source` is `"variable"` | `"key_size"`, `"current_time"` |
+| `symbol` | Symbol name for local variables or module-level globals/functions | When `source` is `"variable"` or `"symbol"` | `"key_size"`, `"bl_spi_mode"` |
 | `value` | Literal value for constants | When `source` is `"constant"` | `"1024"`, `"0x1000"` |
+| `is_reference` | When `true`, passes a pointer to the value instead of the value itself, allowing the patch function to mutate the caller's variable. Supported for `operand` and `variable` sources. | No (default: `false`) | `true`, `false` |
 
 ### Argument Source Types
 
 | Source | Description | Required Fields | Use Case |
 |--------|-------------|-----------------|----------|
-| `operand` | Operation operand by position | `index` | Access operands of matched operations |
-| `argument` | Function call argument by position | `index` | Access arguments of matched function calls |
-| `variable` | Local variable or symbol by name | `symbol` | Access local variables in scope |
+| `operand` (alias: `argument`) | Operand or argument of the matched operation by zero-based index; `operand` and `argument` are interchangeable | `index` | Access operands/arguments of matched calls or operations |
+| `variable` | Local variable in the enclosing function scope, located by its IR name attribute | `symbol` | Access local variables (alloca'd locals) in scope |
+| `symbol` | Module-level global variable or function pointer, located in the module symbol table | `symbol` | Pass a global variable or function pointer to the patch |
 | `constant` | Literal constant value | `value` | Pass fixed values to patch functions |
-| `return_value` | Return value of function or operation | None | Access return value (for ApplyAfter mode) |
+| `return_value` | Return value of function or operation | None | Access return value (for `apply_after` mode only) |
 
 ### Argument Examples
 
@@ -349,9 +356,20 @@ arguments:
     value: "4294967295"
 ```
 
+#### Module-Level Global Symbol
+```yaml
+# Pass a module-level global variable to the patch function
+# source: "symbol" looks up the name in the module symbol table (cir.GlobalOp or cir.FuncOp)
+# Use this for globals and function pointers; use source: "variable" for local alloca'd variables
+arguments:
+  - name: "global_var"
+    source: "symbol"
+    symbol: "bl_spi_mode"
+```
+
 #### Return Value Handling
 ```yaml
-# Access function return value (ApplyAfter mode)
+# Access function return value (apply_after mode)
 arguments:
   - name: "result"
     source: "return_value"
@@ -399,8 +417,7 @@ target:
   arch: "ARM:LE:32"
 
 libraries:
-  patches: "patches/usb_security_patches.yaml"
-  contracts: "contracts/usb_security_contracts.yaml"
+  - "patches/usb_security_patches.yaml"
 
 execution_order:
   - "meta_patches::usb_security_meta_patches"
@@ -408,7 +425,6 @@ execution_order:
 
 meta_patches:
   - name: usb_security_meta_patches
-    id: "usb_security_meta_patches"
     description: "Meta patches for USB security"
     optimization:
       - "inline-patches"
@@ -418,7 +434,7 @@ meta_patches:
       - id: "USB-PATCH-001"
         description: "Patch to add USB security validation"
         match:
-          - symbol: "usbd_ep_write_packet"
+          - name: "usbd_ep_write_packet"
             kind: "function"
             function_context:
               - name: "bl_usb__send_message"
@@ -441,19 +457,20 @@ meta_patches:
 
 meta_contracts:
   - name: usb_security_meta_contracts
-    id: "usb_security_meta_contracts"
     description: "Contracts for USB security validation"
     contract_actions:
-    - id: "USB-CONTRACTS"
-      description: "Assert allocation size is suitable"
-      match:
-        - name: "bl_usb__send_message"
-          kind: "function"
-      action:
-        - mode: "apply_before"
-          contract_id: "USB-CONTRACT-001"
-          description: "Pre-validation security contract"
-          arguments:
+      - id: "USB-CONTRACTS"
+        description: "Assert allocation size is suitable"
+        match:
+          - name: "usbd_ep_write_packet"
+            kind: "function"
+            function_context:
+              - name: "bl_usb__send_message"
+        action:
+          - mode: "apply_before"
+            contract_id: "USB-CONTRACT-001"
+            description: "Pre-validation security contract"
+            arguments:
               - name: "operand_0"
                 source: "operand"
                 index: "0"
@@ -466,13 +483,14 @@ meta_contracts:
 ```yaml
 - name: "sensitive_loads"
   match:
-    operation: "cir.load"
-    function_context:
-      - name: "/.*secure.*/"  # Functions containing "secure"
-      - name: "authenticate"  # Exact function name
-    symbol_matches:
-      - name: "/.*password.*/"  # Variables containing "password"
-        type: "int32*"
+    - name: "cir.load"
+      kind: "operation"
+      function_context:
+        - name: "/.*secure.*/"  # Functions containing "secure"
+        - name: "authenticate"  # Exact function name
+      symbol_matches:
+        - name: "/.*password.*/"  # Variables containing "password"
+          type: "int32*"
 ```
 
 ### Example 2: Match Store Operations with Specific Operands
@@ -480,16 +498,17 @@ meta_contracts:
 ```yaml
 - name: "validate_stores"
   match:
-    operation: "cir.store"
-    function_context:
-      - name: "/.*critical.*/"
-    operand_matches:
-      - index: 0  # The value being stored (first operand)
-        name: "user_input"
-        type: "char*"
-      - index: 1  # The address being stored to (second operand)
-        name: "buffer"
-        type: "char[256]"
+    - name: "cir.store"
+      kind: "operation"
+      function_context:
+        - name: "/.*critical.*/"
+      operand_matches:
+        - index: 0  # The value being stored (first operand)
+          name: "user_input"
+          type: "char*"
+        - index: 1  # The address being stored to (second operand)
+          name: "buffer"
+          type: "char[256]"
 ```
 
 ### Pattern Matching
@@ -506,11 +525,12 @@ Examples:
 
 ## Patch Modes
 
-The specification supports three patching modes:
+The specification supports three patch modes and one contract-only mode:
 
-- `apply_before`: Apply patch before the matched function or operation
-- `apply_after`: Apply patch after the matched function
-- `replace`: Completely replace the matched function
+- `apply_before`: Apply patch or contract before the matched function or operation
+- `apply_after`: Apply patch or contract after the matched function or operation completes
+- `replace`: Completely replace the matched function call or operation (patches only)
+- `apply_at_entrypoint`: Insert a contract at the entry point of the **caller** function (contracts only — see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
 
 ### Apply Before Mode
 
@@ -531,7 +551,7 @@ action:
 
 ### Apply After Mode
 
-In `apply_after` mode, the patch is applied after the matched function or operation completes.
+In `apply_after` mode, the patch or contract is applied immediately after the matched function call or operation completes. This works for both function-based and operation-based matching.
 
 ```yaml
 action:
@@ -548,7 +568,7 @@ action:
 
 ### Replace Mode
 
-In `replace` mode, the matched function or operation is completely replaced by the patch function. The original code is not executed.
+In `replace` mode, the matched function call is completely replaced by the patch function. The original code is not executed. **When used with operation-based matching, the target operation must be a `cir.call`** — attempting to replace other operation types (e.g., `cir.store`) will log an error and leave the operation unchanged.
 
 ```yaml
 action:
@@ -563,6 +583,43 @@ action:
         source: "operand"
         index: "1"
 ```
+
+### Apply At Entrypoint Mode
+
+`apply_at_entrypoint` is a **contract-only** mode that inserts the contract call at the beginning of the **caller** function — the function that *contains* the matched call — rather than at the matched call site itself.
+
+> **Important**: The name can be misleading. The contract is **not** inserted at the beginning of the matched function (the callee). It is inserted at the beginning of the *enclosing* function (the caller) that was specified in `function_context`. Insertion happens after all `cir.alloca` ops and parameter-initialization stores so that all of the caller's parameters are in scope.
+
+**When to use it**: When you want to validate invariants at function entry using the caller's local parameters, before any call inside the function executes.
+
+**How it works** (example):
+- `match.name` = `"usbd_ep_write_packet"` — the call to find inside the caller
+- `match.function_context.name` = `"bl_usb__send_message"` — the caller whose entry point receives the contract
+- The contract call is inserted at the start of `bl_usb__send_message`, not at the `usbd_ep_write_packet` call site
+- Arguments (e.g., `source: "variable"`) are resolved from `bl_usb__send_message`'s local scope
+
+```yaml
+contract_actions:
+  - id: "ENTRY-CONTRACT-001"
+    description: "Null-check message pointer at function entry"
+
+    match:
+      - name: "usbd_ep_write_packet"   # call to find inside the caller
+        kind: "function"
+        function_context:
+          - name: "bl_usb__send_message"  # contract inserts HERE, at this function's entry
+
+    action:
+      - mode: "apply_at_entrypoint"
+        contract_id: "message_entry_check_contract"
+        description: "Runtime null-check on message pointer at bl_usb__send_message entry"
+        arguments:
+          - name: "msg"
+            source: "variable"
+            symbol: "msg"
+```
+
+> **Note**: The contract is inserted at the beginning of the **caller** (`bl_usb__send_message` — the function containing the matched call), not at the beginning of the matched function itself (`usbd_ep_write_packet`).
 
 # Contract Library Specification
 
@@ -682,6 +739,7 @@ Each predicate kind requires specific fields. **Only include the fields listed f
 
 | Kind | Description | Required Fields | Optional Fields | Example Use Case |
 |------|-------------|-----------------|-----------------|------------------|
+| `nonnull` | Assert target is not null | `kind`, `target` | `symbol` | Null pointer guard |
 | `relation` | Compare target against a value | `kind`, `target` (arg, return_value, or symbol), `relation`, `value` | `symbol` | Bounds checking, comparisons |
 | `alignment` | Verify memory alignment | `kind`, `target`, `align` | `symbol` | Memory alignment requirements |
 | `expr` | Free-form expression | `kind`, `expr` | `target`, `symbol` | Complex conditions |
@@ -691,6 +749,7 @@ Each predicate kind requires specific fields. **Only include the fields listed f
 
 | Predicate Kind | `kind` | `target` | `relation` | `value` | `align` | `expr` | `range` | `symbol` |
 |----------------|--------|----------|------------|---------|---------|--------|---------|----------|
+| **nonnull**    | ✓      | ✓        | ✗          | ✗       | ✗       | ✗      | ✗       | Optional |
 | **relation**   | ✓      | ✓        | ✓          | ✓       | ✗       | ✗      | ✗       | Optional |
 | **alignment**  | ✓      | ✓        | ✗          | ✗       | ✓       | ✗      | ✗       | Optional |
 | **expr**       | ✓      | Optional | ✗          | ✗       | ✗       | ✓      | ✗       | ✗        |
@@ -699,6 +758,7 @@ Each predicate kind requires specific fields. **Only include the fields listed f
 **Legend**: ✓ = Required, ✗ = Not allowed/Not used, Optional = May be included
 
 **Important Notes:**
+- **`nonnull`**: Only requires `target` (e.g., `arg0`). Asserts the target pointer is not null. No other fields are used.
 - **`relation`**: Must specify `target`, `relation` operator, and `value` to compare against. Target can be an argument, return value, or symbol reference.
 - **`alignment`**: Must specify `target` and `align` (alignment in bytes). Typically used with pointer arguments.
 - **`expr`**: Only requires the `expr` field with a free-form expression string. Target and symbol are optional for context.
@@ -729,7 +789,21 @@ For `relation` kind predicates:
 
 ### Static Contract Examples
 
-#### Example 1: Range Validation (range)
+#### Example 1: Null Pointer Guard (nonnull)
+
+```yaml
+preconditions:
+  - id: "ptr_nonnull"
+    description: "First argument must not be null"
+    pred:
+      kind: "nonnull"
+      target: "arg0"
+      symbol: "dest"  # Optional: for documentation
+```
+
+**Required fields for `nonnull`**: `kind`, `target`
+
+#### Example 2: Range Validation (range)
 
 ```yaml
 preconditions:
@@ -746,7 +820,7 @@ preconditions:
 
 **Required fields for `range`**: `kind`, `target`, `range` (with `min` and `max`)
 
-#### Example 2: Comparison Relation (relation)
+#### Example 3: Comparison Relation (relation)
 
 ```yaml
 preconditions:
@@ -762,7 +836,7 @@ preconditions:
 
 **Required fields for `relation`**: `kind`, `target`, `relation`, `value`
 
-#### Example 3: Memory Alignment (alignment)
+#### Example 4: Memory Alignment (alignment)
 
 ```yaml
 preconditions:
@@ -777,7 +851,7 @@ preconditions:
 
 **Required fields for `alignment`**: `kind`, `target`, `align`
 
-#### Example 4: Complex Expression (expr)
+#### Example 5: Complex Expression (expr)
 
 ```yaml
 preconditions:
@@ -791,7 +865,7 @@ preconditions:
 **Required fields for `expr`**: `kind`, `expr`
 **Optional fields**: `target`, `symbol` (for documentation)
 
-#### Example 5: Return Value Check (relation)
+#### Example 6: Return Value Check (relation)
 
 ```yaml
 postconditions:
@@ -822,7 +896,6 @@ metadata:
 
 contracts:
   - name: "usb_endpoint_write_validation"
-    id: "USB-CONTRACT-STATIC-001"
     description: "Validate USB endpoint write parameters"
     category: "write_validation"
     type: "STATIC"
@@ -866,6 +939,7 @@ contracts:
 ```
 
 **Summary of field usage by predicate kind:**
+- **nonnull**: `kind` + `target` (`arg<N>`, `return_value`, or `symbol`)
 - **relation**: `kind` + `target` + `relation` + `value` (`arg<N>`, `return_value`, or `symbol`)
 - **alignment**: `kind` + `target` + `align` (`arg<N>`, `return_value`, or `symbol`)
 - **expr**: `kind` + `expr`
@@ -878,7 +952,6 @@ For runtime contracts, specify the implementation details:
 ```yaml
 contracts:
   - name: "usb_endpoint_write_contract"
-    id: "USB-CONTRACT-001"
     description: "Runtime validation for USB endpoint write"
     type: "RUNTIME"
 

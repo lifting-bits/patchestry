@@ -1,0 +1,50 @@
+# Test patching specification: operation-level replace
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "operation-replace"
+  description: "Replace spo2_lookup call (operation match) with replace mode"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2025-07-28"
+
+libraries:
+  # this reference is in relation to the location of this file
+  - "patches/measurement_update_patch.yaml"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+meta_patches:
+  - name: "operation_replace"
+    description: "Replace spo2_lookup call using operation-level matching with replace mode"
+
+    patch_actions:
+      - id: "OPERATION-REPLACE-001"
+        description: "Replace spo2_lookup call operation entirely"
+
+        # Match the cir.call operation that calls spo2_lookup
+        match:
+          - name: "cir.call"
+            kind: "operation"
+            function_context:
+              - name: "/.*measurement.*/"
+              - name: "/.*update.*/"
+            operand_matches:
+              - index: 0
+                name: "var6"
+                type: "float"
+            symbol_matches:
+              - name: "spo2_lookup"
+
+        # Replace the matched operation
+        action:
+          - mode: "replace"
+            patch_id: "measurement_update_replace_patch"
+            description: "Replace spo2_lookup with custom implementation"
+
+            arguments:
+              - name: "function_argument"
+                source: "operand"
+                index: 0

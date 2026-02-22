@@ -41,6 +41,9 @@ void patch__after__spo2_lookup(unsigned char return_value) {
 }
 
 unsigned char patch__replace__spo2_lookup(SFtype param_0) {
-    // Your patch code here
-    return spo2_lookup(param_0);
+    // Test replacement: clamp to valid range without calling original
+    if (param_0 < 0.0f || param_0 > 100.0f) {
+        return (unsigned char)0;
+    }
+    return (unsigned char)param_0;
 }

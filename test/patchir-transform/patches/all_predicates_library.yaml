@@ -1,0 +1,65 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "all-predicates-library"
+  version: "1.0.0"
+  description: "Static contract library exercising all predicate kinds: nonnull, alignment, relation, range, expr"
+  author: "Security Team"
+  created: "2025-07-28"
+
+patches:
+  # Reuse the existing bloodview sprintf replacement patch so no new C code is needed
+  - name: "sprintf_replace_patch"
+    description: "Replace sprintf with bounds-checked variant"
+    category: "safety"
+    code_file: "patches/bloodview_patch.c"
+    function_name: "patch::replace::sprintf"
+    parameters:
+      - name: "dest"
+        type: "char*"
+        description: "Destination buffer"
+      - name: "dest_size"
+        type: "size_t"
+        description: "Destination buffer size"
+      - name: "format"
+        type: "const char*"
+        description: "Format string"
+
+contracts:
+  - name: "all_predicates_static_contract"
+    description: "Static contract exercising nonnull, alignment, relation, range, and expr predicates"
+    category: "safety"
+    type: "STATIC"
+
+    preconditions:
+      - id: "dest_nonnull"
+        pred:
+          kind: "nonnull"
+          target: "arg0"
+
+      - id: "dest_aligned"
+        pred:
+          kind: "alignment"
+          target: "arg0"
+          align: 1
+
+      - id: "dest_size_nonzero"
+        pred:
+          kind: "relation"
+          target: "arg1"
+          relation: "ne"
+          value: "0"
+
+    postconditions:
+      - id: "return_value_range"
+        pred:
+          kind: "range"
+          target: "return_value"
+          range:
+            min: "0"
+            max: "32"
+
+      - id: "return_value_nonnegative"
+        pred:
+          kind: "expr"
+          expr: "return_value >= 0"
