@@ -1,0 +1,73 @@
+# Test patching specification — APPLY_AT_ENTRYPOINT contract mode
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "entrypoint-contract-test"
+  description: "Test APPLY_AT_ENTRYPOINT contract mode on bl_usb__send_message"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2025-07-28"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  # these references are in relation to the location of this file
+  - "patches/entrypoint_contract_library.yaml"
+
+execution_order:
+  - "meta_contracts::entrypoint_meta_contract"
+  - "meta_contracts::entrypoint_meta_contract_static"
+
+meta_contracts:
+  - name: entrypoint_meta_contract
+    description: "Runtime contract inserted at the entrypoint of bl_usb__send_message"
+
+    # Contract Configuration
+    contract_actions:
+      - id: "ENTRY-CONTRACT-001"
+        description: "Validate message pointer is non-null before the function body executes"
+
+        # Match Configuration
+        # apply_at_entrypoint walks CallOps inside the function specified by
+        # function_context and inserts the contract at that enclosing function's
+        # entrypoint — so we match usbd_ep_write_packet (called from within
+        # bl_usb__send_message) to insert at bl_usb__send_message's entrypoint.
+        match:
+          - name: "usbd_ep_write_packet"
+            kind: "function"
+            function_context:
+              - name: "bl_usb__send_message"
+
+        # Actions to Apply
+        action:
+          - mode: "apply_at_entrypoint"
+            contract_id: "message_entry_check_contract"
+            description: "Runtime null-check on message pointer at function entrypoint"
+            arguments:
+              - name: "msg"
+                source: "variable"
+                symbol: "msg"
+
+
+  - name: entrypoint_meta_contract_static
+    description: "Static contract encoding formal preconditions on the entrypoint check call"
+
+    # Contract Configuration
+    contract_actions:
+      - id: "ENTRY-CONTRACT-002"
+        description: "Attach nonnull precondition to the entrypoint contract call for formal verification"
+
+        # Match Configuration
+        match:
+          - name: "contract__entrypoint__message_entry_check"
+            kind: "function"
+            function_context:
+              - name: "bl_usb__send_message"
+
+        # Actions to Apply
+        action:
+          - mode: "apply_before"
+            contract_id: "message_entry_check_contract_static"
+            description: "Static nonnull precondition on message pointer"

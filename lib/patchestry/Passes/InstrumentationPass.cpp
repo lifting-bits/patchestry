@@ -440,17 +440,13 @@ don't yet pass)
                     LOG(ERROR) << "Unknown execution type: " << type << "\n";
                 }
             }
-
-            // Inline inserted call operation
-            // if (patch_options.enable_inlining) {
-            for (auto *op : inline_worklists) {
-                std::ignore = inline_call(mod, mlir::cast< cir::CallOp >(op));
-            }
-
-            // clear the worklist after inlining
-            inline_worklists.clear();
-            //}
         }
+
+        // Inline inserted patch/contract call operations if requested
+        for (auto *op : inline_worklists) {
+            std::ignore = inline_call(mod, mlir::cast< cir::CallOp >(op));
+        }
+        inline_worklists.clear();
     }
 
     /**
@@ -557,19 +553,22 @@ don't yet pass)
                             case PatchInfoMode::APPLY_BEFORE:
                                 PatchOperationImpl::applyBeforePatch(
                                     *this, call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                    options.enable_inlining
+                                        || meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
                             case PatchInfoMode::APPLY_AFTER:
                                 PatchOperationImpl::applyAfterPatch(
                                     *this, call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                    options.enable_inlining
+                                        || meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
                             case PatchInfoMode::REPLACE:
                                 PatchOperationImpl::replaceCallWithPatch(
                                     *this, call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                    options.enable_inlining
+                                        || meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
                             default:
@@ -607,8 +606,29 @@ don't yet pass)
                         case PatchInfoMode::APPLY_BEFORE:
                             PatchOperationImpl::applyBeforePatch(
                                 *this, op, patch_to_apply, patch_module.get(),
-                                meta_patch.optimization.contains("inline-patches")
+                                options.enable_inlining
+                                    || meta_patch.optimization.contains("inline-patches")
                             );
+                            break;
+                        case PatchInfoMode::APPLY_AFTER:
+                            PatchOperationImpl::applyAfterPatch(
+                                *this, op, patch_to_apply, patch_module.get(),
+                                options.enable_inlining
+                                    || meta_patch.optimization.contains("inline-patches")
+                            );
+                            break;
+                        case PatchInfoMode::REPLACE:
+                            if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+                                PatchOperationImpl::replaceCallWithPatch(
+                                    *this, call_op, patch_to_apply, patch_module.get(),
+                                    options.enable_inlining
+                                        || meta_patch.optimization.contains("inline-patches")
+                                );
+                            } else {
+                                LOG(ERROR) << "REPLACE mode is only supported for call "
+                                              "operations, got: "
+                                           << op->getName().getStringRef().str() << "\n";
+                            }
                             break;
                         default:
                             LOG(ERROR) << "Unsupported patch mode for operation: "
@@ -1710,19 +1730,22 @@ don't yet pass)
                         case contract::InfoMode::APPLY_BEFORE:
                             ContractOperationImpl::applyContractBefore(
                                 *this, call_op, contract_to_apply,
-                                meta_contract.optimization.contains("inline-patches")
+                                options.enable_inlining
+                                    || meta_contract.optimization.contains("inline-contracts")
                             );
                             break;
                         case contract::InfoMode::APPLY_AFTER:
                             ContractOperationImpl::applyContractAfter(
                                 *this, call_op, contract_to_apply,
-                                meta_contract.optimization.contains("inline-patches")
+                                options.enable_inlining
+                                    || meta_contract.optimization.contains("inline-contracts")
                             );
                             break;
                         case contract::InfoMode::APPLY_AT_ENTRYPOINT:
                             ContractOperationImpl::applyContractAtEntrypoint(
                                 *this, call_op, contract_to_apply,
-                                meta_contract.optimization.contains("inline-patches")
+                                options.enable_inlining
+                                    || meta_contract.optimization.contains("inline-contracts")
                             );
                             break;
                         default:

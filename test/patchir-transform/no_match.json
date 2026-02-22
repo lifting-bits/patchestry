@@ -1,0 +1,45 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t1 >> /dev/null 2>&1
+// RUN: %patchir-transform %t1.cir --spec %S/no_match.yaml -o %t2.cir
+// RUN: %file-check -vv -check-prefix=NOMATCH %s --input-file %t2.cir
+// NOMATCH: cir.func @spo2_lookup_stub
+// NOMATCH-NOT: patchestry_operation
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "spo2_lookup_stub",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_uint8",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_float"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "input", "type": "type_float", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "COPY", "type": "type_uint8", "inputs": [{ "type": "type_uint8", "kind": "constant", "value": 0 }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_uint8", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_float": { "name": "float", "size": 4, "kind": "float" },
+    "type_uint8": { "name": "unsigned char", "size": 1, "kind": "integer" }
+  }
+}

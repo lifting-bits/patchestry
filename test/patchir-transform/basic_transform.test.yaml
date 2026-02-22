@@ -1,0 +1,38 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "basic-transform-test"
+  description: "Basic transform test for unit testing"
+  version: "1.0.0"
+  author: "Test Suite"
+  created: "2024-01-01"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  patches: "patches/test_patches.yaml"
+
+execution_order:
+  - "meta_patches::test_meta_patches"
+
+meta_patches:
+  - name: test_meta_patches
+    id: "test_meta_patches"
+    description: "Test meta patches"
+    optimization:
+      - "inline-patches"
+
+    patch_actions:
+       - id: "TEST-PATCH-001"
+         description: "Basic test patch"
+
+         match:
+          - symbol: "test_function"
+            kind: "function"
+
+         action:          
+          - mode: "apply_before"
+            patch_id: "TEST-PATCH-001"
+            description: "Test pre-validation"
