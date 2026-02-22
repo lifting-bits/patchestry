@@ -12,7 +12,7 @@ target:
   arch: "ARM:LE:32"
 
 libraries:
-  patches: "patches/test_patches.yaml"
+  -"patches/test_patches.yaml"
 
 execution_order:
   - "meta_patches::test_meta_patches"
@@ -29,7 +29,7 @@ meta_patches:
          description: "Basic test patch"
 
          match:
-          - symbol: "test_function"
+          - name: "test_function"
             kind: "function"
 
          action:          
