@@ -144,40 +144,7 @@ namespace patchestry::ast {
         // gets a fresh DeclRefExpr instead of sharing the same Stmt* node across multiple
         // parent expressions (which violates the AST tree property).
         if (function_builder().operation_stmts.contains(*vnode.operation)) {
-            auto *orig_stmt = function_builder().operation_stmts.at(*vnode.operation);
-            auto *orig_expr = clang::dyn_cast< clang::Expr >(orig_stmt);
-
-            // Only materialize if the cached value is a typed, non-void expression.
-            if (!orig_expr || orig_expr->getType().isNull()
-                || orig_expr->getType()->isVoidType())
-            {
-                return orig_stmt;
-            }
-
-            // Build a C-identifier-safe name from the operation key.
-            std::string tmp_name = "__tmp_";
-            for (char c : *vnode.operation) {
-                tmp_name +=
-                    (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
-            }
-
-            auto var_type = orig_expr->getType();
-            auto op_loc   = clang::SourceLocation();
-            auto *var_decl = clang::VarDecl::Create(
-                ctx, sema().CurContext, op_loc, op_loc, &ctx.Idents.get(tmp_name), var_type,
-                ctx.getTrivialTypeSourceInfo(var_type), clang::SC_None
-            );
-            var_decl->setInit(orig_expr);
-
-            auto *decl_stmt =
-                new (ctx) clang::DeclStmt(clang::DeclGroupRef(var_decl), op_loc, op_loc);
-            function_builder().pending_materialized.push_back(decl_stmt);
-            function_builder().local_variables.emplace(*vnode.operation, var_decl);
-
-            return clang::DeclRefExpr::Create(
-                ctx, clang::NestedNameSpecifierLoc(), op_loc, var_decl, false, op_loc,
-                var_type, clang::VK_LValue
-            );
+            return function_builder().operation_stmts.at(*vnode.operation);
         }
 
         // Case 3: forward reference — the defining op lives in a block not yet processed.
@@ -280,8 +247,22 @@ namespace patchestry::ast {
             // constant values from normalization-pass pattern matchers and silently
             // truncated constants narrower than 32 bits (e.g. uint8_t) or zero-
             // extended constants wider than 32 bits (e.g. uint64_t on 64-bit targets).
-            return new (ctx)
-                clang::IntegerLiteral(ctx, llvm::APInt(bit_width, *vnode.value), vnode_type, location);
+            auto apint = llvm::APInt(bit_width, *vnode.value);
+
+            // Represent unsigned all-ones constants with the signed equivalent type
+            // so they print as -1 rather than the large unsigned decimal (e.g.
+            // 4294967295U).  The all-ones bit pattern is the canonical binary encoding
+            // of -1 and almost always denotes an error sentinel in firmware code.
+            // Signed/unsigned comparison semantics are preserved because C implicitly
+            // converts -1 to UINT_MAX when comparing with an unsigned operand.
+            if (vnode_type->isUnsignedIntegerType() && apint.isAllOnes()) {
+                auto signed_type = ctx.getIntTypeForBitwidth(bit_width, /*isSigned=*/1);
+                if (!signed_type.isNull()) {
+                    return new (ctx) clang::IntegerLiteral(ctx, apint, signed_type, location);
+                }
+            }
+
+            return new (ctx) clang::IntegerLiteral(ctx, apint, vnode_type, location);
         }
 
         if (vnode_type->isVoidType()) {
