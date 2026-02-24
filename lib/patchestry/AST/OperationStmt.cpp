@@ -557,6 +557,10 @@ namespace patchestry::ast {
             auto *rhs_expr = clang::dyn_cast< clang::Expr >(
                 create_varnode(ctx, function, op.inputs[2])
             );
+            if (!lhs_expr || !rhs_expr) {
+                 LOG(ERROR) << "Failed to create LHS or RHS expression for 3-input store operation. key: "
+                           << op.key << "\n";
+            }
 
             auto deref_result =
                 sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);

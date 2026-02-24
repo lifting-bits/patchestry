@@ -138,10 +138,10 @@ namespace patchestry::ast {
                         if (it != lifted_types_->end()) {
                             param_types.push_back(create_type(ctx, it->second));
                         } else {
-                            LOG(WARNING) << "Unknown param type key '" << pk
+                            LOG(ERROR) << "Unknown param type key '" << pk
                                          << "' in function type '" << fn_type.key
-                                         << "'; using void\n";
-                            param_types.push_back(ctx.VoidTy);
+                                         << "'; using voidi*\n";
+                            param_types.push_back(ctx.getPointerType(ctx.VoidTy));
                         }
                     }
                 }

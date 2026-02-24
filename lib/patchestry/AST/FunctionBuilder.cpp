@@ -5,9 +5,11 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <limits>
 #include <map>
 #include <memory>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 
 #include <clang/AST/ASTContext.h>
@@ -86,13 +88,20 @@ namespace patchestry::ast {
         struct BlockKeyComparator {
             static std::pair< uint64_t, int64_t > parse_key(const std::string &key) {
                 // "ram:HEXADDR:DECIMALIDX:basic"  or  "ram:HEXADDR:entry"
-                auto first_colon = key.find(':');
-                if (first_colon == std::string::npos) {
-                    return {0, 0};
+                constexpr std::string_view kExpectedPrefix = "ram:";
+                if (key.substr(0, kExpectedPrefix.size()) != kExpectedPrefix) {
+                    LOG(WARNING) << "BlockKeyComparator: unexpected key format (no 'ram:' prefix): "
+                                 << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
                 }
+
+                auto first_colon = key.find(':');
                 auto second_colon = key.find(':', first_colon + 1);
                 if (second_colon == std::string::npos) {
-                    return {0, 0};
+                    LOG(WARNING) << "BlockKeyComparator: malformed key (missing second ':'): " << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
                 }
 
                 uint64_t addr = 0;
@@ -100,7 +109,11 @@ namespace patchestry::ast {
                     addr = std::stoull(
                         key.substr(first_colon + 1, second_colon - first_colon - 1), nullptr, 16
                     );
-                } catch (...) {}
+                } catch (...) {
+                    LOG(WARNING) << "BlockKeyComparator: failed to parse hex address in key: " << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
+                }
 
                 auto third_colon = key.find(':', second_colon + 1);
                 std::string idx_str = key.substr(
@@ -116,7 +129,10 @@ namespace patchestry::ast {
                 int64_t idx = 0;
                 try {
                     idx = std::stoll(idx_str);
-                } catch (...) {}
+                } catch (...) {
+                    LOG(WARNING) << "BlockKeyComparator: failed to parse block index in key: " << key;
+                    return {addr, std::numeric_limits< int64_t >::max()};
+                }
 
                 return {addr, idx};
             }
