@@ -312,7 +312,7 @@ arguments:
 | `index` | Index for operands/arguments | When `source` is `"operand"` or `"argument"` | `0`, `1`, `2` |
 | `symbol` | Symbol name for local variables or module-level globals/functions | When `source` is `"variable"` or `"symbol"` | `"key_size"`, `"bl_spi_mode"` |
 | `value` | Literal value for constants | When `source` is `"constant"` | `"1024"`, `"0x1000"` |
-| `is_reference` | When `true`, passes a pointer to the value instead of the value itself, allowing the patch function to mutate the caller's variable. Supported for `operand` and `variable` sources. | No (default: `false`) | `true`, `false` |
+| `is_reference` | When `true`, passes a pointer to the value instead of the value itself, allowing the patch function to mutate the caller's variable. Supported for `operand`, `variable`, and `symbol` sources. | No (default: `false`) | `true`, `false` |
 
 ### Argument Source Types
 
