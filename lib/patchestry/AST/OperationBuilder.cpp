@@ -141,6 +141,10 @@ namespace patchestry::ast {
             );
         }
 
+        // Case 2: result cached in operation_stmts (merge_to_next op whose expression has
+        // not yet been given a name).  Materialize it as a VarDecl so that every use site
+        // gets a fresh DeclRefExpr instead of sharing the same Stmt* node across multiple
+        // parent expressions (which violates the AST tree property).
         if (function_builder().operation_stmts.contains(*vnode.operation)) {
             return function_builder().operation_stmts.at(*vnode.operation);
         }

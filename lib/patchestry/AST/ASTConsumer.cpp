@@ -43,6 +43,7 @@
 #include <rellic/AST/StructFieldRenamer.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/AST/ASTNormalizationPipeline.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
@@ -66,6 +67,13 @@ namespace patchestry::ast {
             create_functions(
                 ctx, get_program().serialized_functions, get_program().serialized_types
             );
+        }
+
+        if (options.enable_goto_elimination && !runASTNormalizationPipeline(ctx, options)) {
+            LOG(ERROR) << "Goto elimination pipeline failed.\n";
+            if (options.goto_elimination_strict) {
+                return;
+            }
         }
 
         if (options.print_tu) {

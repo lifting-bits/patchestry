@@ -5,7 +5,7 @@
 // SW4: case {{[0-9]+[U]?}}:
 // SW4: case {{[0-9]+[U]?}}:
 // SW4-NOT: case 1:
-// SW4-NOT: default:
+// SW4: default:
 // SW4-NOT: goto *
 {
   "architecture": "ARM",
