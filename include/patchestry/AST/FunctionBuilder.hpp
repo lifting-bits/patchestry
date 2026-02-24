@@ -122,5 +122,10 @@ namespace patchestry::ast {
         std::unordered_map< std::string, clang::VarDecl * > local_variables;
         std::unordered_map< std::string, clang::LabelDecl * > labels_declaration;
         std::unordered_map< std::string, clang::Stmt * > operation_stmts;
+
+        // Statements queued by create_temporary during an operation build that must be
+        // emitted immediately before the operation that triggered them.  Drained by
+        // create_basic_block after each create_operation call.
+        std::vector< clang::Stmt * > pending_materialized;
     };
 } // namespace patchestry::ast

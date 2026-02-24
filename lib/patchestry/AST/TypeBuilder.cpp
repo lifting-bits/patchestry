@@ -34,6 +34,7 @@ namespace patchestry::ast {
      */
 
     void TypeBuilder::create_types(clang::ASTContext &ctx, TypeMap &lifted_types) {
+        lifted_types_ = &lifted_types;
         for (auto &[key, vnode_type] : lifted_types) {
             serialized_types.emplace(key, create_type(ctx, vnode_type));
         }
@@ -117,8 +118,40 @@ namespace patchestry::ast {
             case VarnodeType::VT_POINTER:
                 return create_pointer(ctx, dynamic_cast< const PointerType & >(*vnode_type));
 
-            case VarnodeType::Kind::VT_FUNCTION:
-                return ctx.VoidPtrTy;
+            case VarnodeType::Kind::VT_FUNCTION: {
+                const auto &fn_type = dynamic_cast< const FunctionType & >(*vnode_type);
+
+                // Resolve return type (fall back to void if key is absent or unknown)
+                clang::QualType return_type = ctx.VoidTy;
+                if (lifted_types_ != nullptr && !fn_type.return_type_key.empty()) {
+                    auto it = lifted_types_->find(fn_type.return_type_key);
+                    if (it != lifted_types_->end()) {
+                        return_type = create_type(ctx, it->second);
+                    }
+                }
+
+                // Resolve parameter types
+                llvm::SmallVector< clang::QualType, 8 > param_types;
+                if (lifted_types_ != nullptr) {
+                    for (const auto &pk : fn_type.param_type_keys) {
+                        auto it = lifted_types_->find(pk);
+                        if (it != lifted_types_->end()) {
+                            param_types.push_back(create_type(ctx, it->second));
+                        } else {
+                            LOG(WARNING) << "Unknown param type key '" << pk
+                                         << "' in function type '" << fn_type.key
+                                         << "'; using void\n";
+                            param_types.push_back(ctx.VoidTy);
+                        }
+                    }
+                }
+
+                clang::FunctionProtoType::ExtProtoInfo epi;
+                epi.Variadic = fn_type.is_variadic;
+                clang::QualType fn_qual =
+                    ctx.getFunctionType(return_type, param_types, epi);
+                return ctx.getPointerType(fn_qual);
+            }
 
             case VarnodeType::VT_STRUCT:
             case VarnodeType::VT_UNION:

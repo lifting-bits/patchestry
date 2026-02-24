@@ -126,6 +126,61 @@ namespace patchestry::ast {
             return result.getAs< clang::Expr >();
         }
 
+        /**
+         * @brief Sanitize an operation key into a valid C identifier.
+         *
+         * Operation keys look like "ram:10000000:3:p0". Replace every character that
+         * is not alphanumeric or '_' with '_'.
+         */
+        std::string sanitize_key_to_ident(std::string_view key) { // NOLINT
+            std::string result;
+            result.reserve(key.size());
+            for (char c : key) {
+                result += (std::isalnum(static_cast< unsigned char >(c)) || c == '_') ? c : '_';
+            }
+            return result;
+        }
+
+        /**
+         * @brief Look up or create an opaque external function placeholder in the TU.
+         *
+         * Used by create_callother and create_userdefined to emit a best-effort call
+         * expression that preserves operation inputs for downstream analysis, rather
+         * than silently dropping the operation.
+         *
+         * @param fn_name   Name of the placeholder function (e.g. "__patchestry_callother_…").
+         * @param ret_type  Return type of the placeholder.
+         * @param op_loc    Source location for the declaration.
+         */
+        clang::FunctionDecl *lookup_or_create_opaque_fn( // NOLINT
+            clang::ASTContext &ctx, const std::string &fn_name, clang::QualType ret_type,
+            clang::SourceLocation op_loc
+        ) {
+            auto &ident = ctx.Idents.get(fn_name);
+            // Check for an existing declaration with this name to avoid duplicates.
+            auto lookup_result =
+                ctx.getTranslationUnitDecl()->lookup(clang::DeclarationName(&ident));
+            for (auto *d : lookup_result) {
+                if (auto *fd = llvm::dyn_cast< clang::FunctionDecl >(d)) {
+                    return fd;
+                }
+            }
+
+            // No existing declaration: create a variadic extern function.
+            clang::FunctionProtoType::ExtProtoInfo epi;
+            epi.Variadic = true;
+            auto fn_type = ctx.getFunctionType(ret_type, {}, epi);
+
+            auto *fn_decl = clang::FunctionDecl::Create(
+                ctx, ctx.getTranslationUnitDecl(), op_loc, op_loc,
+                clang::DeclarationName(&ident), fn_type,
+                ctx.getTrivialTypeSourceInfo(fn_type), clang::SC_Extern
+            );
+            fn_decl->setDeclContext(ctx.getTranslationUnitDecl());
+            ctx.getTranslationUnitDecl()->addDecl(fn_decl);
+            return fn_decl;
+        }
+
     } // namespace
 
     /**
@@ -430,8 +485,16 @@ namespace patchestry::ast {
             input_expr = cast_expr;
         }
 
-        // TODO(kumarak): If input expr is of type void*, derefencing it will lead to type void.
-        // Should it be typecasted to int*??
+        // Dereferencing a void* is ill-formed in C.  When no explicit op.type cast has been
+        // applied above and the pointer is still void*, cast it to the output varnode's type
+        // (if known) or uint8_t* as a last resort.
+        if (input_expr->getType()->isVoidPointerType()) {
+            clang::QualType pointee = op.output.has_value()
+                                          ? get_varnode_type(ctx, *op.output)
+                                          : ctx.UnsignedCharTy;
+            input_expr = make_cast(ctx, input_expr, ctx.getPointerType(pointee), op_loc);
+            assert(input_expr != nullptr && "Failed to cast void* for load");
+        }
 
         auto derefed_expr = sema().CreateBuiltinUnaryOp(
             sourceLocation(ctx.getSourceManager(), op.key), clang::UO_Deref,
@@ -483,15 +546,30 @@ namespace patchestry::ast {
                      false };
         }
 
-        // TODO(kumarak): A pointer can come with space id and offset part. We don't handle
-        // such cases yet. Parameters           Description
-        //   input0(special)    Constant ID of space to storeinto.
-        //   input1             Varnode containing pointer offset of destination.
-        //   input2             Varnode containing data to be stored.
-        // Semantic statement
-        //   *input1 = input2;
-        //   *[input0] input1 = input2;
+        // 3-input form: input0 = address-space constant (not representable in C, ignored),
+        //               input1 = pointer, input2 = value to store.
+        // Semantic: *input1 = input2;  (same as the 2-input case, just different slot indices)
+        if (op.inputs.size() >= 3) {
+            auto op_loc    = sourceLocation(ctx.getSourceManager(), op.key);
+            auto *lhs_expr = clang::dyn_cast< clang::Expr >(
+                create_varnode(ctx, function, op.inputs[1])
+            );
+            auto *rhs_expr = clang::dyn_cast< clang::Expr >(
+                create_varnode(ctx, function, op.inputs[2])
+            );
 
+            auto deref_result =
+                sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
+            assert(!deref_result.isInvalid());
+
+            return { create_assign_operation(
+                         ctx, rhs_expr, deref_result.getAs< clang::Expr >(), op_loc
+                     ),
+                     false };
+        }
+
+        LOG(ERROR) << "Store operation with unexpected number of inputs. key: " << op.key
+                   << "\n";
         return {};
     }
 
@@ -872,15 +950,104 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_callother(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return {};
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        // Determine return type from op.type; fall back to void.
+        clang::QualType ret_type = ctx.VoidTy;
+        if (op.output.has_value() && op.type.has_value()) {
+            const auto &types = type_builder().get_serialized_types();
+            auto it           = types.find(*op.type);
+            if (it != types.end()) {
+                ret_type = it->second;
+            }
+        }
+
+        // Build a placeholder function name: __patchestry_callother_<sanitized key>
+        std::string fn_name = "__patchestry_callother_" + sanitize_key_to_ident(op.key);
+
+        clang::FunctionDecl *fn_decl =
+            lookup_or_create_opaque_fn(ctx, fn_name, ret_type, op_loc);
+
+        // Build call arguments from all op.inputs.
+        std::vector< clang::Expr * > args;
+        for (const auto &input : op.inputs) {
+            auto *arg_expr =
+                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+            if (arg_expr != nullptr) {
+                args.push_back(arg_expr);
+            }
+        }
+
+        auto *ref_expr = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), fn_decl, false,
+            op_loc, ctx.getPointerType(fn_decl->getType()), clang::VK_PRValue
+        );
+
+        auto call_result = sema().BuildCallExpr(nullptr, ref_expr, op_loc, args, op_loc);
+        if (call_result.isInvalid()) {
+            LOG(ERROR) << "Failed to build callother placeholder for: " << op.key << "\n";
+            return {};
+        }
+        auto *call_expr = call_result.getAs< clang::Expr >();
+
+        if (!op.output.has_value() || ret_type->isVoidType()) {
+            return { call_expr, false };
+        }
+
+        auto *output_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        return { create_assign_operation(ctx, call_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_userdefined(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return {};
+        // OP_USERDEFINED covers processor-specific semantics; handled identically to
+        // OP_CALLOTHER: emit an opaque placeholder call so the operation is not silently lost.
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        clang::QualType ret_type = ctx.VoidTy;
+        if (op.output.has_value() && op.type.has_value()) {
+            const auto &types = type_builder().get_serialized_types();
+            auto it           = types.find(*op.type);
+            if (it != types.end()) {
+                ret_type = it->second;
+            }
+        }
+
+        std::string fn_name = "__patchestry_userdefined_" + sanitize_key_to_ident(op.key);
+
+        clang::FunctionDecl *fn_decl =
+            lookup_or_create_opaque_fn(ctx, fn_name, ret_type, op_loc);
+
+        std::vector< clang::Expr * > args;
+        for (const auto &input : op.inputs) {
+            auto *arg_expr =
+                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+            if (arg_expr != nullptr) {
+                args.push_back(arg_expr);
+            }
+        }
+
+        auto *ref_expr = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), fn_decl, false,
+            op_loc, ctx.getPointerType(fn_decl->getType()), clang::VK_PRValue
+        );
+
+        auto call_result = sema().BuildCallExpr(nullptr, ref_expr, op_loc, args, op_loc);
+        if (call_result.isInvalid()) {
+            LOG(ERROR) << "Failed to build userdefined placeholder for: " << op.key << "\n";
+            return {};
+        }
+        auto *call_expr = call_result.getAs< clang::Expr >();
+
+        if (!op.output.has_value() || ret_type->isVoidType()) {
+            return { call_expr, false };
+        }
+
+        auto *output_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        return { create_assign_operation(ctx, call_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_return(
