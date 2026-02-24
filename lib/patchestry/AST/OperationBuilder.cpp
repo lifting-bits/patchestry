@@ -139,8 +139,45 @@ namespace patchestry::ast {
             );
         }
 
+        // Case 2: result cached in operation_stmts (merge_to_next op whose expression has
+        // not yet been given a name).  Materialize it as a VarDecl so that every use site
+        // gets a fresh DeclRefExpr instead of sharing the same Stmt* node across multiple
+        // parent expressions (which violates the AST tree property).
         if (function_builder().operation_stmts.contains(*vnode.operation)) {
-            return function_builder().operation_stmts.at(*vnode.operation);
+            auto *orig_stmt = function_builder().operation_stmts.at(*vnode.operation);
+            auto *orig_expr = clang::dyn_cast< clang::Expr >(orig_stmt);
+
+            // Only materialize if the cached value is a typed, non-void expression.
+            if (!orig_expr || orig_expr->getType().isNull()
+                || orig_expr->getType()->isVoidType())
+            {
+                return orig_stmt;
+            }
+
+            // Build a C-identifier-safe name from the operation key.
+            std::string tmp_name = "__tmp_";
+            for (char c : *vnode.operation) {
+                tmp_name +=
+                    (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
+            }
+
+            auto var_type = orig_expr->getType();
+            auto op_loc   = clang::SourceLocation();
+            auto *var_decl = clang::VarDecl::Create(
+                ctx, sema().CurContext, op_loc, op_loc, &ctx.Idents.get(tmp_name), var_type,
+                ctx.getTrivialTypeSourceInfo(var_type), clang::SC_None
+            );
+            var_decl->setInit(orig_expr);
+
+            auto *decl_stmt =
+                new (ctx) clang::DeclStmt(clang::DeclGroupRef(var_decl), op_loc, op_loc);
+            function_builder().pending_materialized.push_back(decl_stmt);
+            function_builder().local_variables.emplace(*vnode.operation, var_decl);
+
+            return clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), op_loc, var_decl, false, op_loc,
+                var_type, clang::VK_LValue
+            );
         }
 
         // Forward reference — the defining op lives in a block not yet processed.
