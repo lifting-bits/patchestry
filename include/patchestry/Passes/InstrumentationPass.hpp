@@ -234,9 +234,16 @@ namespace patchestry::passes { // NOLINT
          * @param contract Contract information containing argument specifications
          * @param args Output vector to store the prepared arguments
          */
+        // When entrypoint_func is set (APPLY_AT_ENTRYPOINT mode):
+        //   - OPERAND sources are remapped to the enclosing function's block arguments
+        //     (index N → enclosing_func.getArguments()[N]) so that no call-site value
+        //     leaks into the entry block and violates SSA dominance.
+        //   - RETURN_VALUE is rejected: the call result is only defined at the matched
+        //     call site, not at the function entrypoint.
         void prepare_contract_call_arguments(
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp contract_func,
-            const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args
+            const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args,
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
         );
 
         /**

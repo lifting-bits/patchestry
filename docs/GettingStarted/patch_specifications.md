@@ -322,7 +322,7 @@ arguments:
 | `variable` | Local variable in the enclosing function scope, located by its IR name attribute | `symbol` | Access local variables (alloca'd locals) in scope |
 | `symbol` | Module-level global variable or function pointer, located in the module symbol table | `symbol` | Pass a global variable or function pointer to the patch |
 | `constant` | Literal constant value | `value` | Pass fixed values to patch functions |
-| `return_value` | Return value of function or operation | None | Access return value (for `apply_after` mode only) |
+| `return_value` | Return value of function or operation | None | Access return value (`apply_before` / `apply_after` modes only — **not valid for `apply_at_entrypoint`**) |
 
 ### Argument Examples
 
@@ -369,7 +369,10 @@ arguments:
 
 #### Return Value Handling
 ```yaml
-# Access function return value (apply_after mode)
+# Access function return value (apply_before / apply_after mode only)
+# NOTE: return_value is NOT valid for apply_at_entrypoint — the call
+# result is only defined at the matched call site, not at the function
+# entrypoint.  Use variable, symbol, or constant instead.
 arguments:
   - name: "result"
     source: "return_value"
@@ -614,9 +617,15 @@ contract_actions:
         contract_id: "message_entry_check_contract"
         description: "Runtime null-check on message pointer at bl_usb__send_message entry"
         arguments:
+          # source: variable — load a named local/parameter alloca at entry
           - name: "msg"
             source: "variable"
             symbol: "msg"
+          # source: operand — index 0 maps to the 0th argument of bl_usb__send_message,
+          # not the 0th operand of the usbd_ep_write_packet call
+          - name: "usb_handle"
+            source: "operand"
+            index: 0
 ```
 
 > **Note**: The contract is inserted at the beginning of the **caller** (`bl_usb__send_message` — the function containing the matched call), not at the beginning of the matched function itself (`usbd_ep_write_packet`).

@@ -430,9 +430,12 @@ namespace patchestry::passes {
 
         // APPLY_AT_ENTRYPOINT inserts the contract at the beginning of the enclosing
         // function (i.e. the function that contains the matched call), not the callee.
-        // The matched call is used only to identify the enclosing function and to
-        // resolve argument values (source: operand/variable/etc. refer to values
-        // available at the matched call site, which are also live at the entrypoint).
+        // The matched call identifies which enclosing function to instrument.
+        // Argument sources are resolved against the entry block:
+        //   - OPERAND index N  → Nth block argument of the enclosing function
+        //   - VARIABLE/SYMBOL  → alloca/global already live at the entry block
+        //   - CONSTANT         → created inline, always valid
+        //   - RETURN_VALUE     → rejected (only defined at the call site)
         auto enclosing_func = call_op->getParentOfType< cir::FuncOp >();
         if (!enclosing_func) {
             LOG(ERROR) << "applyContractAtEntrypoint: cannot find enclosing function\n";
@@ -487,10 +490,11 @@ namespace patchestry::passes {
         auto symbol_ref =
             mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
         llvm::SmallVector< mlir::Value > function_args;
-        // Pass call_op (the matched CallOp) so argument sources (operand, variable, etc.)
-        // resolve against values available at the call site inside the enclosing function.
+        // Pass enclosing_func so that OPERAND sources are remapped to block arguments of
+        // the enclosing function and RETURN_VALUE is rejected: both prevent call-site SSA
+        // values from leaking into the entry block (which would violate dominance).
         pass.prepare_contract_call_arguments(
-            builder, call_op, contract_func, contract, function_args
+            builder, call_op, contract_func, contract, function_args, enclosing_func
         );
         auto contract_call_op = builder.create< cir::CallOp >(
             enclosing_func->getLoc(), symbol_ref,

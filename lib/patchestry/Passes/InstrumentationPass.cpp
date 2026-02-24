@@ -1069,7 +1069,8 @@ don't yet pass)
      */
     void InstrumentationPass::prepare_contract_call_arguments(
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp contract_func,
-        const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args
+        const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
         auto create_cast = [&](mlir::Value value, mlir::Type type) -> mlir::Value {
             if (value.getType() == type) {
@@ -1106,7 +1107,19 @@ don't yet pass)
                     }
                     unsigned idx = arg_spec.index.value();
 
-                    if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
+                    if (entrypoint_func.has_value()) {
+                        // APPLY_AT_ENTRYPOINT: remap index N to the enclosing function's
+                        // Nth block argument so no call-site value leaks into the entry
+                        // block (which would violate SSA dominance).
+                        auto func_args = entrypoint_func->getArguments();
+                        if (idx >= func_args.size()) {
+                            LOG(ERROR) << "OPERAND index " << idx
+                                       << " out of range for enclosing function (has "
+                                       << func_args.size() << " argument(s))\n";
+                            continue;
+                        }
+                        arg_value = func_args[idx];
+                    } else if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
                         if (idx >= orig_call_op.getArgOperands().size()) {
                             LOG(ERROR) << "Operand index " << idx << " out of range\n";
                             continue;
@@ -1227,6 +1240,18 @@ don't yet pass)
                     break;
                 }
                 case ArgumentSourceType::RETURN_VALUE: {
+                    // APPLY_AT_ENTRYPOINT: the call result is only defined at the matched
+                    // call site, which dominates neither the entry block nor any insertion
+                    // point before the call.  Using it here would produce invalid SSA IR.
+                    if (entrypoint_func.has_value()) {
+                        LOG(ERROR)
+                            << "RETURN_VALUE source is not valid for APPLY_AT_ENTRYPOINT: "
+                               "the call result is only defined at the matched call site, "
+                               "not at the function entrypoint. Use 'variable', 'symbol', "
+                               "or 'constant' instead.\n";
+                        continue;
+                    }
+
                     // Handle return value of function or operation
                     if (call_op->getNumResults() == 0) {
                         LOG(ERROR) << "Operation/function does not have a return value\n";
