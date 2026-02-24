@@ -428,13 +428,45 @@ namespace patchestry::passes {
         auto module = call_op->getParentOfType< mlir::ModuleOp >();
         assert(module && "Wrap around patch: no module found");
 
-        std::string callee_name     = call_op.getCallee()->str();
-        cir::FuncOp callee_function = module.lookupSymbol< cir::FuncOp >(callee_name);
-        mlir::Block &entry_block    = callee_function.getBody().front();
+        // APPLY_AT_ENTRYPOINT inserts the contract at the beginning of the enclosing
+        // function (i.e. the function that contains the matched call), not the callee.
+        // The matched call identifies which enclosing function to instrument.
+        // Argument sources are resolved against the entry block:
+        //   - OPERAND index N  → Nth block argument of the enclosing function
+        //   - VARIABLE/SYMBOL  → alloca/global already live at the entry block
+        //   - CONSTANT         → created inline, always valid
+        //   - RETURN_VALUE     → rejected (only defined at the call site)
+        auto enclosing_func = call_op->getParentOfType< cir::FuncOp >();
+        if (!enclosing_func) {
+            LOG(ERROR) << "applyContractAtEntrypoint: cannot find enclosing function\n";
+            return;
+        }
+        if (enclosing_func.getBody().empty()) {
+            LOG(ERROR) << "applyContractAtEntrypoint: enclosing function has no body\n";
+            return;
+        }
 
-        auto target_op = entry_block.getParentOp();
-        mlir::OpBuilder builder(target_op);
-        builder.setInsertionPointToStart(&entry_block);
+        mlir::Block &entry_block = enclosing_func.getBody().front();
+        auto target_op           = entry_block.getParentOp();
+
+        // Find the insertion point just after all alloca ops and any stores that
+        // initialize parameters (i.e. stores whose value is a block argument).
+        // This ensures all parameter allocas are defined and initialized before
+        // the contract call, allowing "source: variable" to load a parameter value.
+        auto insert_pos = entry_block.begin();
+        while (insert_pos != entry_block.end() && mlir::isa< cir::AllocaOp >(*insert_pos)) {
+            ++insert_pos;
+        }
+        while (insert_pos != entry_block.end()) {
+            if (auto store_op = mlir::dyn_cast< cir::StoreOp >(&*insert_pos)) {
+                if (mlir::isa< mlir::BlockArgument >(store_op->getOperand(0))) {
+                    ++insert_pos;
+                    continue;
+                }
+            }
+            break;
+        }
+        mlir::OpBuilder builder(&entry_block, insert_pos);
 
         if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
             auto result =
@@ -458,11 +490,14 @@ namespace patchestry::passes {
         auto symbol_ref =
             mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
         llvm::SmallVector< mlir::Value > function_args;
+        // Pass enclosing_func so that OPERAND sources are remapped to block arguments of
+        // the enclosing function and RETURN_VALUE is rejected: both prevent call-site SSA
+        // values from leaking into the entry block (which would violate dominance).
         pass.prepare_contract_call_arguments(
-            builder, target_op, contract_func, contract, function_args
+            builder, call_op, contract_func, contract, function_args, enclosing_func
         );
         auto contract_call_op = builder.create< cir::CallOp >(
-            callee_function->getLoc(), symbol_ref,
+            enclosing_func->getLoc(), symbol_ref,
             contract_func->getResultTypes().size() != 0
                 ? contract_func->getResultTypes().front()
                 : mlir::Type(),

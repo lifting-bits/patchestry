@@ -440,17 +440,13 @@ don't yet pass)
                     LOG(ERROR) << "Unknown execution type: " << type << "\n";
                 }
             }
-
-            // Inline inserted call operation
-            // if (patch_options.enable_inlining) {
-            for (auto *op : inline_worklists) {
-                std::ignore = inline_call(mod, mlir::cast< cir::CallOp >(op));
-            }
-
-            // clear the worklist after inlining
-            inline_worklists.clear();
-            //}
         }
+
+        // Inline inserted patch/contract call operations if requested
+        for (auto *op : inline_worklists) {
+            std::ignore = inline_call(mod, mlir::cast< cir::CallOp >(op));
+        }
+        inline_worklists.clear();
     }
 
     /**
@@ -557,19 +553,22 @@ don't yet pass)
                             case PatchInfoMode::APPLY_BEFORE:
                                 PatchOperationImpl::applyBeforePatch(
                                     *this, call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                    options.enable_inlining
+                                        || meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
                             case PatchInfoMode::APPLY_AFTER:
                                 PatchOperationImpl::applyAfterPatch(
                                     *this, call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                    options.enable_inlining
+                                        || meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
                             case PatchInfoMode::REPLACE:
                                 PatchOperationImpl::replaceCallWithPatch(
                                     *this, call_op, patch_to_apply, patch_module.get(),
-                                    meta_patch.optimization.contains("inline-patches")
+                                    options.enable_inlining
+                                        || meta_patch.optimization.contains("inline-patches")
                                 );
                                 break;
                             default:
@@ -607,8 +606,29 @@ don't yet pass)
                         case PatchInfoMode::APPLY_BEFORE:
                             PatchOperationImpl::applyBeforePatch(
                                 *this, op, patch_to_apply, patch_module.get(),
-                                meta_patch.optimization.contains("inline-patches")
+                                options.enable_inlining
+                                    || meta_patch.optimization.contains("inline-patches")
                             );
+                            break;
+                        case PatchInfoMode::APPLY_AFTER:
+                            PatchOperationImpl::applyAfterPatch(
+                                *this, op, patch_to_apply, patch_module.get(),
+                                options.enable_inlining
+                                    || meta_patch.optimization.contains("inline-patches")
+                            );
+                            break;
+                        case PatchInfoMode::REPLACE:
+                            if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+                                PatchOperationImpl::replaceCallWithPatch(
+                                    *this, call_op, patch_to_apply, patch_module.get(),
+                                    options.enable_inlining
+                                        || meta_patch.optimization.contains("inline-patches")
+                                );
+                            } else {
+                                LOG(ERROR) << "REPLACE mode is only supported for call "
+                                              "operations, got: "
+                                           << op->getName().getStringRef().str() << "\n";
+                            }
                             break;
                         default:
                             LOG(ERROR) << "Unsupported patch mode for operation: "
@@ -1049,7 +1069,8 @@ don't yet pass)
      */
     void InstrumentationPass::prepare_contract_call_arguments(
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp contract_func,
-        const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args
+        const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
         auto create_cast = [&](mlir::Value value, mlir::Type type) -> mlir::Value {
             if (value.getType() == type) {
@@ -1086,7 +1107,19 @@ don't yet pass)
                     }
                     unsigned idx = arg_spec.index.value();
 
-                    if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
+                    if (entrypoint_func.has_value()) {
+                        // APPLY_AT_ENTRYPOINT: remap index N to the enclosing function's
+                        // Nth block argument so no call-site value leaks into the entry
+                        // block (which would violate SSA dominance).
+                        auto func_args = entrypoint_func->getArguments();
+                        if (idx >= func_args.size()) {
+                            LOG(ERROR) << "OPERAND index " << idx
+                                       << " out of range for enclosing function (has "
+                                       << func_args.size() << " argument(s))\n";
+                            continue;
+                        }
+                        arg_value = func_args[idx];
+                    } else if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
                         if (idx >= orig_call_op.getArgOperands().size()) {
                             LOG(ERROR) << "Operand index " << idx << " out of range\n";
                             continue;
@@ -1207,6 +1240,18 @@ don't yet pass)
                     break;
                 }
                 case ArgumentSourceType::RETURN_VALUE: {
+                    // APPLY_AT_ENTRYPOINT: the call result is only defined at the matched
+                    // call site, which dominates neither the entry block nor any insertion
+                    // point before the call.  Using it here would produce invalid SSA IR.
+                    if (entrypoint_func.has_value()) {
+                        LOG(ERROR)
+                            << "RETURN_VALUE source is not valid for APPLY_AT_ENTRYPOINT: "
+                               "the call result is only defined at the matched call site, "
+                               "not at the function entrypoint. Use 'variable', 'symbol', "
+                               "or 'constant' instead.\n";
+                        continue;
+                    }
+
                     // Handle return value of function or operation
                     if (call_op->getNumResults() == 0) {
                         LOG(ERROR) << "Operation/function does not have a return value\n";
@@ -1710,19 +1755,22 @@ don't yet pass)
                         case contract::InfoMode::APPLY_BEFORE:
                             ContractOperationImpl::applyContractBefore(
                                 *this, call_op, contract_to_apply,
-                                meta_contract.optimization.contains("inline-patches")
+                                options.enable_inlining
+                                    || meta_contract.optimization.contains("inline-contracts")
                             );
                             break;
                         case contract::InfoMode::APPLY_AFTER:
                             ContractOperationImpl::applyContractAfter(
                                 *this, call_op, contract_to_apply,
-                                meta_contract.optimization.contains("inline-patches")
+                                options.enable_inlining
+                                    || meta_contract.optimization.contains("inline-contracts")
                             );
                             break;
                         case contract::InfoMode::APPLY_AT_ENTRYPOINT:
                             ContractOperationImpl::applyContractAtEntrypoint(
                                 *this, call_op, contract_to_apply,
-                                meta_contract.optimization.contains("inline-patches")
+                                options.enable_inlining
+                                    || meta_contract.optimization.contains("inline-contracts")
                             );
                             break;
                         default:

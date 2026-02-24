@@ -1,0 +1,68 @@
+# Test specification: all static contract predicate kinds
+# Exercises nonnull, alignment, relation, range, and expr predicates
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "all-predicates-test"
+  description: "Test all static contract predicate kinds on sprintf in bl_device__process_entry"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2025-07-28"
+
+libraries:
+  - "patches/all_predicates_library.yaml"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+execution_order:
+  - "meta_patches::all_predicates_meta_patches"
+  - "meta_contracts::all_predicates_meta_contracts"
+
+meta_patches:
+  - name: "all_predicates_meta_patches"
+    description: "Replace sprintf with bounds-checked variant"
+
+    patch_actions:
+      - id: "ALL-PRED-PATCH-001"
+        description: "Replace sprintf in bl_device__process_entry"
+
+        match:
+          - name: "sprintf"
+            kind: "function"
+            function_context:
+              - name: "bl_device__process_entry"
+
+        action:
+          - mode: "replace"
+            patch_id: "sprintf_replace_patch"
+            description: "Replace sprintf with safe variant"
+            arguments:
+              - name: "dest"
+                source: "operand"
+                index: "0"
+              - name: "dest_size"
+                source: "constant"
+                value: "32"
+              - name: "format"
+                source: "operand"
+                index: "1"
+
+meta_contracts:
+  - name: "all_predicates_meta_contracts"
+    description: "Apply static contract with all predicate kinds to the replaced sprintf"
+
+    contract_actions:
+      - id: "ALL-PRED-CONTRACT-001"
+        description: "Static contract with nonnull, alignment, relation, range, and expr predicates"
+
+        match:
+          - name: "patch__replace__sprintf"
+            kind: "function"
+            function_context:
+              - name: "bl_device__process_entry"
+
+        action:
+          - mode: "apply_before"
+            contract_id: "all_predicates_static_contract"
