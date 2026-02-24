@@ -48,6 +48,7 @@ namespace patchestry::ghidra {
             VARNODE_TEMPORARY,
             VARNODE_CONSTANT,
             VARNODE_STRING,
+            VARNODE_INTRINSIC,
         };
 
         static Varnode::Kind convertToKind(const std::string &kdd) {
@@ -59,7 +60,8 @@ namespace patchestry::ghidra {
                 {  "function",  VARNODE_FUNCTION },
                 { "temporary", VARNODE_TEMPORARY },
                 {  "constant",  VARNODE_CONSTANT },
-                {    "string",    VARNODE_STRING }
+                {    "string",    VARNODE_STRING },
+                { "intrinsic", VARNODE_INTRINSIC }
             };
 
             // if kind is not present in the map, return varnode_unknown
@@ -98,6 +100,9 @@ namespace patchestry::ghidra {
                     break;
                 case VARNODE_STRING:
                     kind_str = "STRING";
+                    break;
+                case VARNODE_INTRINSIC:
+                    kind_str = "INTRINSIC";
                     break;
             }
 
