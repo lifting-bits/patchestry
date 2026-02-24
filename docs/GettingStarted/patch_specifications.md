@@ -554,7 +554,7 @@ action:
 
 ### Apply After Mode
 
-In `apply_after` mode, the patch or contract is applied immediately after the matched function call or operation completes. This works for both function-based and operation-based matching.
+In `apply_after` mode, the patch or contract is applied immediately after the matched function call or operation completes. For patches, this works with both function-based and operation-based matching; for contracts, `apply_after` is currently only supported with function-based (function call) matching.
 
 ```yaml
 action:
