@@ -210,7 +210,7 @@ libraries:
 | `match.symbol_matches` | Symbols accessed by the operation (for operation-based matching) | `name: "/.*password.*/"` |
 | `match.operand_matches` | Operands to match (for operation-based matching) | See below |
 
-> **Multiple match entries**: When multiple entries are listed under `match:`, each entry is evaluated independently. The action is applied once for **each** entry that matches — entries are not AND-combined. Think of each entry as a separate trigger. If two entries both match, the action is applied twice.
+> **Multiple match entries**: Currently, only the first entry under `match:` is evaluated by the implementation. If multiple entries are provided, **only the first one is used** and any additional entries are ignored.
 
 #### Operation-Based Matching
 
