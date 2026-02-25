@@ -45,6 +45,12 @@ config.patchestry_tools_dir = os.path.join(config.patchestry_obj_root, 'tools')
 # Set the directory for the test scripts
 config.test_scripts_dir = os.path.join(config.patchestry_src_root, 'test', 'scripts')
 
+# Call-fidelity scripts directory
+config.patchestry_scripts_dir = os.path.join(config.patchestry_src_root, 'scripts')
+
+# Firmware output directory (for ELF-based call verification)
+config.firmware_dir = os.path.join(config.patchestry_src_root, 'firmwares', 'output')
+
 # Add the Ghidra scripts directory to the substitutions list
 config.substitutions.append(('%PATH%', config.patchestry_script_dir))
 
@@ -127,6 +133,16 @@ tools = [
     ToolSubst('%patchir-cir2llvm', command=config.patchir_cir2llvm_tool),
     ToolSubst('%patchir-yaml-parser', command=config.patchir_yaml_parser_tool),
     ToolSubst('%strip-json-comments', command=config.json_strip_comments),
+    # Call-fidelity verification scripts
+    ToolSubst('%gen-call-checks',
+              command=config.python_executable,
+              extra_args=[os.path.join(config.patchestry_scripts_dir, 'gen-call-checks.py')]),
+    ToolSubst('%extract-elf-calls',
+              command=config.python_executable,
+              extra_args=[os.path.join(config.patchestry_scripts_dir, 'extract-elf-calls.py')]),
+    ToolSubst('%verify-calls',
+              command=config.python_executable,
+              extra_args=[os.path.join(config.patchestry_scripts_dir, 'verify-calls.py')]),
 ]
 
 
@@ -145,3 +161,5 @@ os.makedirs(ci_output_folder, exist_ok=True)
 
 config.substitutions.append(('%PATH%', config.environment['PATH']))
 config.substitutions.append(('%ci_output_folder', f"--ci {ci_output_folder}"))
+# Firmware directory for ELF-based call verification
+config.substitutions.append(('%firmware-dir', config.firmware_dir))

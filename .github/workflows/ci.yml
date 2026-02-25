@@ -150,3 +150,160 @@ jobs:
             -e HOST_WORKSPACE=${{ github.workspace }} \
             $DEV_IMAGE \
             lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=/workspace/builds/ci/test/ghidra/Output
+
+  decompiler-call-fidelity:
+    # Runs on every push/PR that touches decompiler source or firmware, and on
+    # a nightly schedule to catch regressions from Ghidra or toolchain updates.
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[verify-elf]')
+    strategy:
+      matrix:
+        image-version: [22.04]
+    runs-on: ubuntu-${{ matrix.image-version }}
+    timeout-minutes: 45
+    env:
+      DEV_IMAGE: ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-20-dev:latest
+      CMAKE_PREFIX_PATH: "/usr/lib/llvm-20/lib/cmake/mlir/;/usr/lib/llvm-20/lib/cmake/clang/"
+      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
+      CI: true
+
+    steps:
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+
+      - name: Clone repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: Pull dev container image
+        run: docker pull $DEV_IMAGE
+
+      - name: Cache P-Code JSON outputs (keyed by firmware ELF hash)
+        uses: actions/cache@v4
+        with:
+          path: /tmp/pcode-cache/
+          key: pcode-${{ hashFiles('firmwares/output/bloodlight-firmware.elf') }}
+
+      - name: Create gitconfig for safe directories
+        run: |
+          cat > /tmp/.gitconfig << 'EOF'
+          [safe]
+              directory = /workspace
+              directory = /workspace/vendor/rellic/src
+              directory = /workspace/vendor/glog/src
+              directory = /workspace/vendor/gflags/src
+              directory = /workspace/vendor/z3/src
+              directory = /workspace/vendor/clangir/src
+          EOF
+
+      - name: Configure and build patchir-decomp
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
+            -w /workspace \
+            -e CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}" \
+            -e LLVM_EXTERNAL_LIT="${LLVM_EXTERNAL_LIT}" \
+            -e CI=true \
+            $DEV_IMAGE \
+            cmake --preset ci -DPE_USE_VENDORED_Z3=OFF \
+              -DLLVM_EXTERNAL_LIT=/usr/local/bin/lit \
+              -DLLVM_Z3_INSTALL_DIR=/usr/local
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
+            -w /workspace \
+            -e CI=true \
+            $DEV_IMAGE \
+            cmake --build --preset ci --config Release -j$(nproc)
+
+      - name: Build Ghidra headless Docker image
+        run: bash ./scripts/ghidra/build-headless-docker.sh
+
+      - name: Decompile firmware functions via Ghidra (cached)
+        run: |
+          mkdir -p /tmp/pcode-cache
+          for FUNC in bl_device__process_entry bl_usb__send_message; do
+            CACHED="/tmp/pcode-cache/${FUNC}.json"
+            if [[ ! -f "$CACHED" ]]; then
+              echo "Cache miss for $FUNC — running Ghidra headless ..."
+              bash scripts/ghidra/decompile-headless.sh \
+                --input firmwares/output/bloodlight-firmware.elf \
+                --function "$FUNC" \
+                --output "$CACHED"
+            else
+              echo "Cache hit for $FUNC."
+            fi
+          done
+
+      - name: Verify call fidelity (Path A — JSON-based FileCheck)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v /tmp/pcode-cache:/pcode \
+            -w /workspace \
+            -e CI=true \
+            $DEV_IMAGE bash -c '
+              set -e
+              FILE_CHECK=$(command -v FileCheck || command -v filecheck)
+              for FUNC in bl_device__process_entry bl_usb__send_message; do
+                JSON="/pcode/${FUNC}.json"
+                OUT="/tmp/${FUNC}"
+                builds/ci/bin/patchir-decomp \
+                  -input "$JSON" -emit-cir -emit-llvm -output "$OUT"
+                python3 scripts/gen-call-checks.py "$JSON" --func "$FUNC" \
+                  > "/tmp/${FUNC}.call-checks.txt"
+                echo "=== $FUNC CIR call-check ==="
+                "$FILE_CHECK" --check-prefix=CALL-CHECK \
+                  "/tmp/${FUNC}.call-checks.txt" --input-file "${OUT}.cir"
+                echo "=== $FUNC LL call-check ==="
+                "$FILE_CHECK" --check-prefix=LL-CALL-CHECK \
+                  "/tmp/${FUNC}.call-checks.txt" --input-file "${OUT}.ll"
+                echo "PASS: $FUNC"
+              done
+            '
+
+      - name: Verify call fidelity (Path B — ELF-based verify-calls)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v /tmp/pcode-cache:/pcode \
+            -w /workspace \
+            -e CI=true \
+            $DEV_IMAGE bash -c '
+              set -e
+              ELF="firmwares/output/bloodlight-firmware.elf"
+              for FUNC in bl_device__process_entry bl_usb__send_message; do
+                JSON="/pcode/${FUNC}.json"
+                OUT="/tmp/${FUNC}"
+                echo "=== $FUNC ELF call-check ==="
+                python3 scripts/extract-elf-calls.py "$ELF" \
+                  --func "$FUNC" --json "$JSON" \
+                  > "/tmp/${FUNC}.elf-calls.txt"
+                python3 scripts/verify-calls.py \
+                  --elf-calls "/tmp/${FUNC}.elf-calls.txt" \
+                  --cir "${OUT}.cir" \
+                  --ll  "${OUT}.ll"  \
+                  --report "/tmp/${FUNC}.report.json"
+                echo "PASS: $FUNC"
+              done
+            '
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: call-fidelity-reports
+          path: /tmp/*.report.json
