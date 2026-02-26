@@ -624,7 +624,7 @@ namespace patchestry::ghidra {
                 auto val   = obj->getInteger("value");
                 auto block = get_string_if_valid(*obj, "target_block");
                 if (val && block && !block->empty()) {
-                    op.switch_cases.push_back({ static_cast< int64_t >(*val), std::string(*block) });
+                    op.switch_cases.push_back({ *val, *block });
                 }
             }
         }

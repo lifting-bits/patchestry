@@ -127,5 +127,11 @@ namespace patchestry::ast {
         // emitted immediately before the operation that triggered them.  Drained by
         // create_basic_block after each create_operation call.
         std::vector< clang::Stmt * > pending_materialized;
+
+        // Key of the next block to be emitted after the current one in RPO order.
+        // Set by create_function_body before building each block; read by
+        // create_branch to decide whether a BRANCH goto is redundant (i.e. the
+        // target is the immediately following block and control falls through).
+        std::string current_next_block_key;
     };
 } // namespace patchestry::ast
