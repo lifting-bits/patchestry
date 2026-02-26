@@ -249,6 +249,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         Options options = program.getOptions(Program.ANALYSIS_PROPERTIES);
         options.setBoolean("Aggressive Instruction Finder", true);
         options.setBoolean("Decompiler Parameter ID", true);
+        options.setBoolean("Decompiler Switch Analysis", true);
         for (String option : options.getOptionNames()) {
             println(option + " = " + options.getValueAsString(option));
         }
@@ -258,6 +259,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
                 mgr.getAnalyzer("Aggressive Instruction Finder"), program.getMemory());
         mgr.scheduleOneTimeAnalysis(
                 mgr.getAnalyzer("Decompiler Parameter ID"), program.getMemory());
+        mgr.scheduleOneTimeAnalysis(
+                mgr.getAnalyzer("Decompiler Switch Analysis"), program.getMemory());
 
         mgr.startAnalysis(monitor);
         mgr.waitForAnalysis(null, monitor);
