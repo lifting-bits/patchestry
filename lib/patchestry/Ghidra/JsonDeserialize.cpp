@@ -602,9 +602,9 @@ namespace patchestry::ghidra {
             }
         }
 
-        // default_block
+        // fallback_block
         set_target_field_if_valid(
-            get_string_if_valid(branch_obj, "default_block"), op.default_block
+            get_string_if_valid(branch_obj, "fallback_block"), op.fallback_block
         );
 
         // switch_input varnode

@@ -607,10 +607,15 @@ namespace patchestry::ast {
             current_next_block_key = (i + 1 < rpo.size()) ? rpo[i + 1] : std::string{};
 
             auto block_stmts = create_basic_block(ctx, bb);
-            if (!block_stmts.empty()) {
-                auto loc         = sourceLocation(ctx.getSourceManager(), key);
-                auto *label_stmt = new (ctx)
-                    clang::LabelStmt(loc, labels_declaration.at(key), block_stmts[0]);
+            auto loc         = sourceLocation(ctx.getSourceManager(), key);
+            clang::Stmt *first = block_stmts.empty()
+                ? static_cast< clang::Stmt * >(new (ctx) clang::NullStmt(loc, false))
+                : block_stmts[0];
+            auto *label_stmt = new (ctx)
+                clang::LabelStmt(loc, labels_declaration.at(key), first);
+            if (block_stmts.empty()) {
+                stmt_vec.push_back(label_stmt);
+            } else {
                 block_stmts[0] = label_stmt;
                 stmt_vec.insert(stmt_vec.end(), block_stmts.begin(), block_stmts.end());
             }

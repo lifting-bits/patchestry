@@ -590,8 +590,7 @@ namespace patchestry::ast {
         if (!function_builder().current_next_block_key.empty()
             && *op.target_block == function_builder().current_next_block_key)
         {
-            auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
-            return { new (ctx) clang::NullStmt(op_loc, false), false };
+            return { nullptr, false };
         }
 
         if (!function_builder().labels_declaration.contains(*op.target_block)) {
@@ -675,27 +674,32 @@ namespace patchestry::ast {
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        if (input_expr == nullptr) {
+            LOG(ERROR) << "BRANCHIND: failed to create input expression. key: " << op.key << "\n";
+            return {};
+        }
         auto loc       = sourceLocation(ctx.getSourceManager(), op.key);
         auto expr_type = input_expr->getType();
         if (!expr_type->isPointerType()) {
-            auto op_type    = ctx.getPointerType(expr_type);
-            auto *cast_expr = make_cast(ctx, input_expr, op_type, loc);
-            assert(cast_expr != nullptr && "Failed to create cast expression");
+            auto *cast_expr = make_cast(ctx, input_expr, ctx.getPointerType(expr_type), loc);
+            if (cast_expr == nullptr) {
+                LOG(ERROR) << "BRANCHIND: failed to cast input to pointer type. key: " << op.key
+                           << "\n";
+                return {};
+            }
             input_expr = cast_expr;
         }
 
-        // Build the default arm: goto L_default if known; otherwise
-        // __builtin_unreachable() since the bounds check before the BRANCHIND
-        // guarantees the discriminant is in-range.  Never emit IndirectGotoStmt
-        // when case recovery has occurred.
-        auto make_default_arm = [&]() -> clang::Stmt * {
-            if (op.default_block.has_value()
-                && function_builder().labels_declaration.contains(*op.default_block))
+        // Build the trailing statement that follows the switch body:
+        // - goto fallback_block when a bounds-check out-of-range target is known,
+        // - __builtin_unreachable() otherwise (all cases are covered by the table).
+        auto make_fallback_stmt = [&]() -> clang::Stmt * {
+            if (op.fallback_block.has_value()
+                && function_builder().labels_declaration.contains(*op.fallback_block))
             {
-                auto target_loc =
-                    sourceLocation(ctx.getSourceManager(), *op.default_block);
+                auto target_loc = sourceLocation(ctx.getSourceManager(), *op.fallback_block);
                 return new (ctx) clang::GotoStmt(
-                    function_builder().labels_declaration.at(*op.default_block), loc,
+                    function_builder().labels_declaration.at(*op.fallback_block), loc,
                     target_loc
                 );
             }
@@ -703,6 +707,18 @@ namespace patchestry::ast {
             return create_builtin_call(
                 ctx, sema(), clang::Builtin::BI__builtin_unreachable, no_args, loc
             );
+        };
+
+        // Wrap switch_stmt with a trailing fallback statement into a compound.
+        // The switch has no default arm; the fallback stmt handles the out-of-range
+        // path (or marks it unreachable when no fallback block is available).
+        auto wrap_with_fallback = [&](clang::Stmt *switch_stmt
+                                  ) -> std::pair< clang::Stmt *, bool > {
+            std::vector< clang::Stmt * > stmts = { switch_stmt, make_fallback_stmt() };
+            return {
+                clang::CompoundStmt::Create(ctx, stmts, clang::FPOptionsOverride(), loc, loc),
+                false
+            };
         };
 
         // Priority 1: switch_cases present — proper integer switch using per-case
@@ -749,15 +765,13 @@ namespace patchestry::ast {
                 ));
                 sw_body.push_back(case_stmt);
             }
-            sw_body.push_back(new (ctx) clang::DefaultStmt(loc, loc, make_default_arm()));
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            return { switch_stmt, false };
+            return wrap_with_fallback(switch_stmt);
         }
 
-        // Priority 2: successor_blocks only — address-based switch (existing logic),
-        // but replace the old IndirectGotoStmt default arm with make_default_arm().
+        // Priority 2: successor_blocks only — address-based switch (existing logic).
         if (!op.successor_blocks.empty()) {
             // Helper: parse "ram:HEXADDR:NUM:basic" → HEXADDR as uint64.
             auto parse_block_addr = [](const std::string &key) -> std::optional< uint64_t > {
@@ -812,11 +826,10 @@ namespace patchestry::ast {
                 sw_body.push_back(case_stmt);
             }
 
-            sw_body.push_back(new (ctx) clang::DefaultStmt(loc, loc, make_default_arm()));
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            return { switch_stmt, false };
+            return wrap_with_fallback(switch_stmt);
         }
 
         // Priority 3: no successor info at all — emit IndirectGotoStmt as the only

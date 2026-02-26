@@ -183,9 +183,9 @@ namespace patchestry::ghidra {
         std::vector< std::string > successor_blocks;
 
         // Switch recovery — all three are independently optional
-        std::optional< std::string > default_block;  // direct-goto default
-        std::optional< Varnode > switch_input;        // original integer discriminant
-        std::vector< SwitchCase > switch_cases;       // case value → target block
+        std::optional< std::string > fallback_block;  // direct-goto fallback when no case matches
+        std::optional< Varnode > switch_input;         // original integer discriminant
+        std::vector< SwitchCase > switch_cases;        // case value → target block
     };
 
     struct BasicBlock
