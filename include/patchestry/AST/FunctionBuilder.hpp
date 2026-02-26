@@ -105,6 +105,11 @@ namespace patchestry::ast {
         std::pair< clang::Stmt *, bool >
         create_operation(clang::ASTContext &ctx, const Operation &op);
 
+        /// Inline single-use temporaries: replace DeclStmt+single-ref patterns
+        /// with the initializer expression inlined at the use site.
+        static void InlineSingleUseTemps(clang::ASTContext &ctx,
+                                         std::vector<clang::Stmt *> &stmts);
+
         void set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
 
         clang::DeclContext *get_sema_context(void) { return sema().CurContext; }
@@ -136,6 +141,14 @@ namespace patchestry::ast {
         // Tracks how many times each local variable name has been declared so
         // that duplicates (e.g. multiple Ghidra "UNNAMED" vars) get unique suffixes.
         std::unordered_map< std::string, unsigned > declared_name_counts;
+
+        // First VarDecl created for each name — used for variable coalescing.
+        // When a later SSA version of the same register has the same type,
+        // we reuse this VarDecl instead of creating x3_1, x3_2, etc.
+        std::unordered_map< std::string, clang::VarDecl * > declared_first_var;
+
+        // Counter for unique temporary variable names for call return values.
+        unsigned call_ret_counter = 0;
 
         // Statements queued by create_temporary during an operation build that must be
         // emitted immediately before the operation that triggered them.  Drained by

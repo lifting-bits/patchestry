@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <algorithm>
 #include <limits>
 #include <map>
 #include <memory>
@@ -772,7 +773,93 @@ namespace patchestry::ast {
             }
         }
 
+        // Inline single-use temporaries: when a DeclStmt defines a variable
+        // that is referenced exactly once in the NEXT statement, replace the
+        // reference with the initializer expression and remove the DeclStmt.
+        // This is the Ghidra merge-phase equivalent for Patchestry.
+        InlineSingleUseTemps(ctx, stmt_vec);
+
         return stmt_vec;
+    }
+
+    namespace {
+
+        // Count references to a VarDecl within a Clang Stmt tree.
+        unsigned CountVarRefs(const clang::Stmt *s, const clang::VarDecl *vd) {
+            if (!s) return 0;
+            if (auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(s)) {
+                if (dre->getDecl() == vd) return 1;
+            }
+            unsigned count = 0;
+            for (auto *child : s->children())
+                count += CountVarRefs(child, vd);
+            return count;
+        }
+
+        // Replace all DeclRefExpr(vd) with replacement_expr in the stmt tree.
+        // Returns true if a replacement was made.
+        bool ReplaceVarRef(clang::Stmt *s, clang::VarDecl *vd,
+                           clang::Expr *replacement, clang::ASTContext &ctx) {
+            if (!s) return false;
+
+            // Check each child. If a child is a DeclRefExpr to vd, replace it
+            // by mutating the parent's child pointer.
+            for (auto it = s->child_begin(); it != s->child_end(); ++it) {
+                if (!*it) continue;
+                if (auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(*it)) {
+                    if (dre->getDecl() == vd) {
+                        // Clang Stmt children are mutable via the iterator
+                        *it = replacement;
+                        return true;
+                    }
+                }
+                if (ReplaceVarRef(*it, vd, replacement, ctx))
+                    return true;
+            }
+            return false;
+        }
+
+    } // anonymous namespace
+
+    void FunctionBuilder::InlineSingleUseTemps(
+            clang::ASTContext &ctx,
+            std::vector<clang::Stmt *> &stmts) {
+        for (size_t i = 0; i + 1 < stmts.size(); ) {
+            // Look for: DeclStmt { VarDecl var = init_expr; }
+            auto *ds = llvm::dyn_cast<clang::DeclStmt>(stmts[i]);
+            if (!ds || !ds->isSingleDecl()) { ++i; continue; }
+            auto *vd = llvm::dyn_cast<clang::VarDecl>(ds->getSingleDecl());
+            if (!vd || !vd->hasInit()) { ++i; continue; }
+
+            // Don't inline if the init has side effects that must execute
+            // at this point (calls, increments, volatile loads).
+            auto *init = vd->getInit();
+            if (init->HasSideEffects(ctx)) { ++i; continue; }
+
+            // Count references in the NEXT statement only.
+            // If exactly 1 reference, inline; otherwise skip.
+            unsigned refs_in_next = CountVarRefs(stmts[i + 1], vd);
+            if (refs_in_next != 1) { ++i; continue; }
+
+            // Check no references in any later statements
+            bool used_later = false;
+            for (size_t j = i + 2; j < stmts.size(); ++j) {
+                if (CountVarRefs(stmts[j], vd) > 0) {
+                    used_later = true;
+                    break;
+                }
+            }
+            if (used_later) { ++i; continue; }
+
+            // Inline: replace the DeclRefExpr in stmts[i+1] with init
+            if (ReplaceVarRef(stmts[i + 1], vd, init, ctx)) {
+                // Remove the DeclStmt
+                stmts.erase(stmts.begin() + static_cast<ptrdiff_t>(i));
+                // Don't increment — re-check same index (the next stmt shifted down)
+            } else {
+                ++i;
+            }
+        }
     }
 
     /**

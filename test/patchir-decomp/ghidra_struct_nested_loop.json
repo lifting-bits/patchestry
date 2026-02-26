@@ -1,0 +1,112 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
+// FN: cir.func @ghidra_struct_nested_loop(
+// RUN: %file-check -vv -check-prefix=NEST %s --input-file %t.c
+// NEST: ghidra_struct_nested_loop(
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:31000000": {
+      "name": "ghidra_struct_nested_loop",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:31000000:entry": {
+          "operations": {
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:31000000:outer_head" }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:31000000:outer_head": {
+          "operations": {
+            "outer_cmp": {
+              "mnemonic": "INT_EQUAL",
+              "type": "type_bool",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 1 },
+                { "type": "type_int", "kind": "constant", "value": 1 }
+              ]
+            },
+            "outer_cbr": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:31000000:inner_head",
+              "not_taken_block": "ram:31000000:exit",
+              "condition": { "type": "type_bool", "kind": "temporary", "operation": "outer_cmp" }
+            }
+          },
+          "ordered_operations": ["outer_cmp", "outer_cbr"]
+        },
+        "ram:31000000:inner_head": {
+          "operations": {
+            "inner_cmp": {
+              "mnemonic": "INT_EQUAL",
+              "type": "type_bool",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 2 },
+                { "type": "type_int", "kind": "constant", "value": 2 }
+              ]
+            },
+            "inner_cbr": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:31000000:inner_body",
+              "not_taken_block": "ram:31000000:outer_latch",
+              "condition": { "type": "type_bool", "kind": "temporary", "operation": "inner_cmp" }
+            }
+          },
+          "ordered_operations": ["inner_cmp", "inner_cbr"]
+        },
+        "ram:31000000:inner_body": {
+          "operations": {
+            "inner_op": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 10 },
+                { "type": "type_int", "kind": "constant", "value": 20 }
+              ]
+            },
+            "back_inner": { "mnemonic": "BRANCH", "target_block": "ram:31000000:inner_head" }
+          },
+          "ordered_operations": ["inner_op", "back_inner"]
+        },
+        "ram:31000000:outer_latch": {
+          "operations": {
+            "outer_op": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 5 },
+                { "type": "type_int", "kind": "constant", "value": 5 }
+              ]
+            },
+            "back_outer": { "mnemonic": "BRANCH", "target_block": "ram:31000000:outer_head" }
+          },
+          "ordered_operations": ["outer_op", "back_outer"]
+        },
+        "ram:31000000:exit": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 0 }]
+            }
+          },
+          "ordered_operations": ["ret"]
+        }
+      },
+      "entry_block": "ram:31000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" },
+    "type_bool": { "name": "bool", "size": 1, "kind": "boolean" }
+  }
+}

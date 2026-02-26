@@ -9,6 +9,8 @@
 // RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 // CCHECK: ext_func(
 // CCHECK: 42
+// RUN: %gen-call-checks %t.json > %t.call.checks
+// RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 //
 // Tests that when a call site has more arguments than the function declaration
 // has parameters, the declaration is promoted to variadic instead of crashing.

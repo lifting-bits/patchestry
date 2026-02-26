@@ -11,6 +11,8 @@
 // RUN: %gen-call-checks %t.json > %t.call.checks
 // RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 // LL: define dso_local i64 @open_memmap(i64 %0)
+// RUN: %gen-call-checks %t.json > %t.call.checks
+// RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 {
   "architecture": "AARCH64",
   "id": "AARCH64:LE:64:v8A",

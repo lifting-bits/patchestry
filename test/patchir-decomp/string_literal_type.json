@@ -11,6 +11,8 @@
 // RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 // CCHECK: sprintf(
 // CCHECK: "hello %s"
+// RUN: %gen-call-checks %t.json > %t.call.checks
+// RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

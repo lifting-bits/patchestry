@@ -27,6 +27,7 @@
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/Specifiers.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/Support/FileSystem.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include "rellic/AST/LoopRefine.h"
@@ -43,7 +44,12 @@
 #include <rellic/AST/StructFieldRenamer.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/AST/CfgBuilder.hpp>
+#include <patchestry/AST/CfgDotEmitter.hpp>
+#include <patchestry/AST/ClangEmitter.hpp>
+#include <patchestry/AST/CfgFoldStructure.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
+#include <patchestry/AST/SNodeDebug.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/Pcode.hpp>
@@ -68,11 +74,76 @@ namespace patchestry::ast {
             );
         }
 
+        if (options.use_structuring_pass) {
+            auto cfgs = BuildCfgs(ctx);
+
+            // Compute output directory for DOT files: same dir as output_file,
+            // falling back to input_file's directory.
+            std::string dot_dir;
+            if (options.emit_dot_cfg) {
+                const auto &base = options.output_file.empty()
+                    ? options.input_file : options.output_file;
+                auto slash = base.find_last_of("/\\");
+                if (slash != std::string::npos) {
+                    dot_dir = base.substr(0, slash + 1);
+                }
+            }
+
+            // Build a name→ghidra::Function lookup for switch metadata.
+            std::unordered_map< std::string, const ghidra::Function * > name_to_ghidra;
+            for (const auto &[key, func] : get_program().serialized_functions) {
+                name_to_ghidra[func.name] = &func;
+            }
+
+            for (auto &cfg : cfgs) {
+                if (!cfg.function || !cfg.function->hasBody()) continue;
+
+                // Populate switch metadata from P-Code JSON before
+                // CfgFoldStructure processes the CFG.
+                std::string fn_name = cfg.function->getName().str();
+                auto it = name_to_ghidra.find(fn_name);
+                if (it != name_to_ghidra.end()) {
+                    PopulateSwitchMetadata(cfg, *it->second);
+                }
+
+                // CfgInput DOT is now emitted as step_000 inside CfgFoldStructure
+
+                auto *fn = const_cast<clang::FunctionDecl *>(cfg.function);
+                SNodeFactory factory;
+                SNode *tree = CfgFoldStructure(cfg, factory, ctx, options);
+
+                if (options.verify_structuring) {
+                    size_t input_count = CountCfgStmts(cfg);
+                    size_t output_count = CountSNodeStmts(tree);
+                    if (output_count < input_count) {
+                        LOG(WARNING) << "STMT DROP: " << fn_name
+                                     << ": input=" << input_count
+                                     << " output=" << output_count
+                                     << " (lost " << (input_count - output_count) << ")\n";
+                        // Pointer-level diff for exact stmt identification
+                        std::unordered_set<const clang::Stmt *> baseline, current;
+                        CollectCfgStmtPtrs(cfg, baseline);
+                        CollectSNodeStmtPtrs(tree, current);
+                        ReportMissingStmts(baseline, current,
+                                           "final:" + fn_name);
+                    } else {
+                        LOG(INFO) << "STMT AUDIT OK: " << fn_name
+                                  << ": " << output_count << " stmts\n";
+                    }
+                }
+
+                EmitClangAST(tree, fn, ctx);
+                CleanupPrettyPrint(fn, ctx);
+
+                // SNodeOutput DOT is now emitted as final step inside CfgFoldStructure
+            }
+        }
+
         if (options.print_tu) {
 #ifdef ENABLE_DEBUG
             ctx.getTranslationUnitDecl()->dumpColor();
 #endif
-        }
+            }
     }
 
     void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
