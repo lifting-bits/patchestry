@@ -1,0 +1,67 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=SEQ %s --input-file %t.c
+// SEQ-NOT: goto
+// SEQ-NOT: while
+// SEQ: return
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:30000000": {
+      "name": "ghidra_struct_sequential",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:30000000:entry": {
+          "operations": {
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:30000000:0:basic" }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:30000000:0:basic": {
+          "operations": {
+            "a": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 1 },
+                { "type": "type_int", "kind": "constant", "value": 2 }
+              ]
+            },
+            "b": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "temporary", "operation": "a" },
+                { "type": "type_int", "kind": "constant", "value": 3 }
+              ]
+            },
+            "br_next": { "mnemonic": "BRANCH", "target_block": "ram:30000000:1:basic" }
+          },
+          "ordered_operations": ["a", "b", "br_next"]
+        },
+        "ram:30000000:1:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 0 }]
+            }
+          },
+          "ordered_operations": ["ret"]
+        }
+      },
+      "entry_block": "ram:30000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" }
+  }
+}

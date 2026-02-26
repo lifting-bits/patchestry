@@ -43,6 +43,9 @@
 #include <rellic/AST/StructFieldRenamer.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/AST/CfgBuilder.hpp>
+#include <patchestry/AST/ClangEmitter.hpp>
+#include <patchestry/AST/CfgFoldStructure.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
@@ -68,11 +71,39 @@ namespace patchestry::ast {
             );
         }
 
+        if (options.use_structuring_pass) {
+            auto cfgs = BuildCfgs(ctx);
+
+            // Build a name→ghidra::Function lookup for switch metadata.
+            std::unordered_map< std::string, const ghidra::Function * > name_to_ghidra;
+            for (const auto &[key, func] : get_program().serialized_functions) {
+                name_to_ghidra[func.name] = &func;
+            }
+
+            for (auto &cfg : cfgs) {
+                if (!cfg.function || !cfg.function->hasBody()) continue;
+
+                // Populate switch metadata from P-Code JSON before
+                // CfgFoldStructure processes the CFG.
+                std::string fn_name = cfg.function->getName().str();
+                auto it = name_to_ghidra.find(fn_name);
+                if (it != name_to_ghidra.end()) {
+                    PopulateSwitchMetadata(cfg, *it->second);
+                }
+
+                auto *fn = const_cast<clang::FunctionDecl *>(cfg.function);
+                SNodeFactory factory;
+                SNode *tree = CfgFoldStructure(cfg, factory, ctx);
+                emitClangAST(tree, fn, ctx);
+                cleanupPrettyPrint(fn, ctx);
+            }
+        }
+
         if (options.print_tu) {
 #ifdef ENABLE_DEBUG
             ctx.getTranslationUnitDecl()->dumpColor();
 #endif
-        }
+            }
     }
 
     void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
@@ -107,7 +138,7 @@ namespace patchestry::ast {
                 continue;
             }
 
-            auto var_type       = type_builder->get_serialized_types().at(variable.type);
+            auto var_type       = type_builder->GetSerializedTypes().at(variable.type);
             auto location       = SourceLocation(ctx.getSourceManager(), key);
             auto sanitized_name = SanitizeKeyToIdent(variable.name);
             auto *var_decl      = clang::VarDecl::Create(

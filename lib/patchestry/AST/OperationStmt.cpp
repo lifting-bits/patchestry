@@ -473,8 +473,8 @@ namespace patchestry::ast {
             LOG(ERROR) << "Operation missing type field. key: " << op.key;
             return std::nullopt;
         }
-        auto it = type_builder().get_serialized_types().find(*op.type);
-        if (it == type_builder().get_serialized_types().end()) {
+        auto it = type_builder().GetSerializedTypes().find(*op.type);
+        if (it == type_builder().GetSerializedTypes().end()) {
             LOG(ERROR) << "Operation type not found in serialized types. key: " << op.key;
             return std::nullopt;
         }
@@ -539,6 +539,27 @@ namespace patchestry::ast {
 
         // When the input is a string literal, the LOAD is semantically a no-op:
         // just let it decay from array type to pointer via implicit cast.
+        if (clang::isa< clang::StringLiteral >(input_expr)) {
+            clang::Expr *result_expr = make_implicit_cast(
+                ctx, input_expr, ctx.getDecayedType(input_expr->getType()),
+                clang::CastKind::CK_ArrayToPointerDecay
+            );
+            if (!result_expr) {
+                result_expr = input_expr;
+            }
+            if (merge_to_next) {
+                return { result_expr, true };
+            }
+            auto *output_expr =
+                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            return { create_assign_operation(ctx, result_expr, output_expr, op_loc), false };
+        }
+
+        // When the input is a string literal, the LOAD is semantically a no-op:
+        // the string literal already IS the value.  Just let it decay from its
+        // array type (const char[N]) to a pointer (const char *) via the standard
+        // array-to-pointer implicit cast, avoiding the *(T**)&"..." pattern that
+        // make_reinterpret_cast would otherwise produce.
         if (clang::isa< clang::StringLiteral >(input_expr)) {
             clang::Expr *result_expr = make_implicit_cast(
                 ctx, input_expr, ctx.getDecayedType(input_expr->getType()),
@@ -628,7 +649,6 @@ namespace patchestry::ast {
                 if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
                     lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
                 }
-
                 auto deref_result = sema().CreateBuiltinUnaryOp(
                     op_loc, clang::UO_Deref, clang::dyn_cast< clang::Expr >(lhs_expr)
                 );
@@ -656,21 +676,22 @@ namespace patchestry::ast {
                  return {};
             }
 
-            if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
-                lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+            // Cancel *(&expr) from PTRADD's &base[index].
+            clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
+            if (!deref_expr) {
+                if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
+                    lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+                }
+                auto deref_result =
+                    sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
+                if (deref_result.isInvalid()) {
+                    LOG(ERROR) << "Failed to create deref expression for STORE. key: " << op.key;
+                    return {};
+                }
+                deref_expr = deref_result.getAs< clang::Expr >();
             }
 
-            auto deref_result =
-                sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
-            if (deref_result.isInvalid()) {
-                LOG(ERROR) << "Failed to create deref expression for STORE. key: " << op.key;
-                return {};
-            }
-
-            return { create_assign_operation(
-                         ctx, rhs_expr, deref_result.getAs< clang::Expr >(), op_loc
-                     ),
-                     false };
+            return { create_assign_operation(ctx, rhs_expr, deref_expr, op_loc), false };
         }
 
         LOG(ERROR) << "Store operation with unexpected number of inputs. key: " << op.key
@@ -795,44 +816,14 @@ namespace patchestry::ast {
             input_expr = cast_expr;
         }
 
-        // Build the trailing statement that follows the switch body:
-        // - goto fallback_block when a bounds-check out-of-range target is known,
-        // - __builtin_unreachable() otherwise (all cases are covered by the table).
-        auto make_fallback_stmt = [&]() -> clang::Stmt * {
-            if (op.fallback_block.has_value()
-                && function_builder().labels_declaration.contains(*op.fallback_block))
-            {
-                auto target_loc = SourceLocation(ctx.getSourceManager(), *op.fallback_block);
-                return new (ctx) clang::GotoStmt(
-                    function_builder().labels_declaration.at(*op.fallback_block), loc,
-                    target_loc
-                );
-            }
-            std::vector< clang::Expr * > no_args;
-            return create_builtin_call(
-                ctx, sema(), clang::Builtin::BI__builtin_unreachable, no_args, loc
-            );
-        };
-
-        // Wrap switch_stmt with a trailing fallback statement into a compound.
-        // The switch has no default arm; the fallback stmt handles the out-of-range
-        // path (or marks it unreachable when no fallback block is available).
-        auto wrap_with_fallback = [&](clang::Stmt *switch_stmt
-                                  ) -> std::pair< clang::Stmt *, bool > {
-            std::vector< clang::Stmt * > stmts = { switch_stmt, make_fallback_stmt() };
-            return {
-                clang::CompoundStmt::Create(ctx, stmts, clang::FPOptionsOverride(), loc, loc),
-                false
-            };
-        };
-
         // Priority 1: switch_cases present — proper integer switch using per-case
         // integer values recovered by Ghidra.  Prefer inputs[0] when it is a named
         // local variable (the most direct discriminant); otherwise fall back to
         // switch_input, which may resolve to an inlined call expression.
         if (!op.switch_cases.empty()) {
             clang::Expr *disc = nullptr;
-            if (op.inputs[0].kind == Varnode::VARNODE_LOCAL) {
+            if (op.inputs[0].kind == Varnode::VARNODE_LOCAL
+                || op.inputs[0].kind == Varnode::VARNODE_PARAM) {
                 disc = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
             } else if (op.switch_input.has_value()) {
                 disc = clang::dyn_cast< clang::Expr >(
@@ -906,7 +897,28 @@ namespace patchestry::ast {
                                     if (!merge) { case_body.push_back(stmt); }
                                 }
                             }
-                            case_body.push_back(new (ctx) clang::BreakStmt(loc));
+                            // If the terminal BRANCH targets a block other than
+                            // the fallback (i.e. a back-edge to a loop header),
+                            // emit goto instead of break to preserve the edge.
+                            const auto &branch_op = tb.operations.at(last_op_key);
+                            if (branch_op.target_block.has_value()
+                                && branch_op.target_block != op.fallback_block
+                                && function_builder().labels_declaration.contains(
+                                    *branch_op.target_block
+                                ))
+                            {
+                                auto tgt_loc = SourceLocation(
+                                    ctx.getSourceManager(), *branch_op.target_block
+                                );
+                                case_body.push_back(new (ctx) clang::GotoStmt(
+                                    function_builder().labels_declaration.at(
+                                        *branch_op.target_block
+                                    ),
+                                    loc, tgt_loc
+                                ));
+                            } else {
+                                case_body.push_back(new (ctx) clang::BreakStmt(loc));
+                            }
                             case_stmt->setSubStmt(clang::CompoundStmt::Create(
                                 ctx, case_body, clang::FPOptionsOverride(), loc, loc
                             ));
@@ -936,10 +948,27 @@ namespace patchestry::ast {
                     sw_body.push_back(create_case(sc));
                 }
             }
+
+            // Emit a default: arm for the guard branch's out-of-bounds target.
+            // When Ghidra folds a bounds-check CBRANCH, the "else" edge becomes
+            // fallback_block — the path taken when no case matches.
+            if (op.fallback_block.has_value()
+                && function_builder().labels_declaration.contains(*op.fallback_block))
+            {
+                auto *default_stmt = new (ctx) clang::DefaultStmt(loc, loc, nullptr);
+                auto target_loc = SourceLocation(ctx.getSourceManager(), *op.fallback_block);
+                auto *goto_stmt = new (ctx) clang::GotoStmt(
+                    function_builder().labels_declaration.at(*op.fallback_block), loc,
+                    target_loc
+                );
+                default_stmt->setSubStmt(goto_stmt);
+                sw_body.push_back(default_stmt);
+            }
+
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            return wrap_with_fallback(switch_stmt);
+            return { switch_stmt, false };
         }
 
         // Priority 2: successor_blocks only — address-based switch (existing logic).
@@ -999,11 +1028,10 @@ namespace patchestry::ast {
                 case_stmt->setSubStmt(goto_stmt);
                 sw_body.push_back(case_stmt);
             }
-
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            return wrap_with_fallback(switch_stmt);
+            return { switch_stmt, false };
         }
 
         // Priority 3: no successor info at all — emit IndirectGotoStmt as the only
@@ -1091,8 +1119,8 @@ namespace patchestry::ast {
             llvm::SmallVector< clang::QualType, 8 > new_param_types;
             bool types_ok = true;
             for (const auto &input : op.inputs) {
-                auto it = type_builder().get_serialized_types().find(input.type_key);
-                if (it == type_builder().get_serialized_types().end()) {
+                auto it = type_builder().GetSerializedTypes().find(input.type_key);
+                if (it == type_builder().GetSerializedTypes().end()) {
                     LOG(ERROR)
                         << "Cannot rebuild call declaration for '"
                         << callee->getNameAsString()
@@ -1168,8 +1196,6 @@ namespace patchestry::ast {
         std::vector< clang::Expr * > arguments;
         for (const auto &input : op.inputs) {
             if (index >= num_params && !proto_type->isVariadic()) {
-                // The recovered operation inputs does not match with number of function
-                // arguments. Drop extra inputs and don't add them to the callee arguments.
                 continue;
             }
             auto *vnode_stmt = create_varnode(ctx, function, input);
@@ -1260,14 +1286,11 @@ namespace patchestry::ast {
             }
             if (!op.output) {
                 // Non-void return but no explicit output varnode in the JSON.
-                // Return the CallExpr with should_merge_to_next=true so it is NOT
-                // emitted as a standalone statement.  Instead, the downstream op
-                // picks it up via create_temporary Case 2 and inlines it directly,
-                // producing exactly one call at the point of consumption and avoiding
-                // cross-block declaration hazards that arise from creating a synthetic
-                // VarDecl in one block whose DeclRefExpr survives in a different block
-                // after dead-block pruning.
-                return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), true);
+                // The return value is unused (no assignment target), so emit
+                // the call as a standalone expression statement.  This ensures
+                // side-effectful calls like fprintf whose return value is
+                // discarded still appear in the output.
+                return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
             }
 
         } else if (op.target->operation) {
@@ -1375,8 +1398,8 @@ namespace patchestry::ast {
             // Infer parameter types from inputs
             std::vector< clang::QualType > param_types;
             for (const auto &input : op.inputs) {
-                if (type_builder().get_serialized_types().contains(input.type_key)) {
-                    param_types.push_back(type_builder().get_serialized_types().at(input.type_key));
+                if (type_builder().GetSerializedTypes().contains(input.type_key)) {
+                    param_types.push_back(type_builder().GetSerializedTypes().at(input.type_key));
                 } else {
                     param_types.push_back(ctx.IntTy); // Fallback
                 }
@@ -1384,8 +1407,8 @@ namespace patchestry::ast {
 
             // Infer return type from op.type
             clang::QualType return_type = ctx.VoidTy;
-            if (op.type && type_builder().get_serialized_types().contains(*op.type)) {
-                return_type = type_builder().get_serialized_types().at(*op.type);
+            if (op.type && type_builder().GetSerializedTypes().contains(*op.type)) {
+                return_type = type_builder().GetSerializedTypes().at(*op.type);
             }
 
             // Build function type and pointer type
@@ -1463,7 +1486,7 @@ namespace patchestry::ast {
 
         clang::QualType ret_type = ctx.VoidTy;
         if (op.output.has_value() && op.type.has_value()) {
-            const auto &types = type_builder().get_serialized_types();
+            const auto &types = type_builder().GetSerializedTypes();
             auto it           = types.find(*op.type);
             if (it != types.end()) {
                 ret_type = it->second;
@@ -1540,7 +1563,7 @@ namespace patchestry::ast {
         // When the enclosing function returns non-void, emit "return (T)0;"
         // instead of a bare "return;" to avoid a diagnostic on the (typically
         // unreachable) empty return after __stack_chk_fail or similar.
-        const auto &types = type_builder().get_serialized_types();
+        const auto &types = type_builder().GetSerializedTypes();
         auto type_it      = types.find(function.prototype.rttype_key);
         if (type_it != types.end() && !type_it->second->isVoidType()) {
             auto ret_type = type_it->second;
@@ -1574,8 +1597,8 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto type_it = type_builder().get_serialized_types().find(*op.type);
-        if (type_it == type_builder().get_serialized_types().end()) {
+        auto type_it = type_builder().GetSerializedTypes().find(*op.type);
+        if (type_it == type_builder().GetSerializedTypes().end()) {
             LOG(ERROR) << "PIECE Operation type is not serialized. key: " << op.key;
             return {};
         }
@@ -1590,11 +1613,17 @@ namespace patchestry::ast {
         }
         auto location = SourceLocation(ctx.getSourceManager(), op.key);
 
-        if (op.inputs[1].size > UINT32_MAX / 8U) {
-            LOG(ERROR) << "PIECE input size too large, would overflow. key: " << op.key;
-            return {};
+        // Determine low-part bit width from input1's type.  The Varnode::size
+        // field is not populated for operation inputs, so look up the type.
+        unsigned low_width = 0;
+        {
+            auto low_type_it =
+                type_builder().GetSerializedTypes().find(op.inputs[1].type_key);
+            if (low_type_it != type_builder().GetSerializedTypes().end()) {
+                low_width = static_cast< unsigned >(ctx.getTypeSize(low_type_it->second));
+            }
         }
-        unsigned low_width = op.inputs[1].size * 8;
+
         auto merge_to_next = !op.output.has_value();
 
         // If Operation has type, convert expression to operation type and perform bit-shift and
@@ -1666,8 +1695,8 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto type_it = type_builder().get_serialized_types().find(*op.type);
-        if (type_it == type_builder().get_serialized_types().end()) {
+        auto type_it = type_builder().GetSerializedTypes().find(*op.type);
+        if (type_it == type_builder().GetSerializedTypes().end()) {
             LOG(ERROR) << "SUBPIECE Operation type is not serialized. key: " << op.key;
             return {};
         }
@@ -1676,8 +1705,9 @@ namespace patchestry::ast {
         const auto &op_type = type_it->second;
         auto op_location    = SourceLocation(ctx.getSourceManager(), op.key);
 
-        auto *shift_value =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+        // input[1] is the byte offset; the bit-shift amount is byte_offset * 8.
+        uint32_t byte_offset = op.inputs[1].value.value_or(0);
+        unsigned shift_bits  = byte_offset * 8;
 
         auto *expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
@@ -1693,37 +1723,54 @@ namespace patchestry::ast {
             }
         }
 
-        auto *expr_with_paren = new (ctx)
-            clang::ParenExpr(op_location, op_location, clang::dyn_cast< clang::Expr >(expr));
+        clang::Expr *result_expr = expr;
 
-        auto shifted_result = sema().CreateBuiltinBinOp(
-            op_location, clang::BO_Shr, clang::dyn_cast< clang::Expr >(expr_with_paren),
-            clang::dyn_cast< clang::Expr >(shift_value)
-        );
+        // Apply right-shift only when byte_offset > 0 (skip ">> 0").
+        if (shift_bits != 0) {
+            auto *expr_with_paren = new (ctx)
+                clang::ParenExpr(op_location, op_location, expr);
 
-        if (shifted_result.isInvalid()) {
-            LOG(ERROR) << "SUBPIECE invalid shifted result. key: " << op.key;
-            return std::make_pair(nullptr, false);
+            auto *shift_value = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), shift_bits), ctx.IntTy,
+                op_location
+            );
+            auto shifted_result = sema().CreateBuiltinBinOp(
+                op_location, clang::BO_Shr, expr_with_paren, shift_value
+            );
+            if (shifted_result.isInvalid()) {
+                LOG(ERROR) << "SUBPIECE invalid shifted result. key: " << op.key;
+                return std::make_pair(nullptr, false);
+            }
+            result_expr = shifted_result.getAs< clang::Expr >();
         }
 
-        auto *shifted_expr = new (ctx)
-            clang::ParenExpr(op_location, op_location, shifted_result.getAs< clang::Expr >());
+        // Apply a bit-mask to extract only the output-sized bits.
+        // Skip the mask when it covers all bits of the integer width (would be no-op).
+        unsigned out_bits      = static_cast< unsigned >(ctx.getTypeSize(op_type));
+        unsigned int_width     = ctx.getIntWidth(ctx.IntTy);
+        if (out_bits > 0 && out_bits < int_width) {
+            auto mask_value = llvm::APInt::getLowBitsSet(int_width, out_bits);
+            auto *mask =
+                clang::IntegerLiteral::Create(ctx, mask_value, ctx.IntTy, op_location);
 
-        auto mask_value = llvm::APInt::getAllOnes(32U);
-        auto *mask = clang::IntegerLiteral::Create(ctx, mask_value, ctx.IntTy, op_location);
+            auto *paren_expr = new (ctx)
+                clang::ParenExpr(op_location, op_location, result_expr);
 
-        auto result = sema().CreateBuiltinBinOp(
-            SourceLocation(ctx.getSourceManager(), op.key), clang::BO_And, shifted_expr,
-            clang::dyn_cast< clang::Expr >(mask)
-        );
+            auto result = sema().CreateBuiltinBinOp(
+                op_location, clang::BO_And, paren_expr,
+                clang::dyn_cast< clang::Expr >(mask)
+            );
 
-        if (result.isInvalid()) {
-            LOG(ERROR) << "SUBPIECE invalid AND-mask result. key: " << op.key;
-            return std::make_pair(nullptr, false);
+            if (result.isInvalid()) {
+                LOG(ERROR) << "SUBPIECE invalid AND-mask result. key: " << op.key;
+                return std::make_pair(nullptr, false);
+            }
+
+            result_expr = result.getAs< clang::Expr >();
         }
 
-        auto *result_expr =
-            new (ctx) clang::ParenExpr(op_location, op_location, result.getAs< clang::Expr >());
+        result_expr =
+            new (ctx) clang::ParenExpr(op_location, op_location, result_expr);
 
         if (merge_to_next) {
             return std::make_pair(result_expr, merge_to_next);
@@ -2100,7 +2147,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "FLOAT_FLOOR operation type is not serialized. key: " << op.key
                        << "\n";
             return {};
@@ -2118,7 +2165,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "FLOAT_FLOOR operation type is not serialized. key: " << op.key
                        << "\n";
             return {};
@@ -2136,7 +2183,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "FLOAT_FLOOR operation type is not serialized. key: " << op.key
                        << "\n";
             return {};
@@ -2154,7 +2201,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "FLOAT_CEIL operation type is not serialized. key: " << op.key
                        << "\n";
             return {};
@@ -2172,7 +2219,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "FLOAT_ROUND operation type is not serialized. key: " << op.key
                        << "\n";
             return {};
@@ -2239,12 +2286,12 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "INT2FLOAT operation type is not serialized. key: " << op.key << "\n";
             return {};
         }
 
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_builder().GetSerializedTypes().at(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2277,7 +2324,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "FLOAT_NAN operation type is not serialized. key: " << op.key << "\n";
             return {};
         }
@@ -2314,13 +2361,13 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "FLOAT2FLOAT operation type is not serialized. key: " << op.key
                        << "\n";
             return {};
         }
 
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_builder().GetSerializedTypes().at(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2352,14 +2399,14 @@ namespace patchestry::ast {
             return { nullptr, false };
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "TRUNC operation type is not serialized. key: " << op.key << "\n";
             return { nullptr, false };
         }
 
         auto merge_to_next = !op.output.has_value();
 
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_builder().GetSerializedTypes().at(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2446,14 +2493,14 @@ namespace patchestry::ast {
             return { nullptr, false };
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "PTRSUB operation type is not serialized. key: " << op.key << "\n";
             return { nullptr, false };
         }
 
         auto merge_to_next = !op.output.has_value();
 
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_builder().GetSerializedTypes().at(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2577,13 +2624,13 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "Operation type does not exist in serialized list. key: " << op.key
                        << "\n";
             return {};
         }
 
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_builder().GetSerializedTypes().at(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
@@ -2623,13 +2670,13 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
             LOG(ERROR) << "Skipping, local/temporary variable type is not serialized. key: "
                        << op.key << "\n";
             return {};
         }
 
-        const auto &var_type = type_builder().get_serialized_types()[*op.type];
+        const auto &var_type = type_builder().GetSerializedTypes()[*op.type];
         auto op_loc          = SourceLocation(ctx.getSourceManager(), op.key);
 
         std::string var_name = *op.name;

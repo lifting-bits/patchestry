@@ -141,6 +141,10 @@ namespace patchestry::ast {
             );
         }
 
+        // Case 2: result cached in operation_stmts (merge_to_next op whose expression has
+        // not yet been given a name).  Materialize it as a VarDecl so that every use site
+        // gets a fresh DeclRefExpr instead of sharing the same Stmt* node across multiple
+        // parent expressions (which violates the AST tree property).
         if (function_builder().operation_stmts.contains(*vnode.operation)) {
             return function_builder().operation_stmts.at(*vnode.operation);
         }
@@ -347,8 +351,8 @@ namespace patchestry::ast {
         // Determine if this is a wide string based on the type
         bool is_wide = false;
         if (!vnode.type_key.empty()) {
-            if (type_builder().get_serialized_types().contains(vnode.type_key)) {
-                auto type = type_builder().get_serialized_types().at(vnode.type_key);
+            if (type_builder().GetSerializedTypes().contains(vnode.type_key)) {
+                auto type = type_builder().GetSerializedTypes().at(vnode.type_key);
                 is_wide   = type->isWideCharType();
             }
         }
@@ -393,8 +397,8 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (type_builder().get_serialized_types().contains(vnode.type_key)) {
-            return type_builder().get_serialized_types().at(vnode.type_key);
+        if (type_builder().GetSerializedTypes().contains(vnode.type_key)) {
+            return type_builder().GetSerializedTypes().at(vnode.type_key);
         }
 
         return GetTypeFromSize(ctx, vnode.size, /*is_signed=*/false, /*is_integer=*/true);

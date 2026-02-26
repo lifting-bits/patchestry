@@ -415,25 +415,31 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder.get().get_serialized_types().contains(proto.rttype_key)) {
+        if (!type_builder.get().GetSerializedTypes().contains(proto.rttype_key)) {
             LOG(ERROR) << "Function return type is not serialized.\n";
             return {};
         }
 
         std::vector< clang::QualType > args_vector;
-        const auto &rttype = type_builder.get().get_serialized_types().at(proto.rttype_key);
+        const auto &rttype = type_builder.get().GetSerializedTypes().at(proto.rttype_key);
         for (const auto &param : proto.parameters) {
-            if (!type_builder.get().get_serialized_types().contains(param)) {
+            if (!type_builder.get().GetSerializedTypes().contains(param)) {
                 LOG(ERROR) << "Skipping, invalid parameter key in function.\n";
                 continue;
             }
 
-            args_vector.emplace_back(type_builder.get().get_serialized_types().at(param));
+            args_vector.emplace_back(type_builder.get().GetSerializedTypes().at(param));
         }
 
         clang::FunctionProtoType::ExtProtoInfo ext_proto_info;
         ext_proto_info.Variadic           = proto.is_variadic;
         ext_proto_info.ExceptionSpec.Type = clang::EST_None;
+
+        // TODO: Map non-default Ghidra calling conventions (e.g. __stdcall,
+        // __fastcall, __thiscall, __vectorcall) to clang::CallingConv once
+        // ClangIR supports them. Currently ClangIR only handles the default
+        // CC_C convention; all others hit UNREACHABLE in CIRGenTypes.cpp.
+        // The calling convention string is available in proto.calling_convention.
 
         return ctx.getFunctionType(rttype, args_vector, ext_proto_info);
     }
@@ -470,12 +476,12 @@ namespace patchestry::ast {
         uint index = 0;
         std::vector< clang::ParmVarDecl * > parameter_vec;
         for (const auto &param_key : proto.parameters) {
-            if (!type_builder.get().get_serialized_types().contains(param_key)) {
+            if (!type_builder.get().GetSerializedTypes().contains(param_key)) {
                 LOG(ERROR) << "Skipping, invalid paramater type key in function prototype.\n";
                 continue;
             }
 
-            auto param_type  = type_builder.get().get_serialized_types().at(param_key);
+            auto param_type  = type_builder.get().GetSerializedTypes().at(param_key);
             auto *param_decl = clang::ParmVarDecl::Create(
                 ctx, func_decl, SourceLocation(ctx.getSourceManager(), param_key),
                 SourceLocation(ctx.getSourceManager(), param_key),
