@@ -81,6 +81,7 @@ import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.pcode.PcodeOpAST;
+import ghidra.program.model.pcode.JumpTable;
 import ghidra.program.model.pcode.SequenceNumber;
 import ghidra.program.model.pcode.SymbolEntry;
 import ghidra.program.model.pcode.Varnode;
@@ -2188,52 +2189,6 @@ public class PcodeSerializer {
 		}
 	}
 
-	// Tier 2: trace `branchIndInput` to a LOAD(table_base + idx*stride), read
-	// `n` pointer-sized entries from binary memory, and match each to a
-	// successor block start address.  Returns a map from block label to case
-	// value, or null if the pattern is not found or the read fails.
-	private Map<String,Long> recoverCaseValuesFromJumpTable(
-			Varnode branchIndInput, int n, long minVal) throws Exception {
-		PcodeOp def = branchIndInput.getDef();
-		if (def == null || def.getOpcode() != PcodeOp.LOAD) {
-			return null;
-		}
-		Long tableBase = extractConstantFromAddrExpr(def.getInput(1));
-		if (tableBase == null) {
-			return null;
-		}
-		int ptrSize = currentProgram.getDefaultPointerSize();
-		boolean bigEndian = currentProgram.getLanguage().isBigEndian();
-		Address base = currentProgram.getAddressFactory()
-								 .getDefaultAddressSpace().getAddress(tableBase);
-		Map<String,Long> result = new HashMap<>();
-		for (int i = 0; i < n; i++) {
-			byte[] buf = new byte[ptrSize];
-			try {
-				currentProgram.getMemory().getBytes(base.add((long) i * ptrSize), buf);
-			} catch (Exception e) {
-				return null;
-			}
-			long addr = 0;
-			if (bigEndian) {
-				for (byte b : buf) {
-					addr = (addr << 8) | (b & 0xFF);
-				}
-			} else {
-				for (int j = ptrSize - 1; j >= 0; j--) {
-					addr = (addr << 8) | (buf[j] & 0xFF);
-				}
-			}
-			for (int j = 0; j < n; j++) {
-				if (currentBlock.getOut(j).getStart().getOffset() == addr) {
-					result.put(label(currentBlock.getOut(j)), minVal + (long) i);
-					break;
-				}
-			}
-		}
-		return result.isEmpty() ? null : result;
-	}
-
 	// Serialize an indirect branch (BRANCHIND). This records the computed
 	// target expression and, when Ghidra has resolved the jump table, the
 	// set of possible successor blocks, the default block, and the original
@@ -2254,28 +2209,65 @@ public class PcodeSerializer {
 		}
 		writer.endArray();
 
-		// Emit the default block recovered from the bounds-check predecessor.
+		// Emit the fallback block recovered from the bounds-check predecessor.
+		// The C++ consumer jumps to this block when no switch case matches.
 		String defaultBlock = findDefaultBlock();
 		if (defaultBlock != null) {
-			writer.name("default_block").value(defaultBlock);
+			writer.name("fallback_block").value(defaultBlock);
 		}
 
-		// Emit the original integer discriminant and per-case integer values using
-		// 4-tier recovery: Tier 0 reads Ghidra's "caseD_HEX" block labels;
-		// Tier 1 scans block-entry ops for discriminant comparisons;
-		// Tier 2 reads the in-memory jump table; Tier 3 falls back to sequential.
-		Varnode discriminant = traceSwitchDiscriminant(pcodeOp.getInput(0));
-		if (discriminant != null) {
-			writer.name("switch_input");
-			serializeInput(pcodeOp, discriminant);
+		JumpTable jt = buildJumpTableIndex().get(pcodeOp.getSeqnum().getTarget());
+		Varnode discriminant = (jt != null) ? traceSwitchDiscriminant(pcodeOp.getInput(0)) : null;
+		if (jt != null && discriminant != null) {
+			serializeSwitchCases(pcodeOp, discriminant, jt, n);
+		}
+	}
 
-			long minVal = recoverMinCaseValue(discriminant);
+	private Map<Address, JumpTable> buildJumpTableIndex() {
+		Map<Address, JumpTable> index = new HashMap<>();
+		for (JumpTable jt : currentFunction.getJumpTables()) {
+			index.put(jt.getSwitchAddress(), jt);
+		}
+		return index;
+	}
 
-			// Tier 0: read Ghidra's own "caseD_HEX" block labels — most reliable
-			// for any compiled switch since Ghidra's switch analysis already
-			// computed the correct case values and stored them in the symbol name.
-			Map<String,Long> caseMap = new HashMap<>();
-			boolean caseMapOk = true;
+	// Emits "switch_input" and "switch_cases" JSON fields for a resolved BRANCHIND.
+	// Case values are recovered using a 3-tier strategy:
+	//   Tier 0a – decompiler's own integer label values from JumpTable API (most authoritative).
+	//   Tier 0  – Ghidra's own "caseD_HEX" block labels.
+	//   Tier 1  – block-entry P-Code ops that compare the discriminant against a constant.
+	// Both fields are omitted entirely when no tier produces a complete case map,
+	// allowing the C++ side to fall back to successor_blocks-based dispatch.
+	private void serializeSwitchCases(PcodeOp pcodeOp, Varnode discriminant,
+			JumpTable jt, int n) throws Exception {
+
+		Map<String,Long> caseMap = new HashMap<>();
+		boolean caseMapOk = false;
+
+		// Tier 0a: use the decompiler's own integer label values — most authoritative source.
+		// getLabelValues()[i] and getCases()[i] are aligned: the i-th label routes to the
+		// i-th case address.
+		Integer[] labels = jt.getLabelValues();
+		Address[] cases  = jt.getCases();
+		if (labels != null && cases != null && labels.length > 0
+				&& labels.length == cases.length) {
+			for (int i = 0; i < labels.length; i++) {
+				for (int j = 0; j < n; j++) {
+					if (currentBlock.getOut(j).getStart().equals(cases[i])) {
+						caseMap.put(label(currentBlock.getOut(j)), (long)(int) labels[i]);
+						break;
+					}
+				}
+			}
+			caseMapOk = !caseMap.isEmpty();
+		}
+
+		// Tier 0: read Ghidra's own "caseD_HEX" block labels — reliable for any
+		// compiled switch since Ghidra's analysis stores the correct case values
+		// in the symbol name.
+		if (!caseMapOk) {
+			caseMap = new HashMap<>();
+			caseMapOk = true;
 			for (int i = 0; i < n; i++) {
 				PcodeBlock blk = currentBlock.getOut(i);
 				Long v = recoverCaseValueFromBlockLabel(blk);
@@ -2285,52 +2277,48 @@ public class PcodeSerializer {
 				}
 				caseMap.put(label(blk), v);
 			}
-
-			// Tier 1: scan first P-Code ops at each case-target block for a
-			// comparison of the discriminant against a constant.  Handles
-			// computed-goto dispatch where blocks start with INT_EQUAL etc.
-			if (!caseMapOk) {
-				caseMap = new HashMap<>();
-				caseMapOk = true;
-				for (int i = 0; i < n; i++) {
-					PcodeBlock blk = currentBlock.getOut(i);
-					if (!(blk instanceof PcodeBlockBasic)) {
-						caseMapOk = false;
-						break;
-					}
-					Long v = recoverCaseValueFromBlockEntry((PcodeBlockBasic) blk, discriminant);
-					if (v == null) {
-						caseMapOk = false;
-						break;
-					}
-					caseMap.put(label(blk), v);
-				}
-			}
-
-			// Tier 2: read case values from the in-memory jump table.
-			if (!caseMapOk) {
-				Map<String,Long> memMap = recoverCaseValuesFromJumpTable(
-						pcodeOp.getInput(0), n, minVal);
-				if (memMap != null) {
-					caseMap = memMap;
-					caseMapOk = true;
-				}
-			}
-
-			writer.name("switch_cases").beginArray();
-			for (int i = 0; i < n; i++) {
-				String blockLabel = label(currentBlock.getOut(i));
-				// Tier 3 fallback: sequential assignment when no tier succeeded.
-				long caseVal = (caseMapOk && caseMap.containsKey(blockLabel))
-						? caseMap.get(blockLabel)
-						: minVal + (long) i;
-				writer.beginObject();
-				writer.name("value").value(caseVal);
-				writer.name("target_block").value(blockLabel);
-				writer.endObject();
-			}
-			writer.endArray();
 		}
+
+		// Tier 1: scan first P-Code ops at each case-target block for a
+		// comparison of the discriminant against a constant.  Handles
+		// computed-goto dispatch where blocks start with INT_EQUAL etc.
+		if (!caseMapOk) {
+			caseMap = new HashMap<>();
+			caseMapOk = true;
+			for (int i = 0; i < n; i++) {
+				PcodeBlock blk = currentBlock.getOut(i);
+				if (!(blk instanceof PcodeBlockBasic)) {
+					caseMapOk = false;
+					break;
+				}
+				Long v = recoverCaseValueFromBlockEntry((PcodeBlockBasic) blk, discriminant);
+				if (v == null) {
+					caseMapOk = false;
+					break;
+				}
+				caseMap.put(label(blk), v);
+			}
+		}
+
+		// If no tier recovered real case values, or the map is partial,
+		// emit nothing — the C++ side will fall back to successor_blocks (Priority 2).
+		if (!caseMapOk || caseMap.size() != n) {
+			return;
+		}
+
+		writer.name("switch_input");
+		serializeInput(pcodeOp, discriminant);
+		writer.name("switch_cases").beginArray();
+		for (int i = 0; i < n; i++) {
+			String blockLabel = label(currentBlock.getOut(i));
+			Long caseVal = caseMap.get(blockLabel);
+			if (caseVal == null) { continue; }  // defensive: skip unmapped blocks
+			writer.beginObject();
+			writer.name("value").value(caseVal);
+			writer.name("target_block").value(blockLabel);
+			writer.endObject();
+		}
+		writer.endArray();
 	}
 
 		// Serialize a generic multi-input, single-output p-code operation.
