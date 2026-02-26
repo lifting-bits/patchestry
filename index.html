@@ -1,0 +1,1290 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+      
+        <link rel="next" href="GettingStarted/build/">
+      
+      
+      <link rel="icon" href="assets/img/favicon.ico">
+      <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.5.17">
+    
+    
+      
+        <title>Patchestry</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.bcfcd587.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#mlir-based-binary-patching-framework" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="." title="Patchestry" class="md-header__button md-logo" aria-label="Patchestry" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Patchestry
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Introduction
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9h-1.9M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69m-9.15 3.96h2.3L12 9l-1.15 3.65Z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12c0-2.42-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var media,input,key,value,palette=__md_get("__palette");if(palette&&palette.color){"(prefers-color-scheme)"===palette.color.media&&(media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']"),palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent"));for([key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7 0-.24-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91 1.61 0 2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08Z"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lifting-bits/patchestry" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.5.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="." title="Patchestry" class="md-nav__button md-logo" aria-label="Patchestry" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    Patchestry
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lifting-bits/patchestry" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.5.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Introduction
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="." class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Introduction
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#technical-rationale" class="md-nav__link">
+    <span class="md-ellipsis">
+      Technical Rationale
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Project Goals
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Project Goals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unified-tooling-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unified Tooling Integration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#incremental-decompilation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Incremental Decompilation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unifying-representations-for-contracts-patches-and-software" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unifying Representations for Contracts, Patches, and Software
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#declarative-patching-and-contracts-description" class="md-nav__link">
+    <span class="md-ellipsis">
+      Declarative Patching and Contracts Description
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decompilation-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Decompilation Workflow
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cve-2021-22156-patching" class="md-nav__link">
+    <span class="md-ellipsis">
+      CVE-2021-22156 Patching
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="GettingStarted/build/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Build & Run
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="GettingStarted/ghidra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Ghidra Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="CONTRIBUTING/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    How to contribute
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Dialects
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Dialects
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="Dialects/Pcode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Pcode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    About
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            About
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="statement/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    License
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#technical-rationale" class="md-nav__link">
+    <span class="md-ellipsis">
+      Technical Rationale
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Project Goals
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Project Goals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unified-tooling-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unified Tooling Integration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#incremental-decompilation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Incremental Decompilation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unifying-representations-for-contracts-patches-and-software" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unifying Representations for Contracts, Patches, and Software
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#declarative-patching-and-contracts-description" class="md-nav__link">
+    <span class="md-ellipsis">
+      Declarative Patching and Contracts Description
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decompilation-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Decompilation Workflow
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cve-2021-22156-patching" class="md-nav__link">
+    <span class="md-ellipsis">
+      CVE-2021-22156 Patching
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+  
+
+
+<h1 id="mlir-based-binary-patching-framework">MLIR-based binary patching framework</h1>
+<p>Patchestry aims to make the same impact to binary patching as compilers and high
+level languages did to early software development. Its main goal is to enable
+developers without extensive knowledge of the deployment platform of the binary
+to patch the binary. To do this, the developer has to be confident that what
+they're patching is functionally equivalent to what is deployed and also that
+the patch they write will integrate into the deployed binary without issue.</p>
+<p>Patchestry leverages MLIR as the foundational technology instead of LLVM IR.
+MLIR is an emerging compiler development technology allowing for the
+specification, transformation, and mixing of IR dialects. The MLIR approach has
+significant industry momentum, and has been adopted by companies such as Google
+(in TensorFlow) and Meta (ClangIR). With MLIR, the decompilation process could
+be stratified into a Tower of IRs (IR dialects). Each IR represents the same
+program, but at a different level of abstraction.</p>
+<p>MLIR brings a notable advantage by enabling the creation of representations to
+streamline communication between diverse state-of-the-art tools. For instance,
+one can create an MLIR dialect specifically for P-Code (a program representation
+utilized by Ghidra) to optimize integration with the Ghidra decompiler.
+Alternatively, an LLVM IR dialect can be employed to compile back to the
+executable, and MLIR can support LLVM-based contract validation through a
+symbolic executor such as KLEE. Moreover, MLIR provides flexibility to
+devise our own dialects for representing contracts in specialized logic, such as
+SMT. Finally, our <a href="https://trailofbits.github.io/vast/">high-level dialect</a>,
+developed under DARPA V-SPELLS, captures the intricacies of full-featured C. Our
+compiler stacks empower us to compile C into any of the previously mentioned
+representations, promoting seamless interconnection between them.</p>
+<h2 id="technical-rationale">Technical Rationale</h2>
+<p>Our recent experience on AMP, as well as our performance on other DARPA binary
+analysis programs (PACE, CFAR, LOGAN, CGC, Cyber Fast Track), have led us to
+four guiding principles that we believe patching solutions for legacy software
+must follow in order to be successful.</p>
+<ol>
+<li>
+<p><strong>Fully automated approaches are doomed to failure.</strong> In general, the process of
+decompilation is an inherently intractable problem. However, developers are
+often capable of distinguishing between decompilation outcomes deemed 'good' or
+'bad', but encoding that kind of heuristic logic into a system invariably yields
+unpredictability and unsoundness.  Hence, we assert that the involvement of
+semi-skilled or skilled human developers is essential in the process. The
+best-case scenario is that a developer can use an existing source code patch as
+a guide. Given this patch, they can locate the corresponding vulnerable machine
+code within a binary using binary function symbol names. The worst-case scenario
+involves the ad hoc application of tools (e.g. BinDiff, BSim) and reverse
+engineering skills to an opaque binary blob that is without symbols or debugging
+information.</p>
+</li>
+<li>
+<p><strong>Developers must be able to leverage pre-existing software development experience</strong>
+and not have to concern themselves with low level details. That is, they should
+be able to operate as if the original source code and build process/environments
+were available, and not be expected to have expert knowledge of every machine
+code language that may be encountered.</p>
+</li>
+<li>
+<p><strong>From-scratch development efforts do not scale.</strong> As much as possible,
+pre-existing tooling that already handles the inherent scalability challenges in
+(de)compiling code for such a wide variety of platforms should be leveraged. For
+example the Ghidra decompiler can decompile over 100 machine code languages to
+C, and the Clang compiler can generate machine code for over 20 machine code
+languages. Rolling new solutions from scratch is impractical.</p>
+</li>
+<li>
+<p><strong>There is no one-size-fits-all way of representing code.</strong> A “complete”
+solution to machine code decompilation only exists at the end of a long tail of
+special cases. Patchestry aims to provide decompilation to a familiar, C-like
+language. Patchestry will not, however, decompile to C or a specific ISO dialect
+thereof because some machine code constructs have no equivalents in C, while
+others are only loosely equivalent given non-conforming dialect extensions.</p>
+</li>
+</ol>
+<h2 id="project-goals">Project Goals</h2>
+<p>Patchestry accomplishes its goals by integrating various innovative concepts
+guided by the four principles described in <a href="#technical-rationale">technical rationale</a>:</p>
+<h3 id="unified-tooling-integration">Unified Tooling Integration</h3>
+<p>Guided by the third principle—recognizing the limitations of from-scratch
+development efforts—Patchestry seamlessly integrates existing tooling for
+decompilation and recompilation in the binary patching process. Patchestry
+advocates a unified tooling integration approach using an MLIR Tower of
+Intermediate Representations (IRs) as a mediator between tools. This strategy
+enables the incorporation of cutting-edge (de)compiler tools into a cohesive
+system, allowing the utilization of specialized tools for each task and ensuring
+effectiveness and optimal outcomes across all desired functionalities.</p>
+<h3 id="incremental-decompilation">Incremental Decompilation</h3>
+<p>Patchestry’s innovative approach involves leveraging multiple program
+representations simultaneously across various layers of the Tower of IRs. While
+state-of-the-art decompilers already offer diverse representations, what sets
+the Tower of IRs apart is its capability to create custom user-defined
+abstractions (layers) while preserving relationships between these layers. This
+modular approach facilitates seamless incremental decompilation and
+recompilation processes. This is crucial for effortlessly devising specific
+abstractions tailored to unique platforms.</p>
+<h3 id="unifying-representations-for-contracts-patches-and-software">Unifying Representations for Contracts, Patches, and Software</h3>
+<p>The Tower of IRs also aligns with the fourth guiding principle: There is no
+one-size-fits-all way of representing code.  Maintaining multiple
+representations simultaneously in the Tower of IRs allows us to establish
+meaningful relationships between them and innovate in how we connect tools and
+conduct analyses. Additionally, this approach allows us to consolidate all
+necessary components for patching within the same representation: patch
+description, contract description and the software. This unified strategy
+streamlines tooling for analysis and facilitates the recompilation of patched
+software, resulting in a single artifact that can undergo desired formal
+analyses, such as LLVM-based analysis.</p>
+<h3 id="declarative-patching-and-contracts-description">Declarative Patching and Contracts Description</h3>
+<p>To address our second guiding principle, which emphasizes the importance of
+allowing developers to leverage their existing software development experience,
+we mandate that all interactions with patching occur in a language commonly
+understood by developers. Specifically, a C-like language. To facilitate this,
+we propose a declarative library designed for describing patches, their
+application. Following the same principle, Patchestry introduces contracts in
+C-like DSL. These contracts serve as constraints guiding both decompilation and
+recompilation, and they must hold at all relevant steps of each process.</p>
+<h2 id="decompilation-workflow">Decompilation Workflow</h2>
+<p><img alt="Patchestry ls" src="img/patchestry-workflow.svg" /></p>
+<p>Patchestry’s technical approach is designed to enable the following seven-step workflow:</p>
+<ol>
+<li>
+<p>A developer is tasked with patching a vulnerability in a program binary
+running on a device. How the user acquires a copy of the binary (e.g.
+downloaded from a vendor’s website, extracted from a network capture, extracted
+directly from a device over serial port or JTAG, etc.) is not part of the project.</p>
+</li>
+<li>
+<p>The developer loads the binary into the open-source Ghidra interactive
+decompiler. Developers will be enabled to leverage Ghidra’s features and plugins
+to locate the function(s) to patch, though previous binary analysis expertise is
+not required. We anticipate that developers will apply tools such as BinDiff or
+BSim, rely on symbol names or debug information, or apply reverse engineering
+techniques.</p>
+</li>
+</ol>
+<p>The Patchestry workflow includes Ghidra because it is open-source and actively
+maintained by the National Security Agency and because it supports a wide
+variety of binary file formats (ELF, COFF, PE, etc.) and machine code languages
+used by medical devices. Ghidra also implements a battery of heuristics that act
+as good first guesses as to the locations and references between functions and
+data in the binary. Although perfect identification/recovery of functions, data,
+and data types in a binary is intractable, the value of interactivity in Ghidra
+is that the human developer can fix incorrect conclusions drawn by the
+decompiler’s heuristics.</p>
+<p>There are two reasons why Patchestry’s workflow does not allow the developer to
+modify Ghidra’s decompilation output and then re-compile that into a patchable
+representation. First, Ghidra’s decompilation is not guaranteed to be
+syntactically correct or compilable. This can be mitigated through developer
+effort; however, the level of effort increases with the complexity of and number
+of references in the target function(s). Second, Ghidra’s heuristic
+decompilation pipeline has been proven to be unfaithful with respect to the
+execution semantics of the machine code. In the worst case, this could result in
+a developer inadvertently introducing new vulnerabilities into the program
+during the patching process.</p>
+<p>Despite Ghidra’s decompilation not being precise enough for recompilation, our
+experience from AMP tells us that Ghidra’s decompilation is good enough to be a
+productivity multiplier for developers trying to locate functions that need
+patching.</p>
+<p>Moreover, the modular design of Patchestry affords the flexibility to seamlessly
+integrate more formally rigorous decompilers and their representations in the
+future, as their capabilities align with our technical requirements. Currently,
+the majority of existing tools are predominantly of a research-oriented nature,
+often concentrating on x86 architecture or even just its subset, which is
+not sufficient for the diverse nature of software.</p>
+<ol>
+<li>After locating the relevant function(s) in Ghidra, the Patchestry plugin will
+present the developer with an editable decompilation of the target function(s).
+Patchestry’s decompilations will be sound and precise with respect to the
+available information in Ghidra’s analysis database. Regardless of how small the
+patch size could be, Patchestry will always formulate the problem at the
+function granularity. There are theoretical and pragmatic reasons why
+Patchestry’s minimum patch recompilation granularity is function-at-a-time.</li>
+</ol>
+<p>From a theoretical standpoint, function granularity patches enable Patchestry to
+leverage stronger guarantees about the application binary interface (ABI). It is
+only at the entry and exit points of a compiled function that higher-level,
+human-readable types can be reliably mapped to low level machine locations
+(registers, memory).</p>
+<p>Patchestry leverages the open-source Clang compiler, which can already
+target relevant platforms. A restriction in compilers like Clang that
+nonetheless favors our approach is that functions are the smallest compilable
+unit of code. Our task in Patchestry is thus to convert code for recompilation
+into LLVM IR functions, which Clang can convert to machine code.</p>
+<ol>
+<li>The developer edits the decompiled function(s), enacting the necessary
+changes to patch the vulnerability in the decompiled code. Patchestry’s highest
+level decompiled code (C-like) will look approximately similar, regardless of
+the platform/architecture of the medical device software. This will help improve
+developer productivity. Moreover, the meta-patch library will allow the
+developer to automate the patching process.</li>
+</ol>
+<p>At this stage, the binary-level patch has not yet been formulated. What
+particular changes are needed to patch a given vulnerability are beyond the
+scope of the project and require an external tool. Patchestry will, however,
+provide a library of “patch intrinsics” such as “add bounds check.” These will
+be formulated as templates of meta-patches.</p>
+<p>A developer can make near arbitrary changes within the body of the decompiled
+code (e.g. add, remove or replace its portions). Although Patchestry aims to
+provide verifiable guarantees about feature- and bug-compatibility of its
+decompilation with respect to the Ghidra database, absent contracts or
+specifications about the intended behavior of the code, Patchestry cannot make
+guarantees about the correctness of the edited decompilation. That is,
+Patchestry cannot prevent a developer from introducing new flaws into the
+binary, nor can it guarantee that a patch comprehensively fixes the root cause
+of the vulnerability.</p>
+<p>To mitigate the problem of developer- or decompiler-introduced emergent
+behaviors, Patchestry will allow developers to leverage model- and
+contract-based software verification techniques. These techniques are normally
+challenging to apply to lifting/decompilation due to a lack of end-to-end
+visibility into the lifting process; usually the techniques only apply at the
+very last stage, on the decompiled/lifted result. However, Patchestry’s approach
+to decompilation is multi-level: decompilation progresses through a stage of
+increasingly high-level IRs. By taking a multi-level approach, Patchestry can
+instrument contracts at various stages of the process.</p>
+<ol>
+<li>
+<p>Verification of contracts. To ensure the reliability of patched code along
+with associated contracts, Patchestry offers a toolset for generating output
+compatible with both static and dynamic analysis tools. The optimal choice for
+this purpose is LLVM IR, given its verification confirms the fulfillment of
+contracts before its compilation. Patchestry allows for easy integration of
+LLVM-based analysis tools such as KLEE or SeaHorn, automating the verification
+process.</p>
+</li>
+<li>
+<p>Patchestry formulates the patch by compiling developer-edited decompiled
+function(s), and packages the patch for use by a binary patching tool.
+Patchestry will utilize a pre-existing tool, such as Patcherex or OFRAK, to
+enact the patch process, creating a new version of the binary.</p>
+</li>
+<li>
+<p>Finally, the developer will load the new version of the binary onto the
+device. How the developer loads the new version of the binary is not part of the
+project.</p>
+</li>
+</ol>
+<h2 id="architecture">Architecture</h2>
+<p>The Patchestry design places a strong emphasis on modularity and seamless
+developer interaction. The developer plays a key role, providing the binary
+pieces to be patched, a patch description, and instructions on how to apply
+these patches using the meta-programming framework (meta-patches). Contracts are
+similarly specified and applied by instrumentation using the same meta-language.
+Utilizing state-of-the-art tools, we perform decompilation and program analysis.</p>
+<p>A significant architectural innovation is the MLIR Tower of IRs, which serves as
+the connecting element. This tower facilitates the association of
+representations between decompiled programs, such as from P-Code and compilable
+and structured representations like LLVM IR. The tower's modularity allows for
+the specification of any DSL for the decompiled program, with the only
+requirement being the translation of this DSL to a layer of the tower. In our
+case, Ghidra's P-Code serves as a suitable starting point layer. However, this
+modular design allows new decompilers to be integrated into Patchestry in the
+future while preserving the rest of the architecture.</p>
+<p>Utilizing the same representation (MLIR dialects) for both the decompiled binary
+and the compiled patched version facilitates seamless instrumentation and
+inlining of patches, ultimately producing a patched MLIR (Tower of IRs). The
+tower's various abstraction layers enable precise specification of points of
+interest, surpassing the limitations of a single representation. Additionally,
+the tower abstracts away from the decompiled representation (P-Code),
+facilitating modular design in the future.</p>
+<p>Contract handling follows a similar pattern. Described in a C-like language,
+contracts can take the form of static or runtime assertions or error handlers.
+These are inserted into the code while it is in the IR Tower form. Runtime
+checks are then compiled and remain in the patched binary. Static contracts are
+checked using a formal verifier. The flexibility to invent new contract
+mechanisms according to specific needs is a key feature.</p>
+<p>In the verification phase, which is the final step, Patchestry is designed to
+accommodate various verification methods. The Tower allows to produce a
+customized representation for the analysis, but it is advisable to stick to the
+same representation as the compilation (such as LLVM IR) to prevent errors
+during translation. Slicing the codebase into independent parts influenced by
+the patch makes LLVM-based static analysis of the representation with contracts
+tractable. We expect that most of the patches being local influence only a small
+part of the program, therefore using the dependency analysis, we can isolate the
+part of the program that needs to be verified.</p>
+<h2 id="cve-2021-22156-patching">CVE-2021-22156 Patching</h2>
+<p>An example of patching the CVE-2021-22156 vulnerability, addressing an integer
+overflow within the <code>calloc()</code> function of the C standard library. This
+vulnerability affects versions of the BlackBerry QNX Software Development
+Platform (SDP) up to version 6.5.0SP1, QNX OS for Medical up to version 1.1, and
+QNX OS for Safety up to version 1.0.1. A malicious actor could exploit this
+integer overflow issue to execute arbitrary code or initiate a denial of service
+attack.</p>
+<p>Consider the vulnerable code snippet below. Here, a user-defined function,
+<code>get_num_elements()</code>, is employed to determine the size requirements for a dynamic
+array of long integers assigned to the variable num_elements. During the
+allocation of the buffer using <code>calloc()</code>, the variable num_elements is multiplied
+by sizeof(long) to calculate the overall size requirements. If the resulting
+multiplication exceeds the representable range of <code>size_t</code>, <code>calloc()</code> may allocate
+a zeroed buffer of insufficient size. Subsequently, when data is copied into
+this buffer, an overflow may occur, posing a potential security risk.</p>
+<p>A vulnerable code in which the standard library function <code>calloc()</code> may allocate
+a zeroed buffer of insufficient size:</p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kt">size_t</span><span class="w"> </span><span class="n">num_elements</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_num_elements</span><span class="p">();</span><span class="w"> </span><span class="c1">// from the outside environment</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kt">long</span><span class="w"> </span><span class="o">*</span><span class="n">buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="n">calloc</span><span class="p">(</span><span class="n">num_elements</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span><span class="p">));</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">buffer</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">NULL</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="cm">/* Handle error condition */</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>The desired result of applying Patchestry to fix the vulnerable code:</p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kt">size_t</span><span class="w"> </span><span class="n">num_elements</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_num_elements</span><span class="p">();</span><span class="w"> </span><span class="c1">// from the outside environment</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="cm">/* Patch start */</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">num_elements</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">SIZE_MAX</span><span class="o">/</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="cm">/*  Handle error condition */</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p">}</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="cm">/* Patch end */</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="kt">long</span><span class="w"> </span><span class="o">*</span><span class="n">buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="n">calloc</span><span class="p">(</span><span class="n">num_elements</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span><span class="p">));</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">buffer</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">NULL</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="cm">/* Handle error condition */</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="k">return</span><span class="p">;</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>To create this simple patch, we require two essential components: the patch
+itself and the specific locations where the patch should be applied. In
+Patchestry, we offer developers a library, allowing them to articulate these
+components using familiar C-like syntax:</p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// 1. Patch in C</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p">[[</span><span class="n">CVE</span><span class="mi">-2021-22156</span><span class="p">]]</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">patch</span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">num_elements</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">num_elements</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">SIZE_MAX</span><span class="o">/</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">            </span><span class="cm">/*  Handle error condition  */</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">}</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1">// 2. Developer-defined meta-patch transformation</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="kt">void</span><span class="w"> </span><span class="n">meta_patch</span><span class="p">(</span><span class="n">source_module_t</span><span class="w"> </span><span class="k">module</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">callsite_t</span><span class="w"> </span><span class="o">&amp;</span><span class="n">place</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="k">module</span><span class="p">.</span><span class="n">calls</span><span class="p">(</span><span class="s">&quot;calloc&quot;</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">        </span><span class="n">place</span><span class="p">.</span><span class="n">apply_before</span><span class="p">(</span><span class="s">&quot;CVE-2021-22156::patch&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">place</span><span class="p">.</span><span class="n">operand</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Patchestry introduces a metaprogramming interface enabling  developer-defined
+code transformations. Patchestry’s interface supports common patching operations
+such as code insertion, replacement, alteration, and deletion. To obtain the
+source module from the program binary, we leverage state-of-the-art decompilers
+and seamlessly integrate them into the MLIR source representation, as elaborated
+later. Patchestry’s source representation can be modified and queried through
+the metaprogramming API.</p>
+<p>The second crucial aspect of Patchestry involves providing assurances regarding
+patches. Similar to the patching process, we empower developers to define
+contracts in our C-like language, and seamlessly embed these checks into the
+binary. Unlike patches, contracts are mandated not to alter program state. There
+are two types of contracts in Patchestry: runtime contracts, addressing
+unexpected states during runtime, and static contracts, exclusively used for
+formal verification without persisting in the compiled binary.</p>
+<div class="language-cpp highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1">// Contract</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="p">[[</span><span class="n">CVE</span><span class="mi">-2021-22156</span><span class="p">]]</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">contract</span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">num_elements</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="n">assert</span><span class="p">(</span><span class="n">num_elements</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">SIZE_MAX</span><span class="o">/</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span><span class="p">));</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1">// Meta-contract</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="kt">void</span><span class="w"> </span><span class="n">meta_contract</span><span class="p">(</span><span class="n">source_module_t</span><span class="w"> </span><span class="k">module</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">callsite_t</span><span class="w"> </span><span class="o">&amp;</span><span class="n">place</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="k">module</span><span class="p">.</span><span class="n">calls</span><span class="p">(</span><span class="s">&quot;calloc&quot;</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">        </span><span class="n">place</span><span class="p">.</span><span class="n">apply_before</span><span class="p">(</span><span class="s">&quot;CVE-2021-22156::contract&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">place</span><span class="p">.</span><span class="n">operand</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">});</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>An example of Patchestry contract that defines the expected functionality of the program
+under test written in the C-like Patchestry contracts DSL. A contract is similar
+to a regression test or a behavioral assertion that an analysis tool like KLEE
+would check.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        <div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://slack.empirehacking.nyc/" target="_blank" rel="noopener" title="slack.empirehacking.nyc" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.5.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2023 Fonticons, Inc.--><path d="M94.12 315.1c0 25.9-21.16 47.06-47.06 47.06S0 341 0 315.1c0-25.9 21.16-47.06 47.06-47.06h47.06v47.06zm23.72 0c0-25.9 21.16-47.06 47.06-47.06s47.06 21.16 47.06 47.06v117.84c0 25.9-21.16 47.06-47.06 47.06s-47.06-21.16-47.06-47.06V315.1zm47.06-188.98c-25.9 0-47.06-21.16-47.06-47.06S139 32 164.9 32s47.06 21.16 47.06 47.06v47.06H164.9zm0 23.72c25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06H47.06C21.16 243.96 0 222.8 0 196.9s21.16-47.06 47.06-47.06H164.9zm188.98 47.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06h-47.06V196.9zm-23.72 0c0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06V79.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06V196.9zM283.1 385.88c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06v-47.06h47.06zm0-23.72c-25.9 0-47.06-21.16-47.06-47.06 0-25.9 21.16-47.06 47.06-47.06h117.84c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06H283.1z"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+      <div class="md-consent" data-md-component="consent" id="__consent" hidden>
+        <div class="md-consent__overlay"></div>
+        <aside class="md-consent__inner">
+          <form class="md-consent__form md-grid md-typeset" name="consent">
+            
+
+
+  
+    
+  
+
+
+
+  
+
+
+<h4>Cookie consent</h4>
+<p>We use cookies to recognize your repeated visits and preferences, as well as to measure the effectiveness of our documentation and whether users find what they're searching for. With your consent, you're helping us to make our documentation better.</p>
+<input class="md-toggle" type="checkbox" id="__settings" >
+<div class="md-consent__settings">
+  <ul class="task-list">
+    
+      
+      
+        
+        
+      
+      <li class="task-list-item">
+        <label class="task-list-control">
+          <input type="checkbox" name="github" checked>
+          <span class="task-list-indicator"></span>
+          GitHub
+        </label>
+      </li>
+    
+  </ul>
+</div>
+<div class="md-consent__controls">
+  
+    
+      <button class="md-button md-button--primary">Accept</button>
+    
+    
+    
+  
+    
+    
+    
+      <label class="md-button" for="__settings">Manage settings</label>
+    
+  
+</div>
+          </form>
+        </aside>
+      </div>
+      <script>var consent=__md_get("__consent");if(consent)for(var input of document.forms.consent.elements)input.name&&(input.checked=consent[input.name]||!1);else"file:"!==location.protocol&&setTimeout(function(){document.querySelector("[data-md-component=consent]").hidden=!1},250);var action,form=document.forms.consent;for(action of["submit","reset"])form.addEventListener(action,function(e){if(e.preventDefault(),"reset"===e.type)for(var n of document.forms.consent.elements)n.name&&(n.checked=!1);__md_set("__consent",Object.fromEntries(Array.from(new FormData(form).keys()).map(function(e){return[e,!0]}))),location.hash="",location.reload()})</script>
+    
+    <script id="__config" type="application/json">{"base": ".", "features": ["navigation.instant", "navigation.instant.prefetch", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.path", "navigation.indexes", "search.suggest", "search.highlight", "search.share"], "search": "assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="assets/javascripts/bundle.1e8ae164.min.js"></script>
+      
+    
+  </body>
+</html>
