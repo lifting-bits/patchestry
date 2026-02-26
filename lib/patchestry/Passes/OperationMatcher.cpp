@@ -22,6 +22,10 @@
 
 #include <patchestry/Passes/Utils.hpp>
 
+namespace {
+    constexpr unsigned kMaxCastChainDepth = 32;
+} // namespace
+
 namespace patchestry::passes {
     bool OperationMatcher::patch_action_matches(
         mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &action,
@@ -545,9 +549,45 @@ namespace patchestry::passes {
                 return extract_ssa_value_type_impl(cast_op.getSrc(), visited);
             }
 
-            // For load operations, get the pointed-to type
+            // For load operations, get the pointed-to type.
+            // When the address is an alloca, also check whether the value stored
+            // into it comes from a global reference (through casts) so that the
+            // pre-cast type of the global is returned instead of the alloca's own
+            // widened element type (e.g., !cir.ptr<!void> vs the real struct ptr).
             if (auto load_op = mlir::dyn_cast< cir::LoadOp >(defining_op)) {
-                auto ptr_type = load_op.getAddr().getType();
+                auto addr = load_op.getAddr();
+                if (auto *addr_def = addr.getDefiningOp()) {
+                    if (mlir::isa< cir::AllocaOp >(addr_def)) {
+                        for (auto &use : addr.getUses()) {
+                            if (auto store_op =
+                                    mlir::dyn_cast< cir::StoreOp >(use.getOwner()))
+                            {
+                                if (store_op.getAddr() != addr) {
+                                    continue;
+                                }
+                                // Walk through casts to find a GetGlobalOp source.
+                                mlir::Value val = store_op.getValue();
+                                unsigned depth = 0;
+                                while (auto *vdef = val.getDefiningOp()) {
+                                    if (++depth > kMaxCastChainDepth) {
+                                        break;
+                                    }
+                                    if (auto cast_op =
+                                            mlir::dyn_cast< cir::CastOp >(vdef))
+                                    {
+                                        val = cast_op.getOperand();
+                                        continue;
+                                    }
+                                    if (mlir::isa< cir::GetGlobalOp >(vdef)) {
+                                        return val.getType();
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                auto ptr_type = addr.getType();
                 if (auto cir_ptr_type = mlir::dyn_cast< cir::PointerType >(ptr_type)) {
                     return cir_ptr_type.getPointee();
                 }
@@ -654,8 +694,43 @@ namespace patchestry::passes {
 
         // Check for load/store operations that might reference named variables
         if (auto load_op = mlir::dyn_cast< cir::LoadOp >(op)) {
-            // Try to extract name from the loaded address
-            auto addr             = load_op.getAddr();
+            auto addr = load_op.getAddr();
+
+            // When the address is an alloca, check whether the value stored into it
+            // originates from a global variable (through zero or more casts).  If so,
+            // return the global name so that argument_matches can identify the original
+            // symbol (e.g. `usb_g`) even when the value is routed through a temporary.
+            // We intentionally do NOT generalise this to other stored values (e.g. call
+            // results) because the alloca name itself is then the right identifier.
+            if (auto *addr_def = addr.getDefiningOp()) {
+                if (mlir::isa< cir::AllocaOp >(addr_def)) {
+                    for (auto &use : addr.getUses()) {
+                        if (auto store_op = mlir::dyn_cast< cir::StoreOp >(use.getOwner())) {
+                            if (store_op.getAddr() != addr) {
+                                continue;
+                            }
+                            // Walk through casts to find a GetGlobalOp source.
+                            mlir::Value val = store_op.getValue();
+                            unsigned depth = 0;
+                            while (auto *def = val.getDefiningOp()) {
+                                if (++depth > kMaxCastChainDepth) {
+                                    break;
+                                }
+                                if (auto cast_op = mlir::dyn_cast< cir::CastOp >(def)) {
+                                    val = cast_op.getOperand();
+                                    continue;
+                                }
+                                if (auto get_global = mlir::dyn_cast< cir::GetGlobalOp >(def)) {
+                                    return get_global.getName().str();
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fall back to the name of the address itself (e.g., an alloca's "name" attr).
             std::string addr_name = extract_ssa_value_name(addr);
             if (!addr_name.empty()) {
                 return addr_name;

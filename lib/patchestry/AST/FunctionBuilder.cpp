@@ -5,8 +5,11 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <limits>
+#include <map>
 #include <memory>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 
 #include <clang/AST/ASTContext.h>
@@ -72,6 +75,78 @@ namespace patchestry::ast {
 
             return operation_vec;
         }
+
+        /**
+         * @brief Comparator for basic-block keys that sorts numerically rather than
+         * lexicographically.
+         *
+         * Block keys have the form "ram:HEXADDR:DECIMALIDX:basic" (or ":entry" for the entry
+         * block).  A plain std::map<string> would sort "10" before "2", producing wrong block
+         * ordering for functions with >= 10 basic blocks.  This comparator parses the address
+         * and index fields as integers so the ordering is always correct.
+         */
+        struct BlockKeyComparator {
+            static std::pair< uint64_t, int64_t > parse_key(const std::string &key) {
+                // "ram:HEXADDR:DECIMALIDX:basic"  or  "ram:HEXADDR:entry"
+                constexpr std::string_view kExpectedPrefix = "ram:";
+                if (key.substr(0, kExpectedPrefix.size()) != kExpectedPrefix) {
+                    LOG(WARNING) << "BlockKeyComparator: unexpected key format (no 'ram:' prefix): "
+                                 << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
+                }
+
+                auto first_colon = key.find(':');
+                auto second_colon = key.find(':', first_colon + 1);
+                if (second_colon == std::string::npos) {
+                    LOG(WARNING) << "BlockKeyComparator: malformed key (missing second ':'): " << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
+                }
+
+                uint64_t addr = 0;
+                try {
+                    addr = std::stoull(
+                        key.substr(first_colon + 1, second_colon - first_colon - 1), nullptr, 16
+                    );
+                } catch (...) {
+                    LOG(WARNING) << "BlockKeyComparator: failed to parse hex address in key: " << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
+                }
+
+                auto third_colon = key.find(':', second_colon + 1);
+                std::string idx_str = key.substr(
+                    second_colon + 1,
+                    third_colon == std::string::npos ? std::string::npos
+                                                     : third_colon - second_colon - 1
+                );
+
+                if (idx_str == "entry") {
+                    return {addr, -1};
+                }
+
+                int64_t idx = 0;
+                try {
+                    idx = std::stoll(idx_str);
+                } catch (...) {
+                    LOG(WARNING) << "BlockKeyComparator: failed to parse block index in key: " << key;
+                    return {addr, std::numeric_limits< int64_t >::max()};
+                }
+
+                return {addr, idx};
+            }
+
+            bool operator()(const std::string &a, const std::string &b) const {
+                auto [addr_a, idx_a] = parse_key(a);
+                auto [addr_b, idx_b] = parse_key(b);
+                if (addr_a != addr_b) {
+                    return addr_a < addr_b;
+                }
+                return idx_a < idx_b;
+            }
+        };
+
     } // namespace
 
     FunctionBuilder::FunctionBuilder(
@@ -424,7 +499,11 @@ namespace patchestry::ast {
             stmt_vec.insert(stmt_vec.end(), entry_stmts.begin(), entry_stmts.end());
         }
 
-        std::unordered_map< std::string, std::vector< clang::Stmt * > > bb_stmts;
+        // Use std::map (sorted by key) so block insertion order is deterministic across
+        // runs. std::unordered_map iteration order is non-deterministic, which caused
+        // different fallthrough edges in buildSuccessorMap and therefore different RPO
+        // orderings and different final ASTs on successive runs with the same input.
+        std::map< std::string, std::vector< clang::Stmt * >, BlockKeyComparator > bb_stmts;
         for (const auto &[block_key, block] : function.get().basic_blocks) {
             LOG(INFO) << "Processing basic block with key " << block_key << "\n";
             const auto &bb = function.get().basic_blocks.at(block_key);
@@ -482,6 +561,14 @@ namespace patchestry::ast {
 
             const auto &operation = block.operations.at(operation_key);
             if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
+                // Drain any VarDecl materializations queued during create_operation
+                // (e.g., from create_temporary promoting a cached expr into a VarDecl).
+                // These must appear before the consuming statement in the output.
+                for (auto *pending : pending_materialized) {
+                    stmt_vec.push_back(pending);
+                }
+                pending_materialized.clear();
+
                 operation_stmts.emplace(operation.key, stmt);
                 if (!should_merge_to_next) {
                     stmt_vec.push_back(stmt);

@@ -130,6 +130,7 @@ namespace patchestry::ast {
             return {};
         }
 
+        // Already materialized as a named VarDecl — return a fresh DeclRefExpr.
         if (function_builder().local_variables.contains(*vnode.operation)) {
             auto *var_decl = function_builder().local_variables.at(*vnode.operation);
             return clang::DeclRefExpr::Create(
@@ -142,8 +143,18 @@ namespace patchestry::ast {
             return function_builder().operation_stmts.at(*vnode.operation);
         }
 
+        // Forward reference — the defining op lives in a block not yet processed.
+        // Build the operation once, cache it, then immediately materialize it as a VarDecl
+        // via a recursive call (which will fall into Case 2).  This prevents re-execution
+        // if create_temporary is called again for the same key before create_basic_block
+        // reaches the defining block.
         if (auto maybe_operation = operationFromKey(function, vnode.operation.value())) {
             auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
+            if (stmt) {
+                function_builder().operation_stmts.emplace(*vnode.operation, stmt);
+                // Recurse: will hit Case 1 (if already local) or Case 2.
+                return create_temporary(ctx, function, vnode);
+            }
             return stmt;
         }
 
@@ -204,47 +215,71 @@ namespace patchestry::ast {
         clang::QualType vnode_type = get_varnode_type(ctx, vnode);
         auto location              = sourceLocation(ctx.getSourceManager(), vnode.type_key);
 
-        // Note: EnumDecl has promotional type as int and an enum type is also identified
-        // as integer.
         if (vnode_type->isIntegralOrUnscopedEnumerationType()) {
-            auto *literal = new (ctx)
-                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
+            // ctx.getIntWidth() returns the value-bit width for the type, matching
+            // what IntegerLiteral's internal assertion requires.  It resolves enum
+            // types to their underlying integer type automatically.
+            unsigned bit_width = ctx.getIntWidth(vnode_type);
 
-            auto result = sema().BuildCStyleCastExpr(
-                location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
-            );
+            if (vnode_type->isEnumeralType()) {
+                // For enum constants we keep a CStyleCastExpr to the enum type
+                // because assigning a plain integer to an enum requires an explicit
+                // cast in C.  The literal itself is typed as the enum's underlying
+                // integer type so downstream pattern-matching (e.g. isAlwaysFalse)
+                // reaches the IntegerLiteral without any IgnoreParenCasts workaround.
+                auto underlying =
+                    vnode_type->castAs< clang::EnumType >()->getDecl()->getIntegerType();
+                auto *literal = new (ctx)
+                    clang::IntegerLiteral(ctx, llvm::APInt(bit_width, *vnode.value), underlying, location);
+                auto result = sema().BuildCStyleCastExpr(
+                    location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
+                );
+                assert(!result.isInvalid());
+                return result.getAs< clang::Expr >();
+            }
 
-            assert(!result.isInvalid());
-            return result.getAs< clang::Expr >();
+            // Plain integer: create the literal at the exact target width and type.
+            // This eliminates the CStyleCastExpr wrapper that previously obscured
+            // constant values from normalization-pass pattern matchers and silently
+            // truncated constants narrower than 32 bits (e.g. uint8_t) or zero-
+            // extended constants wider than 32 bits (e.g. uint64_t on 64-bit targets).
+            return new (ctx)
+                clang::IntegerLiteral(ctx, llvm::APInt(bit_width, *vnode.value), vnode_type, location);
         }
 
         if (vnode_type->isVoidType()) {
+            // Void-typed constants are unusual; keep them as a cast from int so the
+            // resulting expression is at least well-formed.
             auto *literal = new (ctx)
                 clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
-
             auto result = sema().BuildCStyleCastExpr(
                 location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
             );
-
             assert(!result.isInvalid());
             return result.getAs< clang::Expr >();
         }
 
         if (vnode_type->isPointerType()) {
-            auto *literal = new (ctx)
-                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
-
+            // Use the target's pointer-integer width so that pointer constants are
+            // not truncated on 64-bit targets.
+            unsigned ptr_bits = ctx.getIntWidth(ctx.getUIntPtrType());
+            auto *literal     = new (ctx) clang::IntegerLiteral(
+                ctx, llvm::APInt(ptr_bits, *vnode.value), ctx.getUIntPtrType(), location
+            );
             auto result = sema().BuildCStyleCastExpr(
                 location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
             );
-
             assert(!result.isInvalid());
             return result.getAs< clang::Expr >();
         }
 
         if (vnode_type->isFloatingType()) {
-            llvm::APFloat value(llvm::APFloat::IEEEsingle(), *vnode.value);
-            return clang::FloatingLiteral::Create(ctx, value, true, vnode_type, location);
+            // Select the APFloat semantics that match the actual target float type
+            // so that the bit pattern stored in vnode.value is interpreted correctly.
+            const llvm::fltSemantics &sem = ctx.getFloatTypeSemantics(vnode_type);
+            unsigned float_bits           = static_cast<unsigned>(ctx.getTypeSize(vnode_type));
+            llvm::APFloat float_value(sem, llvm::APInt(float_bits, *vnode.value));
+            return clang::FloatingLiteral::Create(ctx, float_value, true, vnode_type, location);
         }
 
         return {};
