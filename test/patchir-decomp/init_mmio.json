@@ -9,6 +9,8 @@
 // MLIR: llvm.func @init_mmio
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // LL: define dso_local void @init_mmio(ptr %0, ptr %1, ptr %2)
+// RUN: %gen-call-checks %t.json > %t.call.checks
+// RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 {
   "architecture": "x86",
   "id": "x86:LE:64:default",

@@ -1,0 +1,65 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=FB %s --input-file %t.c
+// FB-NOT: goto
+// FB: return
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:13000000": {
+      "name": "ghidra_struct_irreducible",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:13000000:entry": {
+          "operations": {
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:13000000:0:basic"
+            }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:13000000:0:basic": {
+          "operations": {
+            "to_2": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:13000000:2:basic"
+            }
+          },
+          "ordered_operations": ["to_2"]
+        },
+        "ram:13000000:1:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 1 }]
+            }
+          },
+          "ordered_operations": ["ret"]
+        },
+        "ram:13000000:2:basic": {
+          "operations": {
+            "to_1": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:13000000:1:basic"
+            }
+          },
+          "ordered_operations": ["to_1"]
+        }
+      },
+      "entry_block": "ram:13000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" }
+  }
+}
