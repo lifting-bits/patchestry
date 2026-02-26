@@ -1,11 +1,16 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -use-rellic-transform=false -print-tu -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=SW4 %s --input-file %t.c
+//
+// Tests graceful handling when a switch_case target_block does not exist.
+// Case 1 points to MISSING_BLOCK which is absent; it should be silently
+// skipped while the remaining valid cases are emitted.
+//
 // SW4: switch (
 // SW4: case {{[0-9]+[U]?}}:
 // SW4: case {{[0-9]+[U]?}}:
+// SW4: case {{[0-9]+[U]?}}:
 // SW4-NOT: case 1:
-// SW4-NOT: default:
 // SW4-NOT: goto *
 {
   "architecture": "ARM",
@@ -39,7 +44,8 @@
               "switch_cases": [
                 { "value": 0, "target_block": "ram:18000000:1:basic", "has_exit": false },
                 { "value": 1, "target_block": "MISSING_BLOCK", "has_exit": false },
-                { "value": 2, "target_block": "ram:18000000:2:basic", "has_exit": false }
+                { "value": 2, "target_block": "ram:18000000:2:basic", "has_exit": false },
+                { "value": 3, "target_block": "ram:18000000:4:basic", "has_exit": false }
               ],
               "fallback_block": "ram:18000000:3:basic"
             }
@@ -57,6 +63,12 @@
             "ret2": { "mnemonic": "RETURN", "inputs": [] }
           },
           "ordered_operations": ["ret2"]
+        },
+        "ram:18000000:4:basic": {
+          "operations": {
+            "ret4": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["ret4"]
         },
         "ram:18000000:3:basic": {
           "operations": {

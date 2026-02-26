@@ -196,25 +196,25 @@ namespace patchestry::typing {
             return cir::IntType::get(context, 64, true);
         }
         if (normalized_type == "size_t") {
-            constexpr unsigned size_t_bits = sizeof(size_t) * 8;
-            return cir::IntType::get(context, size_t_bits, false);
+            constexpr unsigned kSizeTBits = sizeof(size_t) * 8;
+            return cir::IntType::get(context, kSizeTBits, false);
         }
         if (normalized_type == "uintptr_t") {
-            constexpr unsigned uintptr_t_bits = sizeof(uintptr_t) * 8;
-            return cir::IntType::get(context, uintptr_t_bits, false);
+            constexpr unsigned kUintptrTBits = sizeof(uintptr_t) * 8;
+            return cir::IntType::get(context, kUintptrTBits, false);
         }
         if (normalized_type == "ptrdiff_t") {
-            constexpr unsigned ptrdiff_t_bits = sizeof(ptrdiff_t) * 8;
-            return cir::IntType::get(context, ptrdiff_t_bits, true);
+            constexpr unsigned kPtrdiffTBits = sizeof(ptrdiff_t) * 8;
+            return cir::IntType::get(context, kPtrdiffTBits, true);
         }
         if (normalized_type == "ssize_t") {
             // ssize_t is typically the same size as ptrdiff_t
-            constexpr unsigned ssize_t_bits = sizeof(ptrdiff_t) * 8;
-            return cir::IntType::get(context, ssize_t_bits, true);
+            constexpr unsigned kSsizeTBits = sizeof(ptrdiff_t) * 8;
+            return cir::IntType::get(context, kSsizeTBits, true);
         }
         if (normalized_type == "intptr_t") {
-            constexpr unsigned intptr_t_bits = sizeof(intptr_t) * 8;
-            return cir::IntType::get(context, intptr_t_bits, true);
+            constexpr unsigned kIntptrTBits = sizeof(intptr_t) * 8;
+            return cir::IntType::get(context, kIntptrTBits, true);
         }
 
         // Floating point types

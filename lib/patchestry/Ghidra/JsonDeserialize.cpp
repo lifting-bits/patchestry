@@ -6,11 +6,12 @@
  */
 
 #include <algorithm>
-#include <llvm/ADT/StringRef.h>
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
+#include <llvm/ADT/StringRef.h>
 #include <llvm/Support/FormatVariadic.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -18,7 +19,6 @@
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
 #include <patchestry/Util/Log.hpp>
-#include <vector>
 
 namespace patchestry::ghidra {
 
@@ -288,27 +288,6 @@ namespace patchestry::ghidra {
         varnode.is_signed = obj.getBoolean("is_signed").value_or(false);
     }
 
-    void JsonParser::deserialize_bitfield(
-        BitFieldType &varnode, const JsonObject &obj, const TypeMap &serialized_types
-    ) {
-        varnode.bit_offset = static_cast< uint32_t >(obj.getInteger("bit_offset").value_or(0));
-        varnode.bit_size   = static_cast< uint32_t >(obj.getInteger("bit_size").value_or(0));
-
-        auto base_key = get_string_if_valid(obj, "base_type");
-        if (base_key) {
-            auto iter = serialized_types.find(*base_key);
-            if (iter != serialized_types.end()) {
-                varnode.SetBaseType(iter->second);
-            }
-        }
-    }
-
-    void JsonParser::deserialize_string(
-        StringType &varnode, const JsonObject &obj, const TypeMap & /*unused*/
-    ) {
-        varnode.charset = get_string(obj, "charset", "US-ASCII");
-    }
-
     // Deserialize array types
     void JsonParser::deserialize_array(
         ArrayType &varnode, const JsonObject *array_obj, const TypeMap &serialized_types
@@ -515,6 +494,33 @@ namespace patchestry::ghidra {
     ) {
         assert(varnode.kind == VarnodeType::Kind::VT_UNDEFINED);
         (void) varnode;
+    }
+
+    void JsonParser::deserialize_bitfield(
+        BitFieldType &varnode, const JsonObject &bf_obj, const TypeMap &type_map
+    ) {
+        assert(varnode.kind == VarnodeType::Kind::VT_BITFIELD);
+        varnode.bit_offset = static_cast< uint32_t >(
+            bf_obj.getInteger("bit_offset").value_or(0));
+        varnode.bit_size = static_cast< uint32_t >(
+            bf_obj.getInteger("bit_size").value_or(0));
+
+        auto base_key = get_string(bf_obj, "base_type");
+        if (!base_key.empty()) {
+            auto it = type_map.find(base_key);
+            if (it != type_map.end()) {
+                varnode.SetBaseType(it->second);
+            } else {
+                LOG(WARNING) << "BitField base type key '" << base_key << "' not found\n";
+            }
+        }
+    }
+
+    void JsonParser::deserialize_string(
+        StringType &varnode, const JsonObject &str_obj, const TypeMap & /*unused*/
+    ) {
+        assert(varnode.kind == VarnodeType::Kind::VT_STRING);
+        varnode.charset = get_string(str_obj, "charset");
     }
 
     // Deserialize operation varnode
