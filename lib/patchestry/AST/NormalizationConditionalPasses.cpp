@@ -1277,6 +1277,274 @@ namespace patchestry::ast {
             }
         };
 
+        // =========================================================================
+        // IfGotoChainMergePass
+        // =========================================================================
+
+        // Merges consecutive chains of the form:
+        //   if (C0) goto COMMON; else goto L1;
+        //   L1: if (C1) goto COMMON; else goto L2;
+        //   L2: if (C2) goto COMMON; else goto FINAL;
+        // into:
+        //   if (C0 || C1 || C2) goto COMMON; else goto FINAL;
+        //
+        // L1, L2 are absorbed when each has exactly one goto reference (the chain
+        // link's else-goto).  This pattern commonly arises from Ghidra's serialization
+        // of sentinel checks (e.g. getopt returning '?' or ':') that all divert to the
+        // same exit label before reaching the main switch.
+
+        class IfGotoChainMergePass final : public ASTPass
+        {
+          public:
+            explicit IfGotoChainMergePass(PipelineState &state) : state(state) {}
+
+            const char *name(void) const override { return "IfGotoChainMergePass"; }
+
+            bool run(clang::ASTContext &ctx, const patchestry::Options &options) override {
+                if (options.verbose) {
+                    LOG(DEBUG) << "Running AST pass: " << name() << "\n";
+                }
+
+                state.if_goto_chains_merged = 0;
+
+                for (auto *decl : ctx.getTranslationUnitDecl()->decls()) {
+                    auto *func = llvm::dyn_cast< clang::FunctionDecl >(decl);
+                    if (func == nullptr || !func->doesThisDeclarationHaveABody()) {
+                        continue;
+                    }
+                    auto *body = llvm::dyn_cast< clang::CompoundStmt >(func->getBody());
+                    if (body == nullptr) {
+                        continue;
+                    }
+
+                    // Count all goto targets once per function before any merging.
+                    std::vector< const clang::LabelDecl * > all_targets;
+                    collectGotoTargets(body, all_targets);
+                    RefCountMap ref_count;
+                    for (auto *lbl : all_targets) {
+                        ++ref_count[lbl];
+                    }
+
+                    auto *new_body = processStmt(ctx, body, ref_count);
+                    if (new_body != body) {
+                        func->setBody(new_body);
+                    }
+                }
+
+                return true;
+            }
+
+          private:
+            PipelineState &state;
+            using RefCountMap = std::unordered_map< const clang::LabelDecl *, unsigned >;
+
+            // Returns true when `stmt` has the shape: if (cond) goto A; else goto B;
+            static bool isIfGoto(const clang::Stmt *stmt) {
+                const auto *is = llvm::dyn_cast_or_null< clang::IfStmt >(stmt);
+                return is != nullptr
+                    && llvm::isa_and_nonnull< clang::GotoStmt >(is->getThen())
+                    && llvm::isa_and_nonnull< clang::GotoStmt >(is->getElse());
+            }
+
+            // Builds a left-associative logical-OR of all expressions in `conds`.
+            static clang::Expr *buildOrChain(
+                clang::ASTContext &ctx,
+                const std::vector< clang::Expr * > &conds,
+                clang::SourceLocation loc
+            ) {
+                clang::Expr *result = ensureRValue(ctx, conds[0]);
+                for (std::size_t k = 1; k < conds.size(); ++k) {
+                    result = clang::BinaryOperator::Create(
+                        ctx, result, ensureRValue(ctx, conds[k]), clang::BO_LOr, ctx.IntTy,
+                        clang::VK_PRValue, clang::OK_Ordinary, loc, clang::FPOptionsOverride()
+                    );
+                }
+                return result;
+            }
+
+            clang::CompoundStmt *processCompound(
+                clang::ASTContext &ctx,
+                clang::CompoundStmt *compound,
+                const RefCountMap &ref_count
+            ) {
+                std::vector< clang::Stmt * > stmts(
+                    compound->body_begin(), compound->body_end()
+                );
+                bool changed = false;
+
+                for (std::size_t i = 0; i < stmts.size(); ++i) {
+                    // The chain head: a bare IfStmt or a LabelStmt wrapping one.
+                    auto *head_if         = llvm::dyn_cast< clang::IfStmt >(stmts[i]);
+                    auto *head_label_stmt = static_cast< clang::LabelStmt * >(nullptr);
+                    if (head_if == nullptr) {
+                        head_label_stmt = llvm::dyn_cast< clang::LabelStmt >(stmts[i]);
+                        if (head_label_stmt != nullptr) {
+                            head_if =
+                                llvm::dyn_cast< clang::IfStmt >(head_label_stmt->getSubStmt());
+                        }
+                    }
+                    if (head_if == nullptr || !isIfGoto(head_if)) {
+                        continue;
+                    }
+
+                    auto *head_then = llvm::cast< clang::GotoStmt >(head_if->getThen());
+                    auto *head_else = llvm::cast< clang::GotoStmt >(head_if->getElse());
+                    const clang::LabelDecl *common_target = head_then->getLabel();
+
+                    // Extend the chain forward as long as the pattern holds.
+                    std::vector< clang::Expr * > conds;
+                    conds.push_back(head_if->getCond());
+                    auto *final_else   = head_else;
+                    std::size_t chain_end = i; // stmts[i+1..chain_end] are absorbed
+
+                    while (chain_end + 1 < stmts.size()) {
+                        auto *next_lbl =
+                            llvm::dyn_cast< clang::LabelStmt >(stmts[chain_end + 1]);
+                        // The current tail's else-goto must point to this label.
+                        if (next_lbl == nullptr
+                            || next_lbl->getDecl() != final_else->getLabel())
+                        {
+                            break;
+                        }
+                        // Only absorb when no other goto references this label.
+                        auto ref_it = ref_count.find(next_lbl->getDecl());
+                        if (ref_it == ref_count.end() || ref_it->second != 1) {
+                            break;
+                        }
+                        // The label's sub-stmt must be another if-goto with same then-target.
+                        auto *link_if =
+                            llvm::dyn_cast_or_null< clang::IfStmt >(next_lbl->getSubStmt());
+                        if (link_if == nullptr || !isIfGoto(link_if)) {
+                            break;
+                        }
+                        auto *link_then = llvm::cast< clang::GotoStmt >(link_if->getThen());
+                        if (link_then->getLabel() != common_target) {
+                            break;
+                        }
+
+                        conds.push_back(link_if->getCond());
+                        final_else = llvm::cast< clang::GotoStmt >(link_if->getElse());
+                        ++chain_end;
+                    }
+
+                    if (conds.size() < 2) {
+                        continue; // nothing to merge
+                    }
+
+                    auto loc = head_if->getIfLoc();
+                    auto *merged_cond = buildOrChain(ctx, conds, loc);
+                    auto *merged_then = new (ctx) clang::GotoStmt(
+                        const_cast< clang::LabelDecl * >(common_target), loc,
+                        head_then->getLabelLoc()
+                    );
+                    auto *merged_else_stmt = new (ctx) clang::GotoStmt(
+                        final_else->getLabel(), loc, final_else->getLabelLoc()
+                    );
+                    auto *merged_if = clang::IfStmt::Create(
+                        ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                        merged_cond, loc, loc, merged_then, loc, merged_else_stmt
+                    );
+
+                    // Preserve any label wrapper on the chain head.
+                    clang::Stmt *replacement = merged_if;
+                    if (head_label_stmt != nullptr) {
+                        replacement = new (ctx) clang::LabelStmt(
+                            head_label_stmt->getIdentLoc(), head_label_stmt->getDecl(), merged_if
+                        );
+                    }
+
+                    // Rebuild stmts: [i] → replacement, [i+1..chain_end] absorbed.
+                    std::vector< clang::Stmt * > new_stmts;
+                    new_stmts.reserve(stmts.size() - (chain_end - i));
+                    for (std::size_t k = 0; k < stmts.size(); ++k) {
+                        if (k == i) {
+                            new_stmts.push_back(replacement);
+                        } else if (k > i && k <= chain_end) {
+                            // absorbed — skip
+                        } else {
+                            new_stmts.push_back(stmts[k]);
+                        }
+                    }
+
+                    state.if_goto_chains_merged += static_cast< unsigned >(chain_end - i);
+                    stmts   = std::move(new_stmts);
+                    changed = true;
+                }
+
+                // Recurse into each statement (using the possibly-updated stmts list).
+                std::vector< clang::Stmt * > final_stmts;
+                final_stmts.reserve(stmts.size());
+                bool nested_changed = false;
+                for (auto *stmt : stmts) {
+                    auto *processed = processStmt(ctx, stmt, ref_count);
+                    final_stmts.push_back(processed);
+                    nested_changed |= (processed != stmt);
+                }
+
+                if (!changed && !nested_changed) {
+                    return compound;
+                }
+                return makeCompound(
+                    ctx, final_stmts, compound->getLBracLoc(), compound->getRBracLoc()
+                );
+            }
+
+            clang::Stmt *processStmt(
+                clang::ASTContext &ctx, clang::Stmt *stmt, const RefCountMap &ref_count
+            ) {
+                if (stmt == nullptr) {
+                    return nullptr;
+                }
+                if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                    return processCompound(ctx, compound, ref_count);
+                }
+                if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                    auto *new_body = processStmt(ctx, ws->getBody(), ref_count);
+                    if (new_body == ws->getBody()) {
+                        return stmt;
+                    }
+                    return clang::WhileStmt::Create(
+                        ctx, nullptr, ws->getCond(), new_body, ws->getWhileLoc(),
+                        ws->getLParenLoc(), ws->getRParenLoc()
+                    );
+                }
+                if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                    auto *new_body = processStmt(ctx, fs->getBody(), ref_count);
+                    if (new_body == fs->getBody()) {
+                        return stmt;
+                    }
+                    return new (ctx) clang::ForStmt(
+                        ctx, fs->getInit(), fs->getCond(), nullptr, fs->getInc(), new_body,
+                        fs->getForLoc(), fs->getLParenLoc(), fs->getRParenLoc()
+                    );
+                }
+                if (auto *is = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                    auto *new_then = processStmt(ctx, is->getThen(), ref_count);
+                    auto *new_else = processStmt(ctx, is->getElse(), ref_count);
+                    if (new_then == is->getThen() && new_else == is->getElse()) {
+                        return stmt;
+                    }
+                    if (new_then == nullptr) {
+                        new_then = new (ctx) clang::NullStmt(is->getIfLoc(), false);
+                    }
+                    return clang::IfStmt::Create(
+                        ctx, is->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                        is->getCond(), is->getLParenLoc(), new_then->getBeginLoc(), new_then,
+                        new_else != nullptr ? new_else->getBeginLoc() : clang::SourceLocation(),
+                        new_else
+                    );
+                }
+                if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                    auto *new_sub = processStmt(ctx, ls->getSubStmt(), ref_count);
+                    if (new_sub == ls->getSubStmt()) {
+                        return stmt;
+                    }
+                    return new (ctx) clang::LabelStmt(ls->getIdentLoc(), ls->getDecl(), new_sub);
+                }
+                return stmt;
+            }
+        };
+
     } // anonymous namespace
 
     namespace detail {
@@ -1287,6 +1555,10 @@ namespace patchestry::ast {
 
         void addIfElseRegionFormationPass(ASTPassManager &pm, PipelineState &state) {
             pm.add_pass(std::make_unique< IfElseRegionFormationPass >(state));
+        }
+
+        void addIfGotoChainMergePass(ASTPassManager &pm, PipelineState &state) {
+            pm.add_pass(std::make_unique< IfGotoChainMergePass >(state));
         }
 
         void addConditionalPasses(ASTPassManager &pm, PipelineState &state) {

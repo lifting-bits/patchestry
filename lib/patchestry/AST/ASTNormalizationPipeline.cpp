@@ -45,7 +45,11 @@ namespace patchestry::ast {
         // wrapped temps.
         detail::addSingleUseTempInliningPass(pass_manager, state);
         detail::addGotoCanonicalizePass(pass_manager, state);
+        detail::addIfElseRegionFormationPass(pass_manager, state);
+        detail::addLoopPasses(pass_manager, state);
 
+        // detail::addConditionalStructurizePass(pass_manager, state);
+#if 0
         // Steps 4–5: loop structuring.
         // WhileLoopStructurizePass must run before ConditionalStructurizePass.
         // RPO places the loop exit block at i+1 (immediately after the while-head),
@@ -68,11 +72,18 @@ namespace patchestry::ast {
         // Steps 12–16: if-else region formation and irreducible-flow handling,
         // then degenerate-loop and condition-recovery passes.
         detail::addIfElseRegionFormationPass(pass_manager, state);
+
+        // Step 12.5: merge chains of if-goto-common / else-goto-next-label into a
+        // single if (C0 || C1 || ...) goto COMMON; else goto FINAL;
+        // Must run after IfElseRegionFormationPass so that loops are already
+        // structured and the sentinel-check chains are exposed at the compound level.
+        detail::addIfGotoChainMergePass(pass_manager, state);
+
         // detail::addIrreducibleFallbackPass(pass_manager, state);
-        // detail::addSwitchGotoInliningPass(pass_manager, state);
+        detail::addSwitchGotoInliningPass(pass_manager, state);
         // detail::addDegenerateLoopUnwrapPass(pass_manager, state);
         // detail::addLoopConditionRecoveryPass(pass_manager, state);
-#if 0
+
         // Steps 17–19: another dead-code / trailing-jump / AST cleanup round.
         detail::addDeadCfgPruningPass(pass_manager, state);
         detail::addTrailingJumpElimPass(pass_manager, state);

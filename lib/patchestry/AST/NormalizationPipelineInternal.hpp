@@ -84,6 +84,7 @@ namespace patchestry::ast::detail {
         unsigned backedge_loops_structured    = 0;
         unsigned single_use_temps_inlined     = 0;
         unsigned switch_cases_inlined         = 0;
+        unsigned if_goto_chains_merged        = 0;
     };
 
     // =========================================================================
@@ -363,6 +364,7 @@ namespace patchestry::ast::detail {
     // ---- Conditional passes (NormalizationConditionalPasses.cpp) ----
     void addConditionalStructurizePass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addIfElseRegionFormationPass(patchestry::ast::ASTPassManager &, PipelineState &);
+    void addIfGotoChainMergePass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addConditionalPasses(patchestry::ast::ASTPassManager &, PipelineState &);
 
     // ---- Loop passes (NormalizationLoopPasses.cpp) ----
