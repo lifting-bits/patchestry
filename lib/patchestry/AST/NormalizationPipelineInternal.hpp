@@ -83,6 +83,7 @@ namespace patchestry::ast::detail {
         unsigned dead_labels_removed          = 0;
         unsigned backedge_loops_structured    = 0;
         unsigned single_use_temps_inlined     = 0;
+        unsigned switch_cases_inlined         = 0;
     };
 
     // =========================================================================
@@ -270,6 +271,10 @@ namespace patchestry::ast::detail {
     // Returns true if `cond` is a compile-time constant with a false (zero) value.
     bool isAlwaysFalse(const clang::Expr *cond);
 
+    // Returns true if `stmt` unconditionally exits the current scope (break/continue/
+    // return/goto, or an if-else where both branches are unconditional terminators).
+    bool isUnconditionalTerminator(const clang::Stmt *stmt);
+
     // =========================================================================
     // CFG infrastructure types and declarations
     // (SimpleBlockDomTree is defined here; builders declared, implemented in
@@ -374,6 +379,7 @@ namespace patchestry::ast::detail {
     // ---- Switch/Irreducible passes (NormalizationSwitchPasses.cpp) ----
     void addSwitchRecoveryPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addIrreducibleFallbackPass(patchestry::ast::ASTPassManager &, PipelineState &);
+    void addSwitchGotoInliningPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addSwitchPasses(patchestry::ast::ASTPassManager &, PipelineState &);
 
     // ---- Cleanup passes (NormalizationCleanupPasses.cpp) ----
