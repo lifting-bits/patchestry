@@ -412,4 +412,30 @@ namespace patchestry::ast::detail {
         return SimpleBlockDomTree{ std::move(idom), std::move(rpo_num), entry_idx, N };
     }
 
+    // =========================================================================
+    // Unconditional-terminator predicate
+    // =========================================================================
+
+    bool isUnconditionalTerminator(const clang::Stmt *stmt) {
+        if (stmt == nullptr) {
+            return false;
+        }
+        if (llvm::isa< clang::BreakStmt >(stmt) || llvm::isa< clang::ContinueStmt >(stmt)
+            || llvm::isa< clang::ReturnStmt >(stmt) || llvm::isa< clang::GotoStmt >(stmt))
+        {
+            return true;
+        }
+        if (const auto *is = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+            return is->getElse() != nullptr && isUnconditionalTerminator(is->getThen())
+                   && isUnconditionalTerminator(is->getElse());
+        }
+        if (const auto *cs = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+            if (cs->body_empty()) {
+                return false;
+            }
+            return isUnconditionalTerminator(*(cs->body_end() - 1));
+        }
+        return false;
+    }
+
 } // namespace patchestry::ast::detail

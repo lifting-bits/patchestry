@@ -32,30 +32,6 @@ namespace patchestry::ast {
         // File-local helpers: dead-code pruning utilities
         // =========================================================================
 
-        static bool isUnconditionalTerminator(const clang::Stmt *stmt) {
-            if (stmt == nullptr) {
-                return false;
-            }
-            if (llvm::isa< clang::BreakStmt >(stmt)
-                || llvm::isa< clang::ContinueStmt >(stmt)
-                || llvm::isa< clang::ReturnStmt >(stmt)
-                || llvm::isa< clang::GotoStmt >(stmt))
-            {
-                return true;
-            }
-            if (const auto *is = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                return is->getElse() != nullptr
-                       && isUnconditionalTerminator(is->getThen())
-                       && isUnconditionalTerminator(is->getElse());
-            }
-            if (const auto *cs = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
-                if (cs->body_empty()) {
-                    return false;
-                }
-                return isUnconditionalTerminator(*(cs->body_end() - 1));
-            }
-            return false;
-        }
 
         static bool areEquivalentTerminators(const clang::Stmt *a, const clang::Stmt *b) {
             if (a == nullptr || b == nullptr) {
@@ -209,6 +185,45 @@ namespace patchestry::ast {
                     new_then->getBeginLoc(), new_then,
                     new_else != nullptr ? new_else->getBeginLoc() : clang::SourceLocation(),
                     new_else
+                );
+            }
+
+            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                unsigned local_pruned = 0;
+                auto *new_body        = pruneStmt(ctx, ws->getBody(), local_pruned);
+                if (local_pruned == 0) {
+                    return ws;
+                }
+                pruned += local_pruned;
+                return clang::WhileStmt::Create(
+                    ctx, nullptr, ws->getCond(), new_body, ws->getWhileLoc(),
+                    ws->getLParenLoc(), ws->getRParenLoc()
+                );
+            }
+
+            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                unsigned local_pruned = 0;
+                auto *new_body        = pruneStmt(ctx, ds->getBody(), local_pruned);
+                if (local_pruned == 0) {
+                    return ds;
+                }
+                pruned += local_pruned;
+                return new (ctx) clang::DoStmt(
+                    new_body, ds->getCond(), ds->getDoLoc(), ds->getWhileLoc(),
+                    ds->getRParenLoc()
+                );
+            }
+
+            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                unsigned local_pruned = 0;
+                auto *new_body        = pruneStmt(ctx, fs->getBody(), local_pruned);
+                if (local_pruned == 0) {
+                    return fs;
+                }
+                pruned += local_pruned;
+                return new (ctx) clang::ForStmt(
+                    ctx, fs->getInit(), fs->getCond(), nullptr, fs->getInc(), new_body,
+                    fs->getForLoc(), fs->getLParenLoc(), fs->getRParenLoc()
                 );
             }
 

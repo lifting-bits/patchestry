@@ -352,19 +352,29 @@ namespace patchestry::ast {
                         }
 
                         std::vector< clang::Stmt * > then_body;
+                        then_body.push_back(then_label_stmt->getSubStmt());
                         {
                             auto tb_begin = static_cast< std::ptrdiff_t >(then_label_idx + 1);
                             auto tb_end   = static_cast< std::ptrdiff_t >(else_label_idx - 1);
                             if (tb_begin < tb_end) {
-                                then_body.assign(
-                                    stmts.begin() + tb_begin, stmts.begin() + tb_end
+                                then_body.insert(
+                                    then_body.end(), stmts.begin() + tb_begin,
+                                    stmts.begin() + tb_end
                                 );
                             }
                         }
-                        std::vector< clang::Stmt * > else_body(
-                            stmts.begin() + static_cast< std::ptrdiff_t >(else_label_idx + 1),
-                            stmts.begin() + static_cast< std::ptrdiff_t >(join_label_idx)
-                        );
+                        std::vector< clang::Stmt * > else_body;
+                        else_body.push_back(else_label_stmt->getSubStmt());
+                        {
+                            auto eb_begin = static_cast< std::ptrdiff_t >(else_label_idx + 1);
+                            auto eb_end   = static_cast< std::ptrdiff_t >(join_label_idx);
+                            if (eb_begin < eb_end) {
+                                else_body.insert(
+                                    else_body.end(), stmts.begin() + eb_begin,
+                                    stmts.begin() + eb_end
+                                );
+                            }
+                        }
                         if (then_body.empty()) {
                             then_body.push_back(
                                 new (ctx) clang::NullStmt(if_stmt->getBeginLoc(), false)
@@ -415,7 +425,7 @@ namespace patchestry::ast {
                         }
                         rewritten.insert(
                             rewritten.end(),
-                            stmts.begin() + static_cast< std::ptrdiff_t >(join_label_idx + 1),
+                            stmts.begin() + static_cast< std::ptrdiff_t >(join_label_idx),
                             stmts.end()
                         );
 

@@ -423,6 +423,121 @@ namespace patchestry::ast {
                                 back_edge_pos = p;
                             }
                         }
+
+                        // --- Inverted pattern ---
+                        // The standard pattern requires then→body (further forward) and
+                        // else→exit (immediately after head). But decompilers sometimes emit
+                        // the exit condition in the then-arm and the body in the else-arm:
+                        //   if (exit_cond) goto Lexit; else goto Lbody;
+                        // In RPO Lbody appears immediately after the IfStmt (lexit_idx) and
+                        // Lexit is further forward (lbody_idx), so the back-edge search above
+                        // starts at the wrong position.  When no back-edge is found with the
+                        // standard interpretation, try the inverted one.
+                        if (back_edge_pos == stmts.size()) {
+                            // In the inverted pattern:
+                            //   inv_lbody_idx = lexit_idx   (else_goto is actually the body)
+                            //   inv_lexit_idx = lbody_idx   (then_goto is actually the exit)
+                            std::size_t inv_lbody_idx = lexit_idx;
+                            std::size_t inv_lexit_idx = lbody_idx;
+
+                            // Pre-IfStmt stmts [i+1 .. inv_lbody_idx-2] must not contain
+                            // back-edges (spurious check for the inverted case).
+                            bool inv_spurious = false;
+                            for (std::size_t p = i + 1; p < inv_lbody_idx; ++p) {
+                                auto *gs =
+                                    llvm::dyn_cast_or_null< clang::GotoStmt >(stmts[p]);
+                                if (gs != nullptr
+                                    && gs->getLabel() == head_label->getDecl())
+                                {
+                                    inv_spurious = true;
+                                    break;
+                                }
+                            }
+                            if (inv_spurious) {
+                                continue;
+                            }
+
+                            // Back-edges must lie in [inv_lbody_idx .. inv_lexit_idx - 1].
+                            std::size_t inv_back_edge_pos = stmts.size();
+                            for (std::size_t p = inv_lbody_idx; p < inv_lexit_idx; ++p) {
+                                auto *gs =
+                                    llvm::dyn_cast_or_null< clang::GotoStmt >(stmts[p]);
+                                if (gs != nullptr
+                                    && gs->getLabel() == head_label->getDecl())
+                                {
+                                    inv_back_edge_pos = p;
+                                }
+                            }
+                            if (inv_back_edge_pos == stmts.size()) {
+                                continue;  // no back-edge in either pattern
+                            }
+
+                            // Build while(true) { pre_stmts; if(exit_cond) break; body }
+                            // The pre-IfStmt assignments [i+1 .. head_if_pos-1] run each
+                            // iteration before the exit test, so they go into the loop body.
+                            std::vector< clang::Stmt * > inv_body_stmts;
+                            for (std::size_t p = i + 1; p < head_if_pos; ++p) {
+                                inv_body_stmts.push_back(stmts[p]);
+                            }
+
+                            // Convert the inverted IfStmt to "if (exit_cond) break;".
+                            auto *break_stmt =
+                                new (ctx) clang::BreakStmt(head_if->getIfLoc());
+                            auto *inv_if_break = clang::IfStmt::Create(
+                                ctx, head_if->getIfLoc(),
+                                clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                                head_if->getCond(), head_if->getLParenLoc(),
+                                break_stmt->getBeginLoc(), break_stmt,
+                                clang::SourceLocation(), nullptr
+                            );
+                            inv_body_stmts.push_back(inv_if_break);
+
+                            for (std::size_t p = inv_lbody_idx; p < inv_back_edge_pos; ++p) {
+                                inv_body_stmts.push_back(stmts[p]);
+                            }
+                            if (inv_body_stmts.empty()) {
+                                inv_body_stmts.push_back(
+                                    new (ctx) clang::NullStmt(head_if->getIfLoc(), false)
+                                );
+                            }
+
+                            auto *inv_body_compound = makeCompound(
+                                ctx, inv_body_stmts, head_label->getBeginLoc(),
+                                head_label->getEndLoc()
+                            );
+                            auto *inv_while = clang::WhileStmt::Create(
+                                ctx, nullptr,
+                                makeBoolTrue(ctx, head_if->getIfLoc()),
+                                inv_body_compound, head_if->getIfLoc(),
+                                head_if->getIfLoc(), head_if->getEndLoc()
+                            );
+                            auto *inv_new_head = new (ctx) clang::LabelStmt(
+                                head_label->getIdentLoc(), head_label->getDecl(), inv_while
+                            );
+
+                            std::vector< clang::Stmt * > inv_rewritten;
+                            inv_rewritten.reserve(stmts.size());
+                            inv_rewritten.insert(
+                                inv_rewritten.end(), stmts.begin(),
+                                stmts.begin() + static_cast< std::ptrdiff_t >(i)
+                            );
+                            inv_rewritten.push_back(inv_new_head);
+                            inv_rewritten.insert(
+                                inv_rewritten.end(),
+                                stmts.begin()
+                                    + static_cast< std::ptrdiff_t >(inv_back_edge_pos + 1),
+                                stmts.end()
+                            );
+
+                            stmts = std::move(inv_rewritten);
+                            body  = makeCompound(
+                                ctx, stmts, body->getLBracLoc(), body->getRBracLoc()
+                            );
+                            func->setBody(body);
+                            ++local_structurized;
+                            break;
+                        }
+
                         if (back_edge_pos == stmts.size()) {
                             continue;
                         }
@@ -871,6 +986,70 @@ namespace patchestry::ast {
           private:
             PipelineState &state;
 
+            // Walk `stmt` replacing direct (non-nested) BreakStmt nodes with
+            // NullStmt. Stops recursing into nested loops/switches so that
+            // their break statements are left untouched.
+            static clang::Stmt *replaceBreaksWithNull(
+                clang::ASTContext &ctx, clang::Stmt *stmt
+            ) {
+                if (stmt == nullptr) {
+                    return nullptr;
+                }
+                if (llvm::isa< clang::BreakStmt >(stmt)) {
+                    return new (ctx) clang::NullStmt(stmt->getBeginLoc(), false);
+                }
+                if (llvm::isa< clang::WhileStmt >(stmt) || llvm::isa< clang::ForStmt >(stmt)
+                    || llvm::isa< clang::DoStmt >(stmt)
+                    || llvm::isa< clang::SwitchStmt >(stmt))
+                {
+                    return stmt;
+                }
+                if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                    bool changed = false;
+                    std::vector< clang::Stmt * > result;
+                    result.reserve(cs->size());
+                    for (auto *s : cs->body()) {
+                        auto *ns = replaceBreaksWithNull(ctx, s);
+                        if (ns != s) {
+                            changed = true;
+                        }
+                        result.push_back(ns != nullptr ? ns : s);
+                    }
+                    if (!changed) {
+                        return cs;
+                    }
+                    return makeCompound(ctx, result, cs->getLBracLoc(), cs->getRBracLoc());
+                }
+                if (auto *is = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                    auto *new_then = replaceBreaksWithNull(ctx, is->getThen());
+                    auto *new_else = replaceBreaksWithNull(ctx, is->getElse());
+                    if (new_then == is->getThen() && new_else == is->getElse()) {
+                        return is;
+                    }
+                    if (new_then == nullptr) {
+                        new_then = new (ctx) clang::NullStmt(is->getIfLoc(), false);
+                    }
+                    return clang::IfStmt::Create(
+                        ctx, is->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                        const_cast< clang::Expr * >(is->getCond()), is->getLParenLoc(),
+                        new_then->getBeginLoc(), new_then,
+                        new_else != nullptr ? new_else->getBeginLoc() : clang::SourceLocation(),
+                        new_else
+                    );
+                }
+                if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                    auto *new_sub = replaceBreaksWithNull(ctx, ls->getSubStmt());
+                    if (new_sub == ls->getSubStmt()) {
+                        return ls;
+                    }
+                    if (new_sub == nullptr) {
+                        new_sub = new (ctx) clang::NullStmt(ls->getBeginLoc(), false);
+                    }
+                    return new (ctx) clang::LabelStmt(ls->getIdentLoc(), ls->getDecl(), new_sub);
+                }
+                return stmt;
+            }
+
             static bool hasContinue(const clang::Stmt *stmt) {
                 if (stmt == nullptr) {
                     return false;
@@ -892,6 +1071,31 @@ namespace patchestry::ast {
                 return false;
             }
 
+            // Returns true only when every execution path through `stmt` ends
+            // with a BreakStmt or ReturnStmt.  GotoStmt is intentionally excluded
+            // because a goto pointing back to the loop header is a loop-back, not
+            // an exit, and treating it as a terminator would cause the degenerate
+            // while-elimination to fire incorrectly on structured loops.
+            static bool isBreakOrReturnTerminator(const clang::Stmt *stmt) {
+                if (stmt == nullptr) {
+                    return false;
+                }
+                if (llvm::isa< clang::BreakStmt >(stmt) || llvm::isa< clang::ReturnStmt >(stmt)) {
+                    return true;
+                }
+                if (const auto *is = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                    return is->getElse() != nullptr && isBreakOrReturnTerminator(is->getThen())
+                           && isBreakOrReturnTerminator(is->getElse());
+                }
+                if (const auto *cs = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                    if (cs->body_empty()) {
+                        return false;
+                    }
+                    return isBreakOrReturnTerminator(*(cs->body_end() - 1));
+                }
+                return false;
+            }
+
             static clang::Stmt *processStmt(
                 clang::ASTContext &ctx, clang::Stmt *stmt, unsigned &eliminated, bool &changed
             ) {
@@ -904,6 +1108,15 @@ namespace patchestry::ast {
                     auto *new_body = processStmt(ctx, ws->getBody(), eliminated, inner);
                     if (inner) {
                         changed = true;
+                    }
+
+                    auto *effective_body = new_body != nullptr ? new_body : ws->getBody();
+                    if (isAlwaysTrue(ws->getCond()) && !hasContinue(ws->getBody())
+                        && isBreakOrReturnTerminator(effective_body))
+                    {
+                        ++eliminated;
+                        changed = true;
+                        return replaceBreaksWithNull(ctx, effective_body);
                     }
 
                     if (isAlwaysFalse(ws->getCond()) && !hasContinue(ws->getBody())) {

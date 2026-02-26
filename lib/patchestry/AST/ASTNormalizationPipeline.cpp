@@ -44,6 +44,7 @@ namespace patchestry::ast {
         // so that loop condition recognizers see bare comparison expressions, not
         // wrapped temps.
         detail::addSingleUseTempInliningPass(pass_manager, state);
+        detail::addGotoCanonicalizePass(pass_manager, state);
 
         // Steps 4–5: loop structuring.
         // WhileLoopStructurizePass must run before ConditionalStructurizePass.
@@ -67,10 +68,11 @@ namespace patchestry::ast {
         // Steps 12–16: if-else region formation and irreducible-flow handling,
         // then degenerate-loop and condition-recovery passes.
         detail::addIfElseRegionFormationPass(pass_manager, state);
-        detail::addIrreducibleFallbackPass(pass_manager, state);
-        detail::addDegenerateLoopUnwrapPass(pass_manager, state);
-        detail::addLoopConditionRecoveryPass(pass_manager, state);
-
+        // detail::addIrreducibleFallbackPass(pass_manager, state);
+        // detail::addSwitchGotoInliningPass(pass_manager, state);
+        // detail::addDegenerateLoopUnwrapPass(pass_manager, state);
+        // detail::addLoopConditionRecoveryPass(pass_manager, state);
+#if 0
         // Steps 17–19: another dead-code / trailing-jump / AST cleanup round.
         detail::addDeadCfgPruningPass(pass_manager, state);
         detail::addTrailingJumpElimPass(pass_manager, state);
@@ -79,13 +81,18 @@ namespace patchestry::ast {
 
         // Steps 20–28: ast_improvements branch passes.
         detail::addDegenerateWhileElimPass(pass_manager, state);      // 20
+        detail::addDeadCfgPruningPass(
+            pass_manager, state
+        ); // 20.5 – prune nulls from break replacement
+        detail::addAstCleanupPass(
+            pass_manager, state
+        ); // 20.6 – strip empty null-stmt if-branches
         detail::addBackedgeLoopStructurizePass(pass_manager, state);  // 21
         detail::addCfgExtractPass(pass_manager, state);               // 22
 
         // Step 22.5: inline temps again just before NaturalLoopRecoveryPass so
         // that the for-loop recognizer sees bare comparisons in loop conditions.
         detail::addSingleUseTempInliningPass(pass_manager, state);    // 22.5
-
         detail::addNaturalLoopRecoveryPass(pass_manager, state);      // 23
         detail::addAstCleanupPass(pass_manager, state);               // 24
         detail::addDeadLabelElimPass(pass_manager, state);            // 24.5
@@ -98,7 +105,7 @@ namespace patchestry::ast {
 
         // Final verification: report any remaining gotos.
         detail::addNoGotoVerificationPass(pass_manager, state);
-
+#endif
         return pass_manager.run(ctx, options);
     }
 
