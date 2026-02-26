@@ -581,6 +581,15 @@ namespace patchestry::ast {
             return {};
         }
 
+        // If the target is the immediately next block in the RPO emission order,
+        // control falls through naturally — no goto required.
+        if (!function_builder().current_next_block_key.empty()
+            && *op.target_block == function_builder().current_next_block_key)
+        {
+            auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+            return { new (ctx) clang::NullStmt(op_loc, false), false };
+        }
+
         if (!function_builder().labels_declaration.contains(*op.target_block)) {
             LOG(ERROR) << "Target block does not have a label declaration. key: " << op.key
                        << "\n";

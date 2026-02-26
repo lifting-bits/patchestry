@@ -5,10 +5,13 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <sstream>
+#include <stack>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Attr.h>
@@ -130,6 +133,86 @@ namespace patchestry::ast {
                 return idx_a < idx_b;
             }
         };
+
+        /**
+         * @brief Compute RPO block order from the P-Code CFG embedded in the function.
+         *
+         * Performs an iterative post-order DFS from the entry block, then reverses to
+         * obtain RPO.  Successor order (taken before not_taken) mirrors the ordering
+         * used by BasicBlockReorderPass so that the two orderings are identical.
+         * Unreachable blocks are appended after the RPO sequence in deterministic
+         * (address-sorted) order.
+         */
+        std::vector< std::string > compute_rpo(const Function &function) {
+            // Build per-block successor lists from branch operations.
+            std::unordered_map< std::string, std::vector< std::string > > succs;
+            for (const auto &[key, blk] : function.basic_blocks) {
+                for (const auto &op_key : blk.ordered_operations) {
+                    if (!blk.operations.contains(op_key)) {
+                        continue;
+                    }
+                    const auto &op = blk.operations.at(op_key);
+                    // taken_block before not_taken_block — mirrors BasicBlockReorderPass DFS
+                    // order so the emitted block sequence is identical to what that pass
+                    // would produce.
+                    if (op.taken_block) {
+                        succs[key].push_back(*op.taken_block);
+                    }
+                    if (op.not_taken_block) {
+                        succs[key].push_back(*op.not_taken_block);
+                    }
+                    if (op.target_block) {
+                        succs[key].push_back(*op.target_block);
+                    }
+                    for (const auto &s : op.successor_blocks) {
+                        succs[key].push_back(s);
+                    }
+                }
+            }
+
+            // Iterative post-order DFS, then reverse to get RPO.
+            std::vector< std::string > post_order;
+            std::unordered_set< std::string > visited;
+            std::stack< std::pair< std::string, bool > > stk;
+            if (!function.entry_block.empty()
+                && function.basic_blocks.contains(function.entry_block))
+            {
+                stk.push({function.entry_block, false});
+            }
+            while (!stk.empty()) {
+                auto [key, expanded] = stk.top();
+                stk.pop();
+                if (expanded) {
+                    post_order.push_back(key);
+                    continue;
+                }
+                if (visited.count(key)) {
+                    continue;
+                }
+                visited.insert(key);
+                stk.push({key, true});
+                for (const auto &s : succs[key]) {
+                    if (!visited.count(s)) {
+                        stk.push({s, false});
+                    }
+                }
+            }
+            std::reverse(post_order.begin(), post_order.end());
+
+            // Append unreachable blocks in deterministic (address-sorted) order.
+            std::vector< std::string > unreachable;
+            for (const auto &[key, block] : function.basic_blocks) {
+                if (!visited.count(key)) {
+                    unreachable.push_back(key);
+                }
+            }
+            std::sort(unreachable.begin(), unreachable.end(), BlockKeyComparator{});
+            for (auto &key : unreachable) {
+                post_order.push_back(std::move(key));
+            }
+
+            return post_order;
+        }
 
     } // namespace
 
@@ -475,37 +558,45 @@ namespace patchestry::ast {
         std::vector< clang::Stmt * > stmt_vec;
         create_labels(ctx, func_decl);
 
-        // Create entry block first
+        // Compute RPO block order from the P-Code CFG.  Emitting in RPO order
+        // matches what BasicBlockReorderPass would produce, making that pass a
+        // near-no-op and letting GotoCanonicalizePass see clean input earlier.
+        const auto rpo = compute_rpo(function.get());
+
+        // Emit the entry block first (no label).  Set current_next_block_key so
+        // that create_branch can skip the goto when it targets the immediately
+        // following block (RPO[1]).
         if (function.get().basic_blocks.contains(function.get().entry_block)) {
+            current_next_block_key = (rpo.size() > 1) ? rpo[1] : std::string{};
             const auto &entry_block =
                 function.get().basic_blocks.at(function.get().entry_block);
             auto entry_stmts = create_basic_block(ctx, entry_block);
             stmt_vec.insert(stmt_vec.end(), entry_stmts.begin(), entry_stmts.end());
         }
 
-        // Use std::map (sorted by key) so block insertion order is deterministic across
-        // runs. std::unordered_map iteration order is non-deterministic, which caused
-        // different fallthrough edges in buildSuccessorMap and therefore different RPO
-        // orderings and different final ASTs on successive runs with the same input.
-        std::map< std::string, std::vector< clang::Stmt * >, BlockKeyComparator > bb_stmts;
-        for (const auto &[block_key, block] : function.get().basic_blocks) {
-            LOG(INFO) << "Processing basic block with key " << block_key << "\n";
-            const auto &bb = function.get().basic_blocks.at(block_key);
+        // Emit non-entry blocks in RPO order with labels.  RPO[0] is the entry
+        // block so the loop starts at index 1.
+        for (size_t i = 1; i < rpo.size(); ++i) {
+            const auto &key = rpo[i];
+            if (!function.get().basic_blocks.contains(key)) {
+                continue;
+            }
+            const auto &bb = function.get().basic_blocks.at(key);
             if (bb.is_entry_block) {
                 continue;
             }
 
+            LOG(INFO) << "Processing basic block with key " << key << "\n";
+
+            // Expose the next block in RPO order so create_branch can elide
+            // gotos to the immediately following block.
+            current_next_block_key = (i + 1 < rpo.size()) ? rpo[i + 1] : std::string{};
+
             auto block_stmts = create_basic_block(ctx, bb);
-            bb_stmts.emplace(block_key, block_stmts);
-        }
-
-        for (auto &[key, block_stmts] : bb_stmts) {
             if (!block_stmts.empty()) {
-                auto loc = sourceLocation(ctx.getSourceManager(), key);
-                auto *label_stmt =
-                    new (ctx) clang::LabelStmt(loc, labels_declaration.at(key), block_stmts[0]);
-
-                // replace first stmt of block with label stmts
+                auto loc         = sourceLocation(ctx.getSourceManager(), key);
+                auto *label_stmt = new (ctx)
+                    clang::LabelStmt(loc, labels_declaration.at(key), block_stmts[0]);
                 block_stmts[0] = label_stmt;
                 stmt_vec.insert(stmt_vec.end(), block_stmts.begin(), block_stmts.end());
             }
