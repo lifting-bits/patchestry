@@ -181,6 +181,12 @@ namespace patchestry::ast {
                     for (const auto &s : op.successor_blocks) {
                         succs[key].push_back(s);
                     }
+		    for (const auto &sc : op.switch_cases) {
+                        succs[key].push_back(sc.target_block);
+                    }
+                    if (op.fallback_block.has_value()) {
+                        succs[key].push_back(*op.fallback_block);
+                    }
                 }
             }
 
