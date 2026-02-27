@@ -200,6 +200,10 @@ public class PcodeSerializer {
 		// function being serialized.
 		private HighFunction currentFunction;
 		private PcodeBlockBasic currentBlock;
+
+		// Jump table index for the current function, keyed by switch address.
+		// Built once when currentFunction is set and cleared when it is reset.
+		private Map<Address, JumpTable> jumpTableIndex;
 		
 		// We invent an entry block for each `HighFunction` to be serialized.
 		// The operations within this entry block are custom `CALLOTHER`s, that
@@ -303,6 +307,7 @@ public class PcodeSerializer {
 			this.typesToSerialize = new ArrayList<>();
 			this.currentFunction = null;
 			this.currentBlock = null;
+			this.jumpTableIndex = null;
 			this.nextSeqNum = 0;
 			this.entryBlock = new ArrayList<>();
 			this.missingLocalsMap = new HashMap<>();
@@ -2048,24 +2053,6 @@ public class PcodeSerializer {
 		return v;
 	}
 
-	// Scan the HighFunction's P-Code for INT_SUB(discriminant, constant) — the
-	// constant is the minimum case value.  Returns 0 when no subtraction is found
-	// (table indexed from 0).
-	private long recoverMinCaseValue(Varnode discriminant) {
-		Iterator<PcodeOpAST> ops = currentFunction.getPcodeOps();
-		while (ops.hasNext()) {
-			PcodeOp op = ops.next();
-			if (op.getOpcode() == PcodeOp.INT_SUB) {
-				Varnode lhs = op.getInput(0);
-				Varnode rhs = op.getInput(1);
-				if (lhs.equals(discriminant) && rhs.isConstant()) {
-					return rhs.getOffset();
-				}
-			}
-		}
-		return 0L;
-	}
-
 	// Find the default block for a BRANCHIND.  The bounds-check block is the
 	// BRANCHIND's predecessor that has exactly two exits: one into the BRANCHIND
 	// block and one to the default/error block.
@@ -2138,32 +2125,6 @@ public class PcodeSerializer {
 		return null;
 	}
 
-	// Walk an address expression (INT_ADD of a constant and a non-constant)
-	// to extract the constant sub-expression (jump table base address).
-	private Long extractConstantFromAddrExpr(Varnode v) {
-		if (v == null) {
-			return null;
-		}
-		if (v.isConstant()) {
-			return v.getOffset();
-		}
-		PcodeOp def = v.getDef();
-		if (def == null) {
-			return null;
-		}
-		if (def.getOpcode() == PcodeOp.INT_ADD) {
-			Varnode in0 = def.getInput(0);
-			Varnode in1 = def.getInput(1);
-			if (in0.isConstant() && !in1.isConstant()) {
-				return in0.getOffset();
-			}
-			if (in1.isConstant() && !in0.isConstant()) {
-				return in1.getOffset();
-			}
-		}
-		return null;
-	}
-
 	// Tier 0 (most reliable): Ghidra's switch analysis labels each case-target
 	// block with a symbol like "caseD_HEX" (possibly in a namespace such as
 	// "switchD_ADDR::caseD_HEX").  Read the primary symbol at the block start
@@ -2216,20 +2177,13 @@ public class PcodeSerializer {
 			writer.name("fallback_block").value(defaultBlock);
 		}
 
-		JumpTable jt = buildJumpTableIndex().get(pcodeOp.getSeqnum().getTarget());
+		JumpTable jt = jumpTableIndex.get(pcodeOp.getSeqnum().getTarget());
 		Varnode discriminant = (jt != null) ? traceSwitchDiscriminant(pcodeOp.getInput(0)) : null;
 		if (jt != null && discriminant != null) {
 			serializeSwitchCases(pcodeOp, discriminant, jt, n);
 		}
 	}
 
-	private Map<Address, JumpTable> buildJumpTableIndex() {
-		Map<Address, JumpTable> index = new HashMap<>();
-		for (JumpTable jt : currentFunction.getJumpTables()) {
-			index.put(jt.getSwitchAddress(), jt);
-		}
-		return index;
-	}
 
 	// Emits "switch_input" and "switch_cases" JSON fields for a resolved BRANCHIND.
 	// Case values are recovered using a 3-tier strategy:
@@ -2733,6 +2687,10 @@ public class PcodeSerializer {
 					String entryLabel = null;
 					PcodeBlockBasic firstPcodeBasicBlock = null;
 					currentFunction = highFunction;
+					jumpTableIndex = new HashMap<>();
+					for (JumpTable jt : currentFunction.getJumpTables()) {
+						jumpTableIndex.put(jt.getSwitchAddress(), jt);
+					}
 
 					writer.name("basic_blocks").beginObject();
 					for (PcodeBlockBasic basicBlock : highFunction.getBasicBlocks()) {
@@ -2754,6 +2712,7 @@ public class PcodeSerializer {
 					
 					writer.endObject();  // End of `basic_blocks`.
 					currentFunction = null;
+					jumpTableIndex = null;
 					
 					if (entryLabel != null) {
 						writer.name("entry_block").value(entryLabel);

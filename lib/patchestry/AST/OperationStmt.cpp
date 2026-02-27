@@ -805,7 +805,7 @@ namespace patchestry::ast {
             if (!ctx.hasSameUnqualifiedType(disc_expr->getType(), disc_type)) {
                 disc_expr = make_cast(ctx, disc_expr, disc_type, loc);
                 if (!disc_expr) {
-                    return nullptr;
+                    return { nullptr, false };
                 }
             }
 
