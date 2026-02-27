@@ -740,7 +740,13 @@ namespace patchestry::ast {
                 return {};
             }
             if (!disc->getType()->isIntegerType()) {
-                disc = make_cast(ctx, disc, ctx.IntTy, loc);
+                auto *cast_disc = make_cast(ctx, disc, ctx.IntTy, loc);
+                if (cast_disc == nullptr) {
+                    LOG(ERROR) << "BRANCHIND: failed to cast switch discriminant to int. key: "
+                               << op.key << "\n";
+                    return {};
+                }
+                disc = cast_disc;
             }
 
             auto *switch_stmt =
