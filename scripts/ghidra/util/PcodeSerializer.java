@@ -2189,10 +2189,6 @@ public class PcodeSerializer {
 		}
 	}
 
-	// Tier 2: trace `branchIndInput` to a LOAD(table_base + idx*stride), read
-	// `n` pointer-sized entries from binary memory, and match each to a
-	// successor block start address.  Returns a map from block label to case
-	// value, or null if the pattern is not found or the read fails.
 	// Serialize an indirect branch (BRANCHIND). This records the computed
 	// target expression and, when Ghidra has resolved the jump table, the
 	// set of possible successor blocks, the default block, and the original
