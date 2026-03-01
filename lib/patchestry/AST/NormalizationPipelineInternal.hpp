@@ -80,10 +80,9 @@ namespace patchestry::ast::detail {
         unsigned natural_loops_recovered      = 0;
         unsigned for_loops_upgraded           = 0;
         unsigned cleanup_tails_extracted      = 0;
-        unsigned dead_labels_removed          = 0;
         unsigned backedge_loops_structured    = 0;
-        unsigned single_use_temps_inlined     = 0;
         unsigned switch_cases_inlined         = 0;
+        unsigned loop_exit_gotos_inlined      = 0;
     };
 
     // =========================================================================
@@ -358,7 +357,6 @@ namespace patchestry::ast::detail {
     void addCfgPasses(patchestry::ast::ASTPassManager &, PipelineState &);
     void addCfgExtractPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addGotoCanonicalizePass(patchestry::ast::ASTPassManager &, PipelineState &);
-    void addDeadLabelElimPass(patchestry::ast::ASTPassManager &, PipelineState &);
 
     // ---- Conditional passes (NormalizationConditionalPasses.cpp) ----
     void addConditionalStructurizePass(patchestry::ast::ASTPassManager &, PipelineState &);
@@ -380,14 +378,14 @@ namespace patchestry::ast::detail {
     void addSwitchRecoveryPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addIrreducibleFallbackPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addSwitchGotoInliningPass(patchestry::ast::ASTPassManager &, PipelineState &);
+    void
+    addHoistControlEquivalentStmtsIntoLoopPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addSwitchPasses(patchestry::ast::ASTPassManager &, PipelineState &);
 
     // ---- Cleanup passes (NormalizationCleanupPasses.cpp) ----
     void addAstCleanupPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addDeadCfgPruningPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addTrailingJumpElimPass(patchestry::ast::ASTPassManager &, PipelineState &);
-    void addSingleUseTempInliningPass(patchestry::ast::ASTPassManager &, PipelineState &);
-    void addCleanupTailExtractionPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addNoGotoVerificationPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addCleanupPasses(patchestry::ast::ASTPassManager &, PipelineState &);
 

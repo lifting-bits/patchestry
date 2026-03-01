@@ -50,396 +50,13 @@ namespace patchestry::ast {
                     }
 
                     auto *body = llvm::dyn_cast< clang::CompoundStmt >(func->getBody());
-                    if (body == nullptr || body->size() < 3U) {
+                    if (body == nullptr) {
                         continue;
                     }
 
-                    std::vector< clang::Stmt * > stmts(body->body_begin(), body->body_end());
-                    auto label_index = topLevelLabelIndex(body);
-                    bool changed     = false;
-
-                    for (std::size_t i = 0; i < stmts.size(); ++i) {
-                        auto *if_stmt = llvm::dyn_cast< clang::IfStmt >(stmts[i]);
-                        auto *if_label_wrapper = static_cast< clang::LabelStmt * >(nullptr);
-                        if (if_stmt == nullptr) {
-                            if (auto *lbl = llvm::dyn_cast< clang::LabelStmt >(stmts[i])) {
-                                if_stmt = llvm::dyn_cast< clang::IfStmt >(lbl->getSubStmt());
-                                if (if_stmt != nullptr) {
-                                    if_label_wrapper = lbl;
-                                }
-                            }
-                        }
-                        if (if_stmt == nullptr) {
-                            continue;
-                        }
-
-                        auto *then_goto = llvm::dyn_cast_or_null< clang::GotoStmt >(
-                            if_stmt->getThen()
-                        );
-                        auto *else_goto = llvm::dyn_cast_or_null< clang::GotoStmt >(
-                            if_stmt->getElse()
-                        );
-                        if (then_goto == nullptr || else_goto == nullptr) {
-                            // Single-sided if-goto: if (c) goto L_skip; [fallthrough_body] L_skip:
-                            // Transform to: if (!c) { <fallthrough_body> }
-                            if (then_goto != nullptr && else_goto == nullptr
-                                && label_index.contains(then_goto->getLabel()))
-                            {
-                                std::size_t skip_label_idx =
-                                    label_index.at(then_goto->getLabel());
-                                if (skip_label_idx > i + 1 && skip_label_idx < stmts.size()
-                                    && !containsLabelInRange(stmts, i + 1, skip_label_idx - 1))
-                                {
-                                    std::vector< clang::Stmt * > fallthrough_body(
-                                        stmts.begin() + static_cast< std::ptrdiff_t >(i + 1),
-                                        stmts.begin()
-                                            + static_cast< std::ptrdiff_t >(skip_label_idx)
-                                    );
-                                    auto loc = if_stmt->getIfLoc();
-                                    auto *negated_cond = clang::UnaryOperator::Create(
-                                        ctx,
-                                        ensureRValue(
-                                            ctx,
-                                            const_cast< clang::Expr * >(if_stmt->getCond())
-                                        ),
-                                        clang::UO_LNot, ctx.IntTy, clang::VK_PRValue,
-                                        clang::OK_Ordinary, loc, false, clang::FPOptionsOverride()
-                                    );
-                                    auto *new_body = makeCompound(ctx, fallthrough_body, loc, loc);
-                                    auto *new_if   = clang::IfStmt::Create(
-                                        ctx, loc, clang::IfStatementKind::Ordinary, nullptr,
-                                        nullptr, negated_cond, if_stmt->getLParenLoc(),
-                                        new_body->getBeginLoc(), new_body,
-                                        clang::SourceLocation(), nullptr
-                                    );
-                                    std::vector< clang::Stmt * > rewritten;
-                                    rewritten.reserve(stmts.size());
-                                    rewritten.insert(
-                                        rewritten.end(), stmts.begin(),
-                                        stmts.begin() + static_cast< std::ptrdiff_t >(i)
-                                    );
-                                    rewritten.push_back(new_if);
-                                    rewritten.insert(
-                                        rewritten.end(),
-                                        stmts.begin()
-                                            + static_cast< std::ptrdiff_t >(skip_label_idx),
-                                        stmts.end()
-                                    );
-                                    stmts = std::move(rewritten);
-                                    body  = makeCompound(
-                                        ctx, stmts, body->getLBracLoc(), body->getRBracLoc()
-                                    );
-                                    func->setBody(body);
-                                    label_index = topLevelLabelIndex(body);
-                                    changed     = true;
-                                    ++state.conditional_structurized;
-                                    i = 0;
-                                }
-                            }
-                            continue;
-                        }
-
-                        if (!label_index.contains(then_goto->getLabel())
-                            || !label_index.contains(else_goto->getLabel()))
-                        {
-                            continue;
-                        }
-
-                        std::size_t then_label_idx = label_index.at(then_goto->getLabel());
-                        std::size_t else_label_idx = label_index.at(else_goto->getLabel());
-
-                        bool negated_condition = false;
-                        if (then_label_idx > i && else_label_idx > i
-                            && then_label_idx > else_label_idx)
-                        {
-                            std::swap(then_label_idx, else_label_idx);
-                            negated_condition = true;
-                        }
-                        if (then_label_idx <= i || else_label_idx <= i
-                            || then_label_idx >= else_label_idx)
-                        {
-                            continue;
-                        }
-
-                        auto *then_label_stmt =
-                            llvm::dyn_cast< clang::LabelStmt >(stmts[then_label_idx]);
-                        auto *else_label_stmt =
-                            llvm::dyn_cast< clang::LabelStmt >(stmts[else_label_idx]);
-                        if (then_label_stmt == nullptr || else_label_stmt == nullptr) {
-                            continue;
-                        }
-
-                        auto *then_term_goto =
-                            llvm::dyn_cast< clang::GotoStmt >(stmts[else_label_idx - 1]);
-                        if (then_term_goto == nullptr
-                            && else_label_idx - 1 == then_label_idx)
-                        {
-                            then_term_goto = llvm::dyn_cast< clang::GotoStmt >(
-                                then_label_stmt->getSubStmt()
-                            );
-                        }
-
-                        // Then-body falls through to else-label (no explicit goto to join)
-                        if (then_term_goto == nullptr) {
-                            if (!containsLabelInRange(
-                                    stmts, then_label_idx + 1, else_label_idx - 1
-                                ))
-                            {
-                                std::vector< clang::Stmt * > then_body;
-                                then_body.push_back(then_label_stmt->getSubStmt());
-                                for (std::size_t j = then_label_idx + 1; j < else_label_idx;
-                                     ++j)
-                                {
-                                    then_body.push_back(stmts[j]);
-                                }
-                                auto loc          = if_stmt->getIfLoc();
-                                clang::Expr *cond = if_stmt->getCond();
-                                if (negated_condition) {
-                                    cond = clang::UnaryOperator::Create(
-                                        ctx, ensureRValue(ctx, cond), clang::UO_LNot, ctx.IntTy,
-                                        clang::VK_PRValue, clang::OK_Ordinary, loc, false,
-                                        clang::FPOptionsOverride()
-                                    );
-                                }
-                                auto *new_then = makeCompound(
-                                    ctx, then_body, then_label_stmt->getBeginLoc(),
-                                    then_label_stmt->getEndLoc()
-                                );
-                                auto *new_if = clang::IfStmt::Create(
-                                    ctx, loc, clang::IfStatementKind::Ordinary, nullptr,
-                                    nullptr, cond, if_stmt->getLParenLoc(),
-                                    new_then->getBeginLoc(), new_then, clang::SourceLocation(),
-                                    nullptr
-                                );
-                                std::vector< clang::Stmt * > rewritten;
-                                rewritten.reserve(stmts.size());
-                                if (if_label_wrapper != nullptr) {
-                                    if_label_wrapper->setSubStmt(new_if);
-                                    rewritten.insert(
-                                        rewritten.end(), stmts.begin(),
-                                        stmts.begin() + static_cast< std::ptrdiff_t >(i + 1)
-                                    );
-                                } else {
-                                    rewritten.insert(
-                                        rewritten.end(), stmts.begin(),
-                                        stmts.begin() + static_cast< std::ptrdiff_t >(i)
-                                    );
-                                    rewritten.push_back(new_if);
-                                }
-                                rewritten.insert(
-                                    rewritten.end(),
-                                    stmts.begin()
-                                        + static_cast< std::ptrdiff_t >(else_label_idx),
-                                    stmts.end()
-                                );
-                                stmts = std::move(rewritten);
-                                body  = makeCompound(
-                                    ctx, stmts, body->getLBracLoc(), body->getRBracLoc()
-                                );
-                                func->setBody(body);
-                                label_index = topLevelLabelIndex(body);
-                                changed     = true;
-                                ++state.conditional_structurized;
-                                i = 0;
-                            }
-                            continue;
-                        }
-
-                        if (!label_index.contains(then_term_goto->getLabel())) {
-                            continue;
-                        }
-
-                        std::size_t join_label_idx =
-                            label_index.at(then_term_goto->getLabel());
-                        if (join_label_idx < else_label_idx
-                            || join_label_idx >= stmts.size())
-                        {
-                            continue;
-                        }
-
-                        // Special case: join_label == else_label → single-sided if
-                        if (join_label_idx == else_label_idx) {
-                            if (containsLabelInRange(
-                                    stmts, then_label_idx + 1, else_label_idx - 2
-                                ))
-                            {
-                                continue;
-                            }
-                            std::vector< clang::Stmt * > then_only_body;
-                            if (else_label_idx - 1 != then_label_idx) {
-                                then_only_body.push_back(then_label_stmt->getSubStmt());
-                            }
-                            {
-                                auto tb_begin =
-                                    static_cast< std::ptrdiff_t >(then_label_idx + 1);
-                                auto tb_end =
-                                    static_cast< std::ptrdiff_t >(else_label_idx - 1);
-                                if (tb_begin < tb_end) {
-                                    then_only_body.insert(
-                                        then_only_body.end(), stmts.begin() + tb_begin,
-                                        stmts.begin() + tb_end
-                                    );
-                                }
-                            }
-                            if (then_only_body.empty()) {
-                                then_only_body.push_back(
-                                    new (ctx) clang::NullStmt(if_stmt->getBeginLoc(), false)
-                                );
-                            }
-                            clang::Expr *single_cond = if_stmt->getCond();
-                            if (negated_condition) {
-                                single_cond = clang::UnaryOperator::Create(
-                                    ctx, ensureRValue(ctx, single_cond), clang::UO_LNot,
-                                    ctx.IntTy, clang::VK_PRValue, clang::OK_Ordinary,
-                                    if_stmt->getIfLoc(), false, clang::FPOptionsOverride()
-                                );
-                            }
-                            auto *single_then = makeCompound(
-                                ctx, then_only_body, then_label_stmt->getBeginLoc(),
-                                then_label_stmt->getEndLoc()
-                            );
-                            auto *single_if = clang::IfStmt::Create(
-                                ctx, if_stmt->getIfLoc(), clang::IfStatementKind::Ordinary,
-                                nullptr, nullptr, single_cond, if_stmt->getLParenLoc(),
-                                single_then->getBeginLoc(), single_then,
-                                clang::SourceLocation(), nullptr
-                            );
-                            std::vector< clang::Stmt * > rewritten;
-                            rewritten.reserve(stmts.size());
-                            if (if_label_wrapper != nullptr) {
-                                if_label_wrapper->setSubStmt(single_if);
-                                rewritten.insert(
-                                    rewritten.end(), stmts.begin(),
-                                    stmts.begin() + static_cast< std::ptrdiff_t >(i + 1)
-                                );
-                            } else {
-                                rewritten.insert(
-                                    rewritten.end(), stmts.begin(),
-                                    stmts.begin() + static_cast< std::ptrdiff_t >(i)
-                                );
-                                rewritten.push_back(single_if);
-                            }
-                            rewritten.insert(
-                                rewritten.end(),
-                                stmts.begin()
-                                    + static_cast< std::ptrdiff_t >(join_label_idx),
-                                stmts.end()
-                            );
-                            stmts = std::move(rewritten);
-                            body  = makeCompound(
-                                ctx, stmts, body->getLBracLoc(), body->getRBracLoc()
-                            );
-                            func->setBody(body);
-                            label_index = topLevelLabelIndex(body);
-                            changed     = true;
-                            ++state.conditional_structurized;
-                            i = 0;
-                            continue;
-                        }
-
-                        auto *join_label_stmt =
-                            llvm::dyn_cast< clang::LabelStmt >(stmts[join_label_idx]);
-                        if (join_label_stmt == nullptr) {
-                            continue;
-                        }
-
-                        if (containsLabelInRange(stmts, then_label_idx + 1, else_label_idx - 2)
-                            || containsLabelInRange(
-                                stmts, else_label_idx + 1, join_label_idx - 1
-                            ))
-                        {
-                            continue;
-                        }
-
-                        std::vector< clang::Stmt * > then_body;
-                        then_body.push_back(then_label_stmt->getSubStmt());
-                        {
-                            auto tb_begin = static_cast< std::ptrdiff_t >(then_label_idx + 1);
-                            auto tb_end   = static_cast< std::ptrdiff_t >(else_label_idx - 1);
-                            if (tb_begin < tb_end) {
-                                then_body.insert(
-                                    then_body.end(), stmts.begin() + tb_begin,
-                                    stmts.begin() + tb_end
-                                );
-                            }
-                        }
-                        std::vector< clang::Stmt * > else_body;
-                        else_body.push_back(else_label_stmt->getSubStmt());
-                        {
-                            auto eb_begin = static_cast< std::ptrdiff_t >(else_label_idx + 1);
-                            auto eb_end   = static_cast< std::ptrdiff_t >(join_label_idx);
-                            if (eb_begin < eb_end) {
-                                else_body.insert(
-                                    else_body.end(), stmts.begin() + eb_begin,
-                                    stmts.begin() + eb_end
-                                );
-                            }
-                        }
-                        if (then_body.empty()) {
-                            then_body.push_back(
-                                new (ctx) clang::NullStmt(if_stmt->getBeginLoc(), false)
-                            );
-                        }
-                        if (else_body.empty()) {
-                            else_body.push_back(
-                                new (ctx) clang::NullStmt(if_stmt->getBeginLoc(), false)
-                            );
-                        }
-
-                        auto *new_then = makeCompound(
-                            ctx, then_body, then_label_stmt->getBeginLoc(),
-                            then_label_stmt->getEndLoc()
-                        );
-                        auto *new_else = makeCompound(
-                            ctx, else_body, else_label_stmt->getBeginLoc(),
-                            else_label_stmt->getEndLoc()
-                        );
-                        clang::Expr *two_sided_cond = if_stmt->getCond();
-                        if (negated_condition) {
-                            two_sided_cond = clang::UnaryOperator::Create(
-                                ctx, ensureRValue(ctx, two_sided_cond), clang::UO_LNot,
-                                ctx.IntTy, clang::VK_PRValue, clang::OK_Ordinary,
-                                if_stmt->getIfLoc(), false, clang::FPOptionsOverride()
-                            );
-                        }
-                        auto *new_if = clang::IfStmt::Create(
-                            ctx, if_stmt->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr,
-                            nullptr, two_sided_cond, if_stmt->getLParenLoc(),
-                            new_then->getBeginLoc(), new_then, new_else->getBeginLoc(), new_else
-                        );
-
-                        std::vector< clang::Stmt * > rewritten;
-                        rewritten.reserve(stmts.size());
-                        if (if_label_wrapper != nullptr) {
-                            if_label_wrapper->setSubStmt(new_if);
-                            rewritten.insert(
-                                rewritten.end(), stmts.begin(),
-                                stmts.begin() + static_cast< std::ptrdiff_t >(i + 1)
-                            );
-                        } else {
-                            rewritten.insert(
-                                rewritten.end(), stmts.begin(),
-                                stmts.begin() + static_cast< std::ptrdiff_t >(i)
-                            );
-                            rewritten.push_back(new_if);
-                        }
-                        rewritten.insert(
-                            rewritten.end(),
-                            stmts.begin() + static_cast< std::ptrdiff_t >(join_label_idx),
-                            stmts.end()
-                        );
-
-                        stmts = std::move(rewritten);
-                        body  = makeCompound(ctx, stmts, body->getLBracLoc(), body->getRBracLoc());
-                        func->setBody(body);
-                        label_index = topLevelLabelIndex(body);
-                        changed     = true;
-                        ++state.conditional_structurized;
-                        i = 0;
-                    }
-
-                    if (changed) {
-                        (void) changed;
+                    auto *rewritten = processStmt(ctx, body);
+                    if (rewritten != body) {
+                        func->setBody(rewritten);
                     }
                 }
 
@@ -449,6 +66,494 @@ namespace patchestry::ast {
 
           private:
             PipelineState &state;
+
+            clang::CompoundStmt *
+            processCompound(clang::ASTContext &ctx, clang::CompoundStmt *compound) {
+                if (compound->size() < 3U) {
+                    return compound;
+                }
+
+                auto *body = compound;
+                std::vector< clang::Stmt * > stmts(body->body_begin(), body->body_end());
+                auto label_index = topLevelLabelIndex(body);
+
+                for (std::size_t i = 0; i < stmts.size(); ++i) {
+                    auto *if_stmt = llvm::dyn_cast< clang::IfStmt >(stmts[i]);
+                    auto *if_label_wrapper = static_cast< clang::LabelStmt * >(nullptr);
+                    if (if_stmt == nullptr) {
+                        if (auto *lbl = llvm::dyn_cast< clang::LabelStmt >(stmts[i])) {
+                            if_stmt = llvm::dyn_cast< clang::IfStmt >(lbl->getSubStmt());
+                            if (if_stmt != nullptr) {
+                                if_label_wrapper = lbl;
+                            }
+                        }
+                    }
+                    if (if_stmt == nullptr) {
+                        continue;
+                    }
+
+                    auto *then_goto = llvm::dyn_cast_or_null< clang::GotoStmt >(
+                        if_stmt->getThen()
+                    );
+                    auto *else_goto = llvm::dyn_cast_or_null< clang::GotoStmt >(
+                        if_stmt->getElse()
+                    );
+                    if (then_goto == nullptr || else_goto == nullptr) {
+                        // Single-sided if-goto: if (c) goto L_skip; [fallthrough_body] L_skip:
+                        // Transform to: if (!c) { <fallthrough_body> }
+                        if (then_goto != nullptr && else_goto == nullptr
+                            && label_index.contains(then_goto->getLabel()))
+                        {
+                            std::size_t skip_label_idx =
+                                label_index.at(then_goto->getLabel());
+                            // Skip if the next statement is also a plain "if (c) goto L;"
+                            // to the same label — IfElseRegionFormationPass will merge
+                            // them into a single combined condition first.
+                            auto *next_if_csp = (i + 1U < stmts.size())
+                                ? llvm::dyn_cast< clang::IfStmt >(stmts[i + 1U])
+                                : nullptr;
+                            bool next_is_same_target = false;
+                            if (next_if_csp != nullptr) {
+                                auto *nt = llvm::dyn_cast_or_null< clang::GotoStmt >(
+                                    next_if_csp->getThen()
+                                );
+                                next_is_same_target =
+                                    nt != nullptr && nt->getLabel() == then_goto->getLabel();
+                            }
+                            if (skip_label_idx > i + 1 && skip_label_idx < stmts.size()
+                                && !containsLabelInRange(stmts, i + 1, skip_label_idx - 1)
+                                && !next_is_same_target)
+                            {
+                                std::vector< clang::Stmt * > fallthrough_body(
+                                    stmts.begin() + static_cast< std::ptrdiff_t >(i + 1),
+                                    stmts.begin()
+                                        + static_cast< std::ptrdiff_t >(skip_label_idx)
+                                );
+                                auto loc = if_stmt->getIfLoc();
+                                auto *negated_cond = clang::UnaryOperator::Create(
+                                    ctx,
+                                    ensureRValue(
+                                        ctx,
+                                        const_cast< clang::Expr * >(if_stmt->getCond())
+                                    ),
+                                    clang::UO_LNot, ctx.IntTy, clang::VK_PRValue,
+                                    clang::OK_Ordinary, loc, false, clang::FPOptionsOverride()
+                                );
+                                auto *new_body = makeCompound(ctx, fallthrough_body, loc, loc);
+                                auto *new_if   = clang::IfStmt::Create(
+                                    ctx, loc, clang::IfStatementKind::Ordinary, nullptr,
+                                    nullptr, negated_cond, if_stmt->getLParenLoc(),
+                                    new_body->getBeginLoc(), new_body,
+                                    clang::SourceLocation(), nullptr
+                                );
+                                std::vector< clang::Stmt * > rewritten;
+                                rewritten.reserve(stmts.size());
+                                rewritten.insert(
+                                    rewritten.end(), stmts.begin(),
+                                    stmts.begin() + static_cast< std::ptrdiff_t >(i)
+                                );
+                                rewritten.push_back(new_if);
+                                rewritten.insert(
+                                    rewritten.end(),
+                                    stmts.begin()
+                                        + static_cast< std::ptrdiff_t >(skip_label_idx),
+                                    stmts.end()
+                                );
+                                stmts = std::move(rewritten);
+                                body  = makeCompound(
+                                    ctx, stmts, body->getLBracLoc(), body->getRBracLoc()
+                                );
+                                label_index = topLevelLabelIndex(body);
+                                ++state.conditional_structurized;
+                                i = 0;
+                            }
+                        }
+                        continue;
+                    }
+
+                    if (!label_index.contains(then_goto->getLabel())
+                        || !label_index.contains(else_goto->getLabel()))
+                    {
+                        continue;
+                    }
+
+                    std::size_t then_label_idx = label_index.at(then_goto->getLabel());
+                    std::size_t else_label_idx = label_index.at(else_goto->getLabel());
+
+                    bool negated_condition = false;
+                    if (then_label_idx > i && else_label_idx > i
+                        && then_label_idx > else_label_idx)
+                    {
+                        std::swap(then_label_idx, else_label_idx);
+                        negated_condition = true;
+                    }
+                    if (then_label_idx <= i || else_label_idx <= i
+                        || then_label_idx >= else_label_idx)
+                    {
+                        continue;
+                    }
+
+                    auto *then_label_stmt =
+                        llvm::dyn_cast< clang::LabelStmt >(stmts[then_label_idx]);
+                    auto *else_label_stmt =
+                        llvm::dyn_cast< clang::LabelStmt >(stmts[else_label_idx]);
+                    if (then_label_stmt == nullptr || else_label_stmt == nullptr) {
+                        continue;
+                    }
+
+                    auto *then_term_goto =
+                        llvm::dyn_cast< clang::GotoStmt >(stmts[else_label_idx - 1]);
+                    if (then_term_goto == nullptr
+                        && else_label_idx - 1 == then_label_idx)
+                    {
+                        then_term_goto = llvm::dyn_cast< clang::GotoStmt >(
+                            then_label_stmt->getSubStmt()
+                        );
+                    }
+
+                    // Then-body falls through to else-label (no explicit goto to join)
+                    if (then_term_goto == nullptr) {
+                        if (!containsLabelInRange(
+                                stmts, then_label_idx + 1, else_label_idx - 1
+                            ))
+                        {
+                            std::vector< clang::Stmt * > then_body;
+                            then_body.push_back(then_label_stmt->getSubStmt());
+                            for (std::size_t j = then_label_idx + 1; j < else_label_idx;
+                                 ++j)
+                            {
+                                then_body.push_back(stmts[j]);
+                            }
+                            auto loc          = if_stmt->getIfLoc();
+                            clang::Expr *cond = if_stmt->getCond();
+                            if (negated_condition) {
+                                cond = clang::UnaryOperator::Create(
+                                    ctx, ensureRValue(ctx, cond), clang::UO_LNot, ctx.IntTy,
+                                    clang::VK_PRValue, clang::OK_Ordinary, loc, false,
+                                    clang::FPOptionsOverride()
+                                );
+                            }
+                            auto *new_then = makeCompound(
+                                ctx, then_body, then_label_stmt->getBeginLoc(),
+                                then_label_stmt->getEndLoc()
+                            );
+                            auto *new_if = clang::IfStmt::Create(
+                                ctx, loc, clang::IfStatementKind::Ordinary, nullptr,
+                                nullptr, cond, if_stmt->getLParenLoc(),
+                                new_then->getBeginLoc(), new_then, clang::SourceLocation(),
+                                nullptr
+                            );
+                            std::vector< clang::Stmt * > rewritten;
+                            rewritten.reserve(stmts.size());
+                            if (if_label_wrapper != nullptr) {
+                                if_label_wrapper->setSubStmt(new_if);
+                                rewritten.insert(
+                                    rewritten.end(), stmts.begin(),
+                                    stmts.begin() + static_cast< std::ptrdiff_t >(i + 1)
+                                );
+                            } else {
+                                rewritten.insert(
+                                    rewritten.end(), stmts.begin(),
+                                    stmts.begin() + static_cast< std::ptrdiff_t >(i)
+                                );
+                                rewritten.push_back(new_if);
+                            }
+                            rewritten.insert(
+                                rewritten.end(),
+                                stmts.begin()
+                                    + static_cast< std::ptrdiff_t >(else_label_idx),
+                                stmts.end()
+                            );
+                            stmts = std::move(rewritten);
+                            body  = makeCompound(
+                                ctx, stmts, body->getLBracLoc(), body->getRBracLoc()
+                            );
+                            label_index = topLevelLabelIndex(body);
+                            ++state.conditional_structurized;
+                            i = 0;
+                        }
+                        continue;
+                    }
+
+                    if (!label_index.contains(then_term_goto->getLabel())) {
+                        continue;
+                    }
+
+                    std::size_t join_label_idx =
+                        label_index.at(then_term_goto->getLabel());
+                    if (join_label_idx < else_label_idx
+                        || join_label_idx >= stmts.size())
+                    {
+                        continue;
+                    }
+
+                    // Special case: join_label == else_label → single-sided if
+                    if (join_label_idx == else_label_idx) {
+                        if (containsLabelInRange(
+                                stmts, then_label_idx + 1, else_label_idx - 2
+                            ))
+                        {
+                            continue;
+                        }
+                        std::vector< clang::Stmt * > then_only_body;
+                        if (else_label_idx - 1 != then_label_idx) {
+                            then_only_body.push_back(then_label_stmt->getSubStmt());
+                        }
+                        {
+                            auto tb_begin =
+                                static_cast< std::ptrdiff_t >(then_label_idx + 1);
+                            auto tb_end =
+                                static_cast< std::ptrdiff_t >(else_label_idx - 1);
+                            if (tb_begin < tb_end) {
+                                then_only_body.insert(
+                                    then_only_body.end(), stmts.begin() + tb_begin,
+                                    stmts.begin() + tb_end
+                                );
+                            }
+                        }
+                        if (then_only_body.empty()) {
+                            then_only_body.push_back(
+                                new (ctx) clang::NullStmt(if_stmt->getBeginLoc(), false)
+                            );
+                        }
+                        clang::Expr *single_cond = if_stmt->getCond();
+                        if (negated_condition) {
+                            single_cond = clang::UnaryOperator::Create(
+                                ctx, ensureRValue(ctx, single_cond), clang::UO_LNot,
+                                ctx.IntTy, clang::VK_PRValue, clang::OK_Ordinary,
+                                if_stmt->getIfLoc(), false, clang::FPOptionsOverride()
+                            );
+                        }
+                        auto *single_then = makeCompound(
+                            ctx, then_only_body, then_label_stmt->getBeginLoc(),
+                            then_label_stmt->getEndLoc()
+                        );
+                        auto *single_if = clang::IfStmt::Create(
+                            ctx, if_stmt->getIfLoc(), clang::IfStatementKind::Ordinary,
+                            nullptr, nullptr, single_cond, if_stmt->getLParenLoc(),
+                            single_then->getBeginLoc(), single_then,
+                            clang::SourceLocation(), nullptr
+                        );
+                        std::vector< clang::Stmt * > rewritten;
+                        rewritten.reserve(stmts.size());
+                        if (if_label_wrapper != nullptr) {
+                            if_label_wrapper->setSubStmt(single_if);
+                            rewritten.insert(
+                                rewritten.end(), stmts.begin(),
+                                stmts.begin() + static_cast< std::ptrdiff_t >(i + 1)
+                            );
+                        } else {
+                            rewritten.insert(
+                                rewritten.end(), stmts.begin(),
+                                stmts.begin() + static_cast< std::ptrdiff_t >(i)
+                            );
+                            rewritten.push_back(single_if);
+                        }
+                        rewritten.insert(
+                            rewritten.end(),
+                            stmts.begin()
+                                + static_cast< std::ptrdiff_t >(join_label_idx),
+                            stmts.end()
+                        );
+                        stmts = std::move(rewritten);
+                        body  = makeCompound(
+                            ctx, stmts, body->getLBracLoc(), body->getRBracLoc()
+                        );
+                        label_index = topLevelLabelIndex(body);
+                        ++state.conditional_structurized;
+                        i = 0;
+                        continue;
+                    }
+
+                    auto *join_label_stmt =
+                        llvm::dyn_cast< clang::LabelStmt >(stmts[join_label_idx]);
+                    if (join_label_stmt == nullptr) {
+                        continue;
+                    }
+
+                    if (containsLabelInRange(stmts, then_label_idx + 1, else_label_idx - 2)
+                        || containsLabelInRange(
+                            stmts, else_label_idx + 1, join_label_idx - 1
+                        ))
+                    {
+                        continue;
+                    }
+
+                    std::vector< clang::Stmt * > then_body;
+                    then_body.push_back(then_label_stmt->getSubStmt());
+                    {
+                        auto tb_begin = static_cast< std::ptrdiff_t >(then_label_idx + 1);
+                        auto tb_end   = static_cast< std::ptrdiff_t >(else_label_idx - 1);
+                        if (tb_begin < tb_end) {
+                            then_body.insert(
+                                then_body.end(), stmts.begin() + tb_begin,
+                                stmts.begin() + tb_end
+                            );
+                        }
+                    }
+                    std::vector< clang::Stmt * > else_body;
+                    else_body.push_back(else_label_stmt->getSubStmt());
+                    {
+                        auto eb_begin = static_cast< std::ptrdiff_t >(else_label_idx + 1);
+                        auto eb_end   = static_cast< std::ptrdiff_t >(join_label_idx);
+                        if (eb_begin < eb_end) {
+                            else_body.insert(
+                                else_body.end(), stmts.begin() + eb_begin,
+                                stmts.begin() + eb_end
+                            );
+                        }
+                    }
+                    if (then_body.empty()) {
+                        then_body.push_back(
+                            new (ctx) clang::NullStmt(if_stmt->getBeginLoc(), false)
+                        );
+                    }
+                    if (else_body.empty()) {
+                        else_body.push_back(
+                            new (ctx) clang::NullStmt(if_stmt->getBeginLoc(), false)
+                        );
+                    }
+
+                    auto *new_then = makeCompound(
+                        ctx, then_body, then_label_stmt->getBeginLoc(),
+                        then_label_stmt->getEndLoc()
+                    );
+                    auto *new_else = makeCompound(
+                        ctx, else_body, else_label_stmt->getBeginLoc(),
+                        else_label_stmt->getEndLoc()
+                    );
+                    clang::Expr *two_sided_cond = if_stmt->getCond();
+                    if (negated_condition) {
+                        two_sided_cond = clang::UnaryOperator::Create(
+                            ctx, ensureRValue(ctx, two_sided_cond), clang::UO_LNot,
+                            ctx.IntTy, clang::VK_PRValue, clang::OK_Ordinary,
+                            if_stmt->getIfLoc(), false, clang::FPOptionsOverride()
+                        );
+                    }
+                    auto *new_if = clang::IfStmt::Create(
+                        ctx, if_stmt->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr,
+                        nullptr, two_sided_cond, if_stmt->getLParenLoc(),
+                        new_then->getBeginLoc(), new_then, new_else->getBeginLoc(), new_else
+                    );
+
+                    std::vector< clang::Stmt * > rewritten;
+                    rewritten.reserve(stmts.size());
+                    if (if_label_wrapper != nullptr) {
+                        if_label_wrapper->setSubStmt(new_if);
+                        rewritten.insert(
+                            rewritten.end(), stmts.begin(),
+                            stmts.begin() + static_cast< std::ptrdiff_t >(i + 1)
+                        );
+                    } else {
+                        rewritten.insert(
+                            rewritten.end(), stmts.begin(),
+                            stmts.begin() + static_cast< std::ptrdiff_t >(i)
+                        );
+                        rewritten.push_back(new_if);
+                    }
+                    rewritten.insert(
+                        rewritten.end(),
+                        stmts.begin() + static_cast< std::ptrdiff_t >(join_label_idx),
+                        stmts.end()
+                    );
+
+                    stmts = std::move(rewritten);
+                    body  = makeCompound(ctx, stmts, body->getLBracLoc(), body->getRBracLoc());
+                    label_index = topLevelLabelIndex(body);
+                    ++state.conditional_structurized;
+                    i = 0;
+                }
+
+                return body;
+            }
+
+            clang::Stmt *processStmt(clang::ASTContext &ctx, clang::Stmt *stmt) {
+                if (stmt == nullptr) {
+                    return nullptr;
+                }
+
+                if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                    bool changed    = false;
+                    auto *rewritten = processCompound(ctx, cs);
+                    changed         = (rewritten != cs);
+                    cs              = rewritten;
+                    std::vector< clang::Stmt * > children;
+                    children.reserve(cs->size());
+                    for (auto *child : cs->body()) {
+                        auto *new_child = processStmt(ctx, child);
+                        children.push_back(new_child != nullptr ? new_child : child);
+                        changed = changed || (new_child != nullptr && new_child != child);
+                    }
+                    if (!changed) {
+                        return cs;
+                    }
+                    return makeCompound(ctx, children, cs->getLBracLoc(), cs->getRBracLoc());
+                }
+
+                if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                    auto *new_body = processStmt(ctx, ws->getBody());
+                    if (new_body == ws->getBody() || new_body == nullptr) {
+                        return ws;
+                    }
+                    return clang::WhileStmt::Create(
+                        ctx, nullptr, ws->getCond(), new_body, ws->getWhileLoc(),
+                        ws->getLParenLoc(), ws->getRParenLoc()
+                    );
+                }
+
+                if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                    auto *new_body = processStmt(ctx, ds->getBody());
+                    if (new_body == ds->getBody() || new_body == nullptr) {
+                        return ds;
+                    }
+                    return new (ctx) clang::DoStmt(
+                        new_body, ds->getCond(), ds->getDoLoc(), ds->getWhileLoc(),
+                        ds->getRParenLoc()
+                    );
+                }
+
+                if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                    auto *new_body = processStmt(ctx, fs->getBody());
+                    if (new_body == fs->getBody() || new_body == nullptr) {
+                        return fs;
+                    }
+                    return new (ctx) clang::ForStmt(
+                        ctx, fs->getInit(), fs->getCond(), nullptr, fs->getInc(), new_body,
+                        fs->getForLoc(), fs->getLParenLoc(), fs->getRParenLoc()
+                    );
+                }
+
+                if (auto *is = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                    auto *new_then = processStmt(ctx, is->getThen());
+                    auto *new_else = is->getElse() != nullptr
+                        ? processStmt(ctx, is->getElse())
+                        : nullptr;
+                    if ((new_then == nullptr || new_then == is->getThen())
+                        && (new_else == nullptr || new_else == is->getElse()))
+                    {
+                        return is;
+                    }
+                    if (new_then == nullptr) {
+                        new_then = is->getThen();
+                    }
+                    return clang::IfStmt::Create(
+                        ctx, is->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                        is->getCond(), is->getLParenLoc(), new_then->getBeginLoc(), new_then,
+                        new_else != nullptr ? new_else->getBeginLoc() : clang::SourceLocation(),
+                        new_else
+                    );
+                }
+
+                if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                    auto *new_sub = processStmt(ctx, ls->getSubStmt());
+                    if (new_sub == nullptr || new_sub == ls->getSubStmt()) {
+                        return ls;
+                    }
+                    return new (ctx) clang::LabelStmt(ls->getIdentLoc(), ls->getDecl(), new_sub);
+                }
+
+                return stmt;
+            }
         };
 
         // =========================================================================
@@ -1042,6 +1147,172 @@ namespace patchestry::ast {
                 return true;
             }
 
+            // Merge a run of consecutive "if (cN) goto L;" statements (all pointing to
+            // the same label, no else arm, no label wrapper) into a single
+            // "if (c0 || c1 || ... || cN) goto L;". The last if in the run may also
+            // carry an "else goto M;" arm, which is preserved on the merged if.
+            //
+            // Unlike detectIfHead, this does NOT require the target label to exist in
+            // the local label_index — the goto target may be outside the current
+            // compound (e.g. jumping out of a loop), which is the common case for
+            // multi-guard patterns in decompiled P-Code.
+            //
+            // Returns true and mutates stmts on success.
+            static bool mergeConsecutiveSameTargetIfs(
+                clang::ASTContext &ctx, std::vector< clang::Stmt * > &stmts, std::size_t i
+            ) {
+                // stmts[i] must be a plain "if (c) goto L;" with no else arm
+                auto *if0 = llvm::dyn_cast< clang::IfStmt >(stmts[i]);
+                if (if0 == nullptr) {
+                    return false;
+                }
+                auto *then_goto0 =
+                    llvm::dyn_cast_or_null< clang::GotoStmt >(if0->getThen());
+                if (then_goto0 == nullptr || if0->getElse() != nullptr) {
+                    return false;
+                }
+                const clang::LabelDecl *target = then_goto0->getLabel();
+
+                // Collect subsequent ifs with the same then-target.
+                // Interior ifs must be plain (no else); the last one may have an
+                // "else goto M;" (two-sided), which terminates the run.
+                std::vector< clang::IfStmt * > ifs;
+                ifs.push_back(if0);
+                const clang::GotoStmt *terminator_else_goto = nullptr;
+                for (std::size_t j = i + 1U; j < stmts.size(); ++j) {
+                    if (llvm::isa< clang::LabelStmt >(stmts[j])) {
+                        break; // label is an external entry point — cannot merge across it
+                    }
+                    auto *next_if = llvm::dyn_cast< clang::IfStmt >(stmts[j]);
+                    if (next_if == nullptr) {
+                        break; // non-if, non-label: stop
+                    }
+                    auto *next_then =
+                        llvm::dyn_cast_or_null< clang::GotoStmt >(next_if->getThen());
+                    if (next_then == nullptr || next_then->getLabel() != target) {
+                        break; // different then-target
+                    }
+                    auto *next_else =
+                        llvm::dyn_cast_or_null< clang::GotoStmt >(next_if->getElse());
+                    if (next_if->getElse() != nullptr && next_else == nullptr) {
+                        break; // non-goto else arm — cannot absorb safely
+                    }
+                    ifs.push_back(next_if);
+                    if (next_else != nullptr) {
+                        terminator_else_goto = next_else;
+                        break; // two-sided if terminates the run
+                    }
+                }
+                if (ifs.size() < 2U) {
+                    return false;
+                }
+
+                // Build combined condition: c0 || c1 || ... || c_{N-1}
+                const auto loc        = if0->getIfLoc();
+                clang::Expr *combined = ensureRValue(ctx, if0->getCond());
+                for (std::size_t k = 1U; k < ifs.size(); ++k) {
+                    auto *rhs = ensureRValue(ctx, ifs[k]->getCond());
+                    combined  = clang::BinaryOperator::Create(
+                        ctx, combined, rhs, clang::BO_LOr, ctx.IntTy, clang::VK_PRValue,
+                        clang::OK_Ordinary, loc, clang::FPOptionsOverride()
+                    );
+                }
+
+                // Build merged then-goto and optional else-goto
+                auto *merged_goto = new (ctx) clang::GotoStmt(
+                    const_cast< clang::LabelDecl * >(target), loc, loc
+                );
+                clang::Stmt *else_stmt = nullptr;
+                if (terminator_else_goto != nullptr) {
+                    else_stmt = new (ctx) clang::GotoStmt(
+                        const_cast< clang::LabelDecl * >(terminator_else_goto->getLabel()),
+                        loc, loc
+                    );
+                }
+                auto *merged_if = clang::IfStmt::Create(
+                    ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr, combined,
+                    if0->getLParenLoc(), merged_goto->getBeginLoc(), merged_goto,
+                    else_stmt != nullptr ? else_stmt->getBeginLoc() : clang::SourceLocation(),
+                    else_stmt
+                );
+
+                // Replace stmts[i .. i+ifs.size()-1] with the single merged if
+                std::vector< clang::Stmt * > rewritten;
+                rewritten.reserve(stmts.size() - ifs.size() + 1U);
+                appendRange(rewritten, stmts, 0U, i - 1U); // safe at i==0: appendRange guard
+                rewritten.push_back(merged_if);
+                appendRange(rewritten, stmts, i + ifs.size(), stmts.size() - 1U);
+                stmts = std::move(rewritten);
+                return true;
+            }
+
+            // Remove a redundant "else goto L_b;" arm when L_b: is the very next statement.
+            // Pattern:  if (c) goto L_a; else goto L_b;
+            //           L_b: sub_stmt...
+            // Becomes:  if (c) goto L_a;
+            //           sub_stmt...            ← L_b inlined if it has no other incoming gotos
+            //   — or if L_b has other gotos —
+            //           L_b: sub_stmt...       ← label kept
+            //
+            // After stripping the else arm, L_b may lose its only incoming goto, becoming
+            // an orphan.  Inlining it here lets mergeConsecutiveSameTargetIfs see the
+            // sub-statement (typically another "if (c) goto L_a;") on the very next sweep.
+            static bool eliminateRedundantElseGoto(
+                clang::ASTContext &ctx, std::vector< clang::Stmt * > &stmts, std::size_t i
+            ) {
+                auto *if_stmt = llvm::dyn_cast< clang::IfStmt >(stmts[i]);
+                if (if_stmt == nullptr || if_stmt->getElse() == nullptr) {
+                    return false;
+                }
+                auto *else_goto =
+                    llvm::dyn_cast< clang::GotoStmt >(if_stmt->getElse());
+                if (else_goto == nullptr) {
+                    return false;
+                }
+                if (i + 1U >= stmts.size()) {
+                    return false;
+                }
+                auto *next_label = llvm::dyn_cast< clang::LabelStmt >(stmts[i + 1U]);
+                if (next_label == nullptr) {
+                    return false;
+                }
+                if (next_label->getDecl() != else_goto->getLabel()) {
+                    return false;
+                }
+                // The else arm falls through directly to its target — it is a no-op.
+                auto *new_if = clang::IfStmt::Create(
+                    ctx, if_stmt->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                    if_stmt->getCond(), if_stmt->getLParenLoc(),
+                    if_stmt->getThen()->getBeginLoc(), if_stmt->getThen(),
+                    clang::SourceLocation(), nullptr
+                );
+                stmts[i] = new_if;
+
+                // After stripping the else-goto, check whether L_b is now an orphan
+                // (no remaining goto in the compound targets it).  If so, inline it:
+                // replace LabelStmt(L_b, sub) at stmts[i+1] with sub directly.
+                const clang::LabelDecl *lb = next_label->getDecl();
+                bool lb_still_targeted     = false;
+                std::vector< const clang::LabelDecl * > tmp;
+                for (std::size_t k = 0; k < stmts.size(); ++k) {
+                    tmp.clear();
+                    detail::collectGotoTargets(stmts[k], tmp);
+                    for (const auto *t : tmp) {
+                        if (t == lb) {
+                            lb_still_targeted = true;
+                            break;
+                        }
+                    }
+                    if (lb_still_targeted) {
+                        break;
+                    }
+                }
+                if (!lb_still_targeted) {
+                    stmts[i + 1U] = next_label->getSubStmt();
+                }
+                return true;
+            }
+
             static clang::CompoundStmt *rewriteCompoundRegions(
                 clang::ASTContext &ctx, clang::CompoundStmt *compound, unsigned &rewrites,
                 bool &changed
@@ -1057,6 +1328,26 @@ namespace patchestry::ast {
                 changed = false;
 
                 for (std::size_t i = 0; i < stmts.size(); ++i) {
+                    // Merge consecutive same-target ifs BEFORE detectIfHead.
+                    // This handles cases where the goto target is outside the current
+                    // compound (e.g. breaking out of a loop), so detectIfHead would
+                    // return nullopt and never reach this check otherwise.
+                    if (mergeConsecutiveSameTargetIfs(ctx, stmts, i)) {
+                        changed = true;
+                        ++rewrites;
+                        i = 0;
+                        continue;
+                    }
+
+                    // After merging, the combined if may have an else-goto arm that
+                    // targets the very next statement — remove it as a no-op fallthrough.
+                    if (eliminateRedundantElseGoto(ctx, stmts, i)) {
+                        changed = true;
+                        ++rewrites;
+                        i = 0;
+                        continue;
+                    }
+
                     auto label_index = topLevelLabelIndex(makeCompound(ctx, stmts));
                     auto maybe_head  = detectIfHead(stmts, label_index, i);
                     if (!maybe_head.has_value()) {
@@ -1201,7 +1492,6 @@ namespace patchestry::ast {
                 if (stmt == nullptr) {
                     return nullptr;
                 }
-
                 if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
                     bool changed         = false;
                     auto *flat_rewritten = rewriteCompoundRegions(ctx, cs, rewrites, changed);
@@ -1271,6 +1561,16 @@ namespace patchestry::ast {
                         new_else != nullptr ? new_else->getBeginLoc() : clang::SourceLocation(),
                         new_else
                     );
+                }
+
+                // Recurse into LabelStmt sub-statements so that WhileStmts and other
+                // compound-bearing nodes wrapped in a CFG-block label are still processed.
+                if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                    auto *new_sub = processStmt(ctx, ls->getSubStmt(), rewrites);
+                    if (new_sub == nullptr || new_sub == ls->getSubStmt()) {
+                        return ls;
+                    }
+                    return new (ctx) clang::LabelStmt(ls->getIdentLoc(), ls->getDecl(), new_sub);
                 }
 
                 return stmt;

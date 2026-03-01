@@ -25,25 +25,12 @@ namespace patchestry::ast {
         detail::PipelineState state;
 
         // Steps 1–2: extract CFG and reorder basic blocks to RPO.
-        // NOTE: GotoCanonicalizePass is intentionally NOT run before
-        // BasicBlockReorderPass.  In the original binary order, loop back-edges
-        // (e.g. "goto Lhead" at the end of a body block) may appear as
-        // trivially-adjacent forward jumps because the block order does not match
-        // execution order.  Running GotoCanonicalizePass here would silently
-        // remove those back-edge gotos, making WhileLoopStructurizePass unable to
-        // detect the loop later.  BasicBlockReorderPass already runs
-        // GotoCanonicalizePass internally after reordering to RPO, where genuine
-        // back-edges are no longer adjacent to their targets and are therefore
-        // preserved.
         detail::addCfgPasses(pass_manager, state);            // CfgExtract + BasicBlockReorder
 
         // Step 3: prune unreachable dead code exposed by RPO ordering.
         detail::addDeadCfgPruningPass(pass_manager, state);
 
-        // Step 3.5: inline single-use temporaries before loop/conditional passes
-        // so that loop condition recognizers see bare comparison expressions, not
-        // wrapped temps.
-        detail::addSingleUseTempInliningPass(pass_manager, state);
+        // Step 3.5: canonicalize gotos before loop/conditional structuring.
         detail::addGotoCanonicalizePass(pass_manager, state);
 
         // Steps 4–5: loop structuring.
@@ -54,30 +41,26 @@ namespace patchestry::ast {
         detail::addWhileLoopStructurizePass(pass_manager, state);
         detail::addLoopStructurizePass(pass_manager, state);
 
+        // Step 5.5: strip CFG-block labels that have no incoming gotos.
+        // These labels are inserted by CfgExtractPass as basic-block markers; any
+        // that remain unreferenced after loop structuring would otherwise cause
+        // containsLabelInRange to block single-sided-if structuring in the next step.
+        detail::addAstCleanupPass(pass_manager, state);
+
         // Steps 6–7: conditional and switch structuring.
         detail::addConditionalStructurizePass(pass_manager, state);
         detail::addSwitchRecoveryPass(pass_manager, state);
-
-        // Steps 8–11: cleanup and another conditional/goto-canonicalize round.
-        detail::addAstCleanupPass(pass_manager, state);
-        detail::addDeadLabelElimPass(pass_manager, state);
-        detail::addDeadCfgPruningPass(pass_manager, state);
-        detail::addGotoCanonicalizePass(pass_manager, state);
-        detail::addConditionalStructurizePass(pass_manager, state);
-
-        // Steps 12–16: if-else region formation and irreducible-flow handling,
-        // then degenerate-loop and condition-recovery passes.
         detail::addIfElseRegionFormationPass(pass_manager, state);
-        // detail::addIrreducibleFallbackPass(pass_manager, state);
-        // detail::addSwitchGotoInliningPass(pass_manager, state);
-        // detail::addDegenerateLoopUnwrapPass(pass_manager, state);
-        // detail::addLoopConditionRecoveryPass(pass_manager, state);
-#if 0
-        // Steps 17–19: another dead-code / trailing-jump / AST cleanup round.
+        detail::addIrreducibleFallbackPass(pass_manager, state);
+        detail::addSwitchGotoInliningPass(pass_manager, state);
+        // detail::addHoistControlEquivalentStmtsIntoLoopPass(pass_manager, state);
+        detail::addDegenerateLoopUnwrapPass(pass_manager, state);
+        detail::addLoopConditionRecoveryPass(pass_manager, state);
+
+        //  Steps 17–19: another dead-code / trailing-jump / AST cleanup round.
         detail::addDeadCfgPruningPass(pass_manager, state);
         detail::addTrailingJumpElimPass(pass_manager, state);
         detail::addAstCleanupPass(pass_manager, state);
-        detail::addDeadLabelElimPass(pass_manager, state);
 
         // Steps 20–28: ast_improvements branch passes.
         detail::addDegenerateWhileElimPass(pass_manager, state);      // 20
@@ -87,25 +70,17 @@ namespace patchestry::ast {
         detail::addAstCleanupPass(
             pass_manager, state
         ); // 20.6 – strip empty null-stmt if-branches
-        detail::addBackedgeLoopStructurizePass(pass_manager, state);  // 21
-        detail::addCfgExtractPass(pass_manager, state);               // 22
+        detail::addBackedgeLoopStructurizePass(pass_manager, state); // 21
 
-        // Step 22.5: inline temps again just before NaturalLoopRecoveryPass so
-        // that the for-loop recognizer sees bare comparisons in loop conditions.
-        detail::addSingleUseTempInliningPass(pass_manager, state);    // 22.5
-        detail::addNaturalLoopRecoveryPass(pass_manager, state);      // 23
-        detail::addAstCleanupPass(pass_manager, state);               // 24
-        detail::addDeadLabelElimPass(pass_manager, state);            // 24.5
+        // Step 22: recover natural loops after backedge structuring.
+        detail::addNaturalLoopRecoveryPass(pass_manager, state);      // 22
+        detail::addAstCleanupPass(pass_manager, state);               // 23
         detail::addWhileToForUpgradePass(pass_manager, state);        // 24.75
         detail::addGotoCanonicalizePass(pass_manager, state);         // 25
-        detail::addIfElseRegionFormationPass(pass_manager, state);    // 26
         detail::addAstCleanupPass(pass_manager, state);               // 27
-        detail::addDeadLabelElimPass(pass_manager, state);            // 27.5
-        detail::addCleanupTailExtractionPass(pass_manager, state);    // 28
 
         // Final verification: report any remaining gotos.
         detail::addNoGotoVerificationPass(pass_manager, state);
-#endif
         return pass_manager.run(ctx, options);
     }
 

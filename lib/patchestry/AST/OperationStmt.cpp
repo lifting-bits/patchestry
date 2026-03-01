@@ -690,35 +690,30 @@ namespace patchestry::ast {
             input_expr = cast_expr;
         }
 
-        // Build the trailing statement that follows the switch body:
+        // Build the default arm of the switch:
         // - goto fallback_block when a bounds-check out-of-range target is known,
-        // - __builtin_unreachable() otherwise (all cases are covered by the table).
-        auto make_fallback_stmt = [&]() -> clang::Stmt * {
+        // - __builtin_unreachable() otherwise (all enumerated cases are covered).
+        // Placing the fallback inside a default: arm (rather than as a trailing
+        // statement after the switch) keeps the switch self-contained, avoids an
+        // extra CompoundStmt wrapper, and lets the compiler use the unreachable hint
+        // to prove the switch is exhaustive.
+        auto make_default_arm = [&]() -> clang::DefaultStmt * {
+            clang::Stmt *arm_body = nullptr;
             if (op.fallback_block.has_value()
                 && function_builder().labels_declaration.contains(*op.fallback_block))
             {
                 auto target_loc = sourceLocation(ctx.getSourceManager(), *op.fallback_block);
-                return new (ctx) clang::GotoStmt(
+                arm_body        = new (ctx) clang::GotoStmt(
                     function_builder().labels_declaration.at(*op.fallback_block), loc,
                     target_loc
                 );
+            } else {
+                std::vector< clang::Expr * > no_args;
+                arm_body = create_builtin_call(
+                    ctx, sema(), clang::Builtin::BI__builtin_unreachable, no_args, loc
+                );
             }
-            std::vector< clang::Expr * > no_args;
-            return create_builtin_call(
-                ctx, sema(), clang::Builtin::BI__builtin_unreachable, no_args, loc
-            );
-        };
-
-        // Wrap switch_stmt with a trailing fallback statement into a compound.
-        // The switch has no default arm; the fallback stmt handles the out-of-range
-        // path (or marks it unreachable when no fallback block is available).
-        auto wrap_with_fallback = [&](clang::Stmt *switch_stmt
-                                  ) -> std::pair< clang::Stmt *, bool > {
-            std::vector< clang::Stmt * > stmts = { switch_stmt, make_fallback_stmt() };
-            return {
-                clang::CompoundStmt::Create(ctx, stmts, clang::FPOptionsOverride(), loc, loc),
-                false
-            };
+            return new (ctx) clang::DefaultStmt(loc, loc, arm_body);
         };
 
         // Priority 1: switch_cases present — proper integer switch using per-case
@@ -771,10 +766,11 @@ namespace patchestry::ast {
                 ));
                 sw_body.push_back(case_stmt);
             }
+            sw_body.push_back(make_default_arm());
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            return wrap_with_fallback(switch_stmt);
+            return { switch_stmt, false };
         }
 
         // Priority 2: successor_blocks only — address-based switch (existing logic).
@@ -805,7 +801,7 @@ namespace patchestry::ast {
             if (!ctx.hasSameUnqualifiedType(disc_expr->getType(), disc_type)) {
                 disc_expr = make_cast(ctx, disc_expr, disc_type, loc);
                 if (!disc_expr) {
-                    return nullptr;
+                    return {};
                 }
             }
 
@@ -834,11 +830,11 @@ namespace patchestry::ast {
                 case_stmt->setSubStmt(goto_stmt);
                 sw_body.push_back(case_stmt);
             }
-
+            sw_body.push_back(make_default_arm());
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            return wrap_with_fallback(switch_stmt);
+            return { switch_stmt, false };
         }
 
         // Priority 3: no successor info at all — emit IndirectGotoStmt as the only

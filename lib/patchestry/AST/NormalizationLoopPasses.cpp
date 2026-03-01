@@ -153,6 +153,89 @@ namespace patchestry::ast {
             return stmt;
         }
 
+        static clang::Stmt *replaceGotoWithContinue(
+            clang::ASTContext &ctx, clang::Stmt *stmt,
+            const clang::LabelDecl *target_label
+        ) {
+            if (stmt == nullptr) {
+                return nullptr;
+            }
+            // Stop at nested loops — continue would apply to the inner loop.
+            if (llvm::isa< clang::WhileStmt >(stmt) || llvm::isa< clang::ForStmt >(stmt)
+                || llvm::isa< clang::DoStmt >(stmt))
+            {
+                return stmt;
+            }
+            // Do NOT stop at SwitchStmt: continue inside a switch applies to the
+            // enclosing loop, not the switch itself.
+            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                if (gs->getLabel() == target_label) {
+                    return new (ctx) clang::ContinueStmt(gs->getGotoLoc());
+                }
+                return stmt;
+            }
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                std::vector< clang::Stmt * > new_stmts;
+                for (auto *child : cs->body()) {
+                    new_stmts.push_back(replaceGotoWithContinue(ctx, child, target_label));
+                }
+                return makeCompound(ctx, new_stmts, cs->getLBracLoc(), cs->getRBracLoc());
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                ls->setSubStmt(replaceGotoWithContinue(ctx, ls->getSubStmt(), target_label));
+                return ls;
+            }
+            if (auto *is = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                auto *new_then = replaceGotoWithContinue(ctx, is->getThen(), target_label);
+                clang::Stmt *new_else = is->getElse()
+                    ? replaceGotoWithContinue(ctx, is->getElse(), target_label)
+                    : nullptr;
+                return clang::IfStmt::Create(
+                    ctx, is->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                    is->getCond(), is->getLParenLoc(),
+                    new_then ? new_then->getBeginLoc() : is->getIfLoc(), new_then,
+                    new_else ? new_else->getBeginLoc() : clang::SourceLocation(), new_else
+                );
+            }
+            if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
+                auto *body = sw->getBody();
+                auto *new_body = replaceGotoWithContinue(ctx, body, target_label);
+                if (new_body == body) {
+                    return sw;
+                }
+                auto *new_sw = clang::SwitchStmt::Create(
+                    ctx, nullptr, nullptr, sw->getCond(), sw->getLParenLoc(),
+                    sw->getRParenLoc()
+                );
+                new_sw->setBody(new_body);
+                return new_sw;
+            }
+            if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
+                auto *new_sub =
+                    replaceGotoWithContinue(ctx, case_stmt->getSubStmt(), target_label);
+                if (new_sub == case_stmt->getSubStmt()) {
+                    return case_stmt;
+                }
+                auto *new_cs = clang::CaseStmt::Create(
+                    ctx, case_stmt->getLHS(), case_stmt->getRHS(), case_stmt->getCaseLoc(),
+                    case_stmt->getEllipsisLoc(), case_stmt->getColonLoc()
+                );
+                new_cs->setSubStmt(new_sub);
+                return new_cs;
+            }
+            if (auto *def_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
+                auto *new_sub =
+                    replaceGotoWithContinue(ctx, def_stmt->getSubStmt(), target_label);
+                if (new_sub == def_stmt->getSubStmt()) {
+                    return def_stmt;
+                }
+                return new (ctx) clang::DefaultStmt(
+                    def_stmt->getDefaultLoc(), def_stmt->getColonLoc(), new_sub
+                );
+            }
+            return stmt;
+        }
+
         // =========================================================================
         // LoopStructurizePass
         // =========================================================================
@@ -390,20 +473,39 @@ namespace patchestry::ast {
                             llvm::dyn_cast_or_null< clang::GotoStmt >(head_if->getThen());
                         auto *else_goto =
                             llvm::dyn_cast_or_null< clang::GotoStmt >(head_if->getElse());
-                        if (then_goto == nullptr || else_goto == nullptr) {
+
+                        // GotoCanonicalizePass (run after RPO reordering) may have removed
+                        // the else-goto when the exit label is immediately after the IfStmt
+                        // in RPO order.  In that case the IfStmt is single-sided (else ==
+                        // nullptr) and the loop exit is the fall-through to the next stmt.
+                        const clang::LabelDecl *exit_label = nullptr;
+                        if (else_goto != nullptr) {
+                            exit_label = else_goto->getLabel();
+                        } else if (head_if->getElse() == nullptr && then_goto != nullptr) {
+                            if (head_if_pos + 1 < stmts.size()) {
+                                if (auto *next_ls = llvm::dyn_cast< clang::LabelStmt >(
+                                        stmts[head_if_pos + 1]
+                                    ))
+                                {
+                                    exit_label = next_ls->getDecl();
+                                }
+                            }
+                        }
+
+                        if (then_goto == nullptr || exit_label == nullptr) {
                             continue;
                         }
 
                         if (then_goto->getLabel() == head_label->getDecl()
-                            || else_goto->getLabel() == head_label->getDecl())
+                            || exit_label == head_label->getDecl())
                         {
                             continue;
                         }
 
-                        if (!label_index.contains(else_goto->getLabel())) {
+                        if (!label_index.contains(exit_label)) {
                             continue;
                         }
-                        std::size_t lexit_idx = label_index.at(else_goto->getLabel());
+                        std::size_t lexit_idx = label_index.at(exit_label);
                         if (lexit_idx != head_if_pos + 1) {
                             continue;
                         }
@@ -480,20 +582,34 @@ namespace patchestry::ast {
                                 inv_body_stmts.push_back(stmts[p]);
                             }
 
-                            // Convert the inverted IfStmt to "if (exit_cond) break;".
-                            auto *break_stmt =
-                                new (ctx) clang::BreakStmt(head_if->getIfLoc());
+                            // Convert the inverted IfStmt to exit the loop.
+                            // When intermediate blocks sit between the while and the
+                            // exit target, `break` would land at the wrong block.
+                            // Use `goto exit_label` to jump directly past them.
+                            clang::Stmt *exit_stmt;
+                            if (inv_back_edge_pos + 1 >= inv_lexit_idx) {
+                                exit_stmt =
+                                    new (ctx) clang::BreakStmt(head_if->getIfLoc());
+                            } else {
+                                exit_stmt = new (ctx) clang::GotoStmt(
+                                    then_goto->getLabel(), head_if->getIfLoc(),
+                                    head_if->getIfLoc()
+                                );
+                            }
                             auto *inv_if_break = clang::IfStmt::Create(
                                 ctx, head_if->getIfLoc(),
                                 clang::IfStatementKind::Ordinary, nullptr, nullptr,
                                 head_if->getCond(), head_if->getLParenLoc(),
-                                break_stmt->getBeginLoc(), break_stmt,
+                                exit_stmt->getBeginLoc(), exit_stmt,
                                 clang::SourceLocation(), nullptr
                             );
                             inv_body_stmts.push_back(inv_if_break);
 
-                            for (std::size_t p = inv_lbody_idx; p < inv_back_edge_pos; ++p) {
+                            for (std::size_t p = inv_lbody_idx; p <= inv_back_edge_pos; ++p) {
                                 inv_body_stmts.push_back(stmts[p]);
+                            }
+                            for (auto &s : inv_body_stmts) {
+                                s = replaceGotoWithContinue(ctx, s, head_label->getDecl());
                             }
                             if (inv_body_stmts.empty()) {
                                 inv_body_stmts.push_back(
@@ -554,10 +670,29 @@ namespace patchestry::ast {
                             continue;
                         }
 
-                        std::vector< clang::Stmt * > body_stmts(
-                            stmts.begin() + static_cast< std::ptrdiff_t >(lbody_idx),
-                            stmts.begin() + static_cast< std::ptrdiff_t >(back_edge_pos)
-                        );
+                        // Build while-body: prepend head_label's sub-stmt (when it is not
+                        // the IfStmt itself) and any flat stmts between i+1 and head_if_pos,
+                        // then append the actual loop body [lbody_idx, back_edge_pos).
+                        std::vector< clang::Stmt * > body_stmts;
+                        {
+                            clang::Stmt *head_sub = head_label->getSubStmt();
+                            if (head_sub != nullptr && !llvm::isa< clang::NullStmt >(head_sub)
+                                && !llvm::isa< clang::IfStmt >(head_sub))
+                            {
+                                body_stmts.push_back(head_sub);
+                            }
+                            for (std::size_t p = i + 1; p < head_if_pos; ++p) {
+                                body_stmts.push_back(stmts[p]);
+                            }
+                            body_stmts.insert(
+                                body_stmts.end(),
+                                stmts.begin() + static_cast< std::ptrdiff_t >(lbody_idx),
+                                stmts.begin() + static_cast< std::ptrdiff_t >(back_edge_pos)
+                            );
+                        }
+                        for (auto &s : body_stmts) {
+                            s = replaceGotoWithContinue(ctx, s, head_label->getDecl());
+                        }
                         if (body_stmts.empty()) {
                             body_stmts.push_back(
                                 new (ctx) clang::NullStmt(head_if->getIfLoc(), false)
@@ -583,9 +718,12 @@ namespace patchestry::ast {
                             stmts.begin() + static_cast< std::ptrdiff_t >(i)
                         );
                         rewritten.push_back(new_head);
+                        // Emit stmts from head_if_pos+1 (the loop-exit label) up to
+                        // lbody_idx, skipping the loop-condition IfStmt itself and any
+                        // intermediate stmts already moved into the while body.
                         rewritten.insert(
                             rewritten.end(),
-                            stmts.begin() + static_cast< std::ptrdiff_t >(i + 1),
+                            stmts.begin() + static_cast< std::ptrdiff_t >(head_if_pos + 1),
                             stmts.begin() + static_cast< std::ptrdiff_t >(lbody_idx)
                         );
                         rewritten.insert(

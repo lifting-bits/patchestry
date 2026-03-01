@@ -8,7 +8,6 @@
 // CFG-level normalization passes:
 //   CfgExtractPass         – extract per-function CFG edges from the AST
 //   GotoCanonicalizePass   – remove trivial goto → adjacent-label jumps
-//   DeadLabelElimPass      – strip LabelStmt wrappers that are no longer jump targets
 //   BasicBlockReorderPass  – reorder labeled blocks into RPO (DFS) order
 
 #include <algorithm>
@@ -193,6 +192,190 @@ namespace patchestry::ast {
         };
 
         // =========================================================================
+        // GotoCanonicalizePass — helpers (mutually recursive)
+        // =========================================================================
+
+        // Forward declaration so canonicalizeCompound can call canonicalizeStmt.
+        static clang::Stmt *canonicalizeStmt(
+            clang::ASTContext &ctx, clang::Stmt *stmt, unsigned &removed
+        );
+
+        // Process one compound: drop trivially adjacent gotos, strip trivially
+        // adjacent IfStmt arms, and recurse into nested control-flow bodies.
+        static clang::CompoundStmt *canonicalizeCompound(
+            clang::ASTContext &ctx, clang::CompoundStmt *compound, unsigned &removed
+        ) {
+            std::vector< clang::Stmt * > rewritten;
+            rewritten.reserve(compound->size());
+            bool changed = false;
+
+            for (auto it = compound->body_begin(); it != compound->body_end(); ++it) {
+                auto *stmt = *it;
+                if (stmt == nullptr) {
+                    continue;
+                }
+                auto next     = std::next(it);
+                auto has_next = (next != compound->body_end());
+
+                // Case 1: standalone `goto L;` where L is the immediately following
+                // label — the jump is a no-op, remove it.
+                if (auto *goto_stmt = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                    if (has_next) {
+                        auto *next_label = llvm::dyn_cast< clang::LabelStmt >(*next);
+                        if (next_label != nullptr
+                            && next_label->getDecl() == goto_stmt->getLabel())
+                        {
+                            ++removed;
+                            changed = true;
+                            continue; // drop the trivial goto
+                        }
+                    }
+                    rewritten.push_back(stmt);
+                    continue;
+                }
+
+                // Case 2: `if (cond) goto L1; else goto L2;`
+                // If L2 (else target) is the immediately following label, the else arm
+                // is a trivial fallthrough — strip it, leaving `if (cond) goto L1;`.
+                // If L1 (then target) is the immediately following label, the then arm
+                // is trivial — strip it and negate the condition, leaving
+                // `if (!cond) goto L2;`.
+                if (auto *if_stmt = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                    auto *then_goto =
+                        llvm::dyn_cast_or_null< clang::GotoStmt >(if_stmt->getThen());
+                    auto *else_goto =
+                        llvm::dyn_cast_or_null< clang::GotoStmt >(if_stmt->getElse());
+
+                    if (then_goto != nullptr && else_goto != nullptr && has_next) {
+                        auto *next_label = llvm::dyn_cast< clang::LabelStmt >(*next);
+                        if (next_label != nullptr) {
+                            const auto *next_decl = next_label->getDecl();
+
+                            if (next_decl == else_goto->getLabel()) {
+                                // else arm is trivial:
+                                // `if (cond) goto L1; else goto L2;` → `if (cond) goto L1;`
+                                ++removed;
+                                changed = true;
+                                stmt = clang::IfStmt::Create(
+                                    ctx, if_stmt->getIfLoc(),
+                                    clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                                    if_stmt->getCond(), if_stmt->getLParenLoc(),
+                                    then_goto->getBeginLoc(), then_goto,
+                                    clang::SourceLocation(), nullptr
+                                );
+                            } else if (next_decl == then_goto->getLabel()) {
+                                // then arm is trivial: negate condition, swap arms.
+                                // `if (cond) goto L1; else goto L2;` → `if (!cond) goto L2;`
+                                ++removed;
+                                changed = true;
+                                auto *neg_cond = clang::UnaryOperator::Create(
+                                    ctx,
+                                    ensureRValue(
+                                        ctx,
+                                        const_cast< clang::Expr * >(if_stmt->getCond())
+                                    ),
+                                    clang::UO_LNot, ctx.IntTy, clang::VK_PRValue,
+                                    clang::OK_Ordinary, if_stmt->getIfLoc(),
+                                    /*canOverflow=*/false, clang::FPOptionsOverride()
+                                );
+                                stmt = clang::IfStmt::Create(
+                                    ctx, if_stmt->getIfLoc(),
+                                    clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                                    neg_cond, if_stmt->getLParenLoc(),
+                                    else_goto->getBeginLoc(), else_goto,
+                                    clang::SourceLocation(), nullptr
+                                );
+                            }
+                        }
+                    }
+                    // After potentially modifying the IfStmt, recurse into its bodies.
+                    auto *recursed = canonicalizeStmt(ctx, stmt, removed);
+                    if (recursed != stmt) {
+                        changed = true;
+                    }
+                    rewritten.push_back(recursed != nullptr ? recursed : stmt);
+                    continue;
+                }
+
+                // All other statements: recurse into nested control-flow bodies.
+                auto *recursed = canonicalizeStmt(ctx, stmt, removed);
+                if (recursed != stmt) {
+                    changed = true;
+                }
+                rewritten.push_back(recursed != nullptr ? recursed : stmt);
+            }
+
+            if (!changed) {
+                return compound;
+            }
+            return clang::CompoundStmt::Create(
+                ctx, rewritten, clang::FPOptionsOverride(), compound->getLBracLoc(),
+                compound->getRBracLoc()
+            );
+        }
+
+        static clang::Stmt *canonicalizeStmt(
+            clang::ASTContext &ctx, clang::Stmt *stmt, unsigned &removed
+        ) {
+            if (stmt == nullptr) {
+                return nullptr;
+            }
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                return canonicalizeCompound(ctx, cs, removed);
+            }
+            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                auto *new_body = canonicalizeStmt(ctx, ws->getBody(), removed);
+                if (new_body == ws->getBody()) {
+                    return stmt;
+                }
+                return clang::WhileStmt::Create(
+                    ctx, nullptr, ws->getCond(), new_body, ws->getWhileLoc(),
+                    ws->getLParenLoc(), ws->getRParenLoc()
+                );
+            }
+            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                auto *new_body = canonicalizeStmt(ctx, ds->getBody(), removed);
+                if (new_body == ds->getBody()) {
+                    return stmt;
+                }
+                return new (ctx) clang::DoStmt(
+                    new_body, ds->getCond(), ds->getDoLoc(), ds->getWhileLoc(),
+                    ds->getRParenLoc()
+                );
+            }
+            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                auto *new_body = canonicalizeStmt(ctx, fs->getBody(), removed);
+                if (new_body == fs->getBody()) {
+                    return stmt;
+                }
+                return new (ctx) clang::ForStmt(
+                    ctx, fs->getInit(), fs->getCond(), nullptr, fs->getInc(), new_body,
+                    fs->getForLoc(), fs->getLParenLoc(), fs->getRParenLoc()
+                );
+            }
+            if (auto *is = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                auto *new_then = canonicalizeStmt(ctx, is->getThen(), removed);
+                auto *new_else =
+                    is->getElse() != nullptr
+                        ? canonicalizeStmt(ctx, is->getElse(), removed)
+                        : nullptr;
+                if (new_then == is->getThen() && new_else == is->getElse()) {
+                    return stmt;
+                }
+                if (new_then == nullptr) {
+                    new_then = new (ctx) clang::NullStmt(is->getIfLoc(), false);
+                }
+                return clang::IfStmt::Create(
+                    ctx, is->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                    is->getCond(), is->getLParenLoc(), new_then->getBeginLoc(), new_then,
+                    new_else != nullptr ? new_else->getBeginLoc() : clang::SourceLocation(),
+                    new_else
+                );
+            }
+            return stmt;
+        }
+
+        // =========================================================================
         // GotoCanonicalizePass
         // =========================================================================
 
@@ -210,6 +393,7 @@ namespace patchestry::ast {
                 }
 
                 state.trivial_gotos_removed = 0;
+                bool changed = false;
                 for (auto *decl : ctx.getTranslationUnitDecl()->decls()) {
                     auto *func = llvm::dyn_cast< clang::FunctionDecl >(decl);
                     if (func == nullptr || !func->doesThisDeclarationHaveABody()) {
@@ -221,167 +405,23 @@ namespace patchestry::ast {
                         continue;
                     }
 
-                    std::vector< clang::Stmt * > rewritten;
-                    rewritten.reserve(body->size());
-
-                    for (auto it = body->body_begin(); it != body->body_end(); ++it) {
-                        auto *stmt = *it;
-                        if (stmt == nullptr) {
-                            continue;
-                        }
-
-                        auto next = std::next(it);
-
-                        // Case 1: standalone `goto L;` where L is the immediately following
-                        // label — the jump is a no-op, remove it.
-                        if (auto *goto_stmt = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
-                            if (next != body->body_end()) {
-                                auto *next_label = llvm::dyn_cast< clang::LabelStmt >(*next);
-                                if (next_label != nullptr
-                                    && next_label->getDecl() == goto_stmt->getLabel())
-                                {
-                                    ++state.trivial_gotos_removed;
-                                    continue; // drop the trivial goto
-                                }
-                            }
-                            rewritten.push_back(stmt);
-                            continue;
-                        }
-
-                        // Case 2: `if (cond) goto L1; else goto L2;`
-                        // If L2 (else target) is the immediately following label, the else arm
-                        // is a trivial fallthrough — strip it, leaving `if (cond) goto L1;`.
-                        // If L1 (then target) is the immediately following label, the then arm
-                        // is trivial — strip it and negate the condition, leaving
-                        // `if (!cond) goto L2;`.
-                        if (auto *if_stmt = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                            auto *then_goto =
-                                llvm::dyn_cast_or_null< clang::GotoStmt >(if_stmt->getThen());
-                            auto *else_goto =
-                                llvm::dyn_cast_or_null< clang::GotoStmt >(if_stmt->getElse());
-
-                            if (then_goto != nullptr && else_goto != nullptr
-                                && next != body->body_end())
-                            {
-                                auto *next_label = llvm::dyn_cast< clang::LabelStmt >(*next);
-                                if (next_label != nullptr) {
-                                    const auto *next_decl = next_label->getDecl();
-
-                                    if (next_decl == else_goto->getLabel()) {
-                                        // else arm is trivial:
-                                        // `if (cond) goto L1; else goto L2;` → `if (cond) goto L1;`
-                                        ++state.trivial_gotos_removed;
-                                        stmt = clang::IfStmt::Create(
-                                            ctx, if_stmt->getIfLoc(),
-                                            clang::IfStatementKind::Ordinary, nullptr, nullptr,
-                                            if_stmt->getCond(), if_stmt->getLParenLoc(),
-                                            then_goto->getBeginLoc(), then_goto,
-                                            clang::SourceLocation(), nullptr
-                                        );
-                                    } else if (next_decl == then_goto->getLabel()) {
-                                        // then arm is trivial: negate condition, swap arms.
-                                        // `if (cond) goto L1; else goto L2;` → `if (!cond) goto L2;`
-                                        ++state.trivial_gotos_removed;
-                                        auto *neg_cond = clang::UnaryOperator::Create(
-                                            ctx,
-                                            ensureRValue(
-                                                ctx,
-                                                const_cast< clang::Expr * >(if_stmt->getCond())
-                                            ),
-                                            clang::UO_LNot, ctx.IntTy, clang::VK_PRValue,
-                                            clang::OK_Ordinary, if_stmt->getIfLoc(),
-                                            /*canOverflow=*/false, clang::FPOptionsOverride()
-                                        );
-                                        stmt = clang::IfStmt::Create(
-                                            ctx, if_stmt->getIfLoc(),
-                                            clang::IfStatementKind::Ordinary, nullptr, nullptr,
-                                            neg_cond, if_stmt->getLParenLoc(),
-                                            else_goto->getBeginLoc(), else_goto,
-                                            clang::SourceLocation(), nullptr
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
-                        rewritten.push_back(stmt);
-                    }
-
-                    if (rewritten.size() != body->size()) {
-                        auto *new_body = clang::CompoundStmt::Create(
-                            ctx, rewritten, clang::FPOptionsOverride(),
-                            body->getLBracLoc(), body->getRBracLoc()
-                        );
+                    auto *new_body =
+                        canonicalizeCompound(ctx, body, state.trivial_gotos_removed);
+                    if (new_body != body) {
                         func->setBody(new_body);
+                        changed = true;
                     }
                 }
 
-                // Recompute CFG edges after canonicalization to keep normalized state in-sync.
-                CfgExtractPass(state).run(ctx, options);
+                if (changed) {
+                    CfgExtractPass(state).run(ctx, options);
+                }
 
                 if (options.verbose) {
                     LOG(DEBUG) << "GotoCanonicalizePass removed "
                                << state.trivial_gotos_removed << " trivial goto(s)\n";
                 }
 
-                return true;
-            }
-
-          private:
-            PipelineState &state;
-        };
-
-        // =========================================================================
-        // DeadLabelElimPass
-        // =========================================================================
-
-        // Remove LabelStmt wrappers for labels that are not the target of any GotoStmt
-        // within the same function.  Such labels arise after structuring transforms
-        // (while/if-else recovery) that replace gotos referencing those labels.
-        class DeadLabelElimPass final : public ASTPass
-        {
-          public:
-            explicit DeadLabelElimPass(PipelineState &state)
-                : state(state) {}
-
-            const char *name(void) const override { return "DeadLabelElimPass"; }
-
-            bool run(clang::ASTContext &ctx, const patchestry::Options &options) override {
-                if (options.verbose) {
-                    LOG(DEBUG) << "Running AST pass: " << name() << "\n";
-                }
-
-                unsigned local_removed = 0;
-                for (auto *decl : ctx.getTranslationUnitDecl()->decls()) {
-                    auto *func = llvm::dyn_cast< clang::FunctionDecl >(decl);
-                    if (func == nullptr || !func->doesThisDeclarationHaveABody()) {
-                        continue;
-                    }
-                    auto *body = llvm::dyn_cast< clang::CompoundStmt >(func->getBody());
-                    if (body == nullptr) {
-                        continue;
-                    }
-
-                    std::vector< const clang::LabelDecl * > targets;
-                    collectGotoTargets(body, targets);
-                    std::unordered_set< const clang::LabelDecl * > used_labels(
-                        targets.begin(), targets.end()
-                    );
-
-                    unsigned func_removed = 0;
-                    auto *new_body =
-                        stripUnreferencedLabels(ctx, body, used_labels, func_removed);
-                    if (func_removed > 0 && new_body != nullptr) {
-                        func->setBody(new_body);
-                        local_removed += func_removed;
-                    }
-                }
-
-                state.dead_labels_removed += local_removed;
-                if (local_removed > 0 && options.verbose) {
-                    LOG(DEBUG) << "DeadLabelElimPass: removed " << local_removed
-                               << " unreferenced label(s)\n";
-                }
                 return true;
             }
 
@@ -727,10 +767,6 @@ namespace patchestry::ast {
 
         void addGotoCanonicalizePass(ASTPassManager &pm, PipelineState &state) {
             pm.add_pass(std::make_unique< GotoCanonicalizePass >(state));
-        }
-
-        void addDeadLabelElimPass(ASTPassManager &pm, PipelineState &state) {
-            pm.add_pass(std::make_unique< DeadLabelElimPass >(state));
         }
 
     } // namespace detail
