@@ -84,6 +84,8 @@ namespace patchestry::ast::detail {
         unsigned backedge_loops_structured    = 0;
         unsigned switch_cases_inlined         = 0;
         unsigned loop_exit_gotos_inlined      = 0;
+        unsigned diamond_joins_absorbed       = 0;
+        unsigned nested_stmts_relocated       = 0;
     };
 
     // =========================================================================
@@ -280,6 +282,13 @@ namespace patchestry::ast::detail {
     // (SimpleBlockDomTree is defined here; builders declared, implemented in
     //  NormalizationPipelineHelpers.cpp)
     // =========================================================================
+    //
+    // Dominance: block A dominates B iff every path from ENTRY to B goes
+    // through A.  The dominator tree stores the immediate dominator (idom)
+    // per block.  Post-dominance is the dual: A post-dominates B iff every
+    // path from B to EXIT goes through A — computed via dominators on the
+    // reverse CFG.  Used by HoistControlEquivalentStmtsPass for safe
+    // statement relocation across control-flow boundaries.
 
     struct SimpleBlockDomTree
     {
@@ -333,6 +342,48 @@ namespace patchestry::ast::detail {
         std::size_t N
     );
 
+    // Build a post-dominator tree by inverting all edges in `succ_of` to form
+    // the reverse CFG, then running the standard Cooper/Harvey/Kennedy dominator
+    // algorithm with the virtual exit node N as entry.  In the resulting tree,
+    // dominates(a, b) returns true when a post-dominates b in the original CFG.
+    SimpleBlockDomTree buildPostDomTree(
+        const std::vector< std::vector< std::size_t > > &succ_of, std::size_t entry_idx,
+        std::size_t N
+    );
+
+    // =========================================================================
+    // Control-Equivalence Analysis
+    // =========================================================================
+    //
+    // Two blocks A and B in a CFG are *control-equivalent* when:
+    //
+    //   (1) A dominates B   -- every path from ENTRY to B goes through A
+    //   (2) B post-dominates A -- every path from A to EXIT goes through B
+    //
+    // Together these guarantee that A executes if and only if B executes.
+    // This is stronger than data-flow invariance: it does not require the
+    // moved statement to be loop-invariant or side-effect free.  It only
+    // requires that the statement is *guaranteed to execute* on every path
+    // that reaches the target region.
+    //
+    // The struct caches both a forward dominator tree (dom) and a
+    // post-dominator tree (postdom) for a given flat statement list, so
+    // that controlEquivalent() queries are O(depth) lookups.
+    // =========================================================================
+
+    struct ControlEquivalenceInfo
+    {
+        SimpleBlockDomTree dom;
+        SimpleBlockDomTree postdom;
+
+        // Returns true when blocks `a` and `b` are control-equivalent:
+        // `a` dominates `b` (every ENTRY→b path visits a) AND
+        // `b` post-dominates `a` (every a→EXIT path visits b).  Both must hold.
+        bool controlEquivalent(std::size_t a, std::size_t b) const {
+            return dom.dominates(a, b) && postdom.dominates(b, a);
+        }
+    };
+
 } // namespace patchestry::ast::detail
 
 // =========================================================================
@@ -380,8 +431,7 @@ namespace patchestry::ast::detail {
     void addSwitchRecoveryPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addIrreducibleFallbackPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addSwitchGotoInliningPass(patchestry::ast::ASTPassManager &, PipelineState &);
-    void
-    addHoistControlEquivalentStmtsIntoLoopPass(patchestry::ast::ASTPassManager &, PipelineState &);
+    void addHoistControlEquivalentStmtsPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addSwitchPasses(patchestry::ast::ASTPassManager &, PipelineState &);
 
     // ---- Cleanup passes (NormalizationCleanupPasses.cpp) ----

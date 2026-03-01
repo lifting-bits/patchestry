@@ -135,7 +135,7 @@ namespace patchestry::ast {
                                     ctx,
                                     ensureRValue(
                                         ctx,
-                                        const_cast< clang::Expr * >(if_stmt->getCond())
+                                        if_stmt->getCond()
                                     ),
                                     clang::UO_LNot, ctx.IntTy, clang::VK_PRValue,
                                     clang::OK_Ordinary, loc, false, clang::FPOptionsOverride()
@@ -1227,7 +1227,7 @@ namespace patchestry::ast {
                 clang::Stmt *else_stmt = nullptr;
                 if (terminator_else_goto != nullptr) {
                     else_stmt = new (ctx) clang::GotoStmt(
-                        const_cast< clang::LabelDecl * >(terminator_else_goto->getLabel()),
+                        terminator_else_goto->getLabel(),
                         loc, loc
                     );
                 }

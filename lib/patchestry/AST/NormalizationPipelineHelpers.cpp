@@ -256,7 +256,15 @@ namespace patchestry::ast::detail {
     // =========================================================================
     // CFG infrastructure
     // =========================================================================
+    //
+    // The following helpers build a flat block graph over top-level statements
+    // (indices 0..N-1) with a virtual exit node N.  This graph supports
+    // dominance and post-dominance analysis for control-equivalence hoisting.
 
+    // Build flat adjacency list: succ_of[i] = indices of CFG successors for block i.
+    // Block indices 0..N-1 map to flat statement order; N is the virtual exit.
+    // For GotoStmt/ReturnStmt, the successor is the target label index or N.
+    // For IfStmt, both arms are recorded.  Fallthrough is i+1 (or N at end).
     std::vector< std::vector< std::size_t > > buildSuccOf(
         const std::vector< clang::Stmt * > &stmts,
         const std::unordered_map< const clang::LabelDecl *, std::size_t > &label_index,
@@ -292,6 +300,9 @@ namespace patchestry::ast::detail {
         return succ_of;
     }
 
+    // Detect backward edges (i→j) where j <= i in flat statement order.
+    // Backedges identify loop structure; used by loop recovery passes.
+    // Not used by HoistControlEquivalentStmtsPass but part of the CFG infra.
     std::vector< std::pair< std::size_t, std::size_t > > detectBackedges(
         std::size_t N, const std::vector< std::vector< std::size_t > > &succ_of
     ) {
@@ -306,6 +317,20 @@ namespace patchestry::ast::detail {
         return backedges;
     }
 
+    // =========================================================================
+    // Dominator tree (Cooper-Harvey-Kennedy algorithm)
+    // =========================================================================
+    //
+    // Block A *dominates* block B iff every path from the CFG entry to B
+    // passes through A.  The dominator tree stores the *immediate* dominator
+    // (idom) of each block: the unique dominator that is dominated by every
+    // other dominator.  Theory: Cytron et al. (SESE regions); algorithm:
+    // Cooper, Harvey, Kennedy "A Simple, Fast Dominance Algorithm" (2001).
+    //
+    // Implementation: iterative dataflow over reverse post-order.  For each
+    // block b, idom[b] = intersection of idoms of b's predecessors.  The
+    // RPO ensures predecessors are processed before successors.
+    //
     SimpleBlockDomTree buildDomTree(
         const std::vector< std::vector< std::size_t > > &succ_of, std::size_t entry_idx,
         std::size_t N
@@ -410,6 +435,44 @@ namespace patchestry::ast::detail {
         }
 
         return SimpleBlockDomTree{ std::move(idom), std::move(rpo_num), entry_idx, N };
+    }
+
+    // =========================================================================
+    // Post-dominator tree
+    // =========================================================================
+    //
+    // Node B *post-dominates* A iff every path from A to the function exit
+    // passes through B.  Computed by running the standard dominator algorithm
+    // (Cooper-Harvey-Kennedy) on the *reverse* CFG, where the virtual exit
+    // node N becomes the entry.
+    //
+    // Reverse CFG construction: for each forward edge i→j in succ_of, add
+    // reverse edge j→i.  Nodes that had paths to the exit in the forward
+    // graph become reachable from the exit in the reverse graph.  Using N
+    // as the dominator-tree root ensures that dominance in the reverse graph
+    // corresponds to post-dominance in the original.  In the returned tree,
+    // dominates(a,b) is true iff block a post-dominates block b originally.
+
+    SimpleBlockDomTree buildPostDomTree(
+        const std::vector< std::vector< std::size_t > > &succ_of,
+        std::size_t /*entry_idx*/, std::size_t N
+    ) {
+        // Build the reverse CFG: reverse_succ[j] contains every node i such
+        // that j is a successor of i in the forward graph (i.e. i→j becomes
+        // j→i).
+        std::vector< std::vector< std::size_t > > reverse_succ(N + 1);
+        for (std::size_t i = 0; i <= N; ++i) {
+            for (std::size_t j : succ_of[i]) {
+                if (j <= N) {
+                    reverse_succ[j].push_back(i);
+                }
+            }
+        }
+
+        // The virtual exit node N is the entry of the reverse graph.
+        // Running the forward dominator algorithm on this reversed graph
+        // yields the post-dominator tree of the original CFG.
+        return buildDomTree(reverse_succ, /*entry_idx=*/N, N);
     }
 
     // =========================================================================

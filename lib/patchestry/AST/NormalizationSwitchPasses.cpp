@@ -760,29 +760,94 @@ namespace patchestry::ast {
         };
 
         // =========================================================================
-        // HoistControlEquivalentStmtsIntoLoopPass
+        // HoistControlEquivalentStmtsPass
         // =========================================================================
         //
-        // Inlines label bodies from outside a loop into goto sites inside the
-        // loop when the goto targets a forward-sibling label of the loop in the
-        // parent compound.  After inlining, a goto to the fallthrough label is
-        // appended so subsequent passes can convert it to break.
+        // Moves statements across control-flow boundaries when they are
+        // *control-equivalent* to the target region: A and B are
+        // control-equivalent iff A dominates B AND B post-dominates A (every
+        // path that reaches one reaches the other).  This is stronger than
+        // loop-invariance: the moved code need not be side-effect free, only
+        // guaranteed to execute on every path that reaches the target.
+        //
+        // Why control equivalence vs. single-reference heuristic: the old
+        // approach required exactly one goto to the label.  Control
+        // equivalence generalizes this: even with multiple gotos, if the
+        // label is control-equivalent to a goto site, inlining preserves
+        // semantics.  The current implementation still uses ref_count==1 for
+        // Pattern 1 (simplifies absorption) but the analysis framework
+        // supports future relaxation.
+        //
+        // Theory: Cytron et al. (SESE regions); Cooper-Harvey-Kennedy
+        // iterative dominator algorithm.
+        //
+        // Pattern 1 — Loop-exit inlining (implemented):
+        //
+        //    +----------+
+        //    |  loop    |
+        //    |  ...     |
+        //    |  if (p)  |--goto L_exit--+
+        //    |  ...     |               |
+        //    +----+-----+               |
+        //         | (break)             |
+        //         v                     v
+        //    +----------+          +----------+
+        //    | post-loop|          | L_exit:  |
+        //    +----------+          | exit_code|
+        //                          | goto L_j |
+        //                          +----------+
+        //
+        //    When L_exit is control-equivalent to the goto site, the body of
+        //    L_exit is inlined at the goto, replacing it.
+        //
+        // Pattern 2 — Diamond-goto join absorption (future):
+        //
+        //    +----------+
+        //    | if (c)   |
+        //    +--T---F---+
+        //       |   |
+        //       v   v
+        //     L_t: fall
+        //     ...  ...
+        //     goto goto
+        //     L_j  L_j
+        //       |   |
+        //       +---+
+        //       v
+        //    +----------+
+        //    | L_join:  |  <-- post-dominates if-head; head dominates L_join
+        //    | join_code|
+        //    +----------+
+        //
+        //    The join_code is moved after the structured if-else, absorbing
+        //    L_join.
+        //
+        // Pattern 3 — Nested structures (future): recursion into loop bodies,
+        // if-branch bodies, etc.  Each nested CompoundStmt analyzed with a
+        // fresh scoped CFG.
+        //
+        // Safety invariants:
+        //   - ref_count guard: only inline when target has exactly one goto
+        //     from the region (hoist_loop_fallthrough_guard.c)
+        //   - fallthrough guard: if a surviving label falls through to an
+        //     absorbed candidate, the candidate must survive (Phase 2)
+        //   - nested-loop boundary: countTargetGotos stops at inner loops
 
-        class HoistControlEquivalentStmtsIntoLoopPass final : public ASTPass
+        class HoistControlEquivalentStmtsPass final : public ASTPass
         {
           public:
-            explicit HoistControlEquivalentStmtsIntoLoopPass(PipelineState &state)
-                : state(state) {}
+            explicit HoistControlEquivalentStmtsPass(PipelineState &state) : state(state) {}
 
-            const char *name(void) const override {
-                return "HoistControlEquivalentStmtsIntoLoopPass";
-            }
+            const char *name(void) const override { return "HoistControlEquivalentStmtsPass"; }
 
+            // Top-level entry: iterate over all functions with bodies.  For each,
+            // compute ref_count for goto targets, then processCompound to apply
+            // Pattern 1 (loop-exit inlining).  Phase 1 identifies inlinable
+            // labels; Phase 2 absorbs fully-inlined labels with fallthrough guard.
             bool run(clang::ASTContext &ctx, const patchestry::Options &options) override {
                 if (options.verbose) {
                     LOG(DEBUG) << "Running AST pass: " << name() << "\n";
                 }
-
                 unsigned inlined = 0;
                 for (auto *decl : ctx.getTranslationUnitDecl()->decls()) {
                     auto *func = llvm::dyn_cast< clang::FunctionDecl >(decl);
@@ -793,20 +858,17 @@ namespace patchestry::ast {
                     if (body == nullptr) {
                         continue;
                     }
-
                     std::vector< const clang::LabelDecl * > all_targets;
                     collectGotoTargets(body, all_targets);
                     std::unordered_map< const clang::LabelDecl *, unsigned > ref_count;
                     for (auto *lbl : all_targets) {
                         ++ref_count[lbl];
                     }
-
-                    auto *new_body = processFunction(ctx, body, ref_count, inlined);
+                    auto *new_body = processCompound(ctx, body, ref_count, inlined);
                     if (new_body != body) {
                         func->setBody(new_body);
                     }
                 }
-
                 state.loop_exit_gotos_inlined += inlined;
                 if (inlined > 0 && options.verbose) {
                     LOG(DEBUG) << name() << ": inlined " << inlined
@@ -818,9 +880,19 @@ namespace patchestry::ast {
           private:
             PipelineState &state;
 
+            // Maps a label to the stmt list that replaces "goto label" at inlined sites.
             using ReplacementMap =
                 std::unordered_map< const clang::LabelDecl *, std::vector< clang::Stmt * > >;
+            // Maps a label to its body: sub-stmt plus subsequent non-label stmts.
+            using LabelBodyMap =
+                std::unordered_map< const clang::LabelDecl *, std::vector< clang::Stmt * > >;
+            // Maps a label to the next top-level label (immediate fallthrough target).
+            using FallthroughMap =
+                std::unordered_map< const clang::LabelDecl *, const clang::LabelDecl * >;
 
+            /// Extracts the body of a label at label_pos: sub-stmt plus subsequent
+            /// non-label, non-break stmts until the next label.  Used to gather
+            /// the code that will replace a goto when inlining at the goto site.
             static std::vector< clang::Stmt * > buildLabelBody(
                 const std::vector< clang::Stmt * > &all_stmts, std::size_t label_pos
             ) {
@@ -844,6 +916,10 @@ namespace patchestry::ast {
                 return body;
             }
 
+            /// Returns the next top-level label after label_pos, or nullptr if none.
+            /// Used for Phase 2: when a label body falls through (no terminator),
+            /// we must append "goto next_label" when inlining.  Also used to
+            /// detect implicit fallthrough edges that keep absorbed candidates live.
             static const clang::LabelDecl *findFallthroughLabel(
                 const std::vector< clang::Stmt * > &all_stmts, std::size_t label_pos
             ) {
@@ -855,8 +931,10 @@ namespace patchestry::ast {
                 return nullptr;
             }
 
-            // Count gotos to target labels inside a stmt tree, stopping at nested
-            // loops (their gotos belong to inner-loop structure).
+            /// Counts gotos to target labels inside a stmt tree.  Stops at nested
+            /// loops (WhileStmt/ForStmt/DoStmt) so that gotos belonging to inner
+            /// loops are not attributed to the outer loop — preserves the
+            /// nested-loop boundary safety invariant.
             static void countTargetGotos(
                 const clang::Stmt *stmt,
                 const std::unordered_set< const clang::LabelDecl * > &targets,
@@ -881,6 +959,10 @@ namespace patchestry::ast {
                 }
             }
 
+            /// Recursively replaces gotos to labels in replacements with their body.
+            /// Does not recurse into loops: we only replace gotos inside the
+            /// loop body we are inlining into; inner loops are left untouched.
+            /// Increments count for each replacement performed.
             static clang::Stmt *replaceGotos(
                 clang::ASTContext &ctx, clang::Stmt *stmt, const ReplacementMap &replacements,
                 unsigned &count
@@ -991,6 +1073,9 @@ namespace patchestry::ast {
                 return stmt;
             }
 
+            /// Unwraps LabelStmt wrappers until a loop (WhileStmt/ForStmt/DoStmt)
+            /// or nullptr.  Top-level loops may be labeled (e.g. by CfgExtractPass);
+            /// this recovers the underlying loop for body access and rebuild.
             static clang::Stmt *unwrapLoop(clang::Stmt *stmt) {
                 if (auto *ls = llvm::dyn_cast_or_null< clang::LabelStmt >(stmt)) {
                     return unwrapLoop(ls->getSubStmt());
@@ -1004,6 +1089,9 @@ namespace patchestry::ast {
                 return nullptr;
             }
 
+            /// Returns the body stmt of a WhileStmt, ForStmt, or DoStmt.  Used to
+            /// obtain the CompoundStmt/block that will receive inlined label bodies
+            /// via replaceGotos.
             static clang::Stmt *getLoopBody(clang::Stmt *loop) {
                 if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(loop)) {
                     return ws->getBody();
@@ -1017,6 +1105,9 @@ namespace patchestry::ast {
                 return nullptr;
             }
 
+            /// Creates a new loop of the same kind (While/For/Do) with new_body.
+            /// Preserves condition, init, increment from the original.  Used after
+            /// replaceGotos produces a modified loop body.
             static clang::Stmt *
             rebuildLoop(clang::ASTContext &ctx, clang::Stmt *loop, clang::Stmt *new_body) {
                 if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(loop)) {
@@ -1040,6 +1131,9 @@ namespace patchestry::ast {
                 return loop;
             }
 
+            /// Re-applies LabelStmt wrappers from original around new_loop.  When
+            /// the top-level stmt was "L: while(...)", unwrapLoop/rebuildLoop
+            /// produce a bare loop; rewrapLoop restores "L: while(...)".
             static clang::Stmt *
             rewrapLoop(clang::ASTContext &ctx, clang::Stmt *original, clang::Stmt *new_loop) {
                 if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(original)) {
@@ -1049,7 +1143,121 @@ namespace patchestry::ast {
                 return new_loop;
             }
 
-            clang::CompoundStmt *processFunction(
+            /// Pattern 1: inline label bodies into goto sites inside a loop when the
+            /// target is a forward-sibling label (pos > loop_idx).  Preconditions:
+            /// loop at loop_idx, labels after loop with non-empty bodies, exactly
+            /// one goto to each target from the loop body.  Appends fallthrough
+            /// goto when the inlined body does not end with a terminator.
+            /// Returns true if any inlining occurred.
+            bool tryInlineIntoLoop(
+                clang::ASTContext &ctx, std::vector< clang::Stmt * > &all_stmts,
+                std::size_t loop_idx, const LabelBodyMap &label_bodies,
+                const FallthroughMap &fallthrough_labels,
+                const std::unordered_map< const clang::LabelDecl *, std::size_t > &label_index,
+                std::unordered_map< const clang::LabelDecl *, unsigned > &total_inlined_count,
+                std::unordered_set< const clang::LabelDecl * > &fallthrough_targets,
+                unsigned &inlined
+            ) {
+                auto *loop = unwrapLoop(all_stmts[loop_idx]);
+                if (loop == nullptr) {
+                    return false;
+                }
+                auto *loop_body = getLoopBody(loop);
+                if (loop_body == nullptr) {
+                    return false;
+                }
+
+                std::unordered_set< const clang::LabelDecl * > targets;
+                for (const auto &[lbl, pos] : label_index) {
+                    if (pos > loop_idx && label_bodies.count(lbl) && !label_bodies.at(lbl).empty()) {
+                        targets.insert(lbl);
+                    }
+                }
+                if (targets.empty()) {
+                    return false;
+                }
+
+                std::unordered_map< const clang::LabelDecl *, unsigned > local_counts;
+                countTargetGotos(loop_body, targets, local_counts);
+                if (local_counts.empty()) {
+                    return false;
+                }
+
+                ReplacementMap replacements;
+                for (const auto &[lbl, cnt] : local_counts) {
+                    if (cnt != 1) {
+                        continue;
+                    }
+                    auto body_it = label_bodies.find(lbl);
+                    if (body_it == label_bodies.end() || body_it->second.empty()) {
+                        continue;
+                    }
+
+                    std::vector< clang::Stmt * > replacement = body_it->second;
+
+                    bool ends_with_jump = !replacement.empty()
+                        && (llvm::isa< clang::GotoStmt >(replacement.back())
+                            || llvm::isa< clang::ReturnStmt >(replacement.back())
+                            || llvm::isa< clang::BreakStmt >(replacement.back())
+                            || llvm::isa< clang::ContinueStmt >(replacement.back()));
+
+                    if (!ends_with_jump) {
+                        auto ft_it = fallthrough_labels.find(lbl);
+                        if (ft_it != fallthrough_labels.end() && ft_it->second != nullptr) {
+                            auto idx_it = label_index.find(ft_it->second);
+                            if (idx_it != label_index.end()) {
+                                auto *ft_ls =
+                                    llvm::cast< clang::LabelStmt >(all_stmts[idx_it->second]);
+                                replacement.push_back(new (ctx) clang::GotoStmt(
+                                    ft_ls->getDecl(), loop->getBeginLoc(), loop->getBeginLoc()
+                                ));
+                            }
+                        }
+                    }
+                    replacements[lbl] = std::move(replacement);
+                }
+
+                if (replacements.empty()) {
+                    return false;
+                }
+
+                for (const auto &[lbl, body_vec] : replacements) {
+                    for (auto *s : body_vec) {
+                        if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                            fallthrough_targets.insert(gs->getLabel());
+                        }
+                    }
+                }
+
+                unsigned local_inlined = 0;
+                auto *new_body = replaceGotos(ctx, loop_body, replacements, local_inlined);
+                if (new_body == loop_body || local_inlined == 0) {
+                    return false;
+                }
+
+                auto *new_loop  = rebuildLoop(ctx, loop, new_body);
+                all_stmts[loop_idx] = rewrapLoop(ctx, all_stmts[loop_idx], new_loop);
+                inlined += local_inlined;
+
+                for (const auto &[lbl, body_vec] : replacements) {
+                    (void)body_vec;
+                    auto lc_it = local_counts.find(lbl);
+                    if (lc_it != local_counts.end()) {
+                        total_inlined_count[lbl] += lc_it->second;
+                    }
+                }
+                return true;
+            }
+
+            /// Recursive workhorse: process a function-body compound.  Builds
+            /// label_index, label_bodies, fallthrough_labels.  Runs Pattern 1
+            /// (tryInlineIntoLoop) for each top-level loop.  Phase 1: identify
+            /// absorbed candidates (all refs inlined, not a fallthrough target).
+            /// Phase 2: guard — if a surviving label falls through to a candidate,
+            /// the candidate must survive.  Removes absorbed labels from the stmt
+            /// list.  Bottom-up: children (loop bodies) are modified by
+            /// tryInlineIntoLoop before absorption runs on the outer compound.
+            clang::CompoundStmt *processCompound(
                 clang::ASTContext &ctx, clang::CompoundStmt *body,
                 const std::unordered_map< const clang::LabelDecl *, unsigned > &ref_count,
                 unsigned &inlined
@@ -1059,10 +1267,8 @@ namespace patchestry::ast {
 
                 auto label_index = topLevelLabelIndex(body);
 
-                std::unordered_map< const clang::LabelDecl *, std::vector< clang::Stmt * > >
-                    label_bodies;
-                std::unordered_map< const clang::LabelDecl *, const clang::LabelDecl * >
-                    fallthrough_labels;
+                LabelBodyMap label_bodies;
+                FallthroughMap fallthrough_labels;
                 for (std::size_t i = 0; i < N; ++i) {
                     if (const auto *ls = llvm::dyn_cast< clang::LabelStmt >(all_stmts[i])) {
                         label_bodies[ls->getDecl()]       = buildLabelBody(all_stmts, i);
@@ -1071,100 +1277,15 @@ namespace patchestry::ast {
                 }
 
                 std::unordered_map< const clang::LabelDecl *, unsigned > total_inlined_count;
-                std::unordered_set< const clang::LabelDecl * > absorbed_labels;
                 std::unordered_set< const clang::LabelDecl * > fallthrough_targets;
                 bool changed = false;
 
                 for (std::size_t i = 0; i < N; ++i) {
-                    auto *loop = unwrapLoop(all_stmts[i]);
-                    if (loop == nullptr) {
-                        continue;
-                    }
-                    auto *loop_body = getLoopBody(loop);
-                    if (loop_body == nullptr) {
-                        continue;
-                    }
-
-                    std::unordered_set< const clang::LabelDecl * > targets;
-                    for (const auto &[lbl, pos] : label_index) {
-                        if (pos > i && label_bodies.count(lbl) && !label_bodies[lbl].empty()) {
-                            targets.insert(lbl);
-                        }
-                    }
-                    if (targets.empty()) {
-                        continue;
-                    }
-
-                    std::unordered_map< const clang::LabelDecl *, unsigned > local_counts;
-                    countTargetGotos(loop_body, targets, local_counts);
-                    if (local_counts.empty()) {
-                        continue;
-                    }
-
-                    ReplacementMap replacements;
-                    for (const auto &[lbl, cnt] : local_counts) {
-                        if (cnt != 1) {
-                            continue;
-                        }
-                        auto body_it = label_bodies.find(lbl);
-                        if (body_it == label_bodies.end() || body_it->second.empty()) {
-                            continue;
-                        }
-
-                        std::vector< clang::Stmt * > replacement = body_it->second;
-
-                        bool ends_with_jump = !replacement.empty()
-                            && (llvm::isa< clang::GotoStmt >(replacement.back())
-                                || llvm::isa< clang::ReturnStmt >(replacement.back())
-                                || llvm::isa< clang::BreakStmt >(replacement.back())
-                                || llvm::isa< clang::ContinueStmt >(replacement.back()));
-
-                        if (!ends_with_jump) {
-                            auto ft_it = fallthrough_labels.find(lbl);
-                            if (ft_it != fallthrough_labels.end() && ft_it->second != nullptr) {
-                                auto idx_it = label_index.find(ft_it->second);
-                                if (idx_it != label_index.end()) {
-                                    auto *ft_ls =
-                                        llvm::cast< clang::LabelStmt >(all_stmts[idx_it->second]
-                                        );
-                                    replacement.push_back(new (ctx) clang::GotoStmt(
-                                        ft_ls->getDecl(), loop->getBeginLoc(),
-                                        loop->getBeginLoc()
-                                    ));
-                                }
-                            }
-                        }
-                        replacements[lbl] = std::move(replacement);
-                    }
-
-                    if (replacements.empty()) {
-                        continue;
-                    }
-
-                    for (const auto &[lbl, body_vec] : replacements) {
-                        for (auto *s : body_vec) {
-                            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
-                                fallthrough_targets.insert(gs->getLabel());
-                            }
-                        }
-                    }
-
-                    unsigned local_inlined = 0;
-                    auto *new_body = replaceGotos(ctx, loop_body, replacements, local_inlined);
-                    if (new_body == loop_body || local_inlined == 0) {
-                        continue;
-                    }
-
-                    auto *new_loop  = rebuildLoop(ctx, loop, new_body);
-                    all_stmts[i]    = rewrapLoop(ctx, all_stmts[i], new_loop);
-                    inlined        += local_inlined;
-                    changed         = true;
-
-                    for (const auto &[lbl, body_vec] : replacements) {
-                        auto lc_it = local_counts.find(lbl);
-                        if (lc_it != local_counts.end()) {
-                            total_inlined_count[lbl] += lc_it->second;
-                        }
+                    if (tryInlineIntoLoop(
+                            ctx, all_stmts, i, label_bodies, fallthrough_labels, label_index,
+                            total_inlined_count, fallthrough_targets, inlined))
+                    {
+                        changed = true;
                     }
                 }
 
@@ -1222,7 +1343,7 @@ namespace patchestry::ast {
                     }
                 }
 
-                absorbed_labels = std::move(absorbed_candidates);
+                auto absorbed_labels = std::move(absorbed_candidates);
 
                 std::unordered_set< std::size_t > positions_to_skip;
                 for (std::size_t i = 0; i < N; ++i) {
@@ -1273,9 +1394,8 @@ namespace patchestry::ast {
             pm.add_pass(std::make_unique< IrreducibleFallbackPass >(state));
         }
 
-        void
-        addHoistControlEquivalentStmtsIntoLoopPass(ASTPassManager &pm, PipelineState &state) {
-            pm.add_pass(std::make_unique< HoistControlEquivalentStmtsIntoLoopPass >(state));
+        void addHoistControlEquivalentStmtsPass(ASTPassManager &pm, PipelineState &state) {
+            pm.add_pass(std::make_unique< HoistControlEquivalentStmtsPass >(state));
         }
 
     } // namespace detail

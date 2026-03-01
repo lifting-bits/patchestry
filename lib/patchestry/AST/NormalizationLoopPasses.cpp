@@ -882,6 +882,7 @@ namespace patchestry::ast {
             const char *name(void) const override { return "LoopConditionRecoveryPass"; }
 
             bool run(clang::ASTContext &ctx, const patchestry::Options &options) override {
+                (void)state;
                 if (options.verbose) {
                     LOG(DEBUG) << "Running AST pass: " << name() << "\n";
                 }
@@ -906,7 +907,7 @@ namespace patchestry::ast {
             }
 
           private:
-            [[maybe_unused]] PipelineState &state;
+            PipelineState &state;
 
             static clang::Expr *negateCondition(clang::ASTContext &ctx, clang::Expr *cond) {
                 auto *stripped = cond->IgnoreParenImpCasts();
@@ -944,8 +945,7 @@ namespace patchestry::ast {
                     return ws;
                 }
 
-                auto *new_cond =
-                    negateCondition(ctx, const_cast< clang::Expr * >(leading_if->getCond()));
+                auto *new_cond = negateCondition(ctx, leading_if->getCond());
                 std::vector< clang::Stmt * > rest(
                     body_cs->body_begin() + 1, body_cs->body_end()
                 );
@@ -1046,9 +1046,7 @@ namespace patchestry::ast {
                         } else if (llvm::isa_and_nonnull< clang::ContinueStmt >(then_br)
                                    && llvm::isa_and_nonnull< clang::BreakStmt >(else_br))
                         {
-                            auto *neg = negateCondition(
-                                ctx, const_cast< clang::Expr * >(if_stmt->getCond())
-                            );
+                            auto *neg = negateCondition(ctx, if_stmt->getCond());
                             processed = clang::IfStmt::Create(
                                 ctx, if_stmt->getIfLoc(), clang::IfStatementKind::Ordinary,
                                 nullptr, nullptr, neg, if_stmt->getLParenLoc(),
@@ -1173,7 +1171,7 @@ namespace patchestry::ast {
                     }
                     return clang::IfStmt::Create(
                         ctx, is->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr, nullptr,
-                        const_cast< clang::Expr * >(is->getCond()), is->getLParenLoc(),
+                        is->getCond(), is->getLParenLoc(),
                         new_then->getBeginLoc(), new_then,
                         new_else != nullptr ? new_else->getBeginLoc() : clang::SourceLocation(),
                         new_else
@@ -2003,9 +2001,7 @@ namespace patchestry::ast {
 
                         auto *neg_cond = clang::UnaryOperator::Create(
                             ctx,
-                            ensureRValue(
-                                ctx, const_cast< clang::Expr * >(exit_if->getCond())
-                            ),
+                            ensureRValue(ctx, exit_if->getCond()),
                             clang::UO_LNot, ctx.IntTy, clang::VK_PRValue,
                             clang::OK_Ordinary, loc, false, clang::FPOptionsOverride()
                         );
