@@ -271,8 +271,7 @@ namespace patchestry::ast {
                                 auto *neg_cond = clang::UnaryOperator::Create(
                                     ctx,
                                     ensureRValue(
-                                        ctx,
-                                        const_cast< clang::Expr * >(if_stmt->getCond())
+                                        ctx, if_stmt->getCond()
                                     ),
                                     clang::UO_LNot, ctx.IntTy, clang::VK_PRValue,
                                     clang::OK_Ordinary, if_stmt->getIfLoc(),

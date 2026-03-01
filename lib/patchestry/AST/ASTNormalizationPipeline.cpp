@@ -50,7 +50,14 @@ namespace patchestry::ast {
         detail::addIfElseRegionFormationPass(pass_manager, state);    // 9
         detail::addIrreducibleFallbackPass(pass_manager, state);      // 10
         detail::addSwitchGotoInliningPass(pass_manager, state);       // 11
-        // detail::addHoistControlEquivalentStmtsIntoLoopPass(pass_manager, state);
+        // Step 11.5 — Control-equivalence hoisting.  Pipeline placement: run
+        // after switch-goto inlining because that pass exposes new structure
+        // (reduced gotos, clearer loop boundaries).  Catches loop-exit and
+        // diamond patterns at the top level before DegenerateLoopUnwrap and
+        // late loop recovery (steps 12–19) modify the CFG.  If we ran later,
+        // some hoisting opportunities would be lost or require different
+        // pattern matching.
+        detail::addHoistControlEquivalentStmtsPass(pass_manager, state); // 11.5
         detail::addDegenerateLoopUnwrapPass(pass_manager, state);     // 12
         detail::addLoopConditionRecoveryPass(pass_manager, state);    // 13
 
@@ -70,6 +77,14 @@ namespace patchestry::ast {
 
         // Step 20: nested diamonds in late loops.
         detail::addConditionalStructurizePass(pass_manager, state);
+
+        // Step 20.5 — Second control-equivalence hoisting round.  Pipeline
+        // placement: backedge loop structuring (step 18) and nested diamond
+        // structuring (step 20) create new control-flow structure.  Regions
+        // that were not control-equivalent before may become so after these
+        // passes.  Running HoistControlEquivalentStmtsPass again catches
+        // patterns that were invisible in the first round (step 11.5).
+        detail::addHoistControlEquivalentStmtsPass(pass_manager, state); // 20.5
 
         // Step 21: cleanup after late structuring.
         detail::addAstCleanupPass(pass_manager, state);

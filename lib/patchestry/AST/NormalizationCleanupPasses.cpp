@@ -446,6 +446,7 @@ namespace patchestry::ast {
             const char *name(void) const override { return "TrailingJumpElimPass"; }
 
             bool run(clang::ASTContext &ctx, const patchestry::Options &options) override {
+                (void)state;
                 if (options.verbose) {
                     LOG(DEBUG) << "Running AST pass: " << name() << "\n";
                 }
@@ -470,7 +471,7 @@ namespace patchestry::ast {
             }
 
           private:
-            [[maybe_unused]] PipelineState &state;
+            PipelineState &state;
 
             static clang::Stmt *replaceTrailingContinueWithBreak(
                 clang::ASTContext &ctx, clang::Stmt *stmt, unsigned &eliminated
@@ -717,15 +718,16 @@ namespace patchestry::ast {
             const char *name(void) const override { return "StackCanaryRecognitionPass"; }
 
             bool run(clang::ASTContext &ctx, const patchestry::Options &options) override {
+                (void)state;
                 if (options.verbose) {
                     LOG(DEBUG) << "Running AST pass: " << name() << "\n";
                 }
-                (void) ctx;
+                (void)ctx;
                 return true;
             }
 
           private:
-            [[maybe_unused]] PipelineState &state;
+            PipelineState &state;
         };
 
         // =========================================================================
