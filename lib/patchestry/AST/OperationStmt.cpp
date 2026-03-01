@@ -128,21 +128,6 @@ namespace patchestry::ast {
         }
 
         /**
-         * @brief Sanitize an operation key into a valid C identifier.
-         *
-         * Operation keys look like "ram:10000000:3:p0". Replace every character that
-         * is not alphanumeric or '_' with '_'.
-         */
-        std::string sanitize_key_to_ident(std::string_view key) { // NOLINT
-            std::string result;
-            result.reserve(key.size());
-            for (char c : key) {
-                result += (std::isalnum(static_cast< unsigned char >(c)) || c == '_') ? c : '_';
-            }
-            return result;
-        }
-
-        /**
          * @brief Look up or create an opaque external function placeholder in the TU.
          *
          * Used by create_callother and create_userdefined to emit a best-effort call
@@ -534,8 +519,12 @@ namespace patchestry::ast {
             auto *rhs_expr =
                 clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
 
-            // If not member expression, fallback to derefencing and assigning the value to lhs
-            // expression.
+            // Parenthesize pointer arithmetic so the deref binds the whole
+            // expression: *(ptr + offset) instead of *ptr + offset.
+            if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
+                lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+            }
+
             auto deref_result = sema().CreateBuiltinUnaryOp(
                 op_loc, clang::UO_Deref, clang::dyn_cast< clang::Expr >(lhs_expr)
             );
@@ -561,6 +550,10 @@ namespace patchestry::ast {
             if (!lhs_expr || !rhs_expr) {
                  LOG(ERROR) << "Failed to create LHS or RHS expression for 3-input store operation. key: "
                            << op.key << "\n";
+            }
+
+            if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
+                lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
             }
 
             auto deref_result =
@@ -1247,6 +1240,29 @@ namespace patchestry::ast {
                 false
             );
         }
+
+        // When the enclosing function returns non-void, emit "return (T)0;"
+        // instead of a bare "return;" to avoid a diagnostic on the (typically
+        // unreachable) empty return after __stack_chk_fail or similar.
+        const auto &types = type_builder().get_serialized_types();
+        auto type_it      = types.find(function.prototype.rttype_key);
+        if (type_it != types.end() && !type_it->second->isVoidType()) {
+            auto ret_type = type_it->second;
+            auto *zero    = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 0), ctx.IntTy, location
+            );
+            auto cast_result = sema().BuildCStyleCastExpr(
+                location, ctx.getTrivialTypeSourceInfo(ret_type), location, zero
+            );
+            assert(!cast_result.isInvalid());
+            return std::make_pair(
+                clang::ReturnStmt::Create(
+                    ctx, location, cast_result.getAs< clang::Expr >(), nullptr
+                ),
+                false
+            );
+        }
+
         return std::make_pair(
             clang::ReturnStmt::Create(ctx, location, nullptr, nullptr), false
         );
@@ -1273,9 +1289,7 @@ namespace patchestry::ast {
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
         auto location = sourceLocation(ctx.getSourceManager(), op.key);
 
-        // TODO(kumarak): It should be the size of input1 field in bits; At the moment
-        // consider it as 4 bytes but should be fixed.
-        unsigned low_width = ctx.getIntWidth(ctx.IntTy);
+        unsigned low_width = op.inputs[1].size * 8;
         auto merge_to_next = !op.output.has_value();
         auto *shift_value  = clang::IntegerLiteral::Create(
             ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), low_width), ctx.IntTy, location
@@ -2257,8 +2271,16 @@ namespace patchestry::ast {
 
         const auto &var_type = type_builder().get_serialized_types()[*op.type];
         auto op_loc          = sourceLocation(ctx.getSourceManager(), op.key);
+
+        std::string var_name = *op.name;
+        auto &name_counts    = function_builder().declared_name_counts;
+        auto [it, inserted]  = name_counts.try_emplace(var_name, 0);
+        if (!inserted) {
+            var_name += "_" + std::to_string(++(it->second));
+        }
+
         auto *var_decl =
-            create_variable_decl(ctx, sema().CurContext, *op.name, var_type, op_loc);
+            create_variable_decl(ctx, sema().CurContext, var_name, var_type, op_loc);
         // Mark all local variable used to avoid warning about unused variable
         var_decl->setIsUsed();
 

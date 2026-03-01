@@ -307,7 +307,9 @@ namespace patchestry::ast {
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
         // if function is a declaration, add asm attribute with symbol name
-        if (!is_definition) {
+        // only when the symbol name differs from the C identifier (otherwise
+        // Clang's printer emits invalid syntax: asm("sym") void fn(void);)
+        if (!is_definition && function.get().name != func_decl->getName()) {
             if (auto *asm_attr = clang::AsmLabelAttr::Create(
                     ctx, function.get().name, true, func_decl->getSourceRange()
                 ))
