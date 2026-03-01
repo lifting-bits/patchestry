@@ -586,6 +586,10 @@ namespace patchestry::ast {
                 lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
             }
 
+            if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
+                lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+            }
+
             auto deref_result =
                 sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
             if (deref_result.isInvalid()) {
