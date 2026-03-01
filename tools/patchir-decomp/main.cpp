@@ -264,6 +264,17 @@ int main(int argc, char **argv) {
         LOG(ERROR) << "Failed to initialize diagnostics.\n";
         return EXIT_FAILURE;
     }
+
+    // Suppress warnings expected from decompiled 32-bit firmware code parsed
+    // on a 64-bit host (pointer/int size mismatch, char signedness).
+    auto &diags = ci.getDiagnostics();
+    diags.setSeverityForGroup(clang::diag::Flavor::WarningOrError,
+        "int-to-pointer-cast", clang::diag::Severity::Ignored);
+    diags.setSeverityForGroup(clang::diag::Flavor::WarningOrError,
+        "pointer-to-int-cast", clang::diag::Severity::Ignored);
+    diags.setSeverityForGroup(clang::diag::Flavor::WarningOrError,
+        "pointer-sign", clang::diag::Severity::Ignored);
+
     createSourceManager(ci);
 
     std::shared_ptr< clang::TargetOptions > target_options =

@@ -255,14 +255,32 @@ namespace patchestry::ast {
             // of -1 and almost always denotes an error sentinel in firmware code.
             // Signed/unsigned comparison semantics are preserved because C implicitly
             // converts -1 to UINT_MAX when comparing with an unsigned operand.
+            clang::QualType literal_type = vnode_type;
             if (vnode_type->isUnsignedIntegerType() && apint.isAllOnes()) {
                 auto signed_type = ctx.getIntTypeForBitwidth(bit_width, /*isSigned=*/1);
                 if (!signed_type.isNull()) {
-                    return new (ctx) clang::IntegerLiteral(ctx, apint, signed_type, location);
+                    literal_type = signed_type;
                 }
             }
 
-            return new (ctx) clang::IntegerLiteral(ctx, apint, vnode_type, location);
+            // For types narrower than int (e.g. unsigned char, short), Clang's
+            // printer emits MSVC-specific suffixes like Ui8 / Ui16 which are not
+            // valid standard C.  Promote the literal to int / unsigned int width
+            // and wrap in an invisible ImplicitCastExpr back to the narrow type.
+            unsigned int_width = ctx.getIntWidth(ctx.IntTy);
+            if (bit_width < int_width) {
+                bool lit_unsigned = literal_type->isUnsignedIntegerType();
+                auto wide_type   = lit_unsigned ? ctx.UnsignedIntTy : ctx.IntTy;
+                auto wide_val    = lit_unsigned ? apint.zext(int_width)
+                                               : apint.sext(int_width);
+                auto *literal =
+                    new (ctx) clang::IntegerLiteral(ctx, wide_val, wide_type, location);
+                return make_implicit_cast(
+                    ctx, literal, vnode_type, clang::CK_IntegralCast
+                );
+            }
+
+            return new (ctx) clang::IntegerLiteral(ctx, apint, literal_type, location);
         }
 
         if (vnode_type->isVoidType()) {
