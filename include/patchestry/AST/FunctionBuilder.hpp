@@ -123,6 +123,10 @@ namespace patchestry::ast {
         std::unordered_map< std::string, clang::LabelDecl * > labels_declaration;
         std::unordered_map< std::string, clang::Stmt * > operation_stmts;
 
+        // Tracks how many times each local variable name has been declared so
+        // that duplicates (e.g. multiple Ghidra "UNNAMED" vars) get unique suffixes.
+        std::unordered_map< std::string, unsigned > declared_name_counts;
+
         // Statements queued by create_temporary during an operation build that must be
         // emitted immediately before the operation that triggered them.  Drained by
         // create_basic_block after each create_operation call.

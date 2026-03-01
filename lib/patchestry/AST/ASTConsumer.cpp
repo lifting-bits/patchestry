@@ -107,12 +107,12 @@ namespace patchestry::ast {
                 continue;
             }
 
-            auto var_type  = type_builder->get_serialized_types().at(variable.type);
-            auto location  = sourceLocation(ctx.getSourceManager(), key);
-            // Create extern global variable to link with the symbols from original binary
-            auto *var_decl = clang::VarDecl::Create(
+            auto var_type       = type_builder->get_serialized_types().at(variable.type);
+            auto location       = sourceLocation(ctx.getSourceManager(), key);
+            auto sanitized_name = sanitize_key_to_ident(variable.name);
+            auto *var_decl      = clang::VarDecl::Create(
                 ctx, ctx.getTranslationUnitDecl(), location, location,
-                &ctx.Idents.get(variable.name), var_type,
+                &ctx.Idents.get(sanitized_name), var_type,
                 ctx.getTrivialTypeSourceInfo(var_type), clang::SC_Extern
             );
             var_decl->setDeclContext(ctx.getTranslationUnitDecl());
