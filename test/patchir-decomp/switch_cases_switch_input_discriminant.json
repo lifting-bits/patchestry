@@ -1,0 +1,77 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=SW2 %s --input-file %t.c
+// SW2: switch (
+// SW2: case {{[0-9]+[U]?}}:
+// SW2: case {{[0-9]+[U]?}}:
+// SW2: __builtin_unreachable
+// SW2-NOT: default:
+// SW2-NOT: goto *
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:16000000": {
+      "name": "switch_cases_switch_input_discriminant",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:16000000:entry": {
+          "operations": {
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:16000000:0:basic" }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:16000000:0:basic": {
+          "operations": {
+            "add_op": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 0 },
+                { "type": "type_int", "kind": "constant", "value": 0 }
+              ]
+            },
+            "ind": {
+              "mnemonic": "BRANCHIND",
+              "inputs": [
+                { "type": "type_ptr", "kind": "constant", "value": 0 }
+              ],
+              "switch_input": { "type": "type_int", "kind": "temporary", "operation": "add_op" },
+              "switch_cases": [
+                { "value": 5, "target_block": "ram:16000000:1:basic" },
+                { "value": 6, "target_block": "ram:16000000:2:basic" }
+              ]
+            }
+          },
+          "ordered_operations": ["add_op", "ind"]
+        },
+        "ram:16000000:1:basic": {
+          "operations": {
+            "ret1": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["ret1"]
+        },
+        "ram:16000000:2:basic": {
+          "operations": {
+            "ret2": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["ret2"]
+        }
+      },
+      "entry_block": "ram:16000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int":  { "name": "int",  "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void"    },
+    "type_ptr":  { "kind": "pointer", "size": 4, "element_type": "type_void" }
+  }
+}

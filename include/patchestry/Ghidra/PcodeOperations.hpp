@@ -146,6 +146,12 @@ namespace patchestry::ghidra {
         bool is_noreturn;
     };
 
+    struct SwitchCase
+    {
+        int64_t value;
+        std::string target_block;
+    };
+
     struct Operation
     {
         Mnemonic mnemonic;
@@ -172,6 +178,14 @@ namespace patchestry::ghidra {
         std::optional< std::string > not_taken_block;
         std::optional< Varnode > condition;
         std::optional< std::string > address;
+
+        // Indirect Branch: Ghidra-resolved jump-table successors (may be empty)
+        std::vector< std::string > successor_blocks;
+
+        // Switch recovery — all three are independently optional
+        std::optional< std::string > fallback_block;  // direct-goto fallback when no case matches
+        std::optional< Varnode > switch_input;         // original integer discriminant
+        std::vector< SwitchCase > switch_cases;        // case value → target block
     };
 
     struct BasicBlock
