@@ -378,6 +378,7 @@ namespace patchestry::ast {
                         LOG(DEBUG) << "DeadCfgPruningPass: pruned " << local_pruned
                                    << " dead statement(s)\n";
                     }
+                    state.cfg_stale = true;
                     runGotoCanonicalizePass(state, ctx, options);
                     runCfgExtractPass(state, ctx, options);
                 }
@@ -423,6 +424,7 @@ namespace patchestry::ast {
                 }
 
                 if (changed) {
+                    state.cfg_stale = true;
                     runCfgExtractPass(state, ctx, options);
                 }
                 return true;

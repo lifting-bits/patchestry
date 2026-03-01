@@ -378,6 +378,7 @@ namespace patchestry::ast {
                         stmts = std::move(rewritten);
                         body  = makeCompound(ctx, stmts, body->getLBracLoc(), body->getRBracLoc());
                         func->setBody(body);
+                        state.cfg_stale = true;
                         ++state.loops_structurized;
                         break;
                     }
@@ -748,6 +749,7 @@ namespace patchestry::ast {
                         LOG(DEBUG) << "WhileLoopStructurizePass: structurized "
                                    << local_structurized << " while loop(s)\n";
                     }
+                    state.cfg_stale = true;
                     runCfgExtractPass(state, ctx, options);
                 }
 
@@ -855,6 +857,7 @@ namespace patchestry::ast {
                         LOG(DEBUG) << "DegenerateLoopUnwrapPass: unwrapped " << unwrap_count
                                    << " degenerate while(1) loop(s)\n";
                     }
+                    state.cfg_stale = true;
                     runGotoCanonicalizePass(state, ctx, options);
                     runCfgExtractPass(state, ctx, options);
                 }
@@ -1114,6 +1117,7 @@ namespace patchestry::ast {
                         LOG(DEBUG) << "DegenerateWhileElimPass: eliminated " << eliminated
                                    << " degenerate loop(s)\n";
                     }
+                    state.cfg_stale = true;
                     runGotoCanonicalizePass(state, ctx, options);
                     runCfgExtractPass(state, ctx, options);
                 }
@@ -1405,6 +1409,7 @@ namespace patchestry::ast {
                             << "NaturalLoopRecoveryPass: recovered " << recovered
                             << " while-loop(s), upgraded " << for_upgraded << " for-loop(s)\n";
                     }
+                    state.cfg_stale = true;
                     runGotoCanonicalizePass(state, ctx, options);
                     runCfgExtractPass(state, ctx, options);
                 }
@@ -1924,6 +1929,7 @@ namespace patchestry::ast {
                             << "BackedgeLoopStructurizePass: converted " << local_converted
                             << " back-edge goto(s) to while loop(s)\n";
                     }
+                    state.cfg_stale = true;
                     runAstCleanupPass(state, ctx, options);
                 }
                 return true;
@@ -2351,6 +2357,12 @@ namespace patchestry::ast {
 
         void addDegenerateWhileElimPass(ASTPassManager &pm, PipelineState &state) {
             pm.add_pass(std::make_unique< DegenerateWhileElimPass >(state));
+        }
+
+        void addDegenerateWhileElimGroup(ASTPassManager &pm, PipelineState &state) {
+            addDegenerateWhileElimPass(pm, state);
+            addDeadCfgPruningPass(pm, state);
+            addAstCleanupPass(pm, state);
         }
 
         void addNaturalLoopRecoveryPass(ASTPassManager &pm, PipelineState &state) {

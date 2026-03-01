@@ -263,6 +263,7 @@ namespace patchestry::ast {
                         func->setBody(makeCompound(
                             ctx, stmts, body->getLBracLoc(), body->getRBracLoc()
                         ));
+                        state.cfg_stale = true;
                     }
                 }
 
@@ -344,6 +345,7 @@ namespace patchestry::ast {
                     func->setBody(makeCompound(
                         ctx, wrapped, body->getLBracLoc(), body->getRBracLoc()
                     ));
+                    state.cfg_stale = true;
                 }
 
                 runCfgExtractPass(state, ctx, options);
@@ -853,26 +855,6 @@ namespace patchestry::ast {
                 return nullptr;
             }
 
-            // Returns true if every execution path through `sw` ends with an
-            // unconditional terminator.  A switch without a default arm may fall
-            // through when no case matches, so it never qualifies.  A switch with a
-            // default arm qualifies when the default arm's body unconditionally
-            // terminates (the common case from SwitchGotoInliningPass output where
-            // each arm ends with `goto L` or `return`).
-            static bool switchAlwaysTerminates(const clang::SwitchStmt *sw) {
-                const auto *sw_body =
-                    llvm::dyn_cast_or_null< clang::CompoundStmt >(sw->getBody());
-                if (sw_body == nullptr) {
-                    return false;
-                }
-                for (const auto *cs : sw_body->body()) {
-                    if (const auto *def = llvm::dyn_cast< clang::DefaultStmt >(cs)) {
-                        return isUnconditionalTerminator(def->getSubStmt());
-                    }
-                }
-                return false; // no default arm → "no match" path falls through
-            }
-
             // Count gotos to target labels inside a stmt tree, stopping at nested
             // loops (their gotos belong to inner-loop structure).
             static void countTargetGotos(
@@ -1076,11 +1058,6 @@ namespace patchestry::ast {
                 const std::size_t N = all_stmts.size();
 
                 auto label_index = topLevelLabelIndex(body);
-                LOG(DEBUG) << "Label index: " << label_index.size() << "\n";
-                for (const auto &[lbl, pos] : label_index) {
-                    LOG(DEBUG) << "Label: " << lbl->getName().str() << " at position " << pos
-                               << "\n";
-                }
 
                 std::unordered_map< const clang::LabelDecl *, std::vector< clang::Stmt * > >
                     label_bodies;
@@ -1140,11 +1117,7 @@ namespace patchestry::ast {
                             && (llvm::isa< clang::GotoStmt >(replacement.back())
                                 || llvm::isa< clang::ReturnStmt >(replacement.back())
                                 || llvm::isa< clang::BreakStmt >(replacement.back())
-                                || llvm::isa< clang::ContinueStmt >(replacement.back())
-                                || (llvm::isa< clang::SwitchStmt >(replacement.back())
-                                    && switchAlwaysTerminates(
-                                        llvm::cast< clang::SwitchStmt >(replacement.back())
-                                    )));
+                                || llvm::isa< clang::ContinueStmt >(replacement.back()));
 
                         if (!ends_with_jump) {
                             auto ft_it = fallthrough_labels.find(lbl);
@@ -1219,16 +1192,10 @@ namespace patchestry::ast {
                         return true;
                     }
                     const auto *last = bdy.back();
-                    if (llvm::isa< clang::GotoStmt >(last) || llvm::isa< clang::ReturnStmt >(last)
-                        || llvm::isa< clang::BreakStmt >(last)
-                        || llvm::isa< clang::ContinueStmt >(last))
-                    {
-                        return false;
-                    }
-                    if (const auto *sw = llvm::dyn_cast< clang::SwitchStmt >(last)) {
-                        return !switchAlwaysTerminates(sw);
-                    }
-                    return true;
+                    return !llvm::isa< clang::GotoStmt >(last)
+                        && !llvm::isa< clang::ReturnStmt >(last)
+                        && !llvm::isa< clang::BreakStmt >(last)
+                        && !llvm::isa< clang::ContinueStmt >(last);
                 };
 
                 bool guard_changed = true;

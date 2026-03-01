@@ -57,6 +57,7 @@ namespace patchestry::ast {
                     auto *rewritten = processStmt(ctx, body);
                     if (rewritten != body) {
                         func->setBody(rewritten);
+                        state.cfg_stale = true;
                     }
                 }
 
@@ -583,6 +584,7 @@ namespace patchestry::ast {
                     auto *rewritten = processStmt(ctx, func->getBody(), rewrites);
                     if (rewritten != func->getBody()) {
                         func->setBody(rewritten);
+                        state.cfg_stale = true;
                         runCfgExtractPass(state, ctx, options);
                     }
                 }

@@ -68,6 +68,7 @@ namespace patchestry::ast::detail {
     struct PipelineState
     {
         std::vector< FunctionCfg > cfgs;
+        bool cfg_stale                        = true;
         unsigned trivial_gotos_removed        = 0;
         unsigned conditional_structurized     = 0;
         unsigned loops_structurized           = 0;
@@ -369,6 +370,7 @@ namespace patchestry::ast::detail {
     void addDegenerateLoopUnwrapPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addLoopConditionRecoveryPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addDegenerateWhileElimPass(patchestry::ast::ASTPassManager &, PipelineState &);
+    void addDegenerateWhileElimGroup(patchestry::ast::ASTPassManager &, PipelineState &);
     void addNaturalLoopRecoveryPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addBackedgeLoopStructurizePass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addWhileToForUpgradePass(patchestry::ast::ASTPassManager &, PipelineState &);

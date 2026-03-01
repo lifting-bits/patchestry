@@ -414,7 +414,8 @@ namespace patchestry::ast {
                 }
 
                 if (changed) {
-                    CfgExtractPass(state).run(ctx, options);
+                    state.cfg_stale = true;
+                    runCfgExtractPass(state, ctx, options);
                 }
 
                 if (options.verbose) {
@@ -471,8 +472,9 @@ namespace patchestry::ast {
                                    << " function(s)\n";
                     }
                     // After reordering, new trivial goto→label adjacencies may have appeared.
+                    state.cfg_stale = true;
                     GotoCanonicalizePass(state).run(ctx, options);
-                    CfgExtractPass(state).run(ctx, options);
+                    runCfgExtractPass(state, ctx, options);
                 }
 
                 return true;
@@ -747,7 +749,11 @@ namespace patchestry::ast {
         void runCfgExtractPass(
             PipelineState &state, clang::ASTContext &ctx, const patchestry::Options &options
         ) {
+            if (!state.cfg_stale) {
+                return;
+            }
             CfgExtractPass(state).run(ctx, options);
+            state.cfg_stale = false;
         }
 
         void runGotoCanonicalizePass(
