@@ -10,6 +10,7 @@
 #include <utility>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Attr.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclAccessPair.h>
 #include <clang/AST/Expr.h>
@@ -26,10 +27,13 @@
 #include <clang/Sema/Lookup.h>
 #include <clang/Sema/Sema.h>
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Casting.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
+#include <patchestry/AST/IntrinsicHandlers.hpp>
 #include <patchestry/AST/OperationBuilder.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
@@ -130,20 +134,21 @@ namespace patchestry::ast {
         /**
          * @brief Look up or create an opaque external function placeholder in the TU.
          *
-         * Used by create_callother and create_userdefined to emit a best-effort call
-         * expression that preserves operation inputs for downstream analysis, rather
-         * than silently dropping the operation.
+         * Used by create_userdefined to emit a best-effort call expression that
+         * preserves operation inputs for downstream analysis.
          *
-         * @param fn_name   Name of the placeholder function (e.g. "__patchestry_callother_…").
-         * @param ret_type  Return type of the placeholder.
-         * @param op_loc    Source location for the declaration.
+         * @param fn_name     Name of the placeholder function.
+         * @param ret_type    Return type of the placeholder.
+         * @param param_types Parameter types; must be non-empty (variadic with zero
+         *                    fixed params violates "prototyped function must have at
+         *                    least one non-variadic input").
+         * @param op_loc      Source location for the declaration.
          */
         clang::FunctionDecl *lookup_or_create_opaque_fn( // NOLINT
             clang::ASTContext &ctx, const std::string &fn_name, clang::QualType ret_type,
-            clang::SourceLocation op_loc
+            llvm::ArrayRef< clang::QualType > param_types, clang::SourceLocation op_loc
         ) {
             auto &ident = ctx.Idents.get(fn_name);
-            // Check for an existing declaration with this name to avoid duplicates.
             auto lookup_result =
                 ctx.getTranslationUnitDecl()->lookup(clang::DeclarationName(&ident));
             for (auto *d : lookup_result) {
@@ -152,10 +157,15 @@ namespace patchestry::ast {
                 }
             }
 
-            // No existing declaration: create a variadic extern function.
+            // Ensure at least one non-variadic param (LLVM/CIR requirement)
+            llvm::SmallVector< clang::QualType, 4 > params(param_types.begin(), param_types.end());
+            if (params.empty()) {
+                params.push_back(ctx.VoidPtrTy);
+            }
+
             clang::FunctionProtoType::ExtProtoInfo epi;
-            epi.Variadic = true;
-            auto fn_type = ctx.getFunctionType(ret_type, {}, epi);
+            epi.Variadic = false;
+            auto fn_type = ctx.getFunctionType(ret_type, params, epi);
 
             auto *fn_decl = clang::FunctionDecl::Create(
                 ctx, ctx.getTranslationUnitDecl(), op_loc, op_loc,
@@ -1126,53 +1136,26 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_callother(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
-
-        // Determine return type from op.type; fall back to void.
-        clang::QualType ret_type = ctx.VoidTy;
-        if (op.output.has_value() && op.type.has_value()) {
-            const auto &types = type_builder().get_serialized_types();
-            auto it           = types.find(*op.type);
-            if (it != types.end()) {
-                ret_type = it->second;
-            }
-        }
-
-        // Build a placeholder function name: __patchestry_callother_<sanitized key>
-        std::string fn_name = "__patchestry_callother_" + sanitize_key_to_ident(op.key);
-
-        clang::FunctionDecl *fn_decl =
-            lookup_or_create_opaque_fn(ctx, fn_name, ret_type, op_loc);
-
-        // Build call arguments from all op.inputs.
-        std::vector< clang::Expr * > args;
-        for (const auto &input : op.inputs) {
-            auto *arg_expr =
-                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
-            if (arg_expr != nullptr) {
-                args.push_back(arg_expr);
-            }
-        }
-
-        auto *ref_expr = clang::DeclRefExpr::Create(
-            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), fn_decl, false,
-            op_loc, ctx.getPointerType(fn_decl->getType()), clang::VK_PRValue
-        );
-
-        auto call_result = sema().BuildCallExpr(nullptr, ref_expr, op_loc, args, op_loc);
-        if (call_result.isInvalid()) {
-            LOG(ERROR) << "Failed to build callother placeholder for: " << op.key << "\n";
+        if (!op.target || op.target->kind != Varnode::VARNODE_INTRINSIC || !op.target->function) {
+            LOG(ERROR) << "Invalid CALLOTHER intrinsic target. key: " << op.key << "\n";
             return {};
         }
-        auto *call_expr = call_result.getAs< clang::Expr >();
 
-        if (!op.output.has_value() || ret_type->isVoidType()) {
-            return { call_expr, false };
+        const auto &label = *op.target->function;
+        auto name         = parse_intrinsic_name(label);
+
+        // Look up specific handler
+        const auto &handlers = get_intrinsic_handlers();
+        auto it              = handlers.find(name);
+        if (it != handlers.end()) {
+            return it->second(*this, ctx, function, op);
         }
 
-        auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
-        return { create_assign_operation(ctx, call_expr, output_expr, op_loc), false };
+        // Fallback: use __patchestry_missing_<name> for unrecognized intrinsics
+        // This includes cases where Ghidra couldn't determine the actual intrinsic name
+        // (e.g., "stringdata" is a placeholder name)
+        // The function declaration includes an AnnotateAttr with metadata for debugging
+        return create_missing_intrinsic_call(ctx, function, op, name, label);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_userdefined(
@@ -1193,8 +1176,13 @@ namespace patchestry::ast {
 
         std::string fn_name = "__patchestry_userdefined_" + sanitize_key_to_ident(op.key);
 
+        llvm::SmallVector< clang::QualType, 4 > param_types;
+        for (const auto &input : op.inputs) {
+            param_types.push_back(get_varnode_type(ctx, input));
+        }
+
         clang::FunctionDecl *fn_decl =
-            lookup_or_create_opaque_fn(ctx, fn_name, ret_type, op_loc);
+            lookup_or_create_opaque_fn(ctx, fn_name, ret_type, param_types, op_loc);
 
         std::vector< clang::Expr * > args;
         for (const auto &input : op.inputs) {
@@ -1202,6 +1190,16 @@ namespace patchestry::ast {
                 clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
             if (arg_expr != nullptr) {
                 args.push_back(arg_expr);
+            }
+        }
+        // When fn was created with void* placeholder (zero inputs), pass (void*)0
+        if (args.empty() && op.inputs.empty()) {
+            auto *zero = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
+            );
+            auto *null_expr = make_cast(ctx, zero, ctx.VoidPtrTy, op_loc);
+            if (null_expr != nullptr) {
+                args.push_back(null_expr);
             }
         }
 
@@ -2294,6 +2292,226 @@ namespace patchestry::ast {
     ) {
         (void) ctx, (void) function, (void) op;
         return std::make_pair(nullptr, true);
+    }
+
+    clang::FunctionDecl *OpBuilder::get_or_create_intrinsic_decl(
+        clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,
+        bool is_variadic
+    ) {
+        // Check cache first
+        auto it = intrinsic_decls.find(name);
+        if (it != intrinsic_decls.end()) {
+            return it->second;
+        }
+
+        // Create a new intrinsic function declaration
+        auto loc = clang::SourceLocation();
+
+        // Create function type with variadic signature if requested.
+        // Note: Variadic prototypes must have at least one non-variadic parameter
+        // to satisfy CIR/LLVM lowering requirements.
+        clang::FunctionProtoType::ExtProtoInfo epi;
+        epi.Variadic = is_variadic;
+
+        llvm::SmallVector<clang::QualType, 1> param_types;
+        if (is_variadic) {
+            // Use a generic void * parameter to satisfy the "at least one fixed
+            // parameter" requirement for variadic functions.
+            auto void_ptr_ty = ctx.getPointerType(ctx.VoidTy);
+            param_types.push_back(void_ptr_ty);
+        }
+
+        auto func_type = ctx.getFunctionType(return_type, param_types, epi);
+        auto *func_decl = clang::FunctionDecl::Create(
+            ctx, ctx.getTranslationUnitDecl(), loc, loc, &ctx.Idents.get(name), func_type,
+            ctx.getTrivialTypeSourceInfo(func_type), clang::SC_Extern
+        );
+
+        if (func_decl == nullptr) {
+            LOG(ERROR) << "Failed to create intrinsic function declaration for: " << name << "\n";
+            return nullptr;
+        }
+
+        // Add to translation unit
+        ctx.getTranslationUnitDecl()->addDecl(func_decl);
+
+        // Cache it
+        intrinsic_decls[name] = func_decl;
+        return func_decl;
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_intrinsic_call(
+        clang::ASTContext &ctx, const Function &function, const Operation &op,
+        const std::string &name
+    ) {
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        // Determine return type
+        clang::QualType ret_type = ctx.VoidTy;
+        if (op.output) {
+            ret_type = get_varnode_type(ctx, *op.output);
+        }
+
+        // Get or create function declaration
+        auto *fn_decl = get_or_create_intrinsic_decl(ctx, name, ret_type, true);
+        if (fn_decl == nullptr) {
+            LOG(ERROR) << "Failed to get intrinsic declaration. key: " << op.key << "\n";
+            return {};
+        }
+
+        // Build arguments from inputs
+        std::vector< clang::Expr * > args;
+        for (const auto &input : op.inputs) {
+            auto *e = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+            if (e != nullptr) {
+                args.push_back(e);
+            }
+        }
+
+        // Build call expression
+        auto *fn_ref = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), fn_decl, false, op_loc,
+            fn_decl->getType(), clang::VK_LValue
+        );
+
+        auto result = sema().BuildCallExpr(nullptr, fn_ref, op_loc, args, op_loc);
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Failed to build intrinsic call expression. key: " << op.key << "\n";
+            return {};
+        }
+
+        auto *call_expr = result.getAs< clang::Expr >();
+
+        // If no output, just return the call
+        if (!op.output) {
+            return { call_expr, false };
+        }
+
+        // Assign result to output
+        auto *out = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        return { create_assign_operation(ctx, call_expr, out, op_loc), false };
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_missing_intrinsic_call(
+        clang::ASTContext &ctx, const Function &function, const Operation &op,
+        const std::string &original_name, const std::string &original_label
+    ) {
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        // Build descriptive function name: __patchestry_missing_<original_name>
+        std::string func_name = "__patchestry_missing_" + original_name;
+
+        // Determine return type
+        clang::QualType ret_type = ctx.VoidTy;
+        if (op.output) {
+            ret_type = get_varnode_type(ctx, *op.output);
+        }
+
+        // Build metadata annotation string with useful debugging info
+        // Format: "intrinsic:<label> addr:<key> ret:<type> args:<count>"
+        std::string annotation = "intrinsic:" + original_label + " addr:" + op.key;
+        if (op.type) {
+            annotation += " ret:" + *op.type;
+        }
+        annotation += " args:" + std::to_string(op.inputs.size());
+
+        // Check cache for existing declaration
+        auto cache_it = intrinsic_decls.find(func_name);
+        clang::FunctionDecl *fn_decl = nullptr;
+
+        if (cache_it != intrinsic_decls.end()) {
+            fn_decl = cache_it->second;
+        } else {
+            // Build param types from inputs; use non-variadic to satisfy "prototyped
+            // function must have at least one non-variadic input" (void() and void(...)
+            // are invalid in CIR/LLVM lowering)
+            llvm::SmallVector< clang::QualType, 4 > param_types;
+            for (const auto &input : op.inputs) {
+                param_types.push_back(get_varnode_type(ctx, input));
+            }
+            if (param_types.empty()) {
+                param_types.push_back(ctx.VoidPtrTy);
+            }
+            clang::FunctionProtoType::ExtProtoInfo epi;
+            epi.Variadic = false;
+
+            auto func_type = ctx.getFunctionType(ret_type, param_types, epi);
+
+            fn_decl = clang::FunctionDecl::Create(
+                ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(),
+                clang::SourceLocation(), &ctx.Idents.get(func_name), func_type,
+                ctx.getTrivialTypeSourceInfo(func_type), clang::SC_Extern
+            );
+
+            if (fn_decl == nullptr) {
+                LOG(ERROR) << "Failed to create missing intrinsic declaration for: " << func_name
+                           << "\n";
+                return {};
+            }
+
+            // Create ParmVarDecls so Sema can access parameters during call conversion
+            std::vector< clang::ParmVarDecl * > param_decls;
+            for (std::size_t i = 0; i < param_types.size(); ++i) {
+                auto *param = clang::ParmVarDecl::Create(
+                    ctx, fn_decl, op_loc, op_loc, nullptr, param_types[i], nullptr,
+                    clang::SC_None, nullptr
+                );
+                param_decls.push_back(param);
+            }
+            fn_decl->setParams(param_decls);
+
+            // Add AnnotateAttr with metadata for debugging
+            fn_decl->addAttr(clang::AnnotateAttr::Create(
+                ctx, annotation, nullptr, 0, clang::SourceRange()
+            ));
+
+            // Add to translation unit and cache
+            ctx.getTranslationUnitDecl()->addDecl(fn_decl);
+            intrinsic_decls[func_name] = fn_decl;
+        }
+
+        // Build arguments from inputs
+        std::vector< clang::Expr * > args;
+        for (const auto &input : op.inputs) {
+            auto *e = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+            if (e != nullptr) {
+                args.push_back(e);
+            }
+        }
+        // When function expects void* placeholder (op had zero inputs), pass (void*)0
+        if (op.inputs.empty() && args.empty()) {
+            auto *zero = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
+            );
+            auto *null_expr = make_cast(ctx, zero, ctx.VoidPtrTy, op_loc);
+            if (null_expr != nullptr) {
+                args.push_back(null_expr);
+            }
+        }
+
+        // Build call expression
+        auto *fn_ref = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), fn_decl, false, op_loc,
+            fn_decl->getType(), clang::VK_LValue
+        );
+
+        auto result = sema().BuildCallExpr(nullptr, fn_ref, op_loc, args, op_loc);
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Failed to build missing intrinsic call expression. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        auto *call_expr = result.getAs< clang::Expr >();
+
+        // If no output, just return the call
+        if (!op.output) {
+            return { call_expr, false };
+        }
+
+        // Assign result to output
+        auto *out = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        return { create_assign_operation(ctx, call_expr, out, op_loc), false };
     }
 
 } // namespace patchestry::ast
