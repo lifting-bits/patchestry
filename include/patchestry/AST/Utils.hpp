@@ -7,6 +7,9 @@
 
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
@@ -19,6 +22,8 @@ namespace patchestry::ast {
     getTypeFromSize(clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer);
 
     std::string labelNameFromKey(std::string key);
+
+    std::string sanitize_key_to_ident(std::string_view key);
 
     clang::CastKind getCastKind(
         clang::ASTContext &ctx, const clang::QualType &from_type, const clang::QualType &to_type

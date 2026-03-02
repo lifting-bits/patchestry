@@ -139,6 +139,10 @@ namespace patchestry::ast {
             );
         }
 
+        // Case 2: result cached in operation_stmts (merge_to_next op whose expression has
+        // not yet been given a name).  Materialize it as a VarDecl so that every use site
+        // gets a fresh DeclRefExpr instead of sharing the same Stmt* node across multiple
+        // parent expressions (which violates the AST tree property).
         if (function_builder().operation_stmts.contains(*vnode.operation)) {
             return function_builder().operation_stmts.at(*vnode.operation);
         }
@@ -243,8 +247,40 @@ namespace patchestry::ast {
             // constant values from normalization-pass pattern matchers and silently
             // truncated constants narrower than 32 bits (e.g. uint8_t) or zero-
             // extended constants wider than 32 bits (e.g. uint64_t on 64-bit targets).
-            return new (ctx)
-                clang::IntegerLiteral(ctx, llvm::APInt(bit_width, *vnode.value), vnode_type, location);
+            auto apint = llvm::APInt(bit_width, *vnode.value);
+
+            // Represent unsigned all-ones constants with the signed equivalent type
+            // so they print as -1 rather than the large unsigned decimal (e.g.
+            // 4294967295U).  The all-ones bit pattern is the canonical binary encoding
+            // of -1 and almost always denotes an error sentinel in firmware code.
+            // Signed/unsigned comparison semantics are preserved because C implicitly
+            // converts -1 to UINT_MAX when comparing with an unsigned operand.
+            clang::QualType literal_type = vnode_type;
+            if (vnode_type->isUnsignedIntegerType() && apint.isAllOnes()) {
+                auto signed_type = ctx.getIntTypeForBitwidth(bit_width, /*isSigned=*/1);
+                if (!signed_type.isNull()) {
+                    literal_type = signed_type;
+                }
+            }
+
+            // For types narrower than int (e.g. unsigned char, short), Clang's
+            // printer emits MSVC-specific suffixes like Ui8 / Ui16 which are not
+            // valid standard C.  Promote the literal to int / unsigned int width
+            // and wrap in an invisible ImplicitCastExpr back to the narrow type.
+            unsigned int_width = ctx.getIntWidth(ctx.IntTy);
+            if (bit_width < int_width) {
+                bool lit_unsigned = literal_type->isUnsignedIntegerType();
+                auto wide_type   = lit_unsigned ? ctx.UnsignedIntTy : ctx.IntTy;
+                auto wide_val    = lit_unsigned ? apint.zext(int_width)
+                                               : apint.sext(int_width);
+                auto *literal =
+                    new (ctx) clang::IntegerLiteral(ctx, wide_val, wide_type, location);
+                return make_implicit_cast(
+                    ctx, literal, vnode_type, clang::CK_IntegralCast
+                );
+            }
+
+            return new (ctx) clang::IntegerLiteral(ctx, apint, literal_type, location);
         }
 
         if (vnode_type->isVoidType()) {

@@ -4,7 +4,15 @@
 
 add_library(patchestry_ast STATIC
   ASTConsumer.cpp
+  ASTPassManager.cpp
   FunctionBuilder.cpp
+  ASTNormalizationPipeline.cpp
+  NormalizationPipelineHelpers.cpp
+  NormalizationCfgPasses.cpp
+  NormalizationConditionalPasses.cpp
+  NormalizationLoopPasses.cpp
+  NormalizationSwitchPasses.cpp
+  NormalizationCleanupPasses.cpp
   OperationBuilder.cpp
   OperationStmt.cpp
   TypeBuilder.cpp

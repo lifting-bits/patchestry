@@ -35,6 +35,11 @@ add_lit_testsuite(patchir-transform-tests
   ${CMAKE_CURRENT_SOURCE_DIR}/patchir-transform
 )
 
+add_lit_testsuite(patchir-c-normalize-tests
+  "Running patchir-c-normalize tests"
+  ${CMAKE_CURRENT_SOURCE_DIR}/patchir-c-normalize
+)
+
 # tell ctest how to run the defined test suites with add_test()
 add_test(NAME ghidra-output-tests
   COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/ghidra"
@@ -53,5 +58,10 @@ add_test(NAME patchir-decomp-tests
 
 add_test(NAME patchir-transform-tests
   COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/patchir-transform"
+  --param BUILD_TYPE=$<CONFIG>
+)
+
+add_test(NAME patchir-c-normalize-tests
+  COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/patchir-c-normalize"
   --param BUILD_TYPE=$<CONFIG>
 )

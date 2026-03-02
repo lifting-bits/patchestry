@@ -43,6 +43,7 @@
 #include <rellic/AST/StructFieldRenamer.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/AST/ASTNormalizationPipeline.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
@@ -66,6 +67,13 @@ namespace patchestry::ast {
             create_functions(
                 ctx, get_program().serialized_functions, get_program().serialized_types
             );
+        }
+
+        if (options.enable_goto_elimination && !runASTNormalizationPipeline(ctx, options)) {
+            LOG(ERROR) << "Goto elimination pipeline failed.\n";
+            if (options.goto_elimination_strict) {
+                return;
+            }
         }
 
         if (options.print_tu) {
@@ -107,12 +115,12 @@ namespace patchestry::ast {
                 continue;
             }
 
-            auto var_type  = type_builder->get_serialized_types().at(variable.type);
-            auto location  = sourceLocation(ctx.getSourceManager(), key);
-            // Create extern global variable to link with the symbols from original binary
-            auto *var_decl = clang::VarDecl::Create(
+            auto var_type       = type_builder->get_serialized_types().at(variable.type);
+            auto location       = sourceLocation(ctx.getSourceManager(), key);
+            auto sanitized_name = sanitize_key_to_ident(variable.name);
+            auto *var_decl      = clang::VarDecl::Create(
                 ctx, ctx.getTranslationUnitDecl(), location, location,
-                &ctx.Idents.get(variable.name), var_type,
+                &ctx.Idents.get(sanitized_name), var_type,
                 ctx.getTrivialTypeSourceInfo(var_type), clang::SC_Extern
             );
             var_decl->setDeclContext(ctx.getTranslationUnitDecl());

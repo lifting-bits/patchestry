@@ -84,6 +84,18 @@ namespace {
         "print-tu", llvm::cl::desc("Pretty print translation unit"), llvm::cl::init(false)
     );
 
+    const llvm::cl::opt< bool > enable_goto_elimination( // NOLINT(cert-err58-cpp)
+        "enable-goto-elimination",
+        llvm::cl::desc("Enable goto elimination AST pipeline"),
+        llvm::cl::init(true)
+    );
+
+    const llvm::cl::opt< bool > goto_elimination_strict( // NOLINT(cert-err58-cpp)
+        "goto-elimination-strict",
+        llvm::cl::desc("Fail when goto elimination verification detects remaining gotos"),
+        llvm::cl::init(false)
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -97,6 +109,8 @@ namespace {
             .emit_obj             = emit_obj.getValue(),
             .verbose              = verbose.getValue(),
             .use_rellic_transform = use_rellic_transform.getValue(),
+            .enable_goto_elimination = enable_goto_elimination.getValue(),
+            .goto_elimination_strict = goto_elimination_strict.getValue(),
             .output_file          = output_filename.getValue(),
             .input_file           = input_filename.getValue(),
             .print_tu             = print_tu.getValue(),
@@ -250,6 +264,17 @@ int main(int argc, char **argv) {
         LOG(ERROR) << "Failed to initialize diagnostics.\n";
         return EXIT_FAILURE;
     }
+
+    // Suppress warnings expected from decompiled 32-bit firmware code parsed
+    // on a 64-bit host (pointer/int size mismatch, char signedness).
+    auto &diags = ci.getDiagnostics();
+    diags.setSeverityForGroup(clang::diag::Flavor::WarningOrError,
+        "int-to-pointer-cast", clang::diag::Severity::Ignored);
+    diags.setSeverityForGroup(clang::diag::Flavor::WarningOrError,
+        "pointer-to-int-cast", clang::diag::Severity::Ignored);
+    diags.setSeverityForGroup(clang::diag::Flavor::WarningOrError,
+        "pointer-sign", clang::diag::Severity::Ignored);
+
     createSourceManager(ci);
 
     std::shared_ptr< clang::TargetOptions > target_options =
@@ -272,9 +297,12 @@ int main(int argc, char **argv) {
     ast_consumer.HandleTranslationUnit(ast_context);
 
     auto *pcode_consumer = dynamic_cast< patchestry::ast::PcodeASTConsumer * >(&ast_consumer);
-    if (pcode_consumer != nullptr) {
+    if (pcode_consumer != nullptr && !ci.getDiagnostics().hasErrorOccurred()) {
         auto codegen = std::make_unique< patchestry::codegen::CodeGenerator >(ci);
         codegen->lower_to_ir(ast_context, options);
+    } else if (ci.getDiagnostics().hasErrorOccurred()) {
+        LOG(ERROR) << "Skipping code generation due to prior diagnostics errors.\n";
+        return EXIT_FAILURE;
     }
 
     return EXIT_SUCCESS;

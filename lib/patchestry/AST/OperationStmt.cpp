@@ -6,6 +6,7 @@
  */
 
 #include <optional>
+#include <string>
 #include <utility>
 
 #include <clang/AST/ASTContext.h>
@@ -124,21 +125,6 @@ namespace patchestry::ast {
             assert(!result.isInvalid() && "Failed to build builtin call expr");
 
             return result.getAs< clang::Expr >();
-        }
-
-        /**
-         * @brief Sanitize an operation key into a valid C identifier.
-         *
-         * Operation keys look like "ram:10000000:3:p0". Replace every character that
-         * is not alphanumeric or '_' with '_'.
-         */
-        std::string sanitize_key_to_ident(std::string_view key) { // NOLINT
-            std::string result;
-            result.reserve(key.size());
-            for (char c : key) {
-                result += (std::isalnum(static_cast< unsigned char >(c)) || c == '_') ? c : '_';
-            }
-            return result;
         }
 
         /**
@@ -533,8 +519,12 @@ namespace patchestry::ast {
             auto *rhs_expr =
                 clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
 
-            // If not member expression, fallback to derefencing and assigning the value to lhs
-            // expression.
+            // Parenthesize pointer arithmetic so the deref binds the whole
+            // expression: *(ptr + offset) instead of *ptr + offset.
+            if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
+                lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+            }
+
             auto deref_result = sema().CreateBuiltinUnaryOp(
                 op_loc, clang::UO_Deref, clang::dyn_cast< clang::Expr >(lhs_expr)
             );
@@ -562,6 +552,10 @@ namespace patchestry::ast {
                            << op.key << "\n";
             }
 
+            if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
+                lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+            }
+
             auto deref_result =
                 sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
             assert(!deref_result.isInvalid());
@@ -582,6 +576,14 @@ namespace patchestry::ast {
         if (!op.target_block) {
             LOG(ERROR) << "Branch instruction with no target block. key: " << op.key << "\n";
             return {};
+        }
+
+        // If the target is the immediately next block in the RPO emission order,
+        // control falls through naturally — no goto required.
+        if (!function_builder().current_next_block_key.empty()
+            && *op.target_block == function_builder().current_next_block_key)
+        {
+            return { nullptr, false };
         }
 
         if (!function_builder().labels_declaration.contains(*op.target_block)) {
@@ -665,16 +667,171 @@ namespace patchestry::ast {
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        if (input_expr == nullptr) {
+            LOG(ERROR) << "BRANCHIND: failed to create input expression. key: " << op.key << "\n";
+            return {};
+        }
         auto loc       = sourceLocation(ctx.getSourceManager(), op.key);
         auto expr_type = input_expr->getType();
         if (!expr_type->isPointerType()) {
-            auto op_type    = ctx.getPointerType(expr_type);
-            auto *cast_expr = make_cast(ctx, input_expr, op_type, loc);
-            assert(cast_expr != nullptr && "Failed to create cast expression");
+            auto *cast_expr = make_cast(ctx, input_expr, ctx.getPointerType(expr_type), loc);
+            if (cast_expr == nullptr) {
+                LOG(ERROR) << "BRANCHIND: failed to cast input to pointer type. key: " << op.key
+                           << "\n";
+                return {};
+            }
             input_expr = cast_expr;
         }
 
-        // Create indirect goto statement for branchind
+        // Build the default arm of the switch:
+        // - goto fallback_block when a bounds-check out-of-range target is known,
+        // - __builtin_unreachable() otherwise (all enumerated cases are covered).
+        // Placing the fallback inside a default: arm (rather than as a trailing
+        // statement after the switch) keeps the switch self-contained, avoids an
+        // extra CompoundStmt wrapper, and lets the compiler use the unreachable hint
+        // to prove the switch is exhaustive.
+        auto make_default_arm = [&]() -> clang::DefaultStmt * {
+            clang::Stmt *arm_body = nullptr;
+            if (op.fallback_block.has_value()
+                && function_builder().labels_declaration.contains(*op.fallback_block))
+            {
+                auto target_loc = sourceLocation(ctx.getSourceManager(), *op.fallback_block);
+                arm_body        = new (ctx) clang::GotoStmt(
+                    function_builder().labels_declaration.at(*op.fallback_block), loc,
+                    target_loc
+                );
+            } else {
+                std::vector< clang::Expr * > no_args;
+                arm_body = create_builtin_call(
+                    ctx, sema(), clang::Builtin::BI__builtin_unreachable, no_args, loc
+                );
+            }
+            return new (ctx) clang::DefaultStmt(loc, loc, arm_body);
+        };
+
+        // Priority 1: switch_cases present — proper integer switch using per-case
+        // integer values recovered by Ghidra.  Prefer inputs[0] when it is a named
+        // local variable (the most direct discriminant); otherwise fall back to
+        // switch_input, which may resolve to an inlined call expression.
+        if (!op.switch_cases.empty()) {
+            clang::Expr *disc = nullptr;
+            if (op.inputs[0].kind == Varnode::VARNODE_LOCAL) {
+                disc = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            } else if (op.switch_input.has_value()) {
+                disc = clang::dyn_cast< clang::Expr >(
+                    create_varnode(ctx, function, *op.switch_input)
+                );
+            }
+            if (disc == nullptr) {
+                LOG(ERROR) << "BRANCHIND: failed to resolve switch discriminant. key: " << op.key
+                           << "\n";
+                return {};
+            }
+            if (!disc->getType()->isIntegerType()) {
+                auto *cast_disc = make_cast(ctx, disc, ctx.IntTy, loc);
+                if (cast_disc == nullptr) {
+                    LOG(ERROR) << "BRANCHIND: failed to cast switch discriminant to int. key: "
+                               << op.key << "\n";
+                    return {};
+                }
+                disc = cast_disc;
+            }
+
+            auto *switch_stmt =
+                clang::SwitchStmt::Create(ctx, nullptr, nullptr, disc, loc, loc);
+
+            std::vector< clang::Stmt * > sw_body;
+            const auto disc_width = ctx.getIntWidth(disc->getType());
+            for (const auto &sc : op.switch_cases) {
+                if (!function_builder().labels_declaration.contains(sc.target_block)) {
+                    continue;
+                }
+                auto *case_val = clang::IntegerLiteral::Create(
+                    ctx,
+                    llvm::APInt(disc_width, static_cast< uint64_t >(sc.value), /*isSigned=*/true),
+                    disc->getType(), loc
+                );
+                auto *case_stmt =
+                    clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
+                auto target_loc = sourceLocation(ctx.getSourceManager(), sc.target_block);
+                case_stmt->setSubStmt(new (ctx) clang::GotoStmt(
+                    function_builder().labels_declaration.at(sc.target_block), loc, target_loc
+                ));
+                sw_body.push_back(case_stmt);
+            }
+            sw_body.push_back(make_default_arm());
+            switch_stmt->setBody(
+                clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
+            );
+            return { switch_stmt, false };
+        }
+
+        // Priority 2: successor_blocks only — address-based switch (existing logic).
+        if (!op.successor_blocks.empty()) {
+            // Helper: parse "ram:HEXADDR:NUM:basic" → HEXADDR as uint64.
+            auto parse_block_addr = [](const std::string &key) -> std::optional< uint64_t > {
+                auto p1 = key.find(':');
+                if (p1 == std::string::npos) {
+                    return std::nullopt;
+                }
+                auto p2 = key.find(':', p1 + 1U);
+                if (p2 == std::string::npos) {
+                    return std::nullopt;
+                }
+                const auto hex_str = key.substr(p1 + 1U, p2 - p1 - 1U);
+                if (hex_str.empty()) {
+                    return std::nullopt;
+                }
+                try {
+                    return std::stoull(hex_str, nullptr, 16);
+                } catch (...) {
+                    return std::nullopt;
+                }
+            };
+
+            const auto disc_type = ctx.getUIntPtrType();
+            auto *disc_expr      = input_expr;
+            if (!ctx.hasSameUnqualifiedType(disc_expr->getType(), disc_type)) {
+                disc_expr = make_cast(ctx, disc_expr, disc_type, loc);
+                if (!disc_expr) {
+                    return {};
+                }
+            }
+
+            auto *switch_stmt =
+                clang::SwitchStmt::Create(ctx, nullptr, nullptr, disc_expr, loc, loc);
+
+            std::vector< clang::Stmt * > sw_body;
+            const auto disc_width = ctx.getIntWidth(disc_type);
+            for (const auto &block_key : op.successor_blocks) {
+                if (!function_builder().labels_declaration.contains(block_key)) {
+                    continue;
+                }
+                auto maybe_addr = parse_block_addr(block_key);
+                if (!maybe_addr) {
+                    continue;
+                }
+                auto *case_val = clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(disc_width, *maybe_addr), disc_type, loc
+                );
+                auto *case_stmt =
+                    clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
+                auto target_loc = sourceLocation(ctx.getSourceManager(), block_key);
+                auto *goto_stmt = new (ctx) clang::GotoStmt(
+                    function_builder().labels_declaration.at(block_key), loc, target_loc
+                );
+                case_stmt->setSubStmt(goto_stmt);
+                sw_body.push_back(case_stmt);
+            }
+            sw_body.push_back(make_default_arm());
+            switch_stmt->setBody(
+                clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
+            );
+            return { switch_stmt, false };
+        }
+
+        // Priority 3: no successor info at all — emit IndirectGotoStmt as the only
+        // fallback when Ghidra has no resolved successors.
         auto *result_stmt = new (ctx) clang::IndirectGotoStmt(loc, loc, input_expr);
         assert(result_stmt != nullptr && "Failed to create indirect goto statement");
 
@@ -808,8 +965,19 @@ namespace patchestry::ast {
                 function_builder().function_list.get().at(*op.target->function);
 
             call_expr = build_callexpr_from_function(ctx, function, op);
-            if (!op.output || callee->getReturnType()->isVoidType()) {
+            if (callee->getReturnType()->isVoidType()) {
                 return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
+            }
+            if (!op.output) {
+                // Non-void return but no explicit output varnode in the JSON.
+                // Return the CallExpr with should_merge_to_next=true so it is NOT
+                // emitted as a standalone statement.  Instead, the downstream op
+                // picks it up via create_temporary Case 2 and inlines it directly,
+                // producing exactly one call at the point of consumption and avoiding
+                // cross-block declaration hazards that arise from creating a synthetic
+                // VarDecl in one block whose DeclRefExpr survives in a different block
+                // after dead-block pruning.
+                return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), true);
             }
 
         } else if (op.target->operation) {
@@ -1068,6 +1236,29 @@ namespace patchestry::ast {
                 false
             );
         }
+
+        // When the enclosing function returns non-void, emit "return (T)0;"
+        // instead of a bare "return;" to avoid a diagnostic on the (typically
+        // unreachable) empty return after __stack_chk_fail or similar.
+        const auto &types = type_builder().get_serialized_types();
+        auto type_it      = types.find(function.prototype.rttype_key);
+        if (type_it != types.end() && !type_it->second->isVoidType()) {
+            auto ret_type = type_it->second;
+            auto *zero    = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 0), ctx.IntTy, location
+            );
+            auto cast_result = sema().BuildCStyleCastExpr(
+                location, ctx.getTrivialTypeSourceInfo(ret_type), location, zero
+            );
+            assert(!cast_result.isInvalid());
+            return std::make_pair(
+                clang::ReturnStmt::Create(
+                    ctx, location, cast_result.getAs< clang::Expr >(), nullptr
+                ),
+                false
+            );
+        }
+
         return std::make_pair(
             clang::ReturnStmt::Create(ctx, location, nullptr, nullptr), false
         );
@@ -1094,9 +1285,7 @@ namespace patchestry::ast {
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
         auto location = sourceLocation(ctx.getSourceManager(), op.key);
 
-        // TODO(kumarak): It should be the size of input1 field in bits; At the moment
-        // consider it as 4 bytes but should be fixed.
-        unsigned low_width = ctx.getIntWidth(ctx.IntTy);
+        unsigned low_width = op.inputs[1].size * 8;
         auto merge_to_next = !op.output.has_value();
         auto *shift_value  = clang::IntegerLiteral::Create(
             ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), low_width), ctx.IntTy, location
@@ -2078,8 +2267,16 @@ namespace patchestry::ast {
 
         const auto &var_type = type_builder().get_serialized_types()[*op.type];
         auto op_loc          = sourceLocation(ctx.getSourceManager(), op.key);
+
+        std::string var_name = *op.name;
+        auto &name_counts    = function_builder().declared_name_counts;
+        auto [it, inserted]  = name_counts.try_emplace(var_name, 0);
+        if (!inserted) {
+            var_name += "_" + std::to_string(++(it->second));
+        }
+
         auto *var_decl =
-            create_variable_decl(ctx, sema().CurContext, *op.name, var_type, op_loc);
+            create_variable_decl(ctx, sema().CurContext, var_name, var_type, op_loc);
         // Mark all local variable used to avoid warning about unused variable
         var_decl->setIsUsed();
 
