@@ -2414,11 +2414,14 @@ namespace patchestry::ast {
             fn_decl = cache_it->second;
         } else {
             // Build param types from inputs; use non-variadic to satisfy "prototyped
-            // function must have at least one non-variadic input" (variadic with zero
-            // fixed params is invalid)
+            // function must have at least one non-variadic input" (void() and void(...)
+            // are invalid in CIR/LLVM lowering)
             llvm::SmallVector< clang::QualType, 4 > param_types;
             for (const auto &input : op.inputs) {
                 param_types.push_back(get_varnode_type(ctx, input));
+            }
+            if (param_types.empty()) {
+                param_types.push_back(ctx.VoidPtrTy);
             }
             clang::FunctionProtoType::ExtProtoInfo epi;
             epi.Variadic = false;
@@ -2437,6 +2440,17 @@ namespace patchestry::ast {
                 return {};
             }
 
+            // Create ParmVarDecls so Sema can access parameters during call conversion
+            std::vector< clang::ParmVarDecl * > param_decls;
+            for (std::size_t i = 0; i < param_types.size(); ++i) {
+                auto *param = clang::ParmVarDecl::Create(
+                    ctx, fn_decl, op_loc, op_loc, nullptr, param_types[i], nullptr,
+                    clang::SC_None, nullptr
+                );
+                param_decls.push_back(param);
+            }
+            fn_decl->setParams(param_decls);
+
             // Add AnnotateAttr with metadata for debugging
             fn_decl->addAttr(clang::AnnotateAttr::Create(
                 ctx, annotation, nullptr, 0, clang::SourceRange()
@@ -2453,6 +2467,16 @@ namespace patchestry::ast {
             auto *e = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
             if (e != nullptr) {
                 args.push_back(e);
+            }
+        }
+        // When function expects void* placeholder (op had zero inputs), pass (void*)0
+        if (op.inputs.empty() && args.empty()) {
+            auto *zero = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
+            );
+            auto *null_expr = make_cast(ctx, zero, ctx.VoidPtrTy, op_loc);
+            if (null_expr != nullptr) {
+                args.push_back(null_expr);
             }
         }
 
