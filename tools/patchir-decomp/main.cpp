@@ -250,6 +250,7 @@ int main(int argc, char **argv) {
         LOG(ERROR) << "Failed to initialize diagnostics.\n";
         return EXIT_FAILURE;
     }
+
     createSourceManager(ci);
 
     std::shared_ptr< clang::TargetOptions > target_options =

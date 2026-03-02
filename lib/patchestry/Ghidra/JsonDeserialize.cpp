@@ -591,6 +591,43 @@ namespace patchestry::ghidra {
                 op.condition = std::move(*maybe_varnode);
             }
         }
+
+        if (const auto *succ_array = branch_obj.getArray("successor_blocks")) {
+            for (auto item : *succ_array) {
+                if (auto s = item.getAsString()) {
+                    if (!s->empty()) {
+                        op.successor_blocks.emplace_back(*s);
+                    }
+                }
+            }
+        }
+
+        // fallback_block
+        set_target_field_if_valid(
+            get_string_if_valid(branch_obj, "fallback_block"), op.fallback_block
+        );
+
+        // switch_input varnode
+        if (const auto *sw_in = branch_obj.getObject("switch_input")) {
+            if (auto vn = create_varnode(*sw_in)) {
+                op.switch_input = std::move(*vn);
+            }
+        }
+
+        // switch_cases array
+        if (const auto *cases = branch_obj.getArray("switch_cases")) {
+            for (auto item : *cases) {
+                const auto *obj = item.getAsObject();
+                if (obj == nullptr) {
+                    continue;
+                }
+                auto val   = obj->getInteger("value");
+                auto block = get_string_if_valid(*obj, "target_block");
+                if (val && block && !block->empty()) {
+                    op.switch_cases.push_back({ *val, *block });
+                }
+            }
+        }
     }
 
     std::optional< Operation > JsonParser::create_operation(const JsonObject &pcode_obj) {

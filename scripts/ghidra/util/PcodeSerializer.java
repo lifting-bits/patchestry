@@ -80,6 +80,8 @@ import ghidra.program.model.pcode.PartialUnion;
 import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
+import ghidra.program.model.pcode.PcodeOpAST;
+import ghidra.program.model.pcode.JumpTable;
 import ghidra.program.model.pcode.SequenceNumber;
 import ghidra.program.model.pcode.SymbolEntry;
 import ghidra.program.model.pcode.Varnode;
@@ -198,6 +200,10 @@ public class PcodeSerializer {
 		// function being serialized.
 		private HighFunction currentFunction;
 		private PcodeBlockBasic currentBlock;
+
+		// Jump table index for the current function, keyed by switch address.
+		// Built once when currentFunction is set and cleared when it is reset.
+		private Map<Address, JumpTable> jumpTableIndex;
 		
 		// We invent an entry block for each `HighFunction` to be serialized.
 		// The operations within this entry block are custom `CALLOTHER`s, that
@@ -301,6 +307,7 @@ public class PcodeSerializer {
 			this.typesToSerialize = new ArrayList<>();
 			this.currentFunction = null;
 			this.currentBlock = null;
+			this.jumpTableIndex = null;
 			this.nextSeqNum = 0;
 			this.entryBlock = new ArrayList<>();
 			this.missingLocalsMap = new HashMap<>();
@@ -2023,6 +2030,251 @@ public class PcodeSerializer {
 			serializeInput(pcodeOp, pcodeOp.getInput(1));
 		}
 
+	// Walk backward through def-use chains, skipping mechanical transformations
+	// (CAST, COPY, INT_ZEXT, INT_SEXT, INDIRECT), to reach the original integer
+	// discriminant varnode (parameter, local, or call result).
+	private Varnode traceSwitchDiscriminant(Varnode v) {
+		int depth = 0;
+		while (v != null && depth < 8) {
+			PcodeOp def = v.getDef();
+			if (def == null) {
+				return v;  // param/local — done
+			}
+			int opc = def.getOpcode();
+			if (opc == PcodeOp.CAST     || opc == PcodeOp.COPY   ||
+				opc == PcodeOp.INT_ZEXT || opc == PcodeOp.INT_SEXT ||
+				opc == PcodeOp.INDIRECT) {
+				v = def.getInput(0);
+				depth++;
+			} else {
+				return v;  // LOAD, INT_ADD, etc. — stop
+			}
+		}
+		return v;
+	}
+
+	// Find the default block for a BRANCHIND.  The bounds-check block is the
+	// BRANCHIND's predecessor that has exactly two exits: one into the BRANCHIND
+	// block and one to the default/error block.
+	private String findDefaultBlock() throws Exception {
+		for (int i = 0; i < currentBlock.getInSize(); i++) {
+			PcodeBlock pred = currentBlock.getIn(i);
+			if (pred.getOutSize() == 2) {
+				PcodeBlock out0 = pred.getOut(0);
+				PcodeBlock out1 = pred.getOut(1);
+				if (out0 == currentBlock) {
+					return label(out1);
+				}
+				if (out1 == currentBlock) {
+					return label(out0);
+				}
+			}
+		}
+		return null;
+	}
+
+	// Returns true if `v` traces through CAST/COPY/INT_ZEXT/INT_SEXT/INDIRECT
+	// to the same varnode as `disc` (i.e. they represent the same discriminant).
+	private boolean sameDiscriminant(Varnode v, Varnode disc) {
+		int depth = 0;
+		while (v != null && depth < 4) {
+			if (v.equals(disc)) {
+				return true;
+			}
+			PcodeOp def = v.getDef();
+			if (def == null) {
+				return false;
+			}
+			int opc = def.getOpcode();
+			if (opc == PcodeOp.CAST     || opc == PcodeOp.COPY      ||
+				opc == PcodeOp.INT_ZEXT || opc == PcodeOp.INT_SEXT  ||
+				opc == PcodeOp.INDIRECT) {
+				v = def.getInput(0);
+				depth++;
+			} else {
+				return false;
+			}
+		}
+		return false;
+	}
+
+	// Tier 1: scan the first few P-Code ops of `block` looking for a comparison
+	// of the discriminant against a constant (INT_EQUAL, INT_NOTEQUAL, INT_LESS,
+	// INT_LESSEQUAL, INT_SLESS, INT_SLESSEQUAL).  Returns the constant (case
+	// value) or null if the pattern is not found within the first 4 ops.
+	private Long recoverCaseValueFromBlockEntry(PcodeBlockBasic block, Varnode discriminant) {
+		Iterator<PcodeOp> it = block.getIterator();
+		int scanned = 0;
+		while (it.hasNext() && scanned < 4) {
+			PcodeOp op = it.next();
+			int opc = op.getOpcode();
+			if (opc == PcodeOp.INT_EQUAL     || opc == PcodeOp.INT_NOTEQUAL  ||
+				opc == PcodeOp.INT_LESS      || opc == PcodeOp.INT_LESSEQUAL ||
+				opc == PcodeOp.INT_SLESS     || opc == PcodeOp.INT_SLESSEQUAL) {
+				Varnode lhs = op.getInput(0);
+				Varnode rhs = op.getInput(1);
+				if (rhs.isConstant() && sameDiscriminant(lhs, discriminant)) {
+					return rhs.getOffset();
+				}
+				if (lhs.isConstant() && sameDiscriminant(rhs, discriminant)) {
+					return lhs.getOffset();
+				}
+			}
+			scanned++;
+		}
+		return null;
+	}
+
+	// Tier 0 (most reliable): Ghidra's switch analysis labels each case-target
+	// block with a symbol like "caseD_HEX" (possibly in a namespace such as
+	// "switchD_ADDR::caseD_HEX").  Read the primary symbol at the block start
+	// address and parse the hex value after "caseD_".  Returns null when the
+	// block has no such label (e.g. a user-renamed block or a non-switch block).
+	private Long recoverCaseValueFromBlockLabel(PcodeBlock block) {
+		Address addr = block.getStart();
+		Symbol sym = currentProgram.getSymbolTable().getPrimarySymbol(addr);
+		if (sym == null) {
+			return null;
+		}
+		// getName() returns the local name without the namespace prefix.
+		String name = sym.getName();
+		int idx = name.indexOf("caseD_");
+		if (idx < 0) {
+			return null;
+		}
+		String hexPart = name.substring(idx + "caseD_".length());
+		try {
+			return Long.parseLong(hexPart, 16);
+		} catch (NumberFormatException e) {
+			return null;
+		}
+	}
+
+	// Serialize an indirect branch (BRANCHIND). This records the computed
+	// target expression and, when Ghidra has resolved the jump table, the
+	// set of possible successor blocks, the default block, and the original
+	// integer discriminant with per-case integer values.
+	void serializeBranchIndOp(PcodeOp pcodeOp) throws Exception {
+		writer.name("inputs").beginArray();
+		serializeInput(pcodeOp, pcodeOp.getInput(0));
+		writer.endArray();
+
+		int n = currentBlock.getOutSize();
+		if (n == 0) {
+			return;
+		}
+
+		writer.name("successor_blocks").beginArray();
+		for (int i = 0; i < n; i++) {
+			writer.value(label(currentBlock.getOut(i)));
+		}
+		writer.endArray();
+
+		// Emit the fallback block recovered from the bounds-check predecessor.
+		// The C++ consumer jumps to this block when no switch case matches.
+		String defaultBlock = findDefaultBlock();
+		if (defaultBlock != null) {
+			writer.name("fallback_block").value(defaultBlock);
+		}
+
+		JumpTable jt = jumpTableIndex.get(pcodeOp.getSeqnum().getTarget());
+		Varnode discriminant = (jt != null) ? traceSwitchDiscriminant(pcodeOp.getInput(0)) : null;
+		if (jt != null && discriminant != null) {
+			serializeSwitchCases(pcodeOp, discriminant, jt, n);
+		}
+	}
+
+
+	// Emits "switch_input" and "switch_cases" JSON fields for a resolved BRANCHIND.
+	// Case values are recovered using a 3-tier strategy:
+	//   Tier 0a – decompiler's own integer label values from JumpTable API (most authoritative).
+	//   Tier 0  – Ghidra's own "caseD_HEX" block labels.
+	//   Tier 1  – block-entry P-Code ops that compare the discriminant against a constant.
+	// Both fields are omitted entirely when no tier produces a complete case map,
+	// allowing the C++ side to fall back to successor_blocks-based dispatch.
+	private void serializeSwitchCases(PcodeOp pcodeOp, Varnode discriminant,
+			JumpTable jt, int n) throws Exception {
+
+		Map<String,Long> caseMap = new HashMap<>();
+		boolean caseMapOk = false;
+
+		// Tier 0a: use the decompiler's own integer label values — most authoritative source.
+		// getLabelValues()[i] and getCases()[i] are aligned: the i-th label routes to the
+		// i-th case address.
+		Integer[] labels = jt.getLabelValues();
+		Address[] cases  = jt.getCases();
+		if (labels != null && cases != null && labels.length > 0
+				&& labels.length == cases.length) {
+			for (int i = 0; i < labels.length; i++) {
+				for (int j = 0; j < n; j++) {
+					if (currentBlock.getOut(j).getStart().equals(cases[i])) {
+						caseMap.put(label(currentBlock.getOut(j)), (long)(int) labels[i]);
+						break;
+					}
+				}
+			}
+			caseMapOk = !caseMap.isEmpty();
+		}
+
+		// Tier 0: read Ghidra's own "caseD_HEX" block labels — reliable for any
+		// compiled switch since Ghidra's analysis stores the correct case values
+		// in the symbol name.
+		if (!caseMapOk) {
+			caseMap = new HashMap<>();
+			caseMapOk = true;
+			for (int i = 0; i < n; i++) {
+				PcodeBlock blk = currentBlock.getOut(i);
+				Long v = recoverCaseValueFromBlockLabel(blk);
+				if (v == null) {
+					caseMapOk = false;
+					break;
+				}
+				caseMap.put(label(blk), v);
+			}
+		}
+
+		// Tier 1: scan first P-Code ops at each case-target block for a
+		// comparison of the discriminant against a constant.  Handles
+		// computed-goto dispatch where blocks start with INT_EQUAL etc.
+		if (!caseMapOk) {
+			caseMap = new HashMap<>();
+			caseMapOk = true;
+			for (int i = 0; i < n; i++) {
+				PcodeBlock blk = currentBlock.getOut(i);
+				if (!(blk instanceof PcodeBlockBasic)) {
+					caseMapOk = false;
+					break;
+				}
+				Long v = recoverCaseValueFromBlockEntry((PcodeBlockBasic) blk, discriminant);
+				if (v == null) {
+					caseMapOk = false;
+					break;
+				}
+				caseMap.put(label(blk), v);
+			}
+		}
+
+		// If no tier recovered real case values, or the map is partial,
+		// emit nothing — the C++ side will fall back to successor_blocks (Priority 2).
+		if (!caseMapOk || caseMap.size() != n) {
+			return;
+		}
+
+		writer.name("switch_input");
+		serializeInput(pcodeOp, discriminant);
+		writer.name("switch_cases").beginArray();
+		for (int i = 0; i < n; i++) {
+			String blockLabel = label(currentBlock.getOut(i));
+			Long caseVal = caseMap.get(blockLabel);
+			if (caseVal == null) { continue; }  // defensive: skip unmapped blocks
+			writer.beginObject();
+			writer.name("value").value(caseVal);
+			writer.name("target_block").value(blockLabel);
+			writer.endObject();
+		}
+		writer.endArray();
+	}
+
 		// Serialize a generic multi-input, single-output p-code operation.
 		void serializeGenericOp(PcodeOp pcodeOp) throws Exception {
 			writer.name("inputs").beginArray();
@@ -2205,6 +2457,9 @@ public class PcodeSerializer {
 					break;
 				case PcodeOp.BRANCH:
 					serializeBranchOp(pcodeOp);
+					break;
+				case PcodeOp.BRANCHIND:
+					serializeBranchIndOp(pcodeOp);
 					break;
 				case PcodeOp.RETURN:
 					serializeReturnOp(pcodeOp);
@@ -2432,6 +2687,10 @@ public class PcodeSerializer {
 					String entryLabel = null;
 					PcodeBlockBasic firstPcodeBasicBlock = null;
 					currentFunction = highFunction;
+					jumpTableIndex = new HashMap<>();
+					for (JumpTable jt : currentFunction.getJumpTables()) {
+						jumpTableIndex.put(jt.getSwitchAddress(), jt);
+					}
 
 					writer.name("basic_blocks").beginObject();
 					for (PcodeBlockBasic basicBlock : highFunction.getBasicBlocks()) {
@@ -2453,6 +2712,7 @@ public class PcodeSerializer {
 					
 					writer.endObject();  // End of `basic_blocks`.
 					currentFunction = null;
+					jumpTableIndex = null;
 					
 					if (entryLabel != null) {
 						writer.name("entry_block").value(entryLabel);
