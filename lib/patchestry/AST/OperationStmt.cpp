@@ -755,12 +755,9 @@ namespace patchestry::ast {
             auto *switch_stmt =
                 clang::SwitchStmt::Create(ctx, nullptr, nullptr, disc, loc, loc);
 
-            std::vector< clang::Stmt * > sw_body;
             const auto disc_width = ctx.getIntWidth(disc->getType());
-            for (const auto &sc : op.switch_cases) {
-                if (!function_builder().labels_declaration.contains(sc.target_block)) {
-                    continue;
-                }
+
+            auto create_case = [&](const SwitchCase &sc) -> clang::CaseStmt * {
                 auto *case_val = clang::IntegerLiteral::Create(
                     ctx,
                     llvm::APInt(disc_width, static_cast< uint64_t >(sc.value), /*isSigned=*/true),
@@ -769,10 +766,25 @@ namespace patchestry::ast {
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
                 auto target_loc = sourceLocation(ctx.getSourceManager(), sc.target_block);
-                case_stmt->setSubStmt(new (ctx) clang::GotoStmt(
+                auto *goto_stmt = new (ctx) clang::GotoStmt(
                     function_builder().labels_declaration.at(sc.target_block), loc, target_loc
-                ));
-                sw_body.push_back(case_stmt);
+                );
+                if (sc.has_exit) {
+                    std::vector< clang::Stmt * > body = { goto_stmt, new (ctx) clang::BreakStmt(loc) };
+                    case_stmt->setSubStmt(
+                        clang::CompoundStmt::Create(ctx, body, clang::FPOptionsOverride(), loc, loc)
+                    );
+                } else {
+                    case_stmt->setSubStmt(goto_stmt);
+                }
+                return case_stmt;
+            };
+
+            std::vector< clang::Stmt * > sw_body;
+            for (const auto &sc : op.switch_cases) {
+                if (function_builder().labels_declaration.contains(sc.target_block)) {
+                    sw_body.push_back(create_case(sc));
+                }
             }
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)

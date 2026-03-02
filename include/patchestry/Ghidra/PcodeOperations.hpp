@@ -155,6 +155,7 @@ namespace patchestry::ghidra {
     {
         int64_t value;
         std::string target_block;
+        bool has_exit = false;
     };
 
     struct Operation

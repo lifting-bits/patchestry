@@ -624,7 +624,11 @@ namespace patchestry::ghidra {
                 auto val   = obj->getInteger("value");
                 auto block = get_string_if_valid(*obj, "target_block");
                 if (val && block && !block->empty()) {
-                    op.switch_cases.push_back({ *val, *block });
+                    bool has_exit = false;
+                    if (auto exit_val = obj->getBoolean("has_exit")) {
+                        has_exit = *exit_val;
+                    }
+                    op.switch_cases.push_back({ *val, *block, has_exit });
                 }
             }
         }

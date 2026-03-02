@@ -2308,12 +2308,14 @@ public class PcodeSerializer {
 		serializeInput(pcodeOp, discriminant);
 		writer.name("switch_cases").beginArray();
 		for (int i = 0; i < n; i++) {
-			String blockLabel = label(currentBlock.getOut(i));
+			PcodeBlock caseBlock = currentBlock.getOut(i);
+			String blockLabel = label(caseBlock);
 			Long caseVal = caseMap.get(blockLabel);
 			if (caseVal == null) { continue; }  // defensive: skip unmapped blocks
 			writer.beginObject();
 			writer.name("value").value(caseVal);
 			writer.name("target_block").value(blockLabel);
+			writer.name("has_exit").value(caseBlock.getOutSize() == 1);
 			writer.endObject();
 		}
 		writer.endArray();
