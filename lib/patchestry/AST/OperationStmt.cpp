@@ -27,6 +27,8 @@
 #include <clang/Sema/Lookup.h>
 #include <clang/Sema/Sema.h>
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Casting.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
@@ -132,20 +134,21 @@ namespace patchestry::ast {
         /**
          * @brief Look up or create an opaque external function placeholder in the TU.
          *
-         * Used by create_callother and create_userdefined to emit a best-effort call
-         * expression that preserves operation inputs for downstream analysis, rather
-         * than silently dropping the operation.
+         * Used by create_userdefined to emit a best-effort call expression that
+         * preserves operation inputs for downstream analysis.
          *
-         * @param fn_name   Name of the placeholder function (e.g. "__patchestry_callother_…").
-         * @param ret_type  Return type of the placeholder.
-         * @param op_loc    Source location for the declaration.
+         * @param fn_name     Name of the placeholder function.
+         * @param ret_type    Return type of the placeholder.
+         * @param param_types Parameter types; must be non-empty (variadic with zero
+         *                    fixed params violates "prototyped function must have at
+         *                    least one non-variadic input").
+         * @param op_loc      Source location for the declaration.
          */
         clang::FunctionDecl *lookup_or_create_opaque_fn( // NOLINT
             clang::ASTContext &ctx, const std::string &fn_name, clang::QualType ret_type,
-            clang::SourceLocation op_loc
+            llvm::ArrayRef< clang::QualType > param_types, clang::SourceLocation op_loc
         ) {
             auto &ident = ctx.Idents.get(fn_name);
-            // Check for an existing declaration with this name to avoid duplicates.
             auto lookup_result =
                 ctx.getTranslationUnitDecl()->lookup(clang::DeclarationName(&ident));
             for (auto *d : lookup_result) {
@@ -154,10 +157,15 @@ namespace patchestry::ast {
                 }
             }
 
-            // No existing declaration: create a variadic extern function.
+            // Ensure at least one non-variadic param (LLVM/CIR requirement)
+            llvm::SmallVector< clang::QualType, 4 > params(param_types.begin(), param_types.end());
+            if (params.empty()) {
+                params.push_back(ctx.VoidPtrTy);
+            }
+
             clang::FunctionProtoType::ExtProtoInfo epi;
-            epi.Variadic = true;
-            auto fn_type = ctx.getFunctionType(ret_type, {}, epi);
+            epi.Variadic = false;
+            auto fn_type = ctx.getFunctionType(ret_type, params, epi);
 
             auto *fn_decl = clang::FunctionDecl::Create(
                 ctx, ctx.getTranslationUnitDecl(), op_loc, op_loc,
@@ -1168,8 +1176,13 @@ namespace patchestry::ast {
 
         std::string fn_name = "__patchestry_userdefined_" + sanitize_key_to_ident(op.key);
 
+        llvm::SmallVector< clang::QualType, 4 > param_types;
+        for (const auto &input : op.inputs) {
+            param_types.push_back(get_varnode_type(ctx, input));
+        }
+
         clang::FunctionDecl *fn_decl =
-            lookup_or_create_opaque_fn(ctx, fn_name, ret_type, op_loc);
+            lookup_or_create_opaque_fn(ctx, fn_name, ret_type, param_types, op_loc);
 
         std::vector< clang::Expr * > args;
         for (const auto &input : op.inputs) {
@@ -1177,6 +1190,16 @@ namespace patchestry::ast {
                 clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
             if (arg_expr != nullptr) {
                 args.push_back(arg_expr);
+            }
+        }
+        // When fn was created with void* placeholder (zero inputs), pass (void*)0
+        if (args.empty() && op.inputs.empty()) {
+            auto *zero = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
+            );
+            auto *null_expr = make_cast(ctx, zero, ctx.VoidPtrTy, op_loc);
+            if (null_expr != nullptr) {
+                args.push_back(null_expr);
             }
         }
 
@@ -2390,11 +2413,17 @@ namespace patchestry::ast {
         if (cache_it != intrinsic_decls.end()) {
             fn_decl = cache_it->second;
         } else {
-            // Create function type with variadic signature
+            // Build param types from inputs; use non-variadic to satisfy "prototyped
+            // function must have at least one non-variadic input" (variadic with zero
+            // fixed params is invalid)
+            llvm::SmallVector< clang::QualType, 4 > param_types;
+            for (const auto &input : op.inputs) {
+                param_types.push_back(get_varnode_type(ctx, input));
+            }
             clang::FunctionProtoType::ExtProtoInfo epi;
-            epi.Variadic = true;
+            epi.Variadic = false;
 
-            auto func_type = ctx.getFunctionType(ret_type, {}, epi);
+            auto func_type = ctx.getFunctionType(ret_type, param_types, epi);
 
             fn_decl = clang::FunctionDecl::Create(
                 ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(),

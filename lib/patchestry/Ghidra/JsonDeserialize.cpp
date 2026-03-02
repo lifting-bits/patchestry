@@ -672,6 +672,7 @@ namespace patchestry::ghidra {
         switch (operation.mnemonic) {
             case Mnemonic::OP_CALL:
             case Mnemonic::OP_CALLIND:
+            case Mnemonic::OP_CALLOTHER:
                 deserialize_call_operation(pcode_obj, operation);
                 break;
             case Mnemonic::OP_CBRANCH:
