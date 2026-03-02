@@ -130,15 +130,9 @@ namespace patchestry::ast {
                                     stmts.begin()
                                         + static_cast< std::ptrdiff_t >(skip_label_idx)
                                 );
-                                auto loc = if_stmt->getIfLoc();
-                                auto *negated_cond = clang::UnaryOperator::Create(
-                                    ctx,
-                                    ensureRValue(
-                                        ctx,
-                                        if_stmt->getCond()
-                                    ),
-                                    clang::UO_LNot, ctx.IntTy, clang::VK_PRValue,
-                                    clang::OK_Ordinary, loc, false, clang::FPOptionsOverride()
+                                auto loc           = if_stmt->getIfLoc();
+                                auto *negated_cond = negateConditionWithParens(
+                                    ctx, if_stmt->getCond(), loc
                                 );
                                 auto *new_body = makeCompound(ctx, fallthrough_body, loc, loc);
                                 auto *new_if   = clang::IfStmt::Create(
@@ -207,9 +201,19 @@ namespace patchestry::ast {
                     if (then_term_goto == nullptr
                         && else_label_idx - 1 == then_label_idx)
                     {
-                        then_term_goto = llvm::dyn_cast< clang::GotoStmt >(
-                            then_label_stmt->getSubStmt()
-                        );
+                        clang::Stmt *sub = then_label_stmt->getSubStmt();
+                        then_term_goto   = llvm::dyn_cast< clang::GotoStmt >(sub);
+                        if (then_term_goto == nullptr) {
+                            if (auto *cs =
+                                    llvm::dyn_cast< clang::CompoundStmt >(sub))
+                            {
+                                if (!cs->body_empty()) {
+                                    then_term_goto = llvm::dyn_cast< clang::GotoStmt >(
+                                        cs->body_back()
+                                    );
+                                }
+                            }
+                        }
                     }
 
                     // Then-body falls through to else-label (no explicit goto to join)
@@ -228,11 +232,7 @@ namespace patchestry::ast {
                             auto loc          = if_stmt->getIfLoc();
                             clang::Expr *cond = if_stmt->getCond();
                             if (negated_condition) {
-                                cond = clang::UnaryOperator::Create(
-                                    ctx, ensureRValue(ctx, cond), clang::UO_LNot, ctx.IntTy,
-                                    clang::VK_PRValue, clang::OK_Ordinary, loc, false,
-                                    clang::FPOptionsOverride()
-                                );
+                                cond = negateConditionWithParens(ctx, cond, loc);
                             }
                             auto *new_then = makeCompound(
                                 ctx, then_body, then_label_stmt->getBeginLoc(),
@@ -319,11 +319,8 @@ namespace patchestry::ast {
                         }
                         clang::Expr *single_cond = if_stmt->getCond();
                         if (negated_condition) {
-                            single_cond = clang::UnaryOperator::Create(
-                                ctx, ensureRValue(ctx, single_cond), clang::UO_LNot,
-                                ctx.IntTy, clang::VK_PRValue, clang::OK_Ordinary,
-                                if_stmt->getIfLoc(), false, clang::FPOptionsOverride()
-                            );
+                            single_cond =
+                                negateConditionWithParens(ctx, single_cond, if_stmt->getIfLoc());
                         }
                         auto *single_then = makeCompound(
                             ctx, then_only_body, then_label_stmt->getBeginLoc(),
@@ -380,6 +377,8 @@ namespace patchestry::ast {
                         continue;
                     }
 
+                    const clang::LabelDecl *join_decl = join_label_stmt->getDecl();
+
                     std::vector< clang::Stmt * > then_body;
                     then_body.push_back(then_label_stmt->getSubStmt());
                     {
@@ -389,6 +388,11 @@ namespace patchestry::ast {
                             then_body.insert(
                                 then_body.end(), stmts.begin() + tb_begin,
                                 stmts.begin() + tb_end
+                            );
+                        }
+                        if (!then_body.empty()) {
+                            then_body.back() = stripTrailingGotoTo(
+                                ctx, then_body.back(), join_decl
                             );
                         }
                     }
@@ -401,6 +405,11 @@ namespace patchestry::ast {
                             else_body.insert(
                                 else_body.end(), stmts.begin() + eb_begin,
                                 stmts.begin() + eb_end
+                            );
+                        }
+                        if (!else_body.empty()) {
+                            else_body.back() = stripTrailingGotoTo(
+                                ctx, else_body.back(), join_decl
                             );
                         }
                     }
@@ -425,11 +434,8 @@ namespace patchestry::ast {
                     );
                     clang::Expr *two_sided_cond = if_stmt->getCond();
                     if (negated_condition) {
-                        two_sided_cond = clang::UnaryOperator::Create(
-                            ctx, ensureRValue(ctx, two_sided_cond), clang::UO_LNot,
-                            ctx.IntTy, clang::VK_PRValue, clang::OK_Ordinary,
-                            if_stmt->getIfLoc(), false, clang::FPOptionsOverride()
-                        );
+                        two_sided_cond =
+                            negateConditionWithParens(ctx, two_sided_cond, if_stmt->getIfLoc());
                     }
                     auto *new_if = clang::IfStmt::Create(
                         ctx, if_stmt->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr,
@@ -753,10 +759,7 @@ namespace patchestry::ast {
                 if (!negate) {
                     return cond;
                 }
-                return clang::UnaryOperator::Create(
-                    ctx, ensureRValue(ctx, cond), clang::UO_LNot, ctx.IntTy, clang::VK_PRValue,
-                    clang::OK_Ordinary, loc, false, clang::FPOptionsOverride()
-                );
+                return negateConditionWithParens(ctx, cond, loc);
             }
 
             static std::vector< clang::Stmt * > buildSlice(

@@ -207,6 +207,20 @@ namespace patchestry::ast::detail {
         );
     }
 
+    // Create !(cond) with ParenExpr so it prints as !(x>0) not !x>0 (which would
+    // parse as (!x)>0 due to precedence).  Use when negating conditions for
+    // if-structurization.
+    inline clang::Expr *negateConditionWithParens(
+        clang::ASTContext &ctx, clang::Expr *cond, clang::SourceLocation loc
+    ) {
+        clang::Expr *operand = ensureRValue(ctx, cond);
+        clang::Expr *wrapped = new (ctx) clang::ParenExpr(loc, loc, operand);
+        return clang::UnaryOperator::Create(
+            ctx, wrapped, clang::UO_LNot, ctx.IntTy, clang::VK_PRValue,
+            clang::OK_Ordinary, loc, false, clang::FPOptionsOverride()
+        );
+    }
+
     inline clang::CompoundStmt *makeCompound(
         clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts,
         clang::SourceLocation l_brace = clang::SourceLocation(),
@@ -276,6 +290,15 @@ namespace patchestry::ast::detail {
     // Returns true if `stmt` unconditionally exits the current scope (break/continue/
     // return/goto, or an if-else where both branches are unconditional terminators).
     bool isUnconditionalTerminator(const clang::Stmt *stmt);
+
+    // Removes a trailing "goto target" from stmt when building diamond arm bodies.
+    // For CompoundStmt: if the last child is a GotoStmt to target, returns a new
+    // compound without it.  For a bare GotoStmt to target, returns NullStmt.
+    // Otherwise returns stmt unchanged.
+    clang::Stmt *stripTrailingGotoTo(
+        clang::ASTContext &ctx, clang::Stmt *stmt,
+        const clang::LabelDecl *target
+    );
 
     // =========================================================================
     // CFG infrastructure types and declarations

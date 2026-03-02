@@ -501,4 +501,38 @@ namespace patchestry::ast::detail {
         return false;
     }
 
+    clang::Stmt *stripTrailingGotoTo(
+        clang::ASTContext &ctx, clang::Stmt *stmt,
+        const clang::LabelDecl *target
+    ) {
+        if (stmt == nullptr) {
+            return nullptr;
+        }
+        if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+            if (gs->getLabel() == target) {
+                return new (ctx) clang::NullStmt(stmt->getBeginLoc(), false);
+            }
+            return stmt;
+        }
+        if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+            if (cs->body_empty()) {
+                return stmt;
+            }
+            auto *last = cs->body_back();
+            auto *last_goto = llvm::dyn_cast< clang::GotoStmt >(last);
+            if (last_goto != nullptr && last_goto->getLabel() == target) {
+                if (cs->size() == 1U) {
+                    return new (ctx) clang::NullStmt(stmt->getBeginLoc(), false);
+                }
+                std::vector< clang::Stmt * > trimmed(
+                    cs->body_begin(), cs->body_end() - 1
+                );
+                return makeCompound(
+                    ctx, trimmed, cs->getLBracLoc(), cs->getRBracLoc()
+                );
+            }
+        }
+        return stmt;
+    }
+
 } // namespace patchestry::ast::detail
