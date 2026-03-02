@@ -2315,7 +2315,19 @@ public class PcodeSerializer {
 			writer.beginObject();
 			writer.name("value").value(caseVal);
 			writer.name("target_block").value(blockLabel);
-			writer.name("has_exit").value(caseBlock.getOutSize() == 1);
+			boolean hasExit = false;
+			if (caseBlock.getOutSize() == 1) {
+				PcodeBlock succ = caseBlock.getOut(0);
+				boolean succIsAnotherCase = false;
+				for (int j = 0; j < n; j++) {
+					if (currentBlock.getOut(j) == succ) {
+						succIsAnotherCase = true;
+						break;
+					}
+				}
+				hasExit = !succIsAnotherCase;
+			}
+			writer.name("has_exit").value(hasExit);
 			writer.endObject();
 		}
 		writer.endArray();

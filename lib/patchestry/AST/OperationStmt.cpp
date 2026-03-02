@@ -766,17 +766,59 @@ namespace patchestry::ast {
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
                 auto target_loc = sourceLocation(ctx.getSourceManager(), sc.target_block);
-                auto *goto_stmt = new (ctx) clang::GotoStmt(
-                    function_builder().labels_declaration.at(sc.target_block), loc, target_loc
-                );
-                if (sc.has_exit) {
-                    std::vector< clang::Stmt * > body = { goto_stmt, new (ctx) clang::BreakStmt(loc) };
-                    case_stmt->setSubStmt(
-                        clang::CompoundStmt::Create(ctx, body, clang::FPOptionsOverride(), loc, loc)
-                    );
-                } else {
-                    case_stmt->setSubStmt(goto_stmt);
+
+                // Try to inline the target block body for has_exit cases.
+                // Requirements: block exists, has ordered ops, terminal op is BRANCH.
+                bool inlined = false;
+                if (sc.has_exit && function.basic_blocks.contains(sc.target_block)) {
+                    const auto &tb = function.basic_blocks.at(sc.target_block);
+                    if (!tb.ordered_operations.empty()) {
+                        const auto &last_op_key = tb.ordered_operations.back();
+                        bool terminal_is_branch =
+                            tb.operations.contains(last_op_key)
+                            && tb.operations.at(last_op_key).mnemonic == Mnemonic::OP_BRANCH;
+
+                        if (terminal_is_branch) {
+                            std::vector< clang::Stmt * > case_body;
+                            for (const auto &op_key : tb.ordered_operations) {
+                                if (!tb.operations.contains(op_key)) { continue; }
+                                const auto &target_op = tb.operations.at(op_key);
+                                // Skip the terminal BRANCH — break replaces it.
+                                if (target_op.mnemonic == Mnemonic::OP_BRANCH) { continue; }
+                                auto [stmt, merge] =
+                                    function_builder().create_operation(ctx, target_op);
+                                for (auto *p : function_builder().pending_materialized) {
+                                    case_body.push_back(p);
+                                }
+                                function_builder().pending_materialized.clear();
+                                if (stmt) {
+                                    function_builder().operation_stmts.emplace(
+                                        target_op.key, stmt
+                                    );
+                                    if (!merge) { case_body.push_back(stmt); }
+                                }
+                            }
+                            case_body.push_back(new (ctx) clang::BreakStmt(loc));
+                            case_stmt->setSubStmt(clang::CompoundStmt::Create(
+                                ctx, case_body, clang::FPOptionsOverride(), loc, loc
+                            ));
+                            function_builder().inlined_blocks.insert(sc.target_block);
+                            inlined = true;
+                        }
+                    }
                 }
+
+                if (!inlined) {
+                    auto *goto_stmt = new (ctx) clang::GotoStmt(
+                        function_builder().labels_declaration.at(sc.target_block), loc,
+                        target_loc
+                    );
+                    case_stmt->setSubStmt(goto_stmt);
+                    if (sc.has_exit) {
+                        function_builder().break_target_blocks.insert(sc.target_block);
+                    }
+                }
+
                 return case_stmt;
             };
 

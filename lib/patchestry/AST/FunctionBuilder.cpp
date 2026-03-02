@@ -608,6 +608,21 @@ namespace patchestry::ast {
                 continue;
             }
 
+            // Block body was inlined into a switch case — skip entirely.
+            if (inlined_blocks.contains(key)) {
+                continue;
+            }
+
+            // has_exit target that could not be inlined — emit "label: break;".
+            if (break_target_blocks.contains(key)) {
+                auto loc         = sourceLocation(ctx.getSourceManager(), key);
+                auto *break_stmt = new (ctx) clang::BreakStmt(loc);
+                auto *label_stmt = new (ctx)
+                    clang::LabelStmt(loc, labels_declaration.at(key), break_stmt);
+                stmt_vec.push_back(label_stmt);
+                continue;
+            }
+
             LOG(INFO) << "Processing basic block with key " << key << "\n";
 
             // Expose the next block in RPO order so create_branch can elide
