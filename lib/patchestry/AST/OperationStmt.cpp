@@ -2307,12 +2307,21 @@ namespace patchestry::ast {
         // Create a new intrinsic function declaration
         auto loc = clang::SourceLocation();
 
-        // Create function type with variadic signature if requested
+        // Create function type with variadic signature if requested.
+        // Note: Variadic prototypes must have at least one non-variadic parameter
+        // to satisfy CIR/LLVM lowering requirements.
         clang::FunctionProtoType::ExtProtoInfo epi;
         epi.Variadic = is_variadic;
 
-        auto func_type = ctx.getFunctionType(return_type, {}, epi);
+        llvm::SmallVector<clang::QualType, 1> param_types;
+        if (is_variadic) {
+            // Use a generic void * parameter to satisfy the "at least one fixed
+            // parameter" requirement for variadic functions.
+            auto void_ptr_ty = ctx.getPointerType(ctx.VoidTy);
+            param_types.push_back(void_ptr_ty);
+        }
 
+        auto func_type = ctx.getFunctionType(return_type, param_types, epi);
         auto *func_decl = clang::FunctionDecl::Create(
             ctx, ctx.getTranslationUnitDecl(), loc, loc, &ctx.Idents.get(name), func_type,
             ctx.getTrivialTypeSourceInfo(func_type), clang::SC_Extern
