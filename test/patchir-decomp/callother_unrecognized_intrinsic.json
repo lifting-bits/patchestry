@@ -3,9 +3,9 @@
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // CIR: cir.func @unknown_intrinsic_test
-// CIR: __patchestry_missing_some_unknown_intrinsic
+// CIR: __patchestry_missing_some_unknown
 // LL: define {{.*}} void @unknown_intrinsic_test
-// LL: call {{.*}} @__patchestry_missing_some_unknown_intrinsic
+// LL: call {{.*}} @__patchestry_missing_some_unknown
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",
