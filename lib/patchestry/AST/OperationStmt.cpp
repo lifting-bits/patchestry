@@ -417,6 +417,19 @@ namespace patchestry::ast {
         );
     }
 
+    std::optional< clang::QualType > OpBuilder::lookup_op_type(const Operation &op) {
+        if (!op.type.has_value()) {
+            LOG(ERROR) << "Operation missing type field. key: " << op.key;
+            return std::nullopt;
+        }
+        auto it = type_builder().get_serialized_types().find(*op.type);
+        if (it == type_builder().get_serialized_types().end()) {
+            LOG(ERROR) << "Operation type not found in serialized types. key: " << op.key;
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_copy(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -474,10 +487,16 @@ namespace patchestry::ast {
         auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
 
         if (op.type) {
-            const auto &op_type = type_builder().get_serialized_types().at(*op.type);
-            auto pointer_type   = ctx.getPointerType(op_type);
-            auto *cast_expr     = make_cast(ctx, input_expr, pointer_type, op_loc);
-            assert(cast_expr != nullptr && "Failed to make cast expression");
+            auto op_type_opt = lookup_op_type(op);
+            if (!op_type_opt) {
+                return {};
+            }
+            auto pointer_type = ctx.getPointerType(*op_type_opt);
+            auto *cast_expr   = make_cast(ctx, input_expr, pointer_type, op_loc);
+            if (!cast_expr) {
+                LOG(ERROR) << "Failed to make cast expression for LOAD. key: " << op.key;
+                return {};
+            }
             input_expr = cast_expr;
         }
 
@@ -947,7 +966,11 @@ namespace patchestry::ast {
         // TODO(kumarak): Switch to delay the creation of AST node for function declaration and
         // fix return type during creating the node.
         if (op.type) {
-            const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+            auto op_type_opt = lookup_op_type(op);
+            if (!op_type_opt) {
+                return {};
+            }
+            const auto &op_type = *op_type_opt;
             if (callee->getReturnType() != op_type && callee->getReturnType()->isVoidType()) {
                 auto param_types    = proto_type->getParamTypes();
                 auto epi            = proto_type->getExtProtoInfo();
@@ -1336,7 +1359,8 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        auto type_it = type_builder().get_serialized_types().find(*op.type);
+        if (type_it == type_builder().get_serialized_types().end()) {
             LOG(ERROR) << "PIECE Operation type is not serialized. key: " << op.key;
             return {};
         }
@@ -1360,7 +1384,7 @@ namespace patchestry::ast {
         // If Operation has type, convert expression to operation type and perform bit-shift and
         // or operation.
         if (op.type) {
-            auto op_type           = type_builder().get_serialized_types().at(*op.type);
+            auto op_type           = type_it->second;
             auto *cast_expr_input0 = make_cast(ctx, input0_expr, op_type, location);
             if (!cast_expr_input0) {
                 LOG(ERROR) << "Failed to create cast expression for PIECE input0. key: "
@@ -1418,13 +1442,14 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        auto type_it = type_builder().get_serialized_types().find(*op.type);
+        if (type_it == type_builder().get_serialized_types().end()) {
             LOG(ERROR) << "SUBPIECE Operation type is not serialized. key: " << op.key;
             return {};
         }
 
         auto merge_to_next  = !op.output.has_value();
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_it->second;
         auto op_location    = sourceLocation(ctx.getSourceManager(), op.key);
 
         auto *shift_value =
@@ -1502,7 +1527,11 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        auto target_type = type_builder().get_serialized_types().at(*op.type);
+        auto target_type_opt = lookup_op_type(op);
+        if (!target_type_opt) {
+            return {};
+        }
+        auto target_type = *target_type_opt;
 
         auto implicit_result = sema().PerformImplicitConversion(
             input_expr, target_type, clang::AssignmentAction::Converting, true
@@ -1544,7 +1573,11 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        auto target_type = type_builder().get_serialized_types().at(*op.type);
+        auto target_type_opt = lookup_op_type(op);
+        if (!target_type_opt) {
+            return {};
+        }
+        auto target_type = *target_type_opt;
 
         auto implicit_result = sema().PerformImplicitConversion(
             input_expr, target_type, clang::AssignmentAction::Converting, true

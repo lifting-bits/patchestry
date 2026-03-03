@@ -322,8 +322,8 @@ namespace patchestry::ast {
         auto num_parameters = function.get().prototype.parameters.size();
         if (parameters.size() != num_parameters) {
             // If there is mismatch between number of parameters in function prototype and
-            // paramater declaration object, create default parameter considering there is an
-            // issue recovering the paramter operation from ghidra and function prototype is
+            // parameter declaration object, create default parameter considering there is an
+            // issue recovering the parameter operation from ghidra and function prototype is
             // correct.
             auto default_params =
                 create_default_paramaters(ctx, func_decl, function.get().prototype);
@@ -404,7 +404,7 @@ namespace patchestry::ast {
         const auto &rttype = type_builder.get().get_serialized_types().at(proto.rttype_key);
         for (const auto &param : proto.parameters) {
             if (!type_builder.get().get_serialized_types().contains(param)) {
-                LOG(ERROR) << "Skipping, invalid paramater key in function.\n";
+                LOG(ERROR) << "Skipping, invalid parameter key in function.\n";
                 continue;
             }
 
