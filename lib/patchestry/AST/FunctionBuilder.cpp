@@ -614,14 +614,18 @@ namespace patchestry::ast {
             }
 
             // has_exit target that could not be inlined — emit "label: break;".
-            if (break_target_blocks.contains(key)) {
+            // TODO(kumarak): Generating break statement outside switch/loop will cause error
+            // while lowering to CIR. At the moment create a goto to fallback or next block. It
+            // should be fixed after integrating minimal ast passes to inline the break inside
+            // switch statement.
+            /*if (break_target_blocks.contains(key)) {
                 auto loc         = sourceLocation(ctx.getSourceManager(), key);
                 auto *break_stmt = new (ctx) clang::BreakStmt(loc);
                 auto *label_stmt = new (ctx)
                     clang::LabelStmt(loc, labels_declaration.at(key), break_stmt);
                 stmt_vec.push_back(label_stmt);
                 continue;
-            }
+            }*/
 
             LOG(INFO) << "Processing basic block with key " << key << "\n";
 
