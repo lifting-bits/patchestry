@@ -37,9 +37,9 @@
                 { "type": "type_int", "kind": "local", "operation": "loc_sel" }
               ],
               "switch_cases": [
-                { "value": 0, "target_block": "ram:18000000:1:basic" },
-                { "value": 1, "target_block": "MISSING_BLOCK" },
-                { "value": 2, "target_block": "ram:18000000:2:basic" }
+                { "value": 0, "target_block": "ram:18000000:1:basic", "has_exit": false },
+                { "value": 1, "target_block": "MISSING_BLOCK", "has_exit": false },
+                { "value": 2, "target_block": "ram:18000000:2:basic", "has_exit": false }
               ],
               "fallback_block": "ram:18000000:3:basic"
             }

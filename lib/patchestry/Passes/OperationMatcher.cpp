@@ -192,11 +192,13 @@ namespace patchestry::passes {
         // all operations, clearly we don't want this. Return false if the operation name or
         // pattern is empty/whitespace
         if (operation_pattern.empty()) {
+            LOG(WARNING) << "Empty operation pattern provided\n";
             return false;
         }
 
         // Check if pattern contains only whitespace
         if (operation_pattern.find_first_not_of(" \t\n\r\f\v") == std::string::npos) {
+            LOG(WARNING) << "Whitespace-only operation pattern provided\n";
             return false;
         }
 
@@ -208,7 +210,7 @@ namespace patchestry::passes {
     ) {
         // If no function context specified, match all functions
         if (function_context.empty()) {
-            LOG(ERROR) << "No function context specified; anything matches\n";
+            LOG(INFO) << "No function context specified; matching all functions\n";
 
             return true;
         }

@@ -417,6 +417,19 @@ namespace patchestry::ast {
         );
     }
 
+    std::optional< clang::QualType > OpBuilder::lookup_op_type(const Operation &op) {
+        if (!op.type.has_value()) {
+            LOG(ERROR) << "Operation missing type field. key: " << op.key;
+            return std::nullopt;
+        }
+        auto it = type_builder().get_serialized_types().find(*op.type);
+        if (it == type_builder().get_serialized_types().end()) {
+            LOG(ERROR) << "Operation type not found in serialized types. key: " << op.key;
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_copy(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -474,10 +487,16 @@ namespace patchestry::ast {
         auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
 
         if (op.type) {
-            const auto &op_type = type_builder().get_serialized_types().at(*op.type);
-            auto pointer_type   = ctx.getPointerType(op_type);
-            auto *cast_expr     = make_cast(ctx, input_expr, pointer_type, op_loc);
-            assert(cast_expr != nullptr && "Failed to make cast expression");
+            auto op_type_opt = lookup_op_type(op);
+            if (!op_type_opt) {
+                return {};
+            }
+            auto pointer_type = ctx.getPointerType(*op_type_opt);
+            auto *cast_expr   = make_cast(ctx, input_expr, pointer_type, op_loc);
+            if (!cast_expr) {
+                LOG(ERROR) << "Failed to make cast expression for LOAD. key: " << op.key;
+                return {};
+            }
             input_expr = cast_expr;
         }
 
@@ -560,6 +579,7 @@ namespace patchestry::ast {
             if (!lhs_expr || !rhs_expr) {
                  LOG(ERROR) << "Failed to create LHS or RHS expression for 3-input store operation. key: "
                            << op.key << "\n";
+                 return {};
             }
 
             if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
@@ -568,7 +588,10 @@ namespace patchestry::ast {
 
             auto deref_result =
                 sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
-            assert(!deref_result.isInvalid());
+            if (deref_result.isInvalid()) {
+                LOG(ERROR) << "Failed to create deref expression for STORE. key: " << op.key;
+                return {};
+            }
 
             return { create_assign_operation(
                          ctx, rhs_expr, deref_result.getAs< clang::Expr >(), op_loc
@@ -755,12 +778,9 @@ namespace patchestry::ast {
             auto *switch_stmt =
                 clang::SwitchStmt::Create(ctx, nullptr, nullptr, disc, loc, loc);
 
-            std::vector< clang::Stmt * > sw_body;
             const auto disc_width = ctx.getIntWidth(disc->getType());
-            for (const auto &sc : op.switch_cases) {
-                if (!function_builder().labels_declaration.contains(sc.target_block)) {
-                    continue;
-                }
+
+            auto create_case = [&](const SwitchCase &sc) -> clang::CaseStmt * {
                 auto *case_val = clang::IntegerLiteral::Create(
                     ctx,
                     llvm::APInt(disc_width, static_cast< uint64_t >(sc.value), /*isSigned=*/true),
@@ -769,10 +789,67 @@ namespace patchestry::ast {
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
                 auto target_loc = sourceLocation(ctx.getSourceManager(), sc.target_block);
-                case_stmt->setSubStmt(new (ctx) clang::GotoStmt(
-                    function_builder().labels_declaration.at(sc.target_block), loc, target_loc
-                ));
-                sw_body.push_back(case_stmt);
+
+                // Try to inline the target block body for has_exit cases.
+                // Requirements: block exists, has ordered ops, terminal op is BRANCH.
+                bool inlined = false;
+                if (sc.has_exit && function.basic_blocks.contains(sc.target_block)) {
+                    const auto &tb = function.basic_blocks.at(sc.target_block);
+                    if (!tb.ordered_operations.empty()) {
+                        const auto &last_op_key = tb.ordered_operations.back();
+                        bool terminal_is_branch =
+                            tb.operations.contains(last_op_key)
+                            && tb.operations.at(last_op_key).mnemonic == Mnemonic::OP_BRANCH;
+
+                        if (terminal_is_branch) {
+                            std::vector< clang::Stmt * > case_body;
+                            for (const auto &op_key : tb.ordered_operations) {
+                                if (!tb.operations.contains(op_key)) { continue; }
+                                const auto &target_op = tb.operations.at(op_key);
+                                // Skip the terminal BRANCH — break replaces it.
+                                if (target_op.mnemonic == Mnemonic::OP_BRANCH) { continue; }
+                                auto [stmt, merge] =
+                                    function_builder().create_operation(ctx, target_op);
+                                for (auto *p : function_builder().pending_materialized) {
+                                    case_body.push_back(p);
+                                }
+                                function_builder().pending_materialized.clear();
+                                if (stmt) {
+                                    function_builder().operation_stmts.emplace(
+                                        target_op.key, stmt
+                                    );
+                                    if (!merge) { case_body.push_back(stmt); }
+                                }
+                            }
+                            case_body.push_back(new (ctx) clang::BreakStmt(loc));
+                            case_stmt->setSubStmt(clang::CompoundStmt::Create(
+                                ctx, case_body, clang::FPOptionsOverride(), loc, loc
+                            ));
+                            function_builder().inlined_blocks.insert(sc.target_block);
+                            inlined = true;
+                        }
+                    }
+                }
+
+                if (!inlined) {
+                    auto *goto_stmt = new (ctx) clang::GotoStmt(
+                        function_builder().labels_declaration.at(sc.target_block), loc,
+                        target_loc
+                    );
+                    case_stmt->setSubStmt(goto_stmt);
+                    if (sc.has_exit) {
+                        function_builder().break_target_blocks.insert(sc.target_block);
+                    }
+                }
+
+                return case_stmt;
+            };
+
+            std::vector< clang::Stmt * > sw_body;
+            for (const auto &sc : op.switch_cases) {
+                if (function_builder().labels_declaration.contains(sc.target_block)) {
+                    sw_body.push_back(create_case(sc));
+                }
             }
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
@@ -889,7 +966,11 @@ namespace patchestry::ast {
         // TODO(kumarak): Switch to delay the creation of AST node for function declaration and
         // fix return type during creating the node.
         if (op.type) {
-            const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+            auto op_type_opt = lookup_op_type(op);
+            if (!op_type_opt) {
+                return {};
+            }
+            const auto &op_type = *op_type_opt;
             if (callee->getReturnType() != op_type && callee->getReturnType()->isVoidType()) {
                 auto param_types    = proto_type->getParamTypes();
                 auto epi            = proto_type->getExtProtoInfo();
@@ -1229,8 +1310,10 @@ namespace patchestry::ast {
     ) {
         auto location = sourceLocation(ctx.getSourceManager(), op.key);
         if (!op.inputs.empty()) {
-            auto varnode   = op.inputs.size() == 1 ? op.inputs.front() : op.inputs.at(1);
-            auto *ret_expr = create_varnode(ctx, function, varnode);
+            // For multi-input RETURN, input[0] is the address-space constant; use input[1].
+            // For single-input RETURN, use input[0] directly.
+            size_t idx     = op.inputs.size() > 1 ? 1 : 0;
+            auto *ret_expr = create_varnode(ctx, function, op.inputs[idx]);
             return std::make_pair(
                 clang::ReturnStmt::Create(
                     ctx, location, llvm::dyn_cast< clang::Expr >(ret_expr), nullptr
@@ -1276,7 +1359,8 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        auto type_it = type_builder().get_serialized_types().find(*op.type);
+        if (type_it == type_builder().get_serialized_types().end()) {
             LOG(ERROR) << "PIECE Operation type is not serialized. key: " << op.key;
             return {};
         }
@@ -1285,6 +1369,10 @@ namespace patchestry::ast {
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
         auto *input1_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+        if (!input0_expr || !input1_expr) {
+            LOG(ERROR) << "Failed to create PIECE input expression. key: " << op.key;
+            return {};
+        }
         auto location = sourceLocation(ctx.getSourceManager(), op.key);
 
         unsigned low_width = op.inputs[1].size * 8;
@@ -1296,12 +1384,20 @@ namespace patchestry::ast {
         // If Operation has type, convert expression to operation type and perform bit-shift and
         // or operation.
         if (op.type) {
-            auto op_type           = type_builder().get_serialized_types().at(*op.type);
+            auto op_type           = type_it->second;
             auto *cast_expr_input0 = make_cast(ctx, input0_expr, op_type, location);
-            assert(cast_expr_input0 != nullptr && "Failed to create cast expression");
+            if (!cast_expr_input0) {
+                LOG(ERROR) << "Failed to create cast expression for PIECE input0. key: "
+                           << op.key;
+                return {};
+            }
             input0_expr            = cast_expr_input0;
             auto *cast_expr_input1 = make_cast(ctx, input1_expr, op_type, location);
-            assert(cast_expr_input1 != nullptr && "Failed to create cast expression");
+            if (!cast_expr_input1) {
+                LOG(ERROR) << "Failed to create cast expression for PIECE input1. key: "
+                           << op.key;
+                return {};
+            }
             input1_expr = cast_expr_input1;
         }
 
@@ -1318,7 +1414,10 @@ namespace patchestry::ast {
             location, clang::BO_Or, shifted_high_result.getAs< clang::Expr >(),
             clang::dyn_cast< clang::Expr >(input1_expr)
         );
-        assert(!or_result.isInvalid());
+        if (or_result.isInvalid()) {
+            LOG(ERROR) << "PIECE Operation invalid OR result. key: " << op.key;
+            return {};
+        }
 
         if (merge_to_next) {
             return std::make_pair(or_result.getAs< clang::Expr >(), merge_to_next);
@@ -1343,13 +1442,14 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        auto type_it = type_builder().get_serialized_types().find(*op.type);
+        if (type_it == type_builder().get_serialized_types().end()) {
             LOG(ERROR) << "SUBPIECE Operation type is not serialized. key: " << op.key;
             return {};
         }
 
         auto merge_to_next  = !op.output.has_value();
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_it->second;
         auto op_location    = sourceLocation(ctx.getSourceManager(), op.key);
 
         auto *shift_value =
@@ -1373,7 +1473,7 @@ namespace patchestry::ast {
         );
 
         if (shifted_result.isInvalid()) {
-            assert(false);
+            LOG(ERROR) << "SUBPIECE invalid shifted result. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
 
@@ -1389,7 +1489,7 @@ namespace patchestry::ast {
         );
 
         if (result.isInvalid()) {
-            assert(false);
+            LOG(ERROR) << "SUBPIECE invalid AND-mask result. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
 
@@ -1406,7 +1506,7 @@ namespace patchestry::ast {
         );
 
         if (out_result.isInvalid()) {
-            assert(false);
+            LOG(ERROR) << "SUBPIECE invalid output assignment. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
 
@@ -1416,7 +1516,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_zext(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if (op.inputs.size() != 1U && op.mnemonic != Mnemonic::OP_INT_ZEXT) {
+        if (op.inputs.size() != 1U || op.mnemonic != Mnemonic::OP_INT_ZEXT) {
             LOG(ERROR) << "INT_ZEXT operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -1427,7 +1527,11 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        auto target_type = type_builder().get_serialized_types().at(*op.type);
+        auto target_type_opt = lookup_op_type(op);
+        if (!target_type_opt) {
+            return {};
+        }
+        auto target_type = *target_type_opt;
 
         auto implicit_result = sema().PerformImplicitConversion(
             input_expr, target_type, clang::AssignmentAction::Converting, true
@@ -1457,7 +1561,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_sext(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if (op.inputs.size() != 1U && op.mnemonic != Mnemonic::OP_INT_SEXT) {
+        if (op.inputs.size() != 1U || op.mnemonic != Mnemonic::OP_INT_SEXT) {
             LOG(ERROR) << "INT_SEXT operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -1469,7 +1573,11 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        auto target_type = type_builder().get_serialized_types().at(*op.type);
+        auto target_type_opt = lookup_op_type(op);
+        if (!target_type_opt) {
+            return {};
+        }
+        auto target_type = *target_type_opt;
 
         auto implicit_result = sema().PerformImplicitConversion(
             input_expr, target_type, clang::AssignmentAction::Converting, true

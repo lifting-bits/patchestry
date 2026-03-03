@@ -15,7 +15,7 @@ namespace patchestry::codegen {
             std::string buffer;
             llvm::raw_string_ostream os(buffer);
             pass->printAsTextualPipeline(os);
-            return os.str();
+            return buffer;
         }
     } // namespace
 

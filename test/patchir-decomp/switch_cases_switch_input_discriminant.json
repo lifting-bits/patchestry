@@ -45,8 +45,8 @@
               ],
               "switch_input": { "type": "type_int", "kind": "temporary", "operation": "add_op" },
               "switch_cases": [
-                { "value": 5, "target_block": "ram:16000000:1:basic" },
-                { "value": 6, "target_block": "ram:16000000:2:basic" }
+                { "value": 5, "target_block": "ram:16000000:1:basic", "has_exit": true },
+                { "value": 6, "target_block": "ram:16000000:2:basic", "has_exit": true }
               ]
             }
           },

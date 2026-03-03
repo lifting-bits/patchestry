@@ -183,6 +183,10 @@ namespace llvm::yaml {
                 spec.type = ContractType::STATIC;
             } else if (type_str == "RUNTIME") {
                 spec.type = ContractType::RUNTIME;
+            } else {
+                io.setError("Unknown contract type: '" + type_str
+                            + "'. Valid types: STATIC, RUNTIME");
+                return;
             }
             if (spec.type == ContractType::STATIC) {
                 io.mapOptional("preconditions", spec.preconditions);
@@ -213,9 +217,8 @@ namespace llvm::yaml {
             } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
                 action.mode = contract::InfoMode::APPLY_AT_ENTRYPOINT;
             } else {
-                LOG(ERROR) << "Unsupported contract mode: " << mode_str
-                           << "\nApplying apply_before mode by default";
-                action.mode = contract::InfoMode::APPLY_BEFORE;
+                io.setError("Unsupported contract mode: '" + mode_str
+                            + "'. Valid modes: ApplyBefore, ApplyAfter, ApplyAtEntrypoint");
             }
         }
     };

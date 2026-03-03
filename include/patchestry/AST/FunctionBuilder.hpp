@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
@@ -131,6 +132,14 @@ namespace patchestry::ast {
         // emitted immediately before the operation that triggered them.  Drained by
         // create_basic_block after each create_operation call.
         std::vector< clang::Stmt * > pending_materialized;
+
+        // Blocks whose operations have been inlined into a switch case body.
+        // create_function_body skips these entirely.
+        std::unordered_set< std::string > inlined_blocks;
+
+        // Blocks targeted by has_exit cases that could not be inlined.
+        // create_function_body emits "label: break;" for these.
+        std::unordered_set< std::string > break_target_blocks;
 
         // Key of the next block to be emitted after the current one in RPO order.
         // Set by create_function_body before building each block; read by

@@ -264,9 +264,8 @@ namespace patchestry::passes {
      * configuration_file, and use the given inline options for controlling inlining behavior.
      *
      * @param configuration_file Path to the YAML patch specification file
-     * @param ∂options Configuration options for controlling how instrumentation is generally
-     * applied
-don't yet pass)
+     * @param options Configuration options for controlling how instrumentation is generally
+     *        applied (currently unused — reserved for future use).
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
     std::unique_ptr< mlir::Pass > createInstrumentationPass(
@@ -341,16 +340,9 @@ don't yet pass)
         for (auto &spec : config->libraries.patches) {
             auto patches_file_path =
                 ConfigurationFile::getInstance().resolve_path(spec.code_file);
-            if (!llvm::sys::fs::exists(patches_file_path)) {
-                LOG(ERROR) << "Patch file " << patches_file_path << " does not exist\n";
-                continue;
-            }
-
-            auto patch_file_path =
-                ConfigurationFile::getInstance().resolve_path(spec.code_file);
-            spec.patch_module = emitModuleAsString(patch_file_path, config->target.arch);
+            spec.patch_module = emitModuleAsString(patches_file_path, config->target.arch);
             if (!spec.patch_module) {
-                LOG(ERROR) << "Failed to emit patch module for " << spec.name << "\n";
+                LOG(ERROR) << "Failed to load patch file: " << patches_file_path << "\n";
                 continue;
             }
         }
@@ -369,7 +361,6 @@ don't yet pass)
             }
             spec.contract_module = contract_module;
         }
-        (void) options;
     }
 
     /**
@@ -669,7 +660,12 @@ don't yet pass)
 
         auto cast_op =
             builder.create< cir::CastOp >(call_op->getLoc(), target_type, cast_kind, value);
-        return cast_op->getResults().front();
+        auto results = cast_op->getResults();
+        if (results.empty()) {
+            LOG(ERROR) << "Cast operation produced no results\n";
+            return {};
+        }
+        return results.front();
     }
 
     mlir::Value InstrumentationPass::create_reference(
@@ -696,6 +692,11 @@ don't yet pass)
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
         const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
     ) {
+        if (!patch.patch_action.has_value()) {
+            LOG(ERROR) << "Patch action is missing\n";
+            signalPassFailure();
+            return;
+        }
         const auto &patch_action = patch.patch_action.value();
         if (patch_action.action.empty()) {
             LOG(ERROR) << "Patch action '" << patch_action.action_id
@@ -755,6 +756,10 @@ don't yet pass)
             patch_call_op->getParentOfType< mlir::FunctionOpInterface >()
         );
 
+        if (!patch.patch_action.has_value()) {
+            LOG(ERROR) << "Patch action is missing\n";
+            return;
+        }
         const auto &patch_action = patch.patch_action.value();
         if (patch_action.action.empty()) {
             LOG(ERROR) << "Patch action '" << patch_action.action_id
@@ -813,6 +818,11 @@ don't yet pass)
                 return;
             }
             operand_value = call_op->getOperand(idx);
+        }
+
+        if (!operand_value) {
+            LOG(ERROR) << "Failed to resolve operand value at index " << idx << "\n";
+            return;
         }
 
         if (arg_spec.is_reference) {
@@ -1083,6 +1093,11 @@ don't yet pass)
             return cast_op->getResults().front();
         };
 
+        if (!contract.action.has_value()) {
+            LOG(ERROR) << "Contract action is missing\n";
+            signalPassFailure();
+            return;
+        }
         const auto &action = contract.action.value();
         if (action.action.empty()) {
             LOG(ERROR) << "Contract action has empty action list\n";
@@ -1652,13 +1667,23 @@ don't yet pass)
             }
         }
 
-        mlir::Block *callee_entry_block = block_map[&callee_region.front()];
+        auto entry_it = block_map.find(&callee_region.front());
+        if (entry_it == block_map.end()) {
+            LOG(ERROR) << "Entry block not found in block map during inlining\n";
+            return mlir::failure();
+        }
+        mlir::Block *callee_entry_block = entry_it->second;
         builder.setInsertionPointToEnd(caller_block);
 
         // If entry block has arguments, pass them from the call operands
         mlir::SmallVector< mlir::Value > entry_args;
         for (mlir::Value arg : callee.getArguments()) {
-            entry_args.push_back(mapper.lookup(arg));
+            auto mapped = mapper.lookupOrNull(arg);
+            if (!mapped) {
+                LOG(ERROR) << "Unmapped callee argument during inlining\n";
+                return mlir::failure();
+            }
+            entry_args.push_back(mapped);
         }
         builder.create< cir::BrOp >(loc, callee_entry_block, entry_args);
 
@@ -1727,6 +1752,11 @@ don't yet pass)
         const contract::MetaContractConfig &meta_contract,
         const ContractInformation &contract_to_apply
     ) {
+        if (!contract_to_apply.action.has_value()) {
+            LOG(ERROR) << "Contract action is missing\n";
+            signalPassFailure();
+            return;
+        }
         const auto &contract_action = contract_to_apply.action.value();
         if (contract_action.action.empty()) {
             LOG(ERROR) << "Contract action has empty action list\n";

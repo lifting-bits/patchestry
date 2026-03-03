@@ -127,10 +127,13 @@ namespace patchestry::yaml {
             }
 
             file << yaml_content;
+            if (!file.good()) {
+                LOG(ERROR) << "Error during write to file: " << file_path << "\n";
+                return false;
+            }
             file.close();
-
             if (file.fail()) {
-                LOG(ERROR) << "Failed to write to file: " << file_path << "\n";
+                LOG(ERROR) << "Failed to flush/close file: " << file_path << "\n";
                 return false;
             }
 
@@ -220,8 +223,8 @@ namespace llvm::yaml {
                 }
                 // check for api version mismatch
                 if (config.api_version != library.value().api_version) {
-                    LOG(ERROR) << "API version mismatch: " << config.libraries.api_version
-                               << " != " << library.value().api_version << "\n";
+                    LOG(ERROR) << "API version mismatch: expected " << config.api_version
+                               << ", got " << library.value().api_version << "\n";
                     continue;
                 }
 

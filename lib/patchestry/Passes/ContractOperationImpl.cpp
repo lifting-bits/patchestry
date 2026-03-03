@@ -5,7 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
- #include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
+#include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/YAML/ContractSpec.hpp>
 

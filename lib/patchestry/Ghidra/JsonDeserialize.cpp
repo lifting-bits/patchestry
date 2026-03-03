@@ -159,9 +159,14 @@ namespace patchestry::ghidra {
                     );
                     break;
                 case VarnodeType::Kind::VT_ARRAY: {
+                    auto *obj = json_value.getAsObject();
+                    if (!obj) {
+                        LOG(ERROR) << "Invalid JSON object for array type";
+                        break;
+                    }
                     deserialize_array(
                         *dynamic_cast< ArrayType * >(vnode_type.get()),
-                        json_value.getAsObject(), serialized_types
+                        obj, serialized_types
                     );
                     break;
                 }
@@ -305,7 +310,7 @@ namespace patchestry::ghidra {
         // Check for the pointee label in serialized types
         auto iter = serialized_types.find(pointee_key);
         if (iter == serialized_types.end()) {
-            LOG(ERROR) << "Pointee type is not availe in serialized types. Pointer key: "
+            LOG(ERROR) << "Pointee type is not available in serialized types. Pointer key: "
                        << varnode.key << "\n";
             return;
         }
@@ -624,7 +629,11 @@ namespace patchestry::ghidra {
                 auto val   = obj->getInteger("value");
                 auto block = get_string_if_valid(*obj, "target_block");
                 if (val && block && !block->empty()) {
-                    op.switch_cases.push_back({ *val, *block });
+                    bool has_exit = false;
+                    if (auto exit_val = obj->getBoolean("has_exit")) {
+                        has_exit = *exit_val;
+                    }
+                    op.switch_cases.push_back({ *val, *block, has_exit });
                 }
             }
         }

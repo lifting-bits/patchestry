@@ -256,6 +256,9 @@ namespace patchestry::ast {
 
         clang::Stmt *create_string(clang::ASTContext &ctx, const Varnode &vnode);
 
+        std::optional< clang::QualType >
+        lookup_op_type(const Operation &op);
+
         TypeBuilder &type_builder(void) { return builder->type_builder.get(); }
 
         FunctionBuilder &function_builder(void) { return *builder; }

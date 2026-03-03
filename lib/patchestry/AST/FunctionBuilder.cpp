@@ -322,8 +322,8 @@ namespace patchestry::ast {
         auto num_parameters = function.get().prototype.parameters.size();
         if (parameters.size() != num_parameters) {
             // If there is mismatch between number of parameters in function prototype and
-            // paramater declaration object, create default parameter considering there is an
-            // issue recovering the paramter operation from ghidra and function prototype is
+            // parameter declaration object, create default parameter considering there is an
+            // issue recovering the parameter operation from ghidra and function prototype is
             // correct.
             auto default_params =
                 create_default_paramaters(ctx, func_decl, function.get().prototype);
@@ -333,6 +333,11 @@ namespace patchestry::ast {
 
         std::vector< clang::ParmVarDecl * > parameter_vec;
         for (const auto &param_op : parameters) {
+            if (!param_op->type || !param_op->name) {
+                LOG(ERROR) << "Parameter operation missing type or name, key: "
+                           << param_op->key;
+                continue;
+            }
             const auto &param_type =
                 type_builder.get().get_serialized_types().at(*param_op->type);
             auto location = sourceLocation(ctx.getSourceManager(), param_op->key);
@@ -396,14 +401,14 @@ namespace patchestry::ast {
         }
 
         std::vector< clang::QualType > args_vector;
-        const auto &rttype = type_builder.get().get_serialized_types()[proto.rttype_key];
+        const auto &rttype = type_builder.get().get_serialized_types().at(proto.rttype_key);
         for (const auto &param : proto.parameters) {
             if (!type_builder.get().get_serialized_types().contains(param)) {
-                LOG(ERROR) << "Skipping, invalid paramater key in function.\n";
+                LOG(ERROR) << "Skipping, invalid parameter key in function.\n";
                 continue;
             }
 
-            args_vector.emplace_back(type_builder.get().get_serialized_types()[param]);
+            args_vector.emplace_back(type_builder.get().get_serialized_types().at(param));
         }
 
         clang::FunctionProtoType::ExtProtoInfo ext_proto_info;
@@ -607,6 +612,25 @@ namespace patchestry::ast {
             if (bb.is_entry_block) {
                 continue;
             }
+
+            // Block body was inlined into a switch case — skip entirely.
+            if (inlined_blocks.contains(key)) {
+                continue;
+            }
+
+            // has_exit target that could not be inlined — emit "label: break;".
+            // TODO(kumarak): Generating break statement outside switch/loop will cause error
+            // while lowering to CIR. At the moment create a goto to fallback or next block. It
+            // should be fixed after integrating minimal ast passes to inline the break inside
+            // switch statement.
+            /*if (break_target_blocks.contains(key)) {
+                auto loc         = sourceLocation(ctx.getSourceManager(), key);
+                auto *break_stmt = new (ctx) clang::BreakStmt(loc);
+                auto *label_stmt = new (ctx)
+                    clang::LabelStmt(loc, labels_declaration.at(key), break_stmt);
+                stmt_vec.push_back(label_stmt);
+                continue;
+            }*/
 
             LOG(INFO) << "Processing basic block with key " << key << "\n";
 
