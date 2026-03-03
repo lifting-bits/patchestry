@@ -560,6 +560,7 @@ namespace patchestry::ast {
             if (!lhs_expr || !rhs_expr) {
                  LOG(ERROR) << "Failed to create LHS or RHS expression for 3-input store operation. key: "
                            << op.key << "\n";
+                 return {};
             }
 
             if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
