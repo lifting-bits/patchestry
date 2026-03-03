@@ -333,6 +333,11 @@ namespace patchestry::ast {
 
         std::vector< clang::ParmVarDecl * > parameter_vec;
         for (const auto &param_op : parameters) {
+            if (!param_op->type || !param_op->name) {
+                LOG(ERROR) << "Parameter operation missing type or name, key: "
+                           << param_op->key;
+                continue;
+            }
             const auto &param_type =
                 type_builder.get().get_serialized_types().at(*param_op->type);
             auto location = sourceLocation(ctx.getSourceManager(), param_op->key);
@@ -396,14 +401,14 @@ namespace patchestry::ast {
         }
 
         std::vector< clang::QualType > args_vector;
-        const auto &rttype = type_builder.get().get_serialized_types()[proto.rttype_key];
+        const auto &rttype = type_builder.get().get_serialized_types().at(proto.rttype_key);
         for (const auto &param : proto.parameters) {
             if (!type_builder.get().get_serialized_types().contains(param)) {
                 LOG(ERROR) << "Skipping, invalid paramater key in function.\n";
                 continue;
             }
 
-            args_vector.emplace_back(type_builder.get().get_serialized_types()[param]);
+            args_vector.emplace_back(type_builder.get().get_serialized_types().at(param));
         }
 
         clang::FunctionProtoType::ExtProtoInfo ext_proto_info;

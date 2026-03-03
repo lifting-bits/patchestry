@@ -359,17 +359,18 @@ namespace patchestry::ast {
         auto components = varnode.get_components();
         for (auto &component : components) {
             // Resolve the type of the current component.
-            if (!clang_types.contains(component.type->key)) {
+            auto iter = clang_types.find(component.type->key);
+            if (iter == clang_types.end()) {
                 LOG(ERROR) << "Record component does not have type key. Key: " << varnode.key
                            << "\n";
                 continue;
             }
 
-            const auto &iter = clang_types.find(component.type->key);
+            auto field_type  = iter->second;
             auto location    = sourceLocation(ctx.getSourceManager(), component.type->key);
             auto *field_decl = clang::FieldDecl::Create(
                 ctx, record_decl, location, location, &ctx.Idents.get(component.name),
-                iter->second, nullptr, nullptr, false, clang::ICIS_NoInit
+                field_type, nullptr, nullptr, false, clang::ICIS_NoInit
             );
 
             record_decl->addDecl(field_decl);

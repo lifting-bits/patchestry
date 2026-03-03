@@ -569,7 +569,10 @@ namespace patchestry::ast {
 
             auto deref_result =
                 sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
-            assert(!deref_result.isInvalid());
+            if (deref_result.isInvalid()) {
+                LOG(ERROR) << "Failed to create deref expression for STORE. key: " << op.key;
+                return {};
+            }
 
             return { create_assign_operation(
                          ctx, rhs_expr, deref_result.getAs< clang::Expr >(), op_loc
@@ -1284,8 +1287,10 @@ namespace patchestry::ast {
     ) {
         auto location = sourceLocation(ctx.getSourceManager(), op.key);
         if (!op.inputs.empty()) {
-            auto varnode   = op.inputs.size() == 1 ? op.inputs.front() : op.inputs.at(1);
-            auto *ret_expr = create_varnode(ctx, function, varnode);
+            // For multi-input RETURN, input[0] is the address-space constant; use input[1].
+            // For single-input RETURN, use input[0] directly.
+            size_t idx     = op.inputs.size() > 1 ? 1 : 0;
+            auto *ret_expr = create_varnode(ctx, function, op.inputs[idx]);
             return std::make_pair(
                 clang::ReturnStmt::Create(
                     ctx, location, llvm::dyn_cast< clang::Expr >(ret_expr), nullptr
@@ -1340,6 +1345,10 @@ namespace patchestry::ast {
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
         auto *input1_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+        if (!input0_expr || !input1_expr) {
+            LOG(ERROR) << "Failed to create PIECE input expression. key: " << op.key;
+            return {};
+        }
         auto location = sourceLocation(ctx.getSourceManager(), op.key);
 
         unsigned low_width = op.inputs[1].size * 8;
@@ -1353,10 +1362,18 @@ namespace patchestry::ast {
         if (op.type) {
             auto op_type           = type_builder().get_serialized_types().at(*op.type);
             auto *cast_expr_input0 = make_cast(ctx, input0_expr, op_type, location);
-            assert(cast_expr_input0 != nullptr && "Failed to create cast expression");
+            if (!cast_expr_input0) {
+                LOG(ERROR) << "Failed to create cast expression for PIECE input0. key: "
+                           << op.key;
+                return {};
+            }
             input0_expr            = cast_expr_input0;
             auto *cast_expr_input1 = make_cast(ctx, input1_expr, op_type, location);
-            assert(cast_expr_input1 != nullptr && "Failed to create cast expression");
+            if (!cast_expr_input1) {
+                LOG(ERROR) << "Failed to create cast expression for PIECE input1. key: "
+                           << op.key;
+                return {};
+            }
             input1_expr = cast_expr_input1;
         }
 
@@ -1373,7 +1390,10 @@ namespace patchestry::ast {
             location, clang::BO_Or, shifted_high_result.getAs< clang::Expr >(),
             clang::dyn_cast< clang::Expr >(input1_expr)
         );
-        assert(!or_result.isInvalid());
+        if (or_result.isInvalid()) {
+            LOG(ERROR) << "PIECE Operation invalid OR result. key: " << op.key;
+            return {};
+        }
 
         if (merge_to_next) {
             return std::make_pair(or_result.getAs< clang::Expr >(), merge_to_next);
@@ -1428,7 +1448,7 @@ namespace patchestry::ast {
         );
 
         if (shifted_result.isInvalid()) {
-            assert(false);
+            LOG(ERROR) << "SUBPIECE invalid shifted result. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
 
@@ -1444,7 +1464,7 @@ namespace patchestry::ast {
         );
 
         if (result.isInvalid()) {
-            assert(false);
+            LOG(ERROR) << "SUBPIECE invalid AND-mask result. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
 
@@ -1461,7 +1481,7 @@ namespace patchestry::ast {
         );
 
         if (out_result.isInvalid()) {
-            assert(false);
+            LOG(ERROR) << "SUBPIECE invalid output assignment. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
 
@@ -1471,7 +1491,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_zext(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if (op.inputs.size() != 1U && op.mnemonic != Mnemonic::OP_INT_ZEXT) {
+        if (op.inputs.size() != 1U || op.mnemonic != Mnemonic::OP_INT_ZEXT) {
             LOG(ERROR) << "INT_ZEXT operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -1512,7 +1532,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_sext(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if (op.inputs.size() != 1U && op.mnemonic != Mnemonic::OP_INT_SEXT) {
+        if (op.inputs.size() != 1U || op.mnemonic != Mnemonic::OP_INT_SEXT) {
             LOG(ERROR) << "INT_SEXT operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
