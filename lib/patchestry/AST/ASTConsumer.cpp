@@ -96,6 +96,7 @@ namespace patchestry::ast {
                 ci, function, *type_builder, function_declarations, global_variable_declarations
             );
 
+            builder->disable_switch_case_inline = options.disable_switch_case_inline;
             builder->initialize_op_builder();
             func_builders.emplace_back(std::move(builder));
         }

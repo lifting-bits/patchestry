@@ -96,6 +96,12 @@ namespace {
         llvm::cl::init(false)
     );
 
+    const llvm::cl::opt< bool > disable_switch_case_inline( // NOLINT(cert-err58-cpp)
+        "disable-switch-case-inline",
+        llvm::cl::desc("Disable inlining of target block bodies into switch case arms"),
+        llvm::cl::init(false)
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -111,6 +117,7 @@ namespace {
             .use_rellic_transform = use_rellic_transform.getValue(),
             .enable_goto_elimination = enable_goto_elimination.getValue(),
             .goto_elimination_strict = goto_elimination_strict.getValue(),
+            .disable_switch_case_inline = disable_switch_case_inline.getValue(),
             .output_file          = output_filename.getValue(),
             .input_file           = input_filename.getValue(),
             .print_tu             = print_tu.getValue(),

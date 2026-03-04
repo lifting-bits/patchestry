@@ -22,6 +22,7 @@ namespace patchestry {
         bool use_rellic_transform = false;
         bool enable_goto_elimination = true;
         bool goto_elimination_strict = false;
+        bool disable_switch_case_inline = false;
 
         std::string output_file;
         std::string input_file;

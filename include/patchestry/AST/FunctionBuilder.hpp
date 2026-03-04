@@ -91,6 +91,10 @@ namespace patchestry::ast {
 
         clang::FunctionDecl *create_definition(clang::ASTContext &ctx);
 
+        // When true, switch case arms always emit goto instead of inlining the
+        // target block body.  Set from Options::disable_switch_case_inline.
+        bool disable_switch_case_inline = false;
+
       private:
         void create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl);
 

@@ -2054,6 +2054,225 @@ namespace patchestry::ast {
             }
         };
 
+        // =========================================================================
+        // SwitchBackedgeLoopPass
+        // =========================================================================
+        //
+        // Detects the "dispatch-loop" / "state-machine" pattern where a label
+        // heads a block whose body is a SwitchStmt (possibly preceded by a few
+        // setup assignments), and one or more case arms contain `goto Lhead`
+        // (backedge).  Converts the pattern to:
+        //
+        //   while (true) { <pre-stmts>; switch (...) { ... continue; ... } }
+        //
+        // Backedge gotos become `continue`; exit gotos remain (later cleanup
+        // passes may simplify them to `break` or inline them).
+
+        class SwitchBackedgeLoopPass final : public ASTPass
+        {
+          public:
+            explicit SwitchBackedgeLoopPass(PipelineState &state) : state(state) {}
+
+            const char *name(void) const override { return "SwitchBackedgeLoopPass"; }
+
+            bool run(clang::ASTContext &ctx, const patchestry::Options &options) override {
+                if (options.verbose) {
+                    LOG(DEBUG) << "Running AST pass: " << name() << "\n";
+                }
+
+                unsigned local_converted = 0;
+                for (auto *decl : ctx.getTranslationUnitDecl()->decls()) {
+                    auto *func = llvm::dyn_cast< clang::FunctionDecl >(decl);
+                    if (func == nullptr || !func->doesThisDeclarationHaveABody()) {
+                        continue;
+                    }
+                    processFunction(ctx, func, local_converted, options);
+                }
+
+                state.switch_backedge_loops += local_converted;
+                if (local_converted > 0) {
+                    if (options.verbose) {
+                        LOG(DEBUG) << "SwitchBackedgeLoopPass: converted " << local_converted
+                                   << " switch-dispatch loop(s) to while loop(s)\n";
+                    }
+                    state.cfg_stale = true;
+                    runAstCleanupPass(state, ctx, options);
+                }
+                return true;
+            }
+
+          private:
+            PipelineState &state;
+
+            void processFunction(
+                clang::ASTContext &ctx, clang::FunctionDecl *func, unsigned &converted,
+                const patchestry::Options & /*options*/
+            ) {
+                bool any_changed = true;
+                while (any_changed) {
+                    auto *body =
+                        llvm::dyn_cast_or_null< clang::CompoundStmt >(func->getBody());
+                    if (body == nullptr) {
+                        break;
+                    }
+                    any_changed = tryConvert(ctx, func, converted);
+                }
+            }
+
+            // Find a SwitchStmt in a range of flat statements [begin, end).
+            // Returns the index if found, or `end` if not.
+            static std::size_t findSwitchInRange(
+                const std::vector< clang::Stmt * > &stmts, std::size_t begin, std::size_t end
+            ) {
+                for (std::size_t i = begin; i < end; ++i) {
+                    clang::Stmt *s = stmts[i];
+                    // Unwrap LabelStmt wrapper if present.
+                    if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
+                        s = ls->getSubStmt();
+                    }
+                    if (llvm::isa< clang::SwitchStmt >(s)) {
+                        return i;
+                    }
+                }
+                return end;
+            }
+
+            // Check that no external gotos (from outside [head, block_end)) target
+            // the head label.  We require that the ONLY gotos to `lhead_decl` in the
+            // entire function body are inside the block range.
+            static bool hasExternalGotoToHead(
+                const std::vector< clang::Stmt * > &stmts, std::size_t head,
+                std::size_t block_end, const clang::LabelDecl *lhead_decl
+            ) {
+                for (std::size_t i = 0; i < stmts.size(); ++i) {
+                    if (i >= head && i < block_end) {
+                        continue; // skip the block itself
+                    }
+                    if (containsGotoTo(stmts[i], lhead_decl)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            static bool tryConvert(
+                clang::ASTContext &ctx, clang::FunctionDecl *func, unsigned &converted
+            ) {
+                auto *body =
+                    llvm::dyn_cast_or_null< clang::CompoundStmt >(func->getBody());
+                if (body == nullptr) {
+                    return false;
+                }
+                std::vector< clang::Stmt * > stmts(body->body_begin(), body->body_end());
+                const std::size_t N = stmts.size();
+
+                for (std::size_t h = 0; h < N; ++h) {
+                    auto *head_label = llvm::dyn_cast< clang::LabelStmt >(stmts[h]);
+                    if (head_label == nullptr) {
+                        continue;
+                    }
+                    const auto *lhead_decl = head_label->getDecl();
+
+                    // Determine the block extent: from h to the next top-level label
+                    // (or end of function).
+                    std::size_t block_end = h + 1;
+                    while (block_end < N
+                           && !llvm::isa< clang::LabelStmt >(stmts[block_end]))
+                    {
+                        ++block_end;
+                    }
+
+                    // Collect statements in the block: head_label's sub-stmt, then
+                    // stmts[h+1 .. block_end-1].
+                    std::vector< clang::Stmt * > block_stmts;
+                    auto *sub = head_label->getSubStmt();
+                    if (sub != nullptr && !llvm::isa< clang::NullStmt >(sub)) {
+                        block_stmts.push_back(sub);
+                    }
+                    for (std::size_t k = h + 1; k < block_end; ++k) {
+                        block_stmts.push_back(stmts[k]);
+                    }
+                    if (block_stmts.empty()) {
+                        continue;
+                    }
+
+                    // Find a SwitchStmt in the block.
+                    const std::size_t sw_idx =
+                        findSwitchInRange(block_stmts, 0, block_stmts.size());
+                    if (sw_idx >= block_stmts.size()) {
+                        continue;
+                    }
+
+                    // Get the switch statement (unwrap label if needed).
+                    clang::Stmt *sw_raw = block_stmts[sw_idx];
+                    if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(sw_raw)) {
+                        sw_raw = ls->getSubStmt();
+                    }
+                    auto *sw = llvm::dyn_cast< clang::SwitchStmt >(sw_raw);
+                    if (sw == nullptr) {
+                        continue;
+                    }
+
+                    // Check that the switch body contains at least one goto to Lhead.
+                    if (!containsGotoTo(sw->getBody(), lhead_decl)) {
+                        continue;
+                    }
+
+                    // Safety: no labels between head and switch (clean block boundary).
+                    if (containsLabelInRange(block_stmts, 0, sw_idx)) {
+                        continue;
+                    }
+
+                    // Safety: no external gotos to Lhead from outside the block.
+                    if (hasExternalGotoToHead(stmts, h, block_end, lhead_decl)) {
+                        continue;
+                    }
+
+                    // === Build while(true) { pre_stmts; switch(...) { ... } } ===
+                    const auto loc = head_label->getBeginLoc();
+
+                    // Collect pre-switch statements and the switch into the loop body.
+                    std::vector< clang::Stmt * > loop_body_stmts;
+                    for (std::size_t k = 0; k <= sw_idx; ++k) {
+                        loop_body_stmts.push_back(block_stmts[k]);
+                    }
+                    // Also include any statements after the switch but still in the
+                    // block (unlikely but possible).
+                    for (std::size_t k = sw_idx + 1; k < block_stmts.size(); ++k) {
+                        loop_body_stmts.push_back(block_stmts[k]);
+                    }
+
+                    // Replace backedge gotos with continue.
+                    for (auto &s : loop_body_stmts) {
+                        s = replaceGotoWithContinue(ctx, s, lhead_decl);
+                    }
+
+                    auto *loop_body = makeCompound(ctx, loop_body_stmts, loc, loc);
+                    auto *while_stmt = clang::WhileStmt::Create(
+                        ctx, nullptr, makeBoolTrue(ctx, loc), loop_body, loc, loc, loc
+                    );
+
+                    // Rebuild the function body:
+                    //   stmts[0..h-1] + while_stmt + stmts[block_end..N-1]
+                    std::vector< clang::Stmt * > new_stmts(
+                        stmts.begin(),
+                        stmts.begin() + static_cast< std::ptrdiff_t >(h)
+                    );
+                    new_stmts.push_back(while_stmt);
+                    for (std::size_t k = block_end; k < N; ++k) {
+                        new_stmts.push_back(stmts[k]);
+                    }
+
+                    func->setBody(makeCompound(
+                        ctx, new_stmts, body->getLBracLoc(), body->getRBracLoc()
+                    ));
+                    ++converted;
+                    return true;
+                }
+                return false;
+            }
+        };
+
         class WhileToForUpgradePass final : public ASTPass
         {
           public:
@@ -2367,6 +2586,10 @@ namespace patchestry::ast {
 
         void addBackedgeLoopStructurizePass(ASTPassManager &pm, PipelineState &state) {
             pm.add_pass(std::make_unique< BackedgeLoopStructurizePass >(state));
+        }
+
+        void addSwitchBackedgeLoopPass(ASTPassManager &pm, PipelineState &state) {
+            pm.add_pass(std::make_unique< SwitchBackedgeLoopPass >(state));
         }
 
         void addWhileToForUpgradePass(ASTPassManager &pm, PipelineState &state) {

@@ -72,6 +72,10 @@ namespace patchestry::ast {
         // Step 18: backedge loop structuring.
         detail::addBackedgeLoopStructurizePass(pass_manager, state);
 
+        // Step 18.5: switch-dispatch loop recovery — detects labels whose block
+        // body is a SwitchStmt with case-arm backedge gotos; wraps in while(true).
+        detail::addSwitchBackedgeLoopPass(pass_manager, state);
+
         // Step 19: recover natural loops after backedge structuring.
         detail::addNaturalLoopRecoveryPass(pass_manager, state);
 

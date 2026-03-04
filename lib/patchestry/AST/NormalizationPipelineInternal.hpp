@@ -86,6 +86,7 @@ namespace patchestry::ast::detail {
         unsigned loop_exit_gotos_inlined      = 0;
         unsigned diamond_joins_absorbed       = 0;
         unsigned nested_stmts_relocated       = 0;
+        unsigned switch_backedge_loops        = 0;
     };
 
     // =========================================================================
@@ -447,6 +448,7 @@ namespace patchestry::ast::detail {
     void addDegenerateWhileElimGroup(patchestry::ast::ASTPassManager &, PipelineState &);
     void addNaturalLoopRecoveryPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addBackedgeLoopStructurizePass(patchestry::ast::ASTPassManager &, PipelineState &);
+    void addSwitchBackedgeLoopPass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addWhileToForUpgradePass(patchestry::ast::ASTPassManager &, PipelineState &);
     void addLoopPasses(patchestry::ast::ASTPassManager &, PipelineState &);
 

@@ -720,30 +720,25 @@ namespace patchestry::ast {
             input_expr = cast_expr;
         }
 
-        // Build the default arm of the switch:
+        // Build a fallback statement for after the switch:
         // - goto fallback_block when a bounds-check out-of-range target is known,
         // - __builtin_unreachable() otherwise (all enumerated cases are covered).
-        // Placing the fallback inside a default: arm (rather than as a trailing
-        // statement after the switch) keeps the switch self-contained, avoids an
-        // extra CompoundStmt wrapper, and lets the compiler use the unreachable hint
-        // to prove the switch is exhaustive.
-        auto make_default_arm = [&]() -> clang::DefaultStmt * {
-            clang::Stmt *arm_body = nullptr;
+        // Placed after the switch as a flat statement rather than inside a default:
+        // arm, so the switch only contains explicit case labels.
+        auto make_fallback_stmt = [&]() -> clang::Stmt * {
             if (op.fallback_block.has_value()
                 && function_builder().labels_declaration.contains(*op.fallback_block))
             {
                 auto target_loc = sourceLocation(ctx.getSourceManager(), *op.fallback_block);
-                arm_body        = new (ctx) clang::GotoStmt(
+                return new (ctx) clang::GotoStmt(
                     function_builder().labels_declaration.at(*op.fallback_block), loc,
                     target_loc
                 );
-            } else {
-                std::vector< clang::Expr * > no_args;
-                arm_body = create_builtin_call(
-                    ctx, sema(), clang::Builtin::BI__builtin_unreachable, no_args, loc
-                );
             }
-            return new (ctx) clang::DefaultStmt(loc, loc, arm_body);
+            std::vector< clang::Expr * > no_args;
+            return create_builtin_call(
+                ctx, sema(), clang::Builtin::BI__builtin_unreachable, no_args, loc
+            );
         };
 
         // Priority 1: switch_cases present — proper integer switch using per-case
@@ -792,7 +787,8 @@ namespace patchestry::ast {
                 // Try to inline the target block body for has_exit cases.
                 // Requirements: block exists, has ordered ops, terminal op is BRANCH.
                 bool inlined = false;
-                if (sc.has_exit && function.basic_blocks.contains(sc.target_block)) {
+                if (!function_builder().disable_switch_case_inline
+                    && sc.has_exit && function.basic_blocks.contains(sc.target_block)) {
                     const auto &tb = function.basic_blocks.at(sc.target_block);
                     if (!tb.ordered_operations.empty()) {
                         const auto &last_op_key = tb.ordered_operations.back();
@@ -850,11 +846,14 @@ namespace patchestry::ast {
                     sw_body.push_back(create_case(sc));
                 }
             }
-            sw_body.push_back(make_default_arm());
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            return { switch_stmt, false };
+            auto *fallback = make_fallback_stmt();
+            std::vector< clang::Stmt * > result_stmts = { switch_stmt, fallback };
+            return { clang::CompoundStmt::Create(
+                ctx, result_stmts, clang::FPOptionsOverride(), loc, loc
+            ), false };
         }
 
         // Priority 2: successor_blocks only — address-based switch (existing logic).
@@ -914,11 +913,14 @@ namespace patchestry::ast {
                 case_stmt->setSubStmt(goto_stmt);
                 sw_body.push_back(case_stmt);
             }
-            sw_body.push_back(make_default_arm());
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            return { switch_stmt, false };
+            auto *fallback2 = make_fallback_stmt();
+            std::vector< clang::Stmt * > result_stmts2 = { switch_stmt, fallback2 };
+            return { clang::CompoundStmt::Create(
+                ctx, result_stmts2, clang::FPOptionsOverride(), loc, loc
+            ), false };
         }
 
         // Priority 3: no successor info at all — emit IndirectGotoStmt as the only

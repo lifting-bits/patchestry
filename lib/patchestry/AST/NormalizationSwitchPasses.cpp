@@ -1143,6 +1143,138 @@ namespace patchestry::ast {
                 return new_loop;
             }
 
+            /// Returns the trailing GotoStmt from an if-branch body, or nullptr.
+            /// Handles CompoundStmt (last child), bare GotoStmt, or LabelStmt wrappers.
+            static const clang::GotoStmt *getTrailingGoto(const clang::Stmt *branch) {
+                if (branch == nullptr) {
+                    return nullptr;
+                }
+                if (const auto *gs = llvm::dyn_cast< clang::GotoStmt >(branch)) {
+                    return gs;
+                }
+                if (const auto *cs = llvm::dyn_cast< clang::CompoundStmt >(branch)) {
+                    if (cs->size() == 0) {
+                        return nullptr;
+                    }
+                    return llvm::dyn_cast< clang::GotoStmt >(cs->body_back());
+                }
+                if (const auto *ls = llvm::dyn_cast< clang::LabelStmt >(branch)) {
+                    return getTrailingGoto(ls->getSubStmt());
+                }
+                return nullptr;
+            }
+
+            /// Removes the trailing GotoStmt from an if-branch body.  Returns a new
+            /// stmt with the goto stripped, or nullptr if the branch was just a goto.
+            static clang::Stmt *stripTrailingGoto(
+                clang::ASTContext &ctx, clang::Stmt *branch
+            ) {
+                if (branch == nullptr) {
+                    return nullptr;
+                }
+                if (llvm::isa< clang::GotoStmt >(branch)) {
+                    return new (ctx) clang::NullStmt(branch->getBeginLoc(), false);
+                }
+                if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(branch)) {
+                    if (cs->size() == 0) {
+                        return cs;
+                    }
+                    if (!llvm::isa< clang::GotoStmt >(cs->body_back())) {
+                        return cs;
+                    }
+                    std::vector< clang::Stmt * > new_body(cs->body_begin(), cs->body_end());
+                    new_body.pop_back();
+                    if (new_body.empty()) {
+                        return new (ctx) clang::NullStmt(cs->getLBracLoc(), false);
+                    }
+                    return makeCompound(ctx, new_body, cs->getLBracLoc(), cs->getRBracLoc());
+                }
+                return branch;
+            }
+
+            /// Pattern 2: absorb diamond-join labels.  When an IfStmt's then and else
+            /// branches both end with gotos to the same forward label, and that label
+            /// is the next top-level statement, move the label's body after the if-else
+            /// (stripping the gotos) and remove the label.  Returns true if absorption
+            /// occurred and updates all_stmts in place.
+            bool tryAbsorbDiamondJoin(
+                clang::ASTContext &ctx, std::vector< clang::Stmt * > &all_stmts,
+                std::size_t if_idx,
+                const std::unordered_map< const clang::LabelDecl *, unsigned > &ref_count,
+                unsigned &absorbed
+            ) {
+                auto *is = llvm::dyn_cast< clang::IfStmt >(all_stmts[if_idx]);
+                if (is == nullptr || is->getElse() == nullptr) {
+                    return false;
+                }
+
+                const auto *then_goto = getTrailingGoto(is->getThen());
+                const auto *else_goto = getTrailingGoto(is->getElse());
+                if (then_goto == nullptr || else_goto == nullptr) {
+                    return false;
+                }
+                if (then_goto->getLabel() != else_goto->getLabel()) {
+                    return false;
+                }
+                const clang::LabelDecl *join_label = then_goto->getLabel();
+
+                // The join label must be the next top-level statement.
+                if (if_idx + 1 >= all_stmts.size()) {
+                    return false;
+                }
+                auto *next_ls = llvm::dyn_cast< clang::LabelStmt >(all_stmts[if_idx + 1]);
+                if (next_ls == nullptr || next_ls->getDecl() != join_label) {
+                    return false;
+                }
+
+                // Only absorb when the only refs to this label are the two gotos.
+                auto rc_it = ref_count.find(join_label);
+                unsigned total_refs = (rc_it != ref_count.end()) ? rc_it->second : 0u;
+                if (total_refs != 2) {
+                    return false;
+                }
+
+                // Strip trailing gotos from both branches.
+                auto *new_then = stripTrailingGoto(ctx, is->getThen());
+                auto *new_else = stripTrailingGoto(ctx, is->getElse());
+                auto *new_if   = clang::IfStmt::Create(
+                    ctx, is->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                    is->getCond(), is->getLParenLoc(),
+                    new_then->getBeginLoc(), new_then,
+                    new_else != nullptr ? new_else->getBeginLoc() : clang::SourceLocation(),
+                    new_else
+                );
+
+                // Collect the join label's body (sub-stmt + subsequent non-label stmts).
+                std::size_t join_pos = if_idx + 1;
+                auto join_body = buildLabelBody(all_stmts, join_pos);
+
+                // Build new stmt list: replace IfStmt, insert join body, skip label + its stmts.
+                std::vector< clang::Stmt * > new_stmts;
+                new_stmts.reserve(all_stmts.size());
+                for (std::size_t i = 0; i < if_idx; ++i) {
+                    new_stmts.push_back(all_stmts[i]);
+                }
+                new_stmts.push_back(new_if);
+                for (auto *s : join_body) {
+                    new_stmts.push_back(s);
+                }
+                // Skip the label and its body stmts.
+                std::size_t skip_end = join_pos + 1;
+                while (skip_end < all_stmts.size()
+                       && !llvm::isa< clang::LabelStmt >(all_stmts[skip_end]))
+                {
+                    ++skip_end;
+                }
+                for (std::size_t i = skip_end; i < all_stmts.size(); ++i) {
+                    new_stmts.push_back(all_stmts[i]);
+                }
+
+                all_stmts = std::move(new_stmts);
+                ++absorbed;
+                return true;
+            }
+
             /// Pattern 1: inline label bodies into goto sites inside a loop when the
             /// target is a forward-sibling label (pos > loop_idx).  Preconditions:
             /// loop at loop_idx, labels after loop with non-empty bodies, exactly
@@ -1289,6 +1421,17 @@ namespace patchestry::ast {
                     }
                 }
 
+                // Pattern 2: diamond-join absorption.
+                unsigned diamond_absorbed = 0;
+                for (std::size_t i = 0; i < all_stmts.size(); ++i) {
+                    if (tryAbsorbDiamondJoin(ctx, all_stmts, i, ref_count, diamond_absorbed)) {
+                        changed = true;
+                        // all_stmts was rebuilt; re-scan from same index
+                        --i;
+                    }
+                }
+                state.diamond_joins_absorbed += diamond_absorbed;
+
                 if (!changed) {
                     return body;
                 }
@@ -1369,7 +1512,39 @@ namespace patchestry::ast {
                         new_stmts.push_back(all_stmts[i]);
                     }
                 }
+
+                // Pattern 3: recurse into nested structured bodies.
+                recurseIntoNestedBodies(ctx, new_stmts, ref_count, inlined);
+
                 return makeCompound(ctx, new_stmts, body->getLBracLoc(), body->getRBracLoc());
+            }
+
+            /// Pattern 3: recurse processCompound into nested loop bodies.
+            /// Only recurse into loops (not IfStmt branches) to preserve break
+            /// semantics — inlined label bodies may contain breaks that are only
+            /// valid inside a loop scope.
+            void recurseIntoNestedBodies(
+                clang::ASTContext &ctx, std::vector< clang::Stmt * > &stmts,
+                const std::unordered_map< const clang::LabelDecl *, unsigned > &ref_count,
+                unsigned &inlined
+            ) {
+                for (std::size_t i = 0; i < stmts.size(); ++i) {
+                    auto *loop = unwrapLoop(stmts[i]);
+                    if (loop == nullptr) {
+                        continue;
+                    }
+                    auto *loop_body = getLoopBody(loop);
+                    if (auto *lc =
+                            llvm::dyn_cast_or_null< clang::CompoundStmt >(loop_body))
+                    {
+                        auto *result = processCompound(ctx, lc, ref_count, inlined);
+                        if (result != lc) {
+                            auto *new_loop = rebuildLoop(ctx, loop, result);
+                            stmts[i]       = rewrapLoop(ctx, stmts[i], new_loop);
+                            ++state.nested_stmts_relocated;
+                        }
+                    }
+                }
             }
         };
 
