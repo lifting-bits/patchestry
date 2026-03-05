@@ -137,6 +137,26 @@ namespace {
         std::string result;
         llvm::raw_string_ostream os(result);
 
+        // Print an APInt as a signed decimal string.  Streaming APInt directly
+        // uses unsigned representation, which would break downstream consumers
+        // (e.g. std::stoll in patchir-seahorn-verifier) for negative values.
+        // Values wider than 64 bits are printed via toString and a warning is
+        // emitted because the downstream parser only handles int64_t.
+        auto printSignedInt = [](llvm::raw_string_ostream &out,
+                                 const llvm::APInt &val) {
+            if (val.getBitWidth() <= 64) {
+                out << val.getSExtValue();
+            } else {
+                LOG(WARNING) << "Contract integer value has bitwidth "
+                             << val.getBitWidth()
+                             << " which exceeds 64 bits; downstream std::stoll "
+                                "parser may truncate or reject this value\n";
+                llvm::SmallString< 32 > str;
+                val.toString(str, 10, /*Signed=*/true);
+                out << str;
+            }
+        };
+
         // Write predicate kind
         os << "kind=" << ::contracts::stringifyPredicateKind(pred.getKind());
 
@@ -162,16 +182,12 @@ namespace {
             os << ", value=";
             auto valueAttr = pred.getValue();
             if (auto intAttr = mlir::dyn_cast< mlir::IntegerAttr >(valueAttr)) {
-                // Handle integer constants
-                os << intAttr.getValue();
+                printSignedInt(os, intAttr.getValue());
             } else if (auto strAttr = mlir::dyn_cast< mlir::StringAttr >(valueAttr)) {
-                // Handle string values
                 os << "\"" << strAttr.getValue() << "\"";
             } else if (auto symRef = mlir::dyn_cast< mlir::FlatSymbolRefAttr >(valueAttr)) {
-                // Handle symbol references
                 os << "@" << symRef.getValue();
             } else {
-                // Fallback: use MLIR's generic attribute printing
                 std::string attrStr;
                 llvm::raw_string_ostream attrOS(attrStr);
                 valueAttr.print(attrOS);
@@ -193,10 +209,12 @@ namespace {
         if (pred.getRange()) {
             os << ", range=[";
             if (pred.getRange().getMin()) {
-                os << "min=" << pred.getRange().getMin().getValue();
+                os << "min=";
+                printSignedInt(os, pred.getRange().getMin().getValue());
             }
             if (pred.getRange().getMax()) {
-                os << ", max=" << pred.getRange().getMax().getValue();
+                os << ", max=";
+                printSignedInt(os, pred.getRange().getMax().getValue());
             }
             os << "]";
         }
