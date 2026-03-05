@@ -137,6 +137,26 @@ namespace {
         std::string result;
         llvm::raw_string_ostream os(result);
 
+        // Print an APInt as a signed decimal string.  Streaming APInt directly
+        // uses unsigned representation, which would break downstream consumers
+        // (e.g. std::stoll in patchir-seahorn-verifier) for negative values.
+        // Values wider than 64 bits are printed via toString and a warning is
+        // emitted because the downstream parser only handles int64_t.
+        auto printSignedInt = [](llvm::raw_string_ostream &out,
+                                 const llvm::APInt &val) {
+            if (val.getBitWidth() <= 64) {
+                out << val.getSExtValue();
+            } else {
+                LOG(WARNING) << "Contract integer value has bitwidth "
+                             << val.getBitWidth()
+                             << " which exceeds 64 bits; downstream std::stoll "
+                                "parser may truncate or reject this value\n";
+                llvm::SmallString< 32 > str;
+                val.toString(str, 10, /*Signed=*/true);
+                out << str;
+            }
+        };
+
         // Write predicate kind
         os << "kind=" << ::contracts::stringifyPredicateKind(pred.getKind());
 
@@ -158,6 +178,23 @@ namespace {
             os << ", relation=" << ::contracts::stringifyRelationKind(pred.getRelation());
         }
 
+        if (pred.getValue()) {
+            os << ", value=";
+            auto valueAttr = pred.getValue();
+            if (auto intAttr = mlir::dyn_cast< mlir::IntegerAttr >(valueAttr)) {
+                printSignedInt(os, intAttr.getValue());
+            } else if (auto strAttr = mlir::dyn_cast< mlir::StringAttr >(valueAttr)) {
+                os << "\"" << strAttr.getValue() << "\"";
+            } else if (auto symRef = mlir::dyn_cast< mlir::FlatSymbolRefAttr >(valueAttr)) {
+                os << "@" << symRef.getValue();
+            } else {
+                std::string attrStr;
+                llvm::raw_string_ostream attrOS(attrStr);
+                valueAttr.print(attrOS);
+                os << attrOS.str();
+            }
+        }
+
         // Write alignment if present
         if (pred.getAlign()) {
             os << ", align=" << pred.getAlign().getAlignment();
@@ -172,10 +209,12 @@ namespace {
         if (pred.getRange()) {
             os << ", range=[";
             if (pred.getRange().getMin()) {
-                os << "min=" << pred.getRange().getMin().getValue();
+                os << "min=";
+                printSignedInt(os, pred.getRange().getMin().getValue());
             }
             if (pred.getRange().getMax()) {
-                os << ", max=" << pred.getRange().getMax().getValue();
+                os << ", max=";
+                printSignedInt(os, pred.getRange().getMax().getValue());
             }
             os << "]";
         }
@@ -270,7 +309,6 @@ namespace {
             // Check for patchestry_operation attribute
             if (auto attr = op->getAttrOfType<mlir::StringAttr>("patchestry_operation")) {
                 metadata.patchestry_operation = attr.getValue().str();
-                metadata_list.push_back(metadata);
                 LOG(INFO) << "Found patchestry_operation attribute: "
                           << metadata.patchestry_operation
                           << " on operation: " << metadata.operation_name;
@@ -285,7 +323,6 @@ namespace {
                     op->getAttrOfType< ::contracts::StaticContractAttr >("contract.static"))
             {
                 metadata.static_contract = serializeStaticContract(attr);
-                metadata_list.push_back(metadata);
                 LOG(INFO) << "Found contract.static attribute on operation: "
                           << metadata.operation_name
                           << "\nContract details: " << metadata.static_contract << "\n";
@@ -293,7 +330,12 @@ namespace {
                     LOG(INFO) << " at " << metadata.mlir_file << ":" << metadata.mlir_line
                               << ":" << metadata.mlir_column;
                 }
-                LOG(INFO) << "\nStatic contract details: " << metadata.static_contract << "\n";
+                LOG(INFO) << "\n";
+            }
+
+            // Push a single entry if the operation has any relevant attributes
+            if (!metadata.patchestry_operation.empty() || !metadata.static_contract.empty()) {
+                metadata_list.push_back(metadata);
             }
         });
 
@@ -336,14 +378,10 @@ namespace {
         // This allows us to match LLVM instructions with their original MLIR operations
         std::map<LocationKey, const OperationMetadata *> location_to_metadata;
 
-        // Also build a map from line number only (for fallback matching)
-        std::multimap<unsigned, const OperationMetadata *> line_to_metadata;
-
         for (const auto &metadata : metadata_list) {
             if (!metadata.mlir_file.empty() && metadata.mlir_line > 0) {
                 LocationKey key{ metadata.mlir_file, metadata.mlir_line, metadata.mlir_column };
                 location_to_metadata[key] = &metadata;
-                line_to_metadata.insert({ metadata.mlir_line, &metadata });
 
                 LOG(INFO) << "Registered metadata for location: " << metadata.mlir_file << ":"
                           << metadata.mlir_line << ":" << metadata.mlir_column
@@ -463,14 +501,15 @@ namespace {
                                   << "\nMLIR location: " << matched_metadata->mlir_file << ":"
                                   << matched_metadata->mlir_line << ":"
                                   << matched_metadata->mlir_column << "\n";
+                        matched_count++;
                     }
                 }
-                matched_count++;
             }
         }
 
-        LOG(INFO) << "Embedded " << matched_count << " out of " << metadata_list.size()
-                  << " metadata entries (total instructions: " << total_instructions << ")\n";
+        LOG(INFO) << "Embedded metadata on " << matched_count
+                  << " instructions (total instructions: " << total_instructions
+                  << ", metadata entries: " << metadata_list.size() << ")\n";
     }
 
     // Writes LLVM module to file either as bitcode or LLVM IR
