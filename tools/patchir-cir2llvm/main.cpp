@@ -291,7 +291,6 @@ namespace {
             // Check for patchestry_operation attribute
             if (auto attr = op->getAttrOfType<mlir::StringAttr>("patchestry_operation")) {
                 metadata.patchestry_operation = attr.getValue().str();
-                metadata_list.push_back(metadata);
                 LOG(INFO) << "Found patchestry_operation attribute: "
                           << metadata.patchestry_operation
                           << " on operation: " << metadata.operation_name;
@@ -306,7 +305,6 @@ namespace {
                     op->getAttrOfType< ::contracts::StaticContractAttr >("contract.static"))
             {
                 metadata.static_contract = serializeStaticContract(attr);
-                metadata_list.push_back(metadata);
                 LOG(INFO) << "Found contract.static attribute on operation: "
                           << metadata.operation_name
                           << "\nContract details: " << metadata.static_contract << "\n";
@@ -314,7 +312,12 @@ namespace {
                     LOG(INFO) << " at " << metadata.mlir_file << ":" << metadata.mlir_line
                               << ":" << metadata.mlir_column;
                 }
-                LOG(INFO) << "\nStatic contract details: " << metadata.static_contract << "\n";
+                LOG(INFO) << "\n";
+            }
+
+            // Push a single entry if the operation has any relevant attributes
+            if (!metadata.patchestry_operation.empty() || !metadata.static_contract.empty()) {
+                metadata_list.push_back(metadata);
             }
         });
 
@@ -357,14 +360,10 @@ namespace {
         // This allows us to match LLVM instructions with their original MLIR operations
         std::map<LocationKey, const OperationMetadata *> location_to_metadata;
 
-        // Also build a map from line number only (for fallback matching)
-        std::multimap<unsigned, const OperationMetadata *> line_to_metadata;
-
         for (const auto &metadata : metadata_list) {
             if (!metadata.mlir_file.empty() && metadata.mlir_line > 0) {
                 LocationKey key{ metadata.mlir_file, metadata.mlir_line, metadata.mlir_column };
                 location_to_metadata[key] = &metadata;
-                line_to_metadata.insert({ metadata.mlir_line, &metadata });
 
                 LOG(INFO) << "Registered metadata for location: " << metadata.mlir_file << ":"
                           << metadata.mlir_line << ":" << metadata.mlir_column
@@ -484,14 +483,15 @@ namespace {
                                   << "\nMLIR location: " << matched_metadata->mlir_file << ":"
                                   << matched_metadata->mlir_line << ":"
                                   << matched_metadata->mlir_column << "\n";
+                        matched_count++;
                     }
                 }
-                matched_count++;
             }
         }
 
-        LOG(INFO) << "Embedded " << matched_count << " out of " << metadata_list.size()
-                  << " metadata entries (total instructions: " << total_instructions << ")\n";
+        LOG(INFO) << "Embedded metadata on " << matched_count
+                  << " instructions (total instructions: " << total_instructions
+                  << ", metadata entries: " << metadata_list.size() << ")\n";
     }
 
     // Writes LLVM module to file either as bitcode or LLVM IR

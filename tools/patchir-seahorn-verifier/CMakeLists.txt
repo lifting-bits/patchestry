@@ -13,7 +13,6 @@ target_link_libraries(patchir-seahorn-verifier
         LLVMSupport
         LLVMIRReader
         LLVMBitWriter
-        MLIRContracts
 )
 
 if(PATCHESTRY_INSTALL)

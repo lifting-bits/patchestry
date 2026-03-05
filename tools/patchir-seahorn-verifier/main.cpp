@@ -85,7 +85,9 @@ namespace {
                 try {
                     index = static_cast< unsigned >(std::stoul(index_str));
                     return true;
-                } catch (...) {
+                } catch (const std::exception &e) {
+                    llvm::errs() << "Warning: failed to parse argument index '"
+                                 << index_str << "': " << e.what() << "\n";
                     return false;
                 }
             }
@@ -155,8 +157,10 @@ namespace {
         ParsedPredicate pred;
 
         auto kind_it = kv.find("kind");
-        if (kind_it == kv.end())
+        if (kind_it == kv.end()) {
+            llvm::errs() << "Warning: predicate missing 'kind' key\n";
             return pred;
+        }
 
         std::string kind_str = kind_it->second;
 
@@ -191,7 +195,9 @@ namespace {
                         pred.kind = PK_RelGtArgConst;
                     else if (rel == "gte")
                         pred.kind = PK_RelGeArgConst;
-                } catch (...) {
+                } catch (const std::exception &e) {
+                    llvm::errs() << "Warning: failed to parse relation value '"
+                                 << val_it->second << "': " << e.what() << "\n";
                 }
             }
         } else if (kind_str == "range") {
@@ -216,7 +222,10 @@ namespace {
                     size_t min_end = range_str.find_first_of(",]", min_pos);
                     try {
                         pred.min_val = std::stoll(range_str.substr(min_pos, min_end - min_pos));
-                    } catch (...) {
+                    } catch (const std::exception &e) {
+                        llvm::errs() << "Warning: failed to parse range min value '"
+                                     << range_str.substr(min_pos, min_end - min_pos)
+                                     << "': " << e.what() << "\n";
                     }
                 }
 
@@ -225,7 +234,10 @@ namespace {
                     size_t max_end = range_str.find_first_of(",]", max_pos);
                     try {
                         pred.max_val = std::stoll(range_str.substr(max_pos, max_end - max_pos));
-                    } catch (...) {
+                    } catch (const std::exception &e) {
+                        llvm::errs() << "Warning: failed to parse range max value '"
+                                     << range_str.substr(max_pos, max_end - max_pos)
+                                     << "': " << e.what() << "\n";
                     }
                 }
             }
@@ -235,12 +247,33 @@ namespace {
             if (align_it != kv.end()) {
                 try {
                     pred.alignment = std::stoull(align_it->second);
-                } catch (...) {
+                } catch (const std::exception &e) {
+                    llvm::errs() << "Warning: failed to parse alignment value '"
+                                 << align_it->second << "': " << e.what() << "\n";
                 }
             }
+        } else {
+            llvm::errs() << "Warning: unknown predicate kind '" << kind_str << "'\n";
         }
 
         return pred;
+    }
+
+    // Find the position of the closing ']' that matches the opening '[' at
+    // the given start position, handling nested brackets (e.g. range=[min=0, max=255]).
+    // Returns std::string::npos if no matching bracket is found.
+    static size_t findMatchingBracket(const std::string &str, size_t start) {
+        int depth = 1;
+        for (size_t i = start; i < str.length(); ++i) {
+            if (str[i] == '[')
+                depth++;
+            else if (str[i] == ']') {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+        return std::string::npos;
     }
 
     // Parse the static contract metadata string
@@ -252,7 +285,7 @@ namespace {
         size_t pre_start = contract_str.find("preconditions=[");
         if (pre_start != std::string::npos) {
             pre_start += 15; // Skip "preconditions=["
-            size_t pre_end = contract_str.find(']', pre_start);
+            size_t pre_end = findMatchingBracket(contract_str, pre_start);
             if (pre_end != std::string::npos) {
                 std::string pre_section = contract_str.substr(pre_start, pre_end - pre_start);
 
@@ -284,8 +317,8 @@ namespace {
         // Find postconditions section
         size_t post_start = contract_str.find("postconditions=[");
         if (post_start != std::string::npos) {
-            post_start += 16;
-            size_t post_end = contract_str.find(']', post_start);
+            post_start += 16; // Skip "postconditions=["
+            size_t post_end = findMatchingBracket(contract_str, post_start);
             if (post_end != std::string::npos) {
                 std::string post_section = contract_str.substr(post_start, post_end - post_start);
 
@@ -342,20 +375,21 @@ namespace {
         if (preds.empty())
             return;
 
-        // Get or insert __VERIFIER_assume and __VERIFIER_assert
+        // Get or insert __VERIFIER_assume and __VERIFIER_assert.
+        // SeaHorn's C runtime declares these with int (i32) parameters.
+        auto *i32Ty = llvm::Type::getInt32Ty(M.getContext());
+
         llvm::FunctionCallee Assume = M.getOrInsertFunction(
             "__VERIFIER_assume",
             llvm::FunctionType::get(
-                llvm::Type::getVoidTy(M.getContext()),
-                { llvm::Type::getInt1Ty(M.getContext()) }, false
+                llvm::Type::getVoidTy(M.getContext()), { i32Ty }, false
             )
         );
 
         llvm::FunctionCallee Assert = M.getOrInsertFunction(
             "__VERIFIER_assert",
             llvm::FunctionType::get(
-                llvm::Type::getVoidTy(M.getContext()),
-                { llvm::Type::getInt1Ty(M.getContext()) }, false
+                llvm::Type::getVoidTy(M.getContext()), { i32Ty }, false
             )
         );
 
@@ -371,13 +405,26 @@ namespace {
 
             llvm::Value *A = nullptr;
 
-            // Get the argument value
-            if (CB && P.arg_index < CB->arg_size()) {
+            // Get the argument value — requires a CallBase instruction
+            if (!CB) {
+                if (verbose)
+                    llvm::errs() << "  Warning: precondition on arg" << P.arg_index
+                                 << " skipped — instruction is not a call in "
+                                 << Inst.getFunction()->getName() << "\n";
+                continue;
+            }
+            if (P.arg_index < CB->arg_size()) {
                 A = CB->getArgOperand(P.arg_index);
             }
 
-            if (!A)
+            if (!A) {
+                if (verbose)
+                    llvm::errs() << "  Warning: precondition on arg" << P.arg_index
+                                 << " skipped — arg index out of range (function has "
+                                 << CB->arg_size() << " args) in "
+                                 << Inst.getFunction()->getName() << "\n";
                 continue;
+            }
 
             llvm::Value *Cond = nullptr;
 
@@ -479,7 +526,7 @@ namespace {
                 break;
             }
             case PK_Alignment: {
-                if (!A->getType()->isPointerTy())
+                if (!A->getType()->isPointerTy() || P.alignment == 0)
                     break;
                 llvm::Type *intptr_ty = Bpre.getIntPtrTy(M.getDataLayout());
                 llvm::Value *ptr_int  = Bpre.CreatePtrToInt(A, intptr_ty);
@@ -493,18 +540,48 @@ namespace {
                 break;
             }
             default:
+                if (verbose)
+                    llvm::errs() << "  Warning: unhandled precondition kind "
+                                 << static_cast< int >(P.kind) << " in "
+                                 << Inst.getFunction()->getName() << "\n";
                 break;
             }
 
             if (Cond) {
-                Bpre.CreateCall(Assume, { Cond });
+                llvm::Value *CondI32 = Bpre.CreateZExt(Cond, i32Ty);
+                Bpre.CreateCall(Assume, { CondI32 });
             }
         }
 
-        // 2) Postconditions: insert immediately after instruction
-        llvm::Instruction *After = Inst.getNextNode();
-        if (!After)
+        // 2) Postconditions: insert immediately after instruction.
+        // Check whether there are any postconditions before doing work.
+        bool has_postconditions = false;
+        for (auto &P : preds) {
+            if (!P.is_precondition) {
+                has_postconditions = true;
+                break;
+            }
+        }
+        if (!has_postconditions)
             return;
+
+        // If the instruction is at the end of its basic block (e.g. an invoke
+        // terminator), split the block to create a valid insertion point.
+        llvm::Instruction *After = Inst.getNextNode();
+        if (!After) {
+            if (Inst.isTerminator()) {
+                if (verbose)
+                    llvm::errs() << "  Warning: cannot inject postconditions after "
+                                    "terminator instruction in "
+                                 << Inst.getFunction()->getName() << "\n";
+                return;
+            }
+            // Non-terminator at block end — split to create a successor block.
+            llvm::BasicBlock *BB = Inst.getParent();
+            llvm::BasicBlock *NewBB =
+                BB->splitBasicBlock(BB->getTerminator(), "post_contract");
+            After = &*NewBB->begin();
+        }
 
         llvm::IRBuilder<> Bpost(After);
 
@@ -556,13 +633,17 @@ namespace {
                 break;
             }
             default:
-                // Other postconditions can be added here
+                if (verbose)
+                    llvm::errs() << "  Warning: unhandled postcondition kind "
+                                 << static_cast< int >(P.kind) << " in "
+                                 << Inst.getFunction()->getName() << "\n";
                 break;
             }
 
             if (Cond) {
                 // Postconditions use assert
-                Bpost.CreateCall(Assert, { Cond });
+                llvm::Value *CondI32 = Bpost.CreateZExt(Cond, i32Ty);
+                Bpost.CreateCall(Assert, { CondI32 });
             }
         }
     }
@@ -577,17 +658,30 @@ namespace {
                 std::vector< std::pair< llvm::Instruction *, std::string > > worklist;
 
                 for (auto &I : BB) {
-                    if (auto *contract_md = I.getMetadata("static_contract")) {
-                        if (auto *tuple = llvm::dyn_cast< llvm::MDTuple >(contract_md)) {
-                            if (tuple->getNumOperands() >= 2) {
-                                if (auto *md_str =
-                                        llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1)))
-                                {
-                                    worklist.push_back({ &I, md_str->getString().str() });
-                                }
-                            }
-                        }
+                    auto *contract_md = I.getMetadata("static_contract");
+                    if (!contract_md)
+                        continue;
+
+                    auto *tuple = llvm::dyn_cast< llvm::MDTuple >(contract_md);
+                    if (!tuple) {
+                        llvm::errs() << "Warning: static_contract metadata is not an MDTuple"
+                                     << " in " << F.getName() << "\n";
+                        continue;
                     }
+                    if (tuple->getNumOperands() < 2) {
+                        llvm::errs() << "Warning: static_contract metadata has "
+                                     << tuple->getNumOperands() << " operand(s), expected >= 2"
+                                     << " in " << F.getName() << "\n";
+                        continue;
+                    }
+                    auto *md_str =
+                        llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1));
+                    if (!md_str) {
+                        llvm::errs() << "Warning: static_contract metadata operand(1) is not"
+                                     << " an MDString in " << F.getName() << "\n";
+                        continue;
+                    }
+                    worklist.push_back({ &I, md_str->getString().str() });
                 }
 
                 // Process collected instructions
@@ -648,6 +742,11 @@ int main(int argc, char **argv) {
 
     // Process the module
     unsigned count = processModule(*module);
+
+    if (count == 0) {
+        llvm::errs() << "Warning: no static_contract metadata found in module — "
+                        "output will contain no verification predicates\n";
+    }
 
     if (verbose) {
         llvm::outs() << "\nProcessed " << count << " instruction(s) with static contracts\n";
