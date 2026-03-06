@@ -346,23 +346,141 @@ namespace patchestry::ast {
         }
 
         // -------------------------------------------------------------------
-        // Plan 02 stub implementations
+        // LoopBody exit detection, tail ordering, extension, exit labeling
         // -------------------------------------------------------------------
 
-        void LoopBody::findExit(const CGraph & /*g*/, const std::vector<size_t> & /*body*/) {
-            // TODO: Plan 02
+        void LoopBody::findExit(const CGraph &g, const std::vector<size_t> &body) {
+            // Select a single exit block for the loop.
+            // Priority: tail exits first, then head exits, then body exits.
+            // A candidate exit is an unmarked successor reached via a non-goto edge.
+
+            std::vector<size_t> candidates;
+
+            // Scan tails for exits.
+            for (size_t t : tails) {
+                const auto &tn = g.node(t);
+                for (size_t i = 0; i < tn.succs.size(); ++i) {
+                    size_t s = tn.succs[i];
+                    if (!g.node(s).mark && !tn.isGotoOut(i) && !tn.isBackEdge(i)) {
+                        if (!immed_container) {
+                            // No container -- take first candidate immediately.
+                            exit_block = s;
+                            return;
+                        }
+                        candidates.push_back(s);
+                    }
+                }
+            }
+
+            // If container exists, also scan head and remaining body nodes.
+            if (immed_container) {
+                // Scan head (body[0]).
+                const auto &hd = g.node(body[0]);
+                for (size_t i = 0; i < hd.succs.size(); ++i) {
+                    size_t s = hd.succs[i];
+                    if (!g.node(s).mark && !hd.isGotoOut(i) && !hd.isBackEdge(i)) {
+                        candidates.push_back(s);
+                    }
+                }
+                // Scan body nodes beyond the unique set (index >= unique_count).
+                for (size_t idx = static_cast<size_t>(unique_count); idx < body.size(); ++idx) {
+                    const auto &bn = g.node(body[idx]);
+                    for (size_t i = 0; i < bn.succs.size(); ++i) {
+                        size_t s = bn.succs[i];
+                        if (!g.node(s).mark && !bn.isGotoOut(i) && !bn.isBackEdge(i)) {
+                            candidates.push_back(s);
+                        }
+                    }
+                }
+            }
+
+            // Pick exit: for v1, take the first candidate.
+            // NOTE: Full container-aware exit selection (preferring candidates inside
+            // the container's body) can be added later if needed.
+            if (!candidates.empty()) {
+                exit_block = candidates[0];
+            } else {
+                exit_block = NONE;
+            }
         }
 
-        void LoopBody::orderTails(const CGraph & /*g*/) {
-            // TODO: Plan 02
+        void LoopBody::orderTails(const CGraph &g) {
+            // Swap the tail that directly reaches exit_block to tails[0].
+            if (tails.size() <= 1 || exit_block == NONE) return;
+
+            for (size_t ti = 0; ti < tails.size(); ++ti) {
+                const auto &tn = g.node(tails[ti]);
+                for (size_t s : tn.succs) {
+                    if (s == exit_block) {
+                        // Found a tail that reaches exit_block directly.
+                        if (ti != 0) {
+                            std::swap(tails[0], tails[ti]);
+                        }
+                        return;
+                    }
+                }
+            }
+            // No tail reaches exit_block directly -- leave order unchanged.
         }
 
-        void LoopBody::extend(CGraph & /*g*/, std::vector<size_t> & /*body*/) const {
-            // TODO: Plan 02
+        void LoopBody::extend(CGraph &g, std::vector<size_t> &body) const {
+            // Add dominated-only blocks: blocks whose ALL predecessors are in the body.
+            // Uses visit_count to track how many predecessors are body members.
+            // Fixpoint iteration until no new nodes are added.
+
+            std::vector<size_t> touched;  // track nodes with non-zero visit_count
+
+            bool added = true;
+            while (added) {
+                added = false;
+
+                // For each body node, increment visit_count of non-body, non-collapsed successors.
+                for (size_t bid : body) {
+                    const auto &bn = g.node(bid);
+                    for (size_t i = 0; i < bn.succs.size(); ++i) {
+                        size_t s = bn.succs[i];
+                        if (g.node(s).mark) continue;       // already in body
+                        if (g.node(s).collapsed) continue;   // absorbed
+                        if (bn.isGotoOut(i)) continue;       // don't extend through gotos
+                        if (s == exit_block) continue;        // don't extend into exit
+                        if (g.node(s).visit_count == 0) {
+                            touched.push_back(s);
+                        }
+                        g.node(s).visit_count++;
+                    }
+                }
+
+                // Check which visited nodes have ALL predecessors in body.
+                for (size_t s : touched) {
+                    auto &sn = g.node(s);
+                    if (sn.mark) continue;  // already added
+                    if (sn.visit_count == static_cast<int>(sn.sizeIn())) {
+                        // All preds are in body -- include this node.
+                        sn.mark = true;
+                        body.push_back(s);
+                        added = true;
+                    }
+                }
+
+                // Reset visit_count for next iteration.
+                for (size_t s : touched) {
+                    g.node(s).visit_count = 0;
+                }
+                touched.clear();
+            }
         }
 
-        void LoopBody::labelExitEdges(CGraph & /*g*/, const std::vector<size_t> & /*body*/) const {
-            // TODO: Plan 02
+        void LoopBody::labelExitEdges(CGraph &g, const std::vector<size_t> &body) const {
+            // Mark F_LOOP_EXIT on all edges leaving the loop body.
+            for (size_t bid : body) {
+                auto &bn = g.node(bid);
+                for (size_t i = 0; i < bn.succs.size(); ++i) {
+                    size_t s = bn.succs[i];
+                    if (!g.node(s).mark && !bn.isGotoOut(i)) {
+                        bn.edge_flags[i] |= CNode::F_LOOP_EXIT;
+                    }
+                }
+            }
         }
 
     } // namespace detail
