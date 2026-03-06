@@ -522,7 +522,7 @@ namespace patchestry::ast {
         // Condition negation helper
         // ---------------------------------------------------------------
 
-        [[maybe_unused]] static clang::Expr *negateCond(clang::Expr *cond, clang::ASTContext &ctx) {
+        static clang::Expr *negateCond(clang::Expr *cond, clang::ASTContext &ctx) {
             // Double negation elimination
             if (auto *uo = llvm::dyn_cast<clang::UnaryOperator>(cond)) {
                 if (uo->getOpcode() == clang::UO_LNot) {
@@ -625,8 +625,12 @@ namespace patchestry::ast {
                         ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
                 }
 
-                // If the taken branch is succs[0] (false branch in Ghidra convention),
-                // we may need to negate
+                // If clause is on false branch (i==0), negate condition
+                // succs[0]=false branch per Ghidra convention
+                if (i == 0) {
+                    cond = negateCond(cond, ctx);
+                }
+
                 SNode *clause_body = leafFromNode(clause, factory);
                 auto *if_node = factory.make<SIfThenElse>(cond, clause_body, nullptr);
 
@@ -692,6 +696,11 @@ namespace patchestry::ast {
                         ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
                 }
 
+                // Negate condition when body is on false branch
+                if (i == 0) {
+                    cond = negateCond(cond, ctx);
+                }
+
                 auto *body = leafFromNode(clause, factory);
                 auto *while_node = factory.make<SWhile>(cond, body);
 
@@ -716,6 +725,11 @@ namespace patchestry::ast {
                 if (!cond) {
                     cond = clang::IntegerLiteral::Create(
                         ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+                }
+
+                // Negate condition when self-loop is on false branch
+                if (i == 0) {
+                    cond = negateCond(cond, ctx);
                 }
 
                 auto *body = leafFromNode(bl, factory);
@@ -826,12 +840,25 @@ namespace patchestry::ast {
             }
             auto *sw = factory.make<SSwitch>(disc);
 
+            // Build a map from succ_index to case value for this switch block
+            std::unordered_map<size_t, int64_t> succ_to_value;
+            for (const auto &entry : bl.switch_cases) {
+                succ_to_value[entry.succ_index] = entry.value;
+            }
+
             std::vector<size_t> collapse_ids = {id};
-            for (size_t s : bl.succs) {
+            for (size_t si = 0; si < bl.succs.size(); ++si) {
+                size_t s = bl.succs[si];
                 if (s == exit_id) continue;
                 collapse_ids.push_back(s);
-                // TODO: extract actual case values from switch metadata
-                sw->addCase(nullptr, leafFromNode(g.node(s), factory));
+                clang::Expr *case_val = nullptr;
+                auto it = succ_to_value.find(si);
+                if (it != succ_to_value.end()) {
+                    case_val = clang::IntegerLiteral::Create(
+                        ctx, llvm::APInt(64, static_cast<uint64_t>(it->second), true),
+                        ctx.LongTy, clang::SourceLocation());
+                }
+                sw->addCase(case_val, leafFromNode(g.node(s), factory));
             }
 
             g.collapseNodes(collapse_ids, sw);
