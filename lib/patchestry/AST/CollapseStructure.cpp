@@ -508,6 +508,461 @@ namespace patchestry::ast {
             }
         }
 
+        // -------------------------------------------------------------------
+        // LoopBody: exit mark management and update
+        // -------------------------------------------------------------------
+
+        void LoopBody::setExitMarks(CGraph &g, const std::vector<size_t> &body) const {
+            std::unordered_set<size_t> bodyset(body.begin(), body.end());
+            for (size_t nid : body) {
+                auto &n = g.node(nid);
+                for (size_t i = 0; i < n.succs.size(); ++i) {
+                    if (bodyset.count(n.succs[i]) == 0) {
+                        n.setLoopExit(i);
+                    }
+                }
+            }
+        }
+
+        void LoopBody::clearExitMarks(CGraph &g, const std::vector<size_t> &body) const {
+            for (size_t nid : body) {
+                auto &n = g.node(nid);
+                for (size_t i = 0; i < n.succs.size(); ++i) {
+                    n.clearLoopExit(i);
+                }
+            }
+        }
+
+        bool LoopBody::update(const CGraph &g) const {
+            return !g.node(head).collapsed;
+        }
+
+        // -------------------------------------------------------------------
+        // FloatingEdge
+        // -------------------------------------------------------------------
+
+        std::pair<size_t, size_t> FloatingEdge::getCurrentEdge(const CGraph &g) const {
+            if (top_id >= g.nodes.size() || bottom_id >= g.nodes.size())
+                return {CNode::NONE, 0};
+            if (g.node(top_id).collapsed || g.node(bottom_id).collapsed)
+                return {CNode::NONE, 0};
+            const auto &succs = g.node(top_id).succs;
+            for (size_t i = 0; i < succs.size(); ++i) {
+                if (succs[i] == bottom_id)
+                    return {top_id, i};
+            }
+            return {CNode::NONE, 0};
+        }
+
+        // -------------------------------------------------------------------
+        // TraceDAG implementation
+        // -------------------------------------------------------------------
+
+        TraceDAG::~TraceDAG() {
+            for (auto *bp : branchlist) {
+                for (auto *bt : bp->paths) {
+                    delete bt;
+                }
+                delete bp;
+            }
+        }
+
+        void TraceDAG::BranchPoint::markPath() {
+            ismark = true;
+            if (parent != nullptr && !parent->ismark)
+                parent->markPath();
+        }
+
+        int TraceDAG::BranchPoint::distance(BranchPoint *op2) {
+            // Clear marks
+            for (auto *cur = this; cur != nullptr; cur = cur->parent)
+                cur->ismark = false;
+            for (auto *cur = op2; cur != nullptr; cur = cur->parent)
+                cur->ismark = false;
+
+            // Mark path from this to root
+            markPath();
+
+            // Walk from op2 to find common ancestor
+            int dist = 0;
+            auto *cur = op2;
+            while (cur != nullptr && !cur->ismark) {
+                ++dist;
+                cur = cur->parent;
+            }
+            if (cur == nullptr) return dist;
+
+            // Add distance from this to common ancestor
+            auto *cur2 = this;
+            while (cur2 != cur) {
+                ++dist;
+                cur2 = cur2->parent;
+            }
+            return dist;
+        }
+
+        void TraceDAG::insertActive(BlockTrace *trace) {
+            trace->flags |= BlockTrace::f_active;
+            activetrace.push_back(trace);
+            trace->activeiter = std::prev(activetrace.end());
+            ++activecount;
+        }
+
+        void TraceDAG::removeActive(BlockTrace *trace) {
+            if (trace->isActive()) {
+                activetrace.erase(trace->activeiter);
+                trace->flags &= ~BlockTrace::f_active;
+                --activecount;
+            }
+        }
+
+        void TraceDAG::removeTrace(BlockTrace *trace) {
+            removeActive(trace);
+            // If this trace derived a BranchPoint, remove its traces too
+            if (trace->derivedbp != nullptr) {
+                for (auto *bt : trace->derivedbp->paths) {
+                    if (bt != trace)
+                        removeTrace(bt);
+                }
+            }
+        }
+
+        void TraceDAG::initialize() {
+            for (size_t root_id : rootlist) {
+                auto *bp = new BranchPoint();
+                bp->top_id = root_id;
+                bp->depth = 0;
+                branchlist.push_back(bp);
+
+                auto *bt = new BlockTrace();
+                bt->top = bp;
+                bt->pathout = 0;
+                bt->bottom_id = CNode::NONE;
+                bt->dest_id = root_id;
+                bp->paths.push_back(bt);
+                insertActive(bt);
+            }
+        }
+
+        bool TraceDAG::checkOpen(const CGraph &g, BlockTrace *trace) {
+            size_t dest = trace->dest_id;
+            if (dest == CNode::NONE || dest >= g.nodes.size())
+                return true;  // terminal
+
+            const auto &n = g.node(dest);
+            if (n.collapsed) {
+                trace->flags |= BlockTrace::f_terminal;
+                return true;
+            }
+
+            if (dest == finishblock_id) {
+                trace->flags |= BlockTrace::f_terminal;
+                return true;
+            }
+
+            // Count DAG-eligible out-edges
+            size_t dag_out_count = 0;
+            size_t single_succ = CNode::NONE;
+            for (size_t i = 0; i < n.succs.size(); ++i) {
+                if (n.isLoopDAGOut(i)) {
+                    ++dag_out_count;
+                    single_succ = n.succs[i];
+                }
+            }
+
+            if (dag_out_count == 0) {
+                trace->flags |= BlockTrace::f_terminal;
+                return true;
+            }
+
+            if (dag_out_count == 1) {
+                // Linear trace: advance
+                trace->bottom_id = dest;
+                trace->dest_id = single_succ;
+                return true;
+            }
+
+            // Multiple out-edges: needs branching
+            return false;
+        }
+
+        std::list<TraceDAG::BlockTrace *>::iterator
+        TraceDAG::openBranch(CGraph &g, BlockTrace *parent) {
+            size_t branch_id = parent->dest_id;
+            const auto &n = g.node(branch_id);
+
+            auto *bp = new BranchPoint();
+            bp->parent = parent->top;
+            bp->pathout = parent->pathout;
+            bp->top_id = branch_id;
+            bp->depth = parent->top->depth + 1;
+            branchlist.push_back(bp);
+            parent->derivedbp = bp;
+
+            // Remove parent from active (it's now represented by children)
+            removeActive(parent);
+
+            int pathindex = 0;
+            for (size_t i = 0; i < n.succs.size(); ++i) {
+                if (!n.isLoopDAGOut(i)) continue;
+
+                size_t succ_id = n.succs[i];
+                auto &succ_node = g.node(succ_id);
+
+                auto *bt = new BlockTrace();
+                bt->top = bp;
+                bt->pathout = pathindex++;
+                bt->bottom_id = branch_id;
+                bt->dest_id = succ_id;
+                bp->paths.push_back(bt);
+
+                // Check if already visited (edge lump)
+                if (!succ_node.collapsed && succ_node.visit_count > 0) {
+                    // Find the existing trace that visits this node
+                    for (auto *existing : activetrace) {
+                        if (existing->dest_id == succ_id || existing->bottom_id == succ_id) {
+                            existing->edgelump += 1;
+                            bt->flags |= BlockTrace::f_terminal;
+                            break;
+                        }
+                    }
+                    if (!bt->isTerminal()) {
+                        // No existing active trace found, just mark visited
+                        insertActive(bt);
+                    }
+                } else {
+                    insertActive(bt);
+                }
+
+                if (!succ_node.collapsed) {
+                    succ_node.visit_count += 1;
+                }
+            }
+
+            return current_activeiter;
+        }
+
+        bool TraceDAG::checkRetirement(BlockTrace *trace, size_t &exitblock_id) {
+            BranchPoint *bp = trace->top;
+            if (bp == nullptr) return false;
+
+            // Check if all paths from this BranchPoint are terminal or converge
+            size_t common_exit = CNode::NONE;
+            bool all_done = true;
+
+            for (auto *bt : bp->paths) {
+                if (bt->isActive() && !bt->isTerminal()) {
+                    all_done = false;
+                    break;
+                }
+                if (bt->isTerminal()) {
+                    // Terminal traces converge at their dest
+                    size_t exit_cand = bt->dest_id;
+                    if (common_exit == CNode::NONE) {
+                        common_exit = exit_cand;
+                    } else if (common_exit != exit_cand) {
+                        // Different exits -- check if both are terminal (acceptable)
+                        // In Ghidra, terminals with different exits still allow retirement
+                    }
+                } else if (!bt->isActive()) {
+                    // Already retired trace
+                    continue;
+                }
+            }
+
+            if (!all_done) return false;
+
+            // All paths from this BranchPoint are done
+            exitblock_id = common_exit;
+            return true;
+        }
+
+        std::list<TraceDAG::BlockTrace *>::iterator
+        TraceDAG::retireBranch(BranchPoint *bp, size_t exitblock_id) {
+            // Remove all traces from this BranchPoint
+            std::list<BlockTrace *>::iterator next_iter = current_activeiter;
+            for (auto *bt : bp->paths) {
+                if (bt->isActive()) {
+                    auto it = bt->activeiter;
+                    if (it == next_iter) ++next_iter;
+                    removeActive(bt);
+                }
+            }
+
+            // If bp has a parent BranchPoint, update the parent trace
+            if (bp->parent != nullptr) {
+                // Find the parent trace that derived this BP
+                for (auto *pt : bp->parent->paths) {
+                    if (pt->derivedbp == bp) {
+                        pt->derivedbp = nullptr;
+                        if (exitblock_id != CNode::NONE) {
+                            pt->dest_id = exitblock_id;
+                            insertActive(pt);
+                        } else {
+                            pt->flags |= BlockTrace::f_terminal;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            return next_iter;
+        }
+
+        bool TraceDAG::BadEdgeScore::compareFinal(const BadEdgeScore &op2) const {
+            // "worse" means more likely to be a goto candidate
+            // 1. Having an exit conflict is worse than not having one
+            if ((siblingedge > 0) != (op2.siblingedge > 0))
+                return siblingedge > 0;
+            // 2. Higher siblingedge count is worse
+            if (siblingedge != op2.siblingedge)
+                return siblingedge > op2.siblingedge;
+            // 3. Terminal traces are worse (prefer removing terminals)
+            if (terminal != op2.terminal)
+                return terminal > op2.terminal;
+            // 4. Lower distance is worse (closer = more disruptive)
+            if (distance != op2.distance)
+                return distance < op2.distance;
+            return false;
+        }
+
+        bool TraceDAG::BadEdgeScore::operator<(const BadEdgeScore &op2) const {
+            // Sort by exitproto_id for grouping
+            return exitproto_id < op2.exitproto_id;
+        }
+
+        void TraceDAG::processExitConflict(
+            std::list<BadEdgeScore>::iterator start,
+            std::list<BadEdgeScore>::iterator end)
+        {
+            // Count traces in this group
+            int count = 0;
+            for (auto it = start; it != end; ++it) ++count;
+            if (count <= 1) return;
+
+            // For each pair, compute distance between their BranchPoints
+            for (auto it = start; it != end; ++it) {
+                it->siblingedge = count - 1;
+                for (auto jt = start; jt != end; ++jt) {
+                    if (it == jt) continue;
+                    int d = it->trace->top->distance(jt->trace->top);
+                    if (it->distance < 0 || d < it->distance) {
+                        it->distance = d;
+                    }
+                }
+            }
+        }
+
+        TraceDAG::BlockTrace *TraceDAG::selectBadEdge() {
+            // Build score list from all active traces
+            std::list<BadEdgeScore> scores;
+            for (auto *bt : activetrace) {
+                BadEdgeScore score;
+                score.exitproto_id = bt->dest_id;
+                score.trace = bt;
+                score.terminal = bt->isTerminal() ? 1 : 0;
+                scores.push_back(score);
+            }
+
+            if (scores.empty()) return nullptr;
+
+            // Sort by exitproto_id to group by destination
+            scores.sort();
+
+            // Process each group of same-destination traces
+            auto group_start = scores.begin();
+            while (group_start != scores.end()) {
+                auto group_end = group_start;
+                while (group_end != scores.end() &&
+                       group_end->exitproto_id == group_start->exitproto_id) {
+                    ++group_end;
+                }
+                processExitConflict(group_start, group_end);
+                group_start = group_end;
+            }
+
+            // Find the worst edge
+            BlockTrace *worst = nullptr;
+            BadEdgeScore worst_score;
+            for (auto &s : scores) {
+                if (worst == nullptr || s.compareFinal(worst_score)) {
+                    worst = s.trace;
+                    worst_score = s;
+                }
+            }
+
+            return worst;
+        }
+
+        void TraceDAG::pushBranches(CGraph &g) {
+            clearVisitCount(g);
+
+            // Mark initial visit counts for roots
+            for (size_t root_id : rootlist) {
+                if (root_id < g.nodes.size() && !g.node(root_id).collapsed)
+                    g.node(root_id).visit_count = 1;
+            }
+
+            int max_iter = static_cast<int>(g.nodes.size()) * 10;
+            int iter = 0;
+
+            while (activecount > 0 && iter < max_iter) {
+                ++iter;
+                bool progress = false;
+
+                current_activeiter = activetrace.begin();
+                while (current_activeiter != activetrace.end()) {
+                    BlockTrace *bt = *current_activeiter;
+
+                    if (checkOpen(g, bt)) {
+                        // Trace advanced or terminated
+                        ++current_activeiter;
+                        progress = true;
+
+                        // After advancing, try retiring BranchPoints
+                        for (auto *bp : branchlist) {
+                            size_t exit_id = CNode::NONE;
+                            if (checkRetirement(bp->paths.empty() ? nullptr : bp->paths[0],
+                                                exit_id)) {
+                                current_activeiter = retireBranch(bp, exit_id);
+                                progress = true;
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Needs branching
+                    current_activeiter = openBranch(g, bt);
+                    progress = true;
+                }
+
+                if (!progress && activecount > 0) {
+                    // Stuck: select bad edge
+                    BlockTrace *bad = selectBadEdge();
+                    if (bad == nullptr) break;
+
+                    // Add the bad edge to likelygoto
+                    size_t src = bad->bottom_id;
+                    size_t dst = bad->dest_id;
+                    if (src != CNode::NONE && dst != CNode::NONE) {
+                        likelygoto.emplace_back(src, dst);
+                    }
+
+                    // Remove the trace
+                    removeTrace(bad);
+                }
+            }
+
+            clearVisitCount(g);
+        }
+
+        void TraceDAG::clearVisitCount(CGraph &g) {
+            for (auto &n : g.nodes) {
+                n.visit_count = 0;
+            }
+        }
+
     } // namespace detail
 
     // -----------------------------------------------------------------------

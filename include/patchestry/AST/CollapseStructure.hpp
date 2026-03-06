@@ -30,6 +30,8 @@ namespace patchestry::ast {
         /// As rules fire, nodes get absorbed into StructuredNode wrappers and
         /// removed from the active set.
         struct CNode {
+            static constexpr size_t NONE = std::numeric_limits<size_t>::max();
+
             size_t id;                          // original CfgBlock index
             std::vector<size_t> succs;          // outgoing edges (by CNode id)
             std::vector<size_t> preds;          // incoming edges (by CNode id)
@@ -67,8 +69,15 @@ namespace patchestry::ast {
             bool isBackEdge(size_t i) const {
                 return i < edge_flags.size() && (edge_flags[i] & F_BACK);
             }
+            bool isLoopExit(size_t i) const {
+                return i < edge_flags.size() && (edge_flags[i] & F_LOOP_EXIT);
+            }
             bool isDecisionOut(size_t i) const {
                 return !isGotoOut(i) && !isBackEdge(i);
+            }
+            /// Edges to trace in TraceDAG: not back-edges, not loop-exit edges.
+            bool isLoopDAGOut(size_t i) const {
+                return !isBackEdge(i) && !isLoopExit(i);
             }
             bool isSwitchOut() const { return succs.size() > 2; }
 
@@ -77,6 +86,12 @@ namespace patchestry::ast {
 
             void setGoto(size_t i) {
                 if (i < edge_flags.size()) edge_flags[i] |= F_GOTO;
+            }
+            void setLoopExit(size_t i) {
+                if (i < edge_flags.size()) edge_flags[i] |= F_LOOP_EXIT;
+            }
+            void clearLoopExit(size_t i) {
+                if (i < edge_flags.size()) edge_flags[i] &= ~static_cast<uint32_t>(F_LOOP_EXIT);
             }
         };
 
@@ -167,10 +182,106 @@ namespace patchestry::ast {
             static void mergeIdenticalHeads(std::vector<LoopBody *> &looporder,
                                             std::list<LoopBody> &storage);
 
+            /// Mark edges leaving the loop body as F_LOOP_EXIT.
+            void setExitMarks(CGraph &g, const std::vector<size_t> &body) const;
+
+            /// Clear F_LOOP_EXIT marks set by setExitMarks.
+            void clearExitMarks(CGraph &g, const std::vector<size_t> &body) const;
+
+            /// Check if this loop's head is still active (not collapsed).
+            bool update(const CGraph &g) const;
+
             /// Sort innermost-first (higher depth = processed first).
             bool operator<(const LoopBody &other) const {
                 return depth > other.depth;
             }
+        };
+
+        /// A lazily-resolved edge reference that survives collapse operations.
+        struct FloatingEdge {
+            size_t top_id;     // source CNode id
+            size_t bottom_id;  // destination CNode id
+
+            FloatingEdge(size_t t, size_t b) : top_id(t), bottom_id(b) {}
+
+            /// Resolve to current edge in graph. Returns {source_id, edge_index},
+            /// or {CNode::NONE, 0} if the edge no longer exists.
+            std::pair<size_t, size_t> getCurrentEdge(const CGraph &g) const;
+        };
+
+        /// TraceDAG: traces DAG paths through the CGraph to identify
+        /// the least-disruptive edges to mark as gotos.
+        class TraceDAG {
+            struct BlockTrace;
+
+            struct BranchPoint {
+                BranchPoint *parent = nullptr;
+                int pathout = -1;
+                size_t top_id;                     // CNode id of branch point
+                std::vector<BlockTrace *> paths;
+                int depth = 0;
+                bool ismark = false;
+
+                void markPath();
+                int distance(BranchPoint *op2);
+            };
+
+            struct BlockTrace {
+                enum : uint32_t { f_active = 1, f_terminal = 2 };
+                uint32_t flags = 0;
+                BranchPoint *top;
+                int pathout;
+                size_t bottom_id;      // CNode id (or NONE for root traces)
+                size_t dest_id;        // destination CNode id
+                int edgelump = 1;
+                std::list<BlockTrace *>::iterator activeiter;
+                BranchPoint *derivedbp = nullptr;
+
+                bool isActive() const { return flags & f_active; }
+                bool isTerminal() const { return flags & f_terminal; }
+            };
+
+            struct BadEdgeScore {
+                size_t exitproto_id;
+                BlockTrace *trace;
+                int distance = -1;
+                int terminal = 0;
+                int siblingedge = 0;
+
+                bool compareFinal(const BadEdgeScore &op2) const;
+                bool operator<(const BadEdgeScore &op2) const;
+            };
+
+            std::list<FloatingEdge> &likelygoto;
+            std::vector<size_t> rootlist;
+            std::vector<BranchPoint *> branchlist;
+            int activecount = 0;
+            std::list<BlockTrace *> activetrace;
+            std::list<BlockTrace *>::iterator current_activeiter;
+            size_t finishblock_id = CNode::NONE;
+
+            void removeTrace(BlockTrace *trace);
+            void processExitConflict(std::list<BadEdgeScore>::iterator start,
+                                     std::list<BadEdgeScore>::iterator end);
+            BlockTrace *selectBadEdge();
+            void insertActive(BlockTrace *trace);
+            void removeActive(BlockTrace *trace);
+            bool checkOpen(const CGraph &g, BlockTrace *trace);
+            std::list<BlockTrace *>::iterator openBranch(CGraph &g,
+                                                         BlockTrace *parent);
+            bool checkRetirement(BlockTrace *trace, size_t &exitblock_id);
+            std::list<BlockTrace *>::iterator retireBranch(BranchPoint *bp,
+                                                           size_t exitblock_id);
+            void clearVisitCount(CGraph &g);
+
+        public:
+            TraceDAG(std::list<FloatingEdge> &lg) : likelygoto(lg) {}
+            ~TraceDAG();
+
+            void addRoot(size_t root_id) { rootlist.push_back(root_id); }
+            void setFinishBlock(size_t id) { finishblock_id = id; }
+            void initialize();
+            void pushBranches(CGraph &g);
         };
 
         /// Clear CNode::mark for all nodes in body vector.
