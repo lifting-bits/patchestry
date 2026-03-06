@@ -1851,6 +1851,104 @@ namespace patchestry::ast {
             }
         }
 
+        // --- markLabelBumpUp: dead label removal ---
+
+        // Collect all SGoto target names in the tree
+        void collectGotoTargets(SNode *node, std::unordered_set<std::string> &targets) {
+            if (!node) return;
+
+            if (auto *g = node->dyn_cast<SGoto>()) {
+                targets.emplace(g->target());
+            }
+            else if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->size(); ++i) {
+                    collectGotoTargets((*seq)[i], targets);
+                }
+            }
+            else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                collectGotoTargets(ite->thenBranch(), targets);
+                collectGotoTargets(ite->elseBranch(), targets);
+            }
+            else if (auto *w = node->dyn_cast<SWhile>()) {
+                collectGotoTargets(w->body(), targets);
+            }
+            else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                collectGotoTargets(dw->body(), targets);
+            }
+            else if (auto *f = node->dyn_cast<SFor>()) {
+                collectGotoTargets(f->body(), targets);
+            }
+            else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->cases()) {
+                    collectGotoTargets(c.body, targets);
+                }
+                collectGotoTargets(sw->defaultBody(), targets);
+            }
+            else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                collectGotoTargets(lbl->body(), targets);
+            }
+        }
+
+        // Remove SLabel nodes whose name is not in the goto target set.
+        // If the SLabel has a body, replace the label with its body.
+        // If no body, remove entirely.
+        void removeDeadLabels(SNode *node,
+                              const std::unordered_set<std::string> &targets) {
+            if (!node) return;
+
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->size(); ) {
+                    auto *child = (*seq)[i];
+                    if (auto *lbl = child->dyn_cast<SLabel>()) {
+                        if (targets.find(std::string(lbl->name())) == targets.end()) {
+                            // Dead label -- replace with body or remove
+                            if (lbl->body()) {
+                                seq->replaceChild(i, lbl->body());
+                                // Don't increment — re-check the replacement
+                            } else {
+                                seq->removeChild(i);
+                            }
+                            continue;
+                        }
+                    }
+                    // Recurse into child
+                    removeDeadLabels(child, targets);
+                    ++i;
+                }
+            }
+            else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                removeDeadLabels(ite->thenBranch(), targets);
+                removeDeadLabels(ite->elseBranch(), targets);
+            }
+            else if (auto *w = node->dyn_cast<SWhile>()) {
+                removeDeadLabels(w->body(), targets);
+            }
+            else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                removeDeadLabels(dw->body(), targets);
+            }
+            else if (auto *f = node->dyn_cast<SFor>()) {
+                removeDeadLabels(f->body(), targets);
+            }
+            else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->cases()) {
+                    removeDeadLabels(c.body, targets);
+                }
+                removeDeadLabels(sw->defaultBody(), targets);
+            }
+            else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                removeDeadLabels(lbl->body(), targets);
+            }
+        }
+
+        // markLabelBumpUp: remove dead labels left after scopeBreak converts
+        // gotos to break/continue. For v1, this is dead label removal only
+        // (full bump-up optimization deferred).
+        void markLabelBumpUp(SNode *root) {
+            std::unordered_set<std::string> targets;
+            collectGotoTargets(root, targets);
+            removeDeadLabels(root, targets);
+        }
+
     } // anonymous namespace
 
     // ---------------------------------------------------------------
@@ -1934,6 +2032,7 @@ namespace patchestry::ast {
         // 6. Post-collapse transforms (order matters per research)
         scopeBreak(root, "", "", factory);    // 1st: gotos -> break/continue
         whileToFor(root, factory, ctx);       // 2nd: while -> for patterns
+        markLabelBumpUp(root);                // 3rd: clean up dead labels
 
         return root;
     }
