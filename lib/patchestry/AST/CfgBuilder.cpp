@@ -6,6 +6,9 @@
  */
 
 #include <patchestry/AST/CfgBuilder.hpp>
+#include <patchestry/AST/Utils.hpp>
+#include <patchestry/Ghidra/Pcode.hpp>
+#include <patchestry/Ghidra/PcodeOperations.hpp>
 #include <patchestry/Util/Log.hpp>
 
 #include <clang/AST/ASTContext.h>
@@ -355,6 +358,84 @@ namespace patchestry::ast {
         }
 
         return cfgs;
+    }
+
+    void populateSwitchMetadata(Cfg &cfg, const ghidra::Function &func) {
+        using namespace patchestry::ghidra;
+
+        // Build a label→CfgBlock-index map for quick lookup.
+        // CfgBlock::label stores the sanitized name (labelNameFromKey(key)).
+        std::unordered_map< std::string, size_t > label_to_idx;
+        for (size_t i = 0; i < cfg.blocks.size(); ++i) {
+            if (!cfg.blocks[i].label.empty()) {
+                label_to_idx[cfg.blocks[i].label] = i;
+            }
+        }
+
+        // For each ghidra block, scan operations for BRANCHIND with switch_cases.
+        for (const auto &[bb_key, bb] : func.basic_blocks) {
+            for (const auto &op_key : bb.ordered_operations) {
+                if (!bb.operations.contains(op_key)) continue;
+                const auto &op = bb.operations.at(op_key);
+
+                if (op.mnemonic != Mnemonic::OP_BRANCHIND) continue;
+                if (op.switch_cases.empty()) continue;
+
+                // Find the CfgBlock for this ghidra block.
+                std::string sanitized_label = labelNameFromKey(bb_key);
+                auto blk_it = label_to_idx.find(sanitized_label);
+                if (blk_it == label_to_idx.end()) {
+                    // Entry block has no label — check if it matches the entry block key.
+                    if (bb_key == func.entry_block && !cfg.blocks.empty()
+                        && cfg.blocks[cfg.entry].label.empty())
+                    {
+                        blk_it = label_to_idx.end(); // use entry directly
+                    } else {
+                        LOG(WARNING) << "populateSwitchMetadata: no CfgBlock for ghidra block '"
+                                     << bb_key << "'\n";
+                        continue;
+                    }
+                }
+
+                size_t cfg_idx = (blk_it != label_to_idx.end())
+                    ? blk_it->second
+                    : cfg.entry;
+
+                auto &blk = cfg.blocks[cfg_idx];
+
+                // Build a target-label → succs-index map for this block.
+                // Each successor's label needs to be matched against the sanitized
+                // target_block from the ghidra SwitchCase.
+                std::unordered_map< std::string, size_t > target_to_succ_idx;
+                for (size_t si = 0; si < blk.succs.size(); ++si) {
+                    size_t succ_blk = blk.succs[si];
+                    if (succ_blk < cfg.blocks.size()) {
+                        const auto &succ_label = cfg.blocks[succ_blk].label;
+                        if (!succ_label.empty()) {
+                            target_to_succ_idx[succ_label] = si;
+                        }
+                    }
+                }
+
+                // Populate switch_cases on the CfgBlock.
+                for (const auto &sc : op.switch_cases) {
+                    std::string target_label = labelNameFromKey(sc.target_block);
+                    auto it = target_to_succ_idx.find(target_label);
+                    if (it != target_to_succ_idx.end()) {
+                        blk.switch_cases.push_back(SwitchCaseEntry{
+                            sc.value,
+                            it->second,
+                            sc.has_exit
+                        });
+                    } else {
+                        LOG(WARNING) << "populateSwitchMetadata: switch case target '"
+                                     << sc.target_block
+                                     << "' not found in succs of block '"
+                                     << bb_key << "'\n";
+                    }
+                }
+            }
+        }
     }
 
 } // namespace patchestry::ast
