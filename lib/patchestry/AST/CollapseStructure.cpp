@@ -48,13 +48,16 @@ namespace patchestry::ast {
                     if (idset.count(p) == 0) ext_preds.push_back(p);
                 }
             }
-            // Use the last node's outgoing edges as the representative out edges
-            size_t last = ids.back();
-            for (size_t i = 0; i < nodes[last].succs.size(); ++i) {
-                size_t s = nodes[last].succs[i];
-                if (idset.count(s) == 0) {
-                    ext_succs.push_back(s);
-                    ext_succ_flags.push_back(nodes[last].edge_flags[i]);
+            // Collect exit edges from ALL collapsed nodes (not just last)
+            for (size_t nid : ids) {
+                for (size_t i = 0; i < nodes[nid].succs.size(); ++i) {
+                    size_t s = nodes[nid].succs[i];
+                    if (idset.count(s) == 0) {
+                        if (std::find(ext_succs.begin(), ext_succs.end(), s) == ext_succs.end()) {
+                            ext_succs.push_back(s);
+                            ext_succ_flags.push_back(nodes[nid].edge_flags[i]);
+                        }
+                    }
                 }
             }
 
@@ -516,6 +519,24 @@ namespace patchestry::ast {
         using detail::CGraph;
 
         // ---------------------------------------------------------------
+        // Condition negation helper
+        // ---------------------------------------------------------------
+
+        [[maybe_unused]] static clang::Expr *negateCond(clang::Expr *cond, clang::ASTContext &ctx) {
+            // Double negation elimination
+            if (auto *uo = llvm::dyn_cast<clang::UnaryOperator>(cond)) {
+                if (uo->getOpcode() == clang::UO_LNot) {
+                    return uo->getSubExpr();
+                }
+            }
+            return clang::UnaryOperator::Create(
+                ctx, cond, clang::UO_LNot, ctx.IntTy,
+                clang::VK_PRValue, clang::OK_Ordinary,
+                clang::SourceLocation(), false,
+                clang::FPOptionsOverride());
+        }
+
+        // ---------------------------------------------------------------
         // SNode construction helpers
         // ---------------------------------------------------------------
 
@@ -536,6 +557,14 @@ namespace patchestry::ast {
             if (bl.collapsed || bl.sizeOut() != 1) return false;
             if (bl.isSwitchOut()) return false;
             if (!bl.isDecisionOut(0)) return false;
+
+            // Start-of-chain guard: don't fire mid-chain (prevents nested SSeq)
+            if (bl.sizeIn() == 1) {
+                auto &pred = g.node(bl.preds[0]);
+                if (!pred.collapsed && pred.sizeOut() == 1) {
+                    return false;
+                }
+            }
 
             size_t next_id = bl.succs[0];
             if (next_id == id) return false;  // no self-loop
