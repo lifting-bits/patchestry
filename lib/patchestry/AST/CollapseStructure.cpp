@@ -890,6 +890,117 @@ namespace patchestry::ast {
         }
 
         // ---------------------------------------------------------------
+        // AND/OR condition collapsing (ruleBlockOr)
+        // ---------------------------------------------------------------
+
+        // Detects chained if-gotos and collapses them into compound conditions.
+        // OR pattern (i==0): bl->false leads to orblock, both reach same clauseblock => BO_LOr
+        // AND pattern (i==1): bl->true leads to orblock, both reach same clauseblock => BO_LAnd
+        static bool ruleBlockOr(CGraph &g, size_t id, SNodeFactory &/*factory*/,
+                                 clang::ASTContext &ctx) {
+            auto &bl = g.node(id);
+            if (bl.collapsed || bl.sizeOut() != 2) return false;
+            if (bl.isSwitchOut()) return false;
+            if (bl.isGotoOut(0) || bl.isGotoOut(1)) return false;
+
+            for (size_t i = 0; i < 2; ++i) {
+                size_t or_id = bl.succs[i];
+                if (or_id == id) continue;
+                auto &orblock = g.node(or_id);
+                if (orblock.collapsed) continue;
+                if (orblock.sizeIn() != 1 || orblock.sizeOut() != 2) continue;
+                if (orblock.isSwitchOut()) continue;
+                if (bl.isBackEdge(i)) continue;
+
+                size_t clause_id = bl.succs[1 - i];
+                if (clause_id == id || clause_id == or_id) continue;
+
+                // Find which orblock successor matches clause_id
+                size_t j = 2;
+                for (size_t jj = 0; jj < 2; ++jj) {
+                    if (orblock.succs[jj] == clause_id) { j = jj; break; }
+                }
+                if (j == 2) continue;
+                if (orblock.succs[1 - j] == id) continue; // no looping back
+
+                // Determine opcode:
+                // succs[0]=false, succs[1]=true (Ghidra convention)
+                // i==0: bl's FALSE branch leads to orblock => OR pattern
+                // i==1: bl's TRUE branch leads to orblock => AND pattern
+                bool is_or = (i == 0);
+                clang::BinaryOperatorKind op = is_or ? clang::BO_LOr : clang::BO_LAnd;
+
+                clang::Expr *cond_a = bl.branch_cond;
+                clang::Expr *cond_b = orblock.branch_cond;
+                if (!cond_a || !cond_b) continue;
+
+                // Condition normalization
+                if (is_or) {
+                    // OR: bl's false leads to orblock, bl's true leads to clauseblock
+                    // If j==0, orblock's false leads to clauseblock -- negate cond_b
+                    if (j == 0) {
+                        cond_b = negateCond(cond_b, ctx);
+                    }
+                } else {
+                    // AND: bl's true leads to orblock, bl's false leads to clauseblock
+                    // If j==1, orblock's true leads to clause -- negate cond_b
+                    if (j == 1) {
+                        cond_b = negateCond(cond_b, ctx);
+                    }
+                }
+
+                auto *compound = clang::BinaryOperator::Create(
+                    ctx, cond_a, cond_b, op, ctx.IntTy,
+                    clang::VK_PRValue, clang::OK_Ordinary,
+                    clang::SourceLocation(), clang::FPOptionsOverride());
+
+                // Rewire: bl absorbs orblock
+                bl.branch_cond = compound;
+                size_t new_other = orblock.succs[1 - j];
+                bl.succs[i] = new_other;
+
+                // Update pred list of new_other: remove or_id, add id if not present
+                auto &np = g.node(new_other).preds;
+                np.erase(std::remove(np.begin(), np.end(), or_id), np.end());
+                if (std::find(np.begin(), np.end(), id) == np.end()) {
+                    np.push_back(id);
+                }
+
+                // Remove orblock from clause_id's preds
+                auto &cp = g.node(clause_id).preds;
+                cp.erase(std::remove(cp.begin(), cp.end(), or_id), cp.end());
+
+                // Mark orblock collapsed
+                orblock.collapsed = true;
+                orblock.succs.clear();
+                orblock.preds.clear();
+                return true;
+            }
+            return false;
+        }
+
+        // ---------------------------------------------------------------
+        // AND/OR condition collapsing orchestrator
+        // ---------------------------------------------------------------
+
+        static void collapseConditions(CGraph &g, SNodeFactory &factory,
+                                        clang::ASTContext &ctx) {
+            // Iteratively apply ruleBlockOr until no more changes.
+            // This collapses all AND/OR chains before the main collapse loop.
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (auto &n : g.nodes) {
+                    if (n.collapsed) continue;
+                    if (ruleBlockOr(g, n.id, factory, ctx)) {
+                        changed = true;
+                        break; // restart iteration since graph changed
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
         // Goto selection heuristic
         // ---------------------------------------------------------------
 
@@ -988,6 +1099,10 @@ namespace patchestry::ast {
         std::list<detail::LoopBody> loopbody;
         detail::orderLoopBodies(g, loopbody);
         LOG(INFO) << "CollapseStructure: found " << loopbody.size() << " loop(s)\n";
+
+        // 2c. Collapse AND/OR conditions before main collapse loop
+        collapseConditions(g, factory, ctx);
+        LOG(INFO) << "CollapseStructure: condition collapsing complete\n";
 
         // 3. Main collapse loop
         size_t isolated = collapseInternal(g, factory, ctx);
