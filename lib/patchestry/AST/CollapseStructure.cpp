@@ -121,6 +121,7 @@ namespace patchestry::ast {
                 cn.branch_cond = cb.branch_cond;
                 cn.is_conditional = cb.is_conditional;
                 cn.succs = cb.succs;
+                cn.switch_cases = cb.switch_cases;
                 cn.edge_flags.resize(cb.succs.size(), 0);
 
                 // Assert Ghidra convention: 2-successor conditional blocks have

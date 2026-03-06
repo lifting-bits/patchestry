@@ -43,6 +43,9 @@ namespace patchestry::ast {
             clang::Expr *branch_cond = nullptr;
             bool is_conditional = false;
 
+            // Switch case metadata (copied from CfgBlock; non-empty for switch blocks)
+            std::vector< SwitchCaseEntry > switch_cases;
+
             // Set when absorbed into a parent structured node
             bool collapsed = false;
 
