@@ -180,6 +180,10 @@ namespace patchestry::ast {
         void labelLoops(CGraph &g, std::list<LoopBody> &loopbody,
                         std::vector<LoopBody *> &looporder);
 
+        /// Discover all loops, compute bodies/nesting/exits, and order innermost-first.
+        /// Called once from collapseStructure() after markBackEdges().
+        void orderLoopBodies(CGraph &g, std::list<LoopBody> &loopbody);
+
     } // namespace detail
 
     /// Build a structured SNode tree directly from a Cfg using Ghidra-style

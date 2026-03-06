@@ -483,6 +483,28 @@ namespace patchestry::ast {
             }
         }
 
+        // -------------------------------------------------------------------
+        // orderLoopBodies: orchestrate full loop detection pipeline
+        // -------------------------------------------------------------------
+
+        void orderLoopBodies(CGraph &g, std::list<LoopBody> &loopbody) {
+            // 1. labelLoops: create LoopBody per back-edge, merge, compute containment/depth
+            std::vector<LoopBody *> looporder;
+            labelLoops(g, loopbody, looporder);
+            if (loopbody.empty()) return;
+
+            // 2. For each loop (innermost-first): findExit, orderTails, extend, labelExitEdges
+            for (auto &lb : loopbody) {
+                std::vector<size_t> body;
+                lb.findBase(g, body);
+                lb.findExit(g, body);
+                lb.orderTails(g);
+                lb.extend(g, body);
+                lb.labelExitEdges(g, body);
+                clearMarks(g, body);
+            }
+        }
+
     } // namespace detail
 
     // -----------------------------------------------------------------------
@@ -905,6 +927,11 @@ namespace patchestry::ast {
 
         // 2. Mark back-edges
         detail::markBackEdges(g);
+
+        // 2b. Discover loops, compute bodies/nesting/exits, order innermost-first
+        std::list<detail::LoopBody> loopbody;
+        detail::orderLoopBodies(g, loopbody);
+        LOG(INFO) << "CollapseStructure: found " << loopbody.size() << " loop(s)\n";
 
         // 3. Main collapse loop
         size_t isolated = collapseInternal(g, factory, ctx);
