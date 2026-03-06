@@ -102,6 +102,12 @@ namespace {
         llvm::cl::init(false)
     );
 
+    const llvm::cl::opt< bool > use_ghidra_structuring( // NOLINT(cert-err58-cpp)
+        "use-ghidra-structuring",
+        llvm::cl::desc("Use Ghidra-style CollapseStructure pipeline instead of SNode normalization"),
+        llvm::cl::init(false)
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -118,6 +124,7 @@ namespace {
             .enable_goto_elimination = enable_goto_elimination.getValue(),
             .goto_elimination_strict = goto_elimination_strict.getValue(),
             .disable_switch_case_inline = disable_switch_case_inline.getValue(),
+            .use_ghidra_structuring = use_ghidra_structuring.getValue(),
             .output_file          = output_filename.getValue(),
             .input_file           = input_filename.getValue(),
             .print_tu             = print_tu.getValue(),

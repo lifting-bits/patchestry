@@ -72,16 +72,16 @@ namespace patchestry::ast {
             );
         }
 
-        if (options.use_ghidra_structuring) {
-            // Alternative path: rebuild function bodies using Ghidra-style
-            // CollapseStructure directly on the CFG, bypassing goto elimination.
-            auto cfgs = buildCfgs(ctx);
+        // if (options.use_ghidra_structuring) {
+        // Alternative path: rebuild function bodies using Ghidra-style
+        // CollapseStructure directly on the CFG, bypassing goto elimination.
+        auto cfgs = buildCfgs(ctx);
 
-            // Build a name→ghidra::Function lookup for switch metadata.
-            std::unordered_map< std::string, const ghidra::Function * > name_to_ghidra;
-            for (const auto &[key, func] : get_program().serialized_functions) {
-                name_to_ghidra[func.name] = &func;
-            }
+        // Build a name→ghidra::Function lookup for switch metadata.
+        std::unordered_map< std::string, const ghidra::Function * > name_to_ghidra;
+        for (const auto &[key, func] : get_program().serialized_functions) {
+            name_to_ghidra[func.name] = &func;
+        }
 
             for (auto &cfg : cfgs) {
                 if (!cfg.function || !cfg.function->hasBody()) continue;
@@ -98,19 +98,19 @@ namespace patchestry::ast {
                 SNodeFactory factory;
                 SNode *tree = collapseStructure(cfg, factory, ctx);
                 emitClangAST(tree, fn, ctx);
+                cleanupPrettyPrint(fn, ctx);
             }
-        } else if (options.enable_goto_elimination && !runASTNormalizationPipeline(ctx, options)) {
-            LOG(ERROR) << "Goto elimination pipeline failed.\n";
-            if (options.goto_elimination_strict) {
-                return;
-            }
-        }
+            /* } else if (options.enable_goto_elimination && !runASTNormalizationPipeline(ctx,
+             options)) { LOG(ERROR) << "Goto elimination pipeline failed.\n"; if
+             (options.goto_elimination_strict) { return;
+                 }
+             }*/
 
-        if (options.print_tu) {
+            if (options.print_tu) {
 #ifdef ENABLE_DEBUG
             ctx.getTranslationUnitDecl()->dumpColor();
 #endif
-        }
+            }
     }
 
     void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }

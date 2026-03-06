@@ -6,6 +6,8 @@
  */
 
 #include <patchestry/AST/CfgBuilder.hpp>
+
+#include <algorithm>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
@@ -240,6 +242,98 @@ namespace patchestry::ast {
                 // Check for return statement — no successors
                 if (llvm::isa< clang::ReturnStmt >(last)) {
                     continue;
+                }
+
+                // Check for switch statement (emitted by create_branchind as
+                // CompoundStmt { SwitchStmt, goto fallback }).  Extract case
+                // goto targets as successors so populateSwitchMetadata can
+                // match them.
+                {
+                    clang::SwitchStmt *sw = nullptr;
+                    clang::Stmt *post_switch = nullptr;
+                    if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(last)) {
+                        for (auto *s : cs->body()) {
+                            if (auto *s_sw = llvm::dyn_cast< clang::SwitchStmt >(s)) {
+                                sw = s_sw;
+                            } else if (sw && !post_switch) {
+                                post_switch = s;
+                            }
+                        }
+                    } else {
+                        sw = llvm::dyn_cast< clang::SwitchStmt >(last);
+                    }
+
+                    if (sw) {
+                        // Extract goto targets from case statements.
+                        if (auto *body =
+                                llvm::dyn_cast_or_null< clang::CompoundStmt >(sw->getBody()))
+                        {
+                            for (auto *s : body->body()) {
+                                auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(s);
+                                if (!case_stmt) continue;
+                                clang::Stmt *sub = case_stmt->getSubStmt();
+                                if (auto *go =
+                                        llvm::dyn_cast_or_null< clang::GotoStmt >(sub))
+                                {
+                                    std::string target =
+                                        go->getLabel()->getNameAsString();
+                                    auto it = bs.label_to_block.find(target);
+                                    if (it != bs.label_to_block.end()) {
+                                        size_t tgt = it->second;
+                                        if (std::find(blk.succs.begin(),
+                                                      blk.succs.end(), tgt)
+                                            == blk.succs.end())
+                                        {
+                                            blk.succs.push_back(tgt);
+                                        }
+                                    }
+                                }
+                                // Inlined cases with a terminal goto (back-edge
+                                // to loop header) contribute a successor edge.
+                                else if (auto *cs = llvm::dyn_cast_or_null<
+                                             clang::CompoundStmt>(sub))
+                                {
+                                    if (!cs->body_empty()) {
+                                        if (auto *go = llvm::dyn_cast<
+                                                clang::GotoStmt>(cs->body_back()))
+                                        {
+                                            std::string target =
+                                                go->getLabel()->getNameAsString();
+                                            auto it = bs.label_to_block.find(target);
+                                            if (it != bs.label_to_block.end()) {
+                                                // Avoid duplicate edges (multiple cases
+                                                // may goto the same loop header).
+                                                size_t tgt = it->second;
+                                                if (std::find(blk.succs.begin(),
+                                                              blk.succs.end(), tgt)
+                                                    == blk.succs.end())
+                                                {
+                                                    blk.succs.push_back(tgt);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fallback goto after the switch.
+                        if (post_switch) {
+                            std::string target = getGotoTarget(post_switch);
+                            if (!target.empty()) {
+                                auto it = bs.label_to_block.find(target);
+                                if (it != bs.label_to_block.end()) {
+                                    blk.succs.push_back(it->second);
+                                    blk.fallthrough_succ = it->second;
+                                }
+                            }
+                        }
+
+                        // Keep the switch in stmts — FunctionBuilder already
+                        // emitted it with inlined case bodies.  The SNode
+                        // pipeline wraps it in an SBlock and passes it through.
+                        continue;
+                    }
                 }
 
                 // Default: fallthrough to next block

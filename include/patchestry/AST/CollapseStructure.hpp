@@ -43,6 +43,7 @@ namespace patchestry::ast {
             SNode *structured = nullptr;
 
             // Leaf payload: statements from the original CfgBlock
+            std::string label;                      // original CfgBlock label (for SLabel wrapping)
             std::vector<clang::Stmt *> stmts;
             clang::Expr *branch_cond = nullptr;
             bool is_conditional = false;
@@ -52,6 +53,7 @@ namespace patchestry::ast {
 
             // Set when absorbed into a parent structured node
             bool collapsed = false;
+            size_t collapsed_into = NONE;  // representative node after collapse
 
             // Flags for the collapse algorithm
             bool mark = false;

@@ -18,6 +18,16 @@ add_library(patchestry_ast STATIC
   OperationStmt.cpp
   TypeBuilder.cpp
   Utils.cpp
+  SNode.cpp
+  SNodeDebug.cpp
+  SNodePassManager.cpp
+  CfgBuilder.cpp
+  SNodeBuilder.cpp
+  DomTree.cpp
+  LoopInfo.cpp
+  StructuralPasses.cpp
+  ClangEmitter.cpp
+  CollapseStructure.cpp
 )
 
 add_library(patchestry::ast ALIAS patchestry_ast)

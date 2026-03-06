@@ -816,7 +816,28 @@ namespace patchestry::ast {
                                     if (!merge) { case_body.push_back(stmt); }
                                 }
                             }
-                            case_body.push_back(new (ctx) clang::BreakStmt(loc));
+                            // If the terminal BRANCH targets a block other than
+                            // the fallback (i.e. a back-edge to a loop header),
+                            // emit goto instead of break to preserve the edge.
+                            const auto &branch_op = tb.operations.at(last_op_key);
+                            if (branch_op.target_block.has_value()
+                                && branch_op.target_block != op.fallback_block
+                                && function_builder().labels_declaration.contains(
+                                    *branch_op.target_block
+                                ))
+                            {
+                                auto tgt_loc = sourceLocation(
+                                    ctx.getSourceManager(), *branch_op.target_block
+                                );
+                                case_body.push_back(new (ctx) clang::GotoStmt(
+                                    function_builder().labels_declaration.at(
+                                        *branch_op.target_block
+                                    ),
+                                    loc, tgt_loc
+                                ));
+                            } else {
+                                case_body.push_back(new (ctx) clang::BreakStmt(loc));
+                            }
                             case_stmt->setSubStmt(clang::CompoundStmt::Create(
                                 ctx, case_body, clang::FPOptionsOverride(), loc, loc
                             ));
@@ -916,11 +937,7 @@ namespace patchestry::ast {
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            auto *fallback2 = make_fallback_stmt();
-            std::vector< clang::Stmt * > result_stmts2 = { switch_stmt, fallback2 };
-            return { clang::CompoundStmt::Create(
-                ctx, result_stmts2, clang::FPOptionsOverride(), loc, loc
-            ), false };
+            return { switch_stmt, false };
         }
 
         // Priority 3: no successor info at all — emit IndirectGotoStmt as the only
