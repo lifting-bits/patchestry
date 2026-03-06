@@ -24,6 +24,7 @@
 #include <vector>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
 
 namespace patchestry::ast {
@@ -1598,6 +1599,258 @@ namespace patchestry::ast {
             return isolated_count;
         }
 
+        // ---------------------------------------------------------------
+        // Post-collapse transforms: scopeBreak, whileToFor, markLabelBumpUp
+        // ---------------------------------------------------------------
+
+        // scopeBreak: convert loop-exit gotos to SBreak and loop-header gotos
+        // to SContinue. Walks the SNode tree, tracking the current loop context
+        // via exit/header label names.
+        void scopeBreak(SNode *node, std::string_view loop_exit_label,
+                        std::string_view loop_header_label, SNodeFactory &factory) {
+            if (!node) return;
+
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                // Recurse into children. When entering a loop child, we need to
+                // determine the new loop exit/header labels from sibling context.
+                for (size_t i = 0; i < seq->size(); ++i) {
+                    auto *child = (*seq)[i];
+
+                    // For SWhile/SDoWhile, compute new loop context labels
+                    if (auto *w = child->dyn_cast<SWhile>()) {
+                        // New loop_exit_label: label of the next sibling (if SLabel)
+                        std::string_view new_exit;
+                        if (i + 1 < seq->size()) {
+                            if (auto *lbl = (*seq)[i + 1]->dyn_cast<SLabel>()) {
+                                new_exit = lbl->name();
+                            }
+                        }
+                        if (new_exit.empty()) new_exit = loop_exit_label;
+
+                        // New loop_header_label: if prev sibling is SLabel wrapping
+                        // this while, use that label
+                        std::string_view new_header;
+                        if (i > 0) {
+                            if (auto *lbl = (*seq)[i - 1]->dyn_cast<SLabel>()) {
+                                new_header = lbl->name();
+                            }
+                        }
+
+                        scopeBreak(w->body(), new_exit, new_header, factory);
+                        continue;
+                    }
+
+                    if (auto *dw = child->dyn_cast<SDoWhile>()) {
+                        std::string_view new_exit;
+                        if (i + 1 < seq->size()) {
+                            if (auto *lbl = (*seq)[i + 1]->dyn_cast<SLabel>()) {
+                                new_exit = lbl->name();
+                            }
+                        }
+                        if (new_exit.empty()) new_exit = loop_exit_label;
+
+                        std::string_view new_header;
+                        if (i > 0) {
+                            if (auto *lbl = (*seq)[i - 1]->dyn_cast<SLabel>()) {
+                                new_header = lbl->name();
+                            }
+                        }
+
+                        scopeBreak(dw->body(), new_exit, new_header, factory);
+                        continue;
+                    }
+
+                    // For non-loop children, recurse with current loop context
+                    scopeBreak(child, loop_exit_label, loop_header_label, factory);
+                }
+
+                // After recursing, check if last child is SGoto targeting loop exit/header
+                if (seq->size() > 0) {
+                    auto *last = (*seq)[seq->size() - 1];
+                    if (auto *g = last->dyn_cast<SGoto>()) {
+                        if (!loop_exit_label.empty() && g->target() == loop_exit_label) {
+                            seq->replaceChild(seq->size() - 1, factory.make<SBreak>());
+                        } else if (!loop_header_label.empty() && g->target() == loop_header_label) {
+                            seq->replaceChild(seq->size() - 1, factory.make<SContinue>());
+                        }
+                    }
+                }
+            }
+            else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                scopeBreak(ite->thenBranch(), loop_exit_label, loop_header_label, factory);
+                scopeBreak(ite->elseBranch(), loop_exit_label, loop_header_label, factory);
+            }
+            else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                // Switch does not change loop context
+                for (auto &c : sw->cases()) {
+                    scopeBreak(c.body, loop_exit_label, loop_header_label, factory);
+                }
+                scopeBreak(sw->defaultBody(), loop_exit_label, loop_header_label, factory);
+            }
+            else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                scopeBreak(lbl->body(), loop_exit_label, loop_header_label, factory);
+            }
+            else if (auto *f = node->dyn_cast<SFor>()) {
+                // SFor has its own loop context
+                scopeBreak(f->body(), loop_exit_label, loop_header_label, factory);
+            }
+            // SBlock, SGoto, SBreak, SContinue, SReturn: leaf nodes, nothing to do
+        }
+
+        // --- whileToFor helpers ---
+
+        bool isAssignOrDecl(clang::Stmt *s) {
+            if (!s) return false;
+            if (auto *bo = llvm::dyn_cast<clang::BinaryOperator>(s)) {
+                return bo->getOpcode() == clang::BO_Assign;
+            }
+            return llvm::isa<clang::DeclStmt>(s);
+        }
+
+        bool isIncrement(clang::Stmt *s) {
+            if (!s) return false;
+            if (auto *uo = llvm::dyn_cast<clang::UnaryOperator>(s)) {
+                auto op = uo->getOpcode();
+                return op == clang::UO_PreInc || op == clang::UO_PostInc
+                    || op == clang::UO_PreDec || op == clang::UO_PostDec;
+            }
+            if (auto *bo = llvm::dyn_cast<clang::BinaryOperator>(s)) {
+                auto op = bo->getOpcode();
+                return op == clang::BO_Assign || op == clang::BO_AddAssign
+                    || op == clang::BO_SubAssign;
+            }
+            return false;
+        }
+
+        // Extract the DeclRefExpr from an assignment or decl statement
+        clang::DeclRefExpr *getAssignTarget(clang::Stmt *s) {
+            if (!s) return nullptr;
+            if (auto *bo = llvm::dyn_cast<clang::BinaryOperator>(s)) {
+                return llvm::dyn_cast<clang::DeclRefExpr>(bo->getLHS()->IgnoreParenCasts());
+            }
+            if (auto *uo = llvm::dyn_cast<clang::UnaryOperator>(s)) {
+                return llvm::dyn_cast<clang::DeclRefExpr>(uo->getSubExpr()->IgnoreParenCasts());
+            }
+            if (auto *ds = llvm::dyn_cast<clang::DeclStmt>(s)) {
+                if (ds->isSingleDecl()) {
+                    if (auto *vd = llvm::dyn_cast<clang::VarDecl>(ds->getSingleDecl())) {
+                        (void)vd;
+                        // DeclStmt doesn't directly produce a DeclRefExpr;
+                        // we can't easily manufacture one without an ASTContext.
+                        // Return nullptr — sameVariable will handle this via VarDecl matching.
+                        return nullptr;
+                    }
+                }
+            }
+            return nullptr;
+        }
+
+        // Extract the VarDecl referenced by a statement (works for assign, unary, decl)
+        clang::VarDecl *getReferencedVar(clang::Stmt *s) {
+            if (auto *dre = getAssignTarget(s)) {
+                return llvm::dyn_cast<clang::VarDecl>(dre->getDecl());
+            }
+            if (auto *ds = llvm::dyn_cast<clang::DeclStmt>(s)) {
+                if (ds->isSingleDecl()) {
+                    return llvm::dyn_cast<clang::VarDecl>(ds->getSingleDecl());
+                }
+            }
+            return nullptr;
+        }
+
+        // Check if an expression tree contains a reference to the given VarDecl
+        bool containsVarRef(clang::Stmt *s, clang::VarDecl *vd) {
+            if (!s || !vd) return false;
+            if (auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(s)) {
+                return dre->getDecl() == vd;
+            }
+            for (auto *child : s->children()) {
+                if (containsVarRef(child, vd)) return true;
+            }
+            return false;
+        }
+
+        // Check that init, cond, and inc all reference the same variable
+        bool sameVariable(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc) {
+            auto *init_var = getReferencedVar(init);
+            if (!init_var) return false;
+            auto *inc_var = getReferencedVar(inc);
+            if (!inc_var) return false;
+            if (init_var != inc_var) return false;
+            return containsVarRef(cond, init_var);
+        }
+
+        // whileToFor: convert init/while(cond)/inc patterns to SFor
+        void whileToFor(SNode *node, SNodeFactory &factory, clang::ASTContext &ctx) {
+            if (!node) return;
+
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                // Scan for pattern: SBlock(init), SWhile(cond, SSeq(..., SBlock(inc)))
+                for (size_t i = 0; i < seq->size(); ++i) {
+                    auto *w = (*seq)[i]->dyn_cast<SWhile>();
+                    if (!w) continue;
+
+                    // Check for init before the while
+                    clang::Stmt *init_stmt = nullptr;
+                    bool has_init = false;
+                    if (i > 0) {
+                        auto *prev = (*seq)[i - 1]->dyn_cast<SBlock>();
+                        if (prev && prev->size() == 1 && isAssignOrDecl(prev->stmts()[0])) {
+                            init_stmt = prev->stmts()[0];
+                            has_init = true;
+                        }
+                    }
+
+                    // Check for inc at end of while body
+                    clang::Expr *inc_expr = nullptr;
+                    auto *body_seq = w->body() ? w->body()->dyn_cast<SSeq>() : nullptr;
+                    if (body_seq && body_seq->size() > 0) {
+                        auto *last = (*body_seq)[body_seq->size() - 1]->dyn_cast<SBlock>();
+                        if (last && last->size() == 1 && isIncrement(last->stmts()[0])) {
+                            inc_expr = llvm::dyn_cast<clang::Expr>(last->stmts()[0]);
+                        }
+                    }
+
+                    if (has_init && inc_expr && sameVariable(init_stmt, w->cond(), inc_expr)) {
+                        // Remove inc from body
+                        body_seq->removeChild(body_seq->size() - 1);
+                        // Build SFor
+                        auto *for_node = factory.make<SFor>(init_stmt, w->cond(), inc_expr, w->body());
+                        // Replace [i-1, i+1) with the for node
+                        seq->replaceRange(i - 1, i + 1, for_node);
+                        --i; // adjust for removed element
+                    }
+                }
+
+                // Recurse into remaining children
+                for (size_t i = 0; i < seq->size(); ++i) {
+                    whileToFor((*seq)[i], factory, ctx);
+                }
+            }
+            else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                whileToFor(ite->thenBranch(), factory, ctx);
+                whileToFor(ite->elseBranch(), factory, ctx);
+            }
+            else if (auto *w = node->dyn_cast<SWhile>()) {
+                whileToFor(w->body(), factory, ctx);
+            }
+            else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                whileToFor(dw->body(), factory, ctx);
+            }
+            else if (auto *f = node->dyn_cast<SFor>()) {
+                whileToFor(f->body(), factory, ctx);
+            }
+            else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->cases()) {
+                    whileToFor(c.body, factory, ctx);
+                }
+                whileToFor(sw->defaultBody(), factory, ctx);
+            }
+            else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                whileToFor(lbl->body(), factory, ctx);
+            }
+        }
+
     } // anonymous namespace
 
     // ---------------------------------------------------------------
@@ -1677,6 +1930,11 @@ namespace patchestry::ast {
         }
 
         if (!root) root = factory.make<SSeq>();
+
+        // 6. Post-collapse transforms (order matters per research)
+        scopeBreak(root, "", "", factory);    // 1st: gotos -> break/continue
+        whileToFor(root, factory, ctx);       // 2nd: while -> for patterns
+
         return root;
     }
 
