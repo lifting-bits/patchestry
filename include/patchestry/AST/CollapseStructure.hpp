@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
+#include <list>
 #include <unordered_set>
 #include <vector>
 
@@ -129,6 +131,54 @@ namespace patchestry::ast {
 
         /// Detect back-edges using DFS and mark them in the graph.
         void markBackEdges(CGraph &g);
+
+        /// A detected natural loop: header, back-edge tails, nesting info.
+        struct LoopBody {
+            size_t head;                          // loop header CNode id
+            std::vector<size_t> tails;            // CNode ids with back-edges to head
+            int depth = 0;                        // nesting depth (deeper = higher number)
+            int unique_count = 0;                 // count of head+tail nodes before reachability
+            size_t exit_block = NONE;             // official exit CNode id, or NONE
+            LoopBody *immed_container = nullptr;  // immediately containing loop
+
+            static constexpr size_t NONE = std::numeric_limits<size_t>::max();
+
+            explicit LoopBody(size_t h) : head(h) {}
+
+            void addTail(size_t t) { tails.push_back(t); }
+
+            /// Core body computation: backward reachability from tails to head.
+            /// Populates `body` with all CNode ids in the loop. Sets CNode::mark.
+            /// Caller MUST call clearMarks() after using the body.
+            void findBase(CGraph &g, std::vector<size_t> &body) const;
+
+            /// Set immed_container based on containment within other loops.
+            void labelContainments(const CGraph &g, const std::vector<size_t> &body,
+                                   const std::vector<LoopBody *> &looporder);
+
+            /// Exit detection, tail ordering, body extension, exit edge labeling.
+            /// (Declared here, implemented in Plan 02)
+            void findExit(const CGraph &g, const std::vector<size_t> &body);
+            void orderTails(const CGraph &g);
+            void extend(CGraph &g, std::vector<size_t> &body) const;
+            void labelExitEdges(CGraph &g, const std::vector<size_t> &body) const;
+
+            /// Merge LoopBody records that share the same head.
+            static void mergeIdenticalHeads(std::vector<LoopBody *> &looporder,
+                                            std::list<LoopBody> &storage);
+
+            /// Sort innermost-first (higher depth = processed first).
+            bool operator<(const LoopBody &other) const {
+                return depth > other.depth;
+            }
+        };
+
+        /// Clear CNode::mark for all nodes in body vector.
+        void clearMarks(CGraph &g, const std::vector<size_t> &body);
+
+        /// Scan back-edges and create LoopBody records.
+        void labelLoops(CGraph &g, std::list<LoopBody> &loopbody,
+                        std::vector<LoopBody *> &looporder);
 
     } // namespace detail
 
