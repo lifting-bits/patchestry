@@ -1456,36 +1456,102 @@ namespace patchestry::ast {
         }
 
         // ---------------------------------------------------------------
-        // Goto selection heuristic
+        // TraceDAG-based goto selection (replaces selectAndMarkGoto)
         // ---------------------------------------------------------------
 
-        // When collapsing is stuck, pick the "best" edge to mark as goto.
-        // Simple heuristic: pick the edge from the block with most out-edges,
-        // preferring non-back edges.
-        bool selectAndMarkGoto(CGraph &g) {
-            size_t best_from = std::numeric_limits<size_t>::max();
-            size_t best_edge = 0;
-            size_t best_score = 0;
-
+        /// clipExtraRoots: final fallback for unreachable/disconnected regions.
+        /// Finds active nodes with no predecessors (other than entry) and adds
+        /// a FloatingEdge for an incoming edge to reconnect them via goto.
+        static void clipExtraRoots(CGraph &g, std::list<detail::FloatingEdge> &likelygoto) {
             for (auto &n : g.nodes) {
                 if (n.collapsed) continue;
-                if (n.sizeOut() < 2) continue;
-                for (size_t i = 0; i < n.succs.size(); ++i) {
-                    if (n.isGotoOut(i)) continue;
-                    size_t score = n.sizeOut();
-                    if (n.isBackEdge(i)) score += 100;  // prefer marking back-edges
-                    if (score > best_score) {
-                        best_score = score;
-                        best_from = n.id;
-                        best_edge = i;
+                if (n.id == g.entry) continue;
+                if (n.sizeIn() != 0) continue;
+
+                // Extra root: find any active predecessor that has an edge to it
+                for (auto &pred : g.nodes) {
+                    if (pred.collapsed) continue;
+                    for (size_t i = 0; i < pred.succs.size(); ++i) {
+                        if (pred.succs[i] == n.id && !pred.isGotoOut(i)) {
+                            likelygoto.emplace_back(pred.id, n.id);
+                            goto found_pred;
+                        }
                     }
+                }
+                found_pred:;
+            }
+        }
+
+        /// updateLoopBody: run TraceDAG loop-scoped (innermost-first),
+        /// then fall back to full-graph TraceDAG.
+        static bool updateLoopBody(CGraph &g,
+                                   std::list<detail::LoopBody> &loopbody,
+                                   std::list<detail::FloatingEdge> &likelygoto) {
+            // Try each loop body (innermost-first)
+            for (auto &loop : loopbody) {
+                if (!loop.update(g)) continue;
+
+                std::vector<size_t> body;
+                loop.findBase(g, body);
+                loop.setExitMarks(g, body);
+
+                detail::TraceDAG dag(likelygoto);
+                dag.addRoot(loop.head);
+                if (loop.exit_block != detail::LoopBody::NONE &&
+                    loop.exit_block < g.nodes.size() &&
+                    !g.node(loop.exit_block).collapsed) {
+                    dag.setFinishBlock(loop.exit_block);
+                }
+                dag.initialize();
+                dag.pushBranches(g);
+
+                loop.clearExitMarks(g, body);
+                detail::clearMarks(g, body);
+
+                if (!likelygoto.empty()) return true;
+            }
+
+            // Fall back to full-graph TraceDAG
+            {
+                detail::TraceDAG dag(likelygoto);
+
+                // Add active root nodes (entry or nodes with no predecessors)
+                bool has_root = false;
+                for (auto &n : g.nodes) {
+                    if (n.collapsed) continue;
+                    if (n.id == g.entry || n.sizeIn() == 0) {
+                        dag.addRoot(n.id);
+                        has_root = true;
+                    }
+                }
+                if (!has_root) return false;
+
+                dag.initialize();
+                dag.pushBranches(g);
+                return !likelygoto.empty();
+            }
+        }
+
+        /// selectGoto: pick the least-disruptive edge to mark as goto using TraceDAG.
+        /// Replaces the old selectAndMarkGoto heuristic.
+        static bool selectGoto(CGraph &g, std::list<detail::LoopBody> &loopbody) {
+            std::list<detail::FloatingEdge> likelygoto;
+
+            if (!updateLoopBody(g, loopbody, likelygoto)) {
+                // TraceDAG found nothing; try clipExtraRoots as final fallback
+                clipExtraRoots(g, likelygoto);
+            }
+
+            // Iterate likelygoto and mark the first valid edge as goto
+            for (auto &fe : likelygoto) {
+                auto [src, edge_idx] = fe.getCurrentEdge(g);
+                if (src != CNode::NONE) {
+                    g.node(src).setGoto(edge_idx);
+                    return true;
                 }
             }
 
-            if (best_from == std::numeric_limits<size_t>::max()) return false;
-
-            g.node(best_from).setGoto(best_edge);
-            return true;
+            return false;
         }
 
         // ---------------------------------------------------------------
@@ -1562,11 +1628,11 @@ namespace patchestry::ast {
         // 3. Main collapse loop
         size_t isolated = collapseInternal(g, factory, ctx);
 
-        // 4. When stuck, select gotos and retry
+        // 4. When stuck, select gotos via TraceDAG and retry
         size_t max_iterations = g.nodes.size() * 4;  // safety bound
         size_t iter = 0;
         while (isolated < g.activeCount() && iter < max_iterations) {
-            if (!selectAndMarkGoto(g)) {
+            if (!selectGoto(g, loopbody)) {
                 LOG(WARNING) << "CollapseStructure: could not select goto, "
                              << g.activeCount() - isolated << " blocks remaining\n";
                 break;
