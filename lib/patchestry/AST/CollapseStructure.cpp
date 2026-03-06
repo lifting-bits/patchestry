@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <list>
 #include <numeric>
 #include <optional>
 #include <set>
@@ -161,6 +162,207 @@ namespace patchestry::ast {
             };
 
             dfs(g.entry);
+        }
+
+        // -------------------------------------------------------------------
+        // LoopBody core methods
+        // -------------------------------------------------------------------
+
+        void clearMarks(CGraph &g, const std::vector<size_t> &body) {
+            for (size_t id : body) {
+                g.node(id).mark = false;
+            }
+        }
+
+        void LoopBody::findBase(CGraph &g, std::vector<size_t> &body) const {
+            body.clear();
+
+            // Mark head, add to body.
+            g.node(head).mark = true;
+            body.push_back(head);
+
+            // Mark each tail (skip if already marked, e.g. head == tail).
+            for (size_t t : tails) {
+                if (!g.node(t).mark) {
+                    g.node(t).mark = true;
+                    body.push_back(t);
+                }
+            }
+
+            // BFS backward from tails: iterate body starting at index 1
+            // (index 0 is head -- we don't go backward from head).
+            for (size_t idx = 1; idx < body.size(); ++idx) {
+                auto &nd = g.node(body[idx]);
+                for (size_t p : nd.preds) {
+                    if (g.node(p).mark) continue;
+                    if (g.node(p).collapsed) continue;
+
+                    // Check if the incoming edge from p to body[idx] is a goto edge.
+                    // Find the succ index in p that points to body[idx].
+                    bool is_goto = false;
+                    auto &pn = g.node(p);
+                    for (size_t si = 0; si < pn.succs.size(); ++si) {
+                        if (pn.succs[si] == body[idx]) {
+                            if (pn.isGotoOut(si)) {
+                                is_goto = true;
+                            }
+                            break;
+                        }
+                    }
+                    if (is_goto) continue;
+
+                    g.node(p).mark = true;
+                    body.push_back(p);
+                }
+            }
+        }
+
+        void LoopBody::labelContainments(
+            const CGraph &g, const std::vector<size_t> & /*body*/,
+            const std::vector<LoopBody *> &looporder
+        ) {
+            // For each other loop in looporder: if that loop's head is marked
+            // (i.e., inside this loop's body), then that loop is nested in this.
+            // Update its immed_container if this is a tighter (smaller) container.
+            for (LoopBody *lb : looporder) {
+                if (lb == this) continue;
+                if (!g.node(lb->head).mark) continue;
+
+                // lb is nested inside this loop.
+                if (lb->immed_container == nullptr
+                    || lb->immed_container->unique_count > unique_count) {
+                    // `this` is a tighter container (fewer unique head+tail nodes).
+                    // But wait -- smaller unique_count means tighter is wrong.
+                    // A tighter container has FEWER body nodes. Use unique_count as proxy:
+                    // Actually, we want the INNERMOST container. If lb already has a
+                    // container C, and C is smaller than `this`, keep C. Otherwise use this.
+                    // Smaller unique_count ≈ smaller loop ≈ tighter. But `this` is the
+                    // OUTER loop (lb's head is in our body). So we want the smallest
+                    // outer loop. Replace only if this is smaller than current container.
+                }
+                // Correction: `this` contains `lb`. We want lb->immed_container to be
+                // the SMALLEST loop that contains lb. So replace if this loop is smaller
+                // than lb's current immed_container, OR if lb has no container yet.
+                if (lb->immed_container == nullptr) {
+                    lb->immed_container = this;
+                } else {
+                    // Replace if `this` is a smaller container (fewer unique nodes).
+                    // Wait -- unique_count is head+tails before reachability. Not great
+                    // as a size proxy. But Ghidra uses the approach: the last loop to
+                    // set the container is the tightest, because loops are processed
+                    // outermost-first (by body size). Since we don't have body size here,
+                    // use unique_count as a rough proxy. Actually the body vector IS
+                    // available via marks. Let's just not over-think: use unique_count.
+                    // Tighter = smaller body ≈ larger unique_count (fewer extra nodes).
+                    // Actually no -- just check if the current container's head is in our
+                    // body (meaning we're OUTSIDE it).
+                    // Simplest correct approach: if the current immed_container's head is
+                    // also marked (in our body), then we are OUTER -- don't replace.
+                    // If not marked, current container is not inside us, which is
+                    // inconsistent, so replace.
+                    if (g.node(lb->immed_container->head).mark) {
+                        // Current container is also inside this loop -- it's tighter. Keep it.
+                    } else {
+                        // Current container is outside this loop -- replace with us.
+                        lb->immed_container = this;
+                    }
+                }
+            }
+        }
+
+        void LoopBody::mergeIdenticalHeads(
+            std::vector<LoopBody *> &looporder,
+            std::list<LoopBody> &storage
+        ) {
+            // Sort by head for merge detection.
+            std::sort(looporder.begin(), looporder.end(),
+                [](const LoopBody *a, const LoopBody *b) { return a->head < b->head; });
+
+            size_t write = 0;
+            for (size_t read = 0; read < looporder.size(); ++read) {
+                if (write > 0 && looporder[write - 1]->head == looporder[read]->head) {
+                    // Merge tails into the previous entry.
+                    auto *dst = looporder[write - 1];
+                    auto *src = looporder[read];
+                    for (size_t t : src->tails) {
+                        dst->addTail(t);
+                    }
+                    // Erase src from storage.
+                    for (auto it = storage.begin(); it != storage.end(); ++it) {
+                        if (&(*it) == src) {
+                            storage.erase(it);
+                            break;
+                        }
+                    }
+                } else {
+                    looporder[write++] = looporder[read];
+                }
+            }
+            looporder.resize(write);
+        }
+
+        void labelLoops(
+            CGraph &g,
+            std::list<LoopBody> &loopbody,
+            std::vector<LoopBody *> &looporder
+        ) {
+            // Scan all edges for back-edges. Create one LoopBody per back-edge.
+            for (auto &n : g.nodes) {
+                if (n.collapsed) continue;
+                for (size_t i = 0; i < n.succs.size(); ++i) {
+                    if (n.isBackEdge(i)) {
+                        size_t hd = n.succs[i];
+                        loopbody.emplace_back(hd);
+                        loopbody.back().addTail(n.id);
+                        looporder.push_back(&loopbody.back());
+                    }
+                }
+            }
+
+            // Merge loops sharing the same head.
+            LoopBody::mergeIdenticalHeads(looporder, loopbody);
+
+            // For each loop: findBase, labelContainments, clearMarks.
+            for (LoopBody *lb : looporder) {
+                std::vector<size_t> body;
+                lb->findBase(g, body);
+                lb->unique_count = static_cast<int>(body.size());
+                lb->labelContainments(g, body, looporder);
+                clearMarks(g, body);
+            }
+
+            // Compute depth from immed_container chains.
+            for (LoopBody *lb : looporder) {
+                int d = 0;
+                for (LoopBody *c = lb->immed_container; c != nullptr; c = c->immed_container) {
+                    ++d;
+                }
+                lb->depth = d;
+            }
+
+            // Sort innermost-first (higher depth first) for processing order.
+            std::sort(looporder.begin(), looporder.end(),
+                [](const LoopBody *a, const LoopBody *b) { return *a < *b; });
+        }
+
+        // -------------------------------------------------------------------
+        // Plan 02 stub implementations
+        // -------------------------------------------------------------------
+
+        void LoopBody::findExit(const CGraph & /*g*/, const std::vector<size_t> & /*body*/) {
+            // TODO: Plan 02
+        }
+
+        void LoopBody::orderTails(const CGraph & /*g*/) {
+            // TODO: Plan 02
+        }
+
+        void LoopBody::extend(CGraph & /*g*/, std::vector<size_t> & /*body*/) const {
+            // TODO: Plan 02
+        }
+
+        void LoopBody::labelExitEdges(CGraph & /*g*/, const std::vector<size_t> & /*body*/) const {
+            // TODO: Plan 02
         }
 
     } // namespace detail
