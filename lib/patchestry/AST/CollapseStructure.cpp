@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <numeric>
 #include <optional>
@@ -27,181 +28,84 @@
 namespace patchestry::ast {
 
     // -----------------------------------------------------------------------
-    // Internal collapse graph — lightweight mirror of the Cfg that supports
-    // collapsing blocks into structured nodes.
+    // detail:: namespace — CGraph method definitions and graph builders
     // -----------------------------------------------------------------------
-    namespace {
+    namespace detail {
 
-        // A node in the collapsing graph.  Starts as a 1:1 mirror of CfgBlock.
-        // As rules fire, nodes get absorbed into StructuredNode wrappers and
-        // removed from the active set.
-        struct CNode {
-            size_t id;                          // original CfgBlock index
-            std::vector<size_t> succs;          // outgoing edges (by CNode id)
-            std::vector<size_t> preds;          // incoming edges (by CNode id)
+        size_t CGraph::collapseNodes(const std::vector<size_t> &ids, SNode *snode) {
+            // Pick the first id as the representative
+            size_t rep = ids[0];
+            nodes[rep].structured = snode;
 
-            // Edge properties (indexed same as succs)
-            std::vector<uint32_t> edge_flags;
+            // Collect external in/out edges
+            std::unordered_set<size_t> idset(ids.begin(), ids.end());
+            std::vector<size_t> ext_preds, ext_succs;
+            std::vector<uint32_t> ext_succ_flags;
 
-            // The SNode produced when this node is collapsed (null = leaf)
-            SNode *structured = nullptr;
-
-            // Leaf payload: statements from the original CfgBlock
-            std::vector<clang::Stmt *> stmts;
-            clang::Expr *branch_cond = nullptr;
-            bool is_conditional = false;
-
-            // Set when absorbed into a parent structured node
-            bool collapsed = false;
-
-            // Flags for the collapse algorithm
-            bool mark = false;
-            int visit_count = 0;
-
-            enum EdgeFlag : uint32_t {
-                F_GOTO     = 1u << 0,
-                F_BACK     = 1u << 1,
-                F_LOOP_EXIT = 1u << 2,
-            };
-
-            bool isGotoOut(size_t i) const {
-                return i < edge_flags.size() && (edge_flags[i] & F_GOTO);
-            }
-            bool isBackEdge(size_t i) const {
-                return i < edge_flags.size() && (edge_flags[i] & F_BACK);
-            }
-            bool isDecisionOut(size_t i) const {
-                return !isGotoOut(i) && !isBackEdge(i);
-            }
-            bool isSwitchOut() const { return succs.size() > 2; }
-
-            size_t sizeIn() const { return preds.size(); }
-            size_t sizeOut() const { return succs.size(); }
-
-            void setGoto(size_t i) {
-                if (i < edge_flags.size()) edge_flags[i] |= F_GOTO;
-            }
-        };
-
-        // The collapsing graph
-        struct CGraph {
-            std::vector<CNode> nodes;
-            size_t entry = 0;
-
-            // Active (uncollapsed) node ids
-            std::vector<size_t> activeIds() const {
-                std::vector<size_t> result;
-                for (auto &n : nodes) {
-                    if (!n.collapsed) result.push_back(n.id);
+            for (size_t nid : ids) {
+                for (size_t p : nodes[nid].preds) {
+                    if (idset.count(p) == 0) ext_preds.push_back(p);
                 }
-                return result;
+            }
+            // Use the last node's outgoing edges as the representative out edges
+            size_t last = ids.back();
+            for (size_t i = 0; i < nodes[last].succs.size(); ++i) {
+                size_t s = nodes[last].succs[i];
+                if (idset.count(s) == 0) {
+                    ext_succs.push_back(s);
+                    ext_succ_flags.push_back(nodes[last].edge_flags[i]);
+                }
             }
 
-            size_t activeCount() const {
-                size_t c = 0;
-                for (auto &n : nodes) {
-                    if (!n.collapsed) ++c;
-                }
-                return c;
+            // Mark all as collapsed except rep
+            for (size_t nid : ids) {
+                if (nid != rep) nodes[nid].collapsed = true;
             }
 
-            CNode &node(size_t id) { return nodes[id]; }
-            const CNode &node(size_t id) const { return nodes[id]; }
-
-            // Remove an edge from the active graph
-            void removeEdge(size_t from, size_t to) {
-                auto &s = nodes[from].succs;
-                auto &f = nodes[from].edge_flags;
-                for (size_t i = 0; i < s.size(); ++i) {
-                    if (s[i] == to) {
-                        s.erase(s.begin() + static_cast<ptrdiff_t>(i));
-                        f.erase(f.begin() + static_cast<ptrdiff_t>(i));
-                        break;
-                    }
-                }
-                auto &p = nodes[to].preds;
-                p.erase(std::remove(p.begin(), p.end(), from), p.end());
-            }
-
-            // Replace a set of nodes with a single new structured node
-            size_t collapseNodes(const std::vector<size_t> &ids, SNode *snode) {
-                // Pick the first id as the representative
-                size_t rep = ids[0];
-                nodes[rep].structured = snode;
-
-                // Collect external in/out edges
-                std::unordered_set<size_t> idset(ids.begin(), ids.end());
-                std::vector<size_t> ext_preds, ext_succs;
-                std::vector<uint32_t> ext_succ_flags;
-
-                for (size_t nid : ids) {
-                    for (size_t p : nodes[nid].preds) {
-                        if (idset.count(p) == 0) ext_preds.push_back(p);
-                    }
-                }
-                // Use the last node's outgoing edges as the representative out edges
-                size_t last = ids.back();
-                for (size_t i = 0; i < nodes[last].succs.size(); ++i) {
-                    size_t s = nodes[last].succs[i];
+            // Replace edges: remove old, add new through rep
+            for (size_t nid : ids) {
+                // Remove all edges involving collapsed nodes
+                for (size_t s : nodes[nid].succs) {
                     if (idset.count(s) == 0) {
-                        ext_succs.push_back(s);
-                        ext_succ_flags.push_back(nodes[last].edge_flags[i]);
+                        auto &p = nodes[s].preds;
+                        p.erase(std::remove(p.begin(), p.end(), nid), p.end());
                     }
                 }
-
-                // Mark all as collapsed except rep
-                for (size_t nid : ids) {
-                    if (nid != rep) nodes[nid].collapsed = true;
-                }
-
-                // Replace edges: remove old, add new through rep
-                for (size_t nid : ids) {
-                    // Remove all edges involving collapsed nodes
-                    for (size_t s : nodes[nid].succs) {
-                        if (idset.count(s) == 0) {
-                            auto &p = nodes[s].preds;
-                            p.erase(std::remove(p.begin(), p.end(), nid), p.end());
-                            if (nid != rep) {
-                                // Re-add as coming from rep
-                            }
-                        }
-                    }
-                    for (size_t p : nodes[nid].preds) {
-                        if (idset.count(p) == 0) {
-                            auto &ss = nodes[p].succs;
-                            for (size_t i = 0; i < ss.size(); ++i) {
-                                if (ss[i] == nid) {
-                                    ss[i] = rep; // redirect to rep
-                                }
+                for (size_t p : nodes[nid].preds) {
+                    if (idset.count(p) == 0) {
+                        auto &ss = nodes[p].succs;
+                        for (size_t i = 0; i < ss.size(); ++i) {
+                            if (ss[i] == nid) {
+                                ss[i] = rep; // redirect to rep
                             }
                         }
                     }
                 }
-
-                // Set rep's edges to the external edges
-                nodes[rep].succs = ext_succs;
-                nodes[rep].edge_flags = ext_succ_flags;
-
-                // Deduplicate preds
-                std::sort(ext_preds.begin(), ext_preds.end());
-                ext_preds.erase(std::unique(ext_preds.begin(), ext_preds.end()), ext_preds.end());
-                nodes[rep].preds = ext_preds;
-
-                // Add rep to succs' pred lists
-                for (size_t s : ext_succs) {
-                    auto &p = nodes[s].preds;
-                    if (std::find(p.begin(), p.end(), rep) == p.end()) {
-                        p.push_back(rep);
-                    }
-                }
-
-                nodes[rep].is_conditional = !ext_succs.empty() && ext_succs.size() == 2;
-                nodes[rep].stmts.clear();
-                nodes[rep].branch_cond = nullptr;
-
-                return rep;
             }
-        };
+
+            // Set rep's edges to the external edges
+            nodes[rep].succs = ext_succs;
+            nodes[rep].edge_flags = ext_succ_flags;
+
+            // Deduplicate preds
+            std::sort(ext_preds.begin(), ext_preds.end());
+            ext_preds.erase(std::unique(ext_preds.begin(), ext_preds.end()), ext_preds.end());
+            nodes[rep].preds = ext_preds;
+
+            // Add rep to succs' pred lists
+            for (size_t s : ext_succs) {
+                auto &p = nodes[s].preds;
+                if (std::find(p.begin(), p.end(), rep) == p.end()) {
+                    p.push_back(rep);
+                }
+            }
+
+            nodes[rep].is_conditional = !ext_succs.empty() && ext_succs.size() == 2;
+            nodes[rep].stmts.clear();
+            nodes[rep].branch_cond = nullptr;
+
+            return rep;
+        }
 
         // Build the collapse graph from the Cfg
         CGraph buildCGraph(const Cfg &cfg) {
@@ -243,11 +147,11 @@ namespace patchestry::ast {
 
             std::function<void(size_t)> dfs = [&](size_t u) {
                 color[u] = GRAY;
-                auto &node = g.node(u);
-                for (size_t i = 0; i < node.succs.size(); ++i) {
-                    size_t v = node.succs[i];
+                auto &nd = g.node(u);
+                for (size_t i = 0; i < nd.succs.size(); ++i) {
+                    size_t v = nd.succs[i];
                     if (color[v] == GRAY) {
-                        node.edge_flags[i] |= CNode::F_BACK;
+                        nd.edge_flags[i] |= CNode::F_BACK;
                     } else if (color[v] == WHITE) {
                         dfs(v);
                     }
@@ -257,6 +161,16 @@ namespace patchestry::ast {
 
             dfs(g.entry);
         }
+
+    } // namespace detail
+
+    // -----------------------------------------------------------------------
+    // Anonymous namespace — rule functions and internal helpers
+    // -----------------------------------------------------------------------
+    namespace {
+
+        using detail::CNode;
+        using detail::CGraph;
 
         // ---------------------------------------------------------------
         // SNode construction helpers
@@ -273,7 +187,7 @@ namespace patchestry::ast {
         // Pattern-matching collapse rules (adapted from Ghidra)
         // ---------------------------------------------------------------
 
-        // Rule: Sequential blocks (A→B chain)
+        // Rule: Sequential blocks (A->B chain)
         bool ruleBlockCat(CGraph &g, size_t id, SNodeFactory &factory) {
             auto &bl = g.node(id);
             if (bl.collapsed || bl.sizeOut() != 1) return false;
@@ -666,10 +580,10 @@ namespace patchestry::ast {
         }
 
         // 1. Build the collapse graph
-        CGraph g = buildCGraph(cfg);
+        detail::CGraph g = detail::buildCGraph(cfg);
 
         // 2. Mark back-edges
-        markBackEdges(g);
+        detail::markBackEdges(g);
 
         // 3. Main collapse loop
         size_t isolated = collapseInternal(g, factory, ctx);
@@ -696,7 +610,7 @@ namespace patchestry::ast {
                 if (!root) {
                     root = n.structured;
                 } else {
-                    // Multiple uncollapsed nodes — wrap in sequence
+                    // Multiple uncollapsed nodes -- wrap in sequence
                     auto *seq = root->dyn_cast<SSeq>();
                     if (!seq) {
                         seq = factory.make<SSeq>();
@@ -706,7 +620,7 @@ namespace patchestry::ast {
                     seq->addChild(n.structured);
                 }
             } else {
-                // Uncollapsed leaf — add as block
+                // Uncollapsed leaf -- add as block
                 auto *block = leafFromNode(n, factory);
                 if (!root) {
                     root = block;
