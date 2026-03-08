@@ -6,11 +6,12 @@
  */
 
 #include <algorithm>
-#include <llvm/ADT/StringRef.h>
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
+#include <llvm/ADT/StringRef.h>
 #include <llvm/Support/FormatVariadic.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -18,7 +19,6 @@
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
 #include <patchestry/Util/Log.hpp>
-#include <vector>
 
 namespace patchestry::ghidra {
 

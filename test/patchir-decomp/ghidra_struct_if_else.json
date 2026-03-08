@@ -1,0 +1,90 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-ghidra-structuring -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=IFELSE %s --input-file %t.c
+// IFELSE: if (
+// IFELSE: } else {
+// IFELSE: return
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "ghidra_struct_if_else",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "cmp": {
+              "mnemonic": "INT_EQUAL",
+              "type": "type_bool",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 1 },
+                { "type": "type_int", "kind": "constant", "value": 1 }
+              ]
+            },
+            "cbr": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:10000000:1:basic",
+              "not_taken_block": "ram:10000000:2:basic",
+              "condition": {
+                "type": "type_bool",
+                "kind": "temporary",
+                "operation": "cmp"
+              }
+            }
+          },
+          "ordered_operations": ["cmp", "cbr"]
+        },
+        "ram:10000000:1:basic": {
+          "operations": {
+            "to_join": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:3:basic"
+            }
+          },
+          "ordered_operations": ["to_join"]
+        },
+        "ram:10000000:2:basic": {
+          "operations": {
+            "to_join": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:3:basic"
+            }
+          },
+          "ordered_operations": ["to_join"]
+        },
+        "ram:10000000:3:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 7 }]
+            }
+          },
+          "ordered_operations": ["ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" },
+    "type_bool": { "name": "bool", "size": 1, "kind": "boolean" }
+  }
+}

@@ -70,6 +70,8 @@ config.patchir_cir2llvm_tool = patchestry_tool_path('patchir-cir2llvm')
 
 config.patchir_yaml_parser_tool = patchestry_tool_path('patchir-yaml-parser')
 
+config.patchir_c_normalize_tool = patchestry_tool_path('patchir-c-normalize')
+
 def get_musl_include_path(arch):
     """Get the musl include path for the given architecture on macOS.
     
@@ -126,6 +128,7 @@ tools = [
     ToolSubst('%patchir-transform', command=config.patchir_transform_tool),
     ToolSubst('%patchir-cir2llvm', command=config.patchir_cir2llvm_tool),
     ToolSubst('%patchir-yaml-parser', command=config.patchir_yaml_parser_tool),
+    ToolSubst('%patchir-c-normalize', command=config.patchir_c_normalize_tool),
     ToolSubst('%strip-json-comments', command=config.json_strip_comments),
 ]
 

@@ -586,6 +586,10 @@ namespace patchestry::ast {
                 lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
             }
 
+            if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
+                lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+            }
+
             auto deref_result =
                 sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
             if (deref_result.isInvalid()) {
@@ -716,9 +720,11 @@ namespace patchestry::ast {
             input_expr = cast_expr;
         }
 
-        // Build the trailing statement that follows the switch body:
+        // Build a fallback statement for after the switch:
         // - goto fallback_block when a bounds-check out-of-range target is known,
-        // - __builtin_unreachable() otherwise (all cases are covered by the table).
+        // - __builtin_unreachable() otherwise (all enumerated cases are covered).
+        // Placed after the switch as a flat statement rather than inside a default:
+        // arm, so the switch only contains explicit case labels.
         auto make_fallback_stmt = [&]() -> clang::Stmt * {
             if (op.fallback_block.has_value()
                 && function_builder().labels_declaration.contains(*op.fallback_block))
@@ -733,18 +739,6 @@ namespace patchestry::ast {
             return create_builtin_call(
                 ctx, sema(), clang::Builtin::BI__builtin_unreachable, no_args, loc
             );
-        };
-
-        // Wrap switch_stmt with a trailing fallback statement into a compound.
-        // The switch has no default arm; the fallback stmt handles the out-of-range
-        // path (or marks it unreachable when no fallback block is available).
-        auto wrap_with_fallback = [&](clang::Stmt *switch_stmt
-                                  ) -> std::pair< clang::Stmt *, bool > {
-            std::vector< clang::Stmt * > stmts = { switch_stmt, make_fallback_stmt() };
-            return {
-                clang::CompoundStmt::Create(ctx, stmts, clang::FPOptionsOverride(), loc, loc),
-                false
-            };
         };
 
         // Priority 1: switch_cases present — proper integer switch using per-case
@@ -793,7 +787,8 @@ namespace patchestry::ast {
                 // Try to inline the target block body for has_exit cases.
                 // Requirements: block exists, has ordered ops, terminal op is BRANCH.
                 bool inlined = false;
-                if (sc.has_exit && function.basic_blocks.contains(sc.target_block)) {
+                if (!function_builder().disable_switch_case_inline
+                    && sc.has_exit && function.basic_blocks.contains(sc.target_block)) {
                     const auto &tb = function.basic_blocks.at(sc.target_block);
                     if (!tb.ordered_operations.empty()) {
                         const auto &last_op_key = tb.ordered_operations.back();
@@ -821,7 +816,28 @@ namespace patchestry::ast {
                                     if (!merge) { case_body.push_back(stmt); }
                                 }
                             }
-                            case_body.push_back(new (ctx) clang::BreakStmt(loc));
+                            // If the terminal BRANCH targets a block other than
+                            // the fallback (i.e. a back-edge to a loop header),
+                            // emit goto instead of break to preserve the edge.
+                            const auto &branch_op = tb.operations.at(last_op_key);
+                            if (branch_op.target_block.has_value()
+                                && branch_op.target_block != op.fallback_block
+                                && function_builder().labels_declaration.contains(
+                                    *branch_op.target_block
+                                ))
+                            {
+                                auto tgt_loc = sourceLocation(
+                                    ctx.getSourceManager(), *branch_op.target_block
+                                );
+                                case_body.push_back(new (ctx) clang::GotoStmt(
+                                    function_builder().labels_declaration.at(
+                                        *branch_op.target_block
+                                    ),
+                                    loc, tgt_loc
+                                ));
+                            } else {
+                                case_body.push_back(new (ctx) clang::BreakStmt(loc));
+                            }
                             case_stmt->setSubStmt(clang::CompoundStmt::Create(
                                 ctx, case_body, clang::FPOptionsOverride(), loc, loc
                             ));
@@ -854,7 +870,11 @@ namespace patchestry::ast {
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            return wrap_with_fallback(switch_stmt);
+            auto *fallback = make_fallback_stmt();
+            std::vector< clang::Stmt * > result_stmts = { switch_stmt, fallback };
+            return { clang::CompoundStmt::Create(
+                ctx, result_stmts, clang::FPOptionsOverride(), loc, loc
+            ), false };
         }
 
         // Priority 2: successor_blocks only — address-based switch (existing logic).
@@ -914,11 +934,10 @@ namespace patchestry::ast {
                 case_stmt->setSubStmt(goto_stmt);
                 sw_body.push_back(case_stmt);
             }
-
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            return wrap_with_fallback(switch_stmt);
+            return { switch_stmt, false };
         }
 
         // Priority 3: no successor info at all — emit IndirectGotoStmt as the only

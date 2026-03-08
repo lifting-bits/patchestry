@@ -4,12 +4,30 @@
 
 add_library(patchestry_ast STATIC
   ASTConsumer.cpp
+  ASTPassManager.cpp
   FunctionBuilder.cpp
   IntrinsicHandlers.cpp
+  ASTNormalizationPipeline.cpp
+  NormalizationPipelineHelpers.cpp
+  NormalizationCfgPasses.cpp
+  NormalizationConditionalPasses.cpp
+  NormalizationLoopPasses.cpp
+  NormalizationSwitchPasses.cpp
+  NormalizationCleanupPasses.cpp
   OperationBuilder.cpp
   OperationStmt.cpp
   TypeBuilder.cpp
   Utils.cpp
+  SNode.cpp
+  SNodeDebug.cpp
+  SNodePassManager.cpp
+  CfgBuilder.cpp
+  SNodeBuilder.cpp
+  DomTree.cpp
+  LoopInfo.cpp
+  StructuralPasses.cpp
+  ClangEmitter.cpp
+  CollapseStructure.cpp
 )
 
 add_library(patchestry::ast ALIAS patchestry_ast)

@@ -43,6 +43,10 @@
 #include <rellic/AST/StructFieldRenamer.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/AST/ASTNormalizationPipeline.hpp>
+#include <patchestry/AST/CfgBuilder.hpp>
+#include <patchestry/AST/ClangEmitter.hpp>
+#include <patchestry/AST/CollapseStructure.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
@@ -68,11 +72,45 @@ namespace patchestry::ast {
             );
         }
 
-        if (options.print_tu) {
+        // if (options.use_ghidra_structuring) {
+        // Alternative path: rebuild function bodies using Ghidra-style
+        // CollapseStructure directly on the CFG, bypassing goto elimination.
+        auto cfgs = buildCfgs(ctx);
+
+        // Build a name→ghidra::Function lookup for switch metadata.
+        std::unordered_map< std::string, const ghidra::Function * > name_to_ghidra;
+        for (const auto &[key, func] : get_program().serialized_functions) {
+            name_to_ghidra[func.name] = &func;
+        }
+
+            for (auto &cfg : cfgs) {
+                if (!cfg.function || !cfg.function->hasBody()) continue;
+
+                // Populate switch metadata from Ghidra's P-Code JSON before
+                // CollapseStructure processes the CFG.
+                std::string fn_name = cfg.function->getNameAsString();
+                auto it = name_to_ghidra.find(fn_name);
+                if (it != name_to_ghidra.end()) {
+                    populateSwitchMetadata(cfg, *it->second);
+                }
+
+                auto *fn = const_cast<clang::FunctionDecl *>(cfg.function);
+                SNodeFactory factory;
+                SNode *tree = collapseStructure(cfg, factory, ctx);
+                emitClangAST(tree, fn, ctx);
+                cleanupPrettyPrint(fn, ctx);
+            }
+            /* } else if (options.enable_goto_elimination && !runASTNormalizationPipeline(ctx,
+             options)) { LOG(ERROR) << "Goto elimination pipeline failed.\n"; if
+             (options.goto_elimination_strict) { return;
+                 }
+             }*/
+
+            if (options.print_tu) {
 #ifdef ENABLE_DEBUG
             ctx.getTranslationUnitDecl()->dumpColor();
 #endif
-        }
+            }
     }
 
     void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
@@ -88,6 +126,7 @@ namespace patchestry::ast {
                 ci, function, *type_builder, function_declarations, global_variable_declarations
             );
 
+            builder->disable_switch_case_inline = options.disable_switch_case_inline;
             builder->initialize_op_builder();
             func_builders.emplace_back(std::move(builder));
         }
