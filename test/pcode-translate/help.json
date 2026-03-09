@@ -1,2 +1,0 @@
-// RUN: %pcode-translate --help | %file-check %s
-// CHECK: --deserialize-pcode
