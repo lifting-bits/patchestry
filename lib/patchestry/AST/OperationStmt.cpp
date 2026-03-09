@@ -1050,6 +1050,10 @@ namespace patchestry::ast {
                 for (auto *decl : callee->redecls()) {
                     decl->setType(new_proto_type);
                 }
+                // Refresh proto_type/num_params so downstream code sees the
+                // updated return type instead of the stale void.
+                proto_type = callee->getType()->getAs< clang::FunctionProtoType >();
+                num_params = proto_type->getNumParams();
             }
         }
 
@@ -1062,25 +1066,88 @@ namespace patchestry::ast {
             return proto->getParamType(index);
         };
 
-        // When the call-site has more args than the declaration, promote the
-        // declaration to variadic so the extra call-site args are accepted.
-        // We keep existing fixed params unchanged (preserving ParmVarDecl consistency)
-        // and let the surplus args pass through as variadic arguments.
+        // When the call-site arg count differs from the declaration, treat the
+        // call-site as ground truth.  Rebuild the declaration type from
+        // call-site input types.  If ParmVarDecls can't be reset (already set
+        // on the FunctionDecl), keep existing fixed params and promote to
+        // variadic so extra args are accepted.  When two call-sites disagree
+        // on arg count the function is also promoted to variadic.
         if (op.inputs.size() > num_params && !proto_type->isVariadic()) {
-            LOG(WARNING)
-                << "Call to '" << callee->getNameAsString()
-                << "' has " << op.inputs.size() << " args but declaration has "
-                << num_params << " params; promoting to variadic. key: " << op.key << "\n";
-            auto epi      = proto_type->getExtProtoInfo();
-            epi.Variadic  = true;
-            auto new_type = ctx.getFunctionType(
-                proto_type->getReturnType(), proto_type->getParamTypes(), epi
-            );
-            callee->setType(new_type);
-            for (auto *decl : callee->redecls()) {
-                decl->setType(new_type);
+            // Resolve QualTypes for every call-site input.
+            llvm::SmallVector< clang::QualType, 8 > new_param_types;
+            bool types_ok = true;
+            for (const auto &input : op.inputs) {
+                auto it = type_builder().get_serialized_types().find(input.type_key);
+                if (it == type_builder().get_serialized_types().end()) {
+                    LOG(ERROR)
+                        << "Cannot rebuild call declaration for '"
+                        << callee->getNameAsString()
+                        << "': input type '" << input.type_key
+                        << "' not found in serialized types. key: " << op.key << "\n";
+                    types_ok = false;
+                    break;
+                }
+                new_param_types.push_back(it->second);
             }
-            proto_type = callee->getType()->getAs< clang::FunctionProtoType >();
+
+            if (types_ok) {
+                auto epi = proto_type->getExtProtoInfo();
+
+                if (callee->param_empty()) {
+                    // Declaration had no ParmVarDecls (e.g. extern with empty
+                    // parameter_types).  We can set the exact param list.
+                    auto new_type = ctx.getFunctionType(
+                        proto_type->getReturnType(), new_param_types, epi
+                    );
+                    callee->setType(new_type);
+                    for (auto *decl : callee->redecls()) {
+                        decl->setType(new_type);
+                    }
+
+                    // Create matching ParmVarDecls.
+                    llvm::SmallVector< clang::ParmVarDecl *, 8 > new_params;
+                    for (unsigned i = 0; i < new_param_types.size(); ++i) {
+                        std::string pname = "param_" + std::to_string(i);
+                        auto *pd = clang::ParmVarDecl::Create(
+                            ctx, callee, clang::SourceLocation(),
+                            clang::SourceLocation(), &ctx.Idents.get(pname),
+                            new_param_types[i], nullptr, clang::SC_None, nullptr
+                        );
+                        new_params.push_back(pd);
+                    }
+                    callee->setParams(new_params);
+
+                    LOG(INFO)
+                        << "Rebuilt declaration for '" << callee->getNameAsString()
+                        << "' from call-site with " << new_param_types.size()
+                        << " params (was " << num_params << "). key: " << op.key << "\n";
+                } else {
+                    // Declaration already has ParmVarDecls — we can't call
+                    // setParams again.  Keep existing fixed params and promote
+                    // to variadic so extra call-site args are accepted.
+                    epi.Variadic = true;
+                    auto new_type = ctx.getFunctionType(
+                        proto_type->getReturnType(), proto_type->getParamTypes(), epi
+                    );
+                    callee->setType(new_type);
+                    for (auto *decl : callee->redecls()) {
+                        decl->setType(new_type);
+                    }
+                    LOG(WARNING)
+                        << "Call to '" << callee->getNameAsString()
+                        << "' has " << op.inputs.size()
+                        << " args but declaration has " << num_params
+                        << " params; promoting to variadic. key: " << op.key << "\n";
+                }
+
+                proto_type = callee->getType()->getAs< clang::FunctionProtoType >();
+                num_params = proto_type->getNumParams();
+            } else {
+                LOG(WARNING)
+                    << "Skipping declaration rebuild for '"
+                    << callee->getNameAsString()
+                    << "'; extra call-site args will be dropped. key: " << op.key << "\n";
+            }
         }
 
         unsigned index = 0;
