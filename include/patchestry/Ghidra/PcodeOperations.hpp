@@ -51,7 +51,7 @@ namespace patchestry::ghidra {
             VARNODE_INTRINSIC,
         };
 
-        static Varnode::Kind convertToKind(const std::string &kdd) {
+        static Varnode::Kind ConvertToKind(const std::string &kdd) {
             static const std::unordered_map< std::string, Varnode::Kind > kind_map = {
                 {   "unknown",   VARNODE_UNKNOWN },
                 {    "global",    VARNODE_GLOBAL },

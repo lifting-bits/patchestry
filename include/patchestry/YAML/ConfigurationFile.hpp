@@ -25,32 +25,32 @@
 class ConfigurationFile
 {
   public:
-    static ConfigurationFile &getInstance() {
+    static ConfigurationFile &GetInstance() {
         static ConfigurationFile instance;
         return instance;
     }
 
-    void set_file_path(const std::string &file) {
+    void SetFilePath(const std::string &file) {
         auto directory = llvm::sys::path::parent_path(file);
         if (!directory.empty()) {
-            file_path = directory.str();
+            file_path_ = directory.str();
         }
     }
 
-    std::string resolve_path(const std::string &file) {
+    std::string ResolvePath(const std::string &file) {
         if (llvm::sys::path::is_absolute(file)) {
             return file;
         }
 
         llvm::SmallVector< char > directory;
-        directory.assign(file_path.begin(), file_path.end());
+        directory.assign(file_path_.begin(), file_path_.end());
         llvm::sys::path::append(directory, file);
         llvm::sys::path::remove_dots(directory);
         return std::string(directory.data(), directory.size());
     }
 
   private:
-    std::string file_path;
+    std::string file_path_;
 };
 
 namespace patchestry::passes {
@@ -86,7 +86,7 @@ namespace patchestry::yaml {
     namespace utils {
 
         [[maybe_unused]] static std::optional< Library >
-        loadLibrary(const std::string &file_path) {
+        LoadLibrary(const std::string &file_path) {
             YAMLParser parser;
             auto result = parser.parse_from_file< Library >(file_path);
             if (!result) {
@@ -97,7 +97,7 @@ namespace patchestry::yaml {
         }
 
         [[maybe_unused]] static std::optional< Configuration >
-        loadConfiguration(const std::string &file_path) {
+        LoadConfiguration(const std::string &file_path) {
             YAMLParser parser;
             auto result = parser.parse_from_file< Configuration >(file_path);
 
@@ -110,7 +110,7 @@ namespace patchestry::yaml {
         }
 
         [[maybe_unused]] static bool
-        saveConfiguration(const Configuration &config, const std::string &file_path) {
+        SaveConfiguration(const Configuration &config, const std::string &file_path) {
             YAMLParser parser;
             std::string yaml_content = parser.serialize_to_string(config);
 
@@ -140,7 +140,7 @@ namespace patchestry::yaml {
             return true;
         }
 
-        [[maybe_unused]] static bool validateConfiguration(const Configuration &config) {
+        [[maybe_unused]] static bool ValidateConfiguration(const Configuration &config) {
             if (config.libraries.patches.empty()) {
                 LOG(WARNING) << "Patchestry configuration contains no patches\n";
             }
@@ -216,7 +216,7 @@ namespace llvm::yaml {
 
             for (const auto &file : library_files) {
                 // Try loading as patch library
-                auto library = patchestry::yaml::utils::loadLibrary(file);
+                auto library = patchestry::yaml::utils::LoadLibrary(file);
                 if (!library) {
                     LOG(ERROR) << "Failed to load library: " << file << "\n";
                     continue;

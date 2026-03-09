@@ -19,13 +19,13 @@ namespace patchestry::codegen {
     class Serializer
     {
       public:
-        static bool serializeToFile(mlir::ModuleOp mod, const std::string &filename);
+        static bool SerializeToFile(mlir::ModuleOp mod, const std::string &filename);
 
-        static bool serializeToFile(llvm::Module *mod, const std::string &filename);
+        static bool SerializeToFile(llvm::Module *mod, const std::string &filename);
 
         static mlir::ModuleOp
-        deserializeFromFile(mlir::MLIRContext *mctx, const std::string &filename);
+        DeserializeFromFile(mlir::MLIRContext *mctx, const std::string &filename);
 
-        static std::string convertModuleToString(mlir::ModuleOp mod);
+        static std::string ConvertModuleToString(mlir::ModuleOp mod);
     };
 } // namespace patchestry::codegen

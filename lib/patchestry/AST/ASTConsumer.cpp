@@ -108,8 +108,8 @@ namespace patchestry::ast {
             }
 
             auto var_type       = type_builder->get_serialized_types().at(variable.type);
-            auto location       = sourceLocation(ctx.getSourceManager(), key);
-            auto sanitized_name = sanitize_key_to_ident(variable.name);
+            auto location       = SourceLocation(ctx.getSourceManager(), key);
+            auto sanitized_name = SanitizeKeyToIdent(variable.name);
             auto *var_decl      = clang::VarDecl::Create(
                 ctx, ctx.getTranslationUnitDecl(), location, location,
                 &ctx.Idents.get(sanitized_name), var_type,

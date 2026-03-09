@@ -154,7 +154,7 @@ namespace patchestry::passes {
          * @param to The destination MLIR type
          * @return cir::CastKind The appropriate cast kind
          */
-        cir::CastKind getCastKind(mlir::Type from, mlir::Type to) {
+        cir::CastKind GetCastKind(mlir::Type from, mlir::Type to) {
             auto from_category = classifyType(from);
             auto to_category   = classifyType(to);
 
@@ -268,7 +268,7 @@ namespace patchestry::passes {
      *        applied (currently unused — reserved for future use).
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
-    std::unique_ptr< mlir::Pass > createInstrumentationPass(
+    std::unique_ptr< mlir::Pass > CreateInstrumentationPass(
         const std::string &configuration_file, const InstrumentationOptions &options
     ) {
         return std::make_unique< InstrumentationPass >(configuration_file, options);
@@ -312,7 +312,7 @@ namespace patchestry::passes {
     )
         : configuration_file(std::move(spec_)), options(options_) {
         patchestry::yaml::YAMLParser parser;
-        ConfigurationFile::getInstance().set_file_path(configuration_file);
+        ConfigurationFile::GetInstance().SetFilePath(configuration_file);
         if (!parser.validate_yaml_file< patchestry::passes::Configuration >(configuration_file))
         {
             LOG(ERROR) << "Error: Failed to parse Patchestry configuration file: "
@@ -327,7 +327,7 @@ namespace patchestry::passes {
             return;
         }
 
-        auto config_or_err = patchestry::yaml::utils::loadConfiguration(
+        auto config_or_err = patchestry::yaml::utils::LoadConfiguration(
             llvm::sys::path::filename(configuration_file).str()
         );
         if (!config_or_err) {
@@ -339,7 +339,7 @@ namespace patchestry::passes {
         config = std::move(config_or_err.value());
         for (auto &spec : config->libraries.patches) {
             auto patches_file_path =
-                ConfigurationFile::getInstance().resolve_path(spec.code_file);
+                ConfigurationFile::GetInstance().ResolvePath(spec.code_file);
             spec.patch_module = emitModuleAsString(patches_file_path, config->target.arch);
             if (!spec.patch_module) {
                 LOG(ERROR) << "Failed to load patch file: " << patches_file_path << "\n";
@@ -348,7 +348,7 @@ namespace patchestry::passes {
         }
         for (auto &spec : config->libraries.contracts) {
             auto contracts_file_path =
-                ConfigurationFile::getInstance().resolve_path(spec.code_file);
+                ConfigurationFile::GetInstance().ResolvePath(spec.code_file);
             if (!llvm::sys::fs::exists(contracts_file_path)) {
                 LOG(ERROR) << "Contract file " << contracts_file_path << " does not exist\n";
                 continue;
@@ -650,7 +650,7 @@ namespace patchestry::passes {
             return value;
         }
 
-        auto cast_kind = getCastKind(value.getType(), target_type);
+        auto cast_kind = GetCastKind(value.getType(), target_type);
         // For *_to_bool casts, the result type must be !cir.bool
         if (cast_kind == cir::CastKind::int_to_bool || cast_kind == cir::CastKind::float_to_bool
             || cast_kind == cir::CastKind::ptr_to_bool)
@@ -1088,7 +1088,7 @@ namespace patchestry::passes {
             }
 
             auto cast_op = builder.create< cir::CastOp >(
-                call_op->getLoc(), type, getCastKind(value.getType(), type), value
+                call_op->getLoc(), type, GetCastKind(value.getType(), type), value
             );
             return cast_op->getResults().front();
         };

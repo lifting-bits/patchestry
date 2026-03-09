@@ -51,7 +51,7 @@ namespace patchestry::passes { // NOLINT
      * @param configuration_file Path to the YAML Patchestry configuration file containing
      * instrumentation rules for applying patches, contracts, or both
      */
-    void registerInstrumentationPasses(std::string configuration_file);
+    void RegisterInstrumentationPasses(std::string configuration_file);
 
     /**
      * @brief Creates a new instance of the InstrumentationPass.
@@ -64,7 +64,7 @@ namespace patchestry::passes { // NOLINT
      * applied
      * @return std::unique_ptr<mlir::Pass> A unique pointer to the created InstrumentationPass
      */
-    std::unique_ptr< mlir::Pass > createInstrumentationPass(
+    std::unique_ptr< mlir::Pass > CreateInstrumentationPass(
         const std::string &configuration_file, const InstrumentationOptions &options
     );
 

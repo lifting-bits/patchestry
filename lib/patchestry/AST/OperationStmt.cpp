@@ -204,7 +204,7 @@ namespace patchestry::ast {
         //   struct -> unsigned int
         //   struct -> void*
         // Identify such cases early and make expression doing reinterpret cast.
-        if (shouldReinterpretCast(from_type, to_type)) {
+        if (ShouldReinterpretCast(from_type, to_type)) {
             auto *cast_expr = make_reinterpret_cast(ctx, expr, to_type, loc);
             assert(cast_expr != nullptr && "Failed to create cast expression");
             return cast_expr;
@@ -212,7 +212,7 @@ namespace patchestry::ast {
 
         if (expr->isPRValue()) {
             auto *cast_expr =
-                make_implicit_cast(ctx, expr, to_type, getCastKind(ctx, from_type, to_type));
+                make_implicit_cast(ctx, expr, to_type, GetCastKind(ctx, from_type, to_type));
             if (cast_expr != nullptr) {
                 return cast_expr;
             }
@@ -462,7 +462,7 @@ namespace patchestry::ast {
 
         return { create_assign_operation(
                      ctx, input_expr, output_expr,
-                     sourceLocation(ctx.getSourceManager(), op.key)
+                     SourceLocation(ctx.getSourceManager(), op.key)
                  ),
                  false };
     }
@@ -484,7 +484,7 @@ namespace patchestry::ast {
             return { nullptr, false };
         }
 
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         if (op.type) {
             auto op_type_opt = lookup_op_type(op);
@@ -512,7 +512,7 @@ namespace patchestry::ast {
         }
 
         auto derefed_expr = sema().CreateBuiltinUnaryOp(
-            sourceLocation(ctx.getSourceManager(), op.key), clang::UO_Deref,
+            SourceLocation(ctx.getSourceManager(), op.key), clang::UO_Deref,
             clang::dyn_cast< clang::Expr >(input_expr)
         );
 
@@ -527,7 +527,7 @@ namespace patchestry::ast {
 
         return { create_assign_operation(
                      ctx, result_expr, output_expr,
-                     sourceLocation(ctx.getSourceManager(), op.key)
+                     SourceLocation(ctx.getSourceManager(), op.key)
                  ),
                  false };
     }
@@ -541,7 +541,7 @@ namespace patchestry::ast {
         }
 
         if (op.inputs.size() == 2) {
-            auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+            auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
             auto *lhs_expr =
                 clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
@@ -569,7 +569,7 @@ namespace patchestry::ast {
         //               input1 = pointer, input2 = value to store.
         // Semantic: *input1 = input2;  (same as the 2-input case, just different slot indices)
         if (op.inputs.size() >= 3) {
-            auto op_loc    = sourceLocation(ctx.getSourceManager(), op.key);
+            auto op_loc    = SourceLocation(ctx.getSourceManager(), op.key);
             auto *lhs_expr = clang::dyn_cast< clang::Expr >(
                 create_varnode(ctx, function, op.inputs[1])
             );
@@ -625,8 +625,8 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto op_loc     = sourceLocation(ctx.getSourceManager(), op.key);
-        auto target_loc = sourceLocation(ctx.getSourceManager(), *op.target_block);
+        auto op_loc     = SourceLocation(ctx.getSourceManager(), op.key);
+        auto target_loc = SourceLocation(ctx.getSourceManager(), *op.target_block);
         auto *expr      = new (ctx) clang::GotoStmt(
             function_builder().labels_declaration.at(*op.target_block), op_loc, target_loc
         );
@@ -649,7 +649,7 @@ namespace patchestry::ast {
 
         // TODO(kumarak): Could there be case where conditional statement is missing?? In
         // such case treat it as branch instruction.
-        auto loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto loc = SourceLocation(ctx.getSourceManager(), op.key);
         auto *condition_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.condition));
 
@@ -659,7 +659,7 @@ namespace patchestry::ast {
         if (op.taken_block && !op.taken_block->empty()
             && function_builder().labels_declaration.contains(*op.taken_block))
         {
-            auto ll    = sourceLocation(ctx.getSourceManager(), *op.taken_block);
+            auto ll    = SourceLocation(ctx.getSourceManager(), *op.taken_block);
             taken_stmt = new (ctx) clang::GotoStmt(
                 function_builder().labels_declaration.at(*op.taken_block), loc, ll
             );
@@ -670,7 +670,7 @@ namespace patchestry::ast {
         if (op.not_taken_block && !op.not_taken_block->empty()
             && function_builder().labels_declaration.contains(*op.not_taken_block))
         {
-            auto ll        = sourceLocation(ctx.getSourceManager(), *op.not_taken_block);
+            auto ll        = SourceLocation(ctx.getSourceManager(), *op.not_taken_block);
             not_taken_stmt = new (ctx) clang::GotoStmt(
                 function_builder().labels_declaration.at(*op.not_taken_block), loc, ll
             );
@@ -704,7 +704,7 @@ namespace patchestry::ast {
             LOG(ERROR) << "BRANCHIND: failed to create input expression. key: " << op.key << "\n";
             return {};
         }
-        auto loc       = sourceLocation(ctx.getSourceManager(), op.key);
+        auto loc       = SourceLocation(ctx.getSourceManager(), op.key);
         auto expr_type = input_expr->getType();
         if (!expr_type->isPointerType()) {
             auto *cast_expr = make_cast(ctx, input_expr, ctx.getPointerType(expr_type), loc);
@@ -723,7 +723,7 @@ namespace patchestry::ast {
             if (op.fallback_block.has_value()
                 && function_builder().labels_declaration.contains(*op.fallback_block))
             {
-                auto target_loc = sourceLocation(ctx.getSourceManager(), *op.fallback_block);
+                auto target_loc = SourceLocation(ctx.getSourceManager(), *op.fallback_block);
                 return new (ctx) clang::GotoStmt(
                     function_builder().labels_declaration.at(*op.fallback_block), loc,
                     target_loc
@@ -788,7 +788,7 @@ namespace patchestry::ast {
                 );
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
-                auto target_loc = sourceLocation(ctx.getSourceManager(), sc.target_block);
+                auto target_loc = SourceLocation(ctx.getSourceManager(), sc.target_block);
 
                 // Try to inline the target block body for has_exit cases.
                 // Requirements: block exists, has ordered ops, terminal op is BRANCH.
@@ -907,7 +907,7 @@ namespace patchestry::ast {
                 );
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
-                auto target_loc = sourceLocation(ctx.getSourceManager(), block_key);
+                auto target_loc = SourceLocation(ctx.getSourceManager(), block_key);
                 auto *goto_stmt = new (ctx) clang::GotoStmt(
                     function_builder().labels_declaration.at(block_key), loc, target_loc
                 );
@@ -953,7 +953,7 @@ namespace patchestry::ast {
             return nullptr;
         }
 
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         // get the callee and its prototy for creating function argument list
         const auto &callee = function_builder().function_list.get().at(*op.target->function);
@@ -1009,7 +1009,7 @@ namespace patchestry::ast {
                 assert(vnode_expr != nullptr && "Failed to convert to rvalue");
             }
             auto *arg = make_implicit_cast(
-                ctx, vnode_expr, arg_type, getCastKind(ctx, vnode_expr->getType(), arg_type)
+                ctx, vnode_expr, arg_type, GetCastKind(ctx, vnode_expr->getType(), arg_type)
             );
             assert(arg != nullptr && "Function argument is null");
             arguments.push_back(arg);
@@ -1048,7 +1048,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto op_loc            = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc            = SourceLocation(ctx.getSourceManager(), op.key);
         clang::Expr *call_expr = nullptr;
 
         if (op.target->function) {
@@ -1114,7 +1114,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto op_loc            = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc            = SourceLocation(ctx.getSourceManager(), op.key);
         clang::Expr *fn_ptr_expr = nullptr;
 
         // 2. Get function pointer expression from target
@@ -1244,7 +1244,7 @@ namespace patchestry::ast {
     ) {
         // OP_USERDEFINED covers processor-specific semantics; handled identically to
         // OP_CALLOTHER: emit an opaque placeholder call so the operation is not silently lost.
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         clang::QualType ret_type = ctx.VoidTy;
         if (op.output.has_value() && op.type.has_value()) {
@@ -1255,7 +1255,7 @@ namespace patchestry::ast {
             }
         }
 
-        std::string fn_name = "__patchestry_userdefined_" + sanitize_key_to_ident(op.key);
+        std::string fn_name = "__patchestry_userdefined_" + SanitizeKeyToIdent(op.key);
 
         llvm::SmallVector< clang::QualType, 4 > param_types;
         for (const auto &input : op.inputs) {
@@ -1308,7 +1308,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_return(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        auto location = sourceLocation(ctx.getSourceManager(), op.key);
+        auto location = SourceLocation(ctx.getSourceManager(), op.key);
         if (!op.inputs.empty()) {
             // For multi-input RETURN, input[0] is the address-space constant; use input[1].
             // For single-input RETURN, use input[0] directly.
@@ -1373,7 +1373,7 @@ namespace patchestry::ast {
             LOG(ERROR) << "Failed to create PIECE input expression. key: " << op.key;
             return {};
         }
-        auto location = sourceLocation(ctx.getSourceManager(), op.key);
+        auto location = SourceLocation(ctx.getSourceManager(), op.key);
 
         unsigned low_width = op.inputs[1].size * 8;
         auto merge_to_next = !op.output.has_value();
@@ -1427,7 +1427,7 @@ namespace patchestry::ast {
         return { create_assign_operation(
                      ctx, or_result.getAs< clang::Expr >(),
                      clang::dyn_cast< clang::Expr >(output_expr),
-                     sourceLocation(ctx.getSourceManager(), op.key)
+                     SourceLocation(ctx.getSourceManager(), op.key)
                  ),
                  false };
     }
@@ -1450,7 +1450,7 @@ namespace patchestry::ast {
 
         auto merge_to_next  = !op.output.has_value();
         const auto &op_type = type_it->second;
-        auto op_location    = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_location    = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *shift_value =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
@@ -1484,7 +1484,7 @@ namespace patchestry::ast {
         auto *mask = clang::IntegerLiteral::Create(ctx, mask_value, ctx.IntTy, op_location);
 
         auto result = sema().CreateBuiltinBinOp(
-            sourceLocation(ctx.getSourceManager(), op.key), clang::BO_And, shifted_expr,
+            SourceLocation(ctx.getSourceManager(), op.key), clang::BO_And, shifted_expr,
             clang::dyn_cast< clang::Expr >(mask)
         );
 
@@ -1523,7 +1523,7 @@ namespace patchestry::ast {
         }
 
         auto merge_to_next = !op.output.has_value();
-        auto op_loc        = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc        = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
@@ -1568,7 +1568,7 @@ namespace patchestry::ast {
         }
 
         auto merge_to_next = !op.output.has_value();
-        auto op_loc        = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc        = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
@@ -1586,9 +1586,9 @@ namespace patchestry::ast {
         if (implicit_result.isInvalid()) {
             // If fail to perform implcit cast perform explicit cast
             auto result = sema().BuildCStyleCastExpr(
-                sourceLocation(ctx.getSourceManager(), op.key),
+                SourceLocation(ctx.getSourceManager(), op.key),
                 ctx.getTrivialTypeSourceInfo(target_type),
-                sourceLocation(ctx.getSourceManager(), op.key),
+                SourceLocation(ctx.getSourceManager(), op.key),
                 clang::dyn_cast< clang::Expr >(input_expr)
             );
 
@@ -1616,7 +1616,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input0 =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
         auto *input1 =
@@ -1651,7 +1651,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto op_loc  = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc  = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input0 =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
         auto *input1 =
@@ -1724,7 +1724,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto op_loc  = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc  = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input0 =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
         auto *input1 =
@@ -1797,7 +1797,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
@@ -1828,7 +1828,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *lhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
         auto *rhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
@@ -1984,7 +1984,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op,
         clang::Builtin::ID id
     ) {
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
@@ -2016,7 +2016,7 @@ namespace patchestry::ast {
         }
 
         const auto &op_type = type_builder().get_serialized_types().at(*op.type);
-        auto op_loc         = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
@@ -2058,7 +2058,7 @@ namespace patchestry::ast {
             ctx, nan_value, true, ctx.FloatTy, clang::SourceLocation()
         );
 
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
@@ -2092,7 +2092,7 @@ namespace patchestry::ast {
         }
 
         const auto &op_type = type_builder().get_serialized_types().at(*op.type);
-        auto op_loc         = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
@@ -2131,7 +2131,7 @@ namespace patchestry::ast {
         auto merge_to_next = !op.output.has_value();
 
         const auto &op_type = type_builder().get_serialized_types().at(*op.type);
-        auto op_loc         = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
@@ -2225,7 +2225,7 @@ namespace patchestry::ast {
         auto merge_to_next = !op.output.has_value();
 
         const auto &op_type = type_builder().get_serialized_types().at(*op.type);
-        auto op_loc         = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0], op_loc));
@@ -2271,7 +2271,7 @@ namespace patchestry::ast {
         }
 
         auto merge_to_next = !op.output.has_value();
-        auto op_loc        = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc        = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *base =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
@@ -2330,7 +2330,7 @@ namespace patchestry::ast {
         }
 
         const auto &op_type = type_builder().get_serialized_types().at(*op.type);
-        auto op_loc         = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
@@ -2342,7 +2342,7 @@ namespace patchestry::ast {
                                   clang::QualType to_type,
                                   clang::SourceLocation loc) -> clang::Expr * {
             auto input_type = expr->getType();
-            if (shouldReinterpretCast(input_type, to_type)) {
+            if (ShouldReinterpretCast(input_type, to_type)) {
                 return make_reinterpret_cast(ctx, expr, to_type, loc);
             }
 
@@ -2376,7 +2376,7 @@ namespace patchestry::ast {
         }
 
         const auto &var_type = type_builder().get_serialized_types()[*op.type];
-        auto op_loc          = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc          = SourceLocation(ctx.getSourceManager(), op.key);
 
         std::string var_name = *op.name;
         auto &name_counts    = function_builder().declared_name_counts;
@@ -2452,7 +2452,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op,
         const std::string &name
     ) {
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         // Determine return type
         clang::QualType ret_type = ctx.VoidTy;
@@ -2504,7 +2504,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op,
         const std::string &original_name, const std::string &original_label
     ) {
-        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         // Build descriptive function name: __patchestry_missing_<original_name>
         std::string func_name = "__patchestry_missing_" + original_name;

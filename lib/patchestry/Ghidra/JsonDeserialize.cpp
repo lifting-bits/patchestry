@@ -130,7 +130,7 @@ namespace patchestry::ghidra {
             }
 
             const auto type_key = type.getFirst().str();
-            vnode_type->set_key(type_key);
+            vnode_type->SetKey(type_key);
             serialized_types.emplace(type_key, std::move(vnode_type));
             types_value_map.emplace(type_key, type_value);
         }
@@ -224,7 +224,7 @@ namespace patchestry::ghidra {
         auto size     = static_cast< uint32_t >(type_obj.getInteger("size").value_or(0));
         auto kind_str = get_string(type_obj, "kind");
         LOG(INFO) << "Attempting to convert kind string: [" << kind_str << "]" << "\n";
-        auto kind = VarnodeType::convertToKind(kind_str);
+        auto kind = VarnodeType::ConvertToKind(kind_str);
         switch (kind) {
             case VarnodeType::Kind::VT_INVALID: {
                 LOG(ERROR) << "Invalid varnode type: " << name << "\n";
@@ -290,10 +290,10 @@ namespace patchestry::ghidra {
             return;
         }
 
-        varnode.set_element_type(iter->second);
+        varnode.SetElementType(iter->second);
         auto num_elem =
             static_cast< uint32_t >(array_obj->getInteger("num_elements").value_or(0));
-        varnode.set_element_count(num_elem);
+        varnode.SetElementCount(num_elem);
     }
 
     // Deserialize pointer types
@@ -315,7 +315,7 @@ namespace patchestry::ghidra {
             return;
         }
 
-        varnode.set_pointee_type(iter->second);
+        varnode.SetPointeeType(iter->second);
     }
 
     // Deserialize typedef types
@@ -335,7 +335,7 @@ namespace patchestry::ghidra {
             return;
         }
 
-        varnode.set_base_type(iter->second);
+        varnode.SetBaseType(iter->second);
     }
 
     // Deserialize composite types
@@ -394,7 +394,7 @@ namespace patchestry::ghidra {
                              << "'\n";
             }
 
-            varnode.add_components(
+            varnode.AddComponents(
                 field_name, *iter->second, static_cast< uint32_t >(*maybe_offset)
             );
 
@@ -439,7 +439,7 @@ namespace patchestry::ghidra {
                 continue;
             }
 
-            varnode.add_constant(*maybe_name, *maybe_value);
+            varnode.AddConstant(*maybe_name, *maybe_value);
             ++entry_index;
         }
     }
@@ -484,7 +484,7 @@ namespace patchestry::ghidra {
     std::optional< Varnode > JsonParser::create_varnode(const JsonObject &var_obj) {
         auto type_key = get_string(var_obj, "type");
         auto size     = var_obj.getInteger("size").value_or(0);
-        auto kind     = Varnode::convertToKind(var_obj.getString("kind").value_or("").str());
+        auto kind     = Varnode::ConvertToKind(var_obj.getString("kind").value_or("").str());
         if (kind == Varnode::VARNODE_UNKNOWN) {
             LOG(ERROR) << "Operation with unknown varnode.\n";
             return std::nullopt;
@@ -544,7 +544,7 @@ namespace patchestry::ghidra {
 
         OperationTarget target;
         target.kind =
-            Varnode::convertToKind(maybe_target->getString("kind").value_or("").str());
+            Varnode::ConvertToKind(maybe_target->getString("kind").value_or("").str());
 
         auto function = maybe_target->getString("function");
         if (function.has_value() && !function->empty()) {

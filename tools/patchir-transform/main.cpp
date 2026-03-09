@@ -81,7 +81,7 @@ namespace patchestry::instrumentation {
         if (enable_instrumentation.getValue()) {
             patchestry::passes::InstrumentationOptions inline_options = { enable_inlining.getValue() };
             mlir::PassManager pm(&context);
-            pm.addPass(patchestry::passes::createInstrumentationPass(
+            pm.addPass(patchestry::passes::CreateInstrumentationPass(
                 spec_filename.getValue(), inline_options
             ));
             if (mlir::failed(pm.run(*module))) {
@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
     llvm::cl::ParseCommandLineOptions(argc, argv, "Patch IR Instrumentation Driver");
 
     if (enable_instrumentation.getValue() && spec_filename.getValue().empty()) {
-        llvm::errs() << "error: --spec is required when --enable-instrumentation is set\n";
+        LOG(ERROR) << "--spec is required when --enable-instrumentation is set\n";
         return EXIT_FAILURE;
     }
 

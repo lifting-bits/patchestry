@@ -45,7 +45,7 @@ namespace patchestry::ast {
                 return {};
             }
 
-            auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+            auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
             // Get address expression
             auto *addr = clang::dyn_cast< clang::Expr >(b.create_varnode(ctx, fn, op.inputs[0]));
@@ -93,7 +93,7 @@ namespace patchestry::ast {
                 return {};
             }
 
-            auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+            auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
             // Get address and value expressions
             auto *addr = clang::dyn_cast< clang::Expr >(b.create_varnode(ctx, fn, op.inputs[0]));

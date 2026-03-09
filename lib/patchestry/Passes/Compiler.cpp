@@ -25,6 +25,7 @@
 
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Util/Diagnostic.hpp>
+#include <patchestry/Util/Log.hpp>
 
 namespace patchestry::passes {
 
@@ -264,7 +265,7 @@ namespace patchestry::passes {
             );
             ci->setDiagnostics(diagnostics);
             if (!ci->hasDiagnostics()) {
-                llvm::errs() << "Failed to initialize diagnostics.\n";
+                LOG(ERROR) << "Failed to initialize diagnostics.\n";
                 return nullptr;
             }
 
@@ -279,7 +280,7 @@ namespace patchestry::passes {
             ci->createSourceManager(ci->getFileManager());
             auto buffer_or_error = llvm::MemoryBuffer::getFileOrSTDIN(filename);
             if (!buffer_or_error) {
-                llvm::errs() << "Failed to open file: " << filename << "\n";
+                LOG(ERROR) << "Failed to open file: " << filename << "\n";
                 return nullptr;
             }
             auto buffer = std::move(*buffer_or_error);
@@ -290,8 +291,8 @@ namespace patchestry::passes {
                 );
 
             if (!file_entry_ref_or_err) {
-                llvm::errs() << "Failed to create file entry ref: "
-                             << file_entry_ref_or_err.getError().message() << "\n";
+                LOG(ERROR) << "Failed to create file entry ref: "
+                           << file_entry_ref_or_err.getError().message() << "\n";
                 return nullptr;
             }
 

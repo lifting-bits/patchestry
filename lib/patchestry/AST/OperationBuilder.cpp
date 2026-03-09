@@ -32,7 +32,7 @@
 namespace patchestry::ast {
 
     extern clang::QualType
-    getTypeFromSize(clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer);
+    GetTypeFromSize(clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer);
 
     std::optional< Operation >
     operationFromKey(const Function &function, const std::string &lookup_key) {
@@ -172,7 +172,7 @@ namespace patchestry::ast {
 
         if (function_builder().function_list.get().contains(*vnode.function)) {
             auto *function_decl = function_builder().function_list.get().at(*vnode.function);
-            auto location       = sourceLocation(ctx.getSourceManager(), *vnode.function);
+            auto location       = SourceLocation(ctx.getSourceManager(), *vnode.function);
             auto *function_ref  = clang::DeclRefExpr::Create(
                 ctx, clang::NestedNameSpecifierLoc(), location, function_decl, false, location,
                 function_decl->getType(), clang::VK_PRValue
@@ -193,7 +193,7 @@ namespace patchestry::ast {
 
         if (function_builder().local_variables.contains(*vnode.operation)) {
             auto *var_decl = function_builder().local_variables.at(*vnode.operation);
-            auto op_loc    = sourceLocation(ctx.getSourceManager(), *vnode.operation);
+            auto op_loc    = SourceLocation(ctx.getSourceManager(), *vnode.operation);
             return clang::DeclRefExpr::Create(
                 ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
                 op_loc, var_decl->getType(), clang::VK_LValue
@@ -215,7 +215,7 @@ namespace patchestry::ast {
         }
 
         clang::QualType vnode_type = get_varnode_type(ctx, vnode);
-        auto location              = sourceLocation(ctx.getSourceManager(), vnode.type_key);
+        auto location              = SourceLocation(ctx.getSourceManager(), vnode.type_key);
 
         if (vnode_type->isIntegralOrUnscopedEnumerationType()) {
             // ctx.getIntWidth() returns the value-bit width for the type, matching
@@ -386,7 +386,7 @@ namespace patchestry::ast {
             return type_builder().get_serialized_types().at(vnode.type_key);
         }
 
-        return getTypeFromSize(ctx, vnode.size, /*is_signed=*/false, /*is_integer=*/true);
+        return GetTypeFromSize(ctx, vnode.size, /*is_signed=*/false, /*is_integer=*/true);
     }
 
 } // namespace patchestry::ast

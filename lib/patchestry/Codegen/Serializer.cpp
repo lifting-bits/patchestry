@@ -19,19 +19,19 @@
 
 namespace patchestry::codegen {
 
-    bool Serializer::serializeToFile(mlir::ModuleOp mod, const std::string &filename) {
+    bool Serializer::SerializeToFile(mlir::ModuleOp mod, const std::string &filename) {
         std::ofstream outfile(filename, std::ios::binary);
         if (!outfile) {
             return false;
         }
 
-        std::string module_string = Serializer::convertModuleToString(mod);
+        std::string module_string = Serializer::ConvertModuleToString(mod);
         outfile << module_string;
         outfile.close();
         return true;
     }
 
-    bool Serializer::serializeToFile(llvm::Module *mod, const std::string &filename) {
+    bool Serializer::SerializeToFile(llvm::Module *mod, const std::string &filename) {
         std::string mod_string;
         llvm::raw_string_ostream os(mod_string);
         mod->print(os, nullptr);
@@ -42,12 +42,12 @@ namespace patchestry::codegen {
     }
 
     mlir::ModuleOp Serializer::
-        deserializeFromFile(mlir::MLIRContext * /*unused*/, const std::string & /*unused*/) {
+        DeserializeFromFile(mlir::MLIRContext * /*unused*/, const std::string & /*unused*/) {
         UNIMPLEMENTED("not implemented"); // NOLINT
         return {};
     }
 
-    std::string Serializer::convertModuleToString(mlir::ModuleOp mod) {
+    std::string Serializer::ConvertModuleToString(mlir::ModuleOp mod) {
         std::string module_string;
         llvm::raw_string_ostream os(module_string);
         auto flags = mlir::OpPrintingFlags();
