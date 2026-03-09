@@ -60,6 +60,14 @@ namespace patchestry::ghidra {
             UndefinedType &varnode, const JsonObject &undef_obj, const TypeMap &serialized_types
         );
 
+        void deserialize_bitfield(
+            BitFieldType &varnode, const JsonObject &obj, const TypeMap &serialized_types
+        );
+
+        void deserialize_string(
+            StringType &varnode, const JsonObject &obj, const TypeMap &serialized_types
+        );
+
         // Handle pcode operations
         std::optional< Varnode > create_varnode(const JsonObject &var_obj);
 
