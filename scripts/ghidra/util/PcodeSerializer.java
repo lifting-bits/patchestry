@@ -1915,8 +1915,31 @@ public class PcodeSerializer {
 			}
 
 			// Fall back to emitting as a constant with address and space info.
+			// Derive a pointer type from the LOAD output or STORE value operand
+			// so downstream reconstruction can treat this as a typed pointer
+			// rather than an untyped integer.
 			writer.beginObject();
-			writer.name("size").value(address.getSize());
+			DataType addrPtrType = null;
+			int opcode = pcodeOp.getOpcode();
+			if (opcode == PcodeOp.LOAD) {
+				HighVariable outHigh = variableOf(pcodeOp.getOutput().getHigh());
+				if (outHigh != null) {
+					DataTypeManager dtm = currentProgram.getDataTypeManager();
+					addrPtrType = dtm.getPointer(outHigh.getDataType());
+				}
+			} else if (opcode == PcodeOp.STORE && pcodeOp.getNumInputs() > 2) {
+				HighVariable valHigh = variableOf(pcodeOp.getInput(2).getHigh());
+				if (valHigh != null) {
+					DataTypeManager dtm = currentProgram.getDataTypeManager();
+					addrPtrType = dtm.getPointer(valHigh.getDataType());
+				}
+			}
+
+			if (addrPtrType != null) {
+				writer.name("type").value(label(addrPtrType));
+			} else {
+				writer.name("size").value(address.getSize());
+			}
 			writer.name("kind").value("constant");
 			writer.name("value").value(offset);
 			if (space != null) {
