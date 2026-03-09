@@ -1062,24 +1062,25 @@ namespace patchestry::ast {
             return proto->getParamType(index);
         };
 
-        // When the call-site has more args than the declaration, rebuild the
-        // declaration's type from the call-site inputs (treat call-site as ground truth).
+        // When the call-site has more args than the declaration, promote the
+        // declaration to variadic so the extra call-site args are accepted.
+        // We keep existing fixed params unchanged (preserving ParmVarDecl consistency)
+        // and let the surplus args pass through as variadic arguments.
         if (op.inputs.size() > num_params && !proto_type->isVariadic()) {
-            llvm::SmallVector< clang::QualType, 8 > new_param_types;
-            for (const auto &input : op.inputs) {
-                auto *vn = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
-                new_param_types.push_back(vn->getType());
-            }
-            auto epi            = proto_type->getExtProtoInfo();
-            auto new_proto_type = ctx.getFunctionType(
-                proto_type->getReturnType(), new_param_types, epi
+            LOG(WARNING)
+                << "Call to '" << callee->getNameAsString()
+                << "' has " << op.inputs.size() << " args but declaration has "
+                << num_params << " params; promoting to variadic. key: " << op.key << "\n";
+            auto epi      = proto_type->getExtProtoInfo();
+            epi.Variadic  = true;
+            auto new_type = ctx.getFunctionType(
+                proto_type->getReturnType(), proto_type->getParamTypes(), epi
             );
-            callee->setType(new_proto_type);
+            callee->setType(new_type);
             for (auto *decl : callee->redecls()) {
-                decl->setType(new_proto_type);
+                decl->setType(new_type);
             }
             proto_type = callee->getType()->getAs< clang::FunctionProtoType >();
-            num_params = proto_type->getNumParams();
         }
 
         unsigned index = 0;
@@ -1090,8 +1091,24 @@ namespace patchestry::ast {
                 // arguments. Drop extra inputs and don't add them to the callee arguments.
                 continue;
             }
-            auto *vnode_expr =
-                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+            auto *vnode_stmt = create_varnode(ctx, function, input);
+            if (!vnode_stmt) {
+                LOG(ERROR)
+                    << "Failed to create varnode for call argument " << index
+                    << " of '" << callee->getNameAsString()
+                    << "'. key: " << op.key << "\n";
+                index++;
+                continue;
+            }
+            auto *vnode_expr = clang::dyn_cast< clang::Expr >(vnode_stmt);
+            if (!vnode_expr) {
+                LOG(ERROR)
+                    << "Varnode for call argument " << index
+                    << " of '" << callee->getNameAsString()
+                    << "' is not an expression. key: " << op.key << "\n";
+                index++;
+                continue;
+            }
             auto arg_type = get_argument_type(callee, vnode_expr, index++);
             if (!vnode_expr->isPRValue()) {
                 vnode_expr = make_implicit_cast(

@@ -1,0 +1,89 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// CIR: cir.func @bitfield_mask_test
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// LL: define dso_local i32 @bitfield_mask_test
+// LL: and i32
+//
+// Test that integer masking patterns (typical of bitfield access) compile
+// correctly. The AND mask extracts low 3 bits from a loaded value.
+//
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "bitfield_mask_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_intptr"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "reg", "type": "type_intptr", "kind": "parameter", "index": 0 },
+            "local_val": { "mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "val", "type": "type_int" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "local_val", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "load_reg": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "inputs": [{ "type": "type_intptr", "kind": "parameter", "operation": "p0" }]
+            },
+            "mask_op": {
+              "mnemonic": "INT_AND",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "temporary", "operation": "load_reg" },
+                { "type": "type_int", "kind": "constant", "value": 7 }
+              ]
+            },
+            "shift_op": {
+              "mnemonic": "INT_RIGHT",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "temporary", "operation": "load_reg" },
+                { "type": "type_int", "kind": "constant", "value": 3 }
+              ]
+            },
+            "or_op": {
+              "mnemonic": "INT_OR",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "temporary", "operation": "mask_op" },
+                { "type": "type_int", "kind": "temporary", "operation": "shift_op" }
+              ]
+            },
+            "store_val": {
+              "mnemonic": "COPY",
+              "type": "type_int",
+              "output": { "kind": "local", "operation": "local_val" },
+              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "or_op" }]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "local", "operation": "local_val" }]
+            }
+          },
+          "ordered_operations": ["load_reg", "mask_op", "shift_op", "or_op", "store_val", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_intptr": { "kind": "pointer", "size": 4, "element_type": "type_int" }
+  }
+}

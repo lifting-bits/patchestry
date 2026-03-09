@@ -1,0 +1,79 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// CIR: cir.func @call_arg_mismatch_test
+// CIR: cir.call @ext_func(
+// RUN: %file-check -vv -check-prefix=CCHECK %s --input-file %t.c
+// CCHECK: ext_func(
+// CCHECK: 42
+//
+// Tests that when a call site has more arguments than the function declaration
+// has parameters, the declaration is promoted to variadic instead of crashing.
+// This is common with Ghidra external functions where parameter_types may be
+// incomplete.
+//
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "call_arg_mismatch_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int", "type_charptr"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "code", "type": "type_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "msg", "type": "type_charptr", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "call_ext": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": { "kind": "function", "function": "EXTERNAL:00000001", "is_variadic": false, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p0" },
+                { "type": "type_charptr", "kind": "parameter", "operation": "p1" },
+                { "type": "type_int", "kind": "constant", "value": 42 }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": ["call_ext", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "ext_func",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int"]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_char": { "name": "char", "size": 1, "kind": "integer" },
+    "type_charptr": { "kind": "pointer", "size": 4, "element_type": "type_char" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

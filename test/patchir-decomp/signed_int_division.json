@@ -1,0 +1,61 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
+//
+// Verify that signed integer types produce signed division (sdiv) in LLVM IR.
+// The is_signed flag on integer types should propagate through to the backend.
+//
+// CIR: cir.func @signed_div_test
+// CIR: cir.binop(div,
+// LL: define dso_local i32 @signed_div_test
+// LL: sdiv i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "signed_div_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_sint",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_sint", "type_sint"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_sint", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_sint", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "div_op": {
+              "mnemonic": "INT_SDIV",
+              "type": "type_sint",
+              "inputs": [
+                { "type": "type_sint", "kind": "parameter", "operation": "p0" },
+                { "type": "type_sint", "kind": "parameter", "operation": "p1" }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_sint", "kind": "temporary", "operation": "div_op" }]
+            }
+          },
+          "ordered_operations": ["div_op", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_sint": { "name": "int", "size": 4, "kind": "integer", "is_signed": true }
+  }
+}
