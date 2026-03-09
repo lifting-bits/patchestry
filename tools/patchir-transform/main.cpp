@@ -81,7 +81,7 @@ namespace patchestry::instrumentation {
         if (enable_instrumentation.getValue()) {
             patchestry::passes::InstrumentationOptions inline_options = { enable_inlining.getValue() };
             mlir::PassManager pm(&context);
-            pm.addPass(patchestry::passes::createInstrumentationPass(
+            pm.addPass(patchestry::passes::CreateInstrumentationPass(
                 spec_filename.getValue(), inline_options
             ));
             if (mlir::failed(pm.run(*module))) {

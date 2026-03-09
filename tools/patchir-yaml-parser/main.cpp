@@ -131,9 +131,9 @@ int main(int argc, char **argv) {
     yaml::YAMLParser parser;
 
     // Parse the input file
-    ConfigurationFile::getInstance().set_file_path(InputFile.getValue());
+    ConfigurationFile::GetInstance().SetFilePath(InputFile.getValue());
     auto file_path = llvm::sys::path::filename(InputFile.getValue()).str();
-    auto config    = yaml::utils::loadConfiguration(file_path);
+    auto config    = yaml::utils::LoadConfiguration(file_path);
     if (!config) {
         LOG(ERROR) << "\nFailed to parse YAML file: " << file_path << "\n";
         return 1;
@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
 
     // Handle validation only
     if (Validate) {
-        bool isValid = yaml::utils::validateConfiguration(*config);
+        bool isValid = yaml::utils::ValidateConfiguration(*config);
         if (isValid) {
             llvm::outs() << "\nYAML file is valid\n";
             return 0;

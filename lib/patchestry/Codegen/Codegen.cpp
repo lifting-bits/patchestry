@@ -150,7 +150,7 @@ namespace patchestry::codegen {
         }
 
         if (options.emit_cir) {
-            Serializer::serializeToFile(*maybe_mod, options.output_file + ".cir");
+            Serializer::SerializeToFile(*maybe_mod, options.output_file + ".cir");
         }
 
         if (options.emit_mlir) {
@@ -164,13 +164,13 @@ namespace patchestry::codegen {
                 LOG(ERROR) << "Failed to run conversion passes\n";
                 return;
             }
-            Serializer::serializeToFile(cloned_mod, options.output_file + ".mlir");
+            Serializer::SerializeToFile(cloned_mod, options.output_file + ".mlir");
         }
 
         if (options.emit_llvm) {
             llvm::LLVMContext lctx;
             auto llvm_mod = cir::direct::lowerDirectlyFromCIRToLLVMIR(*maybe_mod, lctx);
-            Serializer::serializeToFile(llvm_mod.get(), options.output_file + ".ll");
+            Serializer::SerializeToFile(llvm_mod.get(), options.output_file + ".ll");
         }
 
         if (options.emit_asm) {

@@ -22,9 +22,9 @@ namespace patchestry {
     {
       public:
         DiagnosticClient()
-            : last_note_was_previous_definition(false)
-            , last_error_location()
-            , last_error_message() {}
+            : last_note_was_previous_definition_(false)
+            , last_error_location_()
+            , last_error_message_() {}
 
         void HandleDiagnostic(
             clang::DiagnosticsEngine::Level level, const clang::Diagnostic &info
@@ -34,7 +34,7 @@ namespace patchestry {
 
             // Get source location information
             clang::SourceLocation loc = info.getLocation();
-            std::string location_info = getLocationString(info, loc);
+            std::string location_info = GetLocationString(info, loc);
 
             // Check if this is a "previous definition" note
             bool is_previous_definition =
@@ -42,28 +42,28 @@ namespace patchestry {
                  && (message.str().find("previous") != std::string::npos));
 
             // Get additional context for specific diagnostic types
-            std::string additional_info = getAdditionalDiagnosticInfo(info);
+            std::string additional_info = GetAdditionalDiagnosticInfo(info);
 
             // If this is a redefinition error, store context for the next note
             if (level == clang::DiagnosticsEngine::Error
                 && (message.str().find("redefinition") != std::string::npos
                     || message.str().find("conflicting") != std::string::npos))
             {
-                last_error_location = location_info;
-                last_error_message  = message.str();
+                last_error_location_ = location_info;
+                last_error_message_  = message.str();
             }
 
             // Format the complete diagnostic message
-            std::string fullMessage = formatDiagnosticMessage(
+            std::string fullMessage = FormatDiagnosticMessage(
                 level, std::string(message.str()), location_info, additional_info
             );
 
             // For previous definition notes, add connection to the error
-            if (is_previous_definition && !last_error_location.empty()) {
+            if (is_previous_definition && !last_error_location_.empty()) {
                 fullMessage +=
-                    "\n Related to error at " + last_error_location + ": " + last_error_message;
-                last_error_location.clear();
-                last_error_message.clear();
+                    "\n Related to error at " + last_error_location_ + ": " + last_error_message_;
+                last_error_location_.clear();
+                last_error_message_.clear();
             }
 
             switch (level) {
@@ -84,12 +84,12 @@ namespace patchestry {
                     break;
             }
 
-            last_note_was_previous_definition = is_previous_definition;
+            last_note_was_previous_definition_ = is_previous_definition;
         }
 
       private:
         std::string
-        getLocationString(const clang::Diagnostic &info, clang::SourceLocation loc) {
+        GetLocationString(const clang::Diagnostic &info, clang::SourceLocation loc) {
             if (loc.isInvalid()) {
                 return "[unknown location]";
             }
@@ -114,7 +114,7 @@ namespace patchestry {
             return filename + ":" + std::to_string(line) + ":" + std::to_string(column);
         }
 
-        std::string getAdditionalDiagnosticInfo(const clang::Diagnostic &info) {
+        std::string GetAdditionalDiagnosticInfo(const clang::Diagnostic &info) {
             std::string additional;
 
             // Get diagnostic ID to provide context-specific information
@@ -159,7 +159,7 @@ namespace patchestry {
             return additional;
         }
 
-        std::string formatDiagnosticMessage(
+        std::string FormatDiagnosticMessage(
             clang::DiagnosticsEngine::Level level, const std::string &message,
             const std::string &location, const std::string &additional
         ) {
@@ -191,8 +191,8 @@ namespace patchestry {
         }
 
       private:
-        bool last_note_was_previous_definition{ false };
-        std::string last_error_location{ "" };
-        std::string last_error_message{ "" };
+        bool last_note_was_previous_definition_{ false };
+        std::string last_error_location_{ "" };
+        std::string last_error_message_{ "" };
     };
 } // namespace patchestry

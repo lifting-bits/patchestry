@@ -19,7 +19,7 @@
 
 namespace patchestry::ast {
 
-    clang::SourceLocation sourceLocation(clang::SourceManager &sm, std::string key) {
+    clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key) {
         auto &fm = sm.getFileManager();
         auto fe  = fm.getVirtualFileRef(key, static_cast< int >(key.size()), 0);
         std::unique_ptr< llvm::MemoryBuffer > buffer = llvm::MemoryBuffer::getMemBuffer(key);
@@ -28,7 +28,7 @@ namespace patchestry::ast {
         return sm.getLocForStartOfFile(fid);
     }
 
-    clang::QualType getTypeFromSize(
+    clang::QualType GetTypeFromSize(
         clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer
     ) {
         if (is_integer) {
@@ -48,16 +48,16 @@ namespace patchestry::ast {
             case 80:
                 return ctx.LongDoubleTy;
             default:
-                llvm_unreachable("Unsupported float bit size in getTypeFromSize");
+                llvm_unreachable("Unsupported float bit size in GetTypeFromSize");
         }
     }
 
-    std::string labelNameFromKey(std::string key) {
+    std::string LabelNameFromKey(std::string key) {
         std::replace(key.begin(), key.end(), ':', '_');
         return key;
     }
 
-    std::string sanitize_key_to_ident(std::string_view key) {
+    std::string SanitizeKeyToIdent(std::string_view key) {
         std::string result;
         result.reserve(key.size());
         for (char c : key) {
@@ -66,7 +66,7 @@ namespace patchestry::ast {
         return result;
     }
 
-    clang::CastKind getCastKind(
+    clang::CastKind GetCastKind(
         clang::ASTContext &ctx, const clang::QualType &from_type, const clang::QualType &to_type
     ) {
         assert(!to_type.isNull() && "to_type is null");
@@ -179,7 +179,7 @@ namespace patchestry::ast {
     }
 
     bool
-    shouldReinterpretCast(const clang::QualType &from_type, const clang::QualType &to_type) {
+    ShouldReinterpretCast(const clang::QualType &from_type, const clang::QualType &to_type) {
         if (from_type->isRecordType()) {
             return to_type->isArithmeticType() || to_type->isAnyPointerType()
                 || to_type->isArrayType();

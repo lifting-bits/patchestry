@@ -17,9 +17,9 @@ namespace mlir {
 namespace patchestry::typing {
 
     /// Convert C-like type names to CIR types
-    mlir::Type convertCTypesToCIRTypes(mlir::MLIRContext *context, std::string type_name);
+    mlir::Type ConvertCTypesToCirTypes(mlir::MLIRContext *context, std::string type_name);
 
     /// Convert CIR type back to C-like type name string
-    std::string convertCIRTypesToCTypes(mlir::Type cir_type);
+    std::string ConvertCirTypesToCTypes(mlir::Type cir_type);
 
 } // namespace patchestry::typing

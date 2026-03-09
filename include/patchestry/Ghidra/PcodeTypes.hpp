@@ -36,7 +36,7 @@ namespace patchestry::ghidra {
             VT_VOID
         };
 
-        static VarnodeType::Kind convertToKind(const std::string &kind) {
+        static VarnodeType::Kind ConvertToKind(const std::string &kind) {
             static const std::unordered_map< std::string, VarnodeType::Kind > kind_map = {
                 {   "invalid",   VT_INVALID },
                 {   "boolean",   VT_BOOLEAN },
@@ -70,7 +70,7 @@ namespace patchestry::ghidra {
         VarnodeType &operator=(VarnodeType &&) noexcept = default;
         virtual ~VarnodeType()                          = default;
 
-        void set_key(const std::string &key) { this->key = key; }
+        void SetKey(const std::string &key) { this->key = key; }
 
         Kind kind{};
         uint32_t size{};
@@ -91,15 +91,15 @@ namespace patchestry::ghidra {
         ArrayType(std::string name, Kind kind, uint32_t size)
             : VarnodeType(name, kind, size), num_elements(0), element_type(nullptr) {}
 
-        uint32_t get_element_count(void) const { return num_elements; }
+        uint32_t GetElementCount(void) const { return num_elements; }
 
-        std::shared_ptr< VarnodeType > get_element_type(void) const { return element_type; }
+        std::shared_ptr< VarnodeType > GetElementType(void) const { return element_type; }
 
-        void set_element_type(const std::shared_ptr< VarnodeType > &element) {
+        void SetElementType(const std::shared_ptr< VarnodeType > &element) {
             element_type = element;
         }
 
-        void set_element_count(uint32_t count) { num_elements = count; }
+        void SetElementCount(uint32_t count) { num_elements = count; }
 
       private:
         uint32_t num_elements;
@@ -115,13 +115,13 @@ namespace patchestry::ghidra {
         )
             : VarnodeType(name, kind, size), pointee_type(std::move(pointee)) {}
 
-        std::shared_ptr< VarnodeType > get_pointee_type() const { return pointee_type; }
+        std::shared_ptr< VarnodeType > GetPointeeType() const { return pointee_type; }
 
-        void set_pointee_type(const VarnodeType &pointee) {
+        void SetPointeeType(const VarnodeType &pointee) {
             pointee_type = std::make_shared< VarnodeType >(pointee);
         }
 
-        void set_pointee_type(const std::shared_ptr< VarnodeType > &pointee) {
+        void SetPointeeType(const std::shared_ptr< VarnodeType > &pointee) {
             pointee_type = pointee;
         }
 
@@ -138,9 +138,9 @@ namespace patchestry::ghidra {
         )
             : VarnodeType(name, kind, size), base_type(std::move(base)) {}
 
-        std::shared_ptr< VarnodeType > get_base_type() const { return base_type; }
+        std::shared_ptr< VarnodeType > GetBaseType() const { return base_type; }
 
-        void set_base_type(const std::shared_ptr< VarnodeType > &base) { base_type = base; }
+        void SetBaseType(const std::shared_ptr< VarnodeType > &base) { base_type = base; }
 
       private:
         std::shared_ptr< VarnodeType > base_type;
@@ -176,11 +176,11 @@ namespace patchestry::ghidra {
 
         EnumType(std::string name, Kind kind, uint32_t size) : VarnodeType(name, kind, size) {}
 
-        void add_constant(std::string constant_name, int64_t constant_value) {
+        void AddConstant(std::string constant_name, int64_t constant_value) {
             constants.emplace_back(Constant{ std::move(constant_name), constant_value });
         }
 
-        const std::vector< Constant > &get_constants() const { return constants; }
+        const std::vector< Constant > &GetConstants() const { return constants; }
 
       private:
         std::vector< Constant > constants;
@@ -199,13 +199,13 @@ namespace patchestry::ghidra {
         CompositeType(std::string name, Kind kind, uint32_t size)
             : VarnodeType(name, kind, size) {}
 
-        void add_components(std::string &name, const VarnodeType &type, uint32_t offset) {
+        void AddComponents(std::string &name, const VarnodeType &type, uint32_t offset) {
             components.emplace_back(
                 Component(name, offset, std::make_shared< VarnodeType >(type))
             );
         }
 
-        std::vector< Component > get_components(void) const { return components; }
+        std::vector< Component > GetComponents(void) const { return components; }
 
       private:
         std::vector< Component > components;

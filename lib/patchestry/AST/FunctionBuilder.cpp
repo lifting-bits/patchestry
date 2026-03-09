@@ -340,7 +340,7 @@ namespace patchestry::ast {
             }
             const auto &param_type =
                 type_builder.get().get_serialized_types().at(*param_op->type);
-            auto location = sourceLocation(ctx.getSourceManager(), param_op->key);
+            auto location = SourceLocation(ctx.getSourceManager(), param_op->key);
 
             auto *param_decl = clang::ParmVarDecl::Create(
                 ctx, func_decl, location, location, &ctx.Idents.get(*param_op->name),
@@ -457,8 +457,8 @@ namespace patchestry::ast {
 
             auto param_type  = type_builder.get().get_serialized_types().at(param_key);
             auto *param_decl = clang::ParmVarDecl::Create(
-                ctx, func_decl, sourceLocation(ctx.getSourceManager(), param_key),
-                sourceLocation(ctx.getSourceManager(), param_key),
+                ctx, func_decl, SourceLocation(ctx.getSourceManager(), param_key),
+                SourceLocation(ctx.getSourceManager(), param_key),
                 &ctx.Idents.get(parameter_name(index++)), param_type,
                 ctx.getTrivialTypeSourceInfo(param_type, clang::SourceLocation()),
                 clang::SC_None, nullptr
@@ -513,8 +513,8 @@ namespace patchestry::ast {
         auto body_vec = create_function_body(ctx, function_def);
         function_def->setBody(clang::CompoundStmt::Create(
             ctx, body_vec, clang::FPOptionsOverride(),
-            sourceLocation(ctx.getSourceManager(), function.get().key),
-            sourceLocation(ctx.getSourceManager(), function.get().key)
+            SourceLocation(ctx.getSourceManager(), function.get().key),
+            SourceLocation(ctx.getSourceManager(), function.get().key)
         ));
         function_def->setWillHaveBody(true);
         set_sema_context(prev_context);
@@ -542,8 +542,8 @@ namespace patchestry::ast {
             }
 
             auto *label_decl = clang::LabelDecl::Create(
-                ctx, func_decl, sourceLocation(ctx.getSourceManager(), key),
-                &ctx.Idents.get(labelNameFromKey(key))
+                ctx, func_decl, SourceLocation(ctx.getSourceManager(), key),
+                &ctx.Idents.get(LabelNameFromKey(key))
             );
             if (label_decl == nullptr) {
                 LOG(ERROR) << "Skipping, fail to create label for basic block with key: " << key
@@ -624,7 +624,7 @@ namespace patchestry::ast {
             // should be fixed after integrating minimal ast passes to inline the break inside
             // switch statement.
             /*if (break_target_blocks.contains(key)) {
-                auto loc         = sourceLocation(ctx.getSourceManager(), key);
+                auto loc         = SourceLocation(ctx.getSourceManager(), key);
                 auto *break_stmt = new (ctx) clang::BreakStmt(loc);
                 auto *label_stmt = new (ctx)
                     clang::LabelStmt(loc, labels_declaration.at(key), break_stmt);
@@ -639,7 +639,7 @@ namespace patchestry::ast {
             current_next_block_key = (i + 1 < rpo.size()) ? rpo[i + 1] : std::string{};
 
             auto block_stmts = create_basic_block(ctx, bb);
-            auto loc         = sourceLocation(ctx.getSourceManager(), key);
+            auto loc         = SourceLocation(ctx.getSourceManager(), key);
             clang::Stmt *first = block_stmts.empty()
                 ? static_cast< clang::Stmt * >(new (ctx) clang::NullStmt(loc, false))
                 : block_stmts[0];

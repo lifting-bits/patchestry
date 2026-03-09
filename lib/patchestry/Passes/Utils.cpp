@@ -56,7 +56,7 @@ namespace patchestry::typing {
     } // namespace
 
     /// Convert C-like type names to CIR types
-    mlir::Type convertCTypesToCIRTypes(mlir::MLIRContext *context, std::string type_name) {
+    mlir::Type ConvertCTypesToCirTypes(mlir::MLIRContext *context, std::string type_name) {
         mlir::OpBuilder builder(context);
 
         // Remove whitespace and normalize
@@ -66,7 +66,7 @@ namespace patchestry::typing {
         // Handle pointer types (e.g., "int*", "char*", "void*")
         if (normalized_type.back() == '*') {
             std::string base_type    = normalized_type.substr(0, normalized_type.length() - 1);
-            mlir::Type base_cir_type = convertCTypesToCIRTypes(context, base_type);
+            mlir::Type base_cir_type = ConvertCTypesToCirTypes(context, base_type);
             if (base_cir_type) {
                 return cir::PointerType::get(base_cir_type);
             }
@@ -87,7 +87,7 @@ namespace patchestry::typing {
                 return nullptr;
             }
 
-            mlir::Type element_cir_type = convertCTypesToCIRTypes(context, element_type);
+            mlir::Type element_cir_type = ConvertCTypesToCirTypes(context, element_type);
             if (element_cir_type) {
                 return cir::ArrayType::get(context, element_cir_type, array_size);
             }
@@ -101,7 +101,7 @@ namespace patchestry::typing {
             std::string return_type = func_match[1].str();
             std::string param_types = func_match[2].str();
 
-            mlir::Type return_cir_type = convertCTypesToCIRTypes(context, return_type);
+            mlir::Type return_cir_type = ConvertCTypesToCirTypes(context, return_type);
             if (!return_cir_type) {
                 return nullptr;
             }
@@ -115,7 +115,7 @@ namespace patchestry::typing {
 
                 for (; iter != end; ++iter) {
                     std::string param_type    = iter->str();
-                    mlir::Type param_cir_type = convertCTypesToCIRTypes(context, param_type);
+                    mlir::Type param_cir_type = ConvertCTypesToCirTypes(context, param_type);
                     if (!param_cir_type) {
                         return nullptr;
                     }
@@ -238,11 +238,11 @@ namespace patchestry::typing {
         // Handle const/volatile qualifiers by stripping them
         if (normalized_type.find("const") == 0) {
             std::string base_type = normalized_type.substr(5);
-            return convertCTypesToCIRTypes(context, base_type);
+            return ConvertCTypesToCirTypes(context, base_type);
         }
         if (normalized_type.find("volatile") == 0) {
             std::string base_type = normalized_type.substr(8);
-            return convertCTypesToCIRTypes(context, base_type);
+            return ConvertCTypesToCirTypes(context, base_type);
         }
 
         // Handle struct types (e.g., "struct my_struct", "struct device")
@@ -262,7 +262,7 @@ namespace patchestry::typing {
     }
 
     /// Convert CIR type back to C-like type name string
-    std::string convertCIRTypesToCTypes(mlir::Type cir_type) {
+    std::string ConvertCirTypesToCTypes(mlir::Type cir_type) {
         if (auto void_type = mlir::dyn_cast< cir::VoidType >(cir_type)) {
             return "void";
         }
@@ -288,14 +288,14 @@ namespace patchestry::typing {
 
         if (auto ptr_type = mlir::dyn_cast< cir::PointerType >(cir_type)) {
             mlir::Type pointee_type       = ptr_type.getPointee();
-            std::string pointee_type_name = convertCIRTypesToCTypes(pointee_type);
+            std::string pointee_type_name = ConvertCirTypesToCTypes(pointee_type);
             return pointee_type_name + "*";
         }
 
         if (auto array_type = mlir::dyn_cast< cir::ArrayType >(cir_type)) {
             mlir::Type element_type       = array_type.getEltType();
             uint64_t size                 = array_type.getSize();
-            std::string element_type_name = convertCIRTypesToCTypes(element_type);
+            std::string element_type_name = ConvertCirTypesToCTypes(element_type);
             return element_type_name + "[" + std::to_string(size) + "]";
         }
 
@@ -324,7 +324,7 @@ namespace patchestry::typing {
         }
 
         if (auto func_type = mlir::dyn_cast< cir::FuncType >(cir_type)) {
-            std::string return_type_name = convertCIRTypesToCTypes(func_type.getReturnType());
+            std::string return_type_name = ConvertCirTypesToCTypes(func_type.getReturnType());
             std::string result           = return_type_name + "(";
 
             auto inputs = func_type.getInputs();
@@ -332,7 +332,7 @@ namespace patchestry::typing {
                 if (i > 0) {
                     result += ", ";
                 }
-                result += convertCIRTypesToCTypes(inputs[i]);
+                result += ConvertCirTypesToCTypes(inputs[i]);
             }
             if (inputs.empty()) {
                 result += "void";

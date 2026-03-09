@@ -87,7 +87,7 @@ namespace patchestry::ast {
                 return ctx.BoolTy;
 
             case VarnodeType::VT_INTEGER:
-                return getTypeFromSize(
+                return GetTypeFromSize(
                     ctx, vnode_type->size * TypeBuilder::num_bits_in_byte, /*is_signed=*/false,
                     /*is_integer=*/true
                 );
@@ -99,15 +99,15 @@ namespace patchestry::ast {
                 return ctx.WideCharTy;
 
             case VarnodeType::VT_FLOAT:
-                return getTypeFromSize(
+                return GetTypeFromSize(
                     ctx, vnode_type->size * TypeBuilder::num_bits_in_byte, /*is_signed=*/false,
                     /*is_integer=*/false
                 );
 
             case VarnodeType::VT_ARRAY: {
                 auto array = dynamic_cast< const ArrayType & >(*vnode_type);
-                if (array.get_element_type()
-                    && array.get_element_type()->kind == VarnodeType::VT_UNDEFINED)
+                if (array.GetElementType()
+                    && array.GetElementType()->kind == VarnodeType::VT_UNDEFINED)
                 {
                     return create_type_for_undefined_array(
                         ctx, dynamic_cast< const ArrayType & >(*vnode_type)
@@ -191,7 +191,7 @@ namespace patchestry::ast {
     ) {
         // An invalid type is defined as typedef of a void type
         auto underlying_type = ctx.VoidTy;
-        auto ty_loc          = sourceLocation(ctx.getSourceManager(), vnode_type->key);
+        auto ty_loc          = SourceLocation(ctx.getSourceManager(), vnode_type->key);
         auto *typedef_decl   = clang::TypedefDecl::Create(
             ctx, ctx.getTranslationUnitDecl(), ty_loc, ty_loc, &ctx.Idents.get("invalid_type"),
             ctx.getTrivialTypeSourceInfo(underlying_type)
@@ -220,13 +220,13 @@ namespace patchestry::ast {
 
     clang::QualType
     TypeBuilder::create_typedef(clang::ASTContext &ctx, const TypedefType &typedef_type) {
-        if (!typedef_type.get_base_type()) {
+        if (!typedef_type.GetBaseType()) {
             LOG(ERROR) << "Base Type of a typedef shouldn't be empty. key: " << typedef_type.key
                        << "\n";
             return {};
         }
 
-        const auto &base_type = typedef_type.get_base_type();
+        const auto &base_type = typedef_type.GetBaseType();
         if (base_type->key == typedef_type.key) {
             LOG(ERROR) << "Base Type of typedef is pointing to itself. key: "
                        << typedef_type.key << "\n";
@@ -237,7 +237,7 @@ namespace patchestry::ast {
         serialized_types.emplace(base_type->key, underlying_type);
 
         auto *tinfo        = ctx.getTrivialTypeSourceInfo(underlying_type);
-        auto tydef_loc     = sourceLocation(ctx.getSourceManager(), typedef_type.key);
+        auto tydef_loc     = SourceLocation(ctx.getSourceManager(), typedef_type.key);
         auto *typedef_decl = clang::TypedefDecl::Create(
             ctx, ctx.getTranslationUnitDecl(), tydef_loc, tydef_loc,
             &ctx.Idents.get(typedef_type.name), tinfo
@@ -268,13 +268,13 @@ namespace patchestry::ast {
 
     clang::QualType
     TypeBuilder::create_pointer(clang::ASTContext &ctx, const PointerType &pointer_type) {
-        if (!pointer_type.get_pointee_type()) {
+        if (!pointer_type.GetPointeeType()) {
             LOG(ERROR) << "Pointer type must have a valid pointee. Key: " << pointer_type.key
                        << "\n";
             return ctx.VoidPtrTy;
         }
 
-        const auto &pointee = pointer_type.get_pointee_type();
+        const auto &pointee = pointer_type.GetPointeeType();
         if (pointee->key == pointer_type.key) {
             LOG(ERROR) << "Pointer type cannot reference itself. Key: " << pointer_type.key
                        << "\n";
@@ -305,12 +305,12 @@ namespace patchestry::ast {
      */
     clang::QualType
     TypeBuilder::create_array(clang::ASTContext &ctx, const ArrayType &array_type) {
-        if (!array_type.get_element_type()) {
+        if (!array_type.GetElementType()) {
             LOG(ERROR) << "No element types for array\n";
             return {};
         }
 
-        const auto &element = array_type.get_element_type();
+        const auto &element = array_type.GetElementType();
         if (element->key == array_type.key) {
             LOG(ERROR) << "Element key is same as array key. Key " << element->key << "\n";
             return {};
@@ -321,7 +321,7 @@ namespace patchestry::ast {
         auto element_type = create_type(ctx, element);
         serialized_types.emplace(element->key, element_type);
 
-        auto size = array_type.get_element_count();
+        auto size = array_type.GetElementCount();
         return ctx.getConstantArrayType(
             element_type, llvm::APInt(num_bits_uint, size), nullptr,
             clang::ArraySizeModifier::Normal, 0
@@ -356,7 +356,7 @@ namespace patchestry::ast {
 
         record_decl->completeDefinition();
 
-        auto components = varnode.get_components();
+        auto components = varnode.GetComponents();
         for (auto &component : components) {
             // Resolve the type of the current component.
             auto iter = clang_types.find(component.type->key);
@@ -367,7 +367,7 @@ namespace patchestry::ast {
             }
 
             auto field_type  = iter->second;
-            auto location    = sourceLocation(ctx.getSourceManager(), component.type->key);
+            auto location    = SourceLocation(ctx.getSourceManager(), component.type->key);
             auto *field_decl = clang::FieldDecl::Create(
                 ctx, record_decl, location, location, &ctx.Idents.get(component.name),
                 field_type, nullptr, nullptr, false, clang::ICIS_NoInit
@@ -411,8 +411,8 @@ namespace patchestry::ast {
         // Create a RecordDecl for the composite type.
         auto *decl = clang::RecordDecl::Create(
             ctx, tag_kind, ctx.getTranslationUnitDecl(),
-            sourceLocation(ctx.getSourceManager(), composite_type.key),
-            sourceLocation(ctx.getSourceManager(), composite_type.key),
+            SourceLocation(ctx.getSourceManager(), composite_type.key),
+            SourceLocation(ctx.getSourceManager(), composite_type.key),
             &ctx.Idents.get(composite_type.name)
         );
 
@@ -442,8 +442,8 @@ namespace patchestry::ast {
     TypeBuilder::create_enum(clang::ASTContext &ctx, const EnumType &enum_type) {
         auto *enum_decl = clang::EnumDecl::Create(
             ctx, ctx.getTranslationUnitDecl(),
-            sourceLocation(ctx.getSourceManager(), enum_type.key),
-            sourceLocation(ctx.getSourceManager(), enum_type.key),
+            SourceLocation(ctx.getSourceManager(), enum_type.key),
+            SourceLocation(ctx.getSourceManager(), enum_type.key),
             &ctx.Idents.get(enum_type.name), nullptr, false, false, false
         );
 
@@ -463,7 +463,7 @@ namespace patchestry::ast {
      *
      * This function generates a typedef for an undefined type based on its size
      * and default attributes. It first attempts to derive an appropriate base type
-     * using `getTypeFromSize`. If unsuccessful, it defaults to the `int` type.
+     * using `GetTypeFromSize`. If unsuccessful, it defaults to the `int` type.
      *
      * @param ctx Reference to the `clang::ASTContext` for type creation.
      * @param undefined_type The metadata representing the undefined type, including
@@ -476,7 +476,7 @@ namespace patchestry::ast {
      */
     clang::QualType
     TypeBuilder::create_undefined(clang::ASTContext &ctx, const UndefinedType &undefined_type) {
-        auto base_type = getTypeFromSize(
+        auto base_type = GetTypeFromSize(
             ctx, undefined_type.size * num_bits_in_byte, /*is_signed=*/false,
             /*is_integer=*/true
         );
@@ -488,8 +488,8 @@ namespace patchestry::ast {
 
         auto *typedef_decl = clang::TypedefDecl::Create(
             ctx, ctx.getTranslationUnitDecl(),
-            sourceLocation(ctx.getSourceManager(), undefined_type.key),
-            sourceLocation(ctx.getSourceManager(), undefined_type.key),
+            SourceLocation(ctx.getSourceManager(), undefined_type.key),
+            SourceLocation(ctx.getSourceManager(), undefined_type.key),
             &ctx.Idents.get(undefined_type.name), ctx.getTrivialTypeSourceInfo(base_type)
         );
 
@@ -524,8 +524,8 @@ namespace patchestry::ast {
         // Create a RecordDecl for the composite type.
         auto *decl = clang::RecordDecl::Create(
             ctx, clang::TagDecl::TagKind::Struct, ctx.getTranslationUnitDecl(),
-            sourceLocation(ctx.getSourceManager(), undefined_array.key),
-            sourceLocation(ctx.getSourceManager(), undefined_array.key),
+            SourceLocation(ctx.getSourceManager(), undefined_array.key),
+            SourceLocation(ctx.getSourceManager(), undefined_array.key),
             &ctx.Idents.get(ss.str())
         );
 
@@ -533,8 +533,8 @@ namespace patchestry::ast {
 
         // Create a field decl with type `undef_array`
         auto *field_decl = clang::FieldDecl::Create(
-            ctx, decl, sourceLocation(ctx.getSourceManager(), undefined_array.key),
-            sourceLocation(ctx.getSourceManager(), undefined_array.key),
+            ctx, decl, SourceLocation(ctx.getSourceManager(), undefined_array.key),
+            SourceLocation(ctx.getSourceManager(), undefined_array.key),
             &ctx.Idents.get("undefined"), undef_array, nullptr, nullptr, false,
             clang::ICIS_NoInit
         );

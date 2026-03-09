@@ -16,20 +16,20 @@
 #include <clang/Basic/SourceLocation.h>
 
 namespace patchestry::ast {
-    clang::SourceLocation sourceLocation(clang::SourceManager &sm, std::string key);
+    clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key);
 
     clang::QualType
-    getTypeFromSize(clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer);
+    GetTypeFromSize(clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer);
 
-    std::string labelNameFromKey(std::string key);
+    std::string LabelNameFromKey(std::string key);
 
-    std::string sanitize_key_to_ident(std::string_view key);
+    std::string SanitizeKeyToIdent(std::string_view key);
 
-    clang::CastKind getCastKind(
+    clang::CastKind GetCastKind(
         clang::ASTContext &ctx, const clang::QualType &from_type, const clang::QualType &to_type
     );
 
     bool
-    shouldReinterpretCast(const clang::QualType &from_type, const clang::QualType &to_type);
+    ShouldReinterpretCast(const clang::QualType &from_type, const clang::QualType &to_type);
 
 } // namespace patchestry::ast
