@@ -114,20 +114,19 @@ namespace {
         );
 
         return {
-            .emit_cir             = emit_cir.getValue(),
-            .emit_mlir            = emit_mlir.getValue(), // It is set to true by default
-            .emit_llvm            = emit_llvm.getValue(),
-            .emit_asm             = emit_asm.getValue(),
-            .emit_obj             = emit_obj.getValue(),
-            .verbose              = verbose.getValue(),
-            .use_rellic_transform = use_rellic_transform.getValue(),
-            .enable_goto_elimination = enable_goto_elimination.getValue(),
-            .goto_elimination_strict = goto_elimination_strict.getValue(),
+            .emit_cir                   = emit_cir.getValue(),
+            .emit_mlir                  = emit_mlir.getValue(), // It is set to true by default
+            .emit_llvm                  = emit_llvm.getValue(),
+            .emit_asm                   = emit_asm.getValue(),
+            .emit_obj                   = emit_obj.getValue(),
+            .verbose                    = verbose.getValue(),
+            .use_rellic_transform       = use_rellic_transform.getValue(),
+            .enable_goto_elimination    = enable_goto_elimination.getValue(),
+            .goto_elimination_strict    = goto_elimination_strict.getValue(),
             .disable_switch_case_inline = disable_switch_case_inline.getValue(),
-            .use_ghidra_structuring = use_ghidra_structuring.getValue(),
-            .output_file          = output_filename.getValue(),
-            .input_file           = input_filename.getValue(),
-            .print_tu             = print_tu.getValue(),
+            .output_file                = output_filename.getValue(),
+            .input_file                 = input_filename.getValue(),
+            .print_tu                   = print_tu.getValue(),
         };
     }
 

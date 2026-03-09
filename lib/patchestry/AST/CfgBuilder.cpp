@@ -264,6 +264,10 @@ namespace patchestry::ast {
                     }
 
                     if (sw) {
+                        // Set branch_cond from the switch discriminant so that
+                        // CollapseStructure::ruleBlockSwitch can use it.
+                        blk.branch_cond = sw->getCond();
+
                         // Extract goto targets from case statements.
                         if (auto *body =
                                 llvm::dyn_cast_or_null< clang::CompoundStmt >(sw->getBody()))

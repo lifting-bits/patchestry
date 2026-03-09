@@ -1343,6 +1343,8 @@ namespace patchestry::ast {
                              clang::ASTContext &ctx) {
             auto &bl = g.node(id);
             if (bl.collapsed || !bl.isSwitchOut()) return false;
+            // Must have switch_cases metadata to fire.
+            if (bl.switch_cases.empty()) return false;
 
             // Find exit block: look for a successor with sizeIn > 1 or sizeOut > 1
             size_t exit_id = std::numeric_limits<size_t>::max();
@@ -1355,22 +1357,18 @@ namespace patchestry::ast {
                 }
             }
 
-            // Validate: each case must have sizeIn==1 and either exit to exit_id or have no exit
+            // Validate: each case must have sizeIn==1.
+            // Cases may exit to exit_id (break), have no exit (tail), or exit
+            // to a different target (goto — e.g., loop back-edge).
             for (size_t s : bl.succs) {
                 if (s == exit_id) continue;
                 auto &sn = g.node(s);
                 if (sn.collapsed) return false;
                 if (sn.sizeIn() != 1) return false;
-                if (sn.sizeOut() == 1) {
-                    if (exit_id != std::numeric_limits<size_t>::max() && sn.succs[0] != exit_id)
-                        return false;
-                    if (sn.isGotoOut(0)) return false;
-                } else if (sn.sizeOut() > 1) {
-                    return false;
-                }
+                if (sn.sizeOut() > 1) return false;
             }
 
-            // Build the switch SNode
+            // Build the switch SNode from branch_cond and successor nodes.
             clang::Expr *disc = bl.branch_cond;
             if (!disc) {
                 disc = clang::IntegerLiteral::Create(
@@ -1378,34 +1376,75 @@ namespace patchestry::ast {
             }
             auto *sw = factory.make<SSwitch>(disc);
 
-            // Build a map from succ_index to case value for this switch block
-            std::unordered_map<size_t, int64_t> succ_to_value;
+            // Build a map from succ_index to case values (multiple cases
+            // can target the same successor).
+            std::unordered_map<size_t, std::vector<int64_t>> succ_to_values;
             for (const auto &entry : bl.switch_cases) {
-                succ_to_value[entry.succ_index] = entry.value;
+                succ_to_values[entry.succ_index].push_back(entry.value);
             }
 
+            unsigned iw = ctx.getIntWidth(ctx.IntTy);
+            for (size_t si = 0; si < bl.succs.size(); ++si) {
+                size_t s = bl.succs[si];
+                if (s == exit_id) continue;
+                auto it = succ_to_values.find(si);
+                if (it != succ_to_values.end()) {
+                    auto *body = leafFromNode(g.node(s), factory);
+                    for (int64_t val : it->second) {
+                        auto *case_val = clang::IntegerLiteral::Create(
+                            ctx, llvm::APInt(iw, static_cast<uint64_t>(val), true),
+                            ctx.IntTy, clang::SourceLocation());
+                        sw->addCase(case_val, body);
+                    }
+                } else {
+                    // Successor with no case value — not a case arm; skip it
+                    // (it is the fallback/exit path, not a switch case).
+                }
+            }
+            // Prepend the switch block's own stmts (ops before the switch)
+            // and strip the original SwitchStmt (CollapseStructure rebuilds it).
+            SNode *sw_node = nullptr;
+            if (!bl.stmts.empty()) {
+                auto *seq = factory.make<SSeq>();
+                auto *block = factory.make<SBlock>();
+                for (auto *s : bl.stmts) {
+                    // Skip the original SwitchStmt/CompoundStmt containing it
+                    if (llvm::isa<clang::SwitchStmt>(s)) continue;
+                    if (auto *cs = llvm::dyn_cast<clang::CompoundStmt>(s)) {
+                        bool has_sw = false;
+                        for (auto *child : cs->body())
+                            if (llvm::isa<clang::SwitchStmt>(child)) { has_sw = true; break; }
+                        if (has_sw) continue;
+                    }
+                    block->addStmt(s);
+                }
+                if (!block->stmts().empty()) seq->addChild(block);
+                seq->addChild(sw);
+                sw_node = seq;
+            } else {
+                sw_node = sw;
+            }
+
+            // Collapse only case successor nodes (those with case values).
+            // Successors without case values (fallback paths) stay as
+            // separate blocks so they can be collapsed by later rules.
             std::vector<size_t> collapse_ids = {id};
             for (size_t si = 0; si < bl.succs.size(); ++si) {
                 size_t s = bl.succs[si];
                 if (s == exit_id) continue;
+                if (succ_to_values.find(si) == succ_to_values.end()) continue;
                 collapse_ids.push_back(s);
-                clang::Expr *case_val = nullptr;
-                auto it = succ_to_value.find(si);
-                if (it != succ_to_value.end()) {
-                    unsigned iw = ctx.getIntWidth(ctx.IntTy);
-                    case_val = clang::IntegerLiteral::Create(
-                        ctx, llvm::APInt(iw, static_cast<uint64_t>(it->second), true),
-                        ctx.IntTy, clang::SourceLocation());
-                }
-                sw->addCase(case_val, leafFromNode(g.node(s), factory));
             }
 
-            SNode *sw_node = sw;
             if (!bl.label.empty()) {
                 sw_node = factory.make<SLabel>(factory.intern(bl.label), sw_node);
                 bl.label.clear();
             }
-            g.collapseNodes(collapse_ids, sw_node);
+            size_t rep = g.collapseNodes(collapse_ids, sw_node);
+            // The collapsed node has no real branch condition — prevent
+            // ruleBlockGoto from emitting a spurious if(1) goto.
+            g.node(rep).is_conditional = false;
+            g.node(rep).switch_cases.clear();
             return true;
         }
 
@@ -1444,15 +1483,15 @@ namespace patchestry::ast {
                     auto *if_goto = factory.make<SIfThenElse>(cond, goto_node, nullptr);
 
                     auto *seq = factory.make<SSeq>();
-                    if (!bl.stmts.empty()) {
-                        // leafFromNode embeds the label around stmts
+                    if (!bl.stmts.empty() || bl.structured) {
+                        // leafFromNode embeds the label around stmts/structured
                         seq->addChild(leafFromNode(bl, factory));
                     }
                     seq->addChild(if_goto);
 
                     SNode *result = seq;
-                    // If stmts were empty, leafFromNode wasn't called — wrap with label now
-                    if (bl.stmts.empty() && !bl.label.empty()) {
+                    // If leafFromNode wasn't called, wrap with label now
+                    if (bl.stmts.empty() && !bl.structured && !bl.label.empty()) {
                         result = factory.make<SLabel>(factory.intern(bl.label), result);
                     }
                     bl.structured = result;

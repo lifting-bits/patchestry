@@ -870,11 +870,13 @@ namespace patchestry::ast {
             switch_stmt->setBody(
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
-            auto *fallback = make_fallback_stmt();
-            std::vector< clang::Stmt * > result_stmts = { switch_stmt, fallback };
-            return { clang::CompoundStmt::Create(
-                ctx, result_stmts, clang::FPOptionsOverride(), loc, loc
-            ), false };
+            (void) make_fallback_stmt();
+            return { switch_stmt, false };
+            // auto *fallback = make_fallback_stmt();
+            // std::vector< clang::Stmt * > result_stmts = { switch_stmt, fallback };
+            // return { clang::CompoundStmt::Create(
+            //     ctx, result_stmts, clang::FPOptionsOverride(), loc, loc
+            //), false };
         }
 
         // Priority 2: successor_blocks only — address-based switch (existing logic).

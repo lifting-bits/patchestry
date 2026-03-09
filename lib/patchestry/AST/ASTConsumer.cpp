@@ -126,7 +126,11 @@ namespace patchestry::ast {
                 ci, function, *type_builder, function_declarations, global_variable_declarations
             );
 
-            builder->disable_switch_case_inline = options.disable_switch_case_inline;
+            // When CollapseStructure is used (use_rellic_transform=false),
+            // always disable case inlining so ruleBlockSwitch can rebuild
+            // the switch from non-empty successor nodes.
+            builder->disable_switch_case_inline =
+                options.disable_switch_case_inline || !options.use_rellic_transform;
             builder->initialize_op_builder();
             func_builders.emplace_back(std::move(builder));
         }
