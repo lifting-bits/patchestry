@@ -207,6 +207,7 @@ namespace patchestry::ghidra {
     {
         std::vector< std::string > parameters;
         std::string rttype_key;
+        std::string calling_convention;
         bool is_variadic;
         bool is_noreturn;
     };

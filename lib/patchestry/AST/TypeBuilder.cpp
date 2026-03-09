@@ -7,6 +7,7 @@
 
 #include <sstream>
 
+#include <clang/AST/Expr.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 
@@ -86,11 +87,13 @@ namespace patchestry::ast {
             case VarnodeType::VT_BOOLEAN:
                 return ctx.BoolTy;
 
-            case VarnodeType::VT_INTEGER:
+            case VarnodeType::VT_INTEGER: {
+                auto &builtin = dynamic_cast< const BuiltinType & >(*vnode_type);
                 return GetTypeFromSize(
-                    ctx, vnode_type->size * TypeBuilder::num_bits_in_byte, /*is_signed=*/false,
-                    /*is_integer=*/true
+                    ctx, vnode_type->size * TypeBuilder::num_bits_in_byte,
+                    /*is_signed=*/builtin.is_signed, /*is_integer=*/true
                 );
+            }
 
             case VarnodeType::VT_CHAR:
                 return ctx.CharTy;
@@ -167,6 +170,31 @@ namespace patchestry::ast {
                 return create_undefined(
                     ctx, dynamic_cast< const UndefinedType & >(*vnode_type)
                 );
+
+            case VarnodeType::VT_BITFIELD: {
+                // BitField: return the base integer type.  The bit width is
+                // applied later when creating FieldDecls in composites.
+                auto &bf = dynamic_cast< const BitFieldType & >(*vnode_type);
+                if (bf.GetBaseType()) {
+                    return create_type(ctx, bf.GetBaseType());
+                }
+                return GetTypeFromSize(
+                    ctx, vnode_type->size * TypeBuilder::num_bits_in_byte,
+                    /*is_signed=*/false, /*is_integer=*/true
+                );
+            }
+
+            case VarnodeType::VT_STRING: {
+                // String: char[N] if size is known, else char*.
+                if (vnode_type->size > 0) {
+                    return ctx.getConstantArrayType(
+                        ctx.CharTy,
+                        llvm::APInt(num_bits_uint, vnode_type->size), nullptr,
+                        clang::ArraySizeModifier::Normal, 0
+                    );
+                }
+                return ctx.getPointerType(ctx.CharTy);
+            }
 
             case VarnodeType::VT_VOID: {
                 return ctx.VoidTy;
@@ -368,9 +396,19 @@ namespace patchestry::ast {
 
             auto field_type  = iter->second;
             auto location    = SourceLocation(ctx.getSourceManager(), component.type->key);
+
+            // For bitfield components, create an IntegerLiteral for the bit width.
+            clang::Expr *bit_width = nullptr;
+            if (component.type->kind == VarnodeType::VT_BITFIELD) {
+                auto &bf = dynamic_cast< const BitFieldType & >(*component.type);
+                bit_width = clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(num_bits_uint, bf.bit_size), ctx.UnsignedIntTy, location
+                );
+            }
+
             auto *field_decl = clang::FieldDecl::Create(
                 ctx, record_decl, location, location, &ctx.Idents.get(component.name),
-                field_type, nullptr, nullptr, false, clang::ICIS_NoInit
+                field_type, nullptr, bit_width, false, clang::ICIS_NoInit
             );
 
             record_decl->addDecl(field_decl);
@@ -440,19 +478,29 @@ namespace patchestry::ast {
      */
     clang::QualType
     TypeBuilder::create_enum(clang::ASTContext &ctx, const EnumType &enum_type) {
+        auto loc = SourceLocation(ctx.getSourceManager(), enum_type.key);
         auto *enum_decl = clang::EnumDecl::Create(
-            ctx, ctx.getTranslationUnitDecl(),
-            SourceLocation(ctx.getSourceManager(), enum_type.key),
-            SourceLocation(ctx.getSourceManager(), enum_type.key),
+            ctx, ctx.getTranslationUnitDecl(), loc, loc,
             &ctx.Idents.get(enum_type.name), nullptr, false, false, false
         );
 
         enum_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(enum_decl);
 
-        // TODO: Ghidra script does not recover enum constants and need to be fixed. Instead of
-        // having it as forward declaration, we complete the definition here with new type and
-        // promotional type as integer.
+        // Populate enum with actual Ghidra-serialized constants.
+        const auto &constants = enum_type.GetConstants();
+        for (const auto &c : constants) {
+            auto *val = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(num_bits_uint, static_cast< uint64_t >(c.value), /*isSigned=*/true),
+                ctx.IntTy, loc
+            );
+            auto *ecd = clang::EnumConstantDecl::Create(
+                ctx, enum_decl, loc, &ctx.Idents.get(c.name), ctx.IntTy, val,
+                llvm::APSInt(llvm::APInt(num_bits_uint, static_cast< uint64_t >(c.value), /*isSigned=*/true), /*isUnsigned=*/false)
+            );
+            enum_decl->addDecl(ecd);
+        }
+
         enum_decl->completeDefinition(ctx.IntTy, ctx.IntTy, TypeBuilder::num_bits_uint, 0U);
 
         return ctx.getEnumType(enum_decl);

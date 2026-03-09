@@ -33,7 +33,9 @@ namespace patchestry::ghidra {
             VT_ENUM,
             VT_TYPEDEF,
             VT_UNDEFINED,
-            VT_VOID
+            VT_VOID,
+            VT_BITFIELD,
+            VT_STRING
         };
 
         static VarnodeType::Kind ConvertToKind(const std::string &kind) {
@@ -51,7 +53,9 @@ namespace patchestry::ghidra {
                 {   "typedef",   VT_TYPEDEF },
                 { "undefined", VT_UNDEFINED },
                 {      "void",      VT_VOID },
-                {     "wchar",  VT_WIDECHAR }
+                {     "wchar",  VT_WIDECHAR },
+                {  "bitfield",  VT_BITFIELD },
+                {    "string",    VT_STRING }
             };
 
             // if kind is not present in the map, return vt_invalid
@@ -83,6 +87,8 @@ namespace patchestry::ghidra {
     {
         BuiltinType(std::string &name, Kind kind, uint32_t size)
             : VarnodeType(name, kind, size) {}
+
+        bool is_signed = false;
     };
 
     // ArrayType
@@ -209,6 +215,32 @@ namespace patchestry::ghidra {
 
       private:
         std::vector< Component > components;
+    };
+
+    // BitFieldType
+    struct BitFieldType : public VarnodeType
+    {
+        BitFieldType(std::string name, Kind kind, uint32_t size)
+            : VarnodeType(name, kind, size) {}
+
+        void SetBaseType(const std::shared_ptr< VarnodeType > &base) { base_type = base; }
+
+        std::shared_ptr< VarnodeType > GetBaseType() const { return base_type; }
+
+        uint32_t bit_offset = 0;
+        uint32_t bit_size   = 0;
+
+      private:
+        std::shared_ptr< VarnodeType > base_type;
+    };
+
+    // StringType
+    struct StringType : public VarnodeType
+    {
+        StringType(std::string name, Kind kind, uint32_t size)
+            : VarnodeType(name, kind, size) {}
+
+        std::string charset;
     };
 
 } // namespace patchestry::ghidra
