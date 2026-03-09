@@ -48,6 +48,18 @@ namespace patchestry::ast {
 
     namespace {
 
+        // Simplify *(&expr) → expr.  When PTRADD produces &base[index] and
+        // STORE/LOAD dereferences it, this cancels the redundant &/* pair so the
+        // output reads base[index] instead of *(&base[index]).
+        clang::Expr *simplify_deref_addrof(clang::Expr *expr) {
+            if (auto *uo = clang::dyn_cast< clang::UnaryOperator >(expr)) {
+                if (uo->getOpcode() == clang::UO_AddrOf) {
+                    return uo->getSubExpr();
+                }
+            }
+            return nullptr;
+        }
+
         clang::VarDecl *create_variable_decl( // NOLINT
             clang::ASTContext &ctx, clang::DeclContext *dc, const std::string &name,
             clang::QualType type, clang::SourceLocation loc
@@ -197,6 +209,21 @@ namespace patchestry::ast {
             return expr;
         }
 
+        // When casting from an array type (e.g. string literal const char[N]) to a
+        // pointer type, apply array-to-pointer decay first.
+        if (from_type->isArrayType() && to_type->isPointerType()) {
+            auto decayed = ctx.getDecayedType(from_type);
+            expr = make_implicit_cast(
+                ctx, expr, decayed, clang::CastKind::CK_ArrayToPointerDecay
+            );
+            if (expr) {
+                from_type = expr->getType();
+                if (ctx.hasSameUnqualifiedType(from_type, to_type)) {
+                    return expr;
+                }
+            }
+        }
+
         // Note: The exported high-pcode from ghidra may have types that can't be casted causing
         // diagnostics errors. For example:
         //   unsigned int -> struct
@@ -223,7 +250,14 @@ namespace patchestry::ast {
             }
         }
 
-        // Fallbak to reinterpret cast like expression
+        // For pointer-to-pointer casts (e.g. const char * → unsigned char *),
+        // prefer a C-style cast over the reinterpret_cast pattern which produces
+        // the ugly *(T**)&expr form.
+        if (from_type->isPointerType() && to_type->isPointerType()) {
+            return make_explicit_cast(ctx, expr, to_type, loc);
+        }
+
+        // Fallback to reinterpret cast like expression
         return make_reinterpret_cast(ctx, expr, to_type, loc);
     }
 
@@ -335,6 +369,20 @@ namespace patchestry::ast {
                 sema().CreateBuiltinBinOp(loc, clang::BO_Assign, output_expr, input_expr);
             assert(!assign_operation.isInvalid());
             return assign_operation.getAs< clang::Stmt >();
+        }
+
+        // When the input is a string literal (array type) being assigned to a
+        // pointer, apply array-to-pointer decay first.
+        if (clang::isa< clang::StringLiteral >(input_expr)
+            && input_type->isArrayType() && output_type->isPointerType()) {
+            auto decayed = ctx.getDecayedType(input_type);
+            auto *decayed_expr = make_implicit_cast(
+                ctx, input_expr, decayed, clang::CastKind::CK_ArrayToPointerDecay
+            );
+            if (decayed_expr) {
+                input_expr = decayed_expr;
+                input_type = input_expr->getType();
+            }
         }
 
         auto *cast_expr = make_cast(ctx, input_expr, output_type, loc);
@@ -486,6 +534,24 @@ namespace patchestry::ast {
 
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
+        // When the input is a string literal, the LOAD is semantically a no-op:
+        // just let it decay from array type to pointer via implicit cast.
+        if (clang::isa< clang::StringLiteral >(input_expr)) {
+            clang::Expr *result_expr = make_implicit_cast(
+                ctx, input_expr, ctx.getDecayedType(input_expr->getType()),
+                clang::CastKind::CK_ArrayToPointerDecay
+            );
+            if (!result_expr) {
+                result_expr = input_expr;
+            }
+            if (merge_to_next) {
+                return { result_expr, true };
+            }
+            auto *output_expr =
+                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            return { create_assign_operation(ctx, result_expr, output_expr, op_loc), false };
+        }
+
         if (op.type) {
             auto op_type_opt = lookup_op_type(op);
             if (!op_type_opt) {
@@ -511,16 +577,19 @@ namespace patchestry::ast {
             assert(input_expr != nullptr && "Failed to cast void* for load");
         }
 
-        auto derefed_expr = sema().CreateBuiltinUnaryOp(
-            SourceLocation(ctx.getSourceManager(), op.key), clang::UO_Deref,
-            clang::dyn_cast< clang::Expr >(input_expr)
-        );
-
-        if (merge_to_next) {
-            return std::make_pair(derefed_expr.getAs< clang::Expr >(), merge_to_next);
+        // Cancel *(&expr) from PTRADD's &base[index] to produce base[index].
+        clang::Expr *result_expr = simplify_deref_addrof(input_expr);
+        if (!result_expr) {
+            auto derefed_expr = sema().CreateBuiltinUnaryOp(
+                SourceLocation(ctx.getSourceManager(), op.key), clang::UO_Deref,
+                clang::dyn_cast< clang::Expr >(input_expr)
+            );
+            result_expr = derefed_expr.getAs< clang::Expr >();
         }
 
-        auto *result_expr = derefed_expr.getAs< clang::Expr >();
+        if (merge_to_next) {
+            return std::make_pair(result_expr, merge_to_next);
+        }
 
         auto *output_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
@@ -548,21 +617,23 @@ namespace patchestry::ast {
             auto *rhs_expr =
                 clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
 
-            // Parenthesize pointer arithmetic so the deref binds the whole
-            // expression: *(ptr + offset) instead of *ptr + offset.
-            if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
-                lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+            // Cancel *(&expr) from PTRADD's &base[index].
+            clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
+            if (!deref_expr) {
+                // Parenthesize pointer arithmetic so the deref binds the whole
+                // expression: *(ptr + offset) instead of *ptr + offset.
+                if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
+                    lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+                }
+
+                auto deref_result = sema().CreateBuiltinUnaryOp(
+                    op_loc, clang::UO_Deref, clang::dyn_cast< clang::Expr >(lhs_expr)
+                );
+                assert(!deref_result.isInvalid());
+                deref_expr = deref_result.getAs< clang::Expr >();
             }
 
-            auto deref_result = sema().CreateBuiltinUnaryOp(
-                op_loc, clang::UO_Deref, clang::dyn_cast< clang::Expr >(lhs_expr)
-            );
-            assert(!deref_result.isInvalid());
-
-            return { create_assign_operation(
-                         ctx, rhs_expr, deref_result.getAs< clang::Expr >(), op_loc
-                     ),
-                     false };
+            return { create_assign_operation(ctx, rhs_expr, deref_expr, op_loc), false };
         }
 
         // 3-input form: input0 = address-space constant (not representable in C, ignored),
@@ -991,6 +1062,26 @@ namespace patchestry::ast {
             return proto->getParamType(index);
         };
 
+        // When the call-site has more args than the declaration, rebuild the
+        // declaration's type from the call-site inputs (treat call-site as ground truth).
+        if (op.inputs.size() > num_params && !proto_type->isVariadic()) {
+            llvm::SmallVector< clang::QualType, 8 > new_param_types;
+            for (const auto &input : op.inputs) {
+                auto *vn = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+                new_param_types.push_back(vn->getType());
+            }
+            auto epi            = proto_type->getExtProtoInfo();
+            auto new_proto_type = ctx.getFunctionType(
+                proto_type->getReturnType(), new_param_types, epi
+            );
+            callee->setType(new_proto_type);
+            for (auto *decl : callee->redecls()) {
+                decl->setType(new_proto_type);
+            }
+            proto_type = callee->getType()->getAs< clang::FunctionProtoType >();
+            num_params = proto_type->getNumParams();
+        }
+
         unsigned index = 0;
         std::vector< clang::Expr * > arguments;
         for (const auto &input : op.inputs) {
@@ -1377,9 +1468,6 @@ namespace patchestry::ast {
 
         unsigned low_width = op.inputs[1].size * 8;
         auto merge_to_next = !op.output.has_value();
-        auto *shift_value  = clang::IntegerLiteral::Create(
-            ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), low_width), ctx.IntTy, location
-        );
 
         // If Operation has type, convert expression to operation type and perform bit-shift and
         // or operation.
@@ -1401,17 +1489,25 @@ namespace patchestry::ast {
             input1_expr = cast_expr_input1;
         }
 
-        auto shifted_high_result = sema().CreateBuiltinBinOp(
-            location, clang::BO_Shl, input0_expr, clang::dyn_cast< clang::Expr >(shift_value)
-        );
-
-        if (shifted_high_result.isInvalid()) {
-            LOG(ERROR) << "PIECE Operation invalid shifted high result.\n";
-            return {};
+        // When low_width is 0, the shift is a no-op — skip it to avoid "<< 0".
+        clang::Expr *high_expr = input0_expr;
+        if (low_width > 0) {
+            auto *shift_value = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), low_width), ctx.IntTy, location
+            );
+            auto shifted_high_result = sema().CreateBuiltinBinOp(
+                location, clang::BO_Shl, input0_expr,
+                clang::dyn_cast< clang::Expr >(shift_value)
+            );
+            if (shifted_high_result.isInvalid()) {
+                LOG(ERROR) << "PIECE Operation invalid shifted high result.\n";
+                return {};
+            }
+            high_expr = shifted_high_result.getAs< clang::Expr >();
         }
 
         auto or_result = sema().CreateBuiltinBinOp(
-            location, clang::BO_Or, shifted_high_result.getAs< clang::Expr >(),
+            location, clang::BO_Or, high_expr,
             clang::dyn_cast< clang::Expr >(input1_expr)
         );
         if (or_result.isInvalid()) {
@@ -2280,16 +2376,34 @@ namespace patchestry::ast {
         auto *scale =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[2]));
 
-        auto mult_result = sema().CreateBuiltinBinOp(op_loc, clang::BO_Mul, index, scale);
-        assert(!mult_result.isInvalid());
+        // When the base is a pointer type, emit base[index] (array subscript)
+        // instead of raw base + index * scale arithmetic.  Take the address to
+        // match PTRADD semantics (result is a pointer).
+        clang::Expr *result_expr = nullptr;
+        if (base->getType()->isPointerType()) {
+            auto subscript =
+                sema().CreateBuiltinArraySubscriptExpr(base, op_loc, index, op_loc);
+            if (!subscript.isInvalid()) {
+                result_expr = sema()
+                    .CreateBuiltinUnaryOp(op_loc, clang::UO_AddrOf, subscript.get())
+                    .getAs< clang::Expr >();
+            }
+        }
 
-        auto add_result = sema().CreateBuiltinBinOp(
-            op_loc, clang::BO_Add, base, mult_result.getAs< clang::Expr >()
-        );
-        assert(!add_result.isInvalid());
+        // Fallback to arithmetic for non-pointer base types.
+        if (!result_expr) {
+            auto mult_result = sema().CreateBuiltinBinOp(op_loc, clang::BO_Mul, index, scale);
+            assert(!mult_result.isInvalid());
+
+            auto add_result = sema().CreateBuiltinBinOp(
+                op_loc, clang::BO_Add, base, mult_result.getAs< clang::Expr >()
+            );
+            assert(!add_result.isInvalid());
+            result_expr = add_result.getAs< clang::Expr >();
+        }
 
         if (merge_to_next) {
-            return std::make_pair(add_result.getAs< clang::Stmt >(), merge_to_next);
+            return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
         }
 
         auto *output_stmt = create_varnode(ctx, function, *op.output);
@@ -2301,17 +2415,11 @@ namespace patchestry::ast {
                 clang::dyn_cast< clang::VarDecl >(decl)->getType(), clang::VK_LValue
             );
 
-            return { create_assign_operation(
-                         ctx, add_result.getAs< clang::Expr >(), ref_expr, op_loc
-                     ),
-                     false };
+            return { create_assign_operation(ctx, result_expr, ref_expr, op_loc), false };
         }
 
         auto *output_expr = clang::dyn_cast< clang::Expr >(output_stmt);
-        return { create_assign_operation(
-                     ctx, add_result.getAs< clang::Expr >(), output_expr, op_loc
-                 ),
-                 false };
+        return { create_assign_operation(ctx, result_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_cast(
