@@ -197,11 +197,11 @@ public class PcodeSerializer {
 		// The seen data
 		private Map<Address, Data> seenDataMap;
 
-		// The seen types. The size of `typesToSerialize` is monotonically
-		// non-decreasing, so that as we add new things to `seenTypes`, we add
-		// to the end of `typesToSerialize`. This lets us properly handle
-		// tracking what recursive types need to be serialized.
-		private Set<String> seenTypes;
+		// Maps a canonical type key (category + name + length + UID) to a
+		// collision-free type ID. Uses an incremental counter instead of
+		// hashCode() to avoid 32-bit hash collisions.
+		private Map<String, String> typeIdMap;
+		private int nextTypeId;
 		private List<DataType> typesToSerialize;
 		
 		// Current function being serialized, and current block within that
@@ -211,7 +211,7 @@ public class PcodeSerializer {
 
 		// Jump table index for the current function, keyed by switch address.
 		// Built once when currentFunction is set and cleared when it is reset.
-		private Map<Address, JumpTable> jumpTableIndex;
+		private Map<SequenceNumber, JumpTable> jumpTableIndex;
 		
 		// We invent an entry block for each `HighFunction` to be serialized.
 		// The operations within this entry block are custom `CALLOTHER`s, that
@@ -310,7 +310,8 @@ public class PcodeSerializer {
 			this.uniqueSpace = addressFactory.getUniqueSpace();
 
 			this.seenFunctions = new TreeSet<>();
-			this.seenTypes = new HashSet<>();
+			this.typeIdMap = new HashMap<>();
+			this.nextTypeId = 0;
 			this.seenGlobalsMap = new HashMap<>();
 			this.typesToSerialize = new ArrayList<>();
 			this.currentFunction = null;
@@ -371,20 +372,27 @@ public class PcodeSerializer {
 				type = VoidDataType.dataType;
 			}
 
+			// Build a canonical key from category, name, length, and UID.
 			String name = type.getName();
 			CategoryPath category = type.getCategoryPath();
-			String concatenatedTypeCategoryAndLength = category.toString() + name + Integer.toString(type.getLength());
-			String typeHexId = Integer.toHexString(concatenatedTypeCategoryAndLength.hashCode());
+			String canonicalKey = category.toString() + "::" + name + "::" + Integer.toString(type.getLength());
 
 			UniversalID typeUid = type.getUniversalID();
 			if (typeUid != null) {
-				typeHexId += Address.SEPARATOR + typeUid.toString();
+				canonicalKey += "::" + typeUid.toString();
 			}
 
-			if (seenTypes.add(typeHexId)) {
-				typesToSerialize.add(type);
+			// Return existing ID if we've seen this exact type before.
+			String existingId = typeIdMap.get(canonicalKey);
+			if (existingId != null) {
+				return existingId;
 			}
-			return typeHexId;
+
+			// Assign a new collision-free incremental ID.
+			String typeId = "t" + Integer.toHexString(nextTypeId++);
+			typeIdMap.put(canonicalKey, typeId);
+			typesToSerialize.add(type);
+			return typeId;
 		}
 		
 		// Figure out the return type of an intrinsic op.
@@ -460,13 +468,14 @@ public class PcodeSerializer {
 
 		void serializeBuiltinType(
 				DataType dataType, String kind) throws Exception {
-			
+
 			String displayName = null;
 			if (dataType instanceof AbstractIntegerDataType) {
 				AbstractIntegerDataType adt = (AbstractIntegerDataType) dataType;
 				displayName = adt.getCDeclaration();
+				writer.name("is_signed").value(adt.isSigned());
 			}
-			
+
 			if (displayName == null) {
 				displayName = dataType.getDisplayName();
 			}
@@ -500,18 +509,15 @@ public class PcodeSerializer {
 		void serializeEnumType(Enum enumDataType, String kind) throws Exception {
 			writer.name("name").value(enumDataType.getDisplayName());
 			writer.name("kind").value(kind);
-			writer.name("size").value(enumDataType.getLength());	
-			int enumCountOfEntries = enumDataType.getCount();
-			writer.name("num_entries").value(enumCountOfEntries);
+			writer.name("size").value(enumDataType.getLength());
+			String[] names = enumDataType.getNames();
+			writer.name("num_entries").value(names.length);
 			writer.name("entries").beginArray();
-			for (int i = 0; i < enumCountOfEntries; i++) {
-				String enumDataTypeName = enumDataType.getName(i);
-				if (enumDataTypeName != null) {
-					writer.beginObject();
-					writer.name("name").value(enumDataTypeName);
-					writer.name("value").value(enumDataType.getValue(enumDataTypeName));
-					writer.endObject();
-				}
+			for (String enumName : names) {
+				writer.beginObject();
+				writer.name("name").value(enumName);
+				writer.name("value").value(enumDataType.getValue(enumName));
+				writer.endObject();
 			}
 			writer.endArray();
 		}
@@ -579,16 +585,21 @@ public class PcodeSerializer {
 					serializeType(((PartialUnion) dataType).getStrippedDataType());
 				}
 			} else if (dataType instanceof BitFieldDataType) {
-				writer.name("kind").value("todo:BitFieldDataType");  // TODO(pag): Implement this
-				writer.name("size").value(dataType.getLength());
+				BitFieldDataType bitField = (BitFieldDataType) dataType;
+				writer.name("kind").value("bitfield");
+				writer.name("size").value(bitField.getLength());
+				writer.name("bit_offset").value(bitField.getBitOffset());
+				writer.name("bit_size").value(bitField.getBitSize());
+				writer.name("base_type").value(label(bitField.getBaseDataType()));
 				
 			} else if (dataType instanceof WideCharDataType) {
 				writer.name("kind").value("wchar");
 				writer.name("size").value(dataType.getLength());
 				
 			} else if (dataType instanceof StringDataType) {
-				writer.name("kind").value("todo:StringDataType");  // TODO(pag): Implement this
+				writer.name("kind").value("string");
 				writer.name("size").value(dataType.getLength());
+				writer.name("charset").value("US-ASCII");
 				
 			} else {
 				throw new Exception("Unhandled type: " + dataType.getClass().getName());
@@ -630,7 +641,12 @@ public class PcodeSerializer {
 			writer.name("return_type").value(label(proto.getReturnType()));
 			writer.name("is_variadic").value(proto.isVarArg());
 			writer.name("is_noreturn").value(proto.hasNoReturn());
-			
+
+			String callingConvention = proto.getModelName();
+			if (callingConvention != null && !callingConvention.isEmpty()) {
+				writer.name("calling_convention").value(callingConvention);
+			}
+
 			writer.name("parameter_types").beginArray();
 			int numberOfParams = proto.getNumParams();
 			for (int i = 0; i < numberOfParams; i++) {
@@ -1334,6 +1350,23 @@ public class PcodeSerializer {
 			return true;
 		}
 
+		// Try to rewrite/mutate a `PTRADD base, index, element_size`.
+		// PTRADD computes base + index * element_size. When the base
+		// references the stack pointer, rewrite it to use a local variable.
+		boolean rewritePtrAdd(
+				HighFunction highFunction, PcodeOp pcodeOp,
+				CallDepthChangeInfo cdci) throws Exception {
+
+			// If the base references the stack pointer, resolve it to a local.
+			int spIndex = referencesStackPointer(pcodeOp);
+			if (spIndex != -1) {
+				return tryFixupStackVarnode(highFunction, pcodeOp, cdci);
+			}
+
+			// Otherwise, pass through — the C++ side handles PTRADD natively.
+			return true;
+		}
+
 		DataType normalizeDataType(DataType dataType) throws Exception {
 			if (dataType instanceof TypeDef) {
 				return ((TypeDef) dataType).getBaseDataType();
@@ -1743,12 +1776,12 @@ public class PcodeSerializer {
 								return false;
 							}
 							break;
-//						case PcodeOp.PTRADD:
-//							if (!markPtrAddForElision(high_function, op)) {
-//								println("Unsupported PTRADD at " + label(op) + ": " + op.toString());
-//								return false;
-//							}
-//							break;
+						case PcodeOp.PTRADD:
+							if (!rewritePtrAdd(highFunction, pcodeOp, cdci)) {
+								System.out.println("Unsupported PTRADD at " + label(pcodeOp) + ": " + pcodeOp.toString());
+								return false;
+							}
+							break;
 						case PcodeOp.MULTIEQUAL:
 							if (!canElideMultiEqual(pcodeOp)) {
 								System.out.println("Unsupported MULTIEQUAL at " + label(pcodeOp) + ": " + pcodeOp.toString());
@@ -1857,12 +1890,38 @@ public class PcodeSerializer {
 				return;
 			}
 			
+			// Resolve the address space from input[0] and the constant
+			// address from input[1] into a concrete Address, then try
+			// to find a known global at that location.
 			Varnode addressSpaceVarnode = pcodeOp.getInput(0);
 			assert addressSpaceVarnode.isConstant();
 
+			AddressFactory af = currentProgram.getAddressFactory();
+			int spaceId = (int) addressSpaceVarnode.getOffset();
+			AddressSpace space = af.getAddressSpace(spaceId);
+			long offset = address.getOffset();
+
+			if (space != null) {
+				Address resolved = space.getAddress(offset);
+				HighVariable globalVar = seenGlobalsMap.get(resolved);
+				if (globalVar != null) {
+					writer.beginObject();
+					writer.name("type").value(label(globalVar.getDataType()));
+					writer.name("kind").value("global");
+					writer.name("global").value(label(resolved));
+					writer.endObject();
+					return;
+				}
+			}
+
+			// Fall back to emitting as a constant with address and space info.
 			writer.beginObject();
-			writer.name("size").value(pcodeOp.getInput(1).getSize());
-			System.out.println("!!! " + label(pcodeOp) + ": " + pcodeOp.toString());
+			writer.name("size").value(address.getSize());
+			writer.name("kind").value("constant");
+			writer.name("value").value(offset);
+			if (space != null) {
+				writer.name("address_space").value(space.getName());
+			}
 			writer.endObject();
 		}
 		
@@ -2221,7 +2280,7 @@ public class PcodeSerializer {
 			writer.name("fallback_block").value(defaultBlock);
 		}
 
-		JumpTable jt = jumpTableIndex.get(pcodeOp.getSeqnum().getTarget());
+		JumpTable jt = jumpTableIndex.get(pcodeOp.getSeqnum());
 		Varnode discriminant = (jt != null) ? traceSwitchDiscriminant(pcodeOp.getInput(0)) : null;
 		if (jt != null && discriminant != null) {
 			serializeSwitchCases(pcodeOp, discriminant, jt, n);
@@ -2556,16 +2615,55 @@ public class PcodeSerializer {
 			return true;
 		}
 		
-		// Returns `true` if we can elide a copy operation. This only happens
-		// when we copy a variable into itself.
-		//
-		// NOTE(pag): I think this comes about as a sort of "pre-PHI" operation.
-		//
-		// TODO(pag): This is toally unsafe if there's an intervening write to
-		//			  relevant variable. Probably should investigate this case.
+		// Returns `true` if we can safely elide a copy operation. A COPY can
+		// be elided only when input and output map to the same HighVariable
+		// AND there is no intervening write to that variable between the
+		// input's definition point and this COPY within the same block.
 		boolean canElideCopy(PcodeOp pcodeOp) throws Exception {
 			HighVariable highVariableOfPcodeOp = variableOf(pcodeOp);
-			return highVariableOfPcodeOp != null && highVariableOfPcodeOp == variableOf(pcodeOp.getInput(0));
+			if (highVariableOfPcodeOp == null) {
+				return false;
+			}
+
+			Varnode inputVarnode = pcodeOp.getInput(0);
+			if (highVariableOfPcodeOp != variableOf(inputVarnode)) {
+				return false;
+			}
+
+			// Check for intervening writes to the same variable within the
+			// same basic block. Walk backwards from this COPY looking for
+			// any op whose output defines the same HighVariable.
+			PcodeOp inputDef = inputVarnode.getDef();
+			PcodeBlockBasic block = pcodeOp.getParent();
+			if (block == null || inputDef == null || inputDef.getParent() != block) {
+				// Input defined in a different block — no intervening write
+				// in this block is possible between def and use.
+				return true;
+			}
+
+			// Walk ops between inputDef (exclusive) and pcodeOp (exclusive).
+			Iterator<PcodeOp> it = block.getIterator();
+			boolean pastDef = false;
+			while (it.hasNext()) {
+				PcodeOp op = it.next();
+				if (op == pcodeOp) {
+					break;
+				}
+				if (op == inputDef) {
+					pastDef = true;
+					continue;
+				}
+				if (!pastDef) {
+					continue;
+				}
+				// Check if this op writes to the same variable.
+				Varnode opOutput = op.getOutput();
+				if (opOutput != null && variableOf(opOutput) == highVariableOfPcodeOp) {
+					return false;
+				}
+			}
+
+			return true;
 		}
 		
 		// Returns `true` if `op` is a branch operator.
@@ -2747,7 +2845,30 @@ public class PcodeSerializer {
 					currentFunction = highFunction;
 					jumpTableIndex = new HashMap<>();
 					for (JumpTable jt : currentFunction.getJumpTables()) {
-						jumpTableIndex.put(jt.getSwitchAddress(), jt);
+						// Find the BRANCHIND pcode op at the switch address to
+						// key by its exact SequenceNumber, avoiding ambiguity
+						// when multiple ops share the same machine address.
+						Address switchAddr = jt.getSwitchAddress();
+						ArrayList<PcodeBlockBasic> blocks = currentFunction.getBasicBlocks();
+						boolean found = false;
+						for (PcodeBlockBasic blk : blocks) {
+							Iterator<PcodeOp> opIt = blk.getIterator();
+							while (opIt.hasNext()) {
+								PcodeOp op = opIt.next();
+								if (op.getOpcode() == PcodeOp.BRANCHIND &&
+									op.getSeqnum().getTarget().equals(switchAddr)) {
+									jumpTableIndex.put(op.getSeqnum(), jt);
+									found = true;
+									break;
+								}
+							}
+							if (found) break;
+						}
+						if (!found) {
+							// Fallback: create a synthetic SequenceNumber from the address.
+							jumpTableIndex.put(
+								new SequenceNumber(switchAddr, 0), jt);
+						}
 					}
 
 					writer.name("basic_blocks").beginObject();
