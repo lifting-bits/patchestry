@@ -720,8 +720,8 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool >
     FunctionBuilder::create_operation(clang::ASTContext &ctx, const Operation &op) {
         if (op.mnemonic == Mnemonic::OP_UNKNOWN) {
-            llvm::errs() << "Operation with unknown mnemonic. operation key ( " << op.key
-                         << " )\n";
+            LOG(ERROR) << "Operation with unknown mnemonic. operation key ( " << op.key
+                       << " )\n";
             return {};
         }
 

@@ -20,6 +20,8 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <patchestry/Util/Log.hpp>
+
 #include <map>
 #include <string>
 #include <vector>
@@ -86,7 +88,7 @@ namespace {
                     index = static_cast< unsigned >(std::stoul(index_str));
                     return true;
                 } catch (const std::exception &e) {
-                    llvm::errs() << "Warning: failed to parse argument index '"
+                    LOG(WARNING) << "failed to parse argument index '"
                                  << index_str << "': " << e.what() << "\n";
                     return false;
                 }
@@ -158,7 +160,7 @@ namespace {
 
         auto kind_it = kv.find("kind");
         if (kind_it == kv.end()) {
-            llvm::errs() << "Warning: predicate missing 'kind' key\n";
+            LOG(WARNING) << "predicate missing 'kind' key\n";
             return pred;
         }
 
@@ -196,7 +198,7 @@ namespace {
                     else if (rel == "gte")
                         pred.kind = PK_RelGeArgConst;
                 } catch (const std::exception &e) {
-                    llvm::errs() << "Warning: failed to parse relation value '"
+                    LOG(WARNING) << "failed to parse relation value '"
                                  << val_it->second << "': " << e.what() << "\n";
                 }
             }
@@ -223,7 +225,7 @@ namespace {
                     try {
                         pred.min_val = std::stoll(range_str.substr(min_pos, min_end - min_pos));
                     } catch (const std::exception &e) {
-                        llvm::errs() << "Warning: failed to parse range min value '"
+                        LOG(WARNING) << "failed to parse range min value '"
                                      << range_str.substr(min_pos, min_end - min_pos)
                                      << "': " << e.what() << "\n";
                     }
@@ -235,7 +237,7 @@ namespace {
                     try {
                         pred.max_val = std::stoll(range_str.substr(max_pos, max_end - max_pos));
                     } catch (const std::exception &e) {
-                        llvm::errs() << "Warning: failed to parse range max value '"
+                        LOG(WARNING) << "failed to parse range max value '"
                                      << range_str.substr(max_pos, max_end - max_pos)
                                      << "': " << e.what() << "\n";
                     }
@@ -248,12 +250,12 @@ namespace {
                 try {
                     pred.alignment = std::stoull(align_it->second);
                 } catch (const std::exception &e) {
-                    llvm::errs() << "Warning: failed to parse alignment value '"
+                    LOG(WARNING) << "failed to parse alignment value '"
                                  << align_it->second << "': " << e.what() << "\n";
                 }
             }
         } else {
-            llvm::errs() << "Warning: unknown predicate kind '" << kind_str << "'\n";
+            LOG(WARNING) << "unknown predicate kind '" << kind_str << "'\n";
         }
 
         return pred;
@@ -408,7 +410,7 @@ namespace {
             // Get the argument value — requires a CallBase instruction
             if (!CB) {
                 if (verbose)
-                    llvm::errs() << "  Warning: precondition on arg" << P.arg_index
+                    LOG(WARNING) << "precondition on arg" << P.arg_index
                                  << " skipped — instruction is not a call in "
                                  << Inst.getFunction()->getName() << "\n";
                 continue;
@@ -419,7 +421,7 @@ namespace {
 
             if (!A) {
                 if (verbose)
-                    llvm::errs() << "  Warning: precondition on arg" << P.arg_index
+                    LOG(WARNING) << "precondition on arg" << P.arg_index
                                  << " skipped — arg index out of range (function has "
                                  << CB->arg_size() << " args) in "
                                  << Inst.getFunction()->getName() << "\n";
@@ -539,7 +541,7 @@ namespace {
             }
             default:
                 if (verbose)
-                    llvm::errs() << "  Warning: unhandled precondition kind "
+                    LOG(WARNING) << "unhandled precondition kind "
                                  << static_cast< int >(P.kind) << " in "
                                  << Inst.getFunction()->getName() << "\n";
                 break;
@@ -569,7 +571,7 @@ namespace {
         if (!After) {
             if (Inst.isTerminator()) {
                 if (verbose)
-                    llvm::errs() << "  Warning: cannot inject postconditions after "
+                    LOG(WARNING) << "cannot inject postconditions after "
                                     "terminator instruction in "
                                  << Inst.getFunction()->getName() << "\n";
                 return;
@@ -630,7 +632,7 @@ namespace {
             }
             default:
                 if (verbose)
-                    llvm::errs() << "  Warning: unhandled postcondition kind "
+                    LOG(WARNING) << "unhandled postcondition kind "
                                  << static_cast< int >(P.kind) << " in "
                                  << Inst.getFunction()->getName() << "\n";
                 break;
@@ -660,12 +662,12 @@ namespace {
 
                     auto *tuple = llvm::dyn_cast< llvm::MDTuple >(contract_md);
                     if (!tuple) {
-                        llvm::errs() << "Warning: static_contract metadata is not an MDTuple"
+                        LOG(WARNING) << "static_contract metadata is not an MDTuple"
                                      << " in " << F.getName() << "\n";
                         continue;
                     }
                     if (tuple->getNumOperands() < 2) {
-                        llvm::errs() << "Warning: static_contract metadata has "
+                        LOG(WARNING) << "static_contract metadata has "
                                      << tuple->getNumOperands() << " operand(s), expected >= 2"
                                      << " in " << F.getName() << "\n";
                         continue;
@@ -673,7 +675,7 @@ namespace {
                     auto *md_str =
                         llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1));
                     if (!md_str) {
-                        llvm::errs() << "Warning: static_contract metadata operand(1) is not"
+                        LOG(WARNING) << "static_contract metadata operand(1) is not"
                                      << " an MDString in " << F.getName() << "\n";
                         continue;
                     }
@@ -711,7 +713,7 @@ namespace {
         std::error_code ec;
         llvm::raw_fd_ostream os(output_filename, ec, llvm::sys::fs::OF_None);
         if (ec) {
-            llvm::errs() << "Error opening " << output_filename << ": " << ec.message() << "\n";
+            LOG(ERROR) << "opening " << output_filename << ": " << ec.message() << "\n";
             return false;
         }
 
@@ -749,7 +751,7 @@ int main(int argc, char **argv) {
     unsigned count = processModule(*module);
 
     if (count == 0) {
-        llvm::errs() << "Warning: no static_contract metadata found in module — "
+        LOG(WARNING) << "no static_contract metadata found in module — "
                         "output will contain no verification predicates\n";
     }
 
@@ -759,7 +761,7 @@ int main(int argc, char **argv) {
 
     // Write output
     if (!writeModuleToFile(*module, output_filename)) {
-        llvm::errs() << "Failed to write output\n";
+        LOG(ERROR) << "Failed to write output\n";
         return EXIT_FAILURE;
     }
 

@@ -13,6 +13,7 @@ target_link_libraries(patchir-seahorn-verifier
         LLVMSupport
         LLVMIRReader
         LLVMBitWriter
+        patchestry_settings
 )
 
 if(PATCHESTRY_INSTALL)

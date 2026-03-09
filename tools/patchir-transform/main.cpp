@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
     llvm::cl::ParseCommandLineOptions(argc, argv, "Patch IR Instrumentation Driver");
 
     if (enable_instrumentation.getValue() && spec_filename.getValue().empty()) {
-        llvm::errs() << "error: --spec is required when --enable-instrumentation is set\n";
+        LOG(ERROR) << "--spec is required when --enable-instrumentation is set\n";
         return EXIT_FAILURE;
     }
 
