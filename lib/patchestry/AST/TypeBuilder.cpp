@@ -487,21 +487,38 @@ namespace patchestry::ast {
         enum_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(enum_decl);
 
+        // Derive the underlying integer type from the serialized enum size.
+        unsigned bit_width = enum_type.size * TypeBuilder::num_bits_in_byte;
+        if (bit_width == 0) {
+            bit_width = num_bits_uint;
+        }
+
+        auto underlying_type =
+            GetTypeFromSize(ctx, bit_width, /*is_signed=*/true, /*is_integer=*/true);
+        if (underlying_type.isNull()) {
+            underlying_type = ctx.IntTy;
+            bit_width       = num_bits_uint;
+        }
+
         // Populate enum with actual Ghidra-serialized constants.
         const auto &constants = enum_type.GetConstants();
         for (const auto &c : constants) {
             auto *val = clang::IntegerLiteral::Create(
-                ctx, llvm::APInt(num_bits_uint, static_cast< uint64_t >(c.value), /*isSigned=*/true),
-                ctx.IntTy, loc
+                ctx,
+                llvm::APInt(bit_width, static_cast< uint64_t >(c.value), /*isSigned=*/true),
+                underlying_type, loc
             );
             auto *ecd = clang::EnumConstantDecl::Create(
-                ctx, enum_decl, loc, &ctx.Idents.get(c.name), ctx.IntTy, val,
-                llvm::APSInt(llvm::APInt(num_bits_uint, static_cast< uint64_t >(c.value), /*isSigned=*/true), /*isUnsigned=*/false)
+                ctx, enum_decl, loc, &ctx.Idents.get(c.name), underlying_type, val,
+                llvm::APSInt(
+                    llvm::APInt(bit_width, static_cast< uint64_t >(c.value), /*isSigned=*/true),
+                    /*isUnsigned=*/false
+                )
             );
             enum_decl->addDecl(ecd);
         }
 
-        enum_decl->completeDefinition(ctx.IntTy, ctx.IntTy, TypeBuilder::num_bits_uint, 0U);
+        enum_decl->completeDefinition(underlying_type, underlying_type, bit_width, 0U);
 
         return ctx.getEnumType(enum_decl);
     }

@@ -209,7 +209,7 @@ public class PcodeSerializer {
 		private HighFunction currentFunction;
 		private PcodeBlockBasic currentBlock;
 
-		// Jump table index for the current function, keyed by switch address.
+		// Jump table index for the current function, keyed by SequenceNumber.
 		// Built once when currentFunction is set and cleared when it is reset.
 		private Map<SequenceNumber, JumpTable> jumpTableIndex;
 		
@@ -2844,30 +2844,28 @@ public class PcodeSerializer {
 					PcodeBlockBasic firstPcodeBasicBlock = null;
 					currentFunction = highFunction;
 					jumpTableIndex = new HashMap<>();
-					for (JumpTable jt : currentFunction.getJumpTables()) {
-						// Find the BRANCHIND pcode op at the switch address to
-						// key by its exact SequenceNumber, avoiding ambiguity
-						// when multiple ops share the same machine address.
-						Address switchAddr = jt.getSwitchAddress();
-						ArrayList<PcodeBlockBasic> blocks = currentFunction.getBasicBlocks();
-						boolean found = false;
-						for (PcodeBlockBasic blk : blocks) {
-							Iterator<PcodeOp> opIt = blk.getIterator();
-							while (opIt.hasNext()) {
-								PcodeOp op = opIt.next();
-								if (op.getOpcode() == PcodeOp.BRANCHIND &&
-									op.getSeqnum().getTarget().equals(switchAddr)) {
-									jumpTableIndex.put(op.getSeqnum(), jt);
-									found = true;
-									break;
-								}
+
+					// Pre-index BRANCHIND ops by their target address in a single
+					// pass over all blocks, then resolve each JumpTable in O(1).
+					Map<Address, SequenceNumber> branchIndByAddr = new HashMap<>();
+					for (PcodeBlockBasic blk : currentFunction.getBasicBlocks()) {
+						Iterator<PcodeOp> opIt = blk.getIterator();
+						while (opIt.hasNext()) {
+							PcodeOp op = opIt.next();
+							if (op.getOpcode() == PcodeOp.BRANCHIND) {
+								branchIndByAddr.put(op.getSeqnum().getTarget(), op.getSeqnum());
 							}
-							if (found) break;
 						}
-						if (!found) {
+					}
+
+					for (JumpTable jt : currentFunction.getJumpTables()) {
+						SequenceNumber seq = branchIndByAddr.get(jt.getSwitchAddress());
+						if (seq != null) {
+							jumpTableIndex.put(seq, jt);
+						} else {
 							// Fallback: create a synthetic SequenceNumber from the address.
 							jumpTableIndex.put(
-								new SequenceNumber(switchAddr, 0), jt);
+								new SequenceNumber(jt.getSwitchAddress(), 0), jt);
 						}
 					}
 

@@ -2460,21 +2460,34 @@ namespace patchestry::ast {
         auto *scale =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[2]));
 
-        // When the base is a pointer type, emit base[index] (array subscript)
-        // instead of raw base + index * scale arithmetic.  Take the address to
-        // match PTRADD semantics (result is a pointer).
+        // When the base is a pointer type and the scale matches sizeof(*base),
+        // emit &base[index] (array subscript) instead of raw arithmetic.
+        // Otherwise fall back to base + index * scale to preserve correct
+        // pointer arithmetic for mismatched scales.
         clang::Expr *result_expr = nullptr;
         if (base->getType()->isPointerType()) {
-            auto subscript =
-                sema().CreateBuiltinArraySubscriptExpr(base, op_loc, index, op_loc);
-            if (!subscript.isInvalid()) {
-                result_expr = sema()
-                    .CreateBuiltinUnaryOp(op_loc, clang::UO_AddrOf, subscript.get())
-                    .getAs< clang::Expr >();
+            bool scale_matches = false;
+            if (auto *scale_lit = clang::dyn_cast< clang::IntegerLiteral >(scale)) {
+                auto pointee_size = ctx.getTypeSizeInChars(
+                    base->getType()->getPointeeType()
+                );
+                scale_matches =
+                    scale_lit->getValue() == static_cast< uint64_t >(pointee_size.getQuantity());
+            }
+
+            if (scale_matches) {
+                auto subscript =
+                    sema().CreateBuiltinArraySubscriptExpr(base, op_loc, index, op_loc);
+                if (!subscript.isInvalid()) {
+                    result_expr = sema()
+                        .CreateBuiltinUnaryOp(op_loc, clang::UO_AddrOf, subscript.get())
+                        .getAs< clang::Expr >();
+                }
             }
         }
 
-        // Fallback to arithmetic for non-pointer base types.
+        // Fallback to arithmetic when base is not a pointer, scale is not a
+        // constant, or scale does not match the pointee size.
         if (!result_expr) {
             auto mult_result = sema().CreateBuiltinBinOp(op_loc, clang::BO_Mul, index, scale);
             assert(!mult_result.isInvalid());
