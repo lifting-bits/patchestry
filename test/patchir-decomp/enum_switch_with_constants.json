@@ -1,0 +1,132 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// CIR: cir.func @enum_switch_test
+// RUN: %file-check -vv -check-prefix=CCHECK %s --input-file %t.c
+// CCHECK: enum DeviceState {
+// CCHECK: STATE_IDLE
+// CCHECK: STATE_RUNNING
+// CCHECK: STATE_ERROR
+// CCHECK: enum_switch_test(enum DeviceState state)
+// CCHECK: return
+//
+// Tests enum type deserialization with named constants (entries) and
+// BRANCHIND-based dispatch. Exercises enum constant support in TypeBuilder
+// and the VARNODE_PARAM switch discriminant path.
+//
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "enum_switch_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_state_enum"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "state", "type": "type_state_enum", "kind": "parameter", "index": 0 },
+            "local_r": { "mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "result", "type": "type_int" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "local_r", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "sw": {
+              "mnemonic": "BRANCHIND",
+              "inputs": [{ "type": "type_state_enum", "kind": "parameter", "operation": "p0" }],
+              "switch_cases": [
+                { "value": 0, "target_block": "ram:10000000:1:basic" },
+                { "value": 1, "target_block": "ram:10000000:2:basic" },
+                { "value": 2, "target_block": "ram:10000000:3:basic" }
+              ],
+              "default_block": "ram:10000000:4:basic"
+            }
+          },
+          "ordered_operations": ["sw"]
+        },
+        "ram:10000000:1:basic": {
+          "operations": {
+            "set_idle": {
+              "mnemonic": "COPY",
+              "type": "type_int",
+              "output": { "kind": "local", "operation": "local_r" },
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 10 }]
+            },
+            "br1": { "mnemonic": "BRANCH", "target_block": "ram:10000000:5:basic" }
+          },
+          "ordered_operations": ["set_idle", "br1"]
+        },
+        "ram:10000000:2:basic": {
+          "operations": {
+            "set_running": {
+              "mnemonic": "COPY",
+              "type": "type_int",
+              "output": { "kind": "local", "operation": "local_r" },
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 20 }]
+            },
+            "br2": { "mnemonic": "BRANCH", "target_block": "ram:10000000:5:basic" }
+          },
+          "ordered_operations": ["set_running", "br2"]
+        },
+        "ram:10000000:3:basic": {
+          "operations": {
+            "set_error": {
+              "mnemonic": "COPY",
+              "type": "type_int",
+              "output": { "kind": "local", "operation": "local_r" },
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": -1 }]
+            },
+            "br3": { "mnemonic": "BRANCH", "target_block": "ram:10000000:5:basic" }
+          },
+          "ordered_operations": ["set_error", "br3"]
+        },
+        "ram:10000000:4:basic": {
+          "operations": {
+            "set_default": {
+              "mnemonic": "COPY",
+              "type": "type_int",
+              "output": { "kind": "local", "operation": "local_r" },
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 0 }]
+            },
+            "br4": { "mnemonic": "BRANCH", "target_block": "ram:10000000:5:basic" }
+          },
+          "ordered_operations": ["set_default", "br4"]
+        },
+        "ram:10000000:5:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "local", "operation": "local_r" }]
+            }
+          },
+          "ordered_operations": ["ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" },
+    "type_state_enum": {
+      "name": "DeviceState",
+      "size": 4,
+      "kind": "enum",
+      "num_entries": 3,
+      "entries": [
+        { "name": "STATE_IDLE", "value": 0 },
+        { "name": "STATE_RUNNING", "value": 1 },
+        { "name": "STATE_ERROR", "value": 2 }
+      ]
+    }
+  }
+}

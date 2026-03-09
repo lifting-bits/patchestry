@@ -249,26 +249,29 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
             DataType returnType = func.getReturnType();
             String typeLabelInHex = serializer.label(returnType);
 
-            UniversalID universalId = returnType.getUniversalID();
-            assertNotNull(universalId);
-            assertTrue(typeLabelInHex.endsWith(universalId.toString()));
+            // Collision-free incremental IDs start with "t".
+            assertNotNull(typeLabelInHex);
+            assertTrue(typeLabelInHex.startsWith("t"));
+
+            // Same type must produce the same label (idempotent).
+            assertEquals(typeLabelInHex, serializer.label(returnType));
 
             for (Parameter parameter : func.getParameters()) {
                 DataType parameterType = parameter.getDataType();
                 String paramTypeLabelInHex = serializer.label(parameterType);
 
-                UniversalID paramUid = parameterType.getUniversalID();
-                assertNotNull(paramUid);
-                assertTrue(paramTypeLabelInHex.endsWith(paramUid.toString()));
+                assertNotNull(paramTypeLabelInHex);
+                assertTrue(paramTypeLabelInHex.startsWith("t"));
+                assertEquals(paramTypeLabelInHex, serializer.label(parameterType));
             }
 
             for (Variable localVar : func.getAllVariables()) {
                 DataType localType = localVar.getDataType();
                 String variableTypeLabelInHex = serializer.label(localType);
 
-                UniversalID localUid = localType.getUniversalID();
-                assertNotNull(localUid);
-                assertTrue(variableTypeLabelInHex.endsWith(localUid.toString()));
+                assertNotNull(variableTypeLabelInHex);
+                assertTrue(variableTypeLabelInHex.startsWith("t"));
+                assertEquals(variableTypeLabelInHex, serializer.label(localType));
             }
         }
     }

@@ -212,6 +212,18 @@ namespace patchestry::ghidra {
                         *json_value.getAsObject(), serialized_types
                     );
                     break;
+                case VarnodeType::Kind::VT_BITFIELD:
+                    deserialize_bitfield(
+                        *dynamic_cast< BitFieldType * >(vnode_type.get()),
+                        *json_value.getAsObject(), serialized_types
+                    );
+                    break;
+                case VarnodeType::Kind::VT_STRING:
+                    deserialize_string(
+                        *dynamic_cast< StringType * >(vnode_type.get()),
+                        *json_value.getAsObject(), serialized_types
+                    );
+                    break;
                 case VarnodeType::Kind::VT_INVALID:
                     break;
             }
@@ -251,6 +263,10 @@ namespace patchestry::ghidra {
                 return std::make_shared< TypedefType >(name, kind, size);
             case VarnodeType::VT_UNDEFINED:
                 return std::make_shared< UndefinedType >(name, kind, size);
+            case VarnodeType::Kind::VT_BITFIELD:
+                return std::make_shared< BitFieldType >(name, kind, size);
+            case VarnodeType::Kind::VT_STRING:
+                return std::make_shared< StringType >(name, kind, size);
             case VarnodeType::Kind::VT_VOID:
                 return std::make_shared< BuiltinType >(name, kind, size);
         }
@@ -259,7 +275,7 @@ namespace patchestry::ghidra {
     }
 
     void JsonParser::deserialize_buildin(
-        BuiltinType &varnode, const JsonObject & /*unused*/, const TypeMap & /*unused*/
+        BuiltinType &varnode, const JsonObject &obj, const TypeMap & /*unused*/
     ) {
         assert(
             varnode.kind == VarnodeType::Kind::VT_BOOLEAN
@@ -269,7 +285,28 @@ namespace patchestry::ghidra {
             || varnode.kind == VarnodeType::Kind::VT_FLOAT
             || varnode.kind == VarnodeType::Kind::VT_VOID
         );
-        (void) varnode;
+        varnode.is_signed = obj.getBoolean("is_signed").value_or(false);
+    }
+
+    void JsonParser::deserialize_bitfield(
+        BitFieldType &varnode, const JsonObject &obj, const TypeMap &serialized_types
+    ) {
+        varnode.bit_offset = static_cast< uint32_t >(obj.getInteger("bit_offset").value_or(0));
+        varnode.bit_size   = static_cast< uint32_t >(obj.getInteger("bit_size").value_or(0));
+
+        auto base_key = get_string_if_valid(obj, "base_type");
+        if (base_key) {
+            auto iter = serialized_types.find(*base_key);
+            if (iter != serialized_types.end()) {
+                varnode.SetBaseType(iter->second);
+            }
+        }
+    }
+
+    void JsonParser::deserialize_string(
+        StringType &varnode, const JsonObject &obj, const TypeMap & /*unused*/
+    ) {
+        varnode.charset = get_string(obj, "charset", "US-ASCII");
     }
 
     // Deserialize array types
@@ -746,6 +783,11 @@ namespace patchestry::ghidra {
         proto.rttype_key  = *return_type_key;
         proto.is_variadic = proto_obj.getBoolean("is_variadic").value_or(false);
         proto.is_noreturn = proto_obj.getBoolean("is_noreturn").value_or(false);
+
+        auto cc = get_string_if_valid(proto_obj, "calling_convention");
+        if (cc) {
+            proto.calling_convention = *cc;
+        }
 
         if (const auto *parameters = proto_obj.getArray("parameter_types")) {
             for (const auto &parameter : *parameters) {
