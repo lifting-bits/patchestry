@@ -16,4 +16,5 @@ _site/
 .classpath
 .project
 .settings
+.worktrees/
 
