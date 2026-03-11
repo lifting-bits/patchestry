@@ -14,7 +14,7 @@
 namespace patchestry::ast {
 
     // Compute iterative RPO (reverse post-order) traversal
-    static std::vector< size_t > computeRPO(
+    static std::vector< size_t > ComputeRPO(
         size_t entry, size_t n,
         const std::vector< std::vector< size_t > > &succs
     ) {
@@ -65,13 +65,13 @@ namespace patchestry::ast {
     }
 
     // Cooper-Harvey-Kennedy iterative dominator algorithm
-    static DomTree buildDomImpl(
+    static DomTree BuildDomImpl(
         size_t entry, size_t n,
         const std::vector< std::vector< size_t > > &succs,
         const std::vector< std::vector< size_t > > &preds
     ) {
         DomTree tree;
-        tree.rpo_order_ = computeRPO(entry, n, succs);
+        tree.rpo_order_ = ComputeRPO(entry, n, succs);
         tree.entry_ = entry;
 
         tree.idom_.assign(n, DomTree::kUndef);
@@ -122,7 +122,7 @@ namespace patchestry::ast {
             }
         }
 
-        return buildDomImpl(cfg.entry, n, succs, preds);
+        return BuildDomImpl(cfg.entry, n, succs, preds);
     }
 
     DomTree DomTree::BuildPostDom(const Cfg &cfg) {
@@ -148,7 +148,7 @@ namespace patchestry::ast {
             }
         }
 
-        return buildDomImpl(virt_exit, total, rev_succs, rev_preds);
+        return BuildDomImpl(virt_exit, total, rev_succs, rev_preds);
     }
 
     bool DomTree::Dominates(size_t a, size_t b) const {
@@ -173,7 +173,6 @@ namespace patchestry::ast {
         size_t n = cfg.blocks.size();
 
         for (size_t b = 0; b < n; ++b) {
-            if (cfg.blocks[b].succs.size() < 2) continue;
             for (size_t s : cfg.blocks[b].succs) {
                 size_t runner = b;
                 while (runner != kUndef && runner != Idom(s)) {

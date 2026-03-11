@@ -14,7 +14,7 @@ namespace patchestry::ast {
             llvm::raw_ostream &os;
             unsigned next_id = 0;
 
-            unsigned emit(const SNode *node) {
+            unsigned Emit(const SNode *node) {
                 if (!node) return 0;
                 unsigned id = next_id++;
 
@@ -35,7 +35,7 @@ namespace patchestry::ast {
                 case SNodeKind::SEQ: {
                     auto *seq = node->as< SSeq >();
                     for (const auto *child : seq->Children()) {
-                        unsigned cid = emit(child);
+                        unsigned cid = Emit(child);
                         os << "  n" << id << " -> n" << cid << ";\n";
                     }
                     break;
@@ -43,11 +43,11 @@ namespace patchestry::ast {
                 case SNodeKind::IF_THEN_ELSE: {
                     auto *ite = node->as< SIfThenElse >();
                     if (ite->ThenBranch()) {
-                        unsigned tid = emit(ite->ThenBranch());
+                        unsigned tid = Emit(ite->ThenBranch());
                         os << "  n" << id << " -> n" << tid << " [label=\"then\"];\n";
                     }
                     if (ite->ElseBranch()) {
-                        unsigned eid = emit(ite->ElseBranch());
+                        unsigned eid = Emit(ite->ElseBranch());
                         os << "  n" << id << " -> n" << eid << " [label=\"else\"];\n";
                     }
                     break;
@@ -55,7 +55,7 @@ namespace patchestry::ast {
                 case SNodeKind::WHILE: {
                     auto *w = node->as< SWhile >();
                     if (w->Body()) {
-                        unsigned bid = emit(w->Body());
+                        unsigned bid = Emit(w->Body());
                         os << "  n" << id << " -> n" << bid << " [label=\"body\"];\n";
                     }
                     break;
@@ -63,7 +63,7 @@ namespace patchestry::ast {
                 case SNodeKind::DO_WHILE: {
                     auto *dw = node->as< SDoWhile >();
                     if (dw->Body()) {
-                        unsigned bid = emit(dw->Body());
+                        unsigned bid = Emit(dw->Body());
                         os << "  n" << id << " -> n" << bid << " [label=\"body\"];\n";
                     }
                     break;
@@ -71,7 +71,7 @@ namespace patchestry::ast {
                 case SNodeKind::FOR: {
                     auto *f = node->as< SFor >();
                     if (f->Body()) {
-                        unsigned bid = emit(f->Body());
+                        unsigned bid = Emit(f->Body());
                         os << "  n" << id << " -> n" << bid << " [label=\"body\"];\n";
                     }
                     break;
@@ -80,13 +80,13 @@ namespace patchestry::ast {
                     auto *sw = node->as< SSwitch >();
                     for (size_t i = 0; i < sw->Cases().size(); ++i) {
                         if (sw->Cases()[i].body) {
-                            unsigned cid = emit(sw->Cases()[i].body);
+                            unsigned cid = Emit(sw->Cases()[i].body);
                             os << "  n" << id << " -> n" << cid
                                << " [label=\"case " << i << "\"];\n";
                         }
                     }
                     if (sw->DefaultBody()) {
-                        unsigned did = emit(sw->DefaultBody());
+                        unsigned did = Emit(sw->DefaultBody());
                         os << "  n" << id << " -> n" << did
                            << " [label=\"default\"];\n";
                     }
@@ -95,7 +95,7 @@ namespace patchestry::ast {
                 case SNodeKind::LABEL: {
                     auto *lbl = node->as< SLabel >();
                     if (lbl->Body()) {
-                        unsigned bid = emit(lbl->Body());
+                        unsigned bid = Emit(lbl->Body());
                         os << "  n" << id << " -> n" << bid << ";\n";
                     }
                     break;
@@ -113,7 +113,7 @@ namespace patchestry::ast {
         os << "digraph SNodeTree {\n";
         os << "  node [shape=box, fontname=\"Courier\"];\n";
         DotEmitter emitter{os};
-        emitter.emit(node);
+        emitter.Emit(node);
         os << "}\n";
     }
 

@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -29,13 +30,16 @@ namespace patchestry::ast {
 
     // A basic block in the CFG
     struct CfgBlock {
+        static constexpr size_t kNoSucc = std::numeric_limits< size_t >::max();
+
         std::string label;                  // empty if unlabeled entry block
         std::vector< clang::Stmt * > stmts; // statements in the block
         std::vector< size_t > succs;        // successor block indices
         bool is_conditional = false;        // true if block ends with if(cond) goto
         clang::Expr *branch_cond = nullptr; // condition expr if conditional
-        size_t taken_succ = 0;              // index of "then" successor
-        size_t fallthrough_succ = 0;        // index of "else" / fallthrough successor
+        size_t taken_succ        = kNoSucc; // index of "then" successor, or NO_SUCC
+        size_t fallthrough_succ =
+            kNoSucc; // index of "else" / fallthrough successor, or NO_SUCC
         std::vector< SwitchCaseEntry > switch_cases;  // non-empty iff this is a switch block
     };
 

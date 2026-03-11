@@ -8,12 +8,13 @@
 #pragma once
 
 #include <cassert>
-#include <memory>
-#include <string_view>
-#include <vector>
-#include <string>
-#include <utility>
 #include <cstring>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include <clang/AST/Expr.h>
 #include <clang/AST/Stmt.h>
@@ -400,27 +401,55 @@ namespace patchestry::ast {
         clang::Expr *value_;
     };
 
-    // Arena allocator factory for SNodes
+    // Owning factory for SNodes.
+    //
+    // SNode subclasses hold std:: members (std::string, std::vector) whose heap
+    // allocations must be released via their destructors.  A raw BumpPtrAllocator
+    // would reclaim the slab memory without ever calling destructors, leaking every
+    // such sub-allocation.
+    //
+    // Nodes are therefore owned through std::unique_ptr so that Reset() and the
+    // factory destructor both invoke the full virtual destructor chain.  The bump
+    // allocator is kept only for Intern(), whose raw char bytes carry no destructors.
     class SNodeFactory
     {
       public:
         template< typename T, typename... Args >
         T *Make(Args &&...args) {
-            void *mem = allocator_.Allocate(sizeof(T), alignof(T));
-            return new (mem) T(std::forward< Args >(args)...);
+            static_assert(
+                std::is_base_of_v< SNode, T >,
+                "SNodeFactory::Make may only create SNode subclasses"
+            );
+            auto node = std::make_unique< T >(std::forward< Args >(args)...);
+            T *ptr    = node.get();
+            nodes_.push_back(std::move(node));
+            return ptr;
         }
 
-        // Allocate a copy of a string that lives as long as the factory
+        // Intern a copy of a string; the returned view is valid until Reset().
+        // Uses a bump allocator because raw char data carries no destructor.
         std::string_view Intern(std::string_view s) {
-            char *buf = static_cast< char * >(allocator_.Allocate(s.size(), 1));
+            if (s.empty()) {
+                return {};
+            }
+            char *buf = static_cast< char * >(string_alloc_.Allocate(s.size(), 1));
             std::memcpy(buf, s.data(), s.size());
             return std::string_view(buf, s.size());
         }
 
-        void Reset() { allocator_.Reset(); }
+        // Destroy all nodes and release interned string memory.
+        void Reset() {
+            nodes_.clear(); // invokes virtual destructor on every node
+            string_alloc_.Reset();
+        }
+
+        size_t NodeCount() const { return nodes_.size(); }
 
       private:
-        llvm::BumpPtrAllocator allocator_;
+        // Owns all allocated SNodes; clear() triggers the full destructor chain.
+        std::vector< std::unique_ptr< SNode > > nodes_;
+        // Raw slab for interned string bytes only — no destructors needed.
+        llvm::BumpPtrAllocator string_alloc_;
     };
 
 } // namespace patchestry::ast
