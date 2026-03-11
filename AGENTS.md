@@ -199,6 +199,7 @@ patchir-yaml-parser config.yaml --validate
 - Build walkthrough: `docs/GettingStarted/build.md`
 - Firmware example flow: `docs/GettingStarted/firmware_examples.md`
 - Host ARM64 image build for macOS: `.devcontainer/README-HOST-BUILD.md`
+- System data flow diagram: `docs/system_data_flow.md`
 - Claude-specific workflow notes: `.claude/rules/*.md`
 
 ## Test Suites
@@ -408,8 +409,19 @@ Before requesting review:
 2. Run targeted builds/tests for touched components, plus any affected integration tests.
 3. Include a clear PR description: behavior change, design notes, and test evidence.
 4. If changing docs/process, ensure commands are copy/paste valid and up to date.
+5. If changing a data-flow boundary, tool interface, or owned module interface, update `docs/system_data_flow.md` in the same PR.
 
 Commit message format:
 
 - `component: Simple sentence with a period.`
 - Keep subject <= 80 characters.
+
+## Gardening Tasks
+
+These are recurring maintenance tasks that keep the repository documentation and
+developer guidance aligned with the code:
+
+1. Validate that `docs/system_data_flow.md` still matches the actual toolchain, test coverage, and repository-owned interfaces.
+2. Update the module/interface inventory in this document when patchestry-owned libraries, tools, dialects, scripts, or test suites change.
+3. Keep vendored dependency revisions and purposes current when submodules or integration boundaries change.
+4. Ensure PRs that change affected interfaces or data-flow boundaries also update the corresponding diagram and docs in the same change.
