@@ -32,6 +32,42 @@ Firmware Binary
   -> downstream binary rewriting / verification tools
 ```
 
+### Project-owned module inventory
+
+This inventory is intended to be exhaustive for patchestry-owned code. It does
+not attempt to document LLVM/MLIR internals or vendored dependency internals.
+
+#### Core libraries and dialects
+
+| Module | Build target | Main paths | Primary role |
+|---|---|---|---|
+| Ghidra model and translation | `patchestry_ghidra` | `include/patchestry/Ghidra/`, `lib/patchestry/Ghidra/` | deserialize Ghidra JSON and register P-Code translation |
+| AST lifting | `patchestry_ast` | `include/patchestry/AST/`, `lib/patchestry/AST/` | lift Ghidra model into Clang AST/CIR-ready structures |
+| Codegen | `patchestry_codegen` | `include/patchestry/Codegen/`, `lib/patchestry/Codegen/` | serialize and lower internal representations during tool pipelines |
+| YAML parsing | `patchestry_yaml` | `include/patchestry/YAML/`, `lib/patchestry/YAML/` | parse patch and contract YAML configuration |
+| Patch passes | `patchestry_passes` | `include/patchestry/Passes/`, `lib/patchestry/Passes/` | apply patch and contract transformations to CIR |
+| Contracts dialect | `MLIRContracts` | `include/patchestry/Dialect/Contracts/`, `lib/patchestry/Dialect/Contracts/` | represent contract attributes and verification metadata |
+| Pcode dialect | `MLIRPcode` | `include/patchestry/Dialect/Pcode/`, `lib/patchestry/Dialect/Pcode/` | represent and deserialize P-Code as an MLIR dialect |
+| Intrinsics library | `patchestry_intrinsics` | `include/patchestry/intrinsics/`, `lib/patchestry/intrinsics/` | provide patch helper/runtime functions for patch C code |
+| Utility headers | no standalone target | `include/patchestry/Util/` | shared logging, diagnostics, common options, helper types |
+
+#### Tools
+
+| Tool | Build target | Main paths | Purpose |
+|---|---|---|---|
+| `patchir-decomp` | `patchir-decomp` | `tools/patchir-decomp/` | decompile Ghidra JSON into CIR/LLVM/asm/object outputs |
+| `patchir-transform` | `patchir-transform` | `tools/patchir-transform/` | apply YAML-defined patches and contracts to CIR |
+| `patchir-cir2llvm` | `patchir-cir2llvm` | `tools/patchir-cir2llvm/` | lower CIR to LLVM IR or bitcode |
+| `patchir-yaml-parser` | `patchir-yaml-parser` | `tools/patchir-yaml-parser/` | validate and inspect YAML configuration |
+| `pcode-translate` | `pcode-translate` | `tools/pcode-translate/` | standalone P-Code translation driver built on patchestry Ghidra translation |
+
+#### Workflow scripts
+
+| Script area | Main paths | Purpose |
+|---|---|---|
+| Ghidra automation | `scripts/ghidra/` | build headless container, run decompilation, serialize functions/P-Code |
+| JSON rendering helper | `scripts/render_json.py` | utility script for rendering/inspecting JSON artifacts |
+
 ### Module interface map
 
 These interfaces are the contracts contributors should keep stable while iterating on internals.
@@ -40,12 +76,18 @@ These interfaces are the contracts contributors should keep stable while iterati
 |---|---|---|---|---|---|
 | Ghidra model | `include/patchestry/Ghidra/`, `lib/patchestry/Ghidra/` | `include/patchestry/Ghidra/JsonDeserialize.hpp`, `include/patchestry/Ghidra/Pcode.hpp`, `include/patchestry/Ghidra/PcodeTranslation.hpp` | Ghidra export JSON | in-memory Program/Function/Block/Op model | `lit ./builds/default/test/ghidra -D BUILD_TYPE=Debug -v` |
 | AST lifting | `include/patchestry/AST/`, `lib/patchestry/AST/` | `include/patchestry/AST/ASTConsumer.hpp`, `include/patchestry/AST/FunctionBuilder.hpp`, `include/patchestry/AST/OperationBuilder.hpp`, `include/patchestry/AST/TypeBuilder.hpp` | Ghidra model objects | Clang AST and CIR-ready structures | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
+| Codegen | `include/patchestry/Codegen/`, `lib/patchestry/Codegen/` | `include/patchestry/Codegen/Codegen.hpp`, `include/patchestry/Codegen/PassManager.hpp`, `include/patchestry/Codegen/Serializer.hpp` | AST/CIR owned by patchestry tools | serialized/lowered outputs consumed by tool frontends | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
 | Decompiler tool | `tools/patchir-decomp/` | `tools/patchir-decomp/main.cpp` | P-Code JSON | CIR / LLVM IR / asm / object output selected by flags | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
 | YAML spec parser | `include/patchestry/YAML/`, `lib/patchestry/YAML/`, `tools/patchir-yaml-parser/` | `include/patchestry/YAML/ConfigurationFile.hpp`, `include/patchestry/YAML/PatchSpec.hpp`, `include/patchestry/YAML/ContractSpec.hpp`, `include/patchestry/YAML/YAMLParser.hpp` | YAML patch/contract spec | validated configuration objects consumed by transform passes | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
 | Patch pass engine | `include/patchestry/Passes/`, `lib/patchestry/Passes/` | `include/patchestry/Passes/InstrumentationPass.hpp`, `include/patchestry/Passes/OperationMatcher.hpp`, `lib/patchestry/Passes/PatchOperationImpl.hpp`, `lib/patchestry/Passes/ContractOperationImpl.hpp` | CIR + parsed patch/contract config | transformed CIR with inserted/replaced operations | `lit ./builds/default/test/patchir-transform/patches -D BUILD_TYPE=Debug -v` |
 | Contracts dialect | `include/patchestry/Dialect/Contracts/`, `lib/patchestry/Dialect/Contracts/` | `include/patchestry/Dialect/Contracts/Contract.td`, `include/patchestry/Dialect/Contracts/ContractsDialect.hpp` | CIR ops plus contract attrs/spec | CIR attrs and LLVM metadata for verification flows | `lit ./builds/default/test/patchir-transform/contracts -D BUILD_TYPE=Debug -v` |
+| Pcode dialect | `include/patchestry/Dialect/Pcode/`, `lib/patchestry/Dialect/Pcode/` | `include/patchestry/Dialect/Pcode/Deserialize.hpp`, `include/patchestry/Dialect/Pcode/PcodeDialect.hpp`, `include/patchestry/Dialect/Pcode/PcodeOps.hpp`, `include/patchestry/Dialect/Pcode/PcodeTypes.hpp` | P-Code operations and serialized dialect data | MLIR P-Code dialect objects used by translation/decomp flows | `lit ./builds/default/test/pcode-translate -D BUILD_TYPE=Debug -v` |
 | CIR->LLVM lowering | `tools/patchir-cir2llvm/` | `tools/patchir-cir2llvm/main.cpp` | CIR | LLVM IR/bitcode with patch and contract metadata | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
 | Intrinsics library | `include/patchestry/intrinsics/`, `lib/patchestry/intrinsics/` | `include/patchestry/intrinsics/patchestry_intrinsics.h`, `include/patchestry/intrinsics/runtime.h`, `include/patchestry/intrinsics/safety.h` | patch C code | helper functions compiled into CIR and referenced from patch specs | `lit ./builds/default/test/patchir-transform/patches -D BUILD_TYPE=Debug -v` |
+| Utility headers | `include/patchestry/Util/` | `include/patchestry/Util/Common.hpp`, `include/patchestry/Util/Diagnostic.hpp`, `include/patchestry/Util/Log.hpp`, `include/patchestry/Util/Options.hpp` | shared options, diagnostics, logging inputs | common support APIs used across patchestry components | exercised transitively by owning component tests |
+| `patchir-yaml-parser` tool | `tools/patchir-yaml-parser/` | `tools/patchir-yaml-parser/main.cpp` | YAML patch/contract spec | validation results and diagnostics | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
+| `patchir-transform` tool | `tools/patchir-transform/` | `tools/patchir-transform/main.cpp` | CIR + YAML patch/contract config | patched CIR | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
+| `pcode-translate` tool | `tools/pcode-translate/` | `tools/pcode-translate/main.cpp` | MLIR translation command line + P-Code translation registration | translated P-Code output via MLIR translation driver | `lit ./builds/default/test/pcode-translate -D BUILD_TYPE=Debug -v` |
 
 ### Module-level build and test quick reference
 
@@ -53,10 +95,26 @@ These interfaces are the contracts contributors should keep stable while iterati
 |---|---|---|
 | Ghidra export integration | `patchir-decomp` | `lit ./builds/default/test/ghidra -D BUILD_TYPE=Debug -v` |
 | AST/Ghidra/decomp | `patchir-decomp` | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
+| P-Code dialect translation | `pcode-translate` | `lit ./builds/default/test/pcode-translate -D BUILD_TYPE=Debug -v` |
 | YAML parsing | `patchir-yaml-parser` | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
 | Patch application | `patchir-transform` | `lit ./builds/default/test/patchir-transform/patches -D BUILD_TYPE=Debug -v` |
 | Contract insertion/metadata | `patchir-transform` and `patchir-cir2llvm` | `lit ./builds/default/test/patchir-transform/contracts -D BUILD_TYPE=Debug -v` |
 | CIR lowering | `patchir-cir2llvm` | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
+| Standalone intrinsics build | `patchestry_intrinsics` | validate via patch-based transform tests and standalone CMake build when editing `lib/patchestry/intrinsics/` |
+
+### Component dependency map
+
+Keep these dependency boundaries in mind when editing interfaces:
+
+| Consumer | Depends on patchestry-owned components | Why it depends on them |
+|---|---|---|
+| `patchir-decomp` | `patchestry_ghidra`, `patchestry_ast`, `patchestry_codegen`, `patchestry_yaml` | deserialize exported firmware semantics, lift them, and emit outputs |
+| `patchir-transform` | `patchestry_codegen`, `patchestry_passes`, `patchestry_yaml`, `MLIRContracts` | parse YAML, transform CIR, and preserve contract semantics |
+| `patchir-yaml-parser` | `patchestry_yaml`, `patchestry_codegen`, `patchestry_passes` | validate specs against the same config and pass structures used by transform |
+| `patchir-cir2llvm` | `MLIRContracts` | lower CIR while preserving contract metadata |
+| `pcode-translate` | `patchestry_ghidra` | expose patchestry P-Code translation through the MLIR translation driver |
+| `patchestry_ghidra` | `MLIRPcode` | build/consume patchestry's P-Code dialect layer for translation |
+| `patchestry_passes` | `patchestry_yaml` | consume parsed patch/contract specs during instrumentation |
 
 ### Data interface details by stage
 
@@ -76,6 +134,10 @@ These interfaces are the contracts contributors should keep stable while iterati
    `patchir-cir2llvm` consumes patched CIR and emits LLVM IR text (`.ll`) or
    bitcode (`.bc`), carrying patch and contract semantics forward as LLVM-level
    metadata for downstream binary rewriting and formal verification.
+5. P-Code dialect stage:
+   `pcode-translate` and `MLIRPcode` expose patchestry's owned representation of
+   P-Code operations and types; document the dialect boundary, not MLIR's
+   generic translation internals.
 
 ## Usage and Workflows
 
@@ -87,6 +149,7 @@ These interfaces are the contracts contributors should keep stable while iterati
 | `patchir-transform` | patch author / verification engineer | apply firmware patches and contracts onto CIR | after decompilation, before lowering |
 | `patchir-cir2llvm` | verification/binary pipeline engineer | emit LLVM IR/BC for downstream toolchains | after transform stage |
 | `patchir-yaml-parser` | patch author / CI | validate patch specs early and fail fast | before transform in local loops and CI |
+| `pcode-translate` | dialect/decomp developer | exercise and debug patchestry's P-Code translation boundary | when validating P-Code dialect behavior directly |
 
 ### Patch authoring workflow
 
@@ -105,6 +168,15 @@ Patchestry supports two contract modes:
   formal tools such as KLEE/SeaHorn.
 - Runtime contracts:
   regular C/C++ checks injected at configured sites and executed with the binary.
+
+### Ghidra script workflow
+
+The `scripts/ghidra/` tree is part of the project interface surface:
+
+- `build-headless-docker.sh` builds the headless Ghidra environment used by tests.
+- `decompile-headless.sh` and `decompile-entrypoint.sh` run repository-supported decomp flows.
+- `PatchestryDecompileFunctions.java` and `PatchestryListFunctions.java` are the main script entrypoints.
+- `scripts/ghidra/domain/` and `scripts/ghidra/util/` define the serialization boundary used to generate JSON consumed by patchestry tools.
 
 ### Tool quick reference
 
@@ -128,6 +200,17 @@ patchir-yaml-parser config.yaml --validate
 - Firmware example flow: `docs/GettingStarted/firmware_examples.md`
 - Host ARM64 image build for macOS: `.devcontainer/README-HOST-BUILD.md`
 - Claude-specific workflow notes: `.claude/rules/*.md`
+
+## Test Suites
+
+The repository currently registers four top-level LIT/CTest suites:
+
+| Suite | Source path | What it validates |
+|---|---|---|
+| `ghidra-output-tests` | `test/ghidra/` | end-to-end headless Ghidra export and decompilation fixtures |
+| `pcode-translation-tests` | `test/pcode-translate/` | standalone `pcode-translate` behavior and P-Code translation wiring |
+| `patchir-decomp-tests` | `test/patchir-decomp/` | JSON-to-CIR/LLVM decompilation behavior across operations and control flow |
+| `patchir-transform-tests` | `test/patchir-transform/` | YAML parsing, patch insertion/replacement, and contract workflows |
 
 ## Dependencies
 
