@@ -8,12 +8,119 @@ This is the canonical onboarding and development guide for Patchestry.
 ## Purpose
 
 Patchestry is an MLIR/CIR-based binary patching framework for patching deployed firmware
-without original source code. The main workflow is:
+without original source code.
 
-1. Export P-Code from Ghidra.
-2. Decompile to CIR.
-3. Apply YAML-defined patches/contracts.
-4. Lower to LLVM IR/bitcode for downstream rewriting and verification.
+Important terminology:
+
+- In this document, "patch" means a firmware patch authored against a target firmware image.
+- It does not mean a patch to the Patchestry repository itself.
+
+## Architecture and Modules
+
+### End-to-end data flow
+
+```text
+Firmware Binary
+  -> Ghidra headless scripts (`scripts/ghidra/*`)
+  -> P-Code JSON (`*.json`, Ghidra export schema)
+  -> `patchir-decomp`
+  -> CIR (`*.cir`)
+  -> `patchir-transform` + YAML spec (`*.yaml`)
+  -> Patched CIR (`*.cir`)
+  -> `patchir-cir2llvm`
+  -> LLVM IR (`*.ll`) or bitcode (`*.bc`)
+  -> downstream binary rewriting / verification tools
+```
+
+### Module interface map
+
+These interfaces are the contracts contributors should keep stable while iterating on internals.
+
+| Module | Main paths | Stable interface files | Input format | Output format | Module test command |
+|---|---|---|---|---|---|
+| Ghidra model | `include/patchestry/Ghidra/`, `lib/patchestry/Ghidra/` | `include/patchestry/Ghidra/JsonDeserialize.hpp`, `include/patchestry/Ghidra/Pcode.hpp`, `include/patchestry/Ghidra/PcodeTranslation.hpp` | Ghidra export JSON | in-memory Program/Function/Block/Op model | `lit ./builds/default/test/ghidra -D BUILD_TYPE=Debug -v` |
+| AST lifting | `include/patchestry/AST/`, `lib/patchestry/AST/` | `include/patchestry/AST/ASTConsumer.hpp`, `include/patchestry/AST/FunctionBuilder.hpp`, `include/patchestry/AST/OperationBuilder.hpp`, `include/patchestry/AST/TypeBuilder.hpp` | Ghidra model objects | Clang AST and CIR-ready structures | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
+| Decompiler tool | `tools/patchir-decomp/` | `tools/patchir-decomp/main.cpp` | P-Code JSON | CIR / LLVM IR / asm / object output selected by flags | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
+| YAML spec parser | `include/patchestry/YAML/`, `lib/patchestry/YAML/`, `tools/patchir-yaml-parser/` | `include/patchestry/YAML/ConfigurationFile.hpp`, `include/patchestry/YAML/PatchSpec.hpp`, `include/patchestry/YAML/ContractSpec.hpp`, `include/patchestry/YAML/YAMLParser.hpp` | YAML patch/contract spec | validated configuration objects consumed by transform passes | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
+| Patch pass engine | `include/patchestry/Passes/`, `lib/patchestry/Passes/` | `include/patchestry/Passes/InstrumentationPass.hpp`, `include/patchestry/Passes/OperationMatcher.hpp`, `lib/patchestry/Passes/PatchOperationImpl.hpp`, `lib/patchestry/Passes/ContractOperationImpl.hpp` | CIR + parsed patch/contract config | transformed CIR with inserted/replaced operations | `lit ./builds/default/test/patchir-transform/patches -D BUILD_TYPE=Debug -v` |
+| Contracts dialect | `include/patchestry/Dialect/Contracts/`, `lib/patchestry/Dialect/Contracts/` | `include/patchestry/Dialect/Contracts/Contract.td`, `include/patchestry/Dialect/Contracts/ContractsDialect.hpp` | CIR ops plus contract attrs/spec | CIR attrs and LLVM metadata for verification flows | `lit ./builds/default/test/patchir-transform/contracts -D BUILD_TYPE=Debug -v` |
+| CIR->LLVM lowering | `tools/patchir-cir2llvm/` | `tools/patchir-cir2llvm/main.cpp` | CIR | LLVM IR/bitcode with patch and contract metadata | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
+| Intrinsics library | `include/patchestry/intrinsics/`, `lib/patchestry/intrinsics/` | `include/patchestry/intrinsics/patchestry_intrinsics.h`, `include/patchestry/intrinsics/runtime.h`, `include/patchestry/intrinsics/safety.h` | patch C code | helper functions compiled into CIR and referenced from patch specs | `lit ./builds/default/test/patchir-transform/patches -D BUILD_TYPE=Debug -v` |
+
+### Module-level build and test quick reference
+
+| Area | Build target | Test command |
+|---|---|---|
+| Ghidra export integration | `patchir-decomp` | `lit ./builds/default/test/ghidra -D BUILD_TYPE=Debug -v` |
+| AST/Ghidra/decomp | `patchir-decomp` | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
+| YAML parsing | `patchir-yaml-parser` | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
+| Patch application | `patchir-transform` | `lit ./builds/default/test/patchir-transform/patches -D BUILD_TYPE=Debug -v` |
+| Contract insertion/metadata | `patchir-transform` and `patchir-cir2llvm` | `lit ./builds/default/test/patchir-transform/contracts -D BUILD_TYPE=Debug -v` |
+| CIR lowering | `patchir-cir2llvm` | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
+
+### Data interface details by stage
+
+1. Ghidra stage:
+   `scripts/ghidra/*` and the Ghidra-side pipeline emit JSON matching the data
+   model loaded by `include/patchestry/Ghidra/JsonDeserialize.hpp` and related
+   P-Code headers.
+2. Decomp stage:
+   `patchir-decomp` consumes that JSON, builds the Ghidra model, lifts it
+   through AST builders, and emits CIR as the primary editable interchange
+   format for later patching.
+3. Transform stage:
+   `patchir-transform` consumes CIR plus YAML parsed through
+   `include/patchestry/YAML/*.hpp` and applies `InstrumentationPass` and the
+   patch/contract operation implementations to produce patched CIR.
+4. Lowering stage:
+   `patchir-cir2llvm` consumes patched CIR and emits LLVM IR text (`.ll`) or
+   bitcode (`.bc`), carrying patch and contract semantics forward as LLVM-level
+   metadata for downstream binary rewriting and formal verification.
+
+## Usage and Workflows
+
+### Who uses which tools and why
+
+| Tool | Primary user | Why it exists | Typical use point |
+|---|---|---|---|
+| `patchir-decomp` | reverse engineer / decomp developer | lift Ghidra exports into editable IR | first step after obtaining P-Code JSON |
+| `patchir-transform` | patch author / verification engineer | apply firmware patches and contracts onto CIR | after decompilation, before lowering |
+| `patchir-cir2llvm` | verification/binary pipeline engineer | emit LLVM IR/BC for downstream toolchains | after transform stage |
+| `patchir-yaml-parser` | patch author / CI | validate patch specs early and fail fast | before transform in local loops and CI |
+
+### Patch authoring workflow
+
+1. Write patch logic in C using `include/patchestry/intrinsics/patchestry_intrinsics.h`.
+2. Declare patch placement and matching in YAML (`apply_before`, `apply_after`, `replace`).
+3. Validate YAML spec with `patchir-yaml-parser`.
+4. Apply with `patchir-transform` and inspect resulting CIR.
+5. Lower with `patchir-cir2llvm` and continue to downstream tooling.
+
+### Contracts workflow
+
+Patchestry supports two contract modes:
+
+- Static contracts:
+  represented in CIR/MLIR (`contract.static`), then emitted as LLVM metadata for
+  formal tools such as KLEE/SeaHorn.
+- Runtime contracts:
+  regular C/C++ checks injected at configured sites and executed with the binary.
+
+### Tool quick reference
+
+```sh
+# Decompile a function from P-Code JSON to CIR
+patchir-decomp -input func.json -emit-cir -output func
+
+# Apply patches from YAML to CIR
+patchir-transform input.cir -spec patch.yaml -o patched.cir
+
+# Lower patched CIR to LLVM IR
+patchir-cir2llvm -S patched.cir -o patched.ll
+
+# Validate a YAML patch spec
+patchir-yaml-parser config.yaml --validate
+```
 
 ## Related Docs
 
