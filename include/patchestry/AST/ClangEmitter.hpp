@@ -16,12 +16,12 @@ namespace patchestry::ast {
 
     // Convert an SNode tree back to a Clang CompoundStmt and set it as the
     // function body.
-    void emitClangAST(SNode *root, clang::FunctionDecl *fn,
+    void EmitClangAST(SNode *root, clang::FunctionDecl *fn,
                       clang::ASTContext &ctx);
 
     // Post-emission cleanup for prettier C output.
     // Flattens nested CompoundStmts and pushes LabelStmts inside
     // CompoundStmt bodies. Only call for patchir-decomp path.
-    void cleanupPrettyPrint(clang::FunctionDecl *fn, clang::ASTContext &ctx);
+    void CleanupPrettyPrint(clang::FunctionDecl *fn, clang::ASTContext &ctx);
 
 } // namespace patchestry::ast

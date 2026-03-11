@@ -13,7 +13,7 @@
 
 namespace patchestry::ast {
 
-    const NaturalLoop *LoopInfo::loopFor(size_t block) const {
+    const NaturalLoop *LoopInfo::LoopFor(size_t block) const {
         const NaturalLoop *best = nullptr;
         for (const auto &loop : loops) {
             for (size_t b : loop.body) {
@@ -28,7 +28,7 @@ namespace patchestry::ast {
         return best;
     }
 
-    LoopInfo detectLoops(const Cfg &cfg, const DomTree &dom) {
+    LoopInfo DetectLoops(const Cfg &cfg, const DomTree &dom) {
         LoopInfo info;
         size_t n = cfg.blocks.size();
 
@@ -47,6 +47,14 @@ namespace patchestry::ast {
             }
         }
 
+        // Predecessor map — pure graph topology, built once.
+        std::vector< std::vector< size_t > > preds(n);
+        for (size_t i = 0; i < n; ++i) {
+            for (size_t s : cfg.blocks[i].succs) {
+                preds[s].push_back(i);
+            }
+        }
+
         // For each back-edge, collect the natural loop body via reverse BFS
         for (const auto &be : back_edges) {
             NaturalLoop loop;
@@ -56,19 +64,10 @@ namespace patchestry::ast {
             std::unordered_set< size_t > body_set;
             body_set.insert(be.header);
 
-            // Reverse BFS from tail to find all blocks that can reach header
             std::queue< size_t > worklist;
             if (be.tail != be.header) {
                 body_set.insert(be.tail);
                 worklist.push(be.tail);
-            }
-
-            // Build predecessor map
-            std::vector< std::vector< size_t > > preds(n);
-            for (size_t i = 0; i < n; ++i) {
-                for (size_t s : cfg.blocks[i].succs) {
-                    preds[s].push_back(i);
-                }
             }
 
             while (!worklist.empty()) {
@@ -134,12 +133,14 @@ namespace patchestry::ast {
             }
         }
 
-        // Establish nesting: loop A is parent of loop B if A.body ⊃ B.body
+        // Establish nesting using indices: loop i is the parent of loop j if
+        // loops[i].body ⊃ loops[j].body and loops[i] is the tightest such enclosure.
+        // Using indices avoids dangling-pointer hazards from vector reallocation.
         for (size_t i = 0; i < info.loops.size(); ++i) {
             for (size_t j = 0; j < info.loops.size(); ++j) {
                 if (i == j) continue;
-                auto &outer = info.loops[i];
-                auto &inner = info.loops[j];
+                const auto &outer = info.loops[i];
+                auto &inner       = info.loops[j];
                 if (inner.body.size() >= outer.body.size()) continue;
 
                 // Check if inner is fully contained in outer
@@ -153,19 +154,21 @@ namespace patchestry::ast {
                     }
                 }
                 if (contained) {
-                    // inner is nested in outer — check if outer is the tightest parent
-                    if (!inner.parent ||
-                        inner.parent->body.size() > outer.body.size()) {
-                        inner.parent = &outer;
+                    // inner is nested in outer — keep the tightest (smallest) parent
+                    if (inner.parent_idx == kNoLoopParent
+                        || info.loops[inner.parent_idx].body.size() > outer.body.size())
+                    {
+                        inner.parent_idx = i;
                     }
                 }
             }
         }
 
-        // Build children lists from parent pointers
-        for (auto &loop : info.loops) {
-            if (loop.parent) {
-                loop.parent->children.push_back(&loop);
+        // Build children index lists from parent indices
+        for (size_t j = 0; j < info.loops.size(); ++j) {
+            size_t parent = info.loops[j].parent_idx;
+            if (parent != kNoLoopParent) {
+                info.loops[parent].children_idx.push_back(j);
             }
         }
 
