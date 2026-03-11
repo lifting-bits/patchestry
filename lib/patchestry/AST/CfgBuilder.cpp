@@ -46,38 +46,27 @@ namespace patchestry::ast {
                 blocks.push_back(CfgBlock{});
 
                 for (auto *stmt : body->body()) {
-                    // LabelStmt starts a new block
-                    if (auto *label_stmt = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                        // If current block is non-empty, start a new one
+                    auto *label_stmt = llvm::dyn_cast< clang::LabelStmt >(stmt);
+                    if (!label_stmt) {
+                        blocks.back().stmts.push_back(stmt);
+                        continue;
+                    }
+
+                    // Peel arbitrarily nested LabelStmt chains, starting a
+                    // fresh block for each label encountered.
+                    clang::Stmt *cur = label_stmt;
+                    while (auto *ls = llvm::dyn_cast< clang::LabelStmt >(cur)) {
                         if (!blocks.back().stmts.empty() || !blocks.back().label.empty()) {
                             blocks.push_back(CfgBlock{});
                         }
-
-                        std::string name = GetLabelName(label_stmt->getDecl());
-                        blocks.back().label = name;
+                        std::string name     = GetLabelName(ls->getDecl());
+                        blocks.back().label  = name;
                         label_to_block[name] = blocks.size() - 1;
+                        cur                  = ls->getSubStmt();
+                    }
 
-                        // Add the sub-statement (what the label wraps)
-                        clang::Stmt *sub = label_stmt->getSubStmt();
-                        if (sub && !llvm::isa< clang::NullStmt >(sub)) {
-                            // If sub is another label, recurse; otherwise add it
-                            if (auto *nested_label = llvm::dyn_cast< clang::LabelStmt >(sub)) {
-                                // Finish this block, start new one for nested label
-                                blocks.push_back(CfgBlock{});
-                                std::string nested_name =
-                                    GetLabelName(nested_label->getDecl());
-                                blocks.back().label = nested_name;
-                                label_to_block[nested_name] = blocks.size() - 1;
-                                sub = nested_label->getSubStmt();
-                                if (sub && !llvm::isa< clang::NullStmt >(sub)) {
-                                    blocks.back().stmts.push_back(sub);
-                                }
-                            } else {
-                                blocks.back().stmts.push_back(sub);
-                            }
-                        }
-                    } else {
-                        blocks.back().stmts.push_back(stmt);
+                    if (cur && !llvm::isa< clang::NullStmt >(cur)) {
+                        blocks.back().stmts.push_back(cur);
                     }
                 }
 

@@ -94,8 +94,8 @@ namespace patchestry::ast {
                 auto *fn = const_cast<clang::FunctionDecl *>(cfg.function);
                 SNodeFactory factory;
                 SNode *tree = CfgFoldStructure(cfg, factory, ctx);
-                emitClangAST(tree, fn, ctx);
-                cleanupPrettyPrint(fn, ctx);
+                EmitClangAST(tree, fn, ctx);
+                CleanupPrettyPrint(fn, ctx);
             }
         }
 
