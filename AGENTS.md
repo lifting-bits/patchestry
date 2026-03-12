@@ -438,18 +438,24 @@ cmake -S lib/patchestry/intrinsics -B lib/patchestry/intrinsics/build_standalone
   -DCMAKE_BUILD_TYPE=Release
 cmake --build lib/patchestry/intrinsics/build_standalone -j
 
-lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v
+bash ./scripts/ghidra/build-headless-docker.sh
+
+lit ./builds/default/test -D BUILD_TYPE=Debug -v
 ```
 
 What this validates:
 
 1. The main patchestry tools build with the same preset family used by CI.
 2. The standalone intrinsics library still builds independently.
-3. The patch transformation / contracts suite passes on the host-native build.
+3. The headless Ghidra Docker image builds on Apple Silicon.
+4. The full lit tree passes, including Ghidra, decompilation, P-Code
+   translation, and transform/contract suites.
 
 Docker-backed workflows remain relevant on macOS for `build.sh` and Ghidra
 headless/container tasks, but do not present the default `linux/amd64`
 emulation path as the routine Apple Silicon workflow.
+The validated Ghidra image build on Apple Silicon used Colima with the `vz`
+backend and built Ghidra natives for `linux_arm_64`.
 
 ### CI coherence
 
