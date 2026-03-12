@@ -1306,14 +1306,29 @@ namespace patchestry::ast {
                 clang::SourceLocation(), var_decl->getType(), clang::VK_LValue
             );
         } else if (op.target->operation) {
-            // Target is a computed expression (temporary)
-            auto maybe_operation = operationFromKey(function, *op.target->operation);
-            if (!maybe_operation) {
-                LOG(ERROR) << "CALLIND target operation not found. key: " << op.key << "\n";
-                return {};
+            // Target is a computed expression — resolve via create_varnode for varnode
+            // kinds (temporary/local/param) so that DECLARE_* operations produce
+            // DeclRefExprs rather than DeclStmts.
+            if (op.target->kind == Varnode::VARNODE_TEMPORARY
+                || op.target->kind == Varnode::VARNODE_LOCAL
+                || op.target->kind == Varnode::VARNODE_PARAM) {
+                Varnode target_vnode;
+                target_vnode.kind      = op.target->kind;
+                target_vnode.operation  = op.target->operation;
+                target_vnode.type_key   = op.target->type_key.value_or("");
+                target_vnode.size       = 0;
+                fn_ptr_expr = clang::dyn_cast_or_null< clang::Expr >(
+                    create_varnode(ctx, function, target_vnode)
+                );
+            } else {
+                auto maybe_operation = operationFromKey(function, *op.target->operation);
+                if (!maybe_operation) {
+                    LOG(ERROR) << "CALLIND target operation not found. key: " << op.key << "\n";
+                    return {};
+                }
+                auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
+                fn_ptr_expr    = clang::dyn_cast< clang::Expr >(stmt);
             }
-            auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
-            fn_ptr_expr    = clang::dyn_cast< clang::Expr >(stmt);
         } else {
             LOG(ERROR) << "CALLIND target missing global or operation. key: " << op.key << "\n";
             return {};
