@@ -129,19 +129,24 @@ cmake -S lib/patchestry/intrinsics -B lib/patchestry/intrinsics/build_standalone
   -DCMAKE_BUILD_TYPE=Release
 cmake --build lib/patchestry/intrinsics/build_standalone -j
 
-lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v
+bash ./scripts/ghidra/build-headless-docker.sh
+
+lit ./builds/default/test -D BUILD_TYPE=Debug -v
 ```
 
 This validates:
 1. native configure against the patched fork,
 2. the Debug patchestry build,
 3. the standalone intrinsics library,
-4. the `patchir-transform` suite.
+4. the headless Ghidra Docker image on Apple Silicon,
+5. the full lit tree.
 
 Docker-backed workflows are still required for `build.sh` and Ghidra headless
 tasks. On Apple Silicon, do not recommend the default `linux/amd64` emulation
 path as the routine build workflow; use it only if you explicitly accept the
 emulation overhead, or build a native arm64 image first.
+The validated Ghidra image build used Colima with the `vz` backend and built
+Ghidra natives for `linux_arm_64`.
 
 CI uses the same high-level sequence on Linux:
 1. Configure with `cmake --preset ci`.
