@@ -31,18 +31,49 @@ For each firmware blob you want to decompile, use the decompile-headless script 
 scripts/ghidra/decompile-headless.sh --input firmwares/output/bloodlight-firmware.elf --output ~/temp/patchestry/bloodlight-firmware.json 
 ```
 
-This should produce the output json file, which can be used with tools like `pcode-lifter`.
+This should produce the output JSON file, which can be consumed by `patchir-decomp`.
 
-## Convert it to JSON to CIR
+## Convert JSON to CIR
 
-The JSON (which encompasses Ghidra high-pcode) can then be converted to ClangIR via `pcode-lifter` as follows:
+The JSON (which encompasses Ghidra high-pcode) can then be converted to CIR via
+`patchir-decomp` as follows:
 ```sh
-builds/default/tools/pcode-lifter/Release/pcode-lifter --input ~/temp/patchestry/pulseox-firmware.json --emit-cir --output ~/temp/patchestry/pulseox-firmware_cir --print-tu
+builds/default/tools/patchir-decomp/Debug/patchir-decomp \
+  --input ~/temp/patchestry/pulseox-firmware.json \
+  --emit-cir \
+  --output ~/temp/patchestry/pulseox-firmware_cir \
+  --print-tu
 ```
 
-The `--print-tu` argument is optional, it will emit C along with the ClangIR. The output looks like:
+The `--print-tu` argument is optional; it emits C alongside the CIR. The output
+looks like:
 ```sh
 ls -1 ~/temp/patchestry/pulseox-firmware_cir*
 /Users/artem/temp/patchestry/pulseox-firmware_cir.c
 /Users/artem/temp/patchestry/pulseox-firmware_cir.cir
 ```
+
+## Optional patching and lowering flow
+
+Once you have CIR, the repository-supported patching flow is:
+
+```sh
+# Validate a YAML patch specification
+builds/default/tools/patchir-yaml-parser/Debug/patchir-yaml-parser patch.yaml --validate
+
+# Apply the patch spec to CIR
+builds/default/tools/patchir-transform/Debug/patchir-transform \
+  ~/temp/patchestry/pulseox-firmware_cir.cir \
+  --spec patch.yaml \
+  -o ~/temp/patchestry/pulseox-firmware_patched.cir
+
+# Lower patched CIR to LLVM IR
+builds/default/tools/patchir-cir2llvm/Debug/patchir-cir2llvm \
+  -S \
+  ~/temp/patchestry/pulseox-firmware_patched.cir \
+  -o ~/temp/patchestry/pulseox-firmware_patched.ll
+```
+
+This repository's native tested endpoint is patched CIR and LLVM IR/bitcode.
+Producing a final rewritten firmware binary is downstream of patchestry and
+typically handled by external tooling.
