@@ -415,6 +415,9 @@ ctest --preset debug --output-on-failure
 lit ./builds/default/test -D BUILD_TYPE=Release -v
 lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v
 lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v
+
+# Run the example firmware end-to-end flow with artifact/report output
+scripts/test-example-firmwares.sh --build-type Debug
 ```
 
 ### Fresh checkout to validated build
@@ -476,6 +479,7 @@ Ghidra image build -> full lit test run should remain coherent.
 - Tests are expected to be deterministic and non-flaky.
 - A PR is not considered ready if repeated local runs produce inconsistent outcomes.
 - New behavior changes should include a regression test in the closest relevant suite.
+- If a change affects the documented example firmware flow, rerun `scripts/test-example-firmwares.sh` and update the example docs/reporting guidance in the same PR.
 
 ## Repository Layout
 
@@ -522,3 +526,4 @@ developer guidance aligned with the code:
 4. Ensure PRs that change affected interfaces or data-flow boundaries also update the corresponding diagram and docs in the same change.
 5. Keep build and test instructions copy/paste valid from a fresh checkout, including submodule bootstrap and standalone intrinsics build.
 6. Keep local build/test instructions coherent with `.github/workflows/ci.yml`; when CI stages change, update the docs in the same PR.
+7. Keep `scripts/test-example-firmwares.sh` and `docs/GettingStarted/firmware_examples.md` aligned with the actual example firmware binaries, example specs, and generated reports.

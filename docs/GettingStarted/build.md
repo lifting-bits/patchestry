@@ -106,6 +106,7 @@ Steps followed in the [Gist](https://gist.github.com/kaoudis/e734c6197dbed595586
 ## CMake Commands
 - To build, configure with the `default` preset and build with `cmake --build --preset debug` or `cmake --build --preset release`.
 - To run tests, first build the headless container with `scripts/ghidra/build-headless-docker.sh`, then run `ctest --preset debug --output-on-failure` or `lit ./builds/default/test -D BUILD_TYPE=Debug -v`.
+- To run the example firmware end-to-end flow and get a report, use `scripts/test-example-firmwares.sh --build-type Debug`.
 
 ## Fresh checkout to validated build
 
@@ -141,6 +142,17 @@ This validates:
 4. the headless Ghidra Docker image on Apple Silicon,
 5. the full lit tree.
 
+To validate the documented example firmware patching flow and generate a report:
+
+```sh
+scripts/test-example-firmwares.sh --build-type Debug
+```
+
+This writes per-case artifacts plus:
+
+- `builds/example-firmware-e2e/summary.md`
+- `builds/example-firmware-e2e/summary.tsv`
+
 Docker-backed workflows are still required for `build.sh` and Ghidra headless
 tasks. On Apple Silicon, do not recommend the default `linux/amd64` emulation
 path as the routine build workflow; use it only if you explicitly accept the
@@ -154,6 +166,11 @@ CI uses the same high-level sequence on Linux:
 3. Build the standalone intrinsics library.
 4. Build the headless Ghidra Docker image.
 5. Run `lit ./builds/ci/test`.
+
+The example firmware runner is not part of the default CI matrix because it
+clones and builds external firmware repositories, but it should stay runnable
+and documented. Use the opt-in CTest target by configuring with
+`-DPE_ENABLE_EXAMPLE_FIRMWARE_E2E=ON` if you want CTest to invoke it.
 
 ## Ghidra
 
