@@ -137,6 +137,11 @@ namespace patchestry::ast {
         // create_function_body skips these entirely.
         std::unordered_set< std::string > inlined_blocks;
 
+        // Number of distinct predecessor blocks for each block.  Computed once
+        // at the start of create_function_body so that switch-case inlining can
+        // avoid inlining blocks that are shared across multiple predecessors.
+        std::unordered_map< std::string, unsigned > block_predecessor_count;
+
         // Blocks targeted by has_exit cases that could not be inlined.
         // create_function_body emits "label: break;" for these.
         std::unordered_set< std::string > break_target_blocks;

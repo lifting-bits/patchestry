@@ -862,9 +862,15 @@ namespace patchestry::ast {
                 auto target_loc = SourceLocation(ctx.getSourceManager(), sc.target_block);
 
                 // Try to inline the target block body for has_exit cases.
-                // Requirements: block exists, has ordered ops, terminal op is BRANCH.
+                // Requirements: block exists, has ordered ops, terminal op is BRANCH,
+                // and the block has only one predecessor (otherwise the label must
+                // remain so other gotos can reach it).
                 bool inlined = false;
-                if (sc.has_exit && function.basic_blocks.contains(sc.target_block)) {
+                auto pred_it = function_builder().block_predecessor_count.find(sc.target_block);
+                bool single_pred = pred_it != function_builder().block_predecessor_count.end()
+                    && pred_it->second <= 1;
+                if (sc.has_exit && single_pred
+                    && function.basic_blocks.contains(sc.target_block)) {
                     const auto &tb = function.basic_blocks.at(sc.target_block);
                     if (!tb.ordered_operations.empty()) {
                         const auto &last_op_key = tb.ordered_operations.back();
@@ -1309,6 +1315,7 @@ namespace patchestry::ast {
             // Target is a computed expression — resolve via create_varnode for varnode
             // kinds (temporary/local/param) so that DECLARE_* operations produce
             // DeclRefExprs rather than DeclStmts.
+            // NOTE: op.target->operation is guaranteed non-nullopt by the guard above.
             if (op.target->kind == Varnode::VARNODE_TEMPORARY
                 || op.target->kind == Varnode::VARNODE_LOCAL
                 || op.target->kind == Varnode::VARNODE_PARAM) {
@@ -1327,7 +1334,7 @@ namespace patchestry::ast {
                     return {};
                 }
                 auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
-                fn_ptr_expr    = clang::dyn_cast< clang::Expr >(stmt);
+                fn_ptr_expr    = clang::dyn_cast_or_null< clang::Expr >(stmt);
             }
         } else {
             LOG(ERROR) << "CALLIND target missing global or operation. key: " << op.key << "\n";

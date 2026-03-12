@@ -35,15 +35,14 @@ fi
 if [ ! -d "${script_dir}/repos/ventilator" ]; then
     git clone --depth 1 https://github.com/RespiraWorks/Ventilator.git \
         "${script_dir}/repos/ventilator"
-    cd "${script_dir}/repos/ventilator"
-    git fetch --depth=1 origin ${VENTILATOR_COMMIT}
-    git checkout ${VENTILATOR_COMMIT}
 fi
+cd "${script_dir}/repos/ventilator"
+git fetch --depth=1 origin ${VENTILATOR_COMMIT}
+git checkout -f ${VENTILATOR_COMMIT}
+cd "${script_dir}"
 
-# Build using Docker (skip if image already exists)
-if ! docker image inspect firmware-builder >/dev/null 2>&1; then
-    docker build -t firmware-builder ${script_dir}
-fi
+# Build using Docker
+docker build -t firmware-builder "${script_dir}"
 
 # Build pulseox firmware
 docker run --rm \
