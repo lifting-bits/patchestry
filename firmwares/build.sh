@@ -9,6 +9,7 @@ mkdir -p "${script_dir}/repos"
 # Repository commit hashes
 PULSEOX_COMMIT="54ed8ca6bec36cc13db8f6594e3bd9941937922a"
 BLOODLIGHT_COMMIT="fcc0daef9119ab09914b0c523e7d9d93aad36ea4"
+VENTILATOR_COMMIT="6165c82de293d66b71f43040a2f145ab70bb49c0"
 
 # Clone/update repositories if needed
 if [ ! -d "${script_dir}/repos/pulseox-firmware" ]; then
@@ -31,8 +32,18 @@ if [ ! -d "${script_dir}/repos/bloodlight-firmware" ]; then
     patch -s -p1 < "${script_dir}/bloodlight-firmware-patch.diff"
 fi
 
-# Build using Docker
-docker build -t firmware-builder ${script_dir}
+if [ ! -d "${script_dir}/repos/ventilator" ]; then
+    git clone --depth 1 https://github.com/RespiraWorks/Ventilator.git \
+        "${script_dir}/repos/ventilator"
+    cd "${script_dir}/repos/ventilator"
+    git fetch --depth=1 origin ${VENTILATOR_COMMIT}
+    git checkout ${VENTILATOR_COMMIT}
+fi
+
+# Build using Docker (skip if image already exists)
+if ! docker image inspect firmware-builder >/dev/null 2>&1; then
+    docker build -t firmware-builder ${script_dir}
+fi
 
 # Build pulseox firmware
 docker run --rm \
@@ -66,3 +77,38 @@ docker run --rm \
              cp -r host/build/bloodview /output/bloodlight/bloodview && \
              cp -r host/build/fft /output/bloodlight/fft && \
              cp -r host/build/calibrate /output/bloodlight/calibrate"
+
+# Build ventilator firmware + GUI
+docker build -t ventilator-builder -f "${script_dir}/Dockerfile.ventilator" "${script_dir}"
+
+docker run --rm \
+    -v "${script_dir}/repos/ventilator:/work/ventilator" \
+    -v "${script_dir}/output:/output" \
+    ventilator-builder \
+    -c "set -e && \
+             git config --global --add safe.directory /work/ventilator && \
+             cd /work/ventilator && \
+             git checkout -B build-branch && \
+             cd software && \
+             NANOPB_PLUGIN=\$(which protoc-gen-nanopb) && \
+             EXPECTED=\${HOME}/.local/bin/protoc-gen-nanopb && \
+             if [ -n \"\$NANOPB_PLUGIN\" ] && [ ! -f \"\$EXPECTED\" ]; then \
+                 mkdir -p \$(dirname \"\$EXPECTED\") && \
+                 ln -sf \"\$NANOPB_PLUGIN\" \"\$EXPECTED\"; \
+             fi && \
+             bash common/common.sh generate && \
+             cd controller && \
+             pio run -e stm32 && \
+             cd /work/ventilator/software/common && \
+             pio pkg install -e native && \
+             cd /work/ventilator/software/gui && \
+             conan profile detect --force 2>/dev/null ; \
+             cd /work/ventilator/software/gui && \
+             mkdir -p build && cd build && \
+             cmake .. -DCMAKE_BUILD_TYPE=Release && \
+             make -j\$(nproc) && \
+             mkdir -p /output/ventilator && \
+             cp /work/ventilator/software/controller/.pio/build/stm32/firmware.elf \
+                /output/ventilator/controller-firmware.elf && \
+             cp /work/ventilator/software/gui/build/bin/ventilator_gui_app \
+                /output/ventilator/ventilator_gui_app"
