@@ -251,6 +251,13 @@ Follow this process so both humans and LLM agents can maintain consistency:
 
 ## First-Time Setup
 
+From a fresh checkout, initialize vendored sources before configuring or
+building:
+
+```sh
+git submodule update --init --recursive
+```
+
 ### macOS
 
 Install base tooling and configure Docker BuildX for Colima:
@@ -261,13 +268,19 @@ brew install colima docker docker-buildx docker-credential-helper cmake lit
 brew install FiloSottile/musl-cross/musl-cross
 mkdir -p ~/.docker/cli-plugins
 ln -sf "$(which docker-buildx)" ~/.docker/cli-plugins/docker-buildx
-colima restart
+colima start --vm-type vz
 docker buildx version
+docker ps
 ```
 
 Notes:
 
 - Patchestry uses Colima as the Docker backend on macOS.
+- Use the `vz` backend on Apple Silicon. Do not switch the documented macOS
+  path to `qemu`.
+- Do not treat `linux/amd64` emulation on Apple Silicon as the recommended
+  macOS build path. It is materially slower and should only be used as a last
+  resort when no native arm64 alternative is available.
 - `build.sh` and Ghidra headless tests assume a working Docker daemon (`docker ps` should work).
 - See `docs/GettingStarted/build.md` for the maintained setup sequence.
 
@@ -302,6 +315,10 @@ cmake -G Ninja ../llvm \
 ninja install
 ```
 
+This must be the patched `trail-of-forks/clangir` toolchain (or an equivalent
+install built from the same fork). A stock Homebrew LLVM install is not a
+supported replacement for host-native patchestry builds.
+
 Expected runtime:
 
 - Typical workstation: 30-90 minutes.
@@ -309,17 +326,37 @@ Expected runtime:
 
 If you are on Apple Silicon and this is too slow or space-constrained in Docker,
 use `.devcontainer/README-HOST-BUILD.md` to build the ARM64 base image on host storage.
+That workflow produces a Linux arm64 toolchain and image for container use; it
+does not produce a host-native macOS LLVM/ClangIR install for the direct CMake
+path below.
 
 ### Standard local configure/build
 
 ```sh
-cmake --preset default \
-  -DCMAKE_PREFIX_PATH=<llvm_install>/lib/cmake \
+export LLVM_INSTALL_PREFIX=<llvm_install>
+export CC="${LLVM_INSTALL_PREFIX}/bin/clang"
+export CXX="${LLVM_INSTALL_PREFIX}/bin/clang++"
+export CMAKE_PREFIX_PATH="${LLVM_INSTALL_PREFIX}/lib/cmake/llvm;${LLVM_INSTALL_PREFIX}/lib/cmake/mlir;${LLVM_INSTALL_PREFIX}/lib/cmake/clang"
+
+cmake --fresh --preset default \
   -DLLVM_EXTERNAL_LIT=$(which lit)
 
 cmake --build --preset debug -j
 cmake --build --preset release -j
 ```
+
+This is the supported host-native path on macOS and Linux when you already have
+the required patched LLVM/ClangIR fork installed. On macOS, use this path only
+when you have already built or installed the repository's ClangIR fork.
+The verified macOS host-native path uses the fork's `clang`/`clang++` from
+`<llvm_install>/bin`, not AppleClang or a stock Homebrew LLVM.
+
+Notes:
+
+- The main patchestry build vendors `gflags`, `glog`, `z3`, and the `rellic`
+  library as part of configure.
+- The vendored `rellic` helper tools are not part of patchestry's validated
+  host-native build path; patchestry only links against the `rellic` library.
 
 ### `build.sh` containerized workflow
 
@@ -331,7 +368,11 @@ cmake --build --preset release -j
 
 When to use it:
 
-- Use `build.sh` when you want reproducible containerized builds or when host setup is incomplete.
+- Use `build.sh` when you want a containerized repository workflow.
+- `build.sh` is required for Docker-backed validation paths and useful when host setup is incomplete.
+- On Apple Silicon, do not recommend the default `linux/amd64` emulation path
+  for routine builds. Prefer host-native builds with the patched ClangIR fork,
+  or an arm64 container image when one is available.
 - Prefer direct preset builds when your host toolchain is already configured and you need fastest incremental iteration.
 
 ## Linux Build Mode Choice
@@ -375,6 +416,54 @@ lit ./builds/default/test -D BUILD_TYPE=Release -v
 lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v
 lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v
 ```
+
+### Fresh checkout to validated build
+
+The validated Apple Silicon macOS path is the host-native flow below:
+
+```sh
+git submodule update --init --recursive
+
+export LLVM_INSTALL_PREFIX=<llvm_install>
+export CC="${LLVM_INSTALL_PREFIX}/bin/clang"
+export CXX="${LLVM_INSTALL_PREFIX}/bin/clang++"
+export CMAKE_PREFIX_PATH="${LLVM_INSTALL_PREFIX}/lib/cmake/llvm;${LLVM_INSTALL_PREFIX}/lib/cmake/mlir;${LLVM_INSTALL_PREFIX}/lib/cmake/clang"
+
+cmake --fresh --preset default \
+  -DLLVM_EXTERNAL_LIT=$(which lit)
+
+cmake --build --preset debug -j
+
+cmake -S lib/patchestry/intrinsics -B lib/patchestry/intrinsics/build_standalone \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build lib/patchestry/intrinsics/build_standalone -j
+
+lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v
+```
+
+What this validates:
+
+1. The main patchestry tools build with the same preset family used by CI.
+2. The standalone intrinsics library still builds independently.
+3. The patch transformation / contracts suite passes on the host-native build.
+
+Docker-backed workflows remain relevant on macOS for `build.sh` and Ghidra
+headless/container tasks, but do not present the default `linux/amd64`
+emulation path as the routine Apple Silicon workflow.
+
+### CI coherence
+
+Local instructions should stay aligned with `.github/workflows/ci.yml`:
+
+1. CI configures with `cmake --preset ci`.
+2. CI builds with `cmake --build --preset ci --config <Debug|Release>`.
+3. CI separately builds `lib/patchestry/intrinsics` as a standalone project.
+4. CI builds the Ghidra headless Docker image.
+5. CI validates the repository with `lit ./builds/ci/test ...`.
+
+Local macOS instructions use `default` instead of `ci` because CI runs inside a
+Linux dev image, but the sequence of configure -> build -> intrinsics build ->
+Ghidra image build -> full lit test run should remain coherent.
 
 ### Test reliability expectations
 
@@ -425,3 +514,5 @@ developer guidance aligned with the code:
 2. Update the module/interface inventory in this document when patchestry-owned libraries, tools, dialects, scripts, or test suites change.
 3. Keep vendored dependency revisions and purposes current when submodules or integration boundaries change.
 4. Ensure PRs that change affected interfaces or data-flow boundaries also update the corresponding diagram and docs in the same change.
+5. Keep build and test instructions copy/paste valid from a fresh checkout, including submodule bootstrap and standalone intrinsics build.
+6. Keep local build/test instructions coherent with `.github/workflows/ci.yml`; when CI stages change, update the docs in the same PR.
