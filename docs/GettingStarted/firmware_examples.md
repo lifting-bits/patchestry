@@ -1,8 +1,8 @@
 # How To Run Patchestry on Firmware Examples
 
-## Recommended: automated end-to-end runner
+## Automated end-to-end runner
 
-Use the repository runner when you want one command that:
+The repository runner provides one command that:
 
 1. builds the example firmware artifacts,
 2. decompiles representative example functions to JSON,
@@ -35,9 +35,9 @@ Generated reports:
 The tested endpoint remains patched CIR and LLVM IR/bitcode, not a final
 rewritten firmware binary.
 
-## Recommended: cached patch/contract matrix runner
+## Cached patch/contract matrix runner
 
-Use the matrix runner when you want one command that:
+The matrix runner provides one command that:
 
 1. reuses or rebuilds the example firmware artifacts,
 2. reuses or rebuilds cached decompile JSON and base CIR fixtures,
