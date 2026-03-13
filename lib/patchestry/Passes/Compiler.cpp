@@ -104,8 +104,12 @@ namespace patchestry::passes {
             }
 
             const std::string &arch(lang_vec[0]);
-            int bit_size = std::stoi(lang_vec[2]);
-            auto is_le   = (lang_vec[1] == "LE");
+            int bit_size = 0;
+            if (llvm::StringRef(lang_vec[2]).getAsInteger(10, bit_size)) {
+                LOG(ERROR) << "Invalid bit size in language id: " << lang_vec[2] << "\n";
+                return "";
+            }
+            auto is_le = (lang_vec[1] == "LE");
             auto variant = lang_vec.size() > 3 ? lang_vec[3] : "";
 
             auto is_equal = [&](std::string astr, std::string bstr) -> bool {

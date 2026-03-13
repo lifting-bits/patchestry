@@ -119,11 +119,16 @@ namespace patchestry::ghidra {
             return;
         }
 
-        std::unordered_map< std::string, const JsonValue & > types_value_map;
+        std::unordered_map< std::string, const JsonValue * > types_value_map;
 
         for (const auto &type : type_obj) {
             const auto &type_value = type.getSecond();
-            auto vnode_type        = create_vnode_type(*type_value.getAsObject());
+            const auto *type_obj_ptr = type_value.getAsObject();
+            if (!type_obj_ptr) {
+                LOG(ERROR) << "Invalid JSON object for type entry\n";
+                continue;
+            }
+            auto vnode_type = create_vnode_type(*type_obj_ptr);
             if (!vnode_type) {
                 LOG(ERROR) << "Failed to create varnode type\n";
                 continue;
@@ -132,7 +137,7 @@ namespace patchestry::ghidra {
             const auto type_key = type.getFirst().str();
             vnode_type->SetKey(type_key);
             serialized_types.emplace(type_key, std::move(vnode_type));
-            types_value_map.emplace(type_key, type_value);
+            types_value_map.emplace(type_key, &type_value);
         }
 
         LOG(INFO) << "Number of entry in serialized types: " << serialized_types.size() << "\n";
@@ -141,11 +146,17 @@ namespace patchestry::ghidra {
         for (const auto &[type_key, vnode_type] : serialized_types) {
             auto iter = types_value_map.find(type_key);
             if (iter == types_value_map.end()) {
-                assert(false && "type_key is missing from value map");
+                LOG(ERROR) << "type_key is missing from value map: " << type_key << "\n";
                 continue;
             }
 
-            const auto &json_value = iter->second;
+            const auto *json_value = iter->second;
+            const auto *json_obj = json_value->getAsObject();
+            if (!json_obj) {
+                LOG(ERROR) << "Invalid JSON object for type key: " << type_key << "\n";
+                continue;
+            }
+
             switch (vnode_type->kind) {
                 case VarnodeType::Kind::VT_BOOLEAN:
                 case VarnodeType::Kind::VT_INTEGER:
@@ -155,73 +166,62 @@ namespace patchestry::ghidra {
                 case VarnodeType::Kind::VT_VOID:
                     deserialize_buildin(
                         *dynamic_cast< BuiltinType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                case VarnodeType::Kind::VT_ARRAY: {
-                    auto *obj = json_value.getAsObject();
-                    if (!obj) {
-                        LOG(ERROR) << "Invalid JSON object for array type";
-                        break;
-                    }
+                case VarnodeType::Kind::VT_ARRAY:
                     deserialize_array(
                         *dynamic_cast< ArrayType * >(vnode_type.get()),
-                        obj, serialized_types
+                        json_obj, serialized_types
                     );
                     break;
-                }
-                case VarnodeType::Kind::VT_POINTER: {
+                case VarnodeType::Kind::VT_POINTER:
                     deserialize_pointer(
                         *dynamic_cast< PointerType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                }
-                case VarnodeType::Kind::VT_FUNCTION: {
+                case VarnodeType::Kind::VT_FUNCTION:
                     deserialize_function_type(
                         *dynamic_cast< FunctionType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                }
                 case VarnodeType::Kind::VT_STRUCT:
-                case VarnodeType::Kind::VT_UNION: {
+                case VarnodeType::Kind::VT_UNION:
                     deserialize_composite(
                         *dynamic_cast< CompositeType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                }
-                case VarnodeType::Kind::VT_ENUM: {
+                case VarnodeType::Kind::VT_ENUM:
                     deserialize_enum(
                         *dynamic_cast< EnumType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                }
-                case VarnodeType::Kind::VT_TYPEDEF: {
+                case VarnodeType::Kind::VT_TYPEDEF:
                     deserialize_typedef(
                         *dynamic_cast< TypedefType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                }
                 case VarnodeType::Kind::VT_UNDEFINED:
                     deserialize_undefined_type(
                         *dynamic_cast< UndefinedType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
                 case VarnodeType::Kind::VT_BITFIELD:
                     deserialize_bitfield(
                         *dynamic_cast< BitFieldType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
                 case VarnodeType::Kind::VT_STRING:
                     deserialize_string(
                         *dynamic_cast< StringType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
                 case VarnodeType::Kind::VT_INVALID:
@@ -699,7 +699,11 @@ namespace patchestry::ghidra {
 
         if (const auto *input_array = pcode_obj.getArray("inputs")) {
             for (auto input : *input_array) {
-                if (auto maybe_varnode = create_varnode(*input.getAsObject())) {
+                const auto *input_obj = input.getAsObject();
+                if (!input_obj) {
+                    continue;
+                }
+                if (auto maybe_varnode = create_varnode(*input_obj)) {
                     operation.inputs.emplace_back(std::move(*maybe_varnode));
                 }
             }

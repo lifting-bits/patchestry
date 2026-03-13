@@ -39,7 +39,12 @@ namespace patchestry::pc {
         bld.setInsertionPointToStart(bld.createBlock(&fn.getBlocks()));
         if (auto blocks = json.getArray("basic_blocks")) {
             for (const auto &block : *blocks) {
-                process_block(*block.getAsObject());
+                const auto *block_obj = block.getAsObject();
+                if (!block_obj) {
+                    mlir::emitError(bld.getUnknownLoc(), "Block entry is not a JSON object.");
+                    continue;
+                }
+                process_block(*block_obj);
             }
         }
     }
@@ -63,7 +68,12 @@ namespace patchestry::pc {
         }
 
         for (const auto &inst : *insts) {
-            process_instruction(*inst.getAsObject());
+            const auto *inst_obj = inst.getAsObject();
+            if (!inst_obj) {
+                mlir::emitError(bld.getUnknownLoc(), "Instruction entry is not a JSON object.");
+                continue;
+            }
+            process_instruction(*inst_obj);
         }
     }
 

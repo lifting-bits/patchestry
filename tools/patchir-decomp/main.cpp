@@ -23,6 +23,7 @@
 #include <clang/Frontend/CompilerInvocation.h>
 #include <clang/Frontend/FrontendOptions.h>
 
+#include <llvm/ADT/StringRef.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/JSON.h>
@@ -163,8 +164,12 @@ namespace {
             return "";
         }
 
-        int bit_size = std::stoi(lang_vec[2]);
-        auto is_le   = (lang_vec[1] == "LE");
+        int bit_size = 0;
+        if (llvm::StringRef(lang_vec[2]).getAsInteger(10, bit_size)) {
+            LOG(ERROR) << "Invalid bit size in language id: " << lang_vec[2] << "\n";
+            return "";
+        }
+        auto is_le = (lang_vec[1] == "LE");
 
         auto is_equal = [&](std::string astr, std::string bstr) -> bool {
             // transform both the string to lower-case and compare
@@ -232,7 +237,13 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    auto program = patchestry::ghidra::JsonParser().deserialize_program(*json->getAsObject());
+    const auto *json_obj = json->getAsObject();
+    if (!json_obj) {
+        LOG(ERROR) << "Input JSON is not an object\n";
+        return EXIT_FAILURE;
+    }
+
+    auto program = patchestry::ghidra::JsonParser().deserialize_program(*json_obj);
     if (!program.has_value()) {
         LOG(ERROR) << "Failed to deserialize JSON file '" << options.input_file
                    << "' as patchestry program\n";
