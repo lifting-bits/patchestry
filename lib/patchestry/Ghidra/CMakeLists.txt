@@ -4,7 +4,6 @@
 # LICENSE file found in the root directory of this source tree.
 
 add_library(patchestry_ghidra STATIC
-  PcodeTranslation.cpp
   JsonDeserialize.cpp
 )
 

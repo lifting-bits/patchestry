@@ -20,11 +20,6 @@ add_lit_testsuite(ghidra-output-tests
   ${CMAKE_CURRENT_SOURCE_DIR}/ghidra
 )
 
-add_lit_testsuite(pcode-translation-tests
-  "Running pcode-translate tests"
-  ${CMAKE_CURRENT_SOURCE_DIR}/pcode-translate
-)
-
 add_lit_testsuite(patchir-decomp-tests
   "Running patchir-decomp tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/patchir-decomp
@@ -38,11 +33,6 @@ add_lit_testsuite(patchir-transform-tests
 # tell ctest how to run the defined test suites with add_test()
 add_test(NAME ghidra-output-tests
   COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/ghidra"
-  --param BUILD_TYPE=$<CONFIG>
-)
-
-add_test(NAME pcode-translation-tests
-  COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/pcode-translate"
   --param BUILD_TYPE=$<CONFIG>
 )
 
