@@ -16,9 +16,10 @@ if(NOT EXISTS "${src_dir}/CMakeLists.txt")
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 endif()
 
-execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${build_dir}")
-
 execute_process(COMMAND ${CMAKE_COMMAND}
+                        --fresh
+                        -S "${src_dir}"
+                        -B "${build_dir}"
                         -G "${CMAKE_GENERATOR}"
                         "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
                         "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
@@ -28,8 +29,7 @@ execute_process(COMMAND ${CMAKE_COMMAND}
                         "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
                         "-DCMAKE_LINKER_TYPE=${CMAKE_LINKER_TYPE}"
                         "-DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}"
-                        "${src_dir}"
-               WORKING_DIRECTORY "${build_dir}")
+               WORKING_DIRECTORY "${PROJECT_BINARY_DIR}")
 
 set(LLVM_Z3_INSTALL_DIR "${PE_VENDOR_INSTALL_DIR}" PARENT_SCOPE)
 

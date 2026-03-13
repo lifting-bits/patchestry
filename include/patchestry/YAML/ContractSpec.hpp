@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <charconv>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -24,6 +25,15 @@
 
 namespace patchestry::passes {
     namespace contract {
+
+        inline auto ParseUint64(std::string_view text) -> std::optional< uint64_t > {
+            uint64_t value = 0;
+            auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+            if (ec != std::errc{} || ptr != text.data() + text.size()) {
+                return std::nullopt;
+            }
+            return value;
+        }
 
         // Forward declarations from contract dialect
         namespace attr_types {
@@ -351,9 +361,10 @@ namespace llvm::yaml {
                 } else if (target_str.starts_with("arg")) {
                     pred.target = ::contracts::TargetKind::Arg;
                     // Extract the index from "arg0", "arg1", etc.
-                    try {
-                        pred.arg_index = std::stoull(target_str.substr(3));
-                    } catch (...) {
+                    if (auto parsed_index =
+                            ::patchestry::passes::contract::ParseUint64(target_str.substr(3))) {
+                        pred.arg_index = *parsed_index;
+                    } else {
                         io.setError("Invalid argument index in target: " + target_str);
                         return;
                     }
@@ -392,9 +403,9 @@ namespace llvm::yaml {
             std::string align_str;
             io.mapOptional("align", align_str);
             if (!align_str.empty()) {
-                try {
-                    pred.align = std::stoull(align_str);
-                } catch (...) {
+                if (auto parsed_align = ::patchestry::passes::contract::ParseUint64(align_str)) {
+                    pred.align = *parsed_align;
+                } else {
                     io.setError("Invalid alignment value: " + align_str);
                     return;
                 }
