@@ -20,11 +20,6 @@ if(NOT EXISTS "${src_dir}/llvm/CMakeLists.txt")
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 endif()
 
-# This is the main build, setup and execute the nested build
-# to ensure the Clang and MLIR libraries exist before continuing
-
-execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${build_dir}")
-
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(LLVM_ENABLE_ASSERTIONS ON)
 else()
@@ -37,8 +32,12 @@ else()
   set(LLVM_ENABLE_LLD OFF)
 endif()
 
-# (b) Nested CMake run. May need more -D... options than shown here.
+# (b) Nested CMake run. Use --fresh so host and container reconfigures do not
+# reuse incompatible caches.
 execute_process(COMMAND ${CMAKE_COMMAND}
+                        --fresh
+                        -S "${src_dir}/llvm"
+                        -B "${build_dir}"
                         -G "${CMAKE_GENERATOR}"
                         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
                         "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
@@ -76,8 +75,7 @@ execute_process(COMMAND ${CMAKE_COMMAND}
                         -DLLVM_INSTALL_UTILS:BOOL=ON
                         -DLLVM_ENABLE_ZSTD:BOOL=OFF
                         -DLLVM_ENABLE_LLD:BOOL=${LLVM_ENABLE_LLD}
-                        "${src_dir}/llvm"
-               WORKING_DIRECTORY "${build_dir}")
+               WORKING_DIRECTORY "${PROJECT_BINARY_DIR}")
 
 # (c) Build just mycomp in the nested build. Don't specify a --config
 #     because we cannot know what config the developer will be using
