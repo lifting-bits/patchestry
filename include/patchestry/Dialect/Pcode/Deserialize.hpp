@@ -19,11 +19,11 @@ namespace patchestry::pc {
     using json_obj = llvm::json::Object;
     using json_val = llvm::json::Value;
 
-    struct deserializer
+    struct Deserializer
     {
         mlir_builder bld;
 
-        explicit deserializer(mlir::ModuleOp mod) : bld(mod) {
+        explicit Deserializer(mlir::ModuleOp mod) : bld(mod) {
             assert(mod->getNumRegions() > 0 && "Module has no regions.");
             auto &reg = mod->getRegion(0);
             assert(reg.hasOneBlock() && "Region has unexpected blocks.");

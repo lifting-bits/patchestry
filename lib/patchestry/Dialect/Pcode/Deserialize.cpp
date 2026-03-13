@@ -16,18 +16,18 @@ namespace patchestry::pc {
         auto loc = mlir::UnknownLoc::get(mctx);
         auto mod = mlir::OwningOpRef< mlir::ModuleOp >(mlir::ModuleOp::create(loc));
 
-        deserializer des(mod.get());
+        Deserializer des(mod.get());
         des.process(json);
 
         return mod;
     }
 
-    void deserializer::process(const json_obj &json) {
+    void Deserializer::process(const json_obj &json) {
         // FIXME: implement multi-function support
         process_function(json);
     }
 
-    void deserializer::process_function(const json_obj &json) {
+    void Deserializer::process_function(const json_obj &json) {
         if (!json.getString("name")) {
             mlir::emitError(bld.getUnknownLoc(), "Function JSON missing 'name' field.");
             return;
@@ -44,7 +44,7 @@ namespace patchestry::pc {
         }
     }
 
-    void deserializer::process_block(const json_obj &json) {
+    void Deserializer::process_block(const json_obj &json) {
         if (!json.getString("label")) {
             mlir::emitError(bld.getUnknownLoc(), "Block JSON missing 'label' field.");
             return;
@@ -67,6 +67,6 @@ namespace patchestry::pc {
         }
     }
 
-    void deserializer::process_instruction(const json_obj &json) {}
+    void Deserializer::process_instruction(const json_obj &json) {}
 
 } // namespace patchestry::pc

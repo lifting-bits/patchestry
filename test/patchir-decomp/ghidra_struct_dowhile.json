@@ -1,0 +1,80 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=DW %s --input-file %t.c
+// DW: do {
+// DW: } while (
+// DW: return
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000000": {
+      "name": "ghidra_struct_dowhile",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:20000000:0:basic"
+            }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "body_op": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 3 },
+                { "type": "type_int", "kind": "constant", "value": 4 }
+              ]
+            },
+            "loop_cond": {
+              "mnemonic": "INT_EQUAL",
+              "type": "type_bool",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 0 },
+                { "type": "type_int", "kind": "constant", "value": 1 }
+              ]
+            },
+            "cbr": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:20000000:0:basic",
+              "not_taken_block": "ram:20000000:1:basic",
+              "condition": {
+                "type": "type_bool",
+                "kind": "temporary",
+                "operation": "loop_cond"
+              }
+            }
+          },
+          "ordered_operations": ["body_op", "loop_cond", "cbr"]
+        },
+        "ram:20000000:1:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 0 }]
+            }
+          },
+          "ordered_operations": ["ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" },
+    "type_bool": { "name": "bool", "size": 1, "kind": "boolean" }
+  }
+}

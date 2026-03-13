@@ -22,7 +22,7 @@ namespace patchestry::ast {
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key) {
         auto &fm = sm.getFileManager();
         auto fe  = fm.getVirtualFileRef(key, static_cast< int >(key.size()), 0);
-        std::unique_ptr< llvm::MemoryBuffer > buffer = llvm::MemoryBuffer::getMemBuffer(key);
+        std::unique_ptr< llvm::MemoryBuffer > buffer = llvm::MemoryBuffer::getMemBufferCopy(key);
         sm.overrideFileContents(fe, std::move(buffer));
         auto fid = sm.createFileID(fe, clang::SourceLocation(), clang::SrcMgr::C_User, 0);
         return sm.getLocForStartOfFile(fid);
