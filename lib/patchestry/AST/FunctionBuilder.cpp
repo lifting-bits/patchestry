@@ -585,6 +585,26 @@ namespace patchestry::ast {
         std::vector< clang::Stmt * > stmt_vec;
         create_labels(ctx, func_decl);
 
+        // Compute per-block predecessor counts so that switch-case inlining
+        // can avoid inlining blocks that are targeted by multiple predecessors.
+        block_predecessor_count.clear();
+        for (const auto &[key, blk] : function.get().basic_blocks) {
+            std::unordered_set< std::string > targets;
+            for (const auto &op_key : blk.ordered_operations) {
+                if (!blk.operations.contains(op_key)) { continue; }
+                const auto &op = blk.operations.at(op_key);
+                if (op.taken_block) { targets.insert(*op.taken_block); }
+                if (op.not_taken_block) { targets.insert(*op.not_taken_block); }
+                if (op.target_block) { targets.insert(*op.target_block); }
+                for (const auto &s : op.successor_blocks) { targets.insert(s); }
+                for (const auto &sc : op.switch_cases) { targets.insert(sc.target_block); }
+                if (op.fallback_block) { targets.insert(*op.fallback_block); }
+            }
+            for (const auto &t : targets) {
+                block_predecessor_count[t]++;
+            }
+        }
+
         // Compute RPO block order from the P-Code CFG.  Emitting in RPO order
         // matches what BasicBlockReorderPass would produce, making that pass a
         // near-no-op and letting GotoCanonicalizePass see clean input earlier.
