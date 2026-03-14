@@ -1,21 +1,18 @@
 # Disable fortified libc wrappers (__sprintf_chk, etc.) in Ubuntu 22.04
-ARG IMAGE=ubuntu:22.04
-FROM ${IMAGE}
+FROM ubuntu:22.04
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Enable armhf architecture for cross-compilation libraries
-RUN dpkg --add-architecture armhf
-
-# Configure apt sources for the native container architecture plus armhf.
-# On Apple Silicon, the base image is arm64, so hardcoding amd64 here breaks
-# apt resolution against ports.ubuntu.com.
-RUN HOST_ARCH="$(dpkg --print-architecture)" && \
-    sed -i "s/^deb /deb [arch=${HOST_ARCH}] /" /etc/apt/sources.list && \
-    echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy main universe multiverse restricted" >> /etc/apt/sources.list && \
-    echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe multiverse restricted" >> /etc/apt/sources.list && \
-    echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-security main universe multiverse restricted" >> /etc/apt/sources.list && \
-    echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-backports main universe multiverse restricted" >> /etc/apt/sources.list
+# Enable armhf cross-compilation; configure apt sources per host architecture
+RUN dpkg --add-architecture armhf && \
+    NATIVE_ARCH=$(dpkg --print-architecture) && \
+    if [ "$NATIVE_ARCH" = "amd64" ]; then \
+        sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list && \
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy main universe multiverse restricted" >> /etc/apt/sources.list && \
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe multiverse restricted" >> /etc/apt/sources.list && \
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-security main universe multiverse restricted" >> /etc/apt/sources.list && \
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-backports main universe multiverse restricted" >> /etc/apt/sources.list ; \
+    fi
 
 # Install dependencies
 RUN apt-get update && \
