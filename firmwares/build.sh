@@ -22,7 +22,7 @@ host_repos_dir="$(translate_to_host_path "${script_dir}/repos")"
 # Repository commit hashes
 PULSEOX_COMMIT="54ed8ca6bec36cc13db8f6594e3bd9941937922a"
 BLOODLIGHT_COMMIT="fcc0daef9119ab09914b0c523e7d9d93aad36ea4"
-VENTILATOR_COMMIT="6165c82de293d66b71f43040a2f145ab70bb49c0"
+VENTILATOR_COMMIT="c49fb21130de8732908d7a3d8eaf8915239a5735"
 
 # Clone/update repositories if needed
 if [ ! -d "${script_dir}/repos/pulseox-firmware" ]; then
@@ -46,12 +46,13 @@ if [ ! -d "${script_dir}/repos/bloodlight-firmware" ]; then
 fi
 
 if [ ! -d "${script_dir}/repos/ventilator" ]; then
-    git clone --depth 1 https://github.com/RespiraWorks/Ventilator.git \
+    git clone --depth 1 https://github.com/trail-of-forks/Ventilator.git \
         "${script_dir}/repos/ventilator"
 fi
 cd "${script_dir}/repos/ventilator"
 git fetch --depth=1 origin "${VENTILATOR_COMMIT}"
 git checkout -f "${VENTILATOR_COMMIT}"
+patch -s -p1 < "${script_dir}/ventilator-patch.diff"
 cd "${script_dir}"
 
 # Build using Docker
@@ -112,9 +113,9 @@ docker run --rm \
              cd controller && \
              pio run -e stm32 && \
              cd /work/ventilator/software/gui && \
-             conan profile detect --force 2>/dev/null ; \
-             cd /work/ventilator/software/gui && \
+             conan profile detect --force 2>/dev/null || true && \
              mkdir -p build && cd build && \
+             conan install .. --output-folder=. --build=missing -s build_type=Release && \
              cmake .. -DCMAKE_BUILD_TYPE=Release && \
              make -j\$(nproc) && \
              mkdir -p /output/ventilator && \
