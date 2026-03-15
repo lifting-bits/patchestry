@@ -329,6 +329,20 @@ public class PcodeSerializer {
 			this.seenDataMap = new HashMap<>();
 		}
 
+		// Returns the mangled symbol name for a function if one exists at its
+		// entry point (e.g. _ZN... for GCC/Clang, ?... for MSVC). Falls back
+		// to the Ghidra demangled name for plain C functions.
+		public static String getMangledName(Function function, Program program) {
+			Symbol[] symbols = program.getSymbolTable().getSymbols(function.getEntryPoint());
+			for (Symbol sym : symbols) {
+				String symName = sym.getName();
+				if (symName.startsWith("_Z") || symName.startsWith("?")) {
+					return symName;
+				}
+			}
+			return function.getName();
+		}
+
 		String label(HighFunction function) throws Exception {
 			return label(function.getFunction());
 		}
@@ -2844,7 +2858,7 @@ public class PcodeSerializer {
 			prefixOperationsMap.clear();
 
 			FunctionPrototype functionPrototype = null;
-			writer.name("name").value(functionToSerialize.getName());
+			writer.name("name").value(getMangledName(functionToSerialize, currentProgram));
 			writer.name("is_intrinsic").value(false);
 
 			// If we have a high P-Code function, then serialize the blocks.
