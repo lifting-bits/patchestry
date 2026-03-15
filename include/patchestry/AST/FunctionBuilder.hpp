@@ -91,6 +91,8 @@ namespace patchestry::ast {
 
         clang::FunctionDecl *create_definition(clang::ASTContext &ctx);
 
+        bool has_basic_blocks() const { return !function.get().basic_blocks.empty(); }
+
       private:
         void create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl);
 
