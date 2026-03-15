@@ -182,7 +182,7 @@ namespace patchestry::ast {
     ShouldReinterpretCast(const clang::QualType &from_type, const clang::QualType &to_type) {
         if (from_type->isRecordType()) {
             return to_type->isArithmeticType() || to_type->isAnyPointerType()
-                || to_type->isArrayType();
+                || to_type->isArrayType() || to_type->isRecordType();
         }
         if (from_type->isArithmeticType() || from_type->isPointerType()) {
             return to_type->isArrayType() || to_type->isRecordType();

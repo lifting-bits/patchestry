@@ -1062,7 +1062,12 @@ namespace patchestry::ast {
                 }
             }
 
-            while (activecount_ > 0) {
+            // Guard against infinite loops in the trace-DAG algorithm.
+            // The upper bound is generous: each iteration should retire or
+            // remove at least one trace; O(nodes^2) covers pathological CFGs.
+            const size_t max_iterations = g.nodes.size() * g.nodes.size() + 1000;
+            size_t iteration = 0;
+            while (activecount_ > 0 && iteration++ < max_iterations) {
                 int missedcount = 0;
                 current_activeiter_ = activetrace_.begin();
 

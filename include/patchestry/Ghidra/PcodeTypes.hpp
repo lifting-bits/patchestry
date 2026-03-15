@@ -205,10 +205,8 @@ namespace patchestry::ghidra {
         CompositeType(std::string name, Kind kind, uint32_t size)
             : VarnodeType(name, kind, size) {}
 
-        void AddComponents(std::string &name, const VarnodeType &type, uint32_t offset) {
-            components.emplace_back(
-                Component(name, offset, std::make_shared< VarnodeType >(type))
-            );
+        void AddComponents(std::string &name, const std::shared_ptr< VarnodeType > &type, uint32_t offset) {
+            components.emplace_back(Component(name, offset, type));
         }
 
         std::vector< Component > GetComponents(void) const { return components; }
