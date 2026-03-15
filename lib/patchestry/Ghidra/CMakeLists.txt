@@ -15,5 +15,6 @@ target_link_libraries(patchestry_ghidra
     MLIRPcode
   PRIVATE
     LLVMSupport
+    LLVMDemangle
     patchestry_settings
 )

@@ -11,7 +11,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include <cctype>
+#include <cstdlib>
+
 #include <llvm/ADT/StringRef.h>
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/Support/FormatVariadic.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -550,6 +554,74 @@ namespace patchestry::ghidra {
         return vnode;
     }
 
+    // Demangle a C++ mangled symbol name and sanitize it to a valid C
+    // identifier.  Non-mangled names pass through unchanged.
+    static std::string demangle_to_c_identifier(const std::string &mangled) {
+        // Only attempt Itanium ABI mangling (_Z prefix)
+        if (mangled.size() < 2 || mangled[0] != '_' || mangled[1] != 'Z') {
+            return mangled;
+        }
+
+        char *raw = llvm::itaniumDemangle(mangled);
+        if (!raw) {
+            return mangled;
+        }
+
+        std::string result(raw);
+        std::free(raw);
+
+        // Strip parameter list: "Foo::Bar(int, char)" → "Foo::Bar"
+        auto paren = result.find('(');
+        if (paren != std::string::npos) {
+            result = result.substr(0, paren);
+        }
+
+        // Strip return type prefix for cast operators and similar:
+        // remove leading whitespace after stripping
+        while (!result.empty() && result.back() == ' ') {
+            result.pop_back();
+        }
+
+        // Handle destructors: "Foo::~Foo" → "Foo::dtor_Foo"
+        auto tilde = result.find('~');
+        if (tilde != std::string::npos) {
+            result.replace(tilde, 1, "dtor_");
+        }
+
+        // Replace non-identifier characters (::, <>, spaces, *, &) with '_'
+        for (auto &c : result) {
+            if (!std::isalnum(static_cast< unsigned char >(c)) && c != '_') {
+                c = '_';
+            }
+        }
+
+        // Collapse consecutive underscores
+        std::string collapsed;
+        collapsed.reserve(result.size());
+        bool prev_underscore = false;
+        for (char c : result) {
+            if (c == '_') {
+                if (!prev_underscore) {
+                    collapsed.push_back(c);
+                }
+                prev_underscore = true;
+            } else {
+                collapsed.push_back(c);
+                prev_underscore = false;
+            }
+        }
+
+        // Remove leading/trailing underscores
+        while (!collapsed.empty() && collapsed.front() == '_') {
+            collapsed.erase(collapsed.begin());
+        }
+        while (!collapsed.empty() && collapsed.back() == '_') {
+            collapsed.pop_back();
+        }
+
+        return collapsed.empty() ? mangled : collapsed;
+    }
+
     std::optional< Function > JsonParser::create_function(const JsonObject &func_obj) {
         const auto function_name = stripNull(func_obj.getString("name"));
         if (!function_name || function_name->empty()) {
@@ -559,7 +631,8 @@ namespace patchestry::ghidra {
 
         Function function;
 
-        function.name = *function_name;
+        function.name         = *function_name;
+        function.display_name = demangle_to_c_identifier(function.name);
         if (const auto *proto_obj = func_obj.getObject("type")) {
             if (auto maybe_prototype = create_function_prototype(*proto_obj)) {
                 function.prototype = *maybe_prototype;

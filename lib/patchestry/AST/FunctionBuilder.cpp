@@ -300,7 +300,11 @@ namespace patchestry::ast {
     clang::FunctionDecl *FunctionBuilder::create_declaration(
         clang::ASTContext &ctx, const clang::QualType &function_type, bool is_definition
     ) {
-        if (function.get().name.empty()) {
+        const auto &c_name = function.get().display_name.empty()
+            ? function.get().name
+            : function.get().display_name;
+
+        if (c_name.empty()) {
             LOG(ERROR) << "Function name is empty. function key " << function.get().key << "\n";
             return {};
         }
@@ -308,7 +312,7 @@ namespace patchestry::ast {
         auto location   = clang::SourceLocation();
         auto *func_decl = clang::FunctionDecl::Create(
             ctx, ctx.getTranslationUnitDecl(), location, location,
-            &ctx.Idents.get(function.get().name), function_type,
+            &ctx.Idents.get(c_name), function_type,
             ctx.getTrivialTypeSourceInfo(function_type), clang::SC_None
         );
 
@@ -321,10 +325,11 @@ namespace patchestry::ast {
         func_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
-        // if function is a declaration, add asm attribute with symbol name
-        // only when the symbol name differs from the C identifier (otherwise
-        // Clang's printer emits invalid syntax: asm("sym") void fn(void);)
-        if (!is_definition && function.get().name != func_decl->getName()) {
+        // Add asm label with original symbol name when the C identifier
+        // differs (e.g. demangled name vs mangled symbol).  Applied to both
+        // declarations and definitions so that the compiled object emits the
+        // correct linker symbol for binary patching.
+        if (function.get().name != c_name) {
             if (auto *asm_attr = clang::AsmLabelAttr::Create(
                     ctx, function.get().name, true, func_decl->getSourceRange()
                 ))
@@ -507,13 +512,16 @@ namespace patchestry::ast {
      * blocks, or if the function definition cannot be created.
      */
     clang::FunctionDecl *FunctionBuilder::create_definition(clang::ASTContext &ctx) {
-        if (function.get().name.empty()) {
+        const auto &c_name = function.get().display_name.empty()
+            ? function.get().name
+            : function.get().display_name;
+        if (c_name.empty()) {
             LOG(ERROR) << "Can't create function definition. Missing function name.\n";
             return {};
         }
 
         if (function.get().basic_blocks.empty()) {
-            LOG(ERROR) << "Can't create function definition for '" << function.get().name << "'. Function has no basic blocks.\n";
+            LOG(ERROR) << "Can't create function definition for '" << c_name << "'. Function has no basic blocks.\n";
             return {};
         }
 
