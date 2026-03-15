@@ -31,7 +31,7 @@ public class FunctionSerializer extends JsonWriter {
         name("functions").beginArray();
         for (Function function : functions) {
             beginObject();
-            name("name").value(function.getName());
+            name("name").value(PcodeSerializer.getMangledName(function, currentProgram));
             name("address").value(function.getEntryPoint().toString());
             name("is_thunk").value(function.isThunk());
             endObject();
