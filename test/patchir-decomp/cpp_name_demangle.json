@@ -1,0 +1,87 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=CCHECK %s --input-file %t.c
+//
+// Tests that C++ mangled function names are demangled to valid C identifiers
+// and the original mangled name is preserved as an asm label on declarations.
+//
+// CIR uses the linker symbol (mangled name when asm label is present):
+// CIR-DAG: cir.func @_ZN3Foo3barEi
+// CIR-DAG: cir.func @plain_c_func
+//
+// C output uses demangled name with asm label preserving the mangled symbol:
+// CCHECK-DAG: asm("_ZN3Foo3barEi")
+// CCHECK-DAG: Foo_bar
+// Non-mangled name passes through unchanged (no asm label):
+// CCHECK-DAG: plain_c_func
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "_ZN3Foo3barEi",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "x", "type": "type_int", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "p0" }]
+            }
+          },
+          "ordered_operations": ["ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:20000000": {
+      "name": "plain_c_func",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int"]
+      },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "y", "type": "type_int", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "br"]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "p0" }]
+            }
+          },
+          "ordered_operations": ["ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" }
+  }
+}

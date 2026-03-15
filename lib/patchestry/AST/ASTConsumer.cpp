@@ -77,7 +77,7 @@ namespace patchestry::ast {
             // Build a name→ghidra::Function lookup for switch metadata.
             std::unordered_map< std::string, const ghidra::Function * > name_to_ghidra;
             for (const auto &[key, func] : get_program().serialized_functions) {
-                name_to_ghidra[func.name] = &func;
+                name_to_ghidra[func.display_name.empty() ? func.name : func.display_name] = &func;
             }
 
             for (auto &cfg : cfgs) {
