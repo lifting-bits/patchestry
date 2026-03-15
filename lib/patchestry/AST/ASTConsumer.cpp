@@ -124,8 +124,11 @@ namespace patchestry::ast {
         }
 
         for (auto &builder : func_builders) {
-            auto *func_decl = builder->create_definition(ctx);
-            (void) func_decl;
+            // Functions without basic blocks (externals/callees) already have a
+            // forward declaration created in FunctionBuilder's constructor.
+            if (builder->has_basic_blocks()) {
+                builder->create_definition(ctx);
+            }
         }
         (void) serialized_types;
     }
