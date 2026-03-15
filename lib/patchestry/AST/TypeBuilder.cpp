@@ -397,13 +397,18 @@ namespace patchestry::ast {
             auto field_type  = iter->second;
             auto location    = SourceLocation(ctx.getSourceManager(), component.type->key);
 
-            // For bitfield components, create an IntegerLiteral for the bit width.
+            // For bitfield components, create a ConstantExpr wrapping the bit width.
             clang::Expr *bit_width = nullptr;
             if (component.type->kind == VarnodeType::VT_BITFIELD) {
                 auto &bf = dynamic_cast< const BitFieldType & >(*component.type);
-                bit_width = clang::IntegerLiteral::Create(
+                auto *int_lit = clang::IntegerLiteral::Create(
                     ctx, llvm::APInt(TypeBuilder::kNumBitsUint, bf.bit_size),
                     ctx.UnsignedIntTy, location
+                );
+                bit_width = clang::ConstantExpr::Create(
+                    ctx, int_lit, clang::APValue(llvm::APSInt(
+                        llvm::APInt(TypeBuilder::kNumBitsUint, bf.bit_size), /*isUnsigned=*/true
+                    ))
                 );
             }
 

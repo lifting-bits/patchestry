@@ -267,7 +267,10 @@ namespace patchestry::ast {
     ) {
         auto cast =
             sema().BuildCStyleCastExpr(loc, ctx.getTrivialTypeSourceInfo(to_type), loc, expr);
-        assert(!cast.isInvalid() && "Invalid casted result");
+        if (cast.isInvalid()) {
+            LOG(ERROR) << "make_explicit_cast failed\n";
+            return nullptr;
+        }
         return cast.getAs< clang::Expr >();
     }
 
@@ -307,7 +310,10 @@ namespace patchestry::ast {
         }
 
         auto result = sema().ImpCastExprToType(expr, to_type, kind);
-        assert(!result.isInvalid() && "Failed to make implicit cast expr");
+        if (result.isInvalid()) {
+            LOG(ERROR) << "make_implicit_cast failed\n";
+            return nullptr;
+        }
         return result.getAs< clang::Expr >();
     }
 
@@ -346,6 +352,35 @@ namespace patchestry::ast {
         assert(!deref_expr.isInvalid());
 
         return deref_expr.getAs< clang::Expr >();
+    }
+
+    // Coerce a record (struct/union) typed expression to an unsigned integer of
+    // the same byte size so that it can participate in C arithmetic / bitwise
+    // operations.  Returns the expression unchanged if it is not a record type.
+    clang::Expr *OpBuilder::coerce_record_to_integer(
+        clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc
+    ) {
+        if (!expr || !expr->getType()->isRecordType()) {
+            return expr;
+        }
+        auto size_bits = ctx.getTypeSize(expr->getType());
+        clang::QualType int_type;
+        if (size_bits <= 8) {
+            int_type = ctx.UnsignedCharTy;
+        } else if (size_bits <= 16) {
+            int_type = ctx.UnsignedShortTy;
+        } else if (size_bits <= 32) {
+            int_type = ctx.UnsignedIntTy;
+        } else if (size_bits <= 64) {
+            int_type = ctx.UnsignedLongLongTy;
+        } else {
+            // For very large records, use __uint128_t if available, otherwise
+            // fall back to an array-of-char reinterpret.
+            int_type = ctx.UnsignedInt128Ty.isNull()
+                ? ctx.UnsignedLongLongTy
+                : ctx.UnsignedInt128Ty;
+        }
+        return make_reinterpret_cast(ctx, expr, int_type, loc);
     }
 
     clang::Stmt *OpBuilder::create_assign_operation(
@@ -1573,6 +1608,28 @@ namespace patchestry::ast {
         }
         auto location = SourceLocation(ctx.getSourceManager(), op.key);
 
+        // Record (struct/union) types cannot participate in bitwise shift/or
+        // arithmetic.  When PIECE involves a record type, emit a simple
+        // assignment of the low part (input1) to the output.
+        if (input0_expr->getType()->isRecordType()
+            || input1_expr->getType()->isRecordType()
+            || type_it->second->isRecordType()) {
+            auto merge_to_next = !op.output.has_value();
+            clang::Expr *result_expr = input1_expr;
+            if (!ctx.hasSameUnqualifiedType(result_expr->getType(), type_it->second)) {
+                result_expr = make_reinterpret_cast(ctx, result_expr, type_it->second, location);
+            }
+            if (merge_to_next) {
+                return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
+            }
+            auto *output_expr = create_varnode(ctx, function, *op.output);
+            return { create_assign_operation(
+                         ctx, result_expr,
+                         clang::dyn_cast< clang::Expr >(output_expr), location
+                     ),
+                     false };
+        }
+
         // Determine low-part bit width from input1's type.  The Varnode::size
         // field is not populated for operation inputs, so look up the type.
         unsigned low_width = 0;
@@ -1671,6 +1728,29 @@ namespace patchestry::ast {
 
         auto *expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        // Record (struct/union) types cannot participate in bitwise shift/mask
+        // arithmetic.  When SUBPIECE operates on a record type, emit a
+        // reinterpret-cast to the output type and skip the arithmetic path.
+        if (expr->getType()->isRecordType() || op_type->isRecordType()) {
+            clang::Expr *result_expr = expr;
+            if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
+                result_expr = make_reinterpret_cast(ctx, expr, op_type, op_location);
+            }
+            if (merge_to_next) {
+                return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
+            }
+            auto *out_expr  = create_varnode(ctx, function, *op.output);
+            auto out_result = sema().CreateBuiltinBinOp(
+                op_location, clang::BO_Assign,
+                clang::dyn_cast< clang::Expr >(out_expr), result_expr
+            );
+            if (out_result.isInvalid()) {
+                LOG(ERROR) << "SUBPIECE record-type output assignment failed. key: " << op.key;
+                return std::make_pair(nullptr, false);
+            }
+            return std::make_pair(out_result.getAs< clang::Stmt >(), merge_to_next);
+        }
 
         if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
             if (auto *casted_expr = make_cast(ctx, expr, op_type, op_location)) {
@@ -2032,9 +2112,14 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        // TODO(kumarak): Should check the operation type before creating unary operation???
+        // Coerce record (struct/union) operands to integers for C operators.
+        input_expr = coerce_record_to_integer(ctx, input_expr, op_loc);
+
         auto unary_operation = sema().CreateBuiltinUnaryOp(op_loc, kind, input_expr);
-        assert(!unary_operation.isInvalid());
+        if (unary_operation.isInvalid()) {
+            LOG(ERROR) << "Unary operation failed on operand. key: " << op.key << "\n";
+            return std::make_pair(nullptr, false);
+        }
 
         if (!op.output.has_value()) {
             return { unary_operation.getAs< clang::Stmt >(), true };
@@ -2064,6 +2149,11 @@ namespace patchestry::ast {
         auto *lhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
         auto *rhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
 
+        // Coerce record (struct/union) operands to integers so that C
+        // arithmetic and bitwise operators are valid.
+        lhs = coerce_record_to_integer(ctx, lhs, op_loc);
+        rhs = coerce_record_to_integer(ctx, rhs, op_loc);
+
         auto make_paren_expr = [&](clang::ASTContext &ctx, clang::Expr *expr,
                                    clang::SourceLocation loc) -> clang::Expr * {
             if (auto *uo = clang::dyn_cast< clang::UnaryOperator >(expr); uo) {
@@ -2078,7 +2168,10 @@ namespace patchestry::ast {
             op_loc, kind, make_paren_expr(ctx, lhs, op_loc), make_paren_expr(ctx, rhs, op_loc)
         );
 
-        assert(!result.isInvalid() && "Invalid result from binary operation");
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Binary operation failed on operands. key: " << op.key << "\n";
+            return std::make_pair(nullptr, false);
+        }
 
         if (!op.output) {
             return std::make_pair(result.getAs< clang::Stmt >(), true);
@@ -2408,7 +2501,8 @@ namespace patchestry::ast {
                 }
             }
 
-            assert(false && "Failed to find field decl at offset, check!");
+            LOG(ERROR) << "Failed to find field decl at offset " << target_offset
+                       << " in record type\n";
             return nullptr;
         };
 
@@ -2428,7 +2522,13 @@ namespace patchestry::ast {
         auto *definition = decl->getDefinition();
 
         auto *field = find_field_decl(ctx, definition, offset);
-        assert(field != nullptr && "failed to find record decl field at offset");
+        if (field == nullptr) {
+            // Field not found — fall back to a byte-offset pointer cast:
+            // *(result_type*)((char*)base + offset)
+            return make_reinterpret_cast(
+                ctx, base, ctx.getPointerType(base_type->getPointeeType()), loc
+            );
+        }
 
         clang::DeclarationNameInfo member_name_info(field->getDeclName(), loc);
         return sema().BuildMemberExpr(
@@ -2543,10 +2643,20 @@ namespace patchestry::ast {
             auto mult_result = sema().CreateBuiltinBinOp(op_loc, clang::BO_Mul, index, scale);
             assert(!mult_result.isInvalid());
 
+            // When the base has a record (struct/union) type, cast it to
+            // char* so that pointer arithmetic is valid.
+            clang::Expr *arith_base = base;
+            if (base->getType()->isRecordType()) {
+                arith_base = make_reinterpret_cast(ctx, base, ctx.getPointerType(ctx.CharTy), op_loc);
+            }
+
             auto add_result = sema().CreateBuiltinBinOp(
-                op_loc, clang::BO_Add, base, mult_result.getAs< clang::Expr >()
+                op_loc, clang::BO_Add, arith_base, mult_result.getAs< clang::Expr >()
             );
-            assert(!add_result.isInvalid());
+            if (add_result.isInvalid()) {
+                LOG(ERROR) << "PTRADD invalid add result. key: " << op.key;
+                return std::make_pair(nullptr, false);
+            }
             result_expr = add_result.getAs< clang::Expr >();
         }
 

@@ -229,6 +229,10 @@ namespace patchestry::ast {
             clang::SourceLocation loc
         );
 
+        clang::Expr *coerce_record_to_integer(
+            clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc
+        );
+
         clang::Expr *make_member_expr(
             clang::ASTContext &ctx, clang::Expr *base, unsigned offset,
             clang::SourceLocation loc = clang::SourceLocation()

@@ -411,7 +411,7 @@ namespace patchestry::ghidra {
             }
 
             varnode.AddComponents(
-                field_name, *iter->second, static_cast< uint32_t >(*maybe_offset)
+                field_name, iter->second, static_cast< uint32_t >(*maybe_offset)
             );
 
             ++field_index;

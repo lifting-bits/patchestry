@@ -278,7 +278,9 @@ namespace patchestry::ast {
                 auto *literal =
                     new (ctx) clang::IntegerLiteral(ctx, wide_val, wide_type, location);
                 return make_implicit_cast(
-                    ctx, literal, vnode_type, clang::CK_IntegralCast
+                    ctx, literal, vnode_type,
+                    vnode_type->isBooleanType() ? clang::CK_IntegralToBoolean
+                                                : clang::CK_IntegralCast
                 );
             }
 
