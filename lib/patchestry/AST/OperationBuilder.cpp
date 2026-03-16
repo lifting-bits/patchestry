@@ -48,7 +48,7 @@ namespace patchestry::ast {
             }
         }
 
-        llvm_unreachable("Failed to find operation for varnode lookup key");
+        return std::nullopt;
     }
 
     clang::Stmt *OpBuilder::create_varnode(

@@ -308,8 +308,8 @@ namespace patchestry::ast {
 
         auto result = sema().ImpCastExprToType(expr, to_type, kind);
         if (result.isInvalid()) {
-            LOG(ERROR) << "Failed to make implicit cast expr\n";
-            return nullptr;
+            LOG(WARNING) << "make_implicit_cast failed, returning original expr\n";
+            return expr;
         }
         return result.getAs< clang::Expr >();
     }
@@ -1195,12 +1195,18 @@ namespace patchestry::ast {
                 vnode_expr = make_implicit_cast(
                     ctx, vnode_expr, vnode_expr->getType(), clang::CastKind::CK_LValueToRValue
                 );
-                assert(vnode_expr != nullptr && "Failed to convert to rvalue");
+                if (!vnode_expr) {
+                    LOG(ERROR) << "Failed to convert call arg to rvalue. key: " << op.key << "\n";
+                    continue;
+                }
             }
             auto *arg = make_implicit_cast(
                 ctx, vnode_expr, arg_type, GetCastKind(ctx, vnode_expr->getType(), arg_type)
             );
-            assert(arg != nullptr && "Function argument is null");
+            if (!arg) {
+                LOG(ERROR) << "Failed to cast call argument. key: " << op.key << "\n";
+                arg = vnode_expr;  // use uncast expr as fallback
+            }
             arguments.push_back(arg);
         }
 
