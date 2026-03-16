@@ -176,22 +176,30 @@ namespace patchestry::ast {
                     // taken_block before not_taken_block — mirrors BasicBlockReorderPass DFS
                     // order so the emitted block sequence is identical to what that pass
                     // would produce.
-                    if (op.taken_block) {
+                    // Only add successors that actually exist in the function's
+                    // basic_blocks map — phantom targets from stale JSON would
+                    // otherwise enter the DFS and silently become "unreachable".
+                    const auto &blocks = function.basic_blocks;
+                    if (op.taken_block && blocks.contains(*op.taken_block)) {
                         succs[key].push_back(*op.taken_block);
                     }
-                    if (op.not_taken_block) {
+                    if (op.not_taken_block && blocks.contains(*op.not_taken_block)) {
                         succs[key].push_back(*op.not_taken_block);
                     }
-                    if (op.target_block) {
+                    if (op.target_block && blocks.contains(*op.target_block)) {
                         succs[key].push_back(*op.target_block);
                     }
                     for (const auto &s : op.successor_blocks) {
-                        succs[key].push_back(s);
+                        if (blocks.contains(s)) {
+                            succs[key].push_back(s);
+                        }
                     }
                     for (const auto &sc : op.switch_cases) {
-                        succs[key].push_back(sc.target_block);
+                        if (blocks.contains(sc.target_block)) {
+                            succs[key].push_back(sc.target_block);
+                        }
                     }
-                    if (op.fallback_block.has_value()) {
+                    if (op.fallback_block.has_value() && blocks.contains(*op.fallback_block)) {
                         succs[key].push_back(*op.fallback_block);
                     }
                 }
@@ -268,7 +276,7 @@ namespace patchestry::ast {
         }
     }
 
-    void FunctionBuilder::initialize_op_builder(void) {
+    void FunctionBuilder::InitializeOpBuilder(void) {
         // If `op_builder` is initialized don't initailize them
         if (!op_builder) {
             op_builder =

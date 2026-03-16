@@ -50,7 +50,7 @@ namespace patchestry::ast {
         // Virtual destructor
         virtual ~FunctionBuilder() = default;
 
-        void initialize_op_builder(void);
+        void InitializeOpBuilder(void);
 
         /**
          * @brief Creates a `FunctionDecl` object for the given function, including its type,

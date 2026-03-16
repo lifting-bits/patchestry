@@ -174,10 +174,10 @@ namespace {
         auto is_equal = [&](std::string astr, std::string bstr) -> bool {
             // transform both the string to lower-case and compare
             std::ranges::transform(astr, astr.begin(), [](unsigned char c) {
-                return std::toupper(c);
+                return static_cast< char >(std::toupper(c));
             });
             std::ranges::transform(bstr, bstr.begin(), [](unsigned char c) {
-                return std::toupper(c);
+                return static_cast< char >(std::toupper(c));
             });
             return astr == bstr;
         };
