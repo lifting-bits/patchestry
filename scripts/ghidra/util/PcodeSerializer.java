@@ -257,7 +257,11 @@ public class PcodeSerializer {
 		// readers of the JSON, we want to 'version' the register variables by
 		// their initial user.
 		private Map<HighVariable, PcodeOp> temporaryAddressMap;
-		
+
+		// Counter for generating unique names for UNNAMED variables.
+		// Reset per function in serializeFunction().
+		private int unnamedVarCounter;
+
 		// Replacement operations. Sometimes we have something that we actually
 		// need to replace, and so this mapping allows us to do that without
 		// having to aggressively rewrite things, especially output operands.
@@ -1717,9 +1721,9 @@ public class PcodeSerializer {
 				}
 
 				if (highVariableName == null || highVariableName.equals("UNNAMED")) {
-					continue;
+					highVariableName = "local_" + Integer.toString(unnamedVarCounter++);
 				}
-				
+
 				missingLocalsMap.put(highVariableName, (HighLocal) highVariable);
 			}
 		}
@@ -2442,12 +2446,21 @@ public class PcodeSerializer {
 		// as a `CALLOTHER`.
 		void serializeDeclareParamVar(PcodeOp pcodeOp) throws Exception {
 			HighVariable highVariableOfPcodeOp = variableOf(pcodeOp);
-			writer.name("name").value(highVariableOfPcodeOp.getName());
+			writer.name("name").value(resolveVariableName(highVariableOfPcodeOp.getName()));
 			writer.name("type").value(label(highVariableOfPcodeOp.getDataType()));
 			writer.name("kind").value("parameter");  // So that it also looks like an input/output.
 			if (highVariableOfPcodeOp instanceof HighParam) {
 				writer.name("index").value(((HighParam) highVariableOfPcodeOp).getSlot());
 			}
+		}
+
+		// Resolve a variable name, replacing "UNNAMED" with a generated
+		// identifier like "local_0", "local_1", etc.
+		private String resolveVariableName(String name) {
+			if (name == null || name.equals("UNNAMED")) {
+				return "local_" + Integer.toString(unnamedVarCounter++);
+			}
+			return name;
 		}
 
 		// Serializes a pseudo-op `DECLARE_LOCAL_VAR`, which is actually encoded
@@ -2457,10 +2470,10 @@ public class PcodeSerializer {
 			HighSymbol highSymbol = highVariableOfPcodeOp.getSymbol();
 			writer.name("kind").value("local");  // So that it also looks like an input/output.
 			if (highSymbol != null && highVariableOfPcodeOp.getOffset() == -1 && highVariableOfPcodeOp.getName().equals("UNNAMED")) {
-				writer.name("name").value(highSymbol.getName());
+				writer.name("name").value(resolveVariableName(highSymbol.getName()));
 				writer.name("type").value(label(highSymbol.getDataType()));
 			} else {
-				writer.name("name").value(highVariableOfPcodeOp.getName());
+				writer.name("name").value(resolveVariableName(highVariableOfPcodeOp.getName()));
 				writer.name("type").value(label(highVariableOfPcodeOp.getDataType()));
 			}
 		}
@@ -2484,7 +2497,7 @@ public class PcodeSerializer {
 										   Long.toHexString(representativeVarnode.getOffset()));
 					}
 				} else {
-					writer.name("name").value("temp");
+					writer.name("name").value("temp_" + Integer.toString(unnamedVarCounter++));
 				}
 			} else {
 				writer.name("name").value(highVariableOfPcodeOp.getName());
@@ -2856,6 +2869,7 @@ public class PcodeSerializer {
 			entryBlock.clear();
 			replacementOperationsMap.clear();
 			prefixOperationsMap.clear();
+			unnamedVarCounter = 0;
 
 			FunctionPrototype functionPrototype = null;
 			writer.name("name").value(getMangledName(functionToSerialize, currentProgram));
@@ -2959,6 +2973,11 @@ public class PcodeSerializer {
 					if (globalVariableHighSymbol != null) {
 						globalVariableName = globalVariableHighSymbol.getName();
 					}
+				}
+
+				// If still UNNAMED after all fallbacks, generate a name from address.
+				if (globalVariableName == null || globalVariableName.equals("UNNAMED")) {
+					globalVariableName = "global_" + label(address).replace(":", "_");
 				}
 
 				writer.name(label(address)).beginObject();
