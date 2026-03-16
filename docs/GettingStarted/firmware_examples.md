@@ -1,8 +1,8 @@
 # How To Run Patchestry on Firmware Examples
 
-## Recommended: automated end-to-end runner
+## Automated end-to-end runner
 
-Use the repository runner when you want one command that:
+The repository runner provides one command that:
 
 1. builds the example firmware artifacts,
 2. decompiles representative example functions to JSON,
@@ -34,6 +34,42 @@ Generated reports:
 
 The tested endpoint remains patched CIR and LLVM IR/bitcode, not a final
 rewritten firmware binary.
+
+## Cached patch/contract matrix runner
+
+The matrix runner provides one command that:
+
+1. reuses or rebuilds the example firmware artifacts,
+2. reuses or rebuilds cached decompile JSON and base CIR fixtures,
+3. validates the repository-supported patch and contract spec matrix,
+4. lowers each patched CIR to LLVM IR,
+5. writes a summary report plus per-case logs and artifacts.
+
+```sh
+scripts/test-patch-matrix.sh --build-type Debug
+```
+
+Artifacts and reports are written to:
+
+```sh
+builds/patch-matrix/
+```
+
+Fixture caches are written to:
+
+```sh
+builds/test-fixtures/
+```
+
+Firmware caches remain under:
+
+```sh
+firmwares/output/
+```
+
+By default the runner reuses any existing caches. Use `--rebuild-firmware`,
+`--rebuild-ghidra`, `--rebuild-fixtures`, or `--clean` when you want to force
+fresh inputs.
 
 ## Build the Ghidra docker image
 

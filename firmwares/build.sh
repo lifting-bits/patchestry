@@ -1,10 +1,29 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "${script_dir}/.." && pwd)
 mkdir -p "${script_dir}/output"
 mkdir -p "${script_dir}/repos"
+
+if [ -z "${BUILDX_CONFIG:-}" ]; then
+  export BUILDX_CONFIG="${repo_root}/builds/docker-buildx/firmwares"
+fi
+mkdir -p "${BUILDX_CONFIG}"
+
+translate_to_host_path() {
+  local path="$1"
+  if [ -n "${HOST_WORKSPACE:-}" ]; then
+    echo "${path/#\/workspace/$HOST_WORKSPACE}"
+  else
+    echo "$path"
+  fi
+}
+
+host_script_dir="$(translate_to_host_path "${script_dir}")"
+host_output_dir="$(translate_to_host_path "${script_dir}/output")"
+host_repos_dir="$(translate_to_host_path "${script_dir}/repos")"
 
 # Repository commit hashes
 PULSEOX_COMMIT="54ed8ca6bec36cc13db8f6594e3bd9941937922a"
@@ -13,23 +32,23 @@ VENTILATOR_COMMIT="6165c82de293d66b71f43040a2f145ab70bb49c0"
 
 # Clone/update repositories if needed
 if [ ! -d "${script_dir}/repos/pulseox-firmware" ]; then
-    git clone --depth 1 https://github.com/IRNAS/pulseox-firmware.git \
-        "${script_dir}/repos/pulseox-firmware"
-    cd "${script_dir}/repos/pulseox-firmware"
-    git fetch --depth=1 origin ${PULSEOX_COMMIT}
-    git checkout ${PULSEOX_COMMIT}
-    git submodule update --init --recursive
-    patch -s -p1 < "${script_dir}/pulseox-firmware-patch.diff"
+  git clone --depth 1 https://github.com/IRNAS/pulseox-firmware.git \
+    "${script_dir}/repos/pulseox-firmware"
+  cd "${script_dir}/repos/pulseox-firmware"
+  git fetch --depth=1 origin "${PULSEOX_COMMIT}"
+  git checkout "${PULSEOX_COMMIT}"
+  git submodule update --init --recursive
+  patch -s -p1 <"${script_dir}/pulseox-firmware-patch.diff"
 fi
 
 if [ ! -d "${script_dir}/repos/bloodlight-firmware" ]; then
-    git clone --depth 1 https://github.com/kumarak/bloodlight-firmware.git \
-        "${script_dir}/repos/bloodlight-firmware"
-    cd "${script_dir}/repos/bloodlight-firmware"
-    git fetch --depth=1 origin ${BLOODLIGHT_COMMIT}
-    git checkout ${BLOODLIGHT_COMMIT}
-    git submodule update --init --recursive
-    patch -s -p1 < "${script_dir}/bloodlight-firmware-patch.diff"
+  git clone --depth 1 https://github.com/kumarak/bloodlight-firmware.git \
+    "${script_dir}/repos/bloodlight-firmware"
+  cd "${script_dir}/repos/bloodlight-firmware"
+  git fetch --depth=1 origin "${BLOODLIGHT_COMMIT}"
+  git checkout "${BLOODLIGHT_COMMIT}"
+  git submodule update --init --recursive
+  patch -s -p1 <"${script_dir}/bloodlight-firmware-patch.diff"
 fi
 
 if [ ! -d "${script_dir}/repos/ventilator" ]; then
@@ -42,14 +61,14 @@ git checkout -f ${VENTILATOR_COMMIT}
 cd "${script_dir}"
 
 # Build using Docker
-docker build -t firmware-builder "${script_dir}"
+docker build -t firmware-builder "${host_script_dir}"
 
 # Build pulseox firmware
 docker run --rm \
-    -v "${script_dir}/repos/pulseox-firmware:/work/pulseox-firmware" \
-    -v "${script_dir}/output:/output" \
-    firmware-builder \
-    -c "git config --global --add safe.directory /work/pulseox-firmware && \
+  -v "${host_repos_dir}/pulseox-firmware:/work/pulseox-firmware" \
+  -v "${host_output_dir}:/output" \
+  firmware-builder \
+  -c "git config --global --add safe.directory /work/pulseox-firmware && \
              cd pulseox-firmware && \
              cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake && \
              cmake --build build -j\$(nproc) && \
@@ -57,10 +76,10 @@ docker run --rm \
 
 # Build bloodlight firmware
 docker run --rm \
-    -v "${script_dir}/repos/bloodlight-firmware:/work/bloodlight-firmware" \
-    -v "${script_dir}/output:/output" \
-    firmware-builder \
-    -c "git config --global --add safe.directory /work/bloodlight-firmware && \
+  -v "${host_repos_dir}/bloodlight-firmware:/work/bloodlight-firmware" \
+  -v "${host_output_dir}:/output" \
+  firmware-builder \
+  -c "git config --global --add safe.directory /work/bloodlight-firmware && \
              cd bloodlight-firmware && \
              make -C firmware/libopencm3 && \
              make -C firmware -j\$(nproc) && \

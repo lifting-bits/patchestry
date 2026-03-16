@@ -37,10 +37,9 @@ See also: [Development](#development)
    docker ps
    ```
 
-   Use the `vz` backend on Apple Silicon. Do not switch the documented macOS
-   path to `qemu`.
-   Do not recommend `linux/amd64` emulation on Apple Silicon for routine
-   builds; emulation materially increases build times.
+   The validated Apple Silicon macOS path uses the `vz` backend.
+   The `linux/amd64` emulation path is materially slower and is not the routine
+   workflow described in this document.
 
 4. Log into Docker Hub (this may not be needed - it is not needed on Linux):
    ```
@@ -87,8 +86,8 @@ cmake --build --preset debug -j
 This setup provides a host-native development environment when the patched
 ClangIR fork is already installed. The configuration uses Colima as the Docker
 backend for Docker-backed workflows on macOS.
-Do not point `CC`/`CXX` at AppleClang or a stock Homebrew LLVM install for this
-path.
+This workflow expects `CC` and `CXX` to point at the patched ClangIR toolchain,
+not AppleClang or a stock Homebrew LLVM install.
 
 # First Time Development Setup: Linux
 If you'd like to either follow step by step instructions or run a script to automatically follow them in a fresh Linux instance, here's a [Gist](https://gist.github.com/kaoudis/e734c6197dbed595586ab659844df737) that sets everything up from zero in a fresh VM for you and runs the Patchestry tests to confirm the setup works. This Gist should stay reasonably up to date since it's used to initialize ephemeral coding environments. It's been tested on Ubuntu 24.04. The only thing that should be different for other Ubuntus or for Debian is the `apt` package naming.
@@ -106,6 +105,7 @@ Steps followed in the [Gist](https://gist.github.com/kaoudis/e734c6197dbed595586
 ## CMake Commands
 - To build, configure with the `default` preset and build with `cmake --build --preset debug` or `cmake --build --preset release`.
 - To run tests, first build the headless container with `scripts/ghidra/build-headless-docker.sh`, then run `ctest --preset debug --output-on-failure` or `lit ./builds/default/test -D BUILD_TYPE=Debug -v`.
+- To run the cached patch/contract matrix from one command, use `scripts/test-patch-matrix.sh --build-type Debug`.
 - To run the example firmware end-to-end flow and get a report, use `scripts/test-example-firmwares.sh --build-type Debug`.
 
 ## Fresh checkout to validated build
@@ -153,10 +153,26 @@ This writes per-case artifacts plus:
 - `builds/example-firmware-e2e/summary.md`
 - `builds/example-firmware-e2e/summary.tsv`
 
+To validate the broader patch/contract matrix from cached generated fixtures:
+
+```sh
+scripts/test-patch-matrix.sh --build-type Debug
+```
+
+This reuses firmware artifacts in `firmwares/output/` and fixture caches in
+`builds/test-fixtures/` when present. Use `--rebuild-firmware`,
+`--rebuild-ghidra`, `--rebuild-fixtures`, or `--clean` to refresh caches
+explicitly.
+
+This writes per-case artifacts plus:
+
+- `builds/patch-matrix/summary.md`
+- `builds/patch-matrix/summary.tsv`
+
 Docker-backed workflows are still required for `build.sh` and Ghidra headless
-tasks. On Apple Silicon, do not recommend the default `linux/amd64` emulation
-path as the routine build workflow; use it only if you explicitly accept the
-emulation overhead, or build a native arm64 image first.
+tasks. On Apple Silicon, the routine workflow is the host-native path described
+above. The default `linux/amd64` emulation path remains available, but with the
+expected emulation overhead.
 The validated Ghidra image build used Colima with the `vz` backend and built
 Ghidra natives for `linux_arm_64`.
 
@@ -165,11 +181,11 @@ CI uses the same high-level sequence on Linux:
 2. Build with `cmake --build --preset ci --config <Debug|Release>`.
 3. Build the standalone intrinsics library.
 4. Build the headless Ghidra Docker image.
-5. Run `lit ./builds/ci/test`.
+5. Run `scripts/test-patch-matrix.sh --build-type Debug --rebuild-firmware --rebuild-fixtures`.
+6. Run `lit ./builds/ci/test`.
 
-The example firmware runner is not part of the default CI matrix because it
-clones and builds external firmware repositories, but it should stay runnable
-and documented. Use the opt-in CTest target by configuring with
+The narrower example firmware runner remains available for focused inspection
+and reporting. Use the opt-in CTest target by configuring with
 `-DPE_ENABLE_EXAMPLE_FIRMWARE_E2E=ON` if you want CTest to invoke it.
 
 ## Ghidra
