@@ -1,0 +1,32 @@
+FROM firmware-builder
+
+# --- Ventilator build dependencies (PlatformIO, Qt5, nanopb) -----------------
+RUN apt-get update && \
+    export DEBIAN_FRONTEND=noninteractive && \
+    apt-get install -y --no-install-recommends \
+    protobuf-compiler \
+    python3-venv \
+    qtbase5-dev \
+    qtbase5-dev-tools \
+    qtmultimedia5-dev \
+    qtdeclarative5-dev \
+    qtquickcontrols2-5-dev \
+    libqt5serialport5-dev \
+    qml-module-qtquick-controls2 \
+    qml-module-qtquick-layouts \
+    qml-module-qtmultimedia \
+    qml-module-qt-labs-settings \
+    qml-module-qtcharts \
+    libqt5charts5-dev \
+    libqt5multimedia5-plugins && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+RUN pip3 install --no-cache-dir \
+    platformio==6.1.11 \
+    conan==1.59.0 \
+    nanopb==0.4.7 \
+    grpcio-tools==1.54.2
+
+WORKDIR /work
+ENTRYPOINT ["/bin/bash"]
