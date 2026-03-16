@@ -7,8 +7,11 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Enable armhf architecture for cross-compilation libraries
 RUN dpkg --add-architecture armhf
 
-# Configure apt sources to use ports.ubuntu.com for armhf
-RUN sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list && \
+# Configure apt sources for the native container architecture plus armhf.
+# On Apple Silicon, the base image is arm64, so hardcoding amd64 here breaks
+# apt resolution against ports.ubuntu.com.
+RUN HOST_ARCH="$(dpkg --print-architecture)" && \
+    sed -i "s/^deb /deb [arch=${HOST_ARCH}] /" /etc/apt/sources.list && \
     echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy main universe multiverse restricted" >> /etc/apt/sources.list && \
     echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe multiverse restricted" >> /etc/apt/sources.list && \
     echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-security main universe multiverse restricted" >> /etc/apt/sources.list && \
