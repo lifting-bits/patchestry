@@ -262,6 +262,13 @@ public class PcodeSerializer {
 		// Reset per function in serializeFunction().
 		private int unnamedVarCounter;
 
+		// Shadow variable support: when a HighVariable has instances with
+		// different varnode sizes, we split it into separate declarations.
+		// Maps (HighVariable, size) → shadow DECLARE_LOCAL operation key.
+		private Map<HighVariable, String> varDeclKeyMap;
+		private Map<String, String> varShadowMap;
+		private int shadowVarCounter;
+
 		// Replacement operations. Sometimes we have something that we actually
 		// need to replace, and so this mapping allows us to do that without
 		// having to aggressively rewrite things, especially output operands.
@@ -333,16 +340,71 @@ public class PcodeSerializer {
 			this.seenDataMap = new HashMap<>();
 		}
 
-		// Returns the mangled symbol name for a function if one exists at its
-		// entry point (e.g. _ZN... for GCC/Clang, ?... for MSVC). Falls back
-		// to the Ghidra demangled name for plain C functions.
-		public static String getMangledName(Function function, Program program) {
-			Symbol[] symbols = program.getSymbolTable().getSymbols(function.getEntryPoint());
-			for (Symbol sym : symbols) {
-				String symName = sym.getName();
-				if (symName.startsWith("_Z") || symName.startsWith("?")) {
-					return symName;
+		// Check if a symbol name looks like a C++ mangled name.
+		private static boolean isMangledName(String name) {
+			return name != null
+				&& (name.startsWith("_Z") || name.startsWith("?"));
+		}
+
+		// Search symbols at an address for a mangled name.
+		private static String findMangledSymbolAt(SymbolTable symTable, Address addr) {
+			for (Symbol sym : symTable.getSymbols(addr)) {
+				if (isMangledName(sym.getName())) {
+					return sym.getName();
 				}
+			}
+			return null;
+		}
+
+		// Returns the binary linker symbol name for a function.
+		//
+		// For in-binary functions: checks symbols at the entry point for _Z/_?
+		// mangled names (GCC/Clang/MSVC).
+		//
+		// For external functions (imports): uses Ghidra's ExternalLocation API
+		// which stores the original imported symbol name from the ELF dynamic
+		// symbol table.  Falls back to thunk symbol scanning and finally to
+		// the Ghidra-assigned name.
+		public static String getMangledName(Function function, Program program) {
+			SymbolTable symTable = program.getSymbolTable();
+
+			// (1) Direct symbols at the function's own entry point.
+			String found = findMangledSymbolAt(symTable, function.getEntryPoint());
+			if (found != null) return found;
+
+			if (function.isExternal()) {
+				ghidra.program.model.symbol.ExternalLocation extLoc =
+					function.getExternalLocation();
+				if (extLoc != null) {
+					// getOriginalImportedName(): the pre-demangling name stored
+					// when Ghidra's demangler renamed the symbol.
+					String origName = extLoc.getOriginalImportedName();
+					if (origName != null && !origName.isEmpty()) {
+						return origName;
+					}
+
+					// getLabel(): the external function's label — this is the
+					// binary's import symbol name (e.g., _ZN7QString6appendERKS_
+					// for C++, or "memcpy" for C).
+					String extLabel = extLoc.getLabel();
+					if (extLabel != null && !extLabel.isEmpty()) {
+						return extLabel;
+					}
+				}
+			}
+
+			return function.getName();
+		}
+
+		// Returns a human-readable display name for a function (the demangled
+		// short name with class namespace, suitable for use as a C identifier
+		// after sanitization).  Skips Ghidra's synthetic "<EXTERNAL>" namespace.
+		public static String getDisplayName(Function function) {
+			Namespace ns = function.getParentNamespace();
+			if (ns != null && !ns.isGlobal()
+				&& !ns.getName().equals("<EXTERNAL>")
+				&& !ns.getName().startsWith("<")) {
+				return ns.getName() + "::" + function.getName();
 			}
 			return function.getName();
 		}
@@ -930,10 +992,21 @@ public class PcodeSerializer {
 					writer.name("kind").value("parameter");
 					writer.name("operation").value(label(getOrCreateLocalVariable(highVariable, pcodeOp)));
 					break;
-				case LOCAL:
+				case LOCAL: {
 					writer.name("kind").value("local");
-					writer.name("operation").value(label(getOrCreateLocalVariable(highVariable, pcodeOp)));
+					PcodeOp localDeclOp = getOrCreateLocalVariable(highVariable, pcodeOp);
+					String localKey = label(localDeclOp);
+					// If this variable has instances with mismatched sizes,
+					// redirect to a shadow declaration matching this use-site's size.
+					if (hasInstanceSizeMismatch(highVariable)) {
+						String shadowKey = getOrCreateShadowVarKey(highVariable, node.getSize());
+						if (shadowKey != null) {
+							localKey = shadowKey;
+						}
+					}
+					writer.name("operation").value(localKey);
 					break;
+				}
 				case NAMED_TEMPORARY:
 					writer.name("kind").value("temporary");
 					writer.name("operation").value(label(getOrCreateLocalVariable(highVariable, pcodeOp)));
@@ -2023,6 +2096,59 @@ public class PcodeSerializer {
 		}
 
 		// Creates a pseudo p-code op using a `CALLOTHER` that logically
+		// Check if a HighVariable has instances with different varnode sizes,
+		// indicating Ghidra merged unrelated live ranges that should be split.
+		private boolean hasInstanceSizeMismatch(HighVariable highVariable) {
+			Varnode[] instances = highVariable.getInstances();
+			if (instances == null || instances.length <= 1) return false;
+
+			int referenceSize = -1;
+			for (Varnode inst : instances) {
+				PcodeOp def = inst.getDef();
+				if (def == null) continue;
+				// Skip our synthetic DECLARE ops (CALLOTHER)
+				if (def.getOpcode() == PcodeOp.CALLOTHER) continue;
+
+				int instSize = inst.getSize();
+				if (referenceSize == -1) {
+					referenceSize = instSize;
+				} else if (instSize != referenceSize) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		// Get or create a shadow variable declaration for a use-site where the
+		// varnode size differs from the declared variable's size.  Returns the
+		// operation key for the shadow declaration, or the original key if no
+		// split is needed.
+		String getOrCreateShadowVarKey(HighVariable highVariable, int useSize) throws Exception {
+			String origKey = varDeclKeyMap.get(highVariable);
+			if (origKey == null) return null;  // not a tracked local
+
+			int declSize = highVariable.getSize();
+			if (useSize == declSize) return origKey;  // sizes match, no split
+
+			String shadowKey = origKey + ":shadow:" + Integer.toString(useSize);
+			if (varShadowMap.containsKey(shadowKey)) {
+				return varShadowMap.get(shadowKey);
+			}
+
+			// Create a new DECLARE_LOCAL for this size variant
+			Address address = nextUniqueAddress();
+			DefinitionVarnode defVarnode = new DefinitionVarnode(address, useSize);
+			SequenceNumber seqNum = new SequenceNumber(address, nextSeqNum++);
+			PcodeOp shadowOp = new PcodeOp(seqNum, PcodeOp.CALLOTHER, 1, defVarnode);
+			shadowOp.insertInput(new Varnode(constantSpace.getAddress(DECLARE_LOCAL_VAR), 4), 0);
+			defVarnode.setDef(highVariable, shadowOp);
+			entryBlock.add(shadowOp);
+
+			String newKey = label(shadowOp);
+			varShadowMap.put(shadowKey, newKey);
+			return newKey;
+		}
+
 		// represents the definition of a local variable.
 		PcodeOp createLocalVariableDefinition(HighVariable highVariable) throws Exception {
 			Address address = nextUniqueAddress();
@@ -2039,7 +2165,10 @@ public class PcodeSerializer {
 			newInstances[0] = definitionVarnode;
 
 			highVariable.attachInstances(newInstances, definitionVarnode);
-			
+
+			// Track this variable's declaration key for shadow splitting
+			varDeclKeyMap.put(highVariable, label(pcodeOp));
+
 			HighSymbol highSymbol = highVariable.getSymbol();
 			entryBlock.add(pcodeOp);
 
@@ -2105,6 +2234,11 @@ public class PcodeSerializer {
 
 		// Serialize a direct call. This enqueues the targeted for type lifting
 		// `Function` if it can be resolved.
+		// Maps external function label → mangled name discovered at the call
+		// site (thunk/PLT stub) before dethunking.  Consumed by
+		// serializeFunction when emitting the external's "name" field.
+		private Map<String, String> externalMangledNames = new HashMap<>();
+
 		void serializeCallOp(PcodeOp pcodeOp) throws Exception {
 			Address callerAddress = currentFunction.getFunction().getEntryPoint();
 			Varnode targetNode = pcodeOp.getInput(0);
@@ -2115,11 +2249,35 @@ public class PcodeSerializer {
 						targetNode.getOffset());
 				FunctionManager fm = currentProgram.getFunctionManager();
 				callee = fm.getFunctionAt(targetAddress);
-	
+
+				// Before dethunking: if the direct target is a thunk, capture
+				// its mangled name for the external it resolves to.
+				if (callee != null && callee.isThunk()) {
+					Symbol[] thunkSymbols = currentProgram.getSymbolTable()
+						.getSymbols(callee.getEntryPoint());
+					for (Symbol sym : thunkSymbols) {
+						String symName = sym.getName();
+						if (symName.startsWith("_Z") || symName.startsWith("?")) {
+							// Store mangled name keyed by the dethunked
+							// external's label so serializeFunction can use it.
+							Function resolved = callee.getThunkedFunction(true);
+							if (resolved != null) {
+								try {
+									externalMangledNames.put(
+										label(resolved), symName);
+								} catch (Exception e) {
+									// label() can throw; ignore.
+								}
+							}
+							break;
+						}
+					}
+				}
+
 				// `target_address` may be a pointer to an external. Figure out
 				// what we're calling.
 				if (callee == null) {
-					callee = fm.getReferencedFunction(targetAddress);	
+					callee = fm.getReferencedFunction(targetAddress);
 				}
 			}
 
@@ -2469,12 +2627,32 @@ public class PcodeSerializer {
 			HighVariable highVariableOfPcodeOp = variableOf(pcodeOp);
 			HighSymbol highSymbol = highVariableOfPcodeOp.getSymbol();
 			writer.name("kind").value("local");  // So that it also looks like an input/output.
+
+			// Check if this is a shadow (size-split) declaration.
+			// Shadow ops are created by getOrCreateShadowVarKey and their
+			// output varnode size differs from the original HighVariable's size.
+			int declSize = pcodeOp.getOutput().getSize();
+			boolean isShadow = (declSize != highVariableOfPcodeOp.getSize());
+
 			if (highSymbol != null && highVariableOfPcodeOp.getOffset() == -1 && highVariableOfPcodeOp.getName().equals("UNNAMED")) {
-				writer.name("name").value(resolveVariableName(highSymbol.getName()));
+				String baseName = resolveVariableName(highSymbol.getName());
+				if (isShadow) {
+					baseName = baseName + "_" + Integer.toString(shadowVarCounter++);
+				}
+				writer.name("name").value(baseName);
 				writer.name("type").value(label(highSymbol.getDataType()));
 			} else {
-				writer.name("name").value(resolveVariableName(highVariableOfPcodeOp.getName()));
-				writer.name("type").value(label(highVariableOfPcodeOp.getDataType()));
+				String baseName = resolveVariableName(highVariableOfPcodeOp.getName());
+				if (isShadow) {
+					baseName = baseName + "_" + Integer.toString(shadowVarCounter++);
+				}
+				writer.name("name").value(baseName);
+				// For shadow declarations, use a size-appropriate type
+				if (isShadow) {
+					writer.name("size").value(declSize);
+				} else {
+					writer.name("type").value(label(highVariableOfPcodeOp.getDataType()));
+				}
 			}
 		}
 		
@@ -2870,9 +3048,27 @@ public class PcodeSerializer {
 			replacementOperationsMap.clear();
 			prefixOperationsMap.clear();
 			unnamedVarCounter = 0;
+			varDeclKeyMap = new HashMap<>();
+			varShadowMap = new HashMap<>();
+			shadowVarCounter = 0;
 
 			FunctionPrototype functionPrototype = null;
-			writer.name("name").value(getMangledName(functionToSerialize, currentProgram));
+
+			// Resolve the binary linker symbol for this function.
+			// Priority: (1) mangled name captured at call site (thunk/PLT),
+			//           (2) getMangledName() static lookup.
+			String functionLabel = label(functionToSerialize);
+			String binaryName = externalMangledNames.containsKey(functionLabel)
+				? externalMangledNames.get(functionLabel)
+				: getMangledName(functionToSerialize, currentProgram);
+
+			// Human-readable display name (namespace-qualified).
+			String displayName = getDisplayName(functionToSerialize);
+
+			// "name" is the binary/linker symbol — used for asm labels.
+			writer.name("name").value(binaryName);
+			// "display_name" is the readable name — used for C identifiers.
+			writer.name("display_name").value(displayName);
 			writer.name("is_intrinsic").value(false);
 
 			// If we have a high P-Code function, then serialize the blocks.
@@ -3115,7 +3311,49 @@ public class PcodeSerializer {
 		// Serialize the input function list to JSON. This function will also
 		// serialize type information related to referenced functions and
 		// variables.
+		// Pre-pass: scan all thunk functions in the program and map each
+		// external they resolve to → the thunk's mangled symbol name.
+		// This must run before serialization because the high P-code CALL
+		// targets are already dethunked (the thunk is transparent).
+		private void buildExternalMangledNameMap() throws Exception {
+			FunctionManager fm = currentProgram.getFunctionManager();
+
+			// Scan all thunk functions.  For each, resolve to the external
+			// target and grab getOriginalImportedName() which Ghidra stores
+			// when the demangler renames an imported symbol.
+			FunctionIterator allFunctions = fm.getFunctions(true);
+			while (allFunctions.hasNext()) {
+				Function func = allFunctions.next();
+				if (!func.isThunk()) continue;
+
+				Function resolved = func.getThunkedFunction(true);
+				if (resolved == null || !resolved.isExternal()) continue;
+
+				ghidra.program.model.symbol.ExternalLocation extLoc =
+					resolved.getExternalLocation();
+				if (extLoc == null) continue;
+
+				String origName = extLoc.getOriginalImportedName();
+				if (origName != null && !origName.isEmpty()) {
+					try {
+						externalMangledNames.put(label(resolved), origName);
+					} catch (Exception e) { /* ignore */ }
+				}
+			}
+
+			// Remove diagnostic output after development
+
+			System.out.println("Pre-indexed " + externalMangledNames.size()
+				+ " external mangled names");
+			for (Map.Entry<String, String> entry : externalMangledNames.entrySet()) {
+				System.out.println("  " + entry.getKey() + " → " + entry.getValue());
+			}
+		}
+
 		public void serialize() throws Exception {
+
+			// Build thunk→external mangled name map before serialization.
+			buildExternalMangledNameMap();
 
 			writer.beginObject();
 			writer.name("architecture").value(this.architecture);

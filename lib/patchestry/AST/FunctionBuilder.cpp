@@ -325,13 +325,20 @@ namespace patchestry::ast {
         func_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
-        // Add asm label with original symbol name when the C identifier
-        // differs (e.g. demangled name vs mangled symbol).  Applied to both
-        // declarations and definitions so that the compiled object emits the
-        // correct linker symbol for binary patching.
-        if (function.get().name != c_name) {
+        // Add asm label with the binary linker symbol when:
+        //   (1) the original name differs from the C identifier, AND
+        //   (2) the original name is a genuine mangled symbol (_Z for
+        //       Itanium ABI, ? for MSVC).
+        // Short demangled names like "append" or "operator=" are NOT valid
+        // linker symbols and must not appear in asm labels — they would
+        // cause link failures when recompiling for binary patching.
+        const auto &original_name = function.get().name;
+        bool is_mangled = original_name.size() >= 2
+            && ((original_name[0] == '_' && original_name[1] == 'Z')
+                || original_name[0] == '?');
+        if (is_mangled && original_name != c_name) {
             if (auto *asm_attr = clang::AsmLabelAttr::Create(
-                    ctx, function.get().name, true, func_decl->getSourceRange()
+                    ctx, original_name, true, func_decl->getSourceRange()
                 ))
             {
                 func_decl->addAttr(asm_attr);

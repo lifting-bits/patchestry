@@ -554,41 +554,42 @@ namespace patchestry::ghidra {
         return vnode;
     }
 
-    // Demangle a C++ mangled symbol name and sanitize it to a valid C
-    // identifier.  Non-mangled names pass through unchanged.
-    static std::string demangle_to_c_identifier(const std::string &mangled) {
-        // Only attempt Itanium ABI mangling (_Z prefix)
-        if (mangled.size() < 2 || mangled[0] != '_' || mangled[1] != 'Z') {
-            return mangled;
-        }
+    // Sanitize a string to a valid C identifier: replace non-alphanumeric
+    // characters with '_', collapse consecutive underscores, strip edges.
+    static std::string sanitize_to_c_identifier(const std::string &input) {
+        std::string result = input;
 
-        char *raw = llvm::itaniumDemangle(mangled);
-        if (!raw) {
-            return mangled;
-        }
-
-        std::string result(raw);
-        std::free(raw);
-
-        // Strip parameter list: "Foo::Bar(int, char)" → "Foo::Bar"
-        auto paren = result.find('(');
-        if (paren != std::string::npos) {
-            result = result.substr(0, paren);
-        }
-
-        // Strip return type prefix for cast operators and similar:
-        // remove leading whitespace after stripping
-        while (!result.empty() && result.back() == ' ') {
-            result.pop_back();
-        }
-
-        // Handle destructors: "Foo::~Foo" → "Foo::dtor_Foo"
+        // Handle destructors: "~Foo" → "dtor_Foo"
         auto tilde = result.find('~');
         if (tilde != std::string::npos) {
             result.replace(tilde, 1, "dtor_");
         }
 
-        // Replace non-identifier characters (::, <>, spaces, *, &) with '_'
+        // Handle operator names: "operator=" → "operator_assign", etc.
+        auto op_pos = result.find("operator");
+        if (op_pos != std::string::npos) {
+            auto suffix_start = op_pos + 8; // strlen("operator")
+            if (suffix_start < result.size()) {
+                std::string op_suffix = result.substr(suffix_start);
+                std::string replacement;
+                if (op_suffix.find("=") == 0 && op_suffix.find("==") != 0)
+                    replacement = "assign";
+                else if (op_suffix.find("==") == 0) replacement = "eq";
+                else if (op_suffix.find("!=") == 0) replacement = "ne";
+                else if (op_suffix.find("new") == 0) replacement = "new";
+                else if (op_suffix.find("delete") == 0) replacement = "delete";
+                else if (op_suffix.find(".delete") == 0) replacement = "delete";
+                else if (op_suffix.find("<<") == 0) replacement = "lshift";
+                else if (op_suffix.find(">>") == 0) replacement = "rshift";
+                else if (op_suffix.find("()") == 0) replacement = "call";
+                else if (op_suffix.find("[]") == 0) replacement = "index";
+                if (!replacement.empty()) {
+                    result = result.substr(0, suffix_start) + "_" + replacement;
+                }
+            }
+        }
+
+        // Replace non-identifier characters (::, <>, spaces, *, &, .) with '_'
         for (auto &c : result) {
             if (!std::isalnum(static_cast< unsigned char >(c)) && c != '_') {
                 c = '_';
@@ -619,7 +620,49 @@ namespace patchestry::ghidra {
             collapsed.pop_back();
         }
 
-        return collapsed.empty() ? mangled : collapsed;
+        return collapsed.empty() ? input : collapsed;
+    }
+
+    // Demangle a C++ mangled symbol name and sanitize it to a valid C
+    // identifier.  Also sanitizes non-mangled names that contain C++
+    // artifacts (::, ~, operator) so they become valid C identifiers
+    // while preserving the original name for asm labels.
+    static std::string demangle_to_c_identifier(const std::string &mangled) {
+        // Attempt Itanium ABI demangling (_Z prefix)
+        if (mangled.size() >= 2 && mangled[0] == '_' && mangled[1] == 'Z') {
+            char *raw = llvm::itaniumDemangle(mangled);
+            if (raw) {
+                std::string result(raw);
+                std::free(raw);
+
+                // Strip parameter list: "Foo::Bar(int, char)" → "Foo::Bar"
+                auto paren = result.find('(');
+                if (paren != std::string::npos) {
+                    result = result.substr(0, paren);
+                }
+                while (!result.empty() && result.back() == ' ') {
+                    result.pop_back();
+                }
+
+                return sanitize_to_c_identifier(result);
+            }
+        }
+
+        // For non-mangled names that still have C++ artifacts
+        // (e.g., "~QDir", "operator=", "QString::append"), sanitize them.
+        bool needs_sanitize = false;
+        for (char c : mangled) {
+            if (!std::isalnum(static_cast< unsigned char >(c)) && c != '_') {
+                needs_sanitize = true;
+                break;
+            }
+        }
+
+        if (needs_sanitize) {
+            return sanitize_to_c_identifier(mangled);
+        }
+
+        return mangled;
     }
 
     std::optional< Function > JsonParser::create_function(const JsonObject &func_obj) {
@@ -631,8 +674,17 @@ namespace patchestry::ghidra {
 
         Function function;
 
-        function.name         = *function_name;
-        function.display_name = demangle_to_c_identifier(function.name);
+        function.name = *function_name;
+
+        // Use display_name from JSON if the serializer provided one;
+        // otherwise compute it by demangling/sanitizing the binary name.
+        auto json_display_name = stripNull(func_obj.getString("display_name"));
+        if (json_display_name && !json_display_name->empty()) {
+            function.display_name = sanitize_to_c_identifier(*json_display_name);
+        } else {
+            function.display_name = demangle_to_c_identifier(function.name);
+        }
+
         if (const auto *proto_obj = func_obj.getObject("type")) {
             if (auto maybe_prototype = create_function_prototype(*proto_obj)) {
                 function.prototype = *maybe_prototype;
