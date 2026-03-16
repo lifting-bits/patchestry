@@ -747,13 +747,13 @@ namespace patchestry::ast {
             }
         }
 
-        bool TraceDAG::CheckOpen(const CGraph &g, BlockTrace *trace) {
+        bool TraceDAG::CheckOpen(CGraph &g, BlockTrace *trace) {
             size_t dest = trace->dest_id;
             if (dest == CNode::kNone || dest >= g.nodes.size()) {
                 return true; // terminal
             }
 
-            const auto &n = g.Node(dest);
+            auto &n = g.Node(dest);
             if (n.collapsed) {
                 trace->flags |= BlockTrace::kTerminal;
                 return true;
@@ -780,9 +780,17 @@ namespace patchestry::ast {
             }
 
             if (dag_out_count == 1) {
-                // Linear trace: advance
+                // Linear trace: advance to successor.
+                // Increment visit_count on the successor so that the
+                // predecessor-readiness check in PushBranches (which gates
+                // OpenBranch on visit_count >= dag_preds) sees this arrival.
+                // Without this, traces that converge via linear advance never
+                // satisfy the readiness check, causing an infinite loop.
                 trace->bottom_id = dest;
                 trace->dest_id = single_succ;
+                if (single_succ < g.nodes.size() && !g.Node(single_succ).collapsed) {
+                    g.Node(single_succ).visit_count += 1;
+                }
                 return true;
             }
 
@@ -1062,7 +1070,17 @@ namespace patchestry::ast {
                 }
             }
 
+            // Safety bound: the algorithm should converge in O(edges) iterations
+            // now that CheckOpen increments visit_count.  The bound catches any
+            // remaining pathological CFGs that defeat convergence.
+            const size_t max_outer = g.nodes.size() * g.nodes.size() + 512;
+            size_t outer_iter      = 0;
             while (activecount_ > 0) {
+                if (++outer_iter > max_outer) {
+                    LOG(WARNING) << "PushBranches: iteration limit reached (" << max_outer
+                                 << " on " << g.nodes.size() << " nodes), bailing out\n";
+                    break;
+                }
                 int missedcount = 0;
                 current_activeiter_ = activetrace_.begin();
 

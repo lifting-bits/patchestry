@@ -269,7 +269,7 @@ namespace patchestry::ast {
             BlockTrace *SelectBadEdge();
             void InsertActive(BlockTrace *trace);
             void RemoveActive(BlockTrace *trace);
-            bool CheckOpen(const CGraph &g, BlockTrace *trace);
+            bool CheckOpen(CGraph &g, BlockTrace *trace);
             std::list<BlockTrace *>::iterator OpenBranch(CGraph &g,
                                                          BlockTrace *parent);
             bool CheckRetirement(BlockTrace *trace, size_t &exitblock_id);
