@@ -25,18 +25,18 @@
 namespace patchestry::ast {
 
     enum class SNodeKind {
-        SEQ,
-        BLOCK,
-        IF_THEN_ELSE,
-        WHILE,
-        DO_WHILE,
-        FOR,
-        SWITCH,
-        GOTO,
-        LABEL,
-        BREAK,
-        CONTINUE,
-        RETURN,
+        kSeq,
+        kBlock,
+        kIfThenElse,
+        kWhile,
+        kDoWhile,
+        kFor,
+        kSwitch,
+        kGoto,
+        kLabel,
+        kBreak,
+        kContinue,
+        kReturn,
     };
 
     class SNode
@@ -77,7 +77,7 @@ namespace patchestry::ast {
     class SSeq : public SNode
     {
       public:
-        SSeq() : SNode(SNodeKind::SEQ) {}
+        SSeq() : SNode(SNodeKind::kSeq) {}
 
         const std::vector< SNode * > &Children() const { return children_; }
         std::vector< SNode * > &Children() { return children_; }
@@ -126,7 +126,7 @@ namespace patchestry::ast {
         SNode *operator[](size_t i) { return children_[i]; }
         const SNode *operator[](size_t i) const { return children_[i]; }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::SEQ; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kSeq; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
@@ -139,7 +139,7 @@ namespace patchestry::ast {
     class SBlock : public SNode
     {
       public:
-        SBlock() : SNode(SNodeKind::BLOCK) {}
+        SBlock() : SNode(SNodeKind::kBlock) {}
 
         std::string_view Label() const { return label_; }
         void SetLabel(std::string_view l) { label_ = l; }
@@ -151,7 +151,7 @@ namespace patchestry::ast {
         bool Empty() const { return stmts_.empty(); }
         size_t Size() const { return stmts_.size(); }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::BLOCK; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kBlock; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
@@ -166,7 +166,7 @@ namespace patchestry::ast {
     {
       public:
         SIfThenElse(clang::Expr *cond, SNode *then_branch, SNode *else_branch = nullptr)
-            : SNode(SNodeKind::IF_THEN_ELSE)
+            : SNode(SNodeKind::kIfThenElse)
             , cond_(cond), then_(then_branch), else_(else_branch)
         {
             if (then_) then_->SetParent(this);
@@ -182,7 +182,7 @@ namespace patchestry::ast {
         SNode *ElseBranch() const { return else_; }
         void SetElseBranch(SNode *n) { else_ = n; if (n) n->SetParent(this); }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::IF_THEN_ELSE; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kIfThenElse; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
@@ -198,7 +198,7 @@ namespace patchestry::ast {
     {
       public:
         SWhile(clang::Expr *cond, SNode *body)
-            : SNode(SNodeKind::WHILE), cond_(cond), body_(body)
+            : SNode(SNodeKind::kWhile), cond_(cond), body_(body)
         {
             if (body_) body_->SetParent(this);
         }
@@ -209,7 +209,7 @@ namespace patchestry::ast {
         SNode *Body() const { return body_; }
         void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::WHILE; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kWhile; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
@@ -224,7 +224,7 @@ namespace patchestry::ast {
     {
       public:
         SDoWhile(SNode *body, clang::Expr *cond)
-            : SNode(SNodeKind::DO_WHILE), body_(body), cond_(cond)
+            : SNode(SNodeKind::kDoWhile), body_(body), cond_(cond)
         {
             if (body_) body_->SetParent(this);
         }
@@ -235,7 +235,7 @@ namespace patchestry::ast {
         clang::Expr *Cond() const { return cond_; }
         void SetCond(clang::Expr *c) { cond_ = c; }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::DO_WHILE; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kDoWhile; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
@@ -250,7 +250,7 @@ namespace patchestry::ast {
     {
       public:
         SFor(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc, SNode *body)
-            : SNode(SNodeKind::FOR)
+            : SNode(SNodeKind::kFor)
             , init_(init), cond_(cond), inc_(inc), body_(body)
         {
             if (body_) body_->SetParent(this);
@@ -268,7 +268,7 @@ namespace patchestry::ast {
         SNode *Body() const { return body_; }
         void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::FOR; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kFor; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
@@ -291,7 +291,7 @@ namespace patchestry::ast {
     {
       public:
         SSwitch(clang::Expr *discriminant)
-            : SNode(SNodeKind::SWITCH), discriminant_(discriminant)
+            : SNode(SNodeKind::kSwitch), discriminant_(discriminant)
         {}
 
         clang::Expr *Discriminant() const { return discriminant_; }
@@ -308,7 +308,7 @@ namespace patchestry::ast {
         SNode *DefaultBody() const { return default_; }
         void SetDefaultBody(SNode *n) { default_ = n; if (n) n->SetParent(this); }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::SWITCH; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kSwitch; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
@@ -323,12 +323,12 @@ namespace patchestry::ast {
     class SGoto : public SNode
     {
       public:
-        SGoto(std::string_view target) : SNode(SNodeKind::GOTO), target_(target) {}
+        SGoto(std::string_view target) : SNode(SNodeKind::kGoto), target_(target) {}
 
         std::string_view Target() const { return target_; }
         void SetTarget(std::string_view t) { target_ = t; }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::GOTO; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kGoto; }
 
       private:
         std::string target_;
@@ -339,7 +339,7 @@ namespace patchestry::ast {
     {
       public:
         SLabel(std::string_view name, SNode *body = nullptr)
-            : SNode(SNodeKind::LABEL), name_(name), body_(body)
+            : SNode(SNodeKind::kLabel), name_(name), body_(body)
         {
             if (body_) body_->SetParent(this);
         }
@@ -350,7 +350,7 @@ namespace patchestry::ast {
         SNode *Body() const { return body_; }
         void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::LABEL; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kLabel; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
@@ -364,12 +364,12 @@ namespace patchestry::ast {
     class SBreak : public SNode
     {
       public:
-        SBreak(unsigned depth = 1) : SNode(SNodeKind::BREAK), depth_(depth) {}
+        SBreak(unsigned depth = 1) : SNode(SNodeKind::kBreak), depth_(depth) {}
 
         unsigned Depth() const { return depth_; }
         void SetDepth(unsigned d) { depth_ = d; }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::BREAK; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kBreak; }
 
       private:
         unsigned depth_;
@@ -379,9 +379,9 @@ namespace patchestry::ast {
     class SContinue : public SNode
     {
       public:
-        SContinue() : SNode(SNodeKind::CONTINUE) {}
+        SContinue() : SNode(SNodeKind::kContinue) {}
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::CONTINUE; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kContinue; }
     };
 
     // Return
@@ -389,13 +389,13 @@ namespace patchestry::ast {
     {
       public:
         SReturn(clang::Expr *value = nullptr)
-            : SNode(SNodeKind::RETURN), value_(value)
+            : SNode(SNodeKind::kReturn), value_(value)
         {}
 
         clang::Expr *Value() const { return value_; }
         void SetValue(clang::Expr *e) { value_ = e; }
 
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::RETURN; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kReturn; }
 
       private:
         clang::Expr *value_;

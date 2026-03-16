@@ -35,11 +35,15 @@ namespace patchestry::ast {
         std::vector< NaturalLoop > loops;  // all natural loops, outermost first
 
         // Find the innermost loop containing block b, or nullptr
+        // Return the innermost loop containing `block`, or nullptr.
+        // The returned pointer is valid only while this LoopInfo is alive
+        // and its `loops` vector is not modified (no push_back after construction).
         const NaturalLoop *LoopFor(size_t block) const;
 
         // Return the parent loop of the given loop, or nullptr if outermost
         const NaturalLoop *ParentOf(const NaturalLoop &loop) const {
-            if (loop.parent_idx == kNoLoopParent) {
+            if (loop.parent_idx == kNoLoopParent
+                || loop.parent_idx >= loops.size()) {
                 return nullptr;
             }
             return &loops[loop.parent_idx];

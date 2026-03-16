@@ -26,6 +26,8 @@ namespace patchestry::ast {
         visited[entry] = true;
 
         while (!stk.empty()) {
+            // Structured binding by reference: ++idx modifies the stack
+            // entry in-place, tracking which successor to visit next.
             auto &[block, idx] = stk.top();
             if (idx < succs[block].size()) {
                 size_t next = succs[block][idx];
@@ -52,13 +54,15 @@ namespace patchestry::ast {
 
     size_t DomTree::Intersect(size_t b1, size_t b2) const {
         while (b1 != b2) {
-            while (rpo_num_[b1] > rpo_num_[b2]) {
+            while (b1 < rpo_num_.size() && b2 < rpo_num_.size()
+                   && rpo_num_[b1] > rpo_num_[b2]) {
                 b1 = idom_[b1];
-                if (b1 == kUndef) return kUndef;
+                if (b1 == kUndef || b1 >= rpo_num_.size()) return kUndef;
             }
-            while (rpo_num_[b2] > rpo_num_[b1]) {
+            while (b1 < rpo_num_.size() && b2 < rpo_num_.size()
+                   && rpo_num_[b2] > rpo_num_[b1]) {
                 b2 = idom_[b2];
-                if (b2 == kUndef) return kUndef;
+                if (b2 == kUndef || b2 >= rpo_num_.size()) return kUndef;
             }
         }
         return b1;
@@ -157,8 +161,8 @@ namespace patchestry::ast {
         if (idom_[b] == kUndef) return false;
 
         size_t x = b;
-        unsigned guard = 0;
-        while (x != entry_ && x != kUndef && guard < 2048) {
+        size_t guard = 0;
+        while (x != entry_ && x != kUndef && guard < idom_.size()) {
             x = idom_[x];
             if (x == a) return true;
             if (x == kUndef) return false;
@@ -179,8 +183,9 @@ namespace patchestry::ast {
                     if (runner == block) {
                         frontier.insert(s);
                     }
-                    runner = Idom(runner);
-                    if (runner == entry_) break;
+                    size_t next = Idom(runner);
+                    if (next == runner) break;  // self-loop at root
+                    runner = next;
                 }
             }
         }

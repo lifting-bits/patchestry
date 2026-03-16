@@ -26,7 +26,7 @@ namespace patchestry::ast {
                 clang::VK_PRValue, clang::FPOptionsOverride());
         }
 
-        clang::CompoundStmt *makeCompound(
+        clang::CompoundStmt *MakeCompound(
             clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts,
             clang::SourceLocation l = clang::SourceLocation(),
             clang::SourceLocation r = clang::SourceLocation()) {
@@ -92,7 +92,12 @@ namespace patchestry::ast {
                     cse->getLParenLoc(), cse->getRParenLoc()
                 );
             }
-            // Fallback: return original (safe for leaf expressions that won't be shared)
+            // Fallback: return original expression.  This is safe for leaf
+            // expressions (literals, DeclRefExprs) that are already handled
+            // above.  If a new compound expression type reaches here, it may
+            // become a shared AST node — log so we can add explicit handling.
+            LOG(WARNING) << "CloneExpr: unhandled expression type "
+                         << expr->getStmtClassName() << ", returning original\n";
             return expr;
         }
 
@@ -117,29 +122,29 @@ namespace patchestry::ast {
                 if (!node) return nullptr;
 
                 switch (node->Kind()) {
-                case SNodeKind::SEQ:
+                case SNodeKind::kSeq:
                     return EmitSeq(node->as< SSeq >());
-                case SNodeKind::BLOCK:
+                case SNodeKind::kBlock:
                     return EmitBlock(node->as< SBlock >());
-                case SNodeKind::IF_THEN_ELSE:
+                case SNodeKind::kIfThenElse:
                     return EmitIfThenElse(node->as< SIfThenElse >());
-                case SNodeKind::WHILE:
+                case SNodeKind::kWhile:
                     return EmitWhile(node->as< SWhile >());
-                case SNodeKind::DO_WHILE:
+                case SNodeKind::kDoWhile:
                     return EmitDoWhile(node->as< SDoWhile >());
-                case SNodeKind::FOR:
+                case SNodeKind::kFor:
                     return EmitFor(node->as< SFor >());
-                case SNodeKind::SWITCH:
+                case SNodeKind::kSwitch:
                     return EmitSwitch(node->as< SSwitch >());
-                case SNodeKind::GOTO:
+                case SNodeKind::kGoto:
                     return EmitGoto(node->as< SGoto >());
-                case SNodeKind::LABEL:
+                case SNodeKind::kLabel:
                     return EmitLabel(node->as< SLabel >());
-                case SNodeKind::BREAK:
+                case SNodeKind::kBreak:
                     return EmitBreak(node->as< SBreak >());
-                case SNodeKind::CONTINUE:
+                case SNodeKind::kContinue:
                     return EmitContinue();
-                case SNodeKind::RETURN:
+                case SNodeKind::kReturn:
                     return EmitReturn(node->as< SReturn >());
                 }
                 return nullptr;
@@ -170,7 +175,7 @@ namespace patchestry::ast {
                 }
 
                 if (added) {
-                    return detail::makeCompound(ctx_, stmts);
+                    return detail::MakeCompound(ctx_, stmts);
                 }
                 return body;
             }
@@ -184,12 +189,12 @@ namespace patchestry::ast {
                     auto *s = Emit(child);
                     if (s) stmts.push_back(s);
                 }
-                return detail::makeCompound(ctx_, stmts);
+                return detail::MakeCompound(ctx_, stmts);
             }
 
             clang::Stmt *EmitBlock(const SBlock *block) {
                 if (block->Size() == 1) return block->Stmts()[0];
-                return detail::makeCompound(ctx_, block->Stmts());
+                return detail::MakeCompound(ctx_, block->Stmts());
             }
 
             clang::Stmt *EmitIfThenElse(const SIfThenElse *ite) {
@@ -262,7 +267,7 @@ namespace patchestry::ast {
                         if (!EndsWithTerminator(case_body)) {
                             case_stmts.push_back(new (ctx_) clang::BreakStmt(Loc()));
                         }
-                        case_stmt->setSubStmt(detail::makeCompound(ctx_, case_stmts));
+                        case_stmt->setSubStmt(detail::MakeCompound(ctx_, case_stmts));
                     }
 
                     body_stmts.push_back(case_stmt);
@@ -281,23 +286,23 @@ namespace patchestry::ast {
                     }
 
                     auto *def_stmt = new (ctx_)
-                        clang::DefaultStmt(Loc(), Loc(), detail::makeCompound(ctx_, def_stmts));
+                        clang::DefaultStmt(Loc(), Loc(), detail::MakeCompound(ctx_, def_stmts));
                     body_stmts.push_back(def_stmt);
                     switch_stmt->addSwitchCase(def_stmt);
                 }
 
-                switch_stmt->setBody(detail::makeCompound(ctx_, body_stmts));
+                switch_stmt->setBody(detail::MakeCompound(ctx_, body_stmts));
                 return switch_stmt;
             }
 
             clang::Stmt *EmitGoto(const SGoto *g) {
                 // Look up or create the label
-                auto *label_decl = getOrCreateLabel(g->Target());
+                auto *label_decl = GetOrCreateLabel(g->Target());
                 return new (ctx_) clang::GotoStmt(label_decl, Loc(), Loc());
             }
 
             clang::Stmt *EmitLabel(const SLabel *l) {
-                auto *label_decl = getOrCreateLabel(l->Name());
+                auto *label_decl = GetOrCreateLabel(l->Name());
                 emitted_labels_.insert(std::string(l->Name()));
                 auto *sub = l->Body() ? Emit(l->Body()) : new (ctx_) clang::NullStmt(Loc());
                 return new (ctx_) clang::LabelStmt(Loc(), label_decl, sub);
@@ -315,7 +320,7 @@ namespace patchestry::ast {
                 return clang::ReturnStmt::Create(ctx_, Loc(), r->Value(), nullptr);
             }
 
-            clang::LabelDecl *getOrCreateLabel(std::string_view name) {
+            clang::LabelDecl *GetOrCreateLabel(std::string_view name) {
                 std::string key(name);
                 auto it = labels_.find(key);
                 if (it != labels_.end()) return it->second;
@@ -382,12 +387,56 @@ namespace patchestry::ast {
     }
 
     // Remove DeclStmts from their original positions in the tree.
+    // Recurses into CompoundStmt children and also into structured
+    // statement bodies (IfStmt, WhileStmt, ForStmt, LabelStmt, etc.)
+    // so that DeclStmts nested directly under them are stripped too.
     static clang::Stmt *StripDeclStmts(
         clang::ASTContext &ctx, clang::Stmt *s,
         const std::unordered_set< clang::Stmt * > &decl_set
     ) {
         if (!s) return nullptr;
         if (decl_set.count(s)) return nullptr;
+
+        // Guarantee a non-null Stmt* for set* methods that require one.
+        auto safe = [&](clang::Stmt *r) -> clang::Stmt * {
+            return r ? r : new (ctx) clang::NullStmt(clang::SourceLocation());
+        };
+
+        // Recurse into structured statement bodies
+        if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s)) {
+            ifs->setThen(safe(StripDeclStmts(ctx, ifs->getThen(), decl_set)));
+            if (ifs->getElse())
+                ifs->setElse(safe(StripDeclStmts(ctx, ifs->getElse(), decl_set)));
+            return s;
+        }
+        if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(s)) {
+            ws->setBody(safe(StripDeclStmts(ctx, ws->getBody(), decl_set)));
+            return s;
+        }
+        if (auto *fs = llvm::dyn_cast< clang::ForStmt >(s)) {
+            fs->setBody(safe(StripDeclStmts(ctx, fs->getBody(), decl_set)));
+            return s;
+        }
+        if (auto *ds = llvm::dyn_cast< clang::DoStmt >(s)) {
+            ds->setBody(safe(StripDeclStmts(ctx, ds->getBody(), decl_set)));
+            return s;
+        }
+        if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
+            ls->setSubStmt(safe(StripDeclStmts(ctx, ls->getSubStmt(), decl_set)));
+            return s;
+        }
+        if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(s)) {
+            sw->setBody(safe(StripDeclStmts(ctx, sw->getBody(), decl_set)));
+            return s;
+        }
+        if (auto *cs_node = llvm::dyn_cast< clang::CaseStmt >(s)) {
+            cs_node->setSubStmt(safe(StripDeclStmts(ctx, cs_node->getSubStmt(), decl_set)));
+            return s;
+        }
+        if (auto *def = llvm::dyn_cast< clang::DefaultStmt >(s)) {
+            def->setSubStmt(safe(StripDeclStmts(ctx, def->getSubStmt(), decl_set)));
+            return s;
+        }
 
         auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s);
         if (!cs) return s;
@@ -398,7 +447,7 @@ namespace patchestry::ast {
             auto *stripped = StripDeclStmts(ctx, child, decl_set);
             if (stripped) filtered.push_back(stripped);
         }
-        return detail::makeCompound(ctx, filtered);
+        return detail::MakeCompound(ctx, filtered);
     }
 
     // Collect all LabelDecls referenced by GotoStmts in a Stmt tree.
@@ -468,7 +517,7 @@ namespace patchestry::ast {
         }
 
         if (added) {
-            return detail::makeCompound(ctx, stmts);
+            return detail::MakeCompound(ctx, stmts);
         }
         return body;
     }
@@ -478,7 +527,7 @@ namespace patchestry::ast {
         Emitter emitter(ctx, fn);
         auto *body = emitter.Emit(root);
         if (!body) {
-            body = detail::makeCompound(ctx, {});
+            body = detail::MakeCompound(ctx, {});
         }
 
         // Fixup: add label definitions for any goto targets missing from the tree
@@ -536,12 +585,12 @@ namespace patchestry::ast {
         // Build final body: hoisted decls + control flow
         std::vector< clang::Stmt * > all_stmts;
         all_stmts.insert(all_stmts.end(), decl_stmts.begin(), decl_stmts.end());
-        if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(body)) {
+        if (auto *cs = llvm::dyn_cast_or_null< clang::CompoundStmt >(body)) {
             for (auto *s : cs->body()) all_stmts.push_back(s);
         } else if (body) {
             all_stmts.push_back(body);
         }
-        body = detail::makeCompound(ctx, all_stmts);
+        body = detail::MakeCompound(ctx, all_stmts);
 
         fn->setBody(body);
     }
@@ -555,7 +604,7 @@ namespace patchestry::ast {
         clang::Stmt *PushLabelInside(clang::ASTContext &ctx, clang::Stmt *s) {
             auto *ls = llvm::dyn_cast_or_null< clang::LabelStmt >(s);
             if (!ls) return s;
-            auto *inner = llvm::dyn_cast< clang::CompoundStmt >(ls->getSubStmt());
+            auto *inner = llvm::dyn_cast_or_null< clang::CompoundStmt >(ls->getSubStmt());
             if (!inner || inner->body_empty()) return s;
 
             auto it = inner->body_begin();
@@ -564,7 +613,7 @@ namespace patchestry::ast {
             stmts.push_back(ls);
             for (++it; it != inner->body_end(); ++it)
                 stmts.push_back(*it);
-            return detail::makeCompound(ctx, stmts);
+            return detail::MakeCompound(ctx, stmts);
         }
 
         // Replace a trailing GotoStmt in a case body with break or continue.
@@ -595,7 +644,7 @@ namespace patchestry::ast {
                 for (auto it = cs->body_begin(); std::next(it) != cs->body_end(); ++it)
                     stmts.push_back(*it);
                 stmts.push_back(replaced);
-                return detail::makeCompound(ctx, stmts);
+                return detail::MakeCompound(ctx, stmts);
             }
 
             return s;
@@ -813,7 +862,7 @@ namespace patchestry::ast {
                     }
                 }
 
-                return detail::makeCompound(ctx, children);
+                return detail::MakeCompound(ctx, children);
             }
 
             return s;
@@ -846,7 +895,7 @@ namespace patchestry::ast {
                 auto *cleaned = RemoveDeadLabels(ctx, child, live);
                 if (cleaned) children.push_back(cleaned);
             }
-            return detail::makeCompound(ctx, children);
+            return detail::MakeCompound(ctx, children);
         }
 
         if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s)) {

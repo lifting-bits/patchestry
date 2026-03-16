@@ -24,7 +24,10 @@ namespace patchestry::ast {
         // Build dominator tree from CFG
         static DomTree BuildDom(const Cfg &cfg);
 
-        // Build post-dominator tree from CFG (reverse edges, virtual exit)
+        // Build post-dominator tree from CFG (reverse edges, virtual exit).
+        // The returned tree has BlockCount() == cfg.blocks.size() + 1; the
+        // last entry is the virtual exit node.  Callers should only query
+        // block indices 0..cfg.blocks.size()-1.
         static DomTree BuildPostDom(const Cfg &cfg);
 
         // Returns the immediate dominator of block b

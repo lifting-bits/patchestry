@@ -8,7 +8,9 @@
 #include <patchestry/AST/LoopInfo.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <queue>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace patchestry::ast {
@@ -32,6 +34,10 @@ namespace patchestry::ast {
         LoopInfo info;
         size_t n = cfg.blocks.size();
 
+        // Sanity check: dominator tree should cover all blocks.
+        // If the tree is malformed, back-edge detection will silently miss loops.
+        assert(dom.BlockCount() >= n && "DomTree has fewer blocks than CFG");
+
         // Find back-edges: edge tail→header where header dominates tail
         struct BackEdge {
             size_t tail;
@@ -54,6 +60,9 @@ namespace patchestry::ast {
                 preds[s].push_back(i);
             }
         }
+
+        // Map header → index in info.loops for O(1) merge lookup
+        std::unordered_map< size_t, size_t > loops_by_header;
 
         // For each back-edge, collect the natural loop body via reverse BFS
         for (const auto &be : back_edges) {
@@ -96,39 +105,34 @@ namespace patchestry::ast {
             std::sort(loop.exits.begin(), loop.exits.end());
 
             // Check if this loop should be merged with an existing one (same header)
-            bool merged = false;
-            for (auto &existing : info.loops) {
-                if (existing.header == loop.header) {
-                    // Merge: add the new back-edge and body blocks
-                    existing.back_edges.push_back(be.tail);
-                    for (size_t b : loop.body) {
-                        if (std::find(existing.body.begin(), existing.body.end(), b)
-                            == existing.body.end()) {
-                            existing.body.push_back(b);
-                        }
+            auto merge_it = loops_by_header.find(loop.header);
+            if (merge_it != loops_by_header.end()) {
+                auto &existing = info.loops[merge_it->second];
+                // Merge: add the new back-edge and body blocks
+                existing.back_edges.push_back(be.tail);
+                std::unordered_set< size_t > body_set(
+                    existing.body.begin(), existing.body.end());
+                for (size_t b : loop.body) {
+                    if (body_set.insert(b).second) {
+                        existing.body.push_back(b);
                     }
-                    std::sort(existing.body.begin(), existing.body.end());
-                    // Recompute exits
-                    std::unordered_set< size_t > merged_body(
-                        existing.body.begin(), existing.body.end());
-                    existing.exits.clear();
-                    for (size_t b : existing.body) {
-                        for (size_t s : cfg.blocks[b].succs) {
-                            if (merged_body.find(s) == merged_body.end()) {
-                                existing.exits.push_back(s);
-                            }
-                        }
-                    }
-                    std::sort(existing.exits.begin(), existing.exits.end());
-                    existing.exits.erase(
-                        std::unique(existing.exits.begin(), existing.exits.end()),
-                        existing.exits.end());
-                    merged = true;
-                    break;
                 }
-            }
-
-            if (!merged) {
+                std::sort(existing.body.begin(), existing.body.end());
+                // Recompute exits
+                existing.exits.clear();
+                for (size_t b : existing.body) {
+                    for (size_t s : cfg.blocks[b].succs) {
+                        if (body_set.find(s) == body_set.end()) {
+                            existing.exits.push_back(s);
+                        }
+                    }
+                }
+                std::sort(existing.exits.begin(), existing.exits.end());
+                existing.exits.erase(
+                    std::unique(existing.exits.begin(), existing.exits.end()),
+                    existing.exits.end());
+            } else {
+                loops_by_header[loop.header] = info.loops.size();
                 info.loops.push_back(std::move(loop));
             }
         }

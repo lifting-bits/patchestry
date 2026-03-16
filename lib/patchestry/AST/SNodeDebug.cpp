@@ -32,7 +32,7 @@ namespace patchestry::ast {
                 os << "\"];\n";
 
                 switch (node->Kind()) {
-                case SNodeKind::SEQ: {
+                case SNodeKind::kSeq: {
                     auto *seq = node->as< SSeq >();
                     for (const auto *child : seq->Children()) {
                         unsigned cid = Emit(child);
@@ -40,7 +40,7 @@ namespace patchestry::ast {
                     }
                     break;
                 }
-                case SNodeKind::IF_THEN_ELSE: {
+                case SNodeKind::kIfThenElse: {
                     auto *ite = node->as< SIfThenElse >();
                     if (ite->ThenBranch()) {
                         unsigned tid = Emit(ite->ThenBranch());
@@ -52,7 +52,7 @@ namespace patchestry::ast {
                     }
                     break;
                 }
-                case SNodeKind::WHILE: {
+                case SNodeKind::kWhile: {
                     auto *w = node->as< SWhile >();
                     if (w->Body()) {
                         unsigned bid = Emit(w->Body());
@@ -60,7 +60,7 @@ namespace patchestry::ast {
                     }
                     break;
                 }
-                case SNodeKind::DO_WHILE: {
+                case SNodeKind::kDoWhile: {
                     auto *dw = node->as< SDoWhile >();
                     if (dw->Body()) {
                         unsigned bid = Emit(dw->Body());
@@ -68,7 +68,7 @@ namespace patchestry::ast {
                     }
                     break;
                 }
-                case SNodeKind::FOR: {
+                case SNodeKind::kFor: {
                     auto *f = node->as< SFor >();
                     if (f->Body()) {
                         unsigned bid = Emit(f->Body());
@@ -76,7 +76,7 @@ namespace patchestry::ast {
                     }
                     break;
                 }
-                case SNodeKind::SWITCH: {
+                case SNodeKind::kSwitch: {
                     auto *sw = node->as< SSwitch >();
                     for (size_t i = 0; i < sw->Cases().size(); ++i) {
                         if (sw->Cases()[i].body) {
@@ -92,7 +92,7 @@ namespace patchestry::ast {
                     }
                     break;
                 }
-                case SNodeKind::LABEL: {
+                case SNodeKind::kLabel: {
                     auto *lbl = node->as< SLabel >();
                     if (lbl->Body()) {
                         unsigned bid = Emit(lbl->Body());

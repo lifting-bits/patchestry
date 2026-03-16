@@ -201,7 +201,7 @@ namespace patchestry::ast {
         }
 
         // Build the collapse graph from the Cfg
-        CGraph buildCGraph(const Cfg &cfg) {
+        CGraph BuildCGraph(const Cfg &cfg) {
             CGraph g;
             g.entry = cfg.entry;
             g.nodes.resize(cfg.blocks.size());
@@ -1335,7 +1335,7 @@ namespace patchestry::ast {
                 SNode *head_content = LeafFromNode(bl, factory);
                 bool has_head = false;
                 if (head_content) {
-                    if (head_content->Kind() == SNodeKind::BLOCK) {
+                    if (head_content->Kind() == SNodeKind::kBlock) {
                         has_head = !head_content->as<SBlock>()->Stmts().empty();
                     } else {
                         has_head = true;
@@ -1407,7 +1407,7 @@ namespace patchestry::ast {
             SNode *head_content = LeafFromNode(bl, factory);
             bool has_content = false;
             if (head_content) {
-                if (head_content->Kind() == SNodeKind::BLOCK) {
+                if (head_content->Kind() == SNodeKind::kBlock) {
                     has_content = !head_content->as<SBlock>()->Stmts().empty();
                 } else {
                     has_content = true;
@@ -1635,7 +1635,7 @@ namespace patchestry::ast {
                 SNode *head_content = LeafFromNode(bl, factory);
                 bool has_head = false;
                 if (head_content) {
-                    if (head_content->Kind() == SNodeKind::BLOCK) {
+                    if (head_content->Kind() == SNodeKind::kBlock) {
                         has_head = !head_content->as<SBlock>()->Stmts().empty();
                     } else {
                         has_head = true;
@@ -2202,7 +2202,8 @@ namespace patchestry::ast {
                 // fallback target.
                 std::vector<size_t> guards;
                 size_t cur = sw.preds[0];
-                while (true) {
+                size_t walk_limit = g.nodes.size();
+                while (walk_limit-- > 0) {
                     auto &gn = g.Node(cur);
                     if (gn.collapsed) break;
                     if (!gn.is_conditional || gn.SizeOut() != 2) {
@@ -2263,7 +2264,11 @@ namespace patchestry::ast {
         /// Pattern: cond→clause→other, cond→other  (clause.sizeIn > 1)
         /// After:   cond→clause_copy→other, cond→other  (clause_copy.sizeIn == 1)
         static bool ResolveClauseSplit(CGraph &g) {
-            for (auto &bl : g.nodes) {
+            // Use index-based loop because push_back below may
+            // reallocate g.nodes, invalidating range-based iterators.
+            size_t n = g.nodes.size();
+            for (size_t ni = 0; ni < n; ++ni) {
+                auto &bl = g.nodes[ni];
                 if (bl.collapsed || bl.SizeOut() != 2 || !bl.is_conditional) {
                     continue;
                 }
@@ -2623,7 +2628,7 @@ namespace patchestry::ast {
         }
 
         // Extract the DeclRefExpr from an assignment or decl statement
-        clang::DeclRefExpr *getAssignTarget(clang::Stmt *s) {
+        clang::DeclRefExpr *GetAssignTarget(clang::Stmt *s) {
             if (!s) return nullptr;
             if (auto *bo = llvm::dyn_cast<clang::BinaryOperator>(s)) {
                 return llvm::dyn_cast<clang::DeclRefExpr>(bo->getLHS()->IgnoreParenCasts());
@@ -2646,8 +2651,8 @@ namespace patchestry::ast {
         }
 
         // Extract the VarDecl referenced by a statement (works for assign, unary, decl)
-        clang::VarDecl *getReferencedVar(clang::Stmt *s) {
-            if (auto *dre = getAssignTarget(s)) {
+        clang::VarDecl *GetReferencedVar(clang::Stmt *s) {
+            if (auto *dre = GetAssignTarget(s)) {
                 return llvm::dyn_cast<clang::VarDecl>(dre->getDecl());
             }
             if (auto *ds = llvm::dyn_cast<clang::DeclStmt>(s)) {
@@ -2672,9 +2677,9 @@ namespace patchestry::ast {
 
         // Check that init, cond, and inc all reference the same variable
         bool SameVariable(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc) {
-            auto *init_var = getReferencedVar(init);
+            auto *init_var = GetReferencedVar(init);
             if (!init_var) return false;
-            auto *inc_var = getReferencedVar(inc);
+            auto *inc_var = GetReferencedVar(inc);
             if (!inc_var) return false;
             if (init_var != inc_var) return false;
             return ContainsVarRef(cond, init_var);
@@ -2874,7 +2879,7 @@ namespace patchestry::ast {
         }
 
         // 1. Build the collapse graph
-        detail::CGraph g = detail::buildCGraph(cfg);
+        detail::CGraph g = detail::BuildCGraph(cfg);
 
         // 2. Mark back-edges
         detail::MarkBackEdges(g);

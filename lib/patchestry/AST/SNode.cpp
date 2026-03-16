@@ -13,18 +13,18 @@ namespace patchestry::ast {
 
     const char *SNode::KindName(SNodeKind k) {
         switch (k) {
-            case SNodeKind::SEQ:         return "Seq";
-            case SNodeKind::BLOCK:       return "Block";
-            case SNodeKind::IF_THEN_ELSE:return "IfThenElse";
-            case SNodeKind::WHILE:       return "While";
-            case SNodeKind::DO_WHILE:    return "DoWhile";
-            case SNodeKind::FOR:         return "For";
-            case SNodeKind::SWITCH:      return "Switch";
-            case SNodeKind::GOTO:        return "Goto";
-            case SNodeKind::LABEL:       return "Label";
-            case SNodeKind::BREAK:       return "Break";
-            case SNodeKind::CONTINUE:    return "Continue";
-            case SNodeKind::RETURN:      return "Return";
+            case SNodeKind::kSeq:         return "Seq";
+            case SNodeKind::kBlock:       return "Block";
+            case SNodeKind::kIfThenElse:return "IfThenElse";
+            case SNodeKind::kWhile:       return "While";
+            case SNodeKind::kDoWhile:    return "DoWhile";
+            case SNodeKind::kFor:         return "For";
+            case SNodeKind::kSwitch:      return "Switch";
+            case SNodeKind::kGoto:        return "Goto";
+            case SNodeKind::kLabel:       return "Label";
+            case SNodeKind::kBreak:       return "Break";
+            case SNodeKind::kContinue:    return "Continue";
+            case SNodeKind::kReturn:      return "Return";
         }
         return "Unknown";
     }

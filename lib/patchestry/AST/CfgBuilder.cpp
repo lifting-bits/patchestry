@@ -101,9 +101,10 @@ namespace patchestry::ast {
                                          std::unordered_map< std::string, size_t > &label_to_block,
                                          unsigned &synth_counter) {
             for (size_t i = 0; i < blocks.size(); ++i) {
-                auto &blk = blocks[i];
-                for (size_t s = 0; s + 1 < blk.stmts.size(); ++s) {
-                    if (!IsBlockTerminator(blk.stmts[s])) continue;
+                // Access blocks[i] by index — do NOT cache a reference
+                // because blocks.insert() below may reallocate the vector.
+                for (size_t s = 0; s + 1 < blocks[i].stmts.size(); ++s) {
+                    if (!IsBlockTerminator(blocks[i].stmts[s])) continue;
 
                     // Found a terminator that isn't the last stmt — split here
                     CfgBlock new_block;
@@ -111,10 +112,10 @@ namespace patchestry::ast {
                         "__synth_" + std::to_string(synth_counter++);
                     new_block.label = synth_label;
                     new_block.stmts.assign(
-                        blk.stmts.begin() + static_cast< ptrdiff_t >(s + 1),
-                        blk.stmts.end()
+                        blocks[i].stmts.begin() + static_cast< ptrdiff_t >(s + 1),
+                        blocks[i].stmts.end()
                     );
-                    blk.stmts.resize(s + 1);
+                    blocks[i].stmts.resize(s + 1);
 
                     // Insert new block right after current one
                     auto pos = blocks.begin()
@@ -183,6 +184,16 @@ namespace patchestry::ast {
         }
 
         void ResolveEdges(BlockSplitter &bs) {
+            // Look up a label target, returning the block index only if
+            // it exists in the map AND is within bounds.
+            auto find_target = [&](const std::string &label) -> std::optional< size_t > {
+                auto it = bs.label_to_block.find(label);
+                if (it != bs.label_to_block.end() && it->second < bs.blocks.size()) {
+                    return it->second;
+                }
+                return std::nullopt;
+            };
+
             for (size_t i = 0; i < bs.blocks.size(); ++i) {
                 auto &blk = bs.blocks[i];
                 if (blk.stmts.empty()) {
@@ -207,10 +218,9 @@ namespace patchestry::ast {
                     // Ghidra convention: succs[0] = false/fallthrough,
                     //                    succs[1] = true/taken
                     if (!else_target.empty()) {
-                        auto it_else = bs.label_to_block.find(else_target);
-                        if (it_else != bs.label_to_block.end()) {
-                            blk.fallthrough_succ = it_else->second;
-                            blk.succs.push_back(it_else->second);
+                        if (auto tgt = find_target(else_target)) {
+                            blk.fallthrough_succ = *tgt;
+                            blk.succs.push_back(*tgt);
                         }
                     } else if (i + 1 < bs.blocks.size()) {
                         // No else → fallthrough to next block
@@ -218,10 +228,9 @@ namespace patchestry::ast {
                         blk.succs.push_back(i + 1);
                     }
 
-                    auto it_then = bs.label_to_block.find(then_target);
-                    if (it_then != bs.label_to_block.end()) {
-                        blk.taken_succ = it_then->second;
-                        blk.succs.push_back(it_then->second);
+                    if (auto tgt = find_target(then_target)) {
+                        blk.taken_succ = *tgt;
+                        blk.succs.push_back(*tgt);
                     }
                     continue;
                 }
@@ -230,10 +239,9 @@ namespace patchestry::ast {
                 std::string target = GetGotoTarget(last);
                 if (!target.empty()) {
                     blk.stmts.pop_back(); // remove the goto stmt
-                    auto it = bs.label_to_block.find(target);
-                    if (it != bs.label_to_block.end()) {
-                        blk.succs.push_back(it->second);
-                        blk.fallthrough_succ = it->second;
+                    if (auto tgt = find_target(target)) {
+                        blk.succs.push_back(*tgt);
+                        blk.fallthrough_succ = *tgt;
                     }
                     continue;
                 }
@@ -280,14 +288,12 @@ namespace patchestry::ast {
                                 {
                                     std::string target =
                                         GetLabelName(go->getLabel());
-                                    auto it = bs.label_to_block.find(target);
-                                    if (it != bs.label_to_block.end()) {
-                                        size_t tgt = it->second;
+                                    if (auto tgt = find_target(target)) {
                                         if (std::find(blk.succs.begin(),
-                                                      blk.succs.end(), tgt)
+                                                      blk.succs.end(), *tgt)
                                             == blk.succs.end())
                                         {
-                                            blk.succs.push_back(tgt);
+                                            blk.succs.push_back(*tgt);
                                         }
                                     }
                                 }
@@ -302,16 +308,14 @@ namespace patchestry::ast {
                                         {
                                             std::string target =
                                                 GetLabelName(go->getLabel());
-                                            auto it = bs.label_to_block.find(target);
-                                            if (it != bs.label_to_block.end()) {
+                                            if (auto tgt = find_target(target)) {
                                                 // Avoid duplicate edges (multiple cases
                                                 // may goto the same loop header).
-                                                size_t tgt = it->second;
                                                 if (std::find(blk.succs.begin(),
-                                                              blk.succs.end(), tgt)
+                                                              blk.succs.end(), *tgt)
                                                     == blk.succs.end())
                                                 {
-                                                    blk.succs.push_back(tgt);
+                                                    blk.succs.push_back(*tgt);
                                                 }
                                             }
                                         }
@@ -324,10 +328,9 @@ namespace patchestry::ast {
                         if (post_switch) {
                             std::string target = GetGotoTarget(post_switch);
                             if (!target.empty()) {
-                                auto it = bs.label_to_block.find(target);
-                                if (it != bs.label_to_block.end()) {
-                                    blk.succs.push_back(it->second);
-                                    blk.fallthrough_succ = it->second;
+                                if (auto tgt = find_target(target)) {
+                                    blk.succs.push_back(*tgt);
+                                    blk.fallthrough_succ = *tgt;
                                 }
                             }
                         }
@@ -427,11 +430,15 @@ namespace patchestry::ast {
             for (auto &s : new_blocks[new_idx].succs) {
                 s = remap[s];
             }
-            if (new_blocks[new_idx].is_conditional) {
-                new_blocks[new_idx].taken_succ = remap[new_blocks[new_idx].taken_succ];
-                new_blocks[new_idx].fallthrough_succ = remap[new_blocks[new_idx].fallthrough_succ];
-            } else if (!new_blocks[new_idx].succs.empty()) {
-                new_blocks[new_idx].fallthrough_succ = remap[new_blocks[new_idx].fallthrough_succ];
+            auto &blk = new_blocks[new_idx];
+            if (blk.is_conditional) {
+                if (blk.taken_succ != CfgBlock::kNoSucc)
+                    blk.taken_succ = remap[blk.taken_succ];
+                if (blk.fallthrough_succ != CfgBlock::kNoSucc)
+                    blk.fallthrough_succ = remap[blk.fallthrough_succ];
+            } else if (!blk.succs.empty()) {
+                if (blk.fallthrough_succ != CfgBlock::kNoSucc)
+                    blk.fallthrough_succ = remap[blk.fallthrough_succ];
             }
         }
 
@@ -481,22 +488,19 @@ namespace patchestry::ast {
                 // Find the CfgBlock for this ghidra block.
                 std::string sanitized_label = LabelNameFromKey(bb_key);
                 auto blk_it = label_to_idx.find(sanitized_label);
-                if (blk_it == label_to_idx.end()) {
-                    // Entry block has no label — check if it matches the entry block key.
-                    if (bb_key == func.entry_block && !cfg.blocks.empty()
-                        && cfg.blocks[cfg.entry].label.empty())
-                    {
-                        blk_it = label_to_idx.end(); // use entry directly
-                    } else {
-                        LOG(WARNING) << "PopulateSwitchMetadata: no CfgBlock for ghidra block '"
-                                     << bb_key << "'\n";
-                        continue;
-                    }
-                }
 
-                size_t cfg_idx = (blk_it != label_to_idx.end())
-                    ? blk_it->second
-                    : cfg.entry;
+                size_t cfg_idx;
+                if (blk_it != label_to_idx.end()) {
+                    cfg_idx = blk_it->second;
+                } else if (bb_key == func.entry_block && !cfg.blocks.empty()
+                           && cfg.blocks[cfg.entry].label.empty()) {
+                    // Entry block has no label — use entry directly.
+                    cfg_idx = cfg.entry;
+                } else {
+                    LOG(WARNING) << "PopulateSwitchMetadata: no CfgBlock for ghidra block '"
+                                 << bb_key << "'\n";
+                    continue;
+                }
 
                 auto &blk = cfg.blocks[cfg_idx];
 

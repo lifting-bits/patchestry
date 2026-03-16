@@ -555,27 +555,6 @@ namespace patchestry::ast {
             return { create_assign_operation(ctx, result_expr, output_expr, op_loc), false };
         }
 
-        // When the input is a string literal, the LOAD is semantically a no-op:
-        // the string literal already IS the value.  Just let it decay from its
-        // array type (const char[N]) to a pointer (const char *) via the standard
-        // array-to-pointer implicit cast, avoiding the *(T**)&"..." pattern that
-        // make_reinterpret_cast would otherwise produce.
-        if (clang::isa< clang::StringLiteral >(input_expr)) {
-            clang::Expr *result_expr = make_implicit_cast(
-                ctx, input_expr, ctx.getDecayedType(input_expr->getType()),
-                clang::CastKind::CK_ArrayToPointerDecay
-            );
-            if (!result_expr) {
-                result_expr = input_expr;
-            }
-            if (merge_to_next) {
-                return { result_expr, true };
-            }
-            auto *output_expr =
-                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
-            return { create_assign_operation(ctx, result_expr, output_expr, op_loc), false };
-        }
-
         if (op.type) {
             auto op_type_opt = lookup_op_type(op);
             if (!op_type_opt) {
@@ -818,8 +797,8 @@ namespace patchestry::ast {
 
         // Priority 1: switch_cases present — proper integer switch using per-case
         // integer values recovered by Ghidra.  Prefer inputs[0] when it is a named
-        // local variable (the most direct discriminant); otherwise fall back to
-        // switch_input, which may resolve to an inlined call expression.
+        // local variable or parameter (the most direct discriminant); otherwise
+        // fall back to switch_input, which may resolve to an inlined call expression.
         if (!op.switch_cases.empty()) {
             clang::Expr *disc = nullptr;
             if (op.inputs[0].kind == Varnode::VARNODE_LOCAL
