@@ -1208,10 +1208,13 @@ namespace patchestry::ast {
             }
             // Wrap with SLabel if this CNode carries a label from the original CFG.
             // Clear the label after wrapping to prevent double-wrapping if
-            // LeafFromNode is called again on the same node.
+            // LeafFromNode is called again on the same node — UNLESS the
+            // node is pinned (its label is a goto target that must survive).
             if (!n.label.empty()) {
                 result = factory.Make<SLabel>(factory.Intern(n.label), result);
-                n.label.clear();
+                // Don't clear the label here — the node may be referenced
+                // again (e.g. by InlineCaseChain for shared blocks, or by
+                // final emission).  RefineDeadLabels removes unused labels.
             }
             return result;
         }
@@ -1659,7 +1662,89 @@ namespace patchestry::ast {
             return false;
         }
 
-        // Rule: Switch statement
+        // Aggressive inlining helper: follow the single-successor chain
+        // from a case entry block, building an SSeq of all block contents.
+        // Stops at exit_id, returns (sizeOut==0), back-edges, or blocks
+        // with multiple outgoing edges (inner control flow).
+        // Adds all traversed blocks to |all_collapse|.
+        SNode *InlineCaseChain(CGraph &g, size_t start_id, size_t exit_id,
+                               SNodeFactory &factory, clang::ASTContext &ctx,
+                               std::unordered_set<size_t> &chain_visited,
+                               std::unordered_set<size_t> &all_collapse) {
+            if (start_id == exit_id) return nullptr;
+            auto &bl = g.Node(start_id);
+            if (bl.collapsed) return nullptr;
+            if (chain_visited.count(start_id)) return nullptr; // cycle guard
+
+            // Don't absorb nodes that are themselves switches — leave them
+            // for a separate FoldSwitch pass so inner switches get properly
+            // restructured with their own InlineCaseChain.
+            if (bl.IsSwitchOut() && !bl.switch_cases.empty()) {
+                return nullptr;
+            }
+
+            chain_visited.insert(start_id);
+            all_collapse.insert(start_id);
+
+            auto *body = LeafFromNode(bl, factory);
+
+            // No successors (return/tail) — just the body
+            if (bl.SizeOut() == 0) return body;
+
+            // Single successor to exit block — body only (emitter adds break)
+            if (bl.SizeOut() == 1 && bl.succs[0] == exit_id) return body;
+
+            // Single successor — recursively inline the next block
+            if (bl.SizeOut() == 1) {
+                size_t next = bl.succs[0];
+                auto *next_body = InlineCaseChain(
+                    g, next, exit_id, factory, ctx, chain_visited, all_collapse);
+                if (next_body) {
+                    auto *seq = factory.Make<SSeq>();
+                    seq->AddChild(body);
+                    seq->AddChild(next_body);
+                    return seq;
+                }
+                return body;
+            }
+
+            // Multiple successors — use structured content if available,
+            // otherwise recursively build an if-else for 2-successor
+            // conditional nodes (common from splitAtInternalControlFlow).
+            if (bl.structured) {
+                return bl.structured;
+            }
+            if (bl.SizeOut() == 2 && bl.is_conditional) {
+                size_t t_id = bl.succs[0];
+                size_t f_id = bl.succs[1];
+                auto *t_body = InlineCaseChain(
+                    g, t_id, exit_id, factory, ctx, chain_visited, all_collapse);
+                auto *f_body = InlineCaseChain(
+                    g, f_id, exit_id, factory, ctx, chain_visited, all_collapse);
+                if (t_body || f_body) {
+                    if (!t_body) t_body = factory.Make<SBlock>();
+                    if (!f_body) f_body = factory.Make<SBlock>();
+                    clang::Expr *cond = bl.branch_cond;
+                    if (!cond) {
+                        cond = clang::IntegerLiteral::Create(
+                            ctx, llvm::APInt(32, 1), ctx.IntTy,
+                            clang::SourceLocation());
+                    }
+                    auto *if_node = factory.Make<SIfThenElse>(cond, t_body, f_body);
+                    if (!body || (llvm::isa<SBlock>(body)
+                        && static_cast<SBlock*>(body)->Stmts().empty())) {
+                        return if_node;
+                    }
+                    auto *seq = factory.Make<SSeq>();
+                    seq->AddChild(body);
+                    seq->AddChild(if_node);
+                    return seq;
+                }
+            }
+            return body;
+        }
+
+        // Rule: Switch statement (with aggressive case-body inlining)
         bool FoldSwitch(CGraph &g, size_t id, SNodeFactory &factory,
                              clang::ASTContext &ctx) {
             auto &bl = g.Node(id);
@@ -1669,28 +1754,34 @@ namespace patchestry::ast {
             // Must have switch_cases metadata to fire.
             if (bl.switch_cases.empty()) return false;
 
-            // Find exit block: look for a successor with sizeIn > 1 or sizeOut > 1
-            size_t exit_id = std::numeric_limits<size_t>::max();
-            for (size_t s : bl.succs) {
-                auto &sn = g.Node(s);
-                if (sn.collapsed) continue;
-                if (s == id || sn.SizeIn() > 1 || sn.SizeOut() > 1) {
-                    exit_id = s;
-                    break;
+            // Collect the set of case-target successor ids for quick lookup.
+            std::unordered_set<size_t> case_succ_ids;
+            for (const auto &entry : bl.switch_cases) {
+                if (entry.succ_index < bl.succs.size()) {
+                    case_succ_ids.insert(bl.succs[entry.succ_index]);
                 }
             }
 
-            // Validate: each case must have sizeIn==1.
-            // Cases may exit to exit_id (break), have no exit (tail), or exit
-            // to a different target (goto — e.g., loop back-edge).
+            // Find exit block: a successor that is NOT a case target and has
+            // sizeIn > 1 (merge point where cases reconverge).  Skip case
+            // targets even if they have sizeOut > 1 — InlineCaseChain handles
+            // complex case bodies.
+            size_t exit_id = std::numeric_limits<size_t>::max();
+            for (size_t s : bl.succs) {
+                if (case_succ_ids.count(s)) continue; // skip case targets
+                auto &sn = g.Node(s);
+                if (sn.collapsed) continue;
+                // Non-case successor = exit/fallback block
+                exit_id = s;
+                break;
+            }
+
+            // Validate: each case entry must have sizeIn==1 and not be collapsed.
             for (size_t s : bl.succs) {
                 if (s == exit_id) continue;
                 auto &sn = g.Node(s);
                 if (sn.collapsed) return false;
                 if (sn.SizeIn() != 1) {
-                    return false;
-                }
-                if (sn.SizeOut() > 1) {
                     return false;
                 }
             }
@@ -1710,6 +1801,11 @@ namespace patchestry::ast {
                 succ_to_values[entry.succ_index].push_back(entry.value);
             }
 
+            // Track all blocks to collapse (aggressive inlining may pull in
+            // blocks beyond the direct case successors).
+            std::unordered_set<size_t> all_collapse;
+            all_collapse.insert(id);
+
             // Build case arms.  When a successor has multiple case values
             // (e.g. case 1: case 2: case 3: body), only the LAST value
             // carries the body; preceding values get nullptr (fallthrough).
@@ -1721,7 +1817,13 @@ namespace patchestry::ast {
                 if (it == succ_to_values.end()) continue;
 
                 const auto &vals = it->second;
-                auto *body = LeafFromNode(g.Node(s), factory);
+                // Aggressive inlining: follow the successor chain from this
+                // case entry, inlining all reachable single-successor blocks.
+                std::unordered_set<size_t> chain_visited;
+                auto *body = InlineCaseChain(
+                    g, s, exit_id, factory, ctx, chain_visited, all_collapse);
+                if (!body) body = LeafFromNode(g.Node(s), factory);
+
                 for (size_t vi = 0; vi < vals.size(); ++vi) {
                     auto *case_val = clang::IntegerLiteral::Create(
                         ctx, llvm::APInt(iw, static_cast<uint64_t>(vals[vi]), true),
@@ -1730,6 +1832,7 @@ namespace patchestry::ast {
                     sw->AddCase(case_val, is_last ? body : nullptr);
                 }
             }
+
             // Prepend the switch block's own stmts (ops before the switch)
             // and strip the original SwitchStmt (CfgFoldStructure rebuilds it).
             SNode *sw_node = nullptr;
@@ -1754,15 +1857,23 @@ namespace patchestry::ast {
                 sw_node = sw;
             }
 
-            // Collapse only case successor nodes (those with case values).
-            // Successors without case values (fallback paths) stay as
-            // separate blocks so they can be collapsed by later rules.
-            std::vector<size_t> collapse_ids = {id};
-            for (size_t si = 0; si < bl.succs.size(); ++si) {
-                size_t s = bl.succs[si];
-                if (s == exit_id) continue;
-                if (succ_to_values.find(si) == succ_to_values.end()) continue;
-                collapse_ids.push_back(s);
+            // Build collapse set from all_collapse, but only include blocks
+            // whose predecessors are ALL within the collapse set (safe to remove).
+            // The switch block itself is always included.
+            std::vector<size_t> collapse_ids;
+            collapse_ids.push_back(id);
+            for (size_t nid : all_collapse) {
+                if (nid == id) continue;
+                bool all_preds_internal = true;
+                for (size_t p : g.Node(nid).preds) {
+                    if (all_collapse.count(p) == 0) {
+                        all_preds_internal = false;
+                        break;
+                    }
+                }
+                if (all_preds_internal) {
+                    collapse_ids.push_back(nid);
+                }
             }
 
             if (!bl.label.empty()) {

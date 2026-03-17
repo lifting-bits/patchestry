@@ -325,6 +325,16 @@ namespace patchestry::ast {
                 auto it = labels_.find(key);
                 if (it != labels_.end()) return it->second;
 
+                // Check goto_labels_ cache (populated from raw Clang AST
+                // GotoStmts before emission).  Reusing the same LabelDecl
+                // objects that GotoStmts reference prevents CIR "goto/label
+                // mismatch" from pointer identity mismatches.
+                auto gl = goto_labels_.find(key);
+                if (gl != goto_labels_.end()) {
+                    labels_[key] = gl->second;
+                    return gl->second;
+                }
+
                 auto &idents = ctx_.Idents;
                 auto &ident = idents.get(llvm::StringRef(name.data(), name.size()));
                 auto *decl = clang::LabelDecl::Create(ctx_, fn_, Loc(), &ident);
@@ -332,9 +342,49 @@ namespace patchestry::ast {
                 return decl;
             }
 
+          public:
+            // Pre-scan: collect LabelDecl objects referenced by GotoStmts
+            // in raw Clang AST (SBlock stmts).  Must be called before Emit().
+            void CollectGotoLabelDecls(SNode *node) {
+                if (!node) return;
+                if (auto *blk = node->dyn_cast< SBlock >()) {
+                    std::function< void(clang::Stmt *) > scan =
+                        [&](clang::Stmt *s) {
+                            if (!s) return;
+                            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                                auto *ld = gs->getLabel();
+                                goto_labels_[ld->getName().str()] = ld;
+                                return;
+                            }
+                            for (auto *child : s->children()) scan(child);
+                        };
+                    for (auto *s : blk->Stmts()) scan(s);
+                }
+                if (auto *seq = node->dyn_cast< SSeq >()) {
+                    for (size_t i = 0; i < seq->Size(); ++i)
+                        CollectGotoLabelDecls((*seq)[i]);
+                } else if (auto *ite = node->dyn_cast< SIfThenElse >()) {
+                    CollectGotoLabelDecls(ite->ThenBranch());
+                    CollectGotoLabelDecls(ite->ElseBranch());
+                } else if (auto *sw = node->dyn_cast< SSwitch >()) {
+                    for (auto &c : sw->Cases())
+                        CollectGotoLabelDecls(c.body);
+                    CollectGotoLabelDecls(sw->DefaultBody());
+                } else if (auto *lbl = node->dyn_cast< SLabel >()) {
+                    CollectGotoLabelDecls(lbl->Body());
+                } else if (auto *w = node->dyn_cast< SWhile >()) {
+                    CollectGotoLabelDecls(w->Body());
+                } else if (auto *dw = node->dyn_cast< SDoWhile >()) {
+                    CollectGotoLabelDecls(dw->Body());
+                } else if (auto *f = node->dyn_cast< SFor >()) {
+                    CollectGotoLabelDecls(f->Body());
+                }
+            }
+
             clang::ASTContext &ctx_;
             clang::FunctionDecl *fn_;
             std::unordered_map< std::string, clang::LabelDecl * > labels_;
+            std::unordered_map< std::string, clang::LabelDecl * > goto_labels_;
             std::unordered_set< std::string > emitted_labels_;
         };
 
@@ -480,6 +530,7 @@ namespace patchestry::ast {
     // Add LabelStmt definitions for all GotoStmt targets missing from the body.
     // This handles gotos inside raw Clang AST (SBlock stmts) that bypass the
     // emitter's label tracking.
+    [[maybe_unused]]
     static clang::Stmt *FixupAllMissingLabels(clang::Stmt *body,
                                                clang::ASTContext &ctx) {
         std::unordered_set< clang::LabelDecl * > targets, defs;
@@ -525,6 +576,9 @@ namespace patchestry::ast {
     void EmitClangAST(SNode *root, clang::FunctionDecl *fn,
                       clang::ASTContext &ctx) {
         Emitter emitter(ctx, fn);
+        // Pre-scan: collect LabelDecl objects from raw Clang GotoStmts
+        // so EmitLabel can reuse the same objects (pointer identity match).
+        emitter.CollectGotoLabelDecls(root);
         auto *body = emitter.Emit(root);
         if (!body) {
             body = detail::MakeCompound(ctx, {});
@@ -532,10 +586,6 @@ namespace patchestry::ast {
 
         // Fixup: add label definitions for any goto targets missing from the tree
         body = emitter.FixupMissingLabels(body);
-
-        // Fixup: scan full AST for GotoStmt targets without LabelStmt definitions
-        // (handles gotos in raw Clang AST inside SBlock nodes)
-        body = FixupAllMissingLabels(body, ctx);
 
         // Phase 1: Hoist all existing DeclStmts to the top of the function.
         std::vector< clang::Stmt * > decl_stmts;
