@@ -359,6 +359,7 @@ namespace patchestry::ast {
                             for (auto *child : s->children()) scan(child);
                         };
                     for (auto *s : blk->Stmts()) scan(s);
+                    return; // SBlock has no SNode children
                 }
                 if (auto *seq = node->dyn_cast< SSeq >()) {
                     for (size_t i = 0; i < seq->Size(); ++i)
@@ -514,64 +515,6 @@ namespace patchestry::ast {
         }
     }
 
-    // Collect all LabelDecls that have a LabelStmt definition in a Stmt tree.
-    static void CollectLabelDefs(clang::Stmt *s,
-                                 std::unordered_set< clang::LabelDecl * > &defs,
-                                 std::unordered_set< clang::Stmt * > &seen) {
-        if (!s || !seen.insert(s).second) return;
-        if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
-            defs.insert(ls->getDecl());
-        }
-        for (auto *child : s->children()) {
-            CollectLabelDefs(child, defs, seen);
-        }
-    }
-
-    // Add LabelStmt definitions for all GotoStmt targets missing from the body.
-    // This handles gotos inside raw Clang AST (SBlock stmts) that bypass the
-    // emitter's label tracking.
-    [[maybe_unused]]
-    static clang::Stmt *FixupAllMissingLabels(clang::Stmt *body,
-                                               clang::ASTContext &ctx) {
-        std::unordered_set< clang::LabelDecl * > targets, defs;
-        std::unordered_set< clang::Stmt * > seen1, seen2;
-        CollectGotoTargets(body, targets, seen1);
-        CollectLabelDefs(body, defs, seen2);
-
-        // Build a set of defined label names (not just pointer equality)
-        // so we can skip stubs for labels that have definitions under
-        // a different LabelDecl object but the same name.
-        std::unordered_set< std::string > def_names;
-        for (auto *ld : defs) {
-            def_names.insert(ld->getName().str());
-        }
-
-        std::vector< clang::Stmt * > stmts;
-        if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(body)) {
-            for (auto *s : cs->body()) stmts.push_back(s);
-        } else {
-            stmts.push_back(body);
-        }
-
-        bool added = false;
-        for (auto *ld : targets) {
-            if (defs.count(ld)) continue;
-            // Skip if a label with the same name already has a definition
-            // (may be a different LabelDecl object from SLabel emission)
-            if (def_names.count(ld->getName().str())) continue;
-            auto *null_stmt = new (ctx) clang::NullStmt(clang::SourceLocation());
-            auto *label_stmt = new (ctx) clang::LabelStmt(
-                clang::SourceLocation(), ld, null_stmt
-            );
-            stmts.push_back(label_stmt);
-            added = true;
-        }
-
-        if (added) {
-            return detail::MakeCompound(ctx, stmts);
-        }
-        return body;
-    }
 
     void EmitClangAST(SNode *root, clang::FunctionDecl *fn,
                       clang::ASTContext &ctx) {

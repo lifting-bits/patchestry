@@ -353,8 +353,8 @@ namespace patchestry::ast {
                            << param_op->key;
                 continue;
             }
-            auto type_iter = type_builder.get().get_serialized_types().find(*param_op->type);
-            if (type_iter == type_builder.get().get_serialized_types().end()) {
+            auto type_iter = type_builder.get().GetSerializedTypes().find(*param_op->type);
+            if (type_iter == type_builder.get().GetSerializedTypes().end()) {
                 LOG(ERROR) << "Parameter type not found in serialized types: "
                            << *param_op->type << ", key: " << param_op->key;
                 continue;

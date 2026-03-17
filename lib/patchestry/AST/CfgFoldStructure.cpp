@@ -1206,15 +1206,17 @@ namespace patchestry::ast {
                 for (auto *s : n.stmts) block->AddStmt(s);
                 result = block;
             }
-            // Wrap with SLabel if this CNode carries a label from the original CFG.
-            // Clear the label after wrapping to prevent double-wrapping if
-            // LeafFromNode is called again on the same node — UNLESS the
-            // node is pinned (its label is a goto target that must survive).
+            // Wrap with SLabel if this CNode carries a label.
+            // Don't clear the label — it must persist so that the final
+            // emission (step 5) can emit the label at function scope for
+            // goto targets.  RefineDeadLabels removes unused labels.
+            // Guard against double-wrapping: if result is already an SLabel
+            // with the same name (from a prior call on this node), skip.
             if (!n.label.empty()) {
-                result = factory.Make<SLabel>(factory.Intern(n.label), result);
-                // Don't clear the label here — the node may be referenced
-                // again (e.g. by InlineCaseChain for shared blocks, or by
-                // final emission).  RefineDeadLabels removes unused labels.
+                auto *existing = result->dyn_cast<SLabel>();
+                if (!existing || existing->Name() != n.label) {
+                    result = factory.Make<SLabel>(factory.Intern(n.label), result);
+                }
             }
             return result;
         }
@@ -1686,13 +1688,19 @@ namespace patchestry::ast {
             chain_visited.insert(start_id);
             all_collapse.insert(start_id);
 
-            auto *body = LeafFromNode(bl, factory);
+            // Use structured content if already folded by a prior rule,
+            // otherwise build leaf from raw stmts.  Defer LeafFromNode
+            // until we know we need it (avoids orphaned SLabel wrappers).
+            auto get_body = [&]() -> SNode * {
+                if (bl.structured) return bl.structured;
+                return LeafFromNode(bl, factory);
+            };
 
             // No successors (return/tail) — just the body
-            if (bl.SizeOut() == 0) return body;
+            if (bl.SizeOut() == 0) return get_body();
 
             // Single successor to exit block — body only (emitter adds break)
-            if (bl.SizeOut() == 1 && bl.succs[0] == exit_id) return body;
+            if (bl.SizeOut() == 1 && bl.succs[0] == exit_id) return get_body();
 
             // Single successor — recursively inline the next block
             if (bl.SizeOut() == 1) {
@@ -1700,12 +1708,13 @@ namespace patchestry::ast {
                 auto *next_body = InlineCaseChain(
                     g, next, exit_id, factory, ctx, chain_visited, all_collapse);
                 if (next_body) {
+                    auto *this_body = get_body();
                     auto *seq = factory.Make<SSeq>();
-                    seq->AddChild(body);
+                    seq->AddChild(this_body);
                     seq->AddChild(next_body);
                     return seq;
                 }
-                return body;
+                return get_body();
             }
 
             // Multiple successors — use structured content if available,
@@ -1731,17 +1740,19 @@ namespace patchestry::ast {
                             clang::SourceLocation());
                     }
                     auto *if_node = factory.Make<SIfThenElse>(cond, t_body, f_body);
-                    if (!body || (llvm::isa<SBlock>(body)
-                        && static_cast<SBlock*>(body)->Stmts().empty())) {
+                    auto *this_body = get_body();
+                    bool empty_body = llvm::isa<SBlock>(this_body)
+                        && static_cast<SBlock*>(this_body)->Stmts().empty();
+                    if (empty_body) {
                         return if_node;
                     }
                     auto *seq = factory.Make<SSeq>();
-                    seq->AddChild(body);
+                    seq->AddChild(this_body);
                     seq->AddChild(if_node);
                     return seq;
                 }
             }
-            return body;
+            return get_body();
         }
 
         // Rule: Switch statement (with aggressive case-body inlining)

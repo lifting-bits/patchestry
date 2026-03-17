@@ -1631,8 +1631,7 @@ namespace patchestry::ast {
 
         auto *expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
-
-        if (!expr || !shift_value) {
+        if (!expr) {
             LOG(ERROR) << "Failed to create SUBPIECE input expression. key: " << op.key;
             return {};
         }
