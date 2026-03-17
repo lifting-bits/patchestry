@@ -205,10 +205,8 @@ namespace patchestry::ghidra {
         CompositeType(std::string name, Kind kind, uint32_t size)
             : VarnodeType(name, kind, size) {}
 
-        void AddComponents(std::string &name, const VarnodeType &type, uint32_t offset) {
-            components.emplace_back(
-                Component(name, offset, std::make_shared< VarnodeType >(type))
-            );
+        void AddComponents(std::string &name, const std::shared_ptr< VarnodeType > &type, uint32_t offset) {
+            components.emplace_back(Component(name, offset, type));
         }
 
         std::vector< Component > GetComponents(void) const { return components; }
@@ -223,18 +221,18 @@ namespace patchestry::ghidra {
         BitFieldType(std::string name, Kind kind, uint32_t size)
             : VarnodeType(name, kind, size) {}
 
-        void SetBaseType(const std::shared_ptr< VarnodeType > &base) { base_type = base; }
+        void SetBaseType(const std::shared_ptr< VarnodeType > &base) { base_type_ = base; }
 
-        std::shared_ptr< VarnodeType > GetBaseType() const { return base_type; }
+        std::shared_ptr< VarnodeType > GetBaseType() const { return base_type_; }
 
         uint32_t bit_offset = 0;
         uint32_t bit_size   = 0;
 
       private:
-        std::shared_ptr< VarnodeType > base_type;
+        std::shared_ptr< VarnodeType > base_type_;
     };
 
-    // StringType
+    // StringType — represents a string data type (e.g. char[] with charset info)
     struct StringType : public VarnodeType
     {
         StringType(std::string name, Kind kind, uint32_t size)

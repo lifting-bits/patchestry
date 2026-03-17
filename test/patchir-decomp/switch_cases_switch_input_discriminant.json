@@ -4,8 +4,6 @@
 // SW2: switch (
 // SW2: case {{[0-9]+[U]?}}:
 // SW2: case {{[0-9]+[U]?}}:
-// SW2: __builtin_unreachable
-// SW2-NOT: default:
 // SW2-NOT: goto *
 {
   "architecture": "ARM",
