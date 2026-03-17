@@ -814,14 +814,23 @@ namespace patchestry::ast {
                            << "\n";
                 return {};
             }
-            if (!disc->getType()->isIntegerType()) {
-                auto *cast_disc = make_cast(ctx, disc, ctx.IntTy, loc);
-                if (cast_disc == nullptr) {
-                    LOG(ERROR) << "BRANCHIND: failed to cast switch discriminant to int. key: "
-                               << op.key << "\n";
-                    return {};
+            // C promotes switch conditions to at least int width.  If the
+            // discriminant is narrower than int (e.g., unsigned char / short
+            // from Ghidra's "undefined" types), widen it so the case value
+            // bit widths match the CIR switch condition type.
+            {
+                auto disc_type = disc->getType();
+                bool needs_cast = !disc_type->isIntegerType()
+                    || ctx.getIntWidth(disc_type) < ctx.getIntWidth(ctx.IntTy);
+                if (needs_cast) {
+                    auto *cast_disc = make_cast(ctx, disc, ctx.IntTy, loc);
+                    if (cast_disc == nullptr) {
+                        LOG(ERROR) << "BRANCHIND: failed to cast switch discriminant to int. key: "
+                                   << op.key << "\n";
+                        return {};
+                    }
+                    disc = cast_disc;
                 }
-                disc = cast_disc;
             }
 
             auto *switch_stmt =
