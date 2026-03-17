@@ -307,7 +307,10 @@ namespace patchestry::ast {
         }
 
         auto result = sema().ImpCastExprToType(expr, to_type, kind);
-        assert(!result.isInvalid() && "Failed to make implicit cast expr");
+        if (result.isInvalid()) {
+            LOG(WARNING) << "make_implicit_cast failed, returning original expr\n";
+            return expr;
+        }
         return result.getAs< clang::Expr >();
     }
 
@@ -723,6 +726,11 @@ namespace patchestry::ast {
         auto loc = SourceLocation(ctx.getSourceManager(), op.key);
         auto *condition_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.condition));
+        if (!condition_expr) {
+            LOG(ERROR) << "Failed to create condition expression for cbranch. key: " << op.key
+                       << "\n";
+            return {};
+        }
 
         clang::Stmt *taken_stmt     = nullptr;
         clang::Stmt *not_taken_stmt = nullptr;
@@ -1187,12 +1195,18 @@ namespace patchestry::ast {
                 vnode_expr = make_implicit_cast(
                     ctx, vnode_expr, vnode_expr->getType(), clang::CastKind::CK_LValueToRValue
                 );
-                assert(vnode_expr != nullptr && "Failed to convert to rvalue");
+                if (!vnode_expr) {
+                    LOG(ERROR) << "Failed to convert call arg to rvalue. key: " << op.key << "\n";
+                    continue;
+                }
             }
             auto *arg = make_implicit_cast(
                 ctx, vnode_expr, arg_type, GetCastKind(ctx, vnode_expr->getType(), arg_type)
             );
-            assert(arg != nullptr && "Function argument is null");
+            if (!arg) {
+                LOG(ERROR) << "Failed to cast call argument. key: " << op.key << "\n";
+                arg = vnode_expr;  // use uncast expr as fallback
+            }
             arguments.push_back(arg);
         }
 
@@ -1266,6 +1280,10 @@ namespace patchestry::ast {
             }
 
             auto operation = operationFromKey(function, *op.target->operation);
+            if (!operation) {
+                LOG(ERROR) << "CALL target operation not found. key: " << op.key << "\n";
+                return {};
+            }
             auto [stmt, _] = function_builder().create_operation(ctx, *operation);
             auto result    = sema().BuildCallExpr(
                 nullptr, clang::dyn_cast< clang::Expr >(stmt), op_loc, arguments, op_loc
@@ -1572,6 +1590,10 @@ namespace patchestry::ast {
         }
         auto location = SourceLocation(ctx.getSourceManager(), op.key);
 
+        if (op.inputs[1].size > UINT32_MAX / 8U) {
+            LOG(ERROR) << "PIECE input size too large, would overflow. key: " << op.key;
+            return {};
+        }
         unsigned low_width = op.inputs[1].size * 8;
         auto merge_to_next = !op.output.has_value();
 
@@ -1659,6 +1681,11 @@ namespace patchestry::ast {
 
         auto *expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        if (!expr || !shift_value) {
+            LOG(ERROR) << "Failed to create SUBPIECE input expression. key: " << op.key;
+            return {};
+        }
 
         if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
             if (auto *casted_expr = make_cast(ctx, expr, op_type, op_location)) {
@@ -2374,12 +2401,12 @@ namespace patchestry::ast {
             for (auto *field : decl->fields()) {
                 auto offset =
                     static_cast< unsigned int >(layout.getFieldOffset(field->getFieldIndex()));
-                if (offset >= target_offset * 8U) {
+                if (offset >= static_cast< uint64_t >(target_offset) * 8U) {
                     return field;
                 }
             }
 
-            assert(false && "Failed to find field decl at offset, check!");
+            LOG(ERROR) << "Failed to find field decl at offset " << target_offset << "\n";
             return nullptr;
         };
 

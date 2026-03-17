@@ -110,8 +110,12 @@ namespace patchestry::ast {
                     addr = std::stoull(
                         key.substr(first_colon + 1, second_colon - first_colon - 1), nullptr, 16
                     );
-                } catch (...) {
-                    LOG(WARNING) << "BlockKeyComparator: failed to parse hex address in key: " << key;
+                } catch (const std::invalid_argument &) {
+                    LOG(WARNING) << "BlockKeyComparator: non-numeric hex address in key: " << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
+                } catch (const std::out_of_range &) {
+                    LOG(WARNING) << "BlockKeyComparator: hex address out of range in key: " << key;
                     return {std::numeric_limits< uint64_t >::max(),
                             std::numeric_limits< int64_t >::max()};
                 }
@@ -130,8 +134,11 @@ namespace patchestry::ast {
                 int64_t idx = 0;
                 try {
                     idx = std::stoll(idx_str);
-                } catch (...) {
-                    LOG(WARNING) << "BlockKeyComparator: failed to parse block index in key: " << key;
+                } catch (const std::invalid_argument &) {
+                    LOG(WARNING) << "BlockKeyComparator: non-numeric block index in key: " << key;
+                    return {addr, std::numeric_limits< int64_t >::max()};
+                } catch (const std::out_of_range &) {
+                    LOG(WARNING) << "BlockKeyComparator: block index out of range in key: " << key;
                     return {addr, std::numeric_limits< int64_t >::max()};
                 }
 
@@ -169,22 +176,30 @@ namespace patchestry::ast {
                     // taken_block before not_taken_block — mirrors BasicBlockReorderPass DFS
                     // order so the emitted block sequence is identical to what that pass
                     // would produce.
-                    if (op.taken_block) {
+                    // Only add successors that actually exist in the function's
+                    // basic_blocks map — phantom targets from stale JSON would
+                    // otherwise enter the DFS and silently become "unreachable".
+                    const auto &blocks = function.basic_blocks;
+                    if (op.taken_block && blocks.contains(*op.taken_block)) {
                         succs[key].push_back(*op.taken_block);
                     }
-                    if (op.not_taken_block) {
+                    if (op.not_taken_block && blocks.contains(*op.not_taken_block)) {
                         succs[key].push_back(*op.not_taken_block);
                     }
-                    if (op.target_block) {
+                    if (op.target_block && blocks.contains(*op.target_block)) {
                         succs[key].push_back(*op.target_block);
                     }
                     for (const auto &s : op.successor_blocks) {
-                        succs[key].push_back(s);
+                        if (blocks.contains(s)) {
+                            succs[key].push_back(s);
+                        }
                     }
                     for (const auto &sc : op.switch_cases) {
-                        succs[key].push_back(sc.target_block);
+                        if (blocks.contains(sc.target_block)) {
+                            succs[key].push_back(sc.target_block);
+                        }
                     }
-                    if (op.fallback_block.has_value()) {
+                    if (op.fallback_block.has_value() && blocks.contains(*op.fallback_block)) {
                         succs[key].push_back(*op.fallback_block);
                     }
                 }
@@ -261,7 +276,7 @@ namespace patchestry::ast {
         }
     }
 
-    void FunctionBuilder::initialize_op_builder(void) {
+    void FunctionBuilder::InitializeOpBuilder(void) {
         // If `op_builder` is initialized don't initailize them
         if (!op_builder) {
             op_builder =
@@ -338,8 +353,13 @@ namespace patchestry::ast {
                            << param_op->key;
                 continue;
             }
-            const auto &param_type =
-                type_builder.get().get_serialized_types().at(*param_op->type);
+            auto type_iter = type_builder.get().get_serialized_types().find(*param_op->type);
+            if (type_iter == type_builder.get().get_serialized_types().end()) {
+                LOG(ERROR) << "Parameter type not found in serialized types: "
+                           << *param_op->type << ", key: " << param_op->key;
+                continue;
+            }
+            const auto &param_type = type_iter->second;
             auto location = SourceLocation(ctx.getSourceManager(), param_op->key);
 
             auto *param_decl = clang::ParmVarDecl::Create(
@@ -706,9 +726,15 @@ namespace patchestry::ast {
             }
 
             const auto &operation = block.operations.at(operation_key);
+
+            // Save pending_materialized in case create_operation re-enters
+            // (e.g., create_temporary resolving a forward reference triggers
+            // nested operation building that appends to the same vector).
+            auto saved_pending = std::move(pending_materialized);
+            pending_materialized.clear();
+
             if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
-                // Drain any VarDecl materializations queued during create_operation
-                // (e.g., from create_temporary promoting a cached expr into a VarDecl).
+                // Drain any VarDecl materializations queued during create_operation.
                 // These must appear before the consuming statement in the output.
                 for (auto *pending : pending_materialized) {
                     stmt_vec.push_back(pending);
@@ -719,6 +745,13 @@ namespace patchestry::ast {
                 if (!should_merge_to_next) {
                     stmt_vec.push_back(stmt);
                 }
+            } else {
+                pending_materialized.clear();
+            }
+
+            // Restore any outer-level pending materializations
+            for (auto *s : saved_pending) {
+                pending_materialized.push_back(s);
             }
         }
 

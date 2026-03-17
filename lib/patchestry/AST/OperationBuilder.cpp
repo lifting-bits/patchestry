@@ -48,7 +48,7 @@ namespace patchestry::ast {
             }
         }
 
-        llvm_unreachable("Failed to find operation for varnode lookup key");
+        return std::nullopt;
     }
 
     clang::Stmt *OpBuilder::create_varnode(
@@ -92,7 +92,7 @@ namespace patchestry::ast {
 
     clang::Stmt *OpBuilder::create_parameter(clang::ASTContext &ctx, const Varnode &vnode) {
         if (!vnode.operation || vnode.kind != Varnode::VARNODE_PARAM) {
-            assert(false && "Invalid parameter varnode");
+            LOG(ERROR) << "Invalid parameter varnode\n";
             return nullptr;
         }
 
@@ -109,7 +109,7 @@ namespace patchestry::ast {
 
     clang::Stmt *OpBuilder::create_global(clang::ASTContext &ctx, const Varnode &vnode) {
         if (!vnode.global || vnode.kind != Varnode::VARNODE_GLOBAL) {
-            assert(false && "Invalid global varnode");
+            LOG(ERROR) << "Invalid global varnode\n";
             return {};
         }
 
@@ -150,18 +150,29 @@ namespace patchestry::ast {
         // via a recursive call (which will fall into Case 2).  This prevents re-execution
         // if create_temporary is called again for the same key before create_basic_block
         // reaches the defining block.
-        if (auto maybe_operation = operationFromKey(function, vnode.operation.value())) {
+        const auto &op_key = *vnode.operation;
+        if (resolving_temporaries.contains(op_key)) {
+            LOG(ERROR) << "Cyclic forward reference detected for temporary: " << op_key << "\n";
+            return {};
+        }
+        resolving_temporaries.insert(op_key);
+
+        clang::Stmt *result = nullptr;
+        if (auto maybe_operation = operationFromKey(function, op_key)) {
             auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
             if (stmt) {
-                function_builder().operation_stmts.emplace(*vnode.operation, stmt);
+                function_builder().operation_stmts.emplace(op_key, stmt);
                 // Recurse: will hit Case 1 (if already local) or Case 2.
-                return create_temporary(ctx, function, vnode);
+                result = create_temporary(ctx, function, vnode);
+            } else {
+                result = stmt;
             }
-            return stmt;
+        } else {
+            LOG(ERROR) << "Failed to get operation for key: " << op_key << "\n";
         }
 
-        assert(false && "Failed to get operation for key");
-        return {};
+        resolving_temporaries.erase(op_key);
+        return result;
     }
 
     clang::Stmt *OpBuilder::create_function(clang::ASTContext &ctx, const Varnode &vnode) {

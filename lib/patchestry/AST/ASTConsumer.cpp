@@ -88,7 +88,7 @@ namespace patchestry::ast {
                 ci, function, *type_builder, function_declarations, global_variable_declarations
             );
 
-            builder->initialize_op_builder();
+            builder->InitializeOpBuilder();
             func_builders.emplace_back(std::move(builder));
         }
 
