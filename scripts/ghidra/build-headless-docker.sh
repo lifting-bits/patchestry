@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Copyright (c) 2025, Trail of Bits, Inc.
 #

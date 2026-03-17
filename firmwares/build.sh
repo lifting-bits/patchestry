@@ -56,8 +56,8 @@ if [ ! -d "${script_dir}/repos/ventilator" ]; then
         "${script_dir}/repos/ventilator"
 fi
 cd "${script_dir}/repos/ventilator"
-git fetch --depth=1 origin ${VENTILATOR_COMMIT}
-git checkout -f ${VENTILATOR_COMMIT}
+git fetch --depth=1 origin "${VENTILATOR_COMMIT}"
+git checkout -f "${VENTILATOR_COMMIT}"
 cd "${script_dir}"
 
 # Build using Docker

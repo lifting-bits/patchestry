@@ -200,24 +200,37 @@ run_case() {
   fi
 
   local status="PASS"
-  {
-    echo "+ decompile-headless"
-    "${DECOMPILER_HEADLESS}" --input "${binary}" --function "${function_name}" --output "${json}"
-    echo "+ patchir-decomp"
-    "${PATCHIR_DECOMP}" -input "${json}" -emit-cir -output "${cir_prefix}"
-    echo "+ patchir-yaml-parser"
-    "${PATCHIR_YAML_PARSER}" "${spec}" --validate
-    echo "+ patchir-transform"
-    "${PATCHIR_TRANSFORM}" "${cir}" --spec "${spec}" -o "${patched_cir}"
-    echo "+ patchir-cir2llvm"
-    "${PATCHIR_CIR2LLVM}" -S "${patched_cir}" -o "${llvm_ir}"
-  } >> "${log_file}" 2>&1 || status="FAIL"
+  local failed_step=""
+  run_step() {
+    local step_name="$1"; shift
+    echo "+ ${step_name}" >> "${log_file}"
+    if ! "$@" >> "${log_file}" 2>&1; then
+      failed_step="${step_name}"
+      return 1
+    fi
+  }
+
+  if ! run_step "decompile-headless" \
+       "${DECOMPILER_HEADLESS}" --input "${binary}" --function "${function_name}" --output "${json}" \
+    || ! run_step "patchir-decomp" \
+       "${PATCHIR_DECOMP}" -input "${json}" -emit-cir -output "${cir_prefix}" \
+    || ! run_step "patchir-yaml-parser" \
+       "${PATCHIR_YAML_PARSER}" "${spec}" --validate \
+    || ! run_step "patchir-transform" \
+       "${PATCHIR_TRANSFORM}" "${cir}" --spec "${spec}" -o "${patched_cir}" \
+    || ! run_step "patchir-cir2llvm" \
+       "${PATCHIR_CIR2LLVM}" -S "${patched_cir}" -o "${llvm_ir}"; then
+    echo "Pipeline failed at step: ${failed_step}" >> "${log_file}"
+    status="FAIL"
+  fi
 
   if [[ "${status}" == "PASS" ]]; then
-    [[ -s "${json}" ]] || status="FAIL"
-    [[ -s "${cir}" ]] || status="FAIL"
-    [[ -s "${patched_cir}" ]] || status="FAIL"
-    [[ -s "${llvm_ir}" ]] || status="FAIL"
+    for check_file in "${json}" "${cir}" "${patched_cir}" "${llvm_ir}"; do
+      if [[ ! -s "${check_file}" ]]; then
+        echo "Expected non-empty file missing or empty: ${check_file}" >> "${log_file}"
+        status="FAIL"
+      fi
+    done
   fi
 
   if [[ "${status}" == "PASS" ]]; then

@@ -65,8 +65,12 @@ The targets list of `"host;AArch64;ARM;X86"` is intentional (to always build hos
 This must be the patched `trail-of-forks/clangir` toolchain, or an equivalent
 install built from the same fork. A stock Homebrew `llvm` or `llvm@20` install
 is not a supported substitute for host-native patchestry builds.
-The `.devcontainer/README-HOST-BUILD.md` workflow builds a Linux arm64 toolchain
-for container images; it is not a host-native macOS ClangIR install.
+
+> **Container vs host-native:** The
+> [`.devcontainer/README-HOST-BUILD.md`](.devcontainer/README-HOST-BUILD.md)
+> workflow builds a **Linux arm64** toolchain packaged into a Docker image
+> for the devcontainer workflow. It does not produce a host-native macOS
+> ClangIR install. For macOS host-native builds, use the CMake step below.
 
 
 6. Configure and build with the patched ClangIR toolchain you just installed:

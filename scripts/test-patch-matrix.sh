@@ -328,8 +328,12 @@ run_matrix_case() {
   } >>"${log_file}" 2>&1 || status="FAIL"
 
   if [[ "${status}" == "PASS" ]]; then
-    [[ -s "${patched_cir}" ]] || status="FAIL"
-    [[ -s "${llvm_ir}" ]] || status="FAIL"
+    for check_file in "${patched_cir}" "${llvm_ir}"; do
+      if [[ ! -s "${check_file}" ]]; then
+        echo "Expected non-empty file missing or empty: ${check_file}" >> "${log_file}"
+        status="FAIL"
+      fi
+    done
   fi
 
   if [[ "${status}" == "PASS" && -n "${cir_patterns}" ]]; then
@@ -383,7 +387,7 @@ run_negative_case() {
     echo "+ expecting failure"
   } >>"${log_file}"
 
-  if bash -lc "set -euo pipefail; ${command}" >>"${log_file}" 2>&1; then
+  if bash -c "set -euo pipefail; ${command}" >>"${log_file}" 2>&1; then
     echo "Command unexpectedly succeeded." >>"${log_file}"
     status="FAIL"
   fi
@@ -391,7 +395,7 @@ run_negative_case() {
   if [[ "${status}" == "PASS" ]]; then
     local error_pattern_array=()
     IFS='|' read -r -a error_pattern_array <<<"${error_patterns}"
-    check_patterns "${log_file}" "${error_pattern_array[@]}" || status="FAIL"
+    check_patterns "${log_file}" "${error_pattern_array[@]}" >>"${log_file}" 2>&1 || status="FAIL"
   fi
 
   append_summary \

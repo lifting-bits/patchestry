@@ -34,9 +34,11 @@ bool __patchestry_is_readable(const void* ptr, size_t size) {
     }
 
 #if defined(__APPLE__)
-    // Keep the macOS standalone build working without relying on Linux-style
-    // page residency probes. A more precise implementation would need Mach VM
-    // APIs; until then, treat non-null ranges as readable.
+    // macOS lacks Linux-style mincore page residency probes.  A precise
+    // implementation would use Mach VM APIs (mach_vm_region).  Until then,
+    // treat non-null ranges as readable so the standalone build links.
+    #warning "__patchestry_is_readable is a no-op stub on macOS — all non-null pointers report readable"
+    (void)size;
     return true;
 #else
     long page_size_long = sysconf(_SC_PAGESIZE);
