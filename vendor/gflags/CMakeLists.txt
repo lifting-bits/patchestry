@@ -34,12 +34,12 @@ if(NOT EXISTS "${src_dir}/CMakeLists.txt")
 endif()
 
 # This is the main build, setup and execute the nested build
-# to ensure the gflags library exists before continuing
-
-execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${build_dir}")
-
-# (b) Nested CMake run. May need more -D... options than shown here.
+# to ensure the gflags library exists before continuing. Use --fresh so host
+# and container reconfigures do not reuse incompatible caches.
 execute_process(COMMAND ${CMAKE_COMMAND}
+                        --fresh
+                        -S "${src_dir}"
+                        -B "${build_dir}"
                         -G "${CMAKE_GENERATOR}"
                         "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
                         "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
@@ -61,8 +61,7 @@ execute_process(COMMAND ${CMAKE_COMMAND}
                         -DINSTALL_STATIC_LIBS=ON
                         -DREGISTER_BUILD_DIR=OFF
                         -DREGISTER_INSTALL_PREFIX=OFF
-                        "${src_dir}"
-               WORKING_DIRECTORY "${build_dir}")
+               WORKING_DIRECTORY "${PROJECT_BINARY_DIR}")
 
 # (c) Build just mycomp in the nested build. Don't specify a --config
 #     because we cannot know what config the developer will be using

@@ -5,6 +5,8 @@
 .vscode/
 build/
 builds/
+firmwares/output/
+firmwares/repos/
 cmake-build-*/
 prefix/
 .clangd
@@ -16,4 +18,3 @@ _site/
 .classpath
 .project
 .settings
-

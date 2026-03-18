@@ -1,0 +1,27 @@
+# patches/cwe121_complex_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe121_complex_patches"
+  version: "1.0.0"
+  description: "CWE-121 complex stack overflow patches (loop-based strcat)"
+  author: "Security Team"
+  created: "2026-03-17"
+
+patches:
+  - name: "cwe121_bounded_strcat"
+    description: "Replace unbounded strcat with strncat respecting buffer capacity"
+    category: "memory_safety"
+    code_file: "patches/patch_strcat.c"
+    function_name: "patch::replace::strcat"
+    parameters:
+      - name: "dest"
+        type: "char*"
+        description: "Destination buffer"
+      - name: "src"
+        type: "const char*"
+        description: "Source string to append"
+      - name: "buf_size"
+        type: "size_t"
+        description: "Total buffer capacity"
