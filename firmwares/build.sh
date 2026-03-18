@@ -1,44 +1,58 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 mkdir -p "${script_dir}/output"
 mkdir -p "${script_dir}/repos"
 
+translate_to_host_path() {
+  local path="$1"
+  if [ -n "${HOST_WORKSPACE:-}" ]; then
+    echo "${path/#\/workspace/$HOST_WORKSPACE}"
+  else
+    echo "$path"
+  fi
+}
+
+host_script_dir="$(translate_to_host_path "${script_dir}")"
+host_output_dir="$(translate_to_host_path "${script_dir}/output")"
+host_repos_dir="$(translate_to_host_path "${script_dir}/repos")"
+
 # Repository commit hashes
 PULSEOX_COMMIT="54ed8ca6bec36cc13db8f6594e3bd9941937922a"
 BLOODLIGHT_COMMIT="fcc0daef9119ab09914b0c523e7d9d93aad36ea4"
-VENTILATOR_COMMIT="6165c82de293d66b71f43040a2f145ab70bb49c0"
+VENTILATOR_COMMIT="c49fb21130de8732908d7a3d8eaf8915239a5735"
 
 # Clone/update repositories if needed
 if [ ! -d "${script_dir}/repos/pulseox-firmware" ]; then
-    git clone --depth 1 https://github.com/IRNAS/pulseox-firmware.git \
-        "${script_dir}/repos/pulseox-firmware"
-    cd "${script_dir}/repos/pulseox-firmware"
-    git fetch --depth=1 origin ${PULSEOX_COMMIT}
-    git checkout ${PULSEOX_COMMIT}
-    git submodule update --init --recursive
-    patch -s -p1 < "${script_dir}/pulseox-firmware-patch.diff"
+  git clone --depth 1 https://github.com/IRNAS/pulseox-firmware.git \
+    "${script_dir}/repos/pulseox-firmware"
+  cd "${script_dir}/repos/pulseox-firmware"
+  git fetch --depth=1 origin "${PULSEOX_COMMIT}"
+  git checkout "${PULSEOX_COMMIT}"
+  git submodule update --init --recursive
+  patch -s -p1 <"${script_dir}/pulseox-firmware-patch.diff"
 fi
 
 if [ ! -d "${script_dir}/repos/bloodlight-firmware" ]; then
-    git clone --depth 1 https://github.com/kumarak/bloodlight-firmware.git \
-        "${script_dir}/repos/bloodlight-firmware"
-    cd "${script_dir}/repos/bloodlight-firmware"
-    git fetch --depth=1 origin ${BLOODLIGHT_COMMIT}
-    git checkout ${BLOODLIGHT_COMMIT}
-    git submodule update --init --recursive
-    patch -s -p1 < "${script_dir}/bloodlight-firmware-patch.diff"
+  git clone --depth 1 https://github.com/kumarak/bloodlight-firmware.git \
+    "${script_dir}/repos/bloodlight-firmware"
+  cd "${script_dir}/repos/bloodlight-firmware"
+  git fetch --depth=1 origin "${BLOODLIGHT_COMMIT}"
+  git checkout "${BLOODLIGHT_COMMIT}"
+  git submodule update --init --recursive
+  patch -s -p1 <"${script_dir}/bloodlight-firmware-patch.diff"
 fi
 
 if [ ! -d "${script_dir}/repos/ventilator" ]; then
-    git clone --depth 1 https://github.com/RespiraWorks/Ventilator.git \
+    git clone --depth 1 https://github.com/trail-of-forks/Ventilator.git \
         "${script_dir}/repos/ventilator"
 fi
 cd "${script_dir}/repos/ventilator"
-git fetch --depth=1 origin ${VENTILATOR_COMMIT}
-git checkout -f ${VENTILATOR_COMMIT}
+git fetch --depth=1 origin "${VENTILATOR_COMMIT}"
+git checkout -f "${VENTILATOR_COMMIT}"
+patch -s -p1 < "${script_dir}/ventilator-patch.diff"
 cd "${script_dir}"
 
 # Build using Docker
@@ -46,10 +60,10 @@ docker build -t firmware-builder "${script_dir}"
 
 # Build pulseox firmware
 docker run --rm \
-    -v "${script_dir}/repos/pulseox-firmware:/work/pulseox-firmware" \
-    -v "${script_dir}/output:/output" \
-    firmware-builder \
-    -c "git config --global --add safe.directory /work/pulseox-firmware && \
+  -v "${host_repos_dir}/pulseox-firmware:/work/pulseox-firmware" \
+  -v "${host_output_dir}:/output" \
+  firmware-builder \
+  -c "git config --global --add safe.directory /work/pulseox-firmware && \
              cd pulseox-firmware && \
              cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake && \
              cmake --build build -j\$(nproc) && \
@@ -57,10 +71,10 @@ docker run --rm \
 
 # Build bloodlight firmware
 docker run --rm \
-    -v "${script_dir}/repos/bloodlight-firmware:/work/bloodlight-firmware" \
-    -v "${script_dir}/output:/output" \
-    firmware-builder \
-    -c "git config --global --add safe.directory /work/bloodlight-firmware && \
+  -v "${host_repos_dir}/bloodlight-firmware:/work/bloodlight-firmware" \
+  -v "${host_output_dir}:/output" \
+  firmware-builder \
+  -c "git config --global --add safe.directory /work/bloodlight-firmware && \
              cd bloodlight-firmware && \
              make -C firmware/libopencm3 && \
              make -C firmware -j\$(nproc) && \
@@ -81,8 +95,8 @@ docker run --rm \
 docker build -t ventilator-builder -f "${script_dir}/Dockerfile.ventilator" "${script_dir}"
 
 docker run --rm \
-    -v "${script_dir}/repos/ventilator:/work/ventilator" \
-    -v "${script_dir}/output:/output" \
+    -v "${host_script_dir}/repos/ventilator:/work/ventilator" \
+    -v "${host_output_dir}:/output" \
     ventilator-builder \
     -c "set -e && \
              git config --global --add safe.directory /work/ventilator && \
@@ -101,9 +115,9 @@ docker run --rm \
              cd /work/ventilator/software/common && \
              pio pkg install -e native && \
              cd /work/ventilator/software/gui && \
-             conan profile detect --force 2>/dev/null ; \
-             cd /work/ventilator/software/gui && \
+             conan profile detect --force 2>/dev/null || true && \
              mkdir -p build && cd build && \
+             conan install .. --output-folder=. --build=missing -s build_type=Release && \
              cmake .. -DCMAKE_BUILD_TYPE=Release && \
              make -j\$(nproc) && \
              mkdir -p /output/ventilator && \

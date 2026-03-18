@@ -7,7 +7,9 @@
 cmake_minimum_required(VERSION 3.20.0)
 
 set(src_dir "${CMAKE_CURRENT_LIST_DIR}/src")
+set(overlay_dir "${CMAKE_CURRENT_LIST_DIR}/overlay")
 set(build_dir "${CMAKE_CURRENT_BINARY_DIR}/build")
+set(patched_src_dir "${CMAKE_CURRENT_BINARY_DIR}/src-patched")
 
 # Fetch the submodule if we don't yet have it.
 if(NOT EXISTS "${src_dir}/CMakeLists.txt")
@@ -37,9 +39,25 @@ if (PE_USE_VENDORED_CLANG)
   set(RELLIC_PREFIX_PATH ${PE_VENDOR_INSTALL_DIR})
 endif()
 
-execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${build_dir}")
+# Rellic uses FetchContent sub-builds under `_deps`; scrub them when switching
+# between host and container paths because `cmake --fresh` does not.
+execute_process(COMMAND ${CMAKE_COMMAND} -E rm -rf "${build_dir}/_deps")
+execute_process(COMMAND ${CMAKE_COMMAND} -E rm -rf "${patched_src_dir}")
+execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory "${src_dir}" "${patched_src_dir}")
+# Remove the submodule .git file from the patched copy — its relative gitdir
+# path (../../../.git/modules/...) won't resolve from the new location and
+# causes git_watcher.cmake to FATAL_ERROR during the rellic build.
+execute_process(COMMAND ${CMAKE_COMMAND} -E rm -f "${patched_src_dir}/.git")
+configure_file("${overlay_dir}/CMakeLists.txt" "${patched_src_dir}/CMakeLists.txt" COPYONLY)
+execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${patched_src_dir}/cmake")
+configure_file("${overlay_dir}/options.cmake" "${patched_src_dir}/cmake/options.cmake" COPYONLY)
 
+# Use --fresh so host and container reconfigures do not reuse incompatible
+# caches.
 execute_process(COMMAND ${CMAKE_COMMAND}
+                        --fresh
+                        -S "${patched_src_dir}"
+                        -B "${build_dir}"
                         -G "${CMAKE_GENERATOR}"
                         "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
                         "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
@@ -51,8 +69,9 @@ execute_process(COMMAND ${CMAKE_COMMAND}
                         "-Dglog_DIR=${PE_VENDOR_INSTALL_DIR}/lib/cmake/glog"
                         -DRELLIC_ENABLE_INSTALL=ON
                         -DRELLIC_ENABLE_TESTING=OFF
-                        "${src_dir}"
-               WORKING_DIRECTORY "${build_dir}")
+                        -DRELLIC_ENABLE_TOOLS=OFF
+                        -DGIT_FAIL_IF_NONZERO_EXIT=FALSE
+               WORKING_DIRECTORY "${PROJECT_BINARY_DIR}")
 
 # (c) Build just mycomp in the nested build. Don't specify a --config
 #     because we cannot know what config the developer will be using

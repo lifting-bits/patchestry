@@ -267,10 +267,14 @@ namespace patchestry::passes {
                 }
             }
 
-            // Check argument type if specified
+            // Check argument type if specified.  Use relaxed matching:
+            // check both the traced SSA type and the direct operand type
+            // (consistent with argument_matches behavior).
             if (!operand_match.type.empty()) {
                 auto variable_type = extract_ssa_value_type(operand);
-                if (!matches_type(variable_type, operand_match.type)) {
+                if (!matches_type(variable_type, operand_match.type)
+                    && !matches_type(operand.getType(), operand_match.type))
+                {
                     return false;
                 }
             }
