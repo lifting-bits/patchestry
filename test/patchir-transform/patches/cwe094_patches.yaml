@@ -1,0 +1,21 @@
+# patches/cwe094_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe094_patches"
+  version: "1.0.0"
+  description: "CWE-094 patches"
+  author: "Security Team"
+  created: "2026-03-17"
+
+patches:
+  - name: "cwe094_popen_allowlist"
+    description: "Inject allowlist check before popen()"
+    category: "access_control"
+    code_file: "patches/patch_popen.c"
+    function_name: "patch::before::popen"
+    parameters:
+      - name: "command"
+        type: "const void*"
+        description: "Command string to check against allowlist"
