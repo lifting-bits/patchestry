@@ -1,0 +1,224 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t1 >> /dev/null 2>&1
+//
+// RUN: %patchir-transform %t1.cir --spec %S/cwe078_replace.yaml -o %t2.cir
+// RUN: %file-check -vv -check-prefix=REPLACE %s --input-file %t2.cir
+// REPLACE: cir.call @patch__replace__system({{.*}}) {patchestry_operation = "cir.call"}
+//
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "create_port",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_ptr_char"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "unique:00000000:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "port_name",
+              "type": "t_ptr_char",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00000001:1:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "command",
+              "type": "t_array_char_512"
+            },
+            "unique:00000002:2:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "ret",
+              "type": "t_int"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000010:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00000000:0:0",
+            "unique:00000001:1:0",
+            "unique:00000002:2:0",
+            "entry.exit"
+          ]
+        },
+        "ram:10000010:0:basic": {
+          "operations": {
+            "ram:10000010:100:0": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "t_ptr_char",
+              "inputs": [
+                {
+                  "type": "t_array_char_512",
+                  "kind": "local",
+                  "operation": "unique:00000001:1:0"
+                }
+              ]
+            },
+            "ram:10000018:101:1": {
+              "mnemonic": "COPY",
+              "type": "t_ptr_char",
+              "inputs": [
+                {
+                  "type": "t_ptr_char",
+                  "kind": "string",
+                  "string_value": "stty -F %s raw"
+                }
+              ]
+            },
+            "ram:10000020:102:2": {
+              "mnemonic": "CALL",
+              "type": "t_int",
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000002:2:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000001",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_ptr_char",
+                  "kind": "temporary",
+                  "operation": "ram:10000010:100:0"
+                },
+                {
+                  "type": "t_ptr_char",
+                  "kind": "temporary",
+                  "operation": "ram:10000018:101:1"
+                },
+                {
+                  "type": "t_ptr_char",
+                  "kind": "parameter",
+                  "operation": "unique:00000000:0:0"
+                }
+              ]
+            },
+            "ram:10000028:103:3": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "t_ptr_char",
+              "inputs": [
+                {
+                  "type": "t_array_char_512",
+                  "kind": "local",
+                  "operation": "unique:00000001:1:0"
+                }
+              ]
+            },
+            "ram:10000030:104:4": {
+              "mnemonic": "CALL",
+              "type": "t_int",
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000002:2:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000002",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_ptr_char",
+                  "kind": "temporary",
+                  "operation": "ram:10000028:103:3"
+                }
+              ]
+            },
+            "ram:10000038:105:5": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "kind": "local",
+                  "operation": "unique:00000002:2:0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ram:10000010:100:0",
+            "ram:10000018:101:1",
+            "ram:10000020:102:2",
+            "ram:10000028:103:3",
+            "ram:10000030:104:4",
+            "ram:10000038:105:5"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "sprintf",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": true,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_ptr_char",
+          "t_ptr_char"
+        ]
+      }
+    },
+    "EXTERNAL:00000002": {
+      "name": "system",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_ptr_char"
+        ]
+      }
+    }
+  },
+  "types": {
+    "t_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "t_int": {
+      "name": "int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t_char": {
+      "name": "char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "t_ptr_char": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "t_char"
+    },
+    "t_array_char_512": {
+      "kind": "array",
+      "size": 512,
+      "num_elements": 512,
+      "element_type": "t_char"
+    }
+  }
+}
