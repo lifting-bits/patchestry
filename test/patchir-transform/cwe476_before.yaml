@@ -1,0 +1,39 @@
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe476-apply_before"
+  description: "Inject null pointer check before get_name"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-03-17"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/cwe476_patches.yaml"
+
+meta_patches:
+  - name: "cwe476_get_name_fix"
+    description: "Inject null pointer check before get_name"
+
+    patch_actions:
+      - id: "CWE-476-001"
+        description: "Check for NULL pointer before method call"
+
+        match:
+          - name: "get_name"
+            kind: "function"
+            function_context:
+              - name: "poke_process"
+
+        action:
+          - mode: "apply_before"
+            patch_id: "cwe476_null_check"
+            description: "Inject null pointer check before get_name"
+            arguments:
+              - name: "var_ptr"
+                source: "operand"
+                index: 0
