@@ -1,0 +1,21 @@
+# patches/cwe476_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe476_patches"
+  version: "1.0.0"
+  description: "CWE-476 patches"
+  author: "Security Team"
+  created: "2026-03-17"
+
+patches:
+  - name: "cwe476_null_check"
+    description: "Check for NULL pointer before method call"
+    category: "memory_safety"
+    code_file: "patches/patch_get_name.c"
+    function_name: "patch::before::get_name"
+    parameters:
+      - name: "var_ptr"
+        type: "const void*"
+        description: "Pointer to validate"
