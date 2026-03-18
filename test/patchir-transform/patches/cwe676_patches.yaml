@@ -1,0 +1,27 @@
+# patches/cwe676_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe676_patches"
+  version: "1.0.0"
+  description: "CWE-676 patches"
+  author: "Security Team"
+  created: "2026-03-17"
+
+patches:
+  - name: "cwe676_bounded_strcpy"
+    description: "Replace unbounded strcpy with strncpy + null terminator"
+    category: "memory_safety"
+    code_file: "patches/patch_strcpy.c"
+    function_name: "patch::replace::strcpy"
+    parameters:
+      - name: "dest"
+        type: "void*"
+        description: "Destination buffer"
+      - name: "src"
+        type: "const void*"
+        description: "Source string"
+      - name: "max_size"
+        type: "uint32_t"
+        description: "Maximum buffer size"

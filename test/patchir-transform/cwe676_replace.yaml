@@ -1,0 +1,45 @@
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe676-replace"
+  description: "Replace unsafe strcpy with bounded strncpy"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-03-17"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/cwe676_patches.yaml"
+
+meta_patches:
+  - name: "cwe676_strcpy_fix"
+    description: "Replace unsafe strcpy with bounded strncpy"
+
+    patch_actions:
+      - id: "CWE-676-001"
+        description: "Replace unbounded strcpy with strncpy + null terminator"
+
+        match:
+          - name: "strcpy"
+            kind: "function"
+            function_context:
+              - name: "set_name"
+
+        action:
+          - mode: "replace"
+            patch_id: "cwe676_bounded_strcpy"
+            description: "Replace unsafe strcpy with bounded strncpy"
+            arguments:
+              - name: "dest"
+                source: "operand"
+                index: 0
+              - name: "src"
+                source: "operand"
+                index: 1
+              - name: "max_size"
+                source: "constant"
+                value: 64
