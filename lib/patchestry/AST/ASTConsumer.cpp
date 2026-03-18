@@ -107,7 +107,7 @@ namespace patchestry::ast {
                 continue;
             }
 
-            auto var_type       = type_builder->get_serialized_types().at(variable.type);
+            auto var_type       = type_builder->get_serialized_type(variable.type);
             auto location       = SourceLocation(ctx.getSourceManager(), key);
             auto sanitized_name = SanitizeKeyToIdent(variable.name);
             auto *var_decl      = clang::VarDecl::Create(

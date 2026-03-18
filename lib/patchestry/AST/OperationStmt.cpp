@@ -1376,7 +1376,7 @@ namespace patchestry::ast {
             std::vector< clang::QualType > param_types;
             for (const auto &input : op.inputs) {
                 if (type_builder().get_serialized_types().contains(input.type_key)) {
-                    param_types.push_back(type_builder().get_serialized_types().at(input.type_key));
+                    param_types.push_back(type_builder().get_serialized_type(input.type_key));
                 } else {
                     param_types.push_back(ctx.IntTy); // Fallback
                 }
@@ -1385,7 +1385,7 @@ namespace patchestry::ast {
             // Infer return type from op.type
             clang::QualType return_type = ctx.VoidTy;
             if (op.type && type_builder().get_serialized_types().contains(*op.type)) {
-                return_type = type_builder().get_serialized_types().at(*op.type);
+                return_type = type_builder().get_serialized_type(*op.type);
             }
 
             // Build function type and pointer type
@@ -2244,7 +2244,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_builder().get_serialized_type(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2320,7 +2320,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_builder().get_serialized_type(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2359,7 +2359,7 @@ namespace patchestry::ast {
 
         auto merge_to_next = !op.output.has_value();
 
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_builder().get_serialized_type(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2453,7 +2453,7 @@ namespace patchestry::ast {
 
         auto merge_to_next = !op.output.has_value();
 
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_builder().get_serialized_type(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2583,7 +2583,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_builder().get_serialized_type(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
