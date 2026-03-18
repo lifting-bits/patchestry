@@ -1,0 +1,48 @@
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe122-replace"
+  description: "Fix heap buffer overflow by bounding memcpy to allocation size"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-03-17"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/cwe122_patches.yaml"
+
+meta_patches:
+  - name: "cwe122_memcpy_fix"
+    description: "Cap memcpy to allocation size in process_rx"
+
+    patch_actions:
+      - id: "CWE-122-001"
+        description: "Replace unbounded memcpy in process_rx"
+
+        match:
+          - name: "memcpy"
+            kind: "function"
+            function_context:
+              - name: "process_rx"
+
+        action:
+          - mode: "replace"
+            patch_id: "cwe122_bounded_memcpy"
+            description: "Replace memcpy with bounded version"
+            arguments:
+              - name: "dest"
+                source: "operand"
+                index: 0
+              - name: "src"
+                source: "operand"
+                index: 1
+              - name: "n"
+                source: "operand"
+                index: 2
+              - name: "max_size"
+                source: "constant"
+                value: 256

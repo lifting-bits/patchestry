@@ -1,0 +1,30 @@
+# patches/cwe122_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe122_patches"
+  version: "1.0.0"
+  description: "CWE-122 heap buffer overflow patches"
+  author: "Security Team"
+  created: "2026-03-17"
+
+patches:
+  - name: "cwe122_bounded_memcpy"
+    description: "Replace unbounded memcpy with size-capped version"
+    category: "memory_safety"
+    code_file: "patches/patch_memcpy.c"
+    function_name: "patch::replace::memcpy"
+    parameters:
+      - name: "dest"
+        type: "void*"
+        description: "Destination buffer"
+      - name: "src"
+        type: "const void*"
+        description: "Source buffer"
+      - name: "n"
+        type: "size_t"
+        description: "Original requested size"
+      - name: "max_size"
+        type: "size_t"
+        description: "Maximum allowed copy size"
