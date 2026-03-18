@@ -1,0 +1,51 @@
+diff --git a/software/controller/platformio/build_config/stm32_ldscript.ld b/software/controller/platformio/build_config/stm32_ldscript.ld
+index ef2d7e7..d322d00 100644
+--- a/software/controller/platformio/build_config/stm32_ldscript.ld
++++ b/software/controller/platformio/build_config/stm32_ldscript.ld
+@@ -188,6 +188,10 @@ SECTIONS
+ */
+ 
+   /* Remove information from the compiler libraries */
++  /* Provide end symbol for _sbrk in libnosys */
++  PROVIDE(end = _ebss);
++  PROVIDE(_end = _ebss);
++
+   /DISCARD/ :
+   {
+     libc.a ( * )
+diff --git a/software/controller/platformio/build_config/stm32_scripts.py b/software/controller/platformio/build_config/stm32_scripts.py
+index 5cca218..0856d42 100644
+--- a/software/controller/platformio/build_config/stm32_scripts.py
++++ b/software/controller/platformio/build_config/stm32_scripts.py
+@@ -23,4 +23,4 @@ env.Append(
+ # These link flags tell the linker that the processor we're using has
+ # hardware floating point, so the software floating point libraries aren't
+ # needed.
+-env.Append(LINKFLAGS=["-mfpu=fpv4-sp-d16", "-mfloat-abi=hard", "-nostartfiles"])
++env.Append(LINKFLAGS=["-mfpu=fpv4-sp-d16", "-mfloat-abi=hard", "-nostartfiles", "--specs=nosys.specs"])
+diff --git a/software/gui/src/gui_state_container.h b/software/gui/src/gui_state_container.h
+index 43094f5..c6ef700 100644
+--- a/software/gui/src/gui_state_container.h
++++ b/software/gui/src/gui_state_container.h
+@@ -117,6 +117,10 @@ class GuiStateContainer : public QObject {
+ 
+   AlarmManager *GetAlarmManager();
+ 
++  // Run a system diagnostic command and return its output.
++  // Intended for maintenance use (e.g., "df -h", "uptime", "uname -a").
++  Q_INVOKABLE QString runDiagnostic(const QString &command);
++
+  signals:
+   void measurements_changed();
+   void params_changed();
+@@ -128,10 +132,6 @@ class GuiStateContainer : public QObject {
+   void IsDebugBuildChanged();
+   void AlarmManagerChanged();
+ 
+-  // Run a system diagnostic command and return its output.
+-  // Intended for maintenance use (e.g., "df -h", "uptime", "uname -a").
+-  Q_INVOKABLE QString runDiagnostic(const QString &command);
+-
+  public slots:
+   // Adds a data point of controller status to the history.
+   void controller_status_changed(SteadyInstant now, const ControllerStatus &status);

@@ -30,7 +30,6 @@ meta_patches:
             kind: "function"
             argument_matches:
               - index: 0
-                name: "var6"
                 type: "float"
 
         # Actions to Apply
@@ -42,5 +41,5 @@ meta_patches:
             # Arguments
             arguments:
               - name: "function_argument"
-                source: "variable"
-                symbol: "var6"
+                source: "operand"
+                index: 0

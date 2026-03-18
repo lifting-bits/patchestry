@@ -33,7 +33,6 @@ meta_patches:
               - name: "/.*update.*/"
             operand_matches:
               - index: 0
-                name: "var6"
                 type: "float"
             symbol_matches:
               - name: "spo2_lookup"
