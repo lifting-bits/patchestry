@@ -3,6 +3,9 @@
 // RUN: test -e %t.c
 // RUN: %patchir-decomp -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=CGEN %s --input-file %t.c
+// CGEN: bl_device__process_entry
+// CGEN-NOT: __stack_chk_fail
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // CIR: cir.func @bl_device__process_entry
 // RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir

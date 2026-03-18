@@ -120,6 +120,8 @@ namespace patchestry::ast {
         std::reference_wrapper< std::unordered_map< std::string, clang::VarDecl * > >
             global_var_list;
 
+        bool is_stack_canary_operation(const Operation &op) const;
+
         std::unordered_map< std::string, clang::VarDecl * > local_variables;
         std::unordered_map< std::string, clang::LabelDecl * > labels_declaration;
         std::unordered_map< std::string, clang::Stmt * > operation_stmts;
