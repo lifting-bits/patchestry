@@ -103,7 +103,7 @@ namespace llvm::yaml {
     {
         static void mapping(IO &io, ArgumentMatch &arg) {
             io.mapRequired("index", arg.index);
-            io.mapRequired("name", arg.name);
+            io.mapOptional("name", arg.name);
             io.mapOptional("type", arg.type);
         }
     };
