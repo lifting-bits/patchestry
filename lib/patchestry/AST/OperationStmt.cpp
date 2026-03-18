@@ -1706,7 +1706,7 @@ namespace patchestry::ast {
         // types.  Cast the expression to an unsigned integer of the same width first
         // so that the shift/mask operations are well-formed.
         if (expr->getType()->isFloatingType()) {
-            auto float_size = ctx.getTypeSize(expr->getType());
+            auto float_size = static_cast< unsigned >(ctx.getTypeSize(expr->getType()));
             auto int_type   = ctx.getIntTypeForBitwidth(float_size, /*Signed=*/false);
             if (int_type.isNull()) {
                 int_type = ctx.UnsignedIntTy;
