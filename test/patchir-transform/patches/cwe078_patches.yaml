@@ -1,0 +1,24 @@
+# patches/cwe078_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe078_patches"
+  version: "1.0.0"
+  description: "CWE-78 command injection patches"
+  author: "Security Team"
+  created: "2026-03-17"
+
+patches:
+  - name: "cwe078_sanitized_system"
+    description: "Replace system() with shell metacharacter validation"
+    category: "injection"
+    code_file: "patches/patch_system.c"
+    function_name: "patch::replace::system"
+    parameters:
+      - name: "command"
+        type: "const char*"
+        description: "Command string to validate and execute"
+      - name: "max_len"
+        type: "size_t"
+        description: "Maximum command string length to scan"
