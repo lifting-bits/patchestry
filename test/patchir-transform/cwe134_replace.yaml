@@ -1,0 +1,45 @@
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe134-replace"
+  description: "Prevent format string attacks by hardcoding %s format"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-03-17"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/cwe134_patches.yaml"
+
+meta_patches:
+  - name: "cwe134_snprintf_fix"
+    description: "Prevent format string attacks by hardcoding %s format"
+
+    patch_actions:
+      - id: "CWE-134-001"
+        description: "Replace snprintf with hardcoded format string"
+
+        match:
+          - name: "snprintf"
+            kind: "function"
+            function_context:
+              - name: "set_trace_var"
+
+        action:
+          - mode: "replace"
+            patch_id: "cwe134_safe_snprintf"
+            description: "Prevent format string attacks by hardcoding %s format"
+            arguments:
+              - name: "buf"
+                source: "operand"
+                index: 0
+              - name: "size"
+                source: "operand"
+                index: 1
+              - name: "user_str"
+                source: "operand"
+                index: 2

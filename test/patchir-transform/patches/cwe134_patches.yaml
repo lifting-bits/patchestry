@@ -1,0 +1,27 @@
+# patches/cwe134_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe134_patches"
+  version: "1.0.0"
+  description: "CWE-134 patches"
+  author: "Security Team"
+  created: "2026-03-17"
+
+patches:
+  - name: "cwe134_safe_snprintf"
+    description: "Replace snprintf with hardcoded format string"
+    category: "input_validation"
+    code_file: "patches/patch_snprintf.c"
+    function_name: "patch::replace::snprintf"
+    parameters:
+      - name: "buf"
+        type: "void*"
+        description: "Destination buffer"
+      - name: "size"
+        type: "uint32_t"
+        description: "Buffer size"
+      - name: "user_str"
+        type: "const void*"
+        description: "User-supplied string"
