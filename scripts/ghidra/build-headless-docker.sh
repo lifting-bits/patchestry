@@ -10,23 +10,12 @@ set -euo pipefail
 
 SCRIPTS_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
 
-translate_to_host_path() {
-  local path="$1"
-  if [ -n "${HOST_WORKSPACE:-}" ]; then
-    echo "${path/#\/workspace/$HOST_WORKSPACE}"
-  else
-    echo "$path"
-  fi
-}
-
-HOST_SCRIPTS_DIR="$(translate_to_host_path "${SCRIPTS_DIR}")"
-
 echo "Using SCRIPTS_DIR: $SCRIPTS_DIR"
 
 DOCKER_BUILDKIT=1 docker build \
   --no-cache \
   -t trailofbits/patchestry-decompilation:latest \
-  -f "${HOST_SCRIPTS_DIR}/decompile-headless.dockerfile" \
-  "${HOST_SCRIPTS_DIR}"
+  -f "${SCRIPTS_DIR}/decompile-headless.dockerfile" \
+  "${SCRIPTS_DIR}"
 
 echo "Docker image built successfully."

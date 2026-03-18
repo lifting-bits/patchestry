@@ -55,7 +55,7 @@ git checkout -f "${VENTILATOR_COMMIT}"
 cd "${script_dir}"
 
 # Build using Docker
-docker build -t firmware-builder "${host_script_dir}"
+docker build -t firmware-builder "${script_dir}"
 
 # Build pulseox firmware
 docker run --rm \
@@ -94,8 +94,8 @@ docker run --rm \
 docker build -t ventilator-builder -f "${script_dir}/Dockerfile.ventilator" "${script_dir}"
 
 docker run --rm \
-    -v "${script_dir}/repos/ventilator:/work/ventilator" \
-    -v "${script_dir}/output:/output" \
+    -v "${host_script_dir}/repos/ventilator:/work/ventilator" \
+    -v "${host_output_dir}:/output" \
     ventilator-builder \
     -c "set -e && \
              git config --global --add safe.directory /work/ventilator && \
