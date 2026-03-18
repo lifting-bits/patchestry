@@ -10,7 +10,9 @@ find_package(Git REQUIRED)
 
 execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${PE_VENDOR_INSTALL_DIR}")
 
-set(CMAKE_LINKER_TYPE LLD CACHE STRING "Linker type for the Patchestry build should overall be LLD!")
+if(UNIX AND NOT APPLE)
+  set(CMAKE_LINKER_TYPE LLD CACHE STRING "Linker type for the Patchestry build should overall be LLD!")
+endif()
 
 # Build components in dependency order
 add_subdirectory(gflags)

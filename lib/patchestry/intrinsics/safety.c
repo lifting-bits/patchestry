@@ -32,20 +32,34 @@ bool __patchestry_is_readable(const void* ptr, size_t size) {
     if (ptr == NULL || size == 0) { // NOLINT
         return false;
     }
-    
-    size_t page_size = getpagesize();
+
+#if defined(__APPLE__)
+    // macOS lacks Linux-style mincore page residency probes.  A precise
+    // implementation would use Mach VM APIs (mach_vm_region).  Until then,
+    // treat non-null ranges as readable so the standalone build links.
+    #warning "__patchestry_is_readable is a no-op stub on macOS — all non-null pointers report readable"
+    (void)size;
+    return true;
+#else
+    long page_size_long = sysconf(_SC_PAGESIZE);
+    if (page_size_long <= 0) {
+        return false;
+    }
+
+    size_t page_size = (size_t)page_size_long;
     uintptr_t start = ((uintptr_t)ptr) & ~(page_size - 1);
     size_t pages = (((uintptr_t)ptr + size - start) + page_size - 1) / page_size;
-    
+
     unsigned char* vec = malloc(pages);
     if (!vec) {
         return false;
     }
-    
+
     int result = mincore((void*)start, pages * page_size, vec);
     free(vec);
-    
+
     return result == 0;
+#endif
 }
 
 bool __patchestry_is_writable(const void* ptr, size_t size) { // NOLINT

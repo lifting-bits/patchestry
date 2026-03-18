@@ -1225,7 +1225,11 @@ namespace patchestry::ast {
         auto result = sema().BuildCallExpr(
             nullptr, clang::dyn_cast< clang::Expr >(refexpr), op_loc, arguments, op_loc
         );
-        assert(!result.isInvalid() && "Failed to build call expr");
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Failed to build call expr for '"
+                       << callee->getNameAsString() << "'. key: " << op.key << "\n";
+            return nullptr;
+        }
         return result.getAs< clang::Expr >();
     }
 
@@ -1255,6 +1259,11 @@ namespace patchestry::ast {
                 function_builder().function_list.get().at(*op.target->function);
 
             call_expr = build_callexpr_from_function(ctx, function, op);
+            if (!call_expr) {
+                LOG(ERROR) << "Failed to create call expression for '"
+                           << callee->getNameAsString() << "'. key: " << op.key << "\n";
+                return {};
+            }
             if (callee->getReturnType()->isVoidType()) {
                 return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
             }
@@ -1690,6 +1699,33 @@ namespace patchestry::ast {
         if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
             if (auto *casted_expr = make_cast(ctx, expr, op_type, op_location)) {
                 expr = casted_expr;
+            }
+        }
+
+        // SUBPIECE uses bitwise shift and mask which are invalid on floating-point
+        // types.  Cast the expression to an unsigned integer of the same width first
+        // so that the shift/mask operations are well-formed.
+        if (expr->getType()->isFloatingType()) {
+            auto float_size = static_cast< unsigned >(ctx.getTypeSize(expr->getType()));
+            auto int_type   = ctx.getIntTypeForBitwidth(float_size, /*Signed=*/false);
+            if (int_type.isNull()) {
+                // No exact-width integer (e.g. 80-bit long double).
+                // Use the smallest standard type that covers all bits.
+                if (float_size <= 32) {
+                    int_type = ctx.UnsignedIntTy;
+                } else if (float_size <= 64) {
+                    int_type = ctx.UnsignedLongLongTy;
+                } else {
+                    int_type = ctx.getIntTypeForBitwidth(128, /*Signed=*/false);
+                    if (int_type.isNull()) {
+                        int_type = ctx.UnsignedLongLongTy;
+                    }
+                }
+            }
+            expr = make_cast(ctx, expr, int_type, op_location);
+            if (!expr) {
+                LOG(ERROR) << "SUBPIECE failed to cast float to integer. key: " << op.key;
+                return {};
             }
         }
 
