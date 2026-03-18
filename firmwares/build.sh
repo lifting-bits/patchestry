@@ -3,14 +3,8 @@
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-repo_root=$(cd "${script_dir}/.." && pwd)
 mkdir -p "${script_dir}/output"
 mkdir -p "${script_dir}/repos"
-
-if [ -z "${BUILDX_CONFIG:-}" ]; then
-  export BUILDX_CONFIG="${repo_root}/builds/docker-buildx/firmwares"
-fi
-mkdir -p "${BUILDX_CONFIG}"
 
 translate_to_host_path() {
   local path="$1"

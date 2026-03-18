@@ -9,12 +9,6 @@ set -euo pipefail
 # This script preserves directory state for use in CI.
 
 SCRIPTS_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
-REPO_ROOT="$(cd "${SCRIPTS_DIR}/../.." && pwd)"
-
-if [ -z "${BUILDX_CONFIG:-}" ]; then
-  export BUILDX_CONFIG="${REPO_ROOT}/builds/docker-buildx/ghidra"
-fi
-mkdir -p "${BUILDX_CONFIG}"
 
 translate_to_host_path() {
   local path="$1"
@@ -28,7 +22,6 @@ translate_to_host_path() {
 HOST_SCRIPTS_DIR="$(translate_to_host_path "${SCRIPTS_DIR}")"
 
 echo "Using SCRIPTS_DIR: $SCRIPTS_DIR"
-echo "Using BUILDX_CONFIG: $BUILDX_CONFIG"
 
 DOCKER_BUILDKIT=1 docker build \
   --no-cache \
