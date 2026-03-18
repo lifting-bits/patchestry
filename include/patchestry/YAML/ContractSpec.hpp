@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <charconv>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -24,6 +25,26 @@
 
 namespace patchestry::passes {
     namespace contract {
+
+        struct ParseResult {
+            std::optional< uint64_t > value;
+            std::string error;  // non-empty on failure
+        };
+
+        inline auto ParseUint64(std::string_view text) -> ParseResult {
+            if (text.empty()) {
+                return { std::nullopt, "empty string" };
+            }
+            uint64_t value = 0;
+            auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+            if (ec == std::errc::result_out_of_range) {
+                return { std::nullopt, "value out of range for uint64" };
+            }
+            if (ec != std::errc{} || ptr != text.data() + text.size()) {
+                return { std::nullopt, "not a valid integer" };
+            }
+            return { value, {} };
+        }
 
         // Forward declarations from contract dialect
         namespace attr_types {
@@ -351,10 +372,13 @@ namespace llvm::yaml {
                 } else if (target_str.starts_with("arg")) {
                     pred.target = ::contracts::TargetKind::Arg;
                     // Extract the index from "arg0", "arg1", etc.
-                    try {
-                        pred.arg_index = std::stoull(target_str.substr(3));
-                    } catch (...) {
-                        io.setError("Invalid argument index in target: " + target_str);
+                    auto result =
+                        ::patchestry::passes::contract::ParseUint64(target_str.substr(3));
+                    if (result.value) {
+                        pred.arg_index = *result.value;
+                    } else {
+                        io.setError("Invalid argument index in target: " + target_str
+                                    + " (" + result.error + ")");
                         return;
                     }
                 } else if (target_str == "symbol") {
@@ -392,10 +416,12 @@ namespace llvm::yaml {
             std::string align_str;
             io.mapOptional("align", align_str);
             if (!align_str.empty()) {
-                try {
-                    pred.align = std::stoull(align_str);
-                } catch (...) {
-                    io.setError("Invalid alignment value: " + align_str);
+                auto align_result = ::patchestry::passes::contract::ParseUint64(align_str);
+                if (align_result.value) {
+                    pred.align = *align_result.value;
+                } else {
+                    io.setError("Invalid alignment value: " + align_str
+                                + " (" + align_result.error + ")");
                     return;
                 }
             }
