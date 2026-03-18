@@ -111,8 +111,6 @@ docker run --rm \
              bash common/common.sh generate && \
              cd controller && \
              pio run -e stm32 && \
-             cd /work/ventilator/software/common && \
-             pio pkg install -e native && \
              cd /work/ventilator/software/gui && \
              conan profile detect --force 2>/dev/null ; \
              cd /work/ventilator/software/gui && \
