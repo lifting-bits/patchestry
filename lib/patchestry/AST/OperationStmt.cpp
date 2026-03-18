@@ -1709,7 +1709,18 @@ namespace patchestry::ast {
             auto float_size = static_cast< unsigned >(ctx.getTypeSize(expr->getType()));
             auto int_type   = ctx.getIntTypeForBitwidth(float_size, /*Signed=*/false);
             if (int_type.isNull()) {
-                int_type = ctx.UnsignedIntTy;
+                // No exact-width integer (e.g. 80-bit long double).
+                // Use the smallest standard type that covers all bits.
+                if (float_size <= 32) {
+                    int_type = ctx.UnsignedIntTy;
+                } else if (float_size <= 64) {
+                    int_type = ctx.UnsignedLongLongTy;
+                } else {
+                    int_type = ctx.getIntTypeForBitwidth(128, /*Signed=*/false);
+                    if (int_type.isNull()) {
+                        int_type = ctx.UnsignedLongLongTy;
+                    }
+                }
             }
             expr = make_cast(ctx, expr, int_type, op_location);
             if (!expr) {
