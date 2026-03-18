@@ -44,6 +44,10 @@ endif()
 execute_process(COMMAND ${CMAKE_COMMAND} -E rm -rf "${build_dir}/_deps")
 execute_process(COMMAND ${CMAKE_COMMAND} -E rm -rf "${patched_src_dir}")
 execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory "${src_dir}" "${patched_src_dir}")
+# Remove the submodule .git file from the patched copy — its relative gitdir
+# path (../../../.git/modules/...) won't resolve from the new location and
+# causes git_watcher.cmake to FATAL_ERROR during the rellic build.
+execute_process(COMMAND ${CMAKE_COMMAND} -E rm -f "${patched_src_dir}/.git")
 configure_file("${overlay_dir}/CMakeLists.txt" "${patched_src_dir}/CMakeLists.txt" COPYONLY)
 execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${patched_src_dir}/cmake")
 configure_file("${overlay_dir}/options.cmake" "${patched_src_dir}/cmake/options.cmake" COPYONLY)
@@ -66,6 +70,7 @@ execute_process(COMMAND ${CMAKE_COMMAND}
                         -DRELLIC_ENABLE_INSTALL=ON
                         -DRELLIC_ENABLE_TESTING=OFF
                         -DRELLIC_ENABLE_TOOLS=OFF
+                        -DGIT_FAIL_IF_NONZERO_EXIT=FALSE
                WORKING_DIRECTORY "${PROJECT_BINARY_DIR}")
 
 # (c) Build just mycomp in the nested build. Don't specify a --config
