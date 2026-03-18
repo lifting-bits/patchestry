@@ -239,11 +239,12 @@ Operation-based matching is supported only for patches, meaning it is not suppor
 
 #### Operand Match Fields (Operation-Based Matching)
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| `index` | Position of the operand (0-based) | `0` (first operand), `1` (second operand) |
-| `name` | Name of the operand variable | `"addr"`, `"/.*buffer.*/` |
-| `type` | Type of the operand | `"int32*"` |
+| Field | Description | Required | Example |
+|-------|-------------|----------|---------|
+| `index` | Position of the operand (0-based) | Yes | `0` (first operand), `1` (second operand) |
+| `name` | Name of the operand variable | No | `"addr"`, `"/.*buffer.*/` |
+| `type` | Type of the operand | No | `"int32*"` |
+
 
 Common operand patterns:
 - `cir.load`: operand 0 = address to load from
@@ -253,11 +254,12 @@ Common operand patterns:
 
 #### Argument Match Fields (Function-Based Matching)
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| `index` | Position of the argument (0-based) | `1` |
-| `name` | Name of the argument | `"buff"` |
-| `type` | Type of the argument | `"void*"` |
+| Field | Description | Required | Example |
+|-------|-------------|----------|---------|
+| `index` | Position of the argument (0-based) | Yes | `1` |
+| `name` | Name of the argument | No | `"buff"` |
+| `type` | Type of the argument | No | `"void*"` |
+
 
 #### Variable Match Fields  (Function-Based Matching)
 
