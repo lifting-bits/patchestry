@@ -84,6 +84,12 @@ def get_cir_symbol(func_obj):
     return name
 
 
+# Compiler-inserted stack-protector helpers that FunctionBuilder strips during
+# AST construction. They are intentionally absent from the decompiled output,
+# so the call-target verifier must not require them.
+CANARY_CALLEES = frozenset({"__stack_chk_fail", "___stack_chk_fail"})
+
+
 def collect_call_targets(func, functions):
     """Collect unique direct callee names and count indirect calls."""
     callees = set()
@@ -96,7 +102,10 @@ def collect_call_targets(func, functions):
                 target = op.get("target", {})
                 target_func_id = target.get("function")
                 if target_func_id and target_func_id in functions:
-                    callees.add(get_cir_symbol(functions[target_func_id]))
+                    symbol = get_cir_symbol(functions[target_func_id])
+                    if symbol in CANARY_CALLEES:
+                        continue
+                    callees.add(symbol)
             elif mnemonic == "CALLIND":
                 indirect_count += 1
 
