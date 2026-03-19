@@ -611,26 +611,31 @@ namespace patchestry::ghidra {
         }
 
         // Replace non-identifier characters (::, <>, spaces, *, &, .) with '_'
-        for (auto &c : result) {
+        // Track which underscores are synthetic (from replacement) so we only
+        // collapse those, preserving intentional double underscores in the
+        // original name (e.g. "bl_usb__send_message").
+        std::vector< bool > is_synthetic(result.size(), false);
+        for (size_t i = 0; i < result.size(); ++i) {
+            char c = result[i];
             if (!std::isalnum(static_cast< unsigned char >(c)) && c != '_') {
-                c = '_';
+                result[i]       = '_';
+                is_synthetic[i] = true;
             }
         }
 
-        // Collapse consecutive underscores
+        // Collapse consecutive underscores only when at least one in the
+        // run is synthetic (from character replacement above).
         std::string collapsed;
         collapsed.reserve(result.size());
-        bool prev_underscore = false;
-        for (char c : result) {
-            if (c == '_') {
-                if (!prev_underscore) {
-                    collapsed.push_back(c);
+        for (size_t i = 0; i < result.size(); ++i) {
+            if (result[i] == '_' && i > 0 && collapsed.back() == '_') {
+                // Two adjacent underscores — collapse only if the current
+                // or previous underscore was synthetic.
+                if (is_synthetic[i] || is_synthetic[i - 1]) {
+                    continue; // skip this duplicate
                 }
-                prev_underscore = true;
-            } else {
-                collapsed.push_back(c);
-                prev_underscore = false;
             }
+            collapsed.push_back(result[i]);
         }
 
         // Remove leading/trailing underscores
