@@ -348,7 +348,7 @@ namespace patchestry::ast {
         bool is_wide = false;
         if (!vnode.type_key.empty()) {
             if (type_builder().get_serialized_types().contains(vnode.type_key)) {
-                auto type = type_builder().get_serialized_types().at(vnode.type_key);
+                auto type = type_builder().get_serialized_type(vnode.type_key);
                 is_wide   = type->isWideCharType();
             }
         }
@@ -394,7 +394,7 @@ namespace patchestry::ast {
         }
 
         if (type_builder().get_serialized_types().contains(vnode.type_key)) {
-            return type_builder().get_serialized_types().at(vnode.type_key);
+            return type_builder().get_serialized_type(vnode.type_key);
         }
 
         return GetTypeFromSize(ctx, vnode.size, /*is_signed=*/false, /*is_integer=*/true);

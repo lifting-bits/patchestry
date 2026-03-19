@@ -421,14 +421,14 @@ namespace patchestry::ast {
         }
 
         std::vector< clang::QualType > args_vector;
-        const auto &rttype = type_builder.get().get_serialized_types().at(proto.rttype_key);
+        const auto &rttype = type_builder.get().get_serialized_type(proto.rttype_key);
         for (const auto &param : proto.parameters) {
             if (!type_builder.get().get_serialized_types().contains(param)) {
                 LOG(ERROR) << "Skipping, invalid parameter key in function.\n";
                 continue;
             }
 
-            args_vector.emplace_back(type_builder.get().get_serialized_types().at(param));
+            args_vector.emplace_back(type_builder.get().get_serialized_type(param));
         }
 
         clang::FunctionProtoType::ExtProtoInfo ext_proto_info;
@@ -475,7 +475,7 @@ namespace patchestry::ast {
                 continue;
             }
 
-            auto param_type  = type_builder.get().get_serialized_types().at(param_key);
+            auto param_type  = type_builder.get().get_serialized_type(param_key);
             auto *param_decl = clang::ParmVarDecl::Create(
                 ctx, func_decl, SourceLocation(ctx.getSourceManager(), param_key),
                 SourceLocation(ctx.getSourceManager(), param_key),
