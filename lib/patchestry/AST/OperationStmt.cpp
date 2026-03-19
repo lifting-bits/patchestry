@@ -873,13 +873,20 @@ namespace patchestry::ast {
             auto *switch_stmt =
                 clang::SwitchStmt::Create(ctx, nullptr, nullptr, disc, loc, loc);
 
-            const auto disc_width = ctx.getIntWidth(disc->getType());
+            // Resolve enum types to their underlying integer type for
+            // IntegerLiteral width computation (getIntWidth crashes on enum).
+            auto disc_type = disc->getType();
+            if (disc_type->isEnumeralType()) {
+                disc_type = disc_type->castAs< clang::EnumType >()
+                    ->getDecl()->getIntegerType();
+            }
+            const auto disc_width = ctx.getIntWidth(disc_type);
 
             auto create_case = [&](const SwitchCase &sc) -> clang::CaseStmt * {
                 auto *case_val = clang::IntegerLiteral::Create(
                     ctx,
                     llvm::APInt(disc_width, static_cast< uint64_t >(sc.value), /*isSigned=*/true),
-                    disc->getType(), loc
+                    disc_type, loc
                 );
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
