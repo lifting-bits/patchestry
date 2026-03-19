@@ -91,6 +91,8 @@ namespace patchestry::ast {
 
         clang::FunctionDecl *create_definition(clang::ASTContext &ctx);
 
+        bool has_basic_blocks() const { return !function.get().basic_blocks.empty(); }
+
       private:
         void create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl);
 
@@ -108,6 +110,13 @@ namespace patchestry::ast {
         clang::DeclContext *get_sema_context(void) { return sema().CurContext; }
 
         clang::Sema &sema(void) const { return cii.get().getSema(); }
+
+        /// The C-visible name for the function: display_name if set, else name.
+        const std::string &GetCName() const {
+            return function.get().display_name.empty()
+                ? function.get().name
+                : function.get().display_name;
+        }
 
         clang::FunctionDecl *prev_decl;
         std::reference_wrapper< const clang::CompilerInstance > cii;

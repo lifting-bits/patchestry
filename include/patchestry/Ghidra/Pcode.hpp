@@ -48,7 +48,7 @@ namespace patchestry::ghidra {
     };
 
     // Calculate the number of mnemonics
-    constexpr size_t num_mnemonics = []() constexpr {
+    constexpr size_t kNumMnemonics = []() constexpr {
         size_t count = 0;
 #define X(name) ++count; // NOLINT(cppcoreguidelines-macro-usage)
         PCODE_MNEMONICS
@@ -57,18 +57,18 @@ namespace patchestry::ghidra {
     }();
 
     // Instantiate the EnumStringMapper for PCodeMnemonic
-    constexpr PCodeStringMapper< Mnemonic, num_mnemonics > mnemonic_mapper{ {
+    constexpr PCodeStringMapper< Mnemonic, kNumMnemonics > kMnemonicMapper{ {
 #define X(name) std::pair{ Mnemonic::OP_##name, #name },
         PCODE_MNEMONICS
 #undef X
     } };
 
     constexpr std::string_view to_string(Mnemonic mnemonic) {
-        return mnemonic_mapper.to_string(mnemonic);
+        return kMnemonicMapper.to_string(mnemonic);
     }
 
     constexpr Mnemonic from_string(const std::string_view &mnemonic_str) {
-        return mnemonic_mapper.from_string(mnemonic_str);
+        return kMnemonicMapper.from_string(mnemonic_str);
     }
 
 } // namespace patchestry::ghidra

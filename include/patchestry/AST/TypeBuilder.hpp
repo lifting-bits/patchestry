@@ -22,8 +22,8 @@ namespace patchestry::ast {
     {
       public:
         /* consts */
-        static constexpr uint32_t num_bits_in_byte = 8U;
-        static constexpr uint32_t num_bits_uint    = 32U;
+        static constexpr uint32_t kNumBitsInByte = 8U;
+        static constexpr uint32_t kNumBitsUint   = 32U;
 
         explicit TypeBuilder(clang::ASTContext &ctx) : context(ctx), serialized_types({}) {}
 
@@ -50,7 +50,7 @@ namespace patchestry::ast {
          *  reuse of already generated `QualType` instances.
          */
 
-        SerializedTypeMap &get_serialized_types(void) { return serialized_types; }
+        SerializedTypeMap &GetSerializedTypes(void) { return serialized_types; }
 
         /**
          * @brief Creates and serializes all types defined in the `lifted_types`.
@@ -195,7 +195,7 @@ namespace patchestry::ast {
         /**
          * @brief get reference to the `clang::ASTContext` used for AST nodes
          */
-        clang::ASTContext &ast_context(void) { return context.get(); }
+        clang::ASTContext &GetASTContext() { return context.get(); }
 
         std::unordered_map< std::string, clang::Decl * > missing_type_definition;
         std::reference_wrapper< clang::ASTContext > context;
