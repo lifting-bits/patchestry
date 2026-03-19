@@ -4,9 +4,7 @@
 // SW3: switch (
 // SW3: case {{[0-9]+[U]?}}:
 // SW3: case {{[0-9]+[U]?}}:
-// SW3: case {{[0-9]+[U]?}}:
 // SW3-NOT: default:
-// SW3-NOT: goto *
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

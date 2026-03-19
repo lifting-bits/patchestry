@@ -24,7 +24,7 @@ RUN apt-get update && \
 
 RUN pip3 install --no-cache-dir \
     platformio==6.1.11 \
-    conan==1.59.0 \
+    conan==2.0.17 \
     nanopb==0.4.7 \
     grpcio-tools==1.54.2
 

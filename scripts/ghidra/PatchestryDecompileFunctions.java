@@ -218,12 +218,102 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         return functions;
     }
 
+    // Resolve a function by name using a multi-strategy fallback chain.
+    // Supports: global name, hex address, mangled C++ symbols, namespace-
+    // qualified names (A::B::fn), and unqualified local names.
+    List<Function> resolveFunction(String name) throws Exception {
+        // Step 1: Global namespace lookup (existing Ghidra API).
+        List<Function> functions = getGlobalFunctions(name);
+        if (functions != null && !functions.isEmpty()) {
+            return functions;
+        }
+
+        FunctionManager fm = currentProgram.getFunctionManager();
+        SymbolTable symTable = currentProgram.getSymbolTable();
+
+        // Step 2: Address-based lookup (e.g. "0x08001234" or hex digits).
+        if (name.startsWith("0x") || name.startsWith("0X")) {
+            try {
+                Address addr = currentProgram.getAddressFactory()
+                    .getDefaultAddressSpace().getAddress(name);
+                Function fn = fm.getFunctionAt(addr);
+                if (fn != null) {
+                    println("Resolved '" + name + "' by address to: " + fn.getName(true));
+                    return new ArrayList<>(List.of(fn));
+                }
+            } catch (Exception e) {
+                // Not a valid address, continue to next fallback.
+            }
+        }
+
+        // Step 3: Symbol/label lookup — handles mangled C++ names stored as
+        // labels at the function's entry point by Ghidra's ELF importer.
+        for (Symbol sym : symTable.getSymbols(name)) {
+            Function fn = fm.getFunctionAt(sym.getAddress());
+            if (fn != null) {
+                println("Resolved '" + name + "' via symbol to: " + fn.getName(true));
+                return new ArrayList<>(List.of(fn));
+            }
+        }
+
+        // Step 4: Namespace-qualified name (e.g. "Debug::Command::VarHandler::GetVarInfo").
+        if (name.contains("::")) {
+            String[] parts = name.split("::");
+            String localName = parts[parts.length - 1];
+            for (Symbol sym : symTable.getSymbols(localName)) {
+                if (sym.getSymbolType() == SymbolType.FUNCTION) {
+                    String fullPath = sym.getName(true);
+                    if (fullPath.equals(name)) {
+                        Function fn = fm.getFunctionAt(sym.getAddress());
+                        if (fn != null) {
+                            println("Resolved '" + name + "' via namespace path.");
+                            return new ArrayList<>(List.of(fn));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 5: Local name match via symbol table (last resort).
+        // Uses the symbol table index instead of iterating all functions.
+        String searchName = name.contains("::") ? name.substring(name.lastIndexOf("::") + 2) : name;
+        List<Function> matches = new ArrayList<>();
+        for (Symbol sym : symTable.getSymbols(searchName)) {
+            if (sym.getSymbolType() == SymbolType.FUNCTION) {
+                Function fn = fm.getFunctionAt(sym.getAddress());
+                if (fn != null) {
+                    matches.add(fn);
+                }
+            }
+        }
+
+        if (!matches.isEmpty()) {
+            if (matches.size() > 1) {
+                println("WARNING: Multiple functions match '" + searchName + "':");
+                for (Function fn : matches) {
+                    println("  " + fn.getName(true) + " @ " + fn.getEntryPoint());
+                }
+                println("Using first match: " + matches.get(0).getName(true));
+            } else {
+                println("Resolved '" + name + "' via local name to: "
+                    + matches.get(0).getName(true));
+            }
+            return new ArrayList<>(List.of(matches.get(0)));
+        }
+
+        throw new IllegalArgumentException(
+            "Function not found: '" + name + "'. "
+            + "Searched by: global name, address, symbol/label, namespace path, and local name. "
+            + "Use 'all' mode to decompile everything, or verify the function name in Ghidra."
+        );
+    }
+
     void decompileSingleFunction() throws Exception {
         if (getScriptArgs().length < 3) {
             throw new IllegalArgumentException("Insufficient arguments. Expected: <function_name> <output_file> as argument");
         }
         JsonWriter writer = new JsonWriter(Files.newBufferedWriter(Path.of(getScriptArgs()[2])));
-        serializeToFile(writer, getGlobalFunctions(getScriptArgs()[1]));
+        serializeToFile(writer, resolveFunction(getScriptArgs()[1]));
     }
 
     void decompileAllFunctions() throws Exception {
@@ -304,7 +394,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
         if (functions == null) {
             String functionNameArg = askString("functionNameArg", "Function name to decompile: ");
-            functions = getGlobalFunctions(functionNameArg);
+            functions = resolveFunction(functionNameArg);
         }
 
         File outputDirectory = askDirectory("outputFilePath", "Select output directory");

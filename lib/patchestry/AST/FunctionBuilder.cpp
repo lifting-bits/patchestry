@@ -300,7 +300,9 @@ namespace patchestry::ast {
     clang::FunctionDecl *FunctionBuilder::create_declaration(
         clang::ASTContext &ctx, const clang::QualType &function_type, bool is_definition
     ) {
-        if (function.get().name.empty()) {
+        const auto &c_name = GetCName();
+
+        if (c_name.empty()) {
             LOG(ERROR) << "Function name is empty. function key " << function.get().key << "\n";
             return {};
         }
@@ -308,7 +310,7 @@ namespace patchestry::ast {
         auto location   = clang::SourceLocation();
         auto *func_decl = clang::FunctionDecl::Create(
             ctx, ctx.getTranslationUnitDecl(), location, location,
-            &ctx.Idents.get(function.get().name), function_type,
+            &ctx.Idents.get(c_name), function_type,
             ctx.getTrivialTypeSourceInfo(function_type), clang::SC_None
         );
 
@@ -321,12 +323,20 @@ namespace patchestry::ast {
         func_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
-        // if function is a declaration, add asm attribute with symbol name
-        // only when the symbol name differs from the C identifier (otherwise
-        // Clang's printer emits invalid syntax: asm("sym") void fn(void);)
-        if (!is_definition && function.get().name != func_decl->getName()) {
+        // Add asm label with the binary linker symbol when:
+        //   (1) the original name differs from the C identifier, AND
+        //   (2) the original name is a genuine mangled symbol (_Z for
+        //       Itanium ABI, ? for MSVC).
+        // Short demangled names like "append" or "operator=" are NOT valid
+        // linker symbols and must not appear in asm labels — they would
+        // cause link failures when recompiling for binary patching.
+        const auto &original_name = function.get().name;
+        bool is_mangled = original_name.size() >= 2
+            && ((original_name[0] == '_' && original_name[1] == 'Z')
+                || original_name[0] == '?');
+        if (is_mangled && original_name != c_name) {
             if (auto *asm_attr = clang::AsmLabelAttr::Create(
-                    ctx, function.get().name, true, func_decl->getSourceRange()
+                    ctx, original_name, true, func_decl->getSourceRange()
                 ))
             {
                 func_decl->addAttr(asm_attr);
@@ -507,13 +517,14 @@ namespace patchestry::ast {
      * blocks, or if the function definition cannot be created.
      */
     clang::FunctionDecl *FunctionBuilder::create_definition(clang::ASTContext &ctx) {
-        if (function.get().name.empty()) {
+        const auto &c_name = GetCName();
+        if (c_name.empty()) {
             LOG(ERROR) << "Can't create function definition. Missing function name.\n";
             return {};
         }
 
         if (function.get().basic_blocks.empty()) {
-            LOG(ERROR) << "Can't create function definition for '" << function.get().name << "'. Function has no basic blocks.\n";
+            LOG(ERROR) << "Can't create function definition for '" << c_name << "'. Function has no basic blocks.\n";
             return {};
         }
 

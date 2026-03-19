@@ -88,7 +88,7 @@ jobs:
           fetch-depth: 1
 
       - name: Pull dev container image
-        run: docker pull $DEV_IMAGE
+        run: docker pull "$DEV_IMAGE"
 
       - name: Create gitconfig for safe directories
         run: |
@@ -113,7 +113,7 @@ jobs:
             -e ENABLE_SANITIZER_UNDEFINED_BEHAVIOR="${ENABLE_SANITIZER_UNDEFINED_BEHAVIOR}" \
             -e ENABLE_SANITIZER_ADDRESS="${ENABLE_SANITIZER_ADDRESS}" \
             -e CI=true \
-            $DEV_IMAGE \
+            "$DEV_IMAGE" \
             cmake --preset ci -DPE_USE_VENDORED_Z3=OFF -DLLVM_EXTERNAL_LIT=/usr/local/bin/lit -DLLVM_Z3_INSTALL_DIR=/usr/local
 
       - name: Build ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
@@ -123,7 +123,7 @@ jobs:
             -v /tmp/.gitconfig:/root/.gitconfig:ro \
             -w /workspace \
             -e CI=true \
-            $DEV_IMAGE \
+            "$DEV_IMAGE" \
             cmake --build --preset ci --config ${{ matrix.build-type }} -j$(nproc)
 
       - name: Build the intrinsic library
@@ -132,12 +132,29 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -v /tmp/.gitconfig:/root/.gitconfig:ro \
             -w /workspace/lib/patchestry/intrinsics \
-            $DEV_IMAGE \
+            "$DEV_IMAGE" \
             bash -c "cmake -B build_standalone -DCMAKE_BUILD_TYPE=Release && cmake --build build_standalone -j\$(nproc)"
 
       - name: Build the headless decompilation docker image
         run: |
           bash ./scripts/ghidra/build-headless-docker.sh
+
+      - name: Run cached patch matrix
+        if: matrix.build-type == 'Debug' && matrix.sanitizers == 'OFF'
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v /tmp/.gitconfig:/root/.gitconfig:ro \
+            -w /workspace \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e CI=true \
+            -e HOST_WORKSPACE=${{ github.workspace }} \
+            "$DEV_IMAGE" \
+            bash ./scripts/test-patch-matrix.sh \
+              --build-type Debug \
+              --build-root ci \
+              --rebuild-firmware \
+              --rebuild-fixtures
 
       - name: Test ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: |
@@ -148,5 +165,5 @@ jobs:
             -v /var/run/docker.sock:/var/run/docker.sock \
             -e CI=true \
             -e HOST_WORKSPACE=${{ github.workspace }} \
-            $DEV_IMAGE \
+            "$DEV_IMAGE" \
             lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=/workspace/builds/ci/test/ghidra/Output

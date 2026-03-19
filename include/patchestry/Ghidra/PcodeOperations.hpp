@@ -214,7 +214,8 @@ namespace patchestry::ghidra {
 
     struct Function
     {
-        std::string name;
+        std::string name;         // original (possibly mangled) symbol name
+        std::string display_name; // C-safe identifier (demangled or same as name)
         FunctionPrototype prototype;
         std::string key;
         std::string entry_block;

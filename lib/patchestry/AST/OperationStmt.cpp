@@ -267,7 +267,10 @@ namespace patchestry::ast {
     ) {
         auto cast =
             sema().BuildCStyleCastExpr(loc, ctx.getTrivialTypeSourceInfo(to_type), loc, expr);
-        assert(!cast.isInvalid() && "Invalid casted result");
+        if (cast.isInvalid()) {
+            LOG(ERROR) << "make_explicit_cast failed\n";
+            return nullptr;
+        }
         return cast.getAs< clang::Expr >();
     }
 
@@ -334,21 +337,61 @@ namespace patchestry::ast {
 
         auto *temp_expr  = create_temporary_expr(ctx, expr);
         auto addrof_expr = sema().CreateBuiltinUnaryOp(loc, clang::UO_AddrOf, temp_expr);
-        assert(!addrof_expr.isInvalid() && "Invalid AddressOf expression");
+        if (addrof_expr.isInvalid()) {
+            LOG(ERROR) << "make_reinterpret_cast: failed to create AddressOf expression\n";
+            return nullptr;
+        }
 
         auto to_pointer_type = ctx.getPointerType(to_type);
         auto casted_expr     = sema().BuildCStyleCastExpr(
             loc, ctx.getTrivialTypeSourceInfo(to_pointer_type), loc,
             addrof_expr.getAs< clang::Expr >()
         );
-        assert(!casted_expr.isInvalid());
+        if (casted_expr.isInvalid()) {
+            LOG(ERROR) << "make_reinterpret_cast: failed to create CStyleCast expression\n";
+            return nullptr;
+        }
 
         auto deref_expr = sema().CreateBuiltinUnaryOp(
             loc, clang::UO_Deref, casted_expr.getAs< clang::Expr >()
         );
-        assert(!deref_expr.isInvalid());
+        if (deref_expr.isInvalid()) {
+            LOG(ERROR) << "make_reinterpret_cast: failed to create Deref expression\n";
+            return nullptr;
+        }
 
         return deref_expr.getAs< clang::Expr >();
+    }
+
+    // Coerce a record (struct/union) typed expression to an unsigned integer of
+    // the same byte size so that it can participate in C arithmetic / bitwise
+    // operations.  Returns the expression unchanged if it is not a record type.
+    clang::Expr *OpBuilder::coerce_record_to_integer(
+        clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc
+    ) {
+        if (!expr || !expr->getType()->isRecordType()) {
+            return expr;
+        }
+        auto size_bits = ctx.getTypeSize(expr->getType());
+        clang::QualType int_type;
+        if (size_bits <= 8) {
+            int_type = ctx.UnsignedCharTy;
+        } else if (size_bits <= 16) {
+            int_type = ctx.UnsignedShortTy;
+        } else if (size_bits <= 32) {
+            int_type = ctx.UnsignedIntTy;
+        } else if (size_bits <= 64) {
+            int_type = ctx.UnsignedLongLongTy;
+        } else if (size_bits <= 128 && !ctx.UnsignedInt128Ty.isNull()) {
+            int_type = ctx.UnsignedInt128Ty;
+        } else {
+            // Record too large for integer coercion — return unchanged
+            // and let the caller deal with the record type directly.
+            LOG(WARNING) << "coerce_record_to_integer: record is " << size_bits
+                         << " bits, too large for integer coercion\n";
+            return expr;
+        }
+        return make_reinterpret_cast(ctx, expr, int_type, loc);
     }
 
     clang::Stmt *OpBuilder::create_assign_operation(
@@ -538,7 +581,10 @@ namespace patchestry::ast {
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         // When the input is a string literal, the LOAD is semantically a no-op:
-        // just let it decay from array type to pointer via implicit cast.
+        // the string literal already IS the value.  Just let it decay from its
+        // array type (const char[N]) to a pointer (const char *) via the standard
+        // array-to-pointer implicit cast, avoiding the *(T**)&"..." pattern that
+        // make_reinterpret_cast would otherwise produce.
         if (clang::isa< clang::StringLiteral >(input_expr)) {
             clang::Expr *result_expr = make_implicit_cast(
                 ctx, input_expr, ctx.getDecayedType(input_expr->getType()),
@@ -836,28 +882,103 @@ namespace patchestry::ast {
             auto *switch_stmt =
                 clang::SwitchStmt::Create(ctx, nullptr, nullptr, disc, loc, loc);
 
-            const auto disc_width = ctx.getIntWidth(disc->getType());
+            // Resolve enum types to their underlying integer type for
+            // IntegerLiteral width computation (getIntWidth crashes on enum).
+            auto disc_type = disc->getType();
+            if (disc_type->isEnumeralType()) {
+                disc_type = disc_type->castAs< clang::EnumType >()
+                    ->getDecl()->getIntegerType();
+            }
+            const auto disc_width = ctx.getIntWidth(disc_type);
 
             auto create_case = [&](const SwitchCase &sc) -> clang::CaseStmt * {
                 auto *case_val = clang::IntegerLiteral::Create(
                     ctx,
                     llvm::APInt(disc_width, static_cast< uint64_t >(sc.value), /*isSigned=*/true),
-                    disc->getType(), loc
+                    disc_type, loc
                 );
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
                 auto target_loc = SourceLocation(ctx.getSourceManager(), sc.target_block);
 
-                // Emit goto to the target block.  CfgFoldStructure's FoldSwitch
-                // with InlineCaseChain will restructure these into proper case
-                // bodies with inlined content — no OperationStmt-level inlining
-                // needed.  This avoids label/goto mismatches from blocks being
-                // inlined at one level and collapsed at another.
-                auto *goto_stmt = new (ctx) clang::GotoStmt(
-                    function_builder().labels_declaration.at(sc.target_block), loc,
-                    target_loc
-                );
-                case_stmt->setSubStmt(goto_stmt);
+                // Try to inline the target block body for has_exit cases.
+                // Requirements: block exists, has ordered ops, terminal op is BRANCH,
+                // and the block has only one predecessor (otherwise the label must
+                // remain so other gotos can reach it).
+                bool inlined = false;
+                auto pred_it = function_builder().block_predecessor_count.find(sc.target_block);
+                bool single_pred = pred_it != function_builder().block_predecessor_count.end()
+                    && pred_it->second <= 1;
+                if (sc.has_exit && single_pred
+                    && function.basic_blocks.contains(sc.target_block)) {
+                    const auto &tb = function.basic_blocks.at(sc.target_block);
+                    if (!tb.ordered_operations.empty()) {
+                        const auto &last_op_key = tb.ordered_operations.back();
+                        bool terminal_is_branch =
+                            tb.operations.contains(last_op_key)
+                            && tb.operations.at(last_op_key).mnemonic == Mnemonic::OP_BRANCH;
+
+                        if (terminal_is_branch) {
+                            std::vector< clang::Stmt * > case_body;
+                            for (const auto &op_key : tb.ordered_operations) {
+                                if (!tb.operations.contains(op_key)) { continue; }
+                                const auto &target_op = tb.operations.at(op_key);
+                                // Skip the terminal BRANCH — break replaces it.
+                                if (target_op.mnemonic == Mnemonic::OP_BRANCH) { continue; }
+                                auto [stmt, merge] =
+                                    function_builder().create_operation(ctx, target_op);
+                                for (auto *p : function_builder().pending_materialized) {
+                                    case_body.push_back(p);
+                                }
+                                function_builder().pending_materialized.clear();
+                                if (stmt) {
+                                    function_builder().operation_stmts.emplace(
+                                        target_op.key, stmt
+                                    );
+                                    if (!merge) { case_body.push_back(stmt); }
+                                }
+                            }
+                            // If the terminal BRANCH targets a block other than
+                            // the fallback (i.e. a back-edge to a loop header),
+                            // emit goto instead of break to preserve the edge.
+                            const auto &branch_op = tb.operations.at(last_op_key);
+                            if (branch_op.target_block.has_value()
+                                && branch_op.target_block != op.fallback_block
+                                && function_builder().labels_declaration.contains(
+                                    *branch_op.target_block
+                                ))
+                            {
+                                auto tgt_loc = SourceLocation(
+                                    ctx.getSourceManager(), *branch_op.target_block
+                                );
+                                case_body.push_back(new (ctx) clang::GotoStmt(
+                                    function_builder().labels_declaration.at(
+                                        *branch_op.target_block
+                                    ),
+                                    loc, tgt_loc
+                                ));
+                            } else {
+                                case_body.push_back(new (ctx) clang::BreakStmt(loc));
+                            }
+                            case_stmt->setSubStmt(clang::CompoundStmt::Create(
+                                ctx, case_body, clang::FPOptionsOverride(), loc, loc
+                            ));
+                            function_builder().inlined_blocks.insert(sc.target_block);
+                            inlined = true;
+                        }
+                    }
+                }
+
+                if (!inlined) {
+                    auto *goto_stmt = new (ctx) clang::GotoStmt(
+                        function_builder().labels_declaration.at(sc.target_block), loc,
+                        target_loc
+                    );
+                    case_stmt->setSubStmt(goto_stmt);
+                    if (sc.has_exit) {
+                        function_builder().break_target_blocks.insert(sc.target_block);
+                    }
+                }
 
                 return case_stmt;
             };
@@ -1171,7 +1292,11 @@ namespace patchestry::ast {
         auto result = sema().BuildCallExpr(
             nullptr, clang::dyn_cast< clang::Expr >(refexpr), op_loc, arguments, op_loc
         );
-        assert(!result.isInvalid() && "Failed to build call expr");
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Failed to build call expr for '"
+                       << callee->getNameAsString() << "'. key: " << op.key << "\n";
+            return nullptr;
+        }
         return result.getAs< clang::Expr >();
     }
 
@@ -1201,6 +1326,11 @@ namespace patchestry::ast {
                 function_builder().function_list.get().at(*op.target->function);
 
             call_expr = build_callexpr_from_function(ctx, function, op);
+            if (!call_expr) {
+                LOG(ERROR) << "Failed to create call expression for '"
+                           << callee->getNameAsString() << "'. key: " << op.key << "\n";
+                return {};
+            }
             if (callee->getReturnType()->isVoidType()) {
                 return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
             }
@@ -1533,6 +1663,28 @@ namespace patchestry::ast {
         }
         auto location = SourceLocation(ctx.getSourceManager(), op.key);
 
+        // Record (struct/union) types cannot participate in bitwise shift/or
+        // arithmetic.  When PIECE involves a record type, emit a simple
+        // assignment of the low part (input1) to the output.
+        if (input0_expr->getType()->isRecordType()
+            || input1_expr->getType()->isRecordType()
+            || type_it->second->isRecordType()) {
+            auto merge_to_next = !op.output.has_value();
+            clang::Expr *result_expr = input1_expr;
+            if (!ctx.hasSameUnqualifiedType(result_expr->getType(), type_it->second)) {
+                result_expr = make_reinterpret_cast(ctx, result_expr, type_it->second, location);
+            }
+            if (merge_to_next) {
+                return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
+            }
+            auto *output_expr = create_varnode(ctx, function, *op.output);
+            return { create_assign_operation(
+                         ctx, result_expr,
+                         clang::dyn_cast< clang::Expr >(output_expr), location
+                     ),
+                     false };
+        }
+
         // Determine low-part bit width from input1's type.  The Varnode::size
         // field is not populated for operation inputs, so look up the type.
         unsigned low_width = 0;
@@ -1541,6 +1693,11 @@ namespace patchestry::ast {
                 type_builder().GetSerializedTypes().find(op.inputs[1].type_key);
             if (low_type_it != type_builder().GetSerializedTypes().end()) {
                 low_width = static_cast< unsigned >(ctx.getTypeSize(low_type_it->second));
+            } else {
+                LOG(ERROR) << "PIECE: low-part type not found for key '"
+                           << op.inputs[1].type_key
+                           << "'; cannot determine shift width. key: " << op.key;
+                return {};
             }
         }
 
@@ -1635,6 +1792,28 @@ namespace patchestry::ast {
             LOG(ERROR) << "Failed to create SUBPIECE input expression. key: " << op.key;
             return {};
         }
+        // Record (struct/union) types cannot participate in bitwise shift/mask
+        // arithmetic.  When SUBPIECE operates on a record type, emit a
+        // reinterpret-cast to the output type and skip the arithmetic path.
+        if (expr->getType()->isRecordType() || op_type->isRecordType()) {
+            clang::Expr *result_expr = expr;
+            if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
+                result_expr = make_reinterpret_cast(ctx, expr, op_type, op_location);
+            }
+            if (merge_to_next) {
+                return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
+            }
+            auto *out_expr  = create_varnode(ctx, function, *op.output);
+            auto out_result = sema().CreateBuiltinBinOp(
+                op_location, clang::BO_Assign,
+                clang::dyn_cast< clang::Expr >(out_expr), result_expr
+            );
+            if (out_result.isInvalid()) {
+                LOG(ERROR) << "SUBPIECE record-type output assignment failed. key: " << op.key;
+                return std::make_pair(nullptr, false);
+            }
+            return std::make_pair(out_result.getAs< clang::Stmt >(), merge_to_next);
+        }
 
         if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
             if (auto *casted_expr = make_cast(ctx, expr, op_type, op_location)) {
@@ -1642,8 +1821,34 @@ namespace patchestry::ast {
             }
         }
 
-        clang::Expr *result_expr = expr;
+        // SUBPIECE uses bitwise shift and mask which are invalid on floating-point
+        // types.  Cast the expression to an unsigned integer of the same width first
+        // so that the shift/mask operations are well-formed.
+        if (expr->getType()->isFloatingType()) {
+            auto float_size = static_cast< unsigned >(ctx.getTypeSize(expr->getType()));
+            auto int_type   = ctx.getIntTypeForBitwidth(float_size, /*Signed=*/false);
+            if (int_type.isNull()) {
+                // No exact-width integer (e.g. 80-bit long double).
+                // Use the smallest standard type that covers all bits.
+                if (float_size <= 32) {
+                    int_type = ctx.UnsignedIntTy;
+                } else if (float_size <= 64) {
+                    int_type = ctx.UnsignedLongLongTy;
+                } else {
+                    int_type = ctx.getIntTypeForBitwidth(128, /*Signed=*/false);
+                    if (int_type.isNull()) {
+                        int_type = ctx.UnsignedLongLongTy;
+                    }
+                }
+            }
+            expr = make_cast(ctx, expr, int_type, op_location);
+            if (!expr) {
+                LOG(ERROR) << "SUBPIECE failed to cast float to integer. key: " << op.key;
+                return {};
+            }
+        }
 
+        clang::Expr *result_expr = expr;
         // Apply right-shift only when byte_offset > 0 (skip ">> 0").
         if (shift_bits != 0) {
             auto *expr_with_paren = new (ctx)
@@ -1996,9 +2201,14 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        // TODO(kumarak): Should check the operation type before creating unary operation???
+        // Coerce record (struct/union) operands to integers for C operators.
+        input_expr = coerce_record_to_integer(ctx, input_expr, op_loc);
+
         auto unary_operation = sema().CreateBuiltinUnaryOp(op_loc, kind, input_expr);
-        assert(!unary_operation.isInvalid());
+        if (unary_operation.isInvalid()) {
+            LOG(ERROR) << "Unary operation failed on operand. key: " << op.key << "\n";
+            return std::make_pair(nullptr, false);
+        }
 
         if (!op.output.has_value()) {
             return { unary_operation.getAs< clang::Stmt >(), true };
@@ -2028,6 +2238,11 @@ namespace patchestry::ast {
         auto *lhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
         auto *rhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
 
+        // Coerce record (struct/union) operands to integers so that C
+        // arithmetic and bitwise operators are valid.
+        lhs = coerce_record_to_integer(ctx, lhs, op_loc);
+        rhs = coerce_record_to_integer(ctx, rhs, op_loc);
+
         auto make_paren_expr = [&](clang::ASTContext &ctx, clang::Expr *expr,
                                    clang::SourceLocation loc) -> clang::Expr * {
             if (auto *uo = clang::dyn_cast< clang::UnaryOperator >(expr); uo) {
@@ -2042,7 +2257,10 @@ namespace patchestry::ast {
             op_loc, kind, make_paren_expr(ctx, lhs, op_loc), make_paren_expr(ctx, rhs, op_loc)
         );
 
-        assert(!result.isInvalid() && "Invalid result from binary operation");
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Binary operation failed on operands. key: " << op.key << "\n";
+            return std::make_pair(nullptr, false);
+        }
 
         if (!op.output) {
             return std::make_pair(result.getAs< clang::Stmt >(), true);
@@ -2372,7 +2590,8 @@ namespace patchestry::ast {
                 }
             }
 
-            LOG(ERROR) << "Failed to find field decl at offset " << target_offset << "\n";
+            LOG(ERROR) << "Failed to find field decl at offset " << target_offset
+                       << " in record type\n";
             return nullptr;
         };
 
@@ -2392,7 +2611,29 @@ namespace patchestry::ast {
         auto *definition = decl->getDefinition();
 
         auto *field = find_field_decl(ctx, definition, offset);
-        assert(field != nullptr && "failed to find record decl field at offset");
+        if (field == nullptr) {
+            // Field not found — fall back to byte-offset pointer arithmetic:
+            //   *(pointee_type*)((char*)base + offset)
+            auto char_ptr_type = ctx.getPointerType(ctx.CharTy);
+            auto *char_ptr     = make_cast(ctx, base, char_ptr_type, loc);
+            if (!char_ptr) {
+                return make_reinterpret_cast(
+                    ctx, base, ctx.getPointerType(base_type->getPointeeType()), loc
+                );
+            }
+            auto *offset_lit = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), offset),
+                ctx.IntTy, loc
+            );
+            auto add_result = sema().CreateBuiltinBinOp(loc, clang::BO_Add, char_ptr, offset_lit);
+            if (add_result.isInvalid()) {
+                return make_reinterpret_cast(
+                    ctx, base, ctx.getPointerType(base_type->getPointeeType()), loc
+                );
+            }
+            auto result_ptr_type = ctx.getPointerType(base_type->getPointeeType());
+            return make_cast(ctx, add_result.getAs< clang::Expr >(), result_ptr_type, loc);
+        }
 
         clang::DeclarationNameInfo member_name_info(field->getDeclName(), loc);
         return sema().BuildMemberExpr(
@@ -2507,10 +2748,20 @@ namespace patchestry::ast {
             auto mult_result = sema().CreateBuiltinBinOp(op_loc, clang::BO_Mul, index, scale);
             assert(!mult_result.isInvalid());
 
+            // When the base has a record (struct/union) type, cast it to
+            // char* so that pointer arithmetic is valid.
+            clang::Expr *arith_base = base;
+            if (base->getType()->isRecordType()) {
+                arith_base = make_reinterpret_cast(ctx, base, ctx.getPointerType(ctx.CharTy), op_loc);
+            }
+
             auto add_result = sema().CreateBuiltinBinOp(
-                op_loc, clang::BO_Add, base, mult_result.getAs< clang::Expr >()
+                op_loc, clang::BO_Add, arith_base, mult_result.getAs< clang::Expr >()
             );
-            assert(!add_result.isInvalid());
+            if (add_result.isInvalid()) {
+                LOG(ERROR) << "PTRADD invalid add result. key: " << op.key;
+                return std::make_pair(nullptr, false);
+            }
             result_expr = add_result.getAs< clang::Expr >();
         }
 
