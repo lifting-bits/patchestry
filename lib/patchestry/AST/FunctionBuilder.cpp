@@ -300,9 +300,7 @@ namespace patchestry::ast {
     clang::FunctionDecl *FunctionBuilder::create_declaration(
         clang::ASTContext &ctx, const clang::QualType &function_type, bool is_definition
     ) {
-        const auto &c_name = function.get().display_name.empty()
-            ? function.get().name
-            : function.get().display_name;
+        const auto &c_name = GetCName();
 
         if (c_name.empty()) {
             LOG(ERROR) << "Function name is empty. function key " << function.get().key << "\n";
@@ -519,9 +517,7 @@ namespace patchestry::ast {
      * blocks, or if the function definition cannot be created.
      */
     clang::FunctionDecl *FunctionBuilder::create_definition(clang::ASTContext &ctx) {
-        const auto &c_name = function.get().display_name.empty()
-            ? function.get().name
-            : function.get().display_name;
+        const auto &c_name = GetCName();
         if (c_name.empty()) {
             LOG(ERROR) << "Can't create function definition. Missing function name.\n";
             return {};

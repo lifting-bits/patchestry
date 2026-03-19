@@ -579,10 +579,31 @@ namespace patchestry::ghidra {
                 else if (op_suffix.find("new") == 0) replacement = "new";
                 else if (op_suffix.find("delete") == 0) replacement = "delete";
                 else if (op_suffix.find(".delete") == 0) replacement = "delete";
+                else if (op_suffix.find("<=") == 0) replacement = "le";
+                else if (op_suffix.find(">=") == 0) replacement = "ge";
                 else if (op_suffix.find("<<") == 0) replacement = "lshift";
                 else if (op_suffix.find(">>") == 0) replacement = "rshift";
+                else if (op_suffix.find("<") == 0) replacement = "lt";
+                else if (op_suffix.find(">") == 0) replacement = "gt";
+                else if (op_suffix.find("+=") == 0) replacement = "add_assign";
+                else if (op_suffix.find("-=") == 0) replacement = "sub_assign";
+                else if (op_suffix.find("*=") == 0) replacement = "mul_assign";
+                else if (op_suffix.find("/=") == 0) replacement = "div_assign";
+                else if (op_suffix.find("->") == 0) replacement = "arrow";
+                else if (op_suffix.find("++") == 0) replacement = "inc";
+                else if (op_suffix.find("--") == 0) replacement = "dec";
+                else if (op_suffix.find("+") == 0) replacement = "add";
+                else if (op_suffix.find("-") == 0) replacement = "sub";
+                else if (op_suffix.find("*") == 0) replacement = "mul";
+                else if (op_suffix.find("/") == 0) replacement = "div";
+                else if (op_suffix.find("%") == 0) replacement = "mod";
+                else if (op_suffix.find("^") == 0) replacement = "xor";
+                else if (op_suffix.find("|") == 0) replacement = "or";
+                else if (op_suffix.find("&") == 0) replacement = "and";
+                else if (op_suffix.find("!") == 0) replacement = "not";
                 else if (op_suffix.find("()") == 0) replacement = "call";
                 else if (op_suffix.find("[]") == 0) replacement = "index";
+                else if (op_suffix.find(",") == 0) replacement = "comma";
                 if (!replacement.empty()) {
                     result = result.substr(0, suffix_start) + "_" + replacement;
                 }
@@ -620,7 +641,18 @@ namespace patchestry::ghidra {
             collapsed.pop_back();
         }
 
-        return collapsed.empty() ? input : collapsed;
+        // If stripping produced an empty string (input was all non-alnum),
+        // return a safe fallback instead of the unsanitized input.
+        if (collapsed.empty()) {
+            return "fn";
+        }
+
+        // A valid C identifier must not start with a digit.
+        if (std::isdigit(static_cast< unsigned char >(collapsed.front()))) {
+            collapsed.insert(collapsed.begin(), '_');
+        }
+
+        return collapsed;
     }
 
     // Demangle a C++ mangled symbol name and sanitize it to a valid C

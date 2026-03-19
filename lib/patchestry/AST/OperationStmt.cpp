@@ -337,19 +337,28 @@ namespace patchestry::ast {
 
         auto *temp_expr  = create_temporary_expr(ctx, expr);
         auto addrof_expr = sema().CreateBuiltinUnaryOp(loc, clang::UO_AddrOf, temp_expr);
-        assert(!addrof_expr.isInvalid() && "Invalid AddressOf expression");
+        if (addrof_expr.isInvalid()) {
+            LOG(ERROR) << "make_reinterpret_cast: failed to create AddressOf expression\n";
+            return nullptr;
+        }
 
         auto to_pointer_type = ctx.getPointerType(to_type);
         auto casted_expr     = sema().BuildCStyleCastExpr(
             loc, ctx.getTrivialTypeSourceInfo(to_pointer_type), loc,
             addrof_expr.getAs< clang::Expr >()
         );
-        assert(!casted_expr.isInvalid());
+        if (casted_expr.isInvalid()) {
+            LOG(ERROR) << "make_reinterpret_cast: failed to create CStyleCast expression\n";
+            return nullptr;
+        }
 
         auto deref_expr = sema().CreateBuiltinUnaryOp(
             loc, clang::UO_Deref, casted_expr.getAs< clang::Expr >()
         );
-        assert(!deref_expr.isInvalid());
+        if (deref_expr.isInvalid()) {
+            LOG(ERROR) << "make_reinterpret_cast: failed to create Deref expression\n";
+            return nullptr;
+        }
 
         return deref_expr.getAs< clang::Expr >();
     }
@@ -373,12 +382,14 @@ namespace patchestry::ast {
             int_type = ctx.UnsignedIntTy;
         } else if (size_bits <= 64) {
             int_type = ctx.UnsignedLongLongTy;
+        } else if (size_bits <= 128 && !ctx.UnsignedInt128Ty.isNull()) {
+            int_type = ctx.UnsignedInt128Ty;
         } else {
-            // For very large records, use __uint128_t if available, otherwise
-            // fall back to an array-of-char reinterpret.
-            int_type = ctx.UnsignedInt128Ty.isNull()
-                ? ctx.UnsignedLongLongTy
-                : ctx.UnsignedInt128Ty;
+            // Record too large for integer coercion — return unchanged
+            // and let the caller deal with the record type directly.
+            LOG(WARNING) << "coerce_record_to_integer: record is " << size_bits
+                         << " bits, too large for integer coercion\n";
+            return expr;
         }
         return make_reinterpret_cast(ctx, expr, int_type, loc);
     }
@@ -568,24 +579,6 @@ namespace patchestry::ast {
         }
 
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
-
-        // When the input is a string literal, the LOAD is semantically a no-op:
-        // just let it decay from array type to pointer via implicit cast.
-        if (clang::isa< clang::StringLiteral >(input_expr)) {
-            clang::Expr *result_expr = make_implicit_cast(
-                ctx, input_expr, ctx.getDecayedType(input_expr->getType()),
-                clang::CastKind::CK_ArrayToPointerDecay
-            );
-            if (!result_expr) {
-                result_expr = input_expr;
-            }
-            if (merge_to_next) {
-                return { result_expr, true };
-            }
-            auto *output_expr =
-                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
-            return { create_assign_operation(ctx, result_expr, output_expr, op_loc), false };
-        }
 
         // When the input is a string literal, the LOAD is semantically a no-op:
         // the string literal already IS the value.  Just let it decay from its
@@ -1684,6 +1677,11 @@ namespace patchestry::ast {
                 type_builder().GetSerializedTypes().find(op.inputs[1].type_key);
             if (low_type_it != type_builder().GetSerializedTypes().end()) {
                 low_width = static_cast< unsigned >(ctx.getTypeSize(low_type_it->second));
+            } else {
+                LOG(ERROR) << "PIECE: low-part type not found for key '"
+                           << op.inputs[1].type_key
+                           << "'; cannot determine shift width. key: " << op.key;
+                return {};
             }
         }
 
@@ -2598,11 +2596,27 @@ namespace patchestry::ast {
 
         auto *field = find_field_decl(ctx, definition, offset);
         if (field == nullptr) {
-            // Field not found — fall back to a byte-offset pointer cast:
-            // *(result_type*)((char*)base + offset)
-            return make_reinterpret_cast(
-                ctx, base, ctx.getPointerType(base_type->getPointeeType()), loc
+            // Field not found — fall back to byte-offset pointer arithmetic:
+            //   *(pointee_type*)((char*)base + offset)
+            auto char_ptr_type = ctx.getPointerType(ctx.CharTy);
+            auto *char_ptr     = make_cast(ctx, base, char_ptr_type, loc);
+            if (!char_ptr) {
+                return make_reinterpret_cast(
+                    ctx, base, ctx.getPointerType(base_type->getPointeeType()), loc
+                );
+            }
+            auto *offset_lit = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), offset),
+                ctx.IntTy, loc
             );
+            auto add_result = sema().CreateBuiltinBinOp(loc, clang::BO_Add, char_ptr, offset_lit);
+            if (add_result.isInvalid()) {
+                return make_reinterpret_cast(
+                    ctx, base, ctx.getPointerType(base_type->getPointeeType()), loc
+                );
+            }
+            auto result_ptr_type = ctx.getPointerType(base_type->getPointeeType());
+            return make_cast(ctx, add_result.getAs< clang::Expr >(), result_ptr_type, loc);
         }
 
         clang::DeclarationNameInfo member_name_info(field->getDeclName(), loc);

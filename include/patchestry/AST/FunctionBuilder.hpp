@@ -111,6 +111,13 @@ namespace patchestry::ast {
 
         clang::Sema &sema(void) const { return cii.get().getSema(); }
 
+        /// The C-visible name for the function: display_name if set, else name.
+        const std::string &GetCName() const {
+            return function.get().display_name.empty()
+                ? function.get().name
+                : function.get().display_name;
+        }
+
         clang::FunctionDecl *prev_decl;
         std::reference_wrapper< const clang::CompilerInstance > cii;
         std::reference_wrapper< const Function > function;

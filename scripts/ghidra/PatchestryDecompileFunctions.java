@@ -274,14 +274,16 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             }
         }
 
-        // Step 5: Local name match across all namespaces (last resort).
+        // Step 5: Local name match via symbol table (last resort).
+        // Uses the symbol table index instead of iterating all functions.
         String searchName = name.contains("::") ? name.substring(name.lastIndexOf("::") + 2) : name;
         List<Function> matches = new ArrayList<>();
-        FunctionIterator iter = fm.getFunctions(true);
-        while (iter.hasNext()) {
-            Function fn = iter.next();
-            if (fn.getName().equals(searchName)) {
-                matches.add(fn);
+        for (Symbol sym : symTable.getSymbols(searchName)) {
+            if (sym.getSymbolType() == SymbolType.FUNCTION) {
+                Function fn = fm.getFunctionAt(sym.getAddress());
+                if (fn != null) {
+                    matches.add(fn);
+                }
             }
         }
 

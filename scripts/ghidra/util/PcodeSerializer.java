@@ -285,6 +285,12 @@ public class PcodeSerializer {
 		// the `PcodeOp`s representing those `CALLOTHER`s.
 		private List<PcodeOp> callotherUsePcodeOps;
 
+		// Maps external function label → mangled name discovered at the call
+		// site (thunk/PLT stub) before dethunking.  Populated by
+		// buildExternalMangledNameMap (pre-pass) and serializeCallOp (per-call).
+		// Consumed by serializeFunction when emitting the external's "name" field.
+		private Map<String, String> externalMangledNames = new HashMap<>();
+
 		public PcodeSerializer(
 			JsonWriter writer,
 			List<Function> functions,
@@ -2234,11 +2240,6 @@ public class PcodeSerializer {
 
 		// Serialize a direct call. This enqueues the targeted for type lifting
 		// `Function` if it can be resolved.
-		// Maps external function label → mangled name discovered at the call
-		// site (thunk/PLT stub) before dethunking.  Consumed by
-		// serializeFunction when emitting the external's "name" field.
-		private Map<String, String> externalMangledNames = new HashMap<>();
-
 		void serializeCallOp(PcodeOp pcodeOp) throws Exception {
 			Address callerAddress = currentFunction.getFunction().getEntryPoint();
 			Varnode targetNode = pcodeOp.getInput(0);
@@ -3341,13 +3342,6 @@ public class PcodeSerializer {
 				}
 			}
 
-			// Remove diagnostic output after development
-
-			System.out.println("Pre-indexed " + externalMangledNames.size()
-				+ " external mangled names");
-			for (Map.Entry<String, String> entry : externalMangledNames.entrySet()) {
-				System.out.println("  " + entry.getKey() + " → " + entry.getValue());
-			}
 		}
 
 		public void serialize() throws Exception {

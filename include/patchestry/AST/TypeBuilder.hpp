@@ -195,7 +195,7 @@ namespace patchestry::ast {
         /**
          * @brief get reference to the `clang::ASTContext` used for AST nodes
          */
-        clang::ASTContext &AstContext(void) { return context.get(); }
+        clang::ASTContext &GetASTContext() { return context.get(); }
 
         std::unordered_map< std::string, clang::Decl * > missing_type_definition;
         std::reference_wrapper< clang::ASTContext > context;
