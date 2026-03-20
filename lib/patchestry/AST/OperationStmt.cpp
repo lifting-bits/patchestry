@@ -394,6 +394,50 @@ namespace patchestry::ast {
         return make_reinterpret_cast(ctx, expr, int_type, loc);
     }
 
+    std::pair< clang::Stmt *, bool > OpBuilder::materialize_call_return(
+        clang::ASTContext &ctx, clang::Expr *call_expr,
+        clang::QualType ret_type, const Operation &op,
+        clang::SourceLocation loc
+    ) {
+        auto var_name = "__call_ret_"
+            + std::to_string(function_builder().call_ret_counter++);
+        auto *var_decl = create_variable_decl(
+            ctx, sema().CurContext, var_name, ret_type, loc);
+        var_decl->setIsUsed();
+        sema().CurContext->addDecl(var_decl);
+
+        // Bare DeclStmt pushed to pending (will be hoisted with other decls)
+        auto *decl_stmt = create_decl_stmt(ctx, var_decl, loc);
+        function_builder().pending_materialized.push_back(decl_stmt);
+
+        // Assignment: __call_ret_N = call_expr  (stays in-place)
+        auto *ref = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+            var_decl, false, loc, ret_type, clang::VK_LValue);
+        auto *assign = create_assign_operation(ctx, call_expr, ref, loc);
+
+        if (op.has_return_value.value_or(false)) {
+            // Downstream op will consume via create_temporary.
+            // Cache a DeclRefExpr so the consumer gets the temp var.
+            auto *ref2 = clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+                var_decl, false, loc, ret_type, clang::VK_LValue);
+            function_builder().operation_stmts.emplace(op.key, ref2);
+            return std::make_pair(assign, false);
+        }
+
+        // No downstream consumer — emit assignment + (void)cast.
+        auto *ref2 = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+            var_decl, false, loc, ret_type, clang::VK_LValue);
+        auto *void_cast = clang::CStyleCastExpr::Create(
+            ctx, ctx.VoidTy, clang::VK_PRValue, clang::CK_ToVoid, ref2,
+            nullptr, clang::FPOptionsOverride(),
+            ctx.CreateTypeSourceInfo(ctx.VoidTy), loc, loc);
+        function_builder().pending_materialized.push_back(assign);
+        return std::make_pair(clang::dyn_cast< clang::Stmt >(void_cast), false);
+    }
+
     clang::Stmt *OpBuilder::create_assign_operation(
         clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
         clang::SourceLocation loc
@@ -1336,51 +1380,9 @@ namespace patchestry::ast {
             }
             if (!op.output) {
                 // Non-void return but no explicit output varnode.
-                // Materialize the call result into a temporary variable so
-                // downstream consumers (e.g. CAST) get a DeclRefExpr instead
-                // of sharing the same CallExpr Stmt* (which violates Clang's
-                // AST tree property and causes duplicate call output).
-                auto ret_type = callee->getReturnType();
-                auto var_name = "__call_ret_"
-                    + std::to_string(function_builder().call_ret_counter++);
-                auto *var_decl = create_variable_decl(
-                    ctx, sema().CurContext, var_name, ret_type, op_loc);
-                var_decl->setIsUsed();
-                sema().CurContext->addDecl(var_decl);
-
-                // Push bare DeclStmt to pending (will be hoisted with other decls)
-                auto *decl_stmt = create_decl_stmt(ctx, var_decl, op_loc);
-                function_builder().pending_materialized.push_back(decl_stmt);
-
-                // Create assignment: __call_ret_N = call_expr  (stays in-place)
-                auto *ref = clang::DeclRefExpr::Create(
-                    ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
-                    var_decl, false, op_loc, ret_type, clang::VK_LValue);
-                auto *assign = create_assign_operation(ctx, call_expr, ref, op_loc);
-
-                if (op.has_return_value.value_or(false)) {
-                    // A downstream op will consume this via create_temporary.
-                    // Return the assignment (contains the call) as a non-merged
-                    // stmt so it appears in the correct block, and cache a
-                    // DeclRefExpr so the consumer gets the temp var.
-                    auto *ref2 = clang::DeclRefExpr::Create(
-                        ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
-                        var_decl, false, op_loc, ret_type, clang::VK_LValue);
-                    // Cache the ref under this op key so create_temporary finds it
-                    function_builder().operation_stmts.emplace(op.key, ref2);
-                    return std::make_pair(assign, false);
-                }
-
-                // No downstream consumer — emit assignment + (void)cast.
-                auto *ref2 = clang::DeclRefExpr::Create(
-                    ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
-                    var_decl, false, op_loc, ret_type, clang::VK_LValue);
-                auto *void_cast = clang::CStyleCastExpr::Create(
-                    ctx, ctx.VoidTy, clang::VK_PRValue, clang::CK_ToVoid, ref2,
-                    nullptr, clang::FPOptionsOverride(),
-                    ctx.CreateTypeSourceInfo(ctx.VoidTy), op_loc, op_loc);
-                function_builder().pending_materialized.push_back(assign);
-                return std::make_pair(clang::dyn_cast< clang::Stmt >(void_cast), false);
+                // Materialize into a temp var to avoid duplicate call output.
+                return materialize_call_return(
+                    ctx, call_expr, callee->getReturnType(), op, op_loc);
             }
 
         } else if (op.target->operation) {
@@ -1535,39 +1537,8 @@ namespace patchestry::ast {
         // 6. Handle return value assignment if present
         if (!op.output) {
             if (!call_expr->getType()->isVoidType()) {
-                // Materialize non-void return into temp variable
-                auto ret_type = call_expr->getType();
-                auto var_name = "__call_ret_"
-                    + std::to_string(function_builder().call_ret_counter++);
-                auto *var_decl = create_variable_decl(
-                    ctx, sema().CurContext, var_name, ret_type, op_loc);
-                var_decl->setIsUsed();
-                sema().CurContext->addDecl(var_decl);
-                auto *decl_stmt = create_decl_stmt(ctx, var_decl, op_loc);
-                function_builder().pending_materialized.push_back(decl_stmt);
-
-                auto *ref = clang::DeclRefExpr::Create(
-                    ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
-                    var_decl, false, op_loc, ret_type, clang::VK_LValue);
-                auto *assign = create_assign_operation(ctx, call_expr, ref, op_loc);
-
-                if (op.has_return_value.value_or(false)) {
-                    function_builder().pending_materialized.push_back(assign);
-                    auto *ref2 = clang::DeclRefExpr::Create(
-                        ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
-                        var_decl, false, op_loc, ret_type, clang::VK_LValue);
-                    return std::make_pair(clang::dyn_cast< clang::Expr >(ref2), true);
-                }
-
-                auto *ref2 = clang::DeclRefExpr::Create(
-                    ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
-                    var_decl, false, op_loc, ret_type, clang::VK_LValue);
-                function_builder().pending_materialized.push_back(assign);
-                auto *void_cast = clang::CStyleCastExpr::Create(
-                    ctx, ctx.VoidTy, clang::VK_PRValue, clang::CK_ToVoid, ref2,
-                    nullptr, clang::FPOptionsOverride(),
-                    ctx.CreateTypeSourceInfo(ctx.VoidTy), op_loc, op_loc);
-                return std::make_pair(clang::dyn_cast< clang::Stmt >(void_cast), false);
+                return materialize_call_return(
+                    ctx, call_expr, call_expr->getType(), op, op_loc);
             }
             return std::make_pair(call_expr, false);
         }
@@ -2328,17 +2299,21 @@ namespace patchestry::ast {
             return expr;
         };
 
+        // Suppress diagnostics for the initial attempt — if it fails on
+        // oversized record types, we'll retry with a coerced fallback.
+        // Suppressing prevents the error from being counted/printed,
+        // avoiding the need to Reset() (which clears ALL accumulated state).
+        sema().getDiagnostics().setSuppressAllDiagnostics(true);
         auto result = sema().CreateBuiltinBinOp(
             op_loc, kind, make_paren_expr(ctx, lhs, op_loc), make_paren_expr(ctx, rhs, op_loc)
         );
+        sema().getDiagnostics().setSuppressAllDiagnostics(false);
 
         if (result.isInvalid()) {
             // Fallback: force-coerce both operands to unsigned long long
             // (first 64 bits) and retry.  This handles oversized records
             // (e.g. 192-bit C++ basic_string unions) where
             // coerce_record_to_integer couldn't fit them into a scalar.
-            // Clear the diagnostic error so it doesn't kill CIR generation.
-            sema().getDiagnostics().Reset();
 
             auto *fallback_lhs = make_reinterpret_cast(ctx, lhs, ctx.UnsignedLongLongTy, op_loc);
             auto *fallback_rhs = make_reinterpret_cast(ctx, rhs, ctx.UnsignedLongLongTy, op_loc);

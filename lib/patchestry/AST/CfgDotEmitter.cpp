@@ -51,6 +51,10 @@ namespace patchestry::ast {
             // Truncate long statements
             if (result.size() > max_len) {
                 result.resize(max_len - 3);
+                // Don't leave a trailing backslash (splits escape sequence)
+                if (!result.empty() && result.back() == '\\') {
+                    result.pop_back();
+                }
                 result += "...";
             }
             return result;
@@ -343,9 +347,9 @@ namespace patchestry::ast {
             } else {
                 EmitCGraphDot(g, out);
             }
-            ++step;
         }
 
+        ++step;
         AuditAfterFold(g, rule_name);
     }
 

@@ -436,7 +436,9 @@ namespace patchestry::ast {
         // For ForStmt, skip the init — its DeclStmt belongs in the for-init
         // and must not be hoisted (would cause duplicate VarDecl in CIR).
         if (auto *fs = llvm::dyn_cast< clang::ForStmt >(s)) {
-            // Only recurse into cond, inc, and body — not init
+            // Only recurse into body — not init (its DeclStmt belongs
+            // in the for-loop).  Cond and inc are expressions, not
+            // statement lists, so they can't contain DeclStmts.
             CollectDeclStmts(fs->getBody(), decls, seen);
             return;
         }

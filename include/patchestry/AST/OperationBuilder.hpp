@@ -234,6 +234,16 @@ namespace patchestry::ast {
             clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc
         );
 
+        /// Materialize a non-void call result into a temporary variable.
+        /// Creates VarDecl + DeclStmt (pushed to pending for hoisting),
+        /// assignment (call stays in-place), and returns the appropriate
+        /// pair for the caller to emit.
+        std::pair< clang::Stmt *, bool > materialize_call_return(
+            clang::ASTContext &ctx, clang::Expr *call_expr,
+            clang::QualType ret_type, const Operation &op,
+            clang::SourceLocation loc
+        );
+
         clang::Expr *make_member_expr(
             clang::ASTContext &ctx, clang::Expr *base, unsigned offset,
             clang::SourceLocation loc = clang::SourceLocation()

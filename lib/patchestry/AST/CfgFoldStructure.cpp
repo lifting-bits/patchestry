@@ -1522,6 +1522,23 @@ namespace patchestry::ast {
 
                 if (!simple_body && !multi_body) continue;
 
+                // Validate predecessor connectivity: every chain node's
+                // single predecessor must be the header or another chain
+                // node, otherwise we'd collapse a node owned by a
+                // different subgraph.
+                if (multi_body) {
+                    std::unordered_set<size_t> chain_set(chain.begin(), chain.end());
+                    chain_set.insert(id); // header
+                    for (size_t cid : chain) {
+                        auto &cn = g.Node(cid);
+                        if (cn.SizeIn() != 1 || !chain_set.count(cn.preds[0])) {
+                            multi_body = false;
+                            break;
+                        }
+                    }
+                    if (!multi_body) continue;
+                }
+
                 clang::Expr *cond = bl.branch_cond;
                 if (!cond) {
                     cond = clang::IntegerLiteral::Create(
@@ -1724,9 +1741,12 @@ namespace patchestry::ast {
 
                 auto *clause_body = LeafFromNode(clause, factory);
 
-                // If the clause continues the loop via a back-edge, remove the
-                // edge so the clause becomes terminal.  The back-edge will be
-                // re-established on the collapsed node below.
+                // If the clause continues the loop via a back-edge, remove
+                // the edge BEFORE CollapseNodes so it isn't collected as an
+                // ext_succ (which would create a spurious self-loop on the
+                // collapsed node).  Order matters: collapse first would
+                // inherit the back-edge; remove first makes the clause
+                // terminal so only the header's other branch survives.
                 if (is_back_only) {
                     g.RemoveEdge(clause_id, clause.succs[0]);
                 }
