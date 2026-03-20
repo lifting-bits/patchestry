@@ -2,6 +2,10 @@
 // RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
+// FN: cir.func @_Z11init_loggerbRK7QString(
+// RUN: %gen-call-checks %t.json > %t.call.checks
+// RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 //
 // CWE-22: init_logger with C++ mangled names and Qt types.
 //

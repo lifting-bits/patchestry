@@ -29,6 +29,36 @@ def find_target_function(functions, func_name):
     return None, None
 
 
+def sanitize_to_c_identifier(name):
+    """Mirror the C++ sanitize_to_c_identifier: keep alnum/_, collapse
+    runs of _, strip leading/trailing _, prepend _ if starts with digit."""
+    import re
+    result = re.sub(r'[^A-Za-z0-9_]', '_', name)
+    result = re.sub(r'_+', '_', result)
+    result = result.strip('_')
+    if not result:
+        return "fn"
+    if result[0].isdigit():
+        result = '_' + result
+    return result
+
+
+def get_cir_symbol(func_obj):
+    """Return the CIR symbol name for a function.
+
+    C++ mangled names (_Z prefix): CIR uses the mangled name via asm attr.
+    Others with display_name: CIR uses sanitized display_name.
+    Others without display_name: CIR uses raw name as-is.
+    """
+    name = func_obj.get("name", "")
+    if name.startswith("_Z"):
+        return name
+    display = func_obj.get("display_name", "")
+    if display:
+        return sanitize_to_c_identifier(display)
+    return name
+
+
 def collect_call_targets(func, functions):
     """Collect unique direct callee names and count indirect calls."""
     callees = set()
@@ -41,7 +71,7 @@ def collect_call_targets(func, functions):
                 target = op.get("target", {})
                 target_func_id = target.get("function")
                 if target_func_id and target_func_id in functions:
-                    callees.add(functions[target_func_id]["name"])
+                    callees.add(get_cir_symbol(functions[target_func_id]))
             elif mnemonic == "CALLIND":
                 indirect_count += 1
 
