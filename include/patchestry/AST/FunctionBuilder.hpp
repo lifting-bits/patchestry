@@ -137,6 +137,9 @@ namespace patchestry::ast {
         // that duplicates (e.g. multiple Ghidra "UNNAMED" vars) get unique suffixes.
         std::unordered_map< std::string, unsigned > declared_name_counts;
 
+        // Counter for unique temporary variable names for call return values.
+        unsigned call_ret_counter = 0;
+
         // Statements queued by create_temporary during an operation build that must be
         // emitted immediately before the operation that triggered them.  Drained by
         // create_basic_block after each create_operation call.

@@ -9,6 +9,7 @@
 
 #include <patchestry/AST/CfgBuilder.hpp>
 #include <patchestry/AST/SNode.hpp>
+#include <patchestry/Util/Options.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -320,6 +321,7 @@ namespace patchestry::ast {
     ///   5. Repeat until fully collapsed.
     ///   6. Refine: while→for, break/continue insertion, dead label removal.
     SNode *CfgFoldStructure(const Cfg &cfg, SNodeFactory &factory,
-                             clang::ASTContext &ctx);
+                             clang::ASTContext &ctx,
+                             const patchestry::Options &options = {});
 
 } // namespace patchestry::ast

@@ -424,12 +424,20 @@ namespace patchestry::ast {
     }
 
     // Collect all DeclStmts from a statement tree for hoisting.
+    // Skips DeclStmts inside for-loop init (they belong there).
     static void CollectDeclStmts(clang::Stmt *s,
                                  std::vector< clang::Stmt * > &decls,
                                  std::unordered_set< clang::Stmt * > &seen) {
         if (!s || !seen.insert(s).second) return;
         if (llvm::isa< clang::DeclStmt >(s)) {
             decls.push_back(s);
+            return;
+        }
+        // For ForStmt, skip the init — its DeclStmt belongs in the for-init
+        // and must not be hoisted (would cause duplicate VarDecl in CIR).
+        if (auto *fs = llvm::dyn_cast< clang::ForStmt >(s)) {
+            // Only recurse into cond, inc, and body — not init
+            CollectDeclStmts(fs->getBody(), decls, seen);
             return;
         }
         for (auto *child : s->children()) {

@@ -6,6 +6,7 @@
  */
 
 #include <patchestry/AST/CfgFoldStructure.hpp>
+#include <patchestry/AST/CfgDotEmitter.hpp>
 #include <patchestry/AST/DomTree.hpp>
 #include <patchestry/AST/LoopInfo.hpp>
 #include <patchestry/Util/Log.hpp>
@@ -164,6 +165,16 @@ namespace patchestry::ast {
             }
 
             nodes[rep].is_conditional = !ext_succs.empty() && ext_succs.size() == 2;
+
+#ifndef NDEBUG
+            // Verify: if rep has stmts, they must be captured in the
+            // structured SNode — otherwise they will be lost.
+            if (!nodes[rep].stmts.empty() && !snode) {
+                LOG(WARNING) << "CollapseNodes: rep " << rep
+                             << " has " << nodes[rep].stmts.size()
+                             << " stmts but no structured SNode — stmts will be lost\n";
+            }
+#endif
             nodes[rep].stmts.clear();
             nodes[rep].label.clear();  // label already embedded via LeafFromNode in rule
 
@@ -1453,10 +1464,63 @@ namespace patchestry::ast {
                 if (clause_id == id) continue;
                 auto &clause = g.Node(clause_id);
                 if (clause.collapsed) continue;
-                if (clause.SizeIn() != 1 || clause.SizeOut() != 1) {
-                    continue;
+                if (clause.SizeIn() != 1) continue;
+
+                // Simple case: single-block body that loops back directly.
+                bool simple_body = (clause.SizeOut() == 1 && clause.succs[0] == id);
+
+                // Multi-block case: walk a chain from clause until we find
+                // a node that loops back to the header.  Handles:
+                // (a) single-in/single-out chains
+                // (b) conditional nodes where one branch loops back and the
+                //     other exits (internal if-break pattern in loop body)
+                std::vector<size_t> chain;
+                bool multi_body = false;
+                if (!simple_body) {
+                    size_t cur = clause_id;
+                    std::unordered_set<size_t> visited;
+                    while (true) {
+                        if (visited.count(cur)) break;
+                        visited.insert(cur);
+                        auto &cn = g.Node(cur);
+                        if (cn.collapsed) break;
+                        if (cur != clause_id && cn.SizeIn() != 1) break;
+                        chain.push_back(cur);
+                        // Direct loop-back
+                        if (cn.SizeOut() == 1 && cn.succs[0] == id) {
+                            multi_body = true;
+                            break;
+                        }
+                        // Conditional: one branch loops back via a back-edge,
+                        // the other exits.  Only match genuine back-edges
+                        // (kBack flag set) to avoid mismatching nested loops.
+                        if (cn.SizeOut() == 2) {
+                            int back_idx = -1;
+                            for (size_t si2 = 0; si2 < 2; ++si2) {
+                                if (cn.succs[si2] == id && cn.IsBackEdge(si2)) {
+                                    back_idx = static_cast<int>(si2);
+                                    break;
+                                }
+                                auto &sb = g.Node(cn.succs[si2]);
+                                if (!sb.collapsed && sb.SizeIn() == 1 && sb.SizeOut() == 1
+                                    && sb.succs[0] == id && sb.IsBackEdge(0)) {
+                                    // Successor loops back to header via one hop
+                                    back_idx = static_cast<int>(si2);
+                                    chain.push_back(cn.succs[si2]);
+                                    break;
+                                }
+                            }
+                            if (back_idx >= 0) {
+                                multi_body = true;
+                                break;
+                            }
+                        }
+                        if (cn.SizeOut() != 1) break;
+                        cur = cn.succs[0];
+                    }
                 }
-                if (clause.succs[0] != id) continue;  // must loop back
+
+                if (!simple_body && !multi_body) continue;
 
                 clang::Expr *cond = bl.branch_cond;
                 if (!cond) {
@@ -1469,7 +1533,18 @@ namespace patchestry::ast {
                     cond = NegateCond(cond, ctx);
                 }
 
-                SNode *clause_body = LeafFromNode(clause, factory);
+                // Build the body SNode — simple or multi-block chain.
+                SNode *clause_body = nullptr;
+                if (simple_body) {
+                    clause_body = LeafFromNode(clause, factory);
+                } else {
+                    auto *seq = factory.Make<SSeq>();
+                    for (size_t cid : chain) {
+                        auto *node_body = LeafFromNode(g.Node(cid), factory);
+                        if (node_body) seq->AddChild(node_body);
+                    }
+                    clause_body = seq;
+                }
 
                 // If the header block has statements (e.g. getopt_long()),
                 // they execute each iteration BEFORE the condition check.
@@ -1515,7 +1590,18 @@ namespace patchestry::ast {
                     }
                 }
 
-                g.CollapseNodes({ id, clause_id }, while_node);
+                // Collapse: simple body is just {header, clause}, multi-block
+                // includes the entire chain.
+                std::vector<size_t> collapse_ids;
+                collapse_ids.push_back(id);
+                if (simple_body) {
+                    collapse_ids.push_back(clause_id);
+                } else {
+                    for (size_t cid : chain) {
+                        collapse_ids.push_back(cid);
+                    }
+                }
+                g.CollapseNodes(collapse_ids, while_node);
                 return true;
             }
             return false;
@@ -1595,7 +1681,8 @@ namespace patchestry::ast {
             return true;
         }
 
-        // Rule: If with no exit (clause has zero out edges)
+        // Rule: If with no exit (clause has zero out edges, or clause's
+        // single out-edge is a back-edge — i.e. loop continuation).
         bool FoldIfForcedGoto(CGraph &g, size_t id, SNodeFactory &factory,
                                clang::ASTContext &ctx) {
             auto &bl = g.Node(id);
@@ -1614,9 +1701,12 @@ namespace patchestry::ast {
                 if (clause_id == id) continue;
                 auto &clause = g.Node(clause_id);
                 if (clause.collapsed) continue;
-                if (clause.SizeIn() != 1 || clause.SizeOut() != 0) {
-                    continue;
-                }
+                if (clause.SizeIn() != 1) continue;
+                // Accept: terminal clause (SizeOut==0) OR
+                // clause whose single out-edge is a back-edge (loop continue).
+                bool is_terminal = (clause.SizeOut() == 0);
+                bool is_back_only = (clause.SizeOut() == 1 && clause.IsBackEdge(0));
+                if (!is_terminal && !is_back_only) continue;
                 if (!bl.IsDecisionOut(i)) {
                     continue;
                 }
@@ -1633,6 +1723,14 @@ namespace patchestry::ast {
                 }
 
                 auto *clause_body = LeafFromNode(clause, factory);
+
+                // If the clause continues the loop via a back-edge, remove the
+                // edge so the clause becomes terminal.  The back-edge will be
+                // re-established on the collapsed node below.
+                if (is_back_only) {
+                    g.RemoveEdge(clause_id, clause.succs[0]);
+                }
+
                 SNode *if_node = factory.Make<SIfThenElse>(cond, clause_body, nullptr);
 
                 // Prepend the head block's accumulated content (from prior
@@ -1787,7 +1885,47 @@ namespace patchestry::ast {
                 break;
             }
 
+            // If no explicit exit found, check for loop-interior switch:
+            // all case targets either ARE a back-edge target or have a single
+            // successor that is a back-edge to a common loop header.
+            // In that case, use the loop header as the logical exit (each case
+            // body "breaks" from the switch and the loop continues).
+            bool loop_interior_switch = false;
+            if (exit_id == std::numeric_limits<size_t>::max()) {
+                size_t back_target = std::numeric_limits<size_t>::max();
+                bool valid = true;
+                for (size_t si = 0; si < bl.succs.size(); ++si) {
+                    size_t s = bl.succs[si];
+                    // Direct back-edge from switch to a target (e.g. case 111)
+                    if (bl.IsBackEdge(si)) {
+                        if (back_target == std::numeric_limits<size_t>::max()) back_target = s;
+                        else if (back_target != s) { valid = false; break; }
+                        continue;
+                    }
+                    auto &sn = g.Node(s);
+                    if (sn.collapsed) { valid = false; break; }
+                    // Case target with single successor = back-edge to header
+                    if (sn.SizeOut() == 1 && sn.IsBackEdge(0)) {
+                        size_t bt = sn.succs[0];
+                        if (back_target == std::numeric_limits<size_t>::max()) back_target = bt;
+                        else if (back_target != bt) { valid = false; break; }
+                        continue;
+                    }
+                    // Case target terminates (return/exit) — compatible
+                    if (sn.SizeOut() == 0) continue;
+                    // Otherwise incompatible
+                    valid = false;
+                    break;
+                }
+                if (valid && back_target != std::numeric_limits<size_t>::max()) {
+                    exit_id = back_target;
+                    loop_interior_switch = true;
+                }
+            }
+
             // Validate: each case entry must have sizeIn==1 and not be collapsed.
+            // For loop-interior switches, skip the exit_id (loop header) which
+            // has sizeIn > 1 and is also a direct back-edge target for some cases.
             for (size_t s : bl.succs) {
                 if (s == exit_id) continue;
                 auto &sn = g.Node(s);
@@ -1823,17 +1961,27 @@ namespace patchestry::ast {
             unsigned iw = ctx.getIntWidth(ctx.IntTy);
             for (size_t si = 0; si < bl.succs.size(); ++si) {
                 size_t s = bl.succs[si];
-                if (s == exit_id) continue;
                 auto it = succ_to_values.find(si);
                 if (it == succ_to_values.end()) continue;
 
                 const auto &vals = it->second;
-                // Aggressive inlining: follow the successor chain from this
-                // case entry, inlining all reachable single-successor blocks.
-                std::unordered_set<size_t> chain_visited;
-                auto *body = InlineCaseChain(
-                    g, s, exit_id, factory, ctx, chain_visited, all_collapse);
-                if (!body) body = LeafFromNode(g.Node(s), factory);
+                SNode *body = nullptr;
+
+                if (s == exit_id) {
+                    // For loop-interior switches: direct back-edge case
+                    // (e.g. case 111 → loop header) gets an empty body
+                    // (emitter adds break; from switch, loop continues).
+                    // For normal switches: skip the exit target entirely.
+                    if (!loop_interior_switch) continue;
+                    body = factory.Make<SBlock>();
+                } else {
+                    // Aggressive inlining: follow the successor chain from this
+                    // case entry, inlining all reachable single-successor blocks.
+                    std::unordered_set<size_t> chain_visited;
+                    body = InlineCaseChain(
+                        g, s, exit_id, factory, ctx, chain_visited, all_collapse);
+                    if (!body) body = LeafFromNode(g.Node(s), factory);
+                }
 
                 for (size_t vi = 0; vi < vals.size(); ++vi) {
                     auto *case_val = clang::IntegerLiteral::Create(
@@ -2572,7 +2720,8 @@ namespace patchestry::ast {
         // Main collapse loop
         // ---------------------------------------------------------------
 
-        size_t FoldMainLoop(CGraph &g, SNodeFactory &factory, clang::ASTContext &ctx) {
+        size_t FoldMainLoop(CGraph &g, SNodeFactory &factory,
+                            clang::ASTContext &ctx, CGraphDotTracer &tracer) {
             bool change;
             size_t isolated_count;
 
@@ -2587,14 +2736,14 @@ namespace patchestry::ast {
                             continue;
                         }
 
-                        if (FoldGoto(g, n.id, factory, ctx)) { change = true; continue; }
-                        if (FoldSequence(g, n.id, factory)) { change = true; continue; }
-                        if (FoldIfThen(g, n.id, factory, ctx)) { change = true; continue; }
-                        if (FoldIfElse(g, n.id, factory, ctx)) { change = true; continue; }
-                        if (FoldWhileLoop(g, n.id, factory, ctx)) { change = true; continue; }
-                        if (FoldDoWhileLoop(g, n.id, factory, ctx)) { change = true; continue; }
-                        if (FoldInfiniteLoop(g, n.id, factory, ctx)) { change = true; continue; }
-                        if (FoldSwitch(g, n.id, factory, ctx)) { change = true; continue; }
+                        if (FoldGoto(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldGoto"); change = true; continue; }
+                        if (FoldSequence(g, n.id, factory)) { tracer.Dump(g, "FoldSequence"); change = true; continue; }
+                        if (FoldIfThen(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldIfThen"); change = true; continue; }
+                        if (FoldIfElse(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldIfElse"); change = true; continue; }
+                        if (FoldWhileLoop(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldWhileLoop"); change = true; continue; }
+                        if (FoldDoWhileLoop(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldDoWhileLoop"); change = true; continue; }
+                        if (FoldInfiniteLoop(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldInfiniteLoop"); change = true; continue; }
+                        if (FoldSwitch(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldSwitch"); change = true; continue; }
                     }
                 } while (change);
 
@@ -2603,10 +2752,12 @@ namespace patchestry::ast {
                 for (auto &n : g.nodes) {
                     if (n.collapsed) continue;
                     if (FoldIfForcedGoto(g, n.id, factory, ctx)) {
+                        tracer.Dump(g, "FoldIfForcedGoto");
                         change = true;
                         break;
                     }
                     if (FoldCaseFallthrough(g, n.id)) {
+                        tracer.Dump(g, "FoldCaseFallthrough");
                         change = true;
                         break;
                     }
@@ -2995,13 +3146,34 @@ namespace patchestry::ast {
     // ---------------------------------------------------------------
 
     SNode *CfgFoldStructure(const Cfg &cfg, SNodeFactory &factory,
-                             clang::ASTContext &ctx) {
+                             clang::ASTContext &ctx,
+                             const patchestry::Options &options) {
         if (cfg.blocks.empty()) {
             return factory.Make<SSeq>();
         }
 
+        // Set up DOT tracer — output to same directory as output_file
+        // (or input_file's directory as fallback)
+        CGraphDotTracer tracer;
+        tracer.enabled = options.emit_dot_cfg;
+        tracer.audit = options.verify_structuring;
+        if (tracer.enabled || tracer.audit) {
+            std::string dot_dir;
+            const auto &base = options.output_file.empty()
+                ? options.input_file : options.output_file;
+            auto slash = base.find_last_of("/\\");
+            if (slash != std::string::npos) {
+                dot_dir = base.substr(0, slash + 1);
+            }
+            std::string name = cfg.function
+                ? cfg.function->getName().str() : "unknown";
+            tracer.fn_name = dot_dir + name;
+            tracer.original_stmt_count = CountCfgStmts(cfg);
+        }
+
         // 1. Build the collapse graph
         detail::CGraph g = detail::BuildCGraph(cfg);
+        tracer.Dump(g, "BuildCGraph");
 
         // 2. Mark back-edges
         detail::MarkBackEdges(g);
@@ -3010,6 +3182,7 @@ namespace patchestry::ast {
         std::list<detail::LoopBody> loopbody;
         detail::OrderLoopBodies(g, loopbody);
         LOG(INFO) << "CfgFoldStructure: found " << loopbody.size() << " loop(s)\n";
+        tracer.Dump(g, "MarkBackEdges");
 
         // 2c. Pre-pass: for non-conditional 2-successor blocks where one
         // edge is a back-edge and the other is a forward exit, remove the
@@ -3044,24 +3217,29 @@ namespace patchestry::ast {
             }
         }
 
+        tracer.Dump(g, "BackEdgePrePass");
+
         // 2d. Collapse AND/OR conditions before main collapse loop
         ResolveAllConditionChains(g, factory, ctx);
         LOG(INFO) << "CfgFoldStructure: condition collapsing complete\n";
+        tracer.Dump(g, "ConditionChains");
 
         // 2e. Absorb switch guard chains — mark guard→fallback edges as goto
         // so FoldGoto + FoldSequence chain guards into the switch block,
         // reducing the fallback block's sizeIn for FoldSwitch.
         ResolveSwitchGuards(g);
+        tracer.Dump(g, "SwitchGuards");
 
         // 3. Main collapse loop
-        size_t isolated = FoldMainLoop(g, factory, ctx);
+        size_t isolated = FoldMainLoop(g, factory, ctx, tracer);
 
         // 3b. Try control-equivalence hoisting before falling back to gotos.
         // This duplicates or absorbs small shared blocks to unblock
         // FoldIfThen / FoldIfElse.
         while (isolated < g.ActiveCount()) {
             if (!ResolveControlEquivHoist(g)) break;
-            isolated = FoldMainLoop(g, factory, ctx);
+            tracer.Dump(g, "ControlEquivHoist");
+            isolated = FoldMainLoop(g, factory, ctx, tracer);
         }
 
         // 4. When stuck, select gotos via TraceDAG and retry
@@ -3073,7 +3251,8 @@ namespace patchestry::ast {
                              << g.ActiveCount() - isolated << " blocks remaining\n";
                 break;
             }
-            isolated = FoldMainLoop(g, factory, ctx);
+            tracer.Dump(g, "GotoSelection");
+            isolated = FoldMainLoop(g, factory, ctx, tracer);
             ++iter;
         }
 

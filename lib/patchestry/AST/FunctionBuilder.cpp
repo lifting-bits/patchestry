@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <algorithm>
 #include <limits>
 #include <map>
 #include <memory>

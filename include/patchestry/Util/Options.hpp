@@ -26,6 +26,10 @@ namespace patchestry {
         std::string input_file;
 
         bool print_tu = false;
+
+        bool emit_dot_cfg = false;
+
+        bool verify_structuring = false;
     };
 
 } // namespace patchestry

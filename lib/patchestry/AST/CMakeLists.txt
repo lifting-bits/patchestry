@@ -17,6 +17,7 @@ add_library(patchestry_ast STATIC
   LoopInfo.cpp
   ClangEmitter.cpp
   CfgFoldStructure.cpp
+  CfgDotEmitter.cpp
 )
 
 add_library(patchestry::ast ALIAS patchestry_ast)
