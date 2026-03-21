@@ -20,11 +20,16 @@ namespace patchestry {
         bool emit_obj             = false;
         bool verbose              = false;
         bool use_rellic_transform = false;
+        bool use_structuring_pass = true;
 
         std::string output_file;
         std::string input_file;
 
         bool print_tu = false;
+
+        bool emit_dot_cfg = false;
+
+        bool verify_structuring = false;
     };
 
 } // namespace patchestry

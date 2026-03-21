@@ -85,22 +85,43 @@ namespace {
         "print-tu", llvm::cl::desc("Pretty print translation unit"), llvm::cl::init(false)
     );
 
+    const llvm::cl::opt< bool > use_structuring_pass( // NOLINT(cert-err58-cpp)
+        "use-structuring-pass",
+        llvm::cl::desc("Enable the CfgFoldStructure structuring pass"),
+        llvm::cl::init(true)
+    );
+
+    const llvm::cl::opt< bool > emit_dot_cfg( // NOLINT(cert-err58-cpp)
+        "emit-dot-cfg",
+        llvm::cl::desc("Dump DOT graphs at every CFG fold step (debug)"),
+        llvm::cl::init(false)
+    );
+
+    const llvm::cl::opt< bool > verify_structuring( // NOLINT(cert-err58-cpp)
+        "verify-structuring",
+        llvm::cl::desc("Verify no statements are dropped during CFG structuring"),
+        llvm::cl::init(false)
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
         );
 
         return {
-            .emit_cir             = emit_cir.getValue(),
-            .emit_mlir            = emit_mlir.getValue(), // It is set to true by default
-            .emit_llvm            = emit_llvm.getValue(),
-            .emit_asm             = emit_asm.getValue(),
-            .emit_obj             = emit_obj.getValue(),
-            .verbose              = verbose.getValue(),
-            .use_rellic_transform = use_rellic_transform.getValue(),
-            .output_file          = output_filename.getValue(),
-            .input_file           = input_filename.getValue(),
-            .print_tu             = print_tu.getValue(),
+            .emit_cir                   = emit_cir.getValue(),
+            .emit_mlir                  = emit_mlir.getValue(), // It is set to true by default
+            .emit_llvm                  = emit_llvm.getValue(),
+            .emit_asm                   = emit_asm.getValue(),
+            .emit_obj                   = emit_obj.getValue(),
+            .verbose                    = verbose.getValue(),
+            .use_rellic_transform       = use_rellic_transform.getValue(),
+            .use_structuring_pass       = use_structuring_pass.getValue(),
+            .output_file                = output_filename.getValue(),
+            .input_file                 = input_filename.getValue(),
+            .print_tu                   = print_tu.getValue(),
+            .emit_dot_cfg               = emit_dot_cfg.getValue(),
+            .verify_structuring         = verify_structuring.getValue(),
         };
     }
 
@@ -284,9 +305,12 @@ int main(int argc, char **argv) {
     ast_consumer.HandleTranslationUnit(ast_context);
 
     auto *pcode_consumer = dynamic_cast< patchestry::ast::PcodeASTConsumer * >(&ast_consumer);
-    if (pcode_consumer != nullptr) {
+    if (pcode_consumer != nullptr && !ci.getDiagnostics().hasErrorOccurred()) {
         auto codegen = std::make_unique< patchestry::codegen::CodeGenerator >(ci);
         codegen->lower_to_ir(ast_context, options);
+    } else if (ci.getDiagnostics().hasErrorOccurred()) {
+        LOG(ERROR) << "Skipping code generation due to prior diagnostics errors.\n";
+        return EXIT_FAILURE;
     }
 
     return EXIT_SUCCESS;

@@ -394,6 +394,50 @@ namespace patchestry::ast {
         return make_reinterpret_cast(ctx, expr, int_type, loc);
     }
 
+    std::pair< clang::Stmt *, bool > OpBuilder::materialize_call_return(
+        clang::ASTContext &ctx, clang::Expr *call_expr,
+        clang::QualType ret_type, const Operation &op,
+        clang::SourceLocation loc
+    ) {
+        auto var_name = "__call_ret_"
+            + std::to_string(function_builder().call_ret_counter++);
+        auto *var_decl = create_variable_decl(
+            ctx, sema().CurContext, var_name, ret_type, loc);
+        var_decl->setIsUsed();
+        sema().CurContext->addDecl(var_decl);
+
+        // Bare DeclStmt pushed to pending (will be hoisted with other decls)
+        auto *decl_stmt = create_decl_stmt(ctx, var_decl, loc);
+        function_builder().pending_materialized.push_back(decl_stmt);
+
+        // Assignment: __call_ret_N = call_expr  (stays in-place)
+        auto *ref = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+            var_decl, false, loc, ret_type, clang::VK_LValue);
+        auto *assign = create_assign_operation(ctx, call_expr, ref, loc);
+
+        if (op.has_return_value.value_or(false)) {
+            // Downstream op will consume via create_temporary.
+            // Cache a DeclRefExpr so the consumer gets the temp var.
+            auto *ref2 = clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+                var_decl, false, loc, ret_type, clang::VK_LValue);
+            function_builder().operation_stmts.emplace(op.key, ref2);
+            return std::make_pair(assign, false);
+        }
+
+        // No downstream consumer — emit assignment + (void)cast.
+        auto *ref2 = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+            var_decl, false, loc, ret_type, clang::VK_LValue);
+        auto *void_cast = clang::CStyleCastExpr::Create(
+            ctx, ctx.VoidTy, clang::VK_PRValue, clang::CK_ToVoid, ref2,
+            nullptr, clang::FPOptionsOverride(),
+            ctx.CreateTypeSourceInfo(ctx.VoidTy), loc, loc);
+        function_builder().pending_materialized.push_back(assign);
+        return std::make_pair(clang::dyn_cast< clang::Stmt >(void_cast), false);
+    }
+
     clang::Stmt *OpBuilder::create_assign_operation(
         clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
         clang::SourceLocation loc
@@ -843,8 +887,8 @@ namespace patchestry::ast {
 
         // Priority 1: switch_cases present — proper integer switch using per-case
         // integer values recovered by Ghidra.  Prefer inputs[0] when it is a named
-        // local variable (the most direct discriminant); otherwise fall back to
-        // switch_input, which may resolve to an inlined call expression.
+        // local variable or parameter (the most direct discriminant); otherwise
+        // fall back to switch_input, which may resolve to an inlined call expression.
         if (!op.switch_cases.empty()) {
             clang::Expr *disc = nullptr;
             if (op.inputs[0].kind == Varnode::VARNODE_LOCAL
@@ -860,14 +904,23 @@ namespace patchestry::ast {
                            << "\n";
                 return {};
             }
-            if (!disc->getType()->isIntegerType()) {
-                auto *cast_disc = make_cast(ctx, disc, ctx.IntTy, loc);
-                if (cast_disc == nullptr) {
-                    LOG(ERROR) << "BRANCHIND: failed to cast switch discriminant to int. key: "
-                               << op.key << "\n";
-                    return {};
+            // C promotes switch conditions to at least int width.  If the
+            // discriminant is narrower than int (e.g., unsigned char / short
+            // from Ghidra's "undefined" types), widen it so the case value
+            // bit widths match the CIR switch condition type.
+            {
+                auto disc_type = disc->getType();
+                bool needs_cast = !disc_type->isIntegerType()
+                    || ctx.getIntWidth(disc_type) < ctx.getIntWidth(ctx.IntTy);
+                if (needs_cast) {
+                    auto *cast_disc = make_cast(ctx, disc, ctx.IntTy, loc);
+                    if (cast_disc == nullptr) {
+                        LOG(ERROR) << "BRANCHIND: failed to cast switch discriminant to int. key: "
+                                   << op.key << "\n";
+                        return {};
+                    }
+                    disc = cast_disc;
                 }
-                disc = cast_disc;
             }
 
             auto *switch_stmt =
@@ -1326,12 +1379,10 @@ namespace patchestry::ast {
                 return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
             }
             if (!op.output) {
-                // Non-void return but no explicit output varnode in the JSON.
-                // The return value is unused (no assignment target), so emit
-                // the call as a standalone expression statement.  This ensures
-                // side-effectful calls like fprintf whose return value is
-                // discarded still appear in the output.
-                return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
+                // Non-void return but no explicit output varnode.
+                // Materialize into a temp var to avoid duplicate call output.
+                return materialize_call_return(
+                    ctx, call_expr, callee->getReturnType(), op, op_loc);
             }
 
         } else if (op.target->operation) {
@@ -1484,7 +1535,11 @@ namespace patchestry::ast {
         auto *call_expr = result.getAs< clang::Expr >();
 
         // 6. Handle return value assignment if present
-        if (!op.output || !op.has_return_value.value_or(false)) {
+        if (!op.output) {
+            if (!call_expr->getType()->isVoidType()) {
+                return materialize_call_return(
+                    ctx, call_expr, call_expr->getType(), op, op_loc);
+            }
             return std::make_pair(call_expr, false);
         }
 
@@ -2244,13 +2299,38 @@ namespace patchestry::ast {
             return expr;
         };
 
+        // Suppress diagnostics for the initial attempt — if it fails on
+        // oversized record types, we'll retry with a coerced fallback.
+        // Suppressing prevents the error from being counted/printed,
+        // avoiding the need to Reset() (which clears ALL accumulated state).
+        sema().getDiagnostics().setSuppressAllDiagnostics(true);
         auto result = sema().CreateBuiltinBinOp(
             op_loc, kind, make_paren_expr(ctx, lhs, op_loc), make_paren_expr(ctx, rhs, op_loc)
         );
+        sema().getDiagnostics().setSuppressAllDiagnostics(false);
 
         if (result.isInvalid()) {
-            LOG(ERROR) << "Binary operation failed on operands. key: " << op.key << "\n";
-            return std::make_pair(nullptr, false);
+            // Fallback: force-coerce both operands to unsigned long long
+            // (first 64 bits) and retry.  This handles oversized records
+            // (e.g. 192-bit C++ basic_string unions) where
+            // coerce_record_to_integer couldn't fit them into a scalar.
+
+            auto *fallback_lhs = make_reinterpret_cast(ctx, lhs, ctx.UnsignedLongLongTy, op_loc);
+            auto *fallback_rhs = make_reinterpret_cast(ctx, rhs, ctx.UnsignedLongLongTy, op_loc);
+            if (fallback_lhs && fallback_rhs) {
+                result = sema().CreateBuiltinBinOp(
+                    op_loc, kind,
+                    make_paren_expr(ctx, fallback_lhs, op_loc),
+                    make_paren_expr(ctx, fallback_rhs, op_loc));
+            }
+
+            if (result.isInvalid()) {
+                LOG(ERROR) << "Binary operation failed on operands (after fallback). key: "
+                           << op.key << "\n";
+                return std::make_pair(nullptr, false);
+            }
+            LOG(WARNING) << "Binary operation on oversized record coerced to u64. key: "
+                         << op.key << "\n";
         }
 
         if (!op.output) {

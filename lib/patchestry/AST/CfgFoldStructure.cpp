@@ -1,0 +1,4469 @@
+/*
+ * Copyright (c) 2024, Trail of Bits, Inc.
+ *
+ * This source code is licensed in accordance with the terms specified in
+ * the LICENSE file found in the root directory of this source tree.
+ */
+
+#include <patchestry/AST/CfgFoldStructure.hpp>
+#include <patchestry/AST/CfgDotEmitter.hpp>
+#include <patchestry/AST/DomTree.hpp>
+#include <patchestry/AST/LoopInfo.hpp>
+#include <patchestry/Util/Log.hpp>
+
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <list>
+#include <numeric>
+#include <optional>
+#include <set>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+#include <clang/AST/ASTContext.h>
+#include <clang/AST/Decl.h>
+#include <clang/AST/Expr.h>
+#include <clang/AST/Stmt.h>
+
+namespace patchestry::ast {
+
+    // -----------------------------------------------------------------------
+    // detail:: namespace — CGraph method definitions and graph builders
+    // -----------------------------------------------------------------------
+    namespace detail {
+
+        // ---------------------------------------------------------------
+        // CollapseNodes — merge a set of CNode ids into a single
+        // representative node, rewiring all external edges.
+        //
+        //  BEFORE  (collapsing {A, B} into rep=A):
+        //
+        //      P ──→ A ──→ B ──→ S        Q ──→ B
+        //            │           │
+        //            └───→ X    (internal edges dropped)
+        //
+        //  AFTER:
+        //
+        //      P ──→ rep ──→ S             Q ──→ rep
+        //
+        //  Steps:
+        //    1. Collect ext_preds  — predecessors outside the set
+        //    2. Collect ext_succs  — successors outside the set (deduped)
+        //    3. Mark non-rep nodes as collapsed
+        //    4. Rewire: external successors drop old pred refs,
+        //       external predecessors redirect succ refs → rep
+        //    5. Dedup predecessor succs (handles shared-pred case,
+        //       e.g. P→A and P→B both become P→rep)
+        //    6. Install ext_preds / ext_succs on rep
+        //    7. Ensure rep appears in each successor's pred list
+        // ---------------------------------------------------------------
+        size_t CGraph::CollapseNodes(const std::vector< size_t > &ids, SNode *snode) {
+            // --- Step 0: choose representative ---
+            size_t rep = ids[0];
+            nodes[rep].structured = snode;
+
+            std::unordered_set< size_t > idset(ids.begin(), ids.end());
+
+            // --- Step 1: collect external predecessors ---
+            std::vector< size_t > ext_preds;
+            for (size_t nid : ids) {
+                for (size_t p : nodes[nid].preds) {
+                    if (idset.count(p) == 0) ext_preds.push_back(p);
+                }
+            }
+
+            // --- Step 2: collect external successors (first-seen flags win) ---
+            std::vector< size_t > ext_succs;
+            std::vector< uint32_t > ext_succ_flags;
+            for (size_t nid : ids) {
+                for (size_t i = 0; i < nodes[nid].succs.size(); ++i) {
+                    size_t s = nodes[nid].succs[i];
+                    if (idset.count(s) == 0) {
+                        if (std::find(ext_succs.begin(), ext_succs.end(), s) == ext_succs.end()) {
+                            ext_succs.push_back(s);
+                            ext_succ_flags.push_back(nodes[nid].edge_flags[i]);
+                        }
+                    }
+                }
+            }
+
+            // --- Step 3: mark non-rep nodes as collapsed ---
+            for (size_t nid : ids) {
+                if (nid != rep) {
+                    nodes[nid].collapsed = true;
+                    nodes[nid].collapsed_into = rep;
+                }
+            }
+
+            // --- Step 4: rewire edges ---
+            //  4a. For each external successor, remove old pred references
+            //      to any collapsed node.
+            //  4b. For each external predecessor, redirect succ entries
+            //      that pointed to a collapsed node → rep.
+            for (size_t nid : ids) {
+                for (size_t s : nodes[nid].succs) {
+                    if (idset.count(s) == 0) {
+                        auto &p = nodes[s].preds;
+                        p.erase(std::remove(p.begin(), p.end(), nid), p.end());
+                    }
+                }
+                for (size_t p : nodes[nid].preds) {
+                    if (idset.count(p) == 0) {
+                        auto &ss = nodes[p].succs;
+                        for (size_t i = 0; i < ss.size(); ++i) {
+                            if (ss[i] == nid) {
+                                ss[i] = rep;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Step 5: deduplicate predecessor succs ---
+            //
+            //  Shared-predecessor case:
+            //
+            //      BEFORE redirect       AFTER redirect (broken)
+            //       P.succs = [A, B]      P.succs = [rep, rep]  ← dup!
+            //
+            //  We compact each predecessor's succs/edge_flags in place,
+            //  keeping only the first occurrence of each target.
+            for (size_t p : ext_preds) {
+                auto &ss = nodes[p].succs;
+                auto &sf = nodes[p].edge_flags;
+                std::unordered_set< size_t > seen;
+                size_t write = 0;
+                for (size_t i = 0; i < ss.size(); ++i) {
+                    if (seen.insert(ss[i]).second) {
+                        ss[write] = ss[i];
+                        sf[write] = sf[i];
+                        ++write;
+                    }
+                }
+                ss.resize(write);
+                sf.resize(write);
+            }
+
+            // --- Step 6: install edges on representative ---
+            nodes[rep].succs = ext_succs;
+            nodes[rep].edge_flags = ext_succ_flags;
+
+            std::sort(ext_preds.begin(), ext_preds.end());
+            ext_preds.erase(std::unique(ext_preds.begin(), ext_preds.end()), ext_preds.end());
+            nodes[rep].preds = ext_preds;
+
+            // --- Step 7: ensure rep is listed in each successor's preds ---
+            for (size_t s : ext_succs) {
+                auto &p = nodes[s].preds;
+                if (std::find(p.begin(), p.end(), rep) == p.end()) {
+                    p.push_back(rep);
+                }
+            }
+
+            nodes[rep].is_conditional = !ext_succs.empty() && ext_succs.size() == 2;
+
+#ifndef NDEBUG
+            // Verify: if rep has stmts, they must be captured in the
+            // structured SNode — otherwise they will be lost.
+            if (!nodes[rep].stmts.empty() && !snode) {
+                LOG(WARNING) << "CollapseNodes: rep " << rep
+                             << " has " << nodes[rep].stmts.size()
+                             << " stmts but no structured SNode — stmts will be lost\n";
+            }
+#endif
+            nodes[rep].stmts.clear();
+            nodes[rep].label.clear();  // label already embedded via LeafFromNode in rule
+
+            // Preserve branch_cond from the collapsed node that owns the
+            // conditional split producing the 2 external successors.
+            // Without this, FoldIfElse/FoldIfThen see a null
+            // condition and synthesize a spurious `if(1)`.
+            nodes[rep].branch_cond = nullptr;
+            if (nodes[rep].is_conditional) {
+                // Walk collapsed nodes in reverse (last node most likely
+                // contributed the outgoing conditional edges).
+                for (auto it = ids.rbegin(); it != ids.rend(); ++it) {
+                    if (nodes[*it].branch_cond) {
+                        nodes[rep].branch_cond = nodes[*it].branch_cond;
+                        break;
+                    }
+                }
+            }
+
+            // Preserve switch metadata from collapsed nodes so FoldSwitch
+            // can still fire on the representative after chaining.
+            nodes[rep].switch_cases.clear();
+            for (size_t nid : ids) {
+                if (nid != rep && !nodes[nid].switch_cases.empty()) {
+                    nodes[rep].switch_cases = std::move(nodes[nid].switch_cases);
+                    // Also preserve branch_cond for switch discriminant.
+                    if (!nodes[rep].branch_cond) {
+                        nodes[rep].branch_cond = nodes[nid].branch_cond;
+                    }
+                    break;
+                }
+            }
+
+            return rep;
+        }
+
+        // Build the collapse graph from the Cfg
+        CGraph BuildCGraph(const Cfg &cfg) {
+            CGraph g;
+            g.entry = cfg.entry;
+            g.nodes.resize(cfg.blocks.size());
+
+            for (size_t i = 0; i < cfg.blocks.size(); ++i) {
+                auto &cb = cfg.blocks[i];
+                auto &cn = g.nodes[i];
+                cn.id = i;
+                cn.label = cb.label;
+                cn.stmts = cb.stmts;
+                cn.branch_cond = cb.branch_cond;
+                cn.is_conditional = cb.is_conditional;
+                cn.succs = cb.succs;
+                cn.switch_cases = cb.switch_cases;
+                cn.edge_flags.resize(cb.succs.size(), 0);
+
+                // Assert Ghidra convention: 2-successor conditional blocks have
+                // succs[0]=false/fallthrough, succs[1]=true/taken
+                assert((!cb.is_conditional || cb.succs.size() != 2 ||
+                        (cb.succs[0] == cb.fallthrough_succ && cb.succs[1] == cb.taken_succ))
+                       && "CfgBlock edge polarity must be false-first (Ghidra convention)");
+            }
+
+            // Build predecessor lists
+            for (size_t i = 0; i < g.nodes.size(); ++i) {
+                for (size_t s : g.nodes[i].succs) {
+                    g.nodes[s].preds.push_back(i);
+                }
+            }
+
+            return g;
+        }
+
+        // Detect back-edges using DFS
+        void MarkBackEdges(CGraph &g) {
+            enum Color { WHITE, GRAY, BLACK };
+            std::vector<Color> color(g.nodes.size(), WHITE);
+
+            std::function<void(size_t)> dfs = [&](size_t u) {
+                color[u] = GRAY;
+                auto &nd = g.Node(u);
+                for (size_t i = 0; i < nd.succs.size(); ++i) {
+                    size_t v = nd.succs[i];
+                    if (color[v] == GRAY) {
+                        nd.edge_flags[i] |= CNode::kBack;
+                    } else if (color[v] == WHITE) {
+                        dfs(v);
+                    }
+                }
+                color[u] = BLACK;
+            };
+
+            dfs(g.entry);
+        }
+
+        // -------------------------------------------------------------------
+        // LoopBody core methods
+        // -------------------------------------------------------------------
+
+        void ClearMarks(CGraph &g, const std::vector< size_t > &body) {
+            for (size_t id : body) {
+                g.Node(id).mark = false;
+            }
+        }
+
+        void LoopBody::FindBase(CGraph &g, std::vector< size_t > &body) const {
+            body.clear();
+
+            // Mark head, add to body.
+            g.Node(head).mark = true;
+            body.push_back(head);
+
+            // Mark each tail (skip if already marked, e.g. head == tail).
+            for (size_t t : tails) {
+                if (!g.Node(t).mark) {
+                    g.Node(t).mark = true;
+                    body.push_back(t);
+                }
+            }
+
+            // BFS backward from tails: iterate body starting at index 1
+            // (index 0 is head -- we don't go backward from head).
+            for (size_t idx = 1; idx < body.size(); ++idx) {
+                auto &nd = g.Node(body[idx]);
+                for (size_t p : nd.preds) {
+                    if (g.Node(p).mark) {
+                        continue;
+                    }
+                    if (g.Node(p).collapsed) {
+                        continue;
+                    }
+
+                    // Check if the incoming edge from p to body[idx] is a goto edge.
+                    // Find the succ index in p that points to body[idx].
+                    bool is_goto = false;
+                    auto &pn     = g.Node(p);
+                    for (size_t si = 0; si < pn.succs.size(); ++si) {
+                        if (pn.succs[si] == body[idx]) {
+                            if (pn.IsGotoOut(si)) {
+                                is_goto = true;
+                            }
+                            break;
+                        }
+                    }
+                    if (is_goto) continue;
+
+                    g.Node(p).mark = true;
+                    body.push_back(p);
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // LabelContainments — set immed_container for nested loops.
+        //
+        // Precondition: the caller has marked every CNode in `this`
+        // loop's body (node.mark == true).
+        //
+        // For each other loop `lb` in `looporder`, if lb's head is
+        // marked then `lb` is nested inside `this` loop.  We want
+        // lb->immed_container to point to the SMALLEST (tightest)
+        // enclosing loop.  The decision rule:
+        //
+        //   - If lb has no container yet, adopt `this`.
+        //   - If lb already has a container C whose head is also
+        //     marked, then C is inside `this` loop too — C is a
+        //     tighter fit, so keep C.
+        //   - Otherwise C is not inside `this`, which means `this`
+        //     is a better (tighter) container — replace C with `this`.
+        // ---------------------------------------------------------------
+        void LoopBody::LabelContainments(
+            const CGraph &g, const std::vector< size_t > & /*body*/,
+            const std::vector< LoopBody * > &looporder
+        ) {
+            for (LoopBody *lb : looporder) {
+                if (lb == this) continue;
+                if (!g.Node(lb->head).mark) {
+                    continue;
+                }
+
+                if (lb->immed_container == nullptr) {
+                    lb->immed_container = this;
+                } else if (!g.Node(lb->immed_container->head).mark) {
+                    lb->immed_container = this;
+                }
+            }
+        }
+
+        void LoopBody::MergeIdenticalHeads(
+            std::vector< LoopBody * > &looporder, std::list< LoopBody > &storage
+        ) {
+            // Sort by head for merge detection.
+            std::sort(looporder.begin(), looporder.end(),
+                [](const LoopBody *a, const LoopBody *b) { return a->head < b->head; });
+
+            size_t write = 0;
+            for (size_t read = 0; read < looporder.size(); ++read) {
+                if (write > 0 && looporder[write - 1]->head == looporder[read]->head) {
+                    // Merge tails into the previous entry.
+                    auto *dst = looporder[write - 1];
+                    auto *src = looporder[read];
+                    for (size_t t : src->tails) {
+                        dst->AddTail(t);
+                    }
+                    // Erase src from storage.
+                    for (auto it = storage.begin(); it != storage.end(); ++it) {
+                        if (&(*it) == src) {
+                            storage.erase(it);
+                            break;
+                        }
+                    }
+                } else {
+                    looporder[write++] = looporder[read];
+                }
+            }
+            looporder.resize(write);
+        }
+
+        void LabelLoops(
+            CGraph &g, std::list< LoopBody > &loopbody, std::vector< LoopBody * > &looporder
+        ) {
+            // Scan all edges for back-edges. Create one LoopBody per back-edge.
+            for (auto &n : g.nodes) {
+                if (n.collapsed) continue;
+                for (size_t i = 0; i < n.succs.size(); ++i) {
+                    if (n.IsBackEdge(i)) {
+                        size_t hd = n.succs[i];
+                        loopbody.emplace_back(hd);
+                        loopbody.back().AddTail(n.id);
+                        looporder.push_back(&loopbody.back());
+                    }
+                }
+            }
+
+            // Merge loops sharing the same head.
+            LoopBody::MergeIdenticalHeads(looporder, loopbody);
+
+            // For each loop: findBase, labelContainments, clearMarks.
+            for (LoopBody *lb : looporder) {
+                std::vector<size_t> body;
+                lb->FindBase(g, body);
+                lb->unique_count = static_cast<int>(body.size());
+                lb->LabelContainments(g, body, looporder);
+                ClearMarks(g, body);
+            }
+
+            // Compute depth from immed_container chains.
+            for (LoopBody *lb : looporder) {
+                int d = 0;
+                for (LoopBody *c = lb->immed_container; c != nullptr; c = c->immed_container) {
+                    ++d;
+                }
+                lb->depth = d;
+            }
+
+            // Sort innermost-first (higher depth first) for processing order.
+            std::sort(looporder.begin(), looporder.end(),
+                [](const LoopBody *a, const LoopBody *b) { return *a < *b; });
+        }
+
+        // -------------------------------------------------------------------
+        // LoopBody exit detection, tail ordering, extension, exit labeling
+        // -------------------------------------------------------------------
+
+        void LoopBody::FindExit(const CGraph &g, const std::vector< size_t > &body) {
+            // Select a single exit block for the loop.
+            // Priority: tail exits first, then head exits, then body exits.
+            // A candidate exit is an unmarked successor reached via a non-goto edge.
+
+            std::vector<size_t> candidates;
+
+            // Scan tails for exits.
+            for (size_t t : tails) {
+                const auto &tn = g.Node(t);
+                for (size_t i = 0; i < tn.succs.size(); ++i) {
+                    size_t s = tn.succs[i];
+                    if (!g.Node(s).mark && !tn.IsGotoOut(i) && !tn.IsBackEdge(i)) {
+                        if (!immed_container) {
+                            // No container -- take first candidate immediately.
+                            exit_block = s;
+                            return;
+                        }
+                        candidates.push_back(s);
+                    }
+                }
+            }
+
+            // If container exists, also scan head and remaining body nodes.
+            if (immed_container) {
+                // Scan head (body[0]).
+                const auto &hd = g.Node(body[0]);
+                for (size_t i = 0; i < hd.succs.size(); ++i) {
+                    size_t s = hd.succs[i];
+                    if (!g.Node(s).mark && !hd.IsGotoOut(i) && !hd.IsBackEdge(i)) {
+                        candidates.push_back(s);
+                    }
+                }
+                // Scan body nodes beyond the unique set (index >= unique_count).
+                for (size_t idx = static_cast<size_t>(unique_count); idx < body.size(); ++idx) {
+                    const auto &bn = g.Node(body[idx]);
+                    for (size_t i = 0; i < bn.succs.size(); ++i) {
+                        size_t s = bn.succs[i];
+                        if (!g.Node(s).mark && !bn.IsGotoOut(i) && !bn.IsBackEdge(i)) {
+                            candidates.push_back(s);
+                        }
+                    }
+                }
+            }
+
+            // Pick exit: for v1, take the first candidate.
+            // NOTE: Full container-aware exit selection (preferring candidates inside
+            // the container's body) can be added later if needed.
+            if (!candidates.empty()) {
+                exit_block = candidates[0];
+            } else {
+                exit_block = kNone;
+            }
+        }
+
+        void LoopBody::OrderTails(const CGraph &g) {
+            // Swap the tail that directly reaches exit_block to tails[0].
+            if (tails.size() <= 1 || exit_block == kNone) {
+                return;
+            }
+
+            for (size_t ti = 0; ti < tails.size(); ++ti) {
+                const auto &tn = g.Node(tails[ti]);
+                for (size_t s : tn.succs) {
+                    if (s == exit_block) {
+                        // Found a tail that reaches exit_block directly.
+                        if (ti != 0) {
+                            std::swap(tails[0], tails[ti]);
+                        }
+                        return;
+                    }
+                }
+            }
+            // No tail reaches exit_block directly -- leave order unchanged.
+        }
+
+        void LoopBody::Extend(CGraph &g, std::vector< size_t > &body) const {
+            // Add dominated-only blocks: blocks whose ALL predecessors are in the body.
+            // Uses visit_count to track how many predecessors are body members.
+            // Fixpoint iteration until no new nodes are added.
+
+            std::vector<size_t> touched;  // track nodes with non-zero visit_count
+
+            bool added = true;
+            while (added) {
+                added = false;
+
+                // For each body node, increment visit_count of non-body, non-collapsed successors.
+                for (size_t bid : body) {
+                    const auto &bn = g.Node(bid);
+                    for (size_t i = 0; i < bn.succs.size(); ++i) {
+                        size_t s = bn.succs[i];
+                        if (g.Node(s).mark) {
+                            continue; // already in body
+                        }
+                        if (g.Node(s).collapsed) {
+                            continue; // absorbed
+                        }
+                        if (bn.IsGotoOut(i)) {
+                            continue; // don't extend through gotos
+                        }
+                        if (s == exit_block) continue;        // don't extend into exit
+                        if (g.Node(s).visit_count == 0) {
+                            touched.push_back(s);
+                        }
+                        g.Node(s).visit_count++;
+                    }
+                }
+
+                // Check which visited nodes have ALL predecessors in body.
+                for (size_t s : touched) {
+                    auto &sn = g.Node(s);
+                    if (sn.mark) continue;  // already added
+                    if (sn.visit_count == static_cast< int >(sn.SizeIn())) {
+                        // All preds are in body -- include this node.
+                        sn.mark = true;
+                        body.push_back(s);
+                        added = true;
+                    }
+                }
+
+                // Reset visit_count for next iteration.
+                for (size_t s : touched) {
+                    g.Node(s).visit_count = 0;
+                }
+                touched.clear();
+            }
+        }
+
+        void LoopBody::LabelExitEdges(CGraph &g, const std::vector< size_t > &body) const {
+            // Mark kLoopExit on all edges leaving the loop body.
+            for (size_t bid : body) {
+                auto &bn = g.Node(bid);
+                for (size_t i = 0; i < bn.succs.size(); ++i) {
+                    size_t s = bn.succs[i];
+                    if (!g.Node(s).mark && !bn.IsGotoOut(i)) {
+                        bn.edge_flags[i] |= CNode::kLoopExit;
+                    }
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // orderLoopBodies: orchestrate full loop detection pipeline
+        // -------------------------------------------------------------------
+
+        void OrderLoopBodies(CGraph &g, std::list< LoopBody > &loopbody) {
+            // 1. labelLoops: create LoopBody per back-edge, merge, compute containment/depth
+            std::vector<LoopBody *> looporder;
+            LabelLoops(g, loopbody, looporder);
+            if (loopbody.empty()) return;
+
+            // 2. For each loop (innermost-first): findExit, orderTails, extend, labelExitEdges
+            for (auto &lb : loopbody) {
+                std::vector<size_t> body;
+                lb.FindBase(g, body);
+                lb.FindExit(g, body);
+                lb.OrderTails(g);
+                lb.Extend(g, body);
+                lb.LabelExitEdges(g, body);
+                ClearMarks(g, body);
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // LoopBody: exit mark management and update
+        // -------------------------------------------------------------------
+
+        void LoopBody::SetExitMarks(CGraph &g, const std::vector< size_t > &body) const {
+            std::unordered_set<size_t> bodyset(body.begin(), body.end());
+            for (size_t nid : body) {
+                auto &n = g.Node(nid);
+                for (size_t i = 0; i < n.succs.size(); ++i) {
+                    if (bodyset.count(n.succs[i]) == 0) {
+                        n.SetLoopExit(i);
+                    }
+                }
+            }
+        }
+
+        void LoopBody::ClearExitMarks(CGraph &g, const std::vector< size_t > &body) const {
+            for (size_t nid : body) {
+                auto &n = g.Node(nid);
+                for (size_t i = 0; i < n.succs.size(); ++i) {
+                    n.ClearLoopExit(i);
+                }
+            }
+        }
+
+        bool LoopBody::Update(const CGraph &g) const { return !g.Node(head).collapsed; }
+
+        // -------------------------------------------------------------------
+        // FloatingEdge
+        // -------------------------------------------------------------------
+
+        std::pair< size_t, size_t > FloatingEdge::GetCurrentEdge(const CGraph &g) const {
+            // Gap 3: walk up collapse hierarchy (like Ghidra's getParent walk)
+            size_t top = top_id;
+            while (top < g.nodes.size() && g.Node(top).collapsed) {
+                size_t next = g.Node(top).collapsed_into;
+                if (next == CNode::kNone || next == top) {
+                    break;
+                }
+                top = next;
+            }
+            size_t bot = bottom_id;
+            while (bot < g.nodes.size() && g.Node(bot).collapsed) {
+                size_t next = g.Node(bot).collapsed_into;
+                if (next == CNode::kNone || next == bot) {
+                    break;
+                }
+                bot = next;
+            }
+
+            if (top >= g.nodes.size() || bot >= g.nodes.size())
+                return { CNode::kNone, 0 };
+            if (g.Node(top).collapsed || g.Node(bot).collapsed) {
+                return { CNode::kNone, 0 };
+            }
+            if (top == bot) {
+                return { CNode::kNone, 0 };
+            }
+
+            const auto &succs = g.Node(top).succs;
+            for (size_t i = 0; i < succs.size(); ++i) {
+                if (succs[i] == bot)
+                    return {top, i};
+            }
+            return { CNode::kNone, 0 };
+        }
+
+        // -------------------------------------------------------------------
+        // TraceDAG implementation
+        // -------------------------------------------------------------------
+
+        TraceDAG::~TraceDAG() {
+            for (auto *bp : branchlist_) {
+                for (auto *bt : bp->paths) {
+                    delete bt;
+                }
+                delete bp;
+            }
+        }
+
+        void TraceDAG::BranchPoint::MarkPath() {
+            ismark = true;
+            if (parent != nullptr && !parent->ismark)
+                parent->MarkPath();
+        }
+
+        int TraceDAG::BranchPoint::Distance(BranchPoint *op2) {
+            // Clear marks
+            for (auto *cur = this; cur != nullptr; cur = cur->parent)
+                cur->ismark = false;
+            for (auto *cur = op2; cur != nullptr; cur = cur->parent)
+                cur->ismark = false;
+
+            // Mark path from this to root
+            MarkPath();
+
+            // Walk from op2 to find common ancestor
+            int dist = 0;
+            auto *cur = op2;
+            while (cur != nullptr && !cur->ismark) {
+                ++dist;
+                cur = cur->parent;
+            }
+            if (cur == nullptr) return dist;
+
+            // Add distance from this to common ancestor
+            auto *cur2 = this;
+            while (cur2 != cur) {
+                ++dist;
+                cur2 = cur2->parent;
+            }
+            return dist;
+        }
+
+        void TraceDAG::InsertActive(BlockTrace *trace) {
+            trace->flags |= BlockTrace::kActive;
+            activetrace_.push_back(trace);
+            trace->activeiter = std::prev(activetrace_.end());
+            ++activecount_;
+        }
+
+        void TraceDAG::RemoveActive(BlockTrace *trace) {
+            if (trace->IsActive()) {
+                activetrace_.erase(trace->activeiter);
+                trace->flags &= ~BlockTrace::kActive;
+                --activecount_;
+            }
+        }
+
+        void TraceDAG::RemoveTrace(BlockTrace *trace) {
+            RemoveActive(trace);
+            // If this trace derived a BranchPoint, remove its traces too
+            if (trace->derivedbp != nullptr) {
+                for (auto *bt : trace->derivedbp->paths) {
+                    if (bt != trace)
+                        RemoveTrace(bt);
+                }
+            }
+        }
+
+        void TraceDAG::Initialize() {
+            for (size_t root_id : rootlist_) {
+                auto *bp = new BranchPoint();
+                bp->top_id = root_id;
+                bp->depth = 0;
+                branchlist_.push_back(bp);
+
+                auto *bt = new BlockTrace();
+                bt->top = bp;
+                bt->pathout = 0;
+                bt->bottom_id = CNode::kNone;
+                bt->dest_id = root_id;
+                bp->paths.push_back(bt);
+                InsertActive(bt);
+            }
+        }
+
+        bool TraceDAG::CheckOpen(CGraph &g, BlockTrace *trace) {
+            size_t dest = trace->dest_id;
+            if (dest == CNode::kNone || dest >= g.nodes.size()) {
+                return true; // terminal
+            }
+
+            auto &n = g.Node(dest);
+            if (n.collapsed) {
+                trace->flags |= BlockTrace::kTerminal;
+                return true;
+            }
+
+            if (dest == finishblock_id_) {
+                trace->flags |= BlockTrace::kTerminal;
+                return true;
+            }
+
+            // Count DAG-eligible out-edges
+            size_t dag_out_count = 0;
+            size_t single_succ   = CNode::kNone;
+            for (size_t i = 0; i < n.succs.size(); ++i) {
+                if (n.IsLoopDagOut(i)) {
+                    ++dag_out_count;
+                    single_succ = n.succs[i];
+                }
+            }
+
+            if (dag_out_count == 0) {
+                trace->flags |= BlockTrace::kTerminal;
+                return true;
+            }
+
+            if (dag_out_count == 1) {
+                // Linear trace: advance to successor.
+                // Increment visit_count on the successor so that the
+                // predecessor-readiness check in PushBranches (which gates
+                // OpenBranch on visit_count >= dag_preds) sees this arrival.
+                // Without this, traces that converge via linear advance never
+                // satisfy the readiness check, causing an infinite loop.
+                trace->bottom_id = dest;
+                trace->dest_id = single_succ;
+                if (single_succ < g.nodes.size() && !g.Node(single_succ).collapsed) {
+                    g.Node(single_succ).visit_count += 1;
+                }
+                return true;
+            }
+
+            // Multiple out-edges: needs branching
+            return false;
+        }
+
+        // ---------------------------------------------------------------
+        // OpenBranch — replace a single active trace with child traces
+        // for each outgoing edge of the branch node.
+        //
+        //  BEFORE (activetrace_):
+        //    ... → [parent] → ...
+        //
+        //  AFTER:
+        //    ... → [child_0] → [child_1] → ... → [next]
+        //
+        //  `parent` is removed from the active list and a new
+        //  BranchPoint is created.  Each non-loop-internal successor
+        //  gets a child BlockTrace inserted into the active list,
+        //  unless it was already visited (edge-lump case).
+        //
+        //  Returns an iterator to the element that followed parent
+        //  in activetrace_ (i.e. the resumption point for
+        //  PushBranches's outer loop).  We must capture this BEFORE
+        //  erasing parent — see RetireBranch for the same pattern.
+        // ---------------------------------------------------------------
+        std::list< TraceDAG::BlockTrace * >::iterator
+        TraceDAG::OpenBranch(CGraph &g, BlockTrace *parent) {
+            size_t branch_id = parent->dest_id;
+            const auto &n    = g.Node(branch_id);
+
+            auto *bp = new BranchPoint();
+            bp->parent = parent->top;
+            bp->pathout = parent->pathout;
+            bp->top_id = branch_id;
+            bp->depth = parent->top->depth + 1;
+            branchlist_.push_back(bp);
+            parent->derivedbp = bp;
+
+            // Capture the next iterator BEFORE erasing parent.
+            // RemoveActive erases parent->activeiter, which is also
+            // current_activeiter_ in the caller — reading it after
+            // erase would be undefined behaviour.
+            auto next_iter = std::next(parent->activeiter);
+            RemoveActive(parent);
+
+            int pathindex = 0;
+            for (size_t i = 0; i < n.succs.size(); ++i) {
+                if (!n.IsLoopDagOut(i)) {
+                    continue;
+                }
+
+                size_t succ_id = n.succs[i];
+                auto &succ_node = g.Node(succ_id);
+
+                auto *bt = new BlockTrace();
+                bt->top = bp;
+                bt->pathout = pathindex++;
+                bt->bottom_id = branch_id;
+                bt->dest_id = succ_id;
+                bp->paths.push_back(bt);
+
+                if (!succ_node.collapsed && succ_node.visit_count > 0) {
+                    for (auto *existing : activetrace_) {
+                        if (existing->dest_id == succ_id || existing->bottom_id == succ_id) {
+                            existing->edgelump += 1;
+                            bt->flags          |= BlockTrace::kTerminal;
+                            break;
+                        }
+                    }
+                    if (!bt->IsTerminal()) {
+                        InsertActive(bt);
+                    }
+                } else {
+                    InsertActive(bt);
+                }
+
+                if (!succ_node.collapsed) {
+                    succ_node.visit_count += 1;
+                }
+            }
+
+            return next_iter;
+        }
+
+        bool TraceDAG::CheckRetirement(BlockTrace *trace, size_t &exitblock_id) {
+            // Gap 2+6: Only first sibling triggers retirement (matches Ghidra)
+            if (trace->pathout != 0) return false;
+            BranchPoint *bp = trace->top;
+            if (bp == nullptr) return false;
+
+            if (bp->depth == 0) {
+                // Root BranchPoint: all paths must be active AND terminal
+                for (auto *bt : bp->paths) {
+                    if (!bt->IsActive()) {
+                        return false;
+                    }
+                    if (!bt->IsTerminal()) {
+                        return false;
+                    }
+                }
+                exitblock_id = CNode::kNone;
+                return true;
+            }
+
+            // Non-root: all must be active; non-terminal paths must converge
+            // to the SAME destination. Different exits = DON'T retire (forces
+            // selectBadEdge to fire).
+            size_t outblock = CNode::kNone;
+            for (auto *bt : bp->paths) {
+                if (!bt->IsActive()) {
+                    return false;
+                }
+                if (bt->IsTerminal()) {
+                    continue;
+                }
+                if (outblock == bt->dest_id) continue;
+                if (outblock != CNode::kNone) {
+                    return false; // divergent exits
+                }
+                outblock = bt->dest_id;
+            }
+            exitblock_id = outblock;
+            return true;
+        }
+
+        std::list< TraceDAG::BlockTrace * >::iterator
+        TraceDAG::RetireBranch(BranchPoint *bp, size_t exitblock_id) {
+            // Remove all traces from this BranchPoint
+            std::list< BlockTrace * >::iterator next_iter = current_activeiter_;
+            for (auto *bt : bp->paths) {
+                if (bt->IsActive()) {
+                    auto it = bt->activeiter;
+                    if (it == next_iter) ++next_iter;
+                    RemoveActive(bt);
+                }
+            }
+
+            // If bp has a parent BranchPoint, update the parent trace
+            if (bp->parent != nullptr) {
+                // Find the parent trace that derived this BP
+                for (auto *pt : bp->parent->paths) {
+                    if (pt->derivedbp == bp) {
+                        pt->derivedbp = nullptr;
+                        if (exitblock_id != CNode::kNone) {
+                            pt->dest_id = exitblock_id;
+                            InsertActive(pt);
+                        } else {
+                            pt->flags |= BlockTrace::kTerminal;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            return next_iter;
+        }
+
+        bool TraceDAG::BadEdgeScore::CompareFinal(const BadEdgeScore &op2) const {
+            // Gap 1: Match Ghidra's scoring (blockaction.cc:617-630)
+            // "worse" = more likely to be the bad (goto) edge.
+            // Bigger sibling count = MORE structural = LESS likely bad.
+            if (siblingedge != op2.siblingedge)
+                return (op2.siblingedge < siblingedge);
+            if (terminal != op2.terminal)
+                return (terminal < op2.terminal);
+            if (distance != op2.distance)
+                return (distance < op2.distance);
+            // Less depth = less likely to be bad
+            if (trace->top && op2.trace->top)
+                return (trace->top->depth < op2.trace->top->depth);
+            return false;
+        }
+
+        bool TraceDAG::BadEdgeScore::operator<(const BadEdgeScore &op2) const {
+            // Sort by exitproto_id for grouping
+            return exitproto_id < op2.exitproto_id;
+        }
+
+        void TraceDAG::ProcessExitConflict(
+            std::list< BadEdgeScore >::iterator start, std::list< BadEdgeScore >::iterator end
+        ) {
+            // Count traces in this group
+            int count = 0;
+            for (auto it = start; it != end; ++it) ++count;
+            if (count <= 1) return;
+
+            // For each pair, compute distance between their BranchPoints
+            for (auto it = start; it != end; ++it) {
+                it->siblingedge = count - 1;
+                for (auto jt = start; jt != end; ++jt) {
+                    if (it == jt) continue;
+                    int d = it->trace->top->Distance(jt->trace->top);
+                    if (it->distance < 0 || d < it->distance) {
+                        it->distance = d;
+                    }
+                }
+            }
+        }
+
+        TraceDAG::BlockTrace *TraceDAG::SelectBadEdge() {
+            // Build score list from non-terminal active traces (Ghidra skips terminals)
+            std::list<BadEdgeScore> scores;
+            for (auto *bt : activetrace_) {
+                if (bt->IsTerminal()) {
+                    continue;
+                }
+                BadEdgeScore score;
+                score.exitproto_id = bt->dest_id;
+                score.trace = bt;
+                score.terminal = 0;  // non-terminal traces only (terminals filtered above)
+                scores.push_back(score);
+            }
+
+            if (scores.empty()) return nullptr;
+
+            // Sort by exitproto_id to group by destination
+            scores.sort();
+
+            // Process each group of same-destination traces
+            auto group_start = scores.begin();
+            while (group_start != scores.end()) {
+                auto group_end = group_start;
+                while (group_end != scores.end() &&
+                       group_end->exitproto_id == group_start->exitproto_id) {
+                    ++group_end;
+                }
+                ProcessExitConflict(group_start, group_end);
+                group_start = group_end;
+            }
+
+            // Find the worst edge
+            BlockTrace *worst = nullptr;
+            BadEdgeScore worst_score;
+            for (auto &s : scores) {
+                if (worst == nullptr || s.CompareFinal(worst_score)) {
+                    worst = s.trace;
+                    worst_score = s;
+                }
+            }
+
+            return worst;
+        }
+
+        // ---------------------------------------------------------------
+        // PushBranches — build the trace DAG by iteratively advancing,
+        // branching, or retiring active traces.
+        //
+        //  Each iteration of the inner loop picks one active trace
+        //  and attempts, in order:
+        //
+        //    1. Retire  — all sibling paths of a BranchPoint reached
+        //                 the same destination; collapse back to parent.
+        //                 Resets missedcount (progress made).
+        //    2. Advance — single-successor or newly terminal node;
+        //                 slide the trace forward or mark it done.
+        //                 Resets missedcount (progress made).
+        //       Stall   — trace was already terminal before CheckOpen;
+        //                 no progress, increments missedcount.
+        //    3. Branch  — multi-successor node with all in-edges visited;
+        //                 replace trace with per-successor child traces.
+        //                 Resets missedcount (progress made).
+        //       Skip    — multi-successor node waiting for in-edges;
+        //                 increments missedcount.
+        //
+        //  When missedcount >= activecount_, every active trace was
+        //  skipped without progress → select the worst "bad edge" and
+        //  record it as a likely goto to break the cycle.
+        // ---------------------------------------------------------------
+        void TraceDAG::PushBranches(CGraph &g) {
+            ClearVisitCount(g);
+
+            for (size_t root_id : rootlist_) {
+                if (root_id < g.nodes.size() && !g.Node(root_id).collapsed) {
+                    g.Node(root_id).visit_count = 1;
+                }
+            }
+
+            // Safety bound: the algorithm should converge in O(edges) iterations
+            // now that CheckOpen increments visit_count.  The bound catches any
+            // remaining pathological CFGs that defeat convergence.
+            const size_t max_outer = g.nodes.size() * g.nodes.size() + 512;
+            size_t outer_iter      = 0;
+            while (activecount_ > 0) {
+                if (++outer_iter > max_outer) {
+                    LOG(WARNING) << "PushBranches: iteration limit reached (" << max_outer
+                                 << " on " << g.nodes.size() << " nodes), bailing out\n";
+                    break;
+                }
+                int missedcount = 0;
+                current_activeiter_ = activetrace_.begin();
+
+                while (current_activeiter_ != activetrace_.end()) {
+                    BlockTrace *bt = *current_activeiter_;
+
+                    if (missedcount >= activecount_) {
+                        // Stuck: select bad edge
+                        BlockTrace *bad = SelectBadEdge();
+                        if (bad == nullptr) {
+                            ClearVisitCount(g);
+                            return;
+                        }
+                        if (bad->bottom_id != CNode::kNone && bad->dest_id != CNode::kNone) {
+                            likelygoto_.emplace_back(bad->bottom_id, bad->dest_id);
+                        }
+                        RemoveTrace(bad);
+                        missedcount = 0;
+                        current_activeiter_ = activetrace_.begin();
+                        continue;
+                    }
+
+                    // Try retirement (only first sibling via pathout==0 check
+                    // inside checkRetirement)
+                    {
+                        size_t exit_id = CNode::kNone;
+                        if (CheckRetirement(bt, exit_id)) {
+                            current_activeiter_ = RetireBranch(bt->top, exit_id);
+                            missedcount = 0;
+                            continue;
+                        }
+                    }
+
+                    {
+                        bool was_terminal = bt->IsTerminal();
+                        if (CheckOpen(g, bt)) {
+                            ++current_activeiter_;
+                            if (was_terminal) {
+                                // Already terminal before CheckOpen — no progress.
+                                ++missedcount;
+                            } else {
+                                // Trace advanced (linear) or newly terminated.
+                                missedcount = 0;
+                            }
+                            continue;
+                        }
+                    }
+
+                    // CheckOpen returned false → multi-edge node needs branching.
+                    // Only open the branch if all in-edges have been visited
+                    // (visit_count >= DAG-eligible pred count).  Otherwise the
+                    // node isn't ready — skip it and bump missedcount so the
+                    // stuck-detection guard can eventually fire.
+                    {
+                        const auto &dest_node = g.Node(bt->dest_id);
+                        size_t dag_preds      = 0;
+                        for (size_t p : dest_node.preds) {
+                            if (!g.Node(p).collapsed) {
+                                ++dag_preds;
+                            }
+                        }
+                        if (dag_preds > 1
+                            && dest_node.visit_count < static_cast< int >(dag_preds))
+                        {
+                            ++current_activeiter_;
+                            ++missedcount;
+                            continue;
+                        }
+                    }
+
+                    current_activeiter_ = OpenBranch(g, bt);
+                    missedcount = 0;
+                }
+            }
+
+            ClearVisitCount(g);
+        }
+
+        void TraceDAG::ClearVisitCount(CGraph &g) {
+            for (auto &n : g.nodes) {
+                n.visit_count = 0;
+            }
+        }
+
+    } // namespace detail
+
+    // -----------------------------------------------------------------------
+    // Anonymous namespace — rule functions and internal helpers
+    // -----------------------------------------------------------------------
+    namespace {
+
+        using detail::CNode;
+        using detail::CGraph;
+
+        // ---------------------------------------------------------------
+        // Condition negation helper
+        // ---------------------------------------------------------------
+
+        static clang::Expr *NegateCond(clang::Expr *cond, clang::ASTContext &ctx) {
+            // Double negation elimination: !!x → x
+            if (auto *uo = llvm::dyn_cast<clang::UnaryOperator>(cond)) {
+                if (uo->getOpcode() == clang::UO_LNot) {
+                    return uo->getSubExpr();
+                }
+            }
+            // Flip comparison operators: (a <= b) → (a > b), etc.
+            // This avoids the precedence bug where !a <= b parses as (!a) <= b.
+            if (auto *bo = llvm::dyn_cast<clang::BinaryOperator>(cond)) {
+                if (!bo->isComparisonOp()) goto fallback_paren;
+                auto flipped = clang::BinaryOperator::negateComparisonOp(bo->getOpcode());
+                if (flipped != bo->getOpcode()) {
+                    return clang::BinaryOperator::Create(
+                        ctx, bo->getLHS(), bo->getRHS(), flipped,
+                        bo->getType(), bo->getValueKind(), bo->getObjectKind(),
+                        bo->getOperatorLoc(), clang::FPOptionsOverride());
+                }
+            }
+            // Fallback: wrap in ParenExpr to ensure correct precedence
+            // when the ! is applied to a non-trivial sub-expression.
+            fallback_paren:
+            auto *parened = new (ctx) clang::ParenExpr(
+                clang::SourceLocation(), clang::SourceLocation(), cond);
+            return clang::UnaryOperator::Create(
+                ctx, parened, clang::UO_LNot, ctx.IntTy,
+                clang::VK_PRValue, clang::OK_Ordinary,
+                clang::SourceLocation(), false,
+                clang::FPOptionsOverride());
+        }
+
+        // ---------------------------------------------------------------
+        // SNode construction helpers
+        // ---------------------------------------------------------------
+
+        SNode *LeafFromNode(CNode &n, SNodeFactory &factory) {
+            SNode *result;
+            if (n.structured) {
+                result = n.structured;
+            } else {
+                auto *block = factory.Make<SBlock>();
+                for (auto *s : n.stmts) block->AddStmt(s);
+                result = block;
+            }
+            // Wrap with SLabel if this CNode carries a label.
+            // Don't clear the label — it must persist so that the final
+            // emission (step 5) can emit the label at function scope for
+            // goto targets.  RefineDeadLabels removes unused labels.
+            // Guard against double-wrapping: if result is already an SLabel
+            // with the same name (from a prior call on this node), skip.
+            if (!n.label.empty()) {
+                auto *existing = result->dyn_cast<SLabel>();
+                if (!existing || existing->Name() != n.label) {
+                    result = factory.Make<SLabel>(factory.Intern(n.label), result);
+                }
+            }
+            return result;
+        }
+
+        // ---------------------------------------------------------------
+        // Pattern-matching collapse rules (adapted from Ghidra)
+        // ---------------------------------------------------------------
+
+        // Rule: Sequential blocks (A->B chain)
+        bool FoldSequence(CGraph &g, size_t id, SNodeFactory &factory) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || bl.SizeOut() != 1) {
+                return false;
+            }
+            if (bl.IsSwitchOut()) {
+                return false;
+            }
+            if (!bl.IsDecisionOut(0)) {
+                return false;
+            }
+
+            // Start-of-chain guard: don't fire mid-chain (prevents nested SSeq)
+            if (bl.SizeIn() == 1) {
+                auto &pred = g.Node(bl.preds[0]);
+                if (!pred.collapsed && pred.SizeOut() == 1) {
+                    return false;
+                }
+            }
+
+            size_t next_id = bl.succs[0];
+            if (next_id == id) return false;  // no self-loop
+            auto &next = g.Node(next_id);
+            if (next.collapsed) return false;
+            if (next.SizeIn() != 1) {
+                return false;
+            }
+            // Don't chain into a switch node — FoldSwitch needs it intact.
+            if (next.IsSwitchOut()) {
+                return false;
+            }
+            // Don't chain into a conditional node — FoldIfThen/FoldIfElse need
+            // it as a separate head to match the if-pattern.  Absorbing it into
+            // a sequence buries the branch_cond in an SSeq where it is invisible
+            // to downstream if-rules (see decode_frame uVar7!=0 loss).
+            if (next.is_conditional && next.SizeOut() > 1) {
+                return false;
+            }
+
+            // Build a sequence
+            auto *seq = factory.Make<SSeq>();
+            seq->AddChild(LeafFromNode(bl, factory));
+
+            // Extend the chain
+            std::vector<size_t> chain = {id, next_id};
+            size_t cur = next_id;
+            while (g.Node(cur).SizeOut() == 1 && g.Node(cur).IsDecisionOut(0)) {
+                size_t nxt = g.Node(cur).succs[0];
+                if (nxt == id) break;
+                auto &nxtNode = g.Node(nxt);
+                if (nxtNode.collapsed || nxtNode.SizeIn() != 1) {
+                    break;
+                }
+                if (nxtNode.IsSwitchOut()) {
+                    break;
+                }
+                // Don't chain into a conditional tail (same rationale as above).
+                if (nxtNode.is_conditional && nxtNode.SizeOut() > 1) {
+                    break;
+                }
+                chain.push_back(nxt);
+                cur = nxt;
+            }
+
+            for (size_t i = 1; i < chain.size(); ++i) {
+                seq->AddChild(LeafFromNode(g.Node(chain[i]), factory));
+            }
+
+            g.CollapseNodes(chain, seq);
+            return true;
+        }
+
+        // Rule: If without else (proper if)
+        bool FoldIfThen(CGraph &g, size_t id, SNodeFactory &factory,
+                               clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || bl.SizeOut() != 2) {
+                return false;
+            }
+            if (bl.IsSwitchOut()) {
+                return false;
+            }
+            if (bl.IsGotoOut(0) || bl.IsGotoOut(1)) {
+                return false;
+            }
+
+            for (size_t i = 0; i < 2; ++i) {
+                size_t clause_id = bl.succs[i];
+                if (clause_id == id) continue;
+                auto &clause = g.Node(clause_id);
+                if (clause.collapsed) continue;
+                if (clause.SizeIn() != 1 || clause.SizeOut() != 1) {
+                    continue;
+                }
+                if (!bl.IsDecisionOut(i)) {
+                    continue;
+                }
+                if (clause.IsGotoOut(0)) {
+                    continue;
+                }
+
+                size_t exit_id = clause.succs[0];
+                if (exit_id != bl.succs[1 - i]) continue;
+
+                // Build the if
+                clang::Expr *cond = bl.branch_cond;
+                if (!cond) {
+                    // Create a placeholder true literal
+                    cond = clang::IntegerLiteral::Create(
+                        ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+                }
+
+                // If clause is on false branch (i==0), negate condition
+                // succs[0]=false branch per Ghidra convention
+                if (i == 0) {
+                    cond = NegateCond(cond, ctx);
+                }
+
+                SNode *clause_body = LeafFromNode(clause, factory);
+                SNode *if_node = factory.Make<SIfThenElse>(cond, clause_body, nullptr);
+
+                // Prepend head block's accumulated content so it is not lost.
+                SNode *head_content = LeafFromNode(bl, factory);
+                bool has_head = false;
+                if (head_content) {
+                    if (head_content->Kind() == SNodeKind::kBlock) {
+                        has_head = !head_content->as<SBlock>()->Stmts().empty();
+                    } else {
+                        has_head = true;
+                    }
+                }
+                if (has_head) {
+                    auto *seq = factory.Make<SSeq>();
+                    seq->AddChild(head_content);
+                    seq->AddChild(if_node);
+                    if_node = seq;
+                }
+
+                if (!bl.label.empty()) {
+                    if_node = factory.Make<SLabel>(factory.Intern(bl.label), if_node);
+                    bl.label.clear();
+                }
+
+                g.CollapseNodes({ id, clause_id }, if_node);
+                return true;
+            }
+            return false;
+        }
+
+        // Rule: If-else
+        bool FoldIfElse(CGraph &g, size_t id, SNodeFactory &factory,
+                             clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || bl.SizeOut() != 2) {
+                return false;
+            }
+            if (bl.IsSwitchOut()) {
+                return false;
+            }
+            if (!bl.IsDecisionOut(0) || !bl.IsDecisionOut(1)) {
+                return false;
+            }
+
+            size_t tc_id = bl.succs[1];  // true clause (Ghidra: out[1])
+            size_t fc_id = bl.succs[0];  // false clause (Ghidra: out[0])
+            auto &tc     = g.Node(tc_id);
+            auto &fc     = g.Node(fc_id);
+
+            if (tc.collapsed || fc.collapsed) return false;
+            if (tc.SizeIn() != 1 || fc.SizeIn() != 1) {
+                return false;
+            }
+            if (tc.SizeOut() != 1 || fc.SizeOut() != 1) {
+                return false;
+            }
+            if (tc.succs[0] != fc.succs[0]) return false;  // must exit to same block
+            if (tc.succs[0] == id) return false;  // no loops
+            if (tc.IsGotoOut(0) || fc.IsGotoOut(0)) {
+                return false;
+            }
+
+            clang::Expr *cond = bl.branch_cond;
+            if (!cond) {
+                cond = clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+            }
+
+            auto *then_body = LeafFromNode(tc, factory);
+            auto *else_body = LeafFromNode(fc, factory);
+            SNode *if_node = factory.Make<SIfThenElse>(cond, then_body, else_body);
+
+            // Prepend the head block's accumulated content (from prior
+            // collapses) so it is not lost.  LeafFromNode returns the
+            // structured SNode tree built by earlier rules.
+            SNode *head_content = LeafFromNode(bl, factory);
+            bool has_content = false;
+            if (head_content) {
+                if (head_content->Kind() == SNodeKind::kBlock) {
+                    has_content = !head_content->as<SBlock>()->Stmts().empty();
+                } else {
+                    has_content = true;
+                }
+            }
+            if (has_content) {
+                auto *seq = factory.Make<SSeq>();
+                seq->AddChild(head_content);
+                seq->AddChild(if_node);
+                if_node = seq;
+            }
+
+            if (!bl.label.empty()) {
+                if_node = factory.Make<SLabel>(factory.Intern(bl.label), if_node);
+                bl.label.clear();
+            }
+
+            g.CollapseNodes({ id, tc_id, fc_id }, if_node);
+            return true;
+        }
+
+        // Rule: While-do loop
+        bool FoldWhileLoop(CGraph &g, size_t id, SNodeFactory &factory,
+                              clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || bl.SizeOut() != 2) {
+                return false;
+            }
+            if (bl.IsSwitchOut()) {
+                return false;
+            }
+            if (bl.IsGotoOut(0) || bl.IsGotoOut(1)) {
+                return false;
+            }
+
+            for (size_t i = 0; i < 2; ++i) {
+                size_t clause_id = bl.succs[i];
+                if (clause_id == id) continue;
+                auto &clause = g.Node(clause_id);
+                if (clause.collapsed) continue;
+                if (clause.SizeIn() != 1) continue;
+
+                // Simple case: single-block body that loops back directly.
+                bool simple_body = (clause.SizeOut() == 1 && clause.succs[0] == id);
+
+                // Multi-block case: walk a chain from clause until we find
+                // a node that loops back to the header.  Handles:
+                // (a) single-in/single-out chains
+                // (b) conditional nodes where one branch loops back and the
+                //     other exits (internal if-break pattern in loop body)
+                std::vector<size_t> chain;
+                bool multi_body = false;
+                if (!simple_body) {
+                    size_t cur = clause_id;
+                    std::unordered_set<size_t> visited;
+                    while (true) {
+                        if (visited.count(cur)) break;
+                        visited.insert(cur);
+                        auto &cn = g.Node(cur);
+                        if (cn.collapsed) break;
+                        if (cur != clause_id && cn.SizeIn() != 1) break;
+                        chain.push_back(cur);
+                        // Direct loop-back
+                        if (cn.SizeOut() == 1 && cn.succs[0] == id) {
+                            multi_body = true;
+                            break;
+                        }
+                        // Conditional: one branch loops back via a back-edge,
+                        // the other exits.  Only match genuine back-edges
+                        // (kBack flag set) to avoid mismatching nested loops.
+                        if (cn.SizeOut() == 2) {
+                            int back_idx = -1;
+                            for (size_t si2 = 0; si2 < 2; ++si2) {
+                                if (cn.succs[si2] == id && cn.IsBackEdge(si2)) {
+                                    back_idx = static_cast<int>(si2);
+                                    break;
+                                }
+                                auto &sb = g.Node(cn.succs[si2]);
+                                if (!sb.collapsed && sb.SizeIn() == 1 && sb.SizeOut() == 1
+                                    && sb.succs[0] == id && sb.IsBackEdge(0)) {
+                                    // Successor loops back to header via one hop
+                                    back_idx = static_cast<int>(si2);
+                                    chain.push_back(cn.succs[si2]);
+                                    break;
+                                }
+                            }
+                            if (back_idx >= 0) {
+                                multi_body = true;
+                                break;
+                            }
+                        }
+                        if (cn.SizeOut() != 1) break;
+                        cur = cn.succs[0];
+                    }
+                }
+
+                if (!simple_body && !multi_body) continue;
+
+                // Validate predecessor connectivity: every chain node's
+                // single predecessor must be the header or another chain
+                // node, otherwise we'd collapse a node owned by a
+                // different subgraph.
+                if (multi_body) {
+                    std::unordered_set<size_t> chain_set(chain.begin(), chain.end());
+                    chain_set.insert(id); // header
+                    for (size_t cid : chain) {
+                        auto &cn = g.Node(cid);
+                        if (cn.SizeIn() != 1 || !chain_set.count(cn.preds[0])) {
+                            multi_body = false;
+                            break;
+                        }
+                    }
+                    if (!multi_body) continue;
+                }
+
+                clang::Expr *cond = bl.branch_cond;
+                if (!cond) {
+                    cond = clang::IntegerLiteral::Create(
+                        ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+                }
+
+                // Negate condition when body is on false branch
+                if (i == 0) {
+                    cond = NegateCond(cond, ctx);
+                }
+
+                // Build the body SNode — simple or multi-block chain.
+                SNode *clause_body = nullptr;
+                if (simple_body) {
+                    clause_body = LeafFromNode(clause, factory);
+                } else {
+                    auto *seq = factory.Make<SSeq>();
+                    for (size_t cid : chain) {
+                        auto *node_body = LeafFromNode(g.Node(cid), factory);
+                        if (node_body) seq->AddChild(node_body);
+                    }
+                    clause_body = seq;
+                }
+
+                // Determine which while-loop pattern to emit based on
+                // the header's content.
+                SNode *while_node;
+
+                // Case A: all header stmts are expressions — use comma
+                // operator in the while condition:
+                //   while (stmt1, stmt2, cond) { body }
+                bool all_expr = !bl.stmts.empty() && bl.branch_cond;
+                if (all_expr) {
+                    for (auto *s : bl.stmts) {
+                        if (!llvm::isa<clang::Expr>(s)
+                            || llvm::isa<clang::DeclStmt>(s)) {
+                            all_expr = false;
+                            break;
+                        }
+                    }
+                }
+
+                bool has_content = !bl.stmts.empty() || bl.structured;
+
+                if (all_expr) {
+                    // Build comma chain: (stmt1, (stmt2, cond))
+                    auto op_loc = clang::SourceLocation();
+                    clang::Expr *while_cond = cond;
+                    for (auto it = bl.stmts.rbegin(); it != bl.stmts.rend(); ++it) {
+                        auto *expr = llvm::dyn_cast<clang::Expr>(*it);
+                        while_cond = clang::BinaryOperator::Create(
+                            ctx, expr, while_cond, clang::BO_Comma,
+                            while_cond->getType(), clang::VK_PRValue,
+                            clang::OK_Ordinary, op_loc,
+                            clang::FPOptionsOverride());
+                    }
+                    while_node = factory.Make<SWhile>(while_cond, clause_body);
+                    if (!bl.label.empty()) {
+                        while_node = factory.Make<SLabel>(
+                            factory.Intern(bl.label), while_node);
+                        bl.label.clear();
+                    }
+                } else if (has_content) {
+                    // Case B: header has DeclStmts, structured content, or
+                    // mix — emit while(true) { header; if(exit) break; body }
+                    auto *true_lit = clang::IntegerLiteral::Create(
+                        ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+
+                    clang::Expr *exit_cond = bl.branch_cond;
+                    if (!exit_cond) {
+                        exit_cond = clang::IntegerLiteral::Create(
+                            ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+                    }
+                    if (i == 1) {
+                        exit_cond = NegateCond(exit_cond, ctx);
+                    }
+
+                    auto *break_node = factory.Make<SBreak>();
+                    auto *if_break = factory.Make<SIfThenElse>(exit_cond, break_node, nullptr);
+
+                    // Use LeafFromNode to capture both raw stmts AND
+                    // structured content (e.g., inner while-loop from
+                    // a prior fold).
+                    SNode *header_block = LeafFromNode(bl, factory);
+
+                    auto *seq = factory.Make<SSeq>();
+                    seq->AddChild(header_block);
+                    seq->AddChild(if_break);
+                    seq->AddChild(clause_body);
+                    while_node = factory.Make<SWhile>(true_lit, seq);
+                } else {
+                    // Case C: no header content — simple while(cond) { body }
+                    while_node = factory.Make<SWhile>(cond, clause_body);
+                    if (!bl.label.empty()) {
+                        while_node = factory.Make<SLabel>(factory.Intern(bl.label), while_node);
+                        bl.label.clear();
+                    }
+                }
+
+                // Collapse: simple body is just {header, clause}, multi-block
+                // includes the entire chain.
+                std::vector<size_t> collapse_ids;
+                collapse_ids.push_back(id);
+                if (simple_body) {
+                    collapse_ids.push_back(clause_id);
+                } else {
+                    for (size_t cid : chain) {
+                        collapse_ids.push_back(cid);
+                    }
+                }
+                g.CollapseNodes(collapse_ids, while_node);
+                return true;
+            }
+            return false;
+        }
+
+        // Rule: Do-while loop (single block looping to itself)
+        bool FoldDoWhileLoop(CGraph &g, size_t id, SNodeFactory &factory,
+                              clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || bl.SizeOut() != 2) {
+                return false;
+            }
+            if (bl.IsSwitchOut()) {
+                return false;
+            }
+            if (bl.IsGotoOut(0) || bl.IsGotoOut(1)) {
+                return false;
+            }
+
+            for (size_t i = 0; i < 2; ++i) {
+                if (bl.succs[i] != id) continue;  // must loop to self
+
+                clang::Expr *cond = bl.branch_cond;
+                if (!cond) {
+                    cond = clang::IntegerLiteral::Create(
+                        ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+                }
+
+                // Negate condition when self-loop is on false branch
+                if (i == 0) {
+                    cond = NegateCond(cond, ctx);
+                }
+
+                // Save label before LeafFromNode clears it — for loops,
+                // the label should wrap the entire loop (not be inside the body)
+                std::string saved_label = bl.label;
+                bl.label.clear();
+                auto *body = LeafFromNode(bl, factory);
+                SNode *dowhile_node = factory.Make<SDoWhile>(body, cond);
+                if (!saved_label.empty()) {
+                    dowhile_node = factory.Make<SLabel>(factory.Intern(saved_label), dowhile_node);
+                }
+
+                // Use collapseNodes to handle edge cleanup uniformly
+                g.CollapseNodes({ id }, dowhile_node);
+                g.Node(id).is_conditional = false;
+                g.Node(id).branch_cond    = nullptr;
+                return true;
+            }
+            return false;
+        }
+
+        // Rule: Infinite loop (single out to self)
+        bool FoldInfiniteLoop(CGraph &g, size_t id, SNodeFactory &factory,
+                              clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || bl.SizeOut() != 1) {
+                return false;
+            }
+            if (bl.IsGotoOut(0)) {
+                return false;
+            }
+            if (bl.succs[0] != id) return false;  // must loop to self
+
+            std::string saved_label = bl.label;
+            bl.label.clear();
+            auto *body = LeafFromNode(bl, factory);
+            auto *true_lit = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+            SNode *loop = factory.Make<SWhile>(true_lit, body);
+            if (!saved_label.empty()) {
+                loop = factory.Make<SLabel>(factory.Intern(saved_label), loop);
+            }
+
+            // Use collapseNodes to handle edge cleanup uniformly
+            g.CollapseNodes({ id }, loop);
+            return true;
+        }
+
+        // Rule: If with no exit (clause has zero out edges, or clause's
+        // single out-edge is a back-edge — i.e. loop continuation).
+        bool FoldIfForcedGoto(CGraph &g, size_t id, SNodeFactory &factory,
+                               clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || bl.SizeOut() != 2) {
+                return false;
+            }
+            if (bl.IsSwitchOut()) {
+                return false;
+            }
+            if (bl.IsGotoOut(0) || bl.IsGotoOut(1)) {
+                return false;
+            }
+
+            for (size_t i = 0; i < 2; ++i) {
+                size_t clause_id = bl.succs[i];
+                if (clause_id == id) continue;
+                auto &clause = g.Node(clause_id);
+                if (clause.collapsed) continue;
+                if (clause.SizeIn() != 1) continue;
+                // Accept: terminal clause (SizeOut==0) OR
+                // clause whose single out-edge is a back-edge (loop continue).
+                bool is_terminal = (clause.SizeOut() == 0);
+                bool is_back_only = (clause.SizeOut() == 1 && clause.IsBackEdge(0));
+                if (!is_terminal && !is_back_only) continue;
+                if (!bl.IsDecisionOut(i)) {
+                    continue;
+                }
+
+                clang::Expr *cond = bl.branch_cond;
+                if (!cond) {
+                    cond = clang::IntegerLiteral::Create(
+                        ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+                }
+
+                // If clause is on false branch (i==0), negate condition
+                if (i == 0) {
+                    cond = NegateCond(cond, ctx);
+                }
+
+                auto *clause_body = LeafFromNode(clause, factory);
+
+                // If the clause continues the loop via a back-edge, remove
+                // the edge BEFORE CollapseNodes so it isn't collected as an
+                // ext_succ (which would create a spurious self-loop on the
+                // collapsed node).  Order matters: collapse first would
+                // inherit the back-edge; remove first makes the clause
+                // terminal so only the header's other branch survives.
+                if (is_back_only) {
+                    g.RemoveEdge(clause_id, clause.succs[0]);
+                }
+
+                SNode *if_node = factory.Make<SIfThenElse>(cond, clause_body, nullptr);
+
+                // Prepend the head block's accumulated content (from prior
+                // collapses) so it is not lost.
+                SNode *head_content = LeafFromNode(bl, factory);
+                bool has_head = false;
+                if (head_content) {
+                    if (head_content->Kind() == SNodeKind::kBlock) {
+                        has_head = !head_content->as<SBlock>()->Stmts().empty();
+                    } else {
+                        has_head = true;
+                    }
+                }
+                if (has_head) {
+                    auto *seq = factory.Make<SSeq>();
+                    seq->AddChild(head_content);
+                    seq->AddChild(if_node);
+                    if_node = seq;
+                }
+
+                if (!bl.label.empty()) {
+                    if_node = factory.Make<SLabel>(factory.Intern(bl.label), if_node);
+                    bl.label.clear();
+                }
+
+                g.CollapseNodes({ id, clause_id }, if_node);
+                return true;
+            }
+            return false;
+        }
+
+        // ---------------------------------------------------------------
+        // FoldIfThenGoto — handles a conditional where one branch is a
+        // single-entry clause and the other is a shared goto target
+        // (SizeIn > 1).  Folds the clause into an if-then body and
+        // emits a goto for the shared branch, reducing its SizeIn to
+        // unblock downstream folds (FoldIfElse, FoldIfThen, etc.).
+        //
+        //  BEFORE:   bl ──→ clause ──→ X        AFTER:  rep ──→ X
+        //            │                                  (structured: if(cond){clause}
+        //            └──→ shared (SizeIn>1)              else{goto shared_label;})
+        //                                        shared.SizeIn decremented
+        // ---------------------------------------------------------------
+        bool FoldIfThenGoto(CGraph &g, size_t id, SNodeFactory &factory,
+                            clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || bl.SizeOut() != 2) return false;
+            if (bl.IsSwitchOut()) return false;
+            if (bl.IsGotoOut(0) || bl.IsGotoOut(1)) return false;
+
+            for (size_t i = 0; i < 2; ++i) {
+                size_t clause_id = bl.succs[i];
+                if (clause_id == id) continue;
+                auto &clause = g.Node(clause_id);
+                if (clause.collapsed) continue;
+                if (clause.SizeIn() != 1) continue;
+                if (clause.SizeOut() != 1) continue;
+                if (!bl.IsDecisionOut(i)) continue;
+                if (clause.IsGotoOut(0)) continue;
+
+                // The other branch must be a shared goto target.
+                size_t shared_id = bl.succs[1 - i];
+                auto &shared = g.Node(shared_id);
+                if (shared.SizeIn() <= 1) continue;
+                if (shared.label.empty()) continue;
+
+                // Build condition (negate if clause is on false branch)
+                clang::Expr *cond = bl.branch_cond;
+                if (!cond) {
+                    cond = clang::IntegerLiteral::Create(
+                        ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+                }
+                if (i == 0) {
+                    cond = NegateCond(cond, ctx);
+                }
+
+                auto *clause_body = LeafFromNode(clause, factory);
+                auto *goto_node = factory.Make<SGoto>(factory.Intern(shared.label));
+                SNode *if_node = factory.Make<SIfThenElse>(cond, clause_body, goto_node);
+
+                // Prepend head block's accumulated content so it is not lost.
+                SNode *head_content = LeafFromNode(bl, factory);
+                bool has_head = false;
+                if (head_content) {
+                    if (head_content->Kind() == SNodeKind::kBlock) {
+                        has_head = !head_content->as<SBlock>()->Stmts().empty();
+                    } else {
+                        has_head = true;
+                    }
+                }
+                if (has_head) {
+                    auto *seq = factory.Make<SSeq>();
+                    seq->AddChild(head_content);
+                    seq->AddChild(if_node);
+                    if_node = seq;
+                }
+
+                if (!bl.label.empty()) {
+                    if_node = factory.Make<SLabel>(factory.Intern(bl.label), if_node);
+                    bl.label.clear();
+                }
+
+                // Remove the edge to the shared target BEFORE collapse so it
+                // is not collected as an ext_succ.  This reduces shared.SizeIn.
+                g.RemoveEdge(id, shared_id);
+
+                g.CollapseNodes({ id, clause_id }, if_node);
+                return true;
+            }
+            return false;
+        }
+
+        // Aggressive inlining helper: follow the single-successor chain
+        // from a case entry block, building an SSeq of all block contents.
+        // Stops at exit_id, returns (sizeOut==0), back-edges, or blocks
+        // with multiple outgoing edges (inner control flow).
+        // Adds all traversed blocks to |all_collapse|.
+        SNode *InlineCaseChain(CGraph &g, size_t start_id, size_t exit_id,
+                               SNodeFactory &factory, clang::ASTContext &ctx,
+                               std::unordered_set<size_t> &chain_visited,
+                               std::unordered_set<size_t> &all_collapse) {
+            if (start_id == exit_id) return nullptr;
+            auto &bl = g.Node(start_id);
+            if (bl.collapsed) return nullptr;
+            if (chain_visited.count(start_id)) return nullptr; // cycle guard
+
+            // Don't absorb nodes that are themselves switches — leave them
+            // for a separate FoldSwitch pass so inner switches get properly
+            // restructured with their own InlineCaseChain.
+            if (bl.IsSwitchOut() && !bl.switch_cases.empty()) {
+                return nullptr;
+            }
+
+            chain_visited.insert(start_id);
+            all_collapse.insert(start_id);
+
+            // Use structured content if already folded by a prior rule,
+            // otherwise build leaf from raw stmts.  Defer LeafFromNode
+            // until we know we need it (avoids orphaned SLabel wrappers).
+            auto get_body = [&]() -> SNode * {
+                if (bl.structured) return bl.structured;
+                return LeafFromNode(bl, factory);
+            };
+
+            // No successors (return/tail) — just the body
+            if (bl.SizeOut() == 0) return get_body();
+
+            // Single successor to exit block — body only (emitter adds break)
+            if (bl.SizeOut() == 1 && bl.succs[0] == exit_id) return get_body();
+
+            // Single successor — recursively inline the next block
+            if (bl.SizeOut() == 1) {
+                size_t next = bl.succs[0];
+                auto *next_body = InlineCaseChain(
+                    g, next, exit_id, factory, ctx, chain_visited, all_collapse);
+                if (next_body) {
+                    auto *this_body = get_body();
+                    auto *seq = factory.Make<SSeq>();
+                    seq->AddChild(this_body);
+                    seq->AddChild(next_body);
+                    return seq;
+                }
+                return get_body();
+            }
+
+            // Multiple successors — use structured content if available,
+            // otherwise recursively build an if-else for 2-successor
+            // conditional nodes (common from splitAtInternalControlFlow).
+            if (bl.structured) {
+                return bl.structured;
+            }
+            if (bl.SizeOut() == 2 && bl.is_conditional) {
+                size_t t_id = bl.succs[0];
+                size_t f_id = bl.succs[1];
+                auto *t_body = InlineCaseChain(
+                    g, t_id, exit_id, factory, ctx, chain_visited, all_collapse);
+                auto *f_body = InlineCaseChain(
+                    g, f_id, exit_id, factory, ctx, chain_visited, all_collapse);
+                if (t_body || f_body) {
+                    if (!t_body) t_body = factory.Make<SBlock>();
+                    if (!f_body) f_body = factory.Make<SBlock>();
+                    clang::Expr *cond = bl.branch_cond;
+                    if (!cond) {
+                        cond = clang::IntegerLiteral::Create(
+                            ctx, llvm::APInt(32, 1), ctx.IntTy,
+                            clang::SourceLocation());
+                    }
+                    auto *if_node = factory.Make<SIfThenElse>(cond, t_body, f_body);
+                    auto *this_body = get_body();
+                    bool empty_body = llvm::isa<SBlock>(this_body)
+                        && static_cast<SBlock*>(this_body)->Stmts().empty();
+                    if (empty_body) {
+                        return if_node;
+                    }
+                    auto *seq = factory.Make<SSeq>();
+                    seq->AddChild(this_body);
+                    seq->AddChild(if_node);
+                    return seq;
+                }
+            }
+            return get_body();
+        }
+
+        // Rule: Switch statement (with aggressive case-body inlining)
+        bool FoldSwitch(CGraph &g, size_t id, SNodeFactory &factory,
+                             clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || !bl.IsSwitchOut()) {
+                return false;
+            }
+            // Must have switch_cases metadata to fire.
+            if (bl.switch_cases.empty()) return false;
+
+            // Collect the set of case-target successor ids for quick lookup.
+            std::unordered_set<size_t> case_succ_ids;
+            for (const auto &entry : bl.switch_cases) {
+                if (entry.succ_index < bl.succs.size()) {
+                    case_succ_ids.insert(bl.succs[entry.succ_index]);
+                }
+            }
+
+            // Find exit block: a successor that is NOT a case target and has
+            // sizeIn > 1 (merge point where cases reconverge).  Skip case
+            // targets even if they have sizeOut > 1 — InlineCaseChain handles
+            // complex case bodies.
+            size_t exit_id = std::numeric_limits<size_t>::max();
+            for (size_t s : bl.succs) {
+                if (case_succ_ids.count(s)) continue; // skip case targets
+                auto &sn = g.Node(s);
+                if (sn.collapsed) continue;
+                // Non-case successor = exit/fallback block
+                exit_id = s;
+                break;
+            }
+
+            // If no explicit exit found, check for loop-interior switch:
+            // all case targets either ARE a back-edge target or have a single
+            // successor that is a back-edge to a common loop header.
+            // In that case, use the loop header as the logical exit (each case
+            // body "breaks" from the switch and the loop continues).
+            bool loop_interior_switch = false;
+            if (exit_id == std::numeric_limits<size_t>::max()) {
+                size_t back_target = std::numeric_limits<size_t>::max();
+                bool valid = true;
+                for (size_t si = 0; si < bl.succs.size(); ++si) {
+                    size_t s = bl.succs[si];
+                    // Direct back-edge from switch to a target (e.g. case 111)
+                    if (bl.IsBackEdge(si)) {
+                        if (back_target == std::numeric_limits<size_t>::max()) back_target = s;
+                        else if (back_target != s) { valid = false; break; }
+                        continue;
+                    }
+                    auto &sn = g.Node(s);
+                    if (sn.collapsed) { valid = false; break; }
+                    // Case target with single successor = back-edge to header
+                    if (sn.SizeOut() == 1 && sn.IsBackEdge(0)) {
+                        size_t bt = sn.succs[0];
+                        if (back_target == std::numeric_limits<size_t>::max()) back_target = bt;
+                        else if (back_target != bt) { valid = false; break; }
+                        continue;
+                    }
+                    // Case target terminates (return/exit) — compatible
+                    if (sn.SizeOut() == 0) continue;
+                    // Otherwise incompatible
+                    valid = false;
+                    break;
+                }
+                if (valid && back_target != std::numeric_limits<size_t>::max()) {
+                    exit_id = back_target;
+                    loop_interior_switch = true;
+                }
+            }
+
+            // Validate: each case entry must have sizeIn==1 and not be collapsed.
+            // For loop-interior switches, skip the exit_id (loop header) which
+            // has sizeIn > 1 and is also a direct back-edge target for some cases.
+            for (size_t s : bl.succs) {
+                if (s == exit_id) continue;
+                auto &sn = g.Node(s);
+                if (sn.collapsed) return false;
+                if (sn.SizeIn() != 1) {
+                    return false;
+                }
+            }
+
+            // Build the switch SNode from branch_cond and successor nodes.
+            clang::Expr *disc = bl.branch_cond;
+            if (!disc) {
+                disc = clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(32, 0), ctx.IntTy, clang::SourceLocation());
+            }
+            auto *sw = factory.Make<SSwitch>(disc);
+
+            // Build a map from succ_index to case values (multiple cases
+            // can target the same successor).
+            std::unordered_map<size_t, std::vector<int64_t>> succ_to_values;
+            for (const auto &entry : bl.switch_cases) {
+                succ_to_values[entry.succ_index].push_back(entry.value);
+            }
+
+            // Track all blocks to collapse (aggressive inlining may pull in
+            // blocks beyond the direct case successors).
+            std::unordered_set<size_t> all_collapse;
+            all_collapse.insert(id);
+
+            // Build case arms.  When a successor has multiple case values
+            // (e.g. case 1: case 2: case 3: body), only the LAST value
+            // carries the body; preceding values get nullptr (fallthrough).
+            unsigned iw = ctx.getIntWidth(ctx.IntTy);
+            for (size_t si = 0; si < bl.succs.size(); ++si) {
+                size_t s = bl.succs[si];
+                auto it = succ_to_values.find(si);
+                if (it == succ_to_values.end()) continue;
+
+                const auto &vals = it->second;
+                SNode *body = nullptr;
+
+                if (s == exit_id) {
+                    // For loop-interior switches: direct back-edge case
+                    // (e.g. case 111 → loop header) gets an empty body
+                    // (emitter adds break; from switch, loop continues).
+                    // For normal switches: skip the exit target entirely.
+                    if (!loop_interior_switch) continue;
+                    body = factory.Make<SBlock>();
+                } else {
+                    // Aggressive inlining: follow the successor chain from this
+                    // case entry, inlining all reachable single-successor blocks.
+                    std::unordered_set<size_t> chain_visited;
+                    body = InlineCaseChain(
+                        g, s, exit_id, factory, ctx, chain_visited, all_collapse);
+                    if (!body) body = LeafFromNode(g.Node(s), factory);
+                }
+
+                for (size_t vi = 0; vi < vals.size(); ++vi) {
+                    auto *case_val = clang::IntegerLiteral::Create(
+                        ctx, llvm::APInt(iw, static_cast<uint64_t>(vals[vi]), true),
+                        ctx.IntTy, clang::SourceLocation());
+                    bool is_last = (vi + 1 == vals.size());
+                    sw->AddCase(case_val, is_last ? body : nullptr);
+                }
+            }
+
+            // Prepend the switch block's own stmts (ops before the switch)
+            // and strip the original SwitchStmt (CfgFoldStructure rebuilds it).
+            SNode *sw_node = nullptr;
+            if (!bl.stmts.empty()) {
+                auto *seq = factory.Make<SSeq>();
+                auto *block = factory.Make<SBlock>();
+                for (auto *s : bl.stmts) {
+                    // Skip the original SwitchStmt/CompoundStmt containing it
+                    if (llvm::isa<clang::SwitchStmt>(s)) continue;
+                    if (auto *cs = llvm::dyn_cast<clang::CompoundStmt>(s)) {
+                        bool has_sw = false;
+                        for (auto *child : cs->body())
+                            if (llvm::isa<clang::SwitchStmt>(child)) { has_sw = true; break; }
+                        if (has_sw) continue;
+                    }
+                    block->AddStmt(s);
+                }
+                if (!block->Stmts().empty()) seq->AddChild(block);
+                seq->AddChild(sw);
+                sw_node = seq;
+            } else {
+                sw_node = sw;
+            }
+
+            // Build collapse set from all_collapse, but only include blocks
+            // whose predecessors are ALL within the collapse set (safe to remove).
+            // The switch block itself is always included.
+            std::vector<size_t> collapse_ids;
+            collapse_ids.push_back(id);
+            for (size_t nid : all_collapse) {
+                if (nid == id) continue;
+                bool all_preds_internal = true;
+                for (size_t p : g.Node(nid).preds) {
+                    if (all_collapse.count(p) == 0) {
+                        all_preds_internal = false;
+                        break;
+                    }
+                }
+                if (all_preds_internal) {
+                    collapse_ids.push_back(nid);
+                }
+            }
+
+            if (!bl.label.empty()) {
+                sw_node = factory.Make<SLabel>(factory.Intern(bl.label), sw_node);
+                bl.label.clear();
+            }
+            size_t rep                 = g.CollapseNodes(collapse_ids, sw_node);
+            // The collapsed node has no real branch condition — prevent
+            // FoldGoto from emitting a spurious if(1) goto.
+            g.Node(rep).is_conditional = false;
+            g.Node(rep).switch_cases.clear();
+            return true;
+        }
+
+        // Rule: Mark goto edges
+        bool FoldGoto(CGraph &g, size_t id, SNodeFactory &factory,
+                           clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed) return false;
+
+            for (size_t i = 0; i < bl.succs.size(); ++i) {
+                if (!bl.IsGotoOut(i)) {
+                    continue;
+                }
+
+                // Use the target CNode's actual label if available, otherwise
+                // fall back to synthetic "block_N" label.
+                auto &target_node        = g.Node(bl.succs[i]);
+                std::string target_label = target_node.label.empty()
+                    ? "block_" + std::to_string(bl.succs[i])
+                    : target_node.label;
+                auto *goto_node = factory.Make<SGoto>(factory.Intern(target_label));
+
+                // Conditional block with one goto edge: emit if(cond) goto
+                // and keep the non-goto successor edge.
+                if (bl.is_conditional && bl.succs.size() == 2) {
+                    clang::Expr *cond = bl.branch_cond;
+                    if (!cond) {
+                        cond = clang::IntegerLiteral::Create(
+                            ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+                    }
+                    // If goto is on the false branch (i==0), the goto fires
+                    // when cond is false → emit if(!cond) goto
+                    // If goto is on the true branch (i==1), emit if(cond) goto
+                    if (i == 0) {
+                        cond = NegateCond(cond, ctx);
+                    }
+
+                    auto *if_goto = factory.Make<SIfThenElse>(cond, goto_node, nullptr);
+
+                    auto *seq = factory.Make<SSeq>();
+                    if (!bl.stmts.empty() || bl.structured) {
+                        // LeafFromNode embeds the label around stmts/structured
+                        seq->AddChild(LeafFromNode(bl, factory));
+                    }
+                    seq->AddChild(if_goto);
+
+                    SNode *result = seq;
+                    // If LeafFromNode wasn't called, wrap with label now
+                    if (bl.stmts.empty() && !bl.structured && !bl.label.empty()) {
+                        result = factory.Make<SLabel>(factory.Intern(bl.label), result);
+                    }
+                    bl.structured = result;
+                    bl.label.clear();
+                    bl.is_conditional = false;
+                    bl.branch_cond = nullptr;
+                    g.RemoveEdge(id, bl.succs[i]);
+                    return true;
+                }
+
+                // Unconditional goto: wrap stmts + goto
+                auto *body = LeafFromNode(bl, factory);
+                auto *seq = factory.Make<SSeq>();
+                seq->AddChild(body);
+                seq->AddChild(goto_node);
+
+                bl.structured = seq;
+                bl.label.clear();  // label embedded via LeafFromNode
+                g.RemoveEdge(id, bl.succs[i]);
+                return true;
+            }
+            return false;
+        }
+
+        // Gap 4: Switch case fallthrough detection (late-stage fallback)
+        bool FoldCaseFallthrough(CGraph &g, size_t id) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || !bl.IsSwitchOut()) {
+                return false;
+            }
+
+            std::vector<size_t> fallthru;
+            int nonfallthru = 0;
+
+            for (size_t i = 0; i < bl.succs.size(); ++i) {
+                size_t case_id = bl.succs[i];
+                if (case_id == id) return false;
+                auto &casebl = g.Node(case_id);
+
+                if (casebl.SizeIn() > 2 || casebl.SizeOut() > 1) {
+                    nonfallthru++;
+                } else if (casebl.SizeOut() == 1) {
+                    size_t target_id = casebl.succs[0];
+                    auto &target     = g.Node(target_id);
+                    if (target.SizeIn() == 2 && target.SizeOut() <= 1) {
+                        bool other_is_switch = false;
+                        for (size_t p : target.preds) {
+                            if (p != case_id && p == id) other_is_switch = true;
+                        }
+                        if (other_is_switch) fallthru.push_back(case_id);
+                    }
+                }
+                if (nonfallthru > 1) return false;
+            }
+
+            if (fallthru.empty()) return false;
+
+            for (size_t fid : fallthru) {
+                g.Node(fid).SetGoto(0);
+            }
+            return true;
+        }
+
+        // ---------------------------------------------------------------
+        // AND/OR condition collapsing (ResolveConditionChain)
+        // ---------------------------------------------------------------
+
+        // Detects chained if-gotos and collapses them into compound conditions.
+        // OR pattern (i==0): bl->false leads to orblock, both reach same clauseblock => BO_LOr
+        // AND pattern (i==1): bl->true leads to orblock, both reach same clauseblock => BO_LAnd
+        static bool ResolveConditionChain(CGraph &g, size_t id, SNodeFactory &/*factory*/,
+                                 clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || bl.SizeOut() != 2) {
+                return false;
+            }
+            if (bl.IsSwitchOut()) {
+                return false;
+            }
+            if (bl.IsGotoOut(0) || bl.IsGotoOut(1)) {
+                return false;
+            }
+
+            for (size_t i = 0; i < 2; ++i) {
+                size_t or_id = bl.succs[i];
+                if (or_id == id) continue;
+                auto &orblock = g.Node(or_id);
+                if (orblock.collapsed) continue;
+                if (orblock.SizeIn() != 1 || orblock.SizeOut() != 2) {
+                    continue;
+                }
+                if (orblock.IsSwitchOut()) {
+                    continue;
+                }
+                if (bl.IsBackEdge(i)) {
+                    continue;
+                }
+                // Don't collapse if orblock has side-effectful statements
+                // that would be lost (e.g. function calls between conditions).
+                if (!orblock.stmts.empty()) continue;
+
+                size_t clause_id = bl.succs[1 - i];
+                if (clause_id == id || clause_id == or_id) continue;
+
+                // Find which orblock successor matches clause_id
+                size_t j = 2;
+                for (size_t jj = 0; jj < 2; ++jj) {
+                    if (orblock.succs[jj] == clause_id) { j = jj; break; }
+                }
+                if (j == 2) continue;
+                if (orblock.succs[1 - j] == id) continue; // no looping back
+
+                // Determine opcode:
+                // succs[0]=false, succs[1]=true (Ghidra convention)
+                // i==0: bl's FALSE branch leads to orblock => OR pattern
+                // i==1: bl's TRUE branch leads to orblock => AND pattern
+                bool is_or = (i == 0);
+                clang::BinaryOperatorKind op = is_or ? clang::BO_LOr : clang::BO_LAnd;
+
+                clang::Expr *cond_a = bl.branch_cond;
+                clang::Expr *cond_b = orblock.branch_cond;
+                if (!cond_a || !cond_b) continue;
+
+                // Condition normalization
+                if (is_or) {
+                    // OR: bl's false leads to orblock, bl's true leads to clauseblock
+                    // If j==0, orblock's false leads to clauseblock -- negate cond_b
+                    if (j == 0) {
+                        cond_b = NegateCond(cond_b, ctx);
+                    }
+                } else {
+                    // AND: bl's true leads to orblock, bl's false leads to clauseblock
+                    // If j==1, orblock's true leads to clause -- negate cond_b
+                    if (j == 1) {
+                        cond_b = NegateCond(cond_b, ctx);
+                    }
+                }
+
+                auto *compound = clang::BinaryOperator::Create(
+                    ctx, cond_a, cond_b, op, ctx.IntTy,
+                    clang::VK_PRValue, clang::OK_Ordinary,
+                    clang::SourceLocation(), clang::FPOptionsOverride());
+
+                // Rewire: bl absorbs orblock
+                bl.branch_cond = compound;
+                size_t new_other = orblock.succs[1 - j];
+                bl.succs[i] = new_other;
+
+                // Update pred list of new_other: remove or_id, add id if not present
+                auto &np = g.Node(new_other).preds;
+                np.erase(std::remove(np.begin(), np.end(), or_id), np.end());
+                if (std::find(np.begin(), np.end(), id) == np.end()) {
+                    np.push_back(id);
+                }
+
+                // Remove orblock from clause_id's preds
+                auto &cp = g.Node(clause_id).preds;
+                cp.erase(std::remove(cp.begin(), cp.end(), or_id), cp.end());
+
+                // Mark orblock collapsed
+                orblock.collapsed = true;
+                orblock.succs.clear();
+                orblock.preds.clear();
+                return true;
+            }
+            return false;
+        }
+
+        // ---------------------------------------------------------------
+        // AND/OR condition collapsing orchestrator
+        // ---------------------------------------------------------------
+
+        static void ResolveAllConditionChains(CGraph &g, SNodeFactory &factory,
+                                        clang::ASTContext &ctx) {
+            // Iteratively apply ResolveConditionChain until no more changes.
+            // This collapses all AND/OR chains before the main collapse loop.
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (auto &n : g.nodes) {
+                    if (n.collapsed) continue;
+                    if (ResolveConditionChain(g, n.id, factory, ctx)) {
+                        changed = true;
+                        break; // restart iteration since graph changed
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // TraceDAG-based goto selection (replaces selectAndMarkGoto)
+        // ---------------------------------------------------------------
+
+        /// ResolveDisconnectedRoots: final fallback for unreachable/disconnected regions.
+        /// Finds active nodes with no predecessors (other than entry) and adds
+        /// a FloatingEdge for an incoming edge to reconnect them via goto.
+        static void
+        ResolveDisconnectedRoots(CGraph &g, std::list< detail::FloatingEdge > &likelygoto_) {
+            for (auto &n : g.nodes) {
+                if (n.collapsed) continue;
+                if (n.id == g.entry) continue;
+                if (n.SizeIn() != 0) {
+                    continue;
+                }
+
+                // Extra root: find any active predecessor that has an edge to it
+                for (auto &pred : g.nodes) {
+                    if (pred.collapsed) continue;
+                    for (size_t i = 0; i < pred.succs.size(); ++i) {
+                        if (pred.succs[i] == n.id && !pred.IsGotoOut(i)) {
+                            likelygoto_.emplace_back(pred.id, n.id);
+                            goto found_pred;
+                        }
+                    }
+                }
+                found_pred:;
+            }
+        }
+
+        /// ResolveLoopBodyTracing: run TraceDAG loop-scoped (innermost-first),
+        /// then fall back to full-graph TraceDAG.
+        static bool ResolveLoopBodyTracing(
+            CGraph &g, std::list< detail::LoopBody > &loopbody,
+            std::list< detail::FloatingEdge > &likelygoto_
+        ) {
+            // Try each loop body (innermost-first)
+            for (auto &loop : loopbody) {
+                if (!loop.Update(g)) {
+                    continue;
+                }
+
+                std::vector<size_t> body;
+                loop.FindBase(g, body);
+                loop.SetExitMarks(g, body);
+
+                detail::TraceDAG dag(likelygoto_);
+                dag.AddRoot(loop.head);
+                if (loop.exit_block != detail::LoopBody::kNone
+                    && loop.exit_block < g.nodes.size() && !g.Node(loop.exit_block).collapsed)
+                {
+                    dag.SetFinishBlock(loop.exit_block);
+                }
+                dag.Initialize();
+                dag.PushBranches(g);
+
+                loop.ClearExitMarks(g, body);
+                detail::ClearMarks(g, body);
+
+                if (!likelygoto_.empty()) {
+                    return true;
+                }
+
+                // Post-TraceDAG heuristic: if TraceDAG found nothing within
+                // the loop body, look for "extra loop exits" — edges from
+                // non-header body nodes to outside the body.  These must
+                // become gotos for the body to collapse into a chainable
+                // single-successor structure required by FoldWhileLoop.
+                // Prefer the deepest (last-in-body-order) edge first.
+                {
+                    std::unordered_set<size_t> bodyset(body.begin(), body.end());
+                    for (auto rit = body.rbegin(); rit != body.rend(); ++rit) {
+                        size_t bid = *rit;
+                        if (bid == loop.head) continue;
+                        auto &bn = g.Node(bid);
+                        for (size_t i = 0; i < bn.succs.size(); ++i) {
+                            if (bn.IsGotoOut(i) || bn.IsBackEdge(i)) {
+                                continue;
+                            }
+                            if (bodyset.count(bn.succs[i]) == 0) {
+                                likelygoto_.emplace_back(bid, bn.succs[i]);
+                            }
+                        }
+                        if (!likelygoto_.empty()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // Fall back to full-graph TraceDAG
+            {
+                detail::TraceDAG dag(likelygoto_);
+
+                // Add active root nodes (entry or nodes with no predecessors)
+                bool has_root = false;
+                for (auto &n : g.nodes) {
+                    if (n.collapsed) continue;
+                    if (n.id == g.entry || n.SizeIn() == 0) {
+                        dag.AddRoot(n.id);
+                        has_root = true;
+                    }
+                }
+                if (!has_root) return false;
+
+                dag.Initialize();
+                dag.PushBranches(g);
+                return !likelygoto_.empty();
+            }
+        }
+
+        /// ResolveGotoSelection: pick the least-disruptive edge to mark as goto using TraceDAG.
+        /// Replaces the old selectAndMarkGoto heuristic.
+        static bool ResolveGotoSelection(CGraph &g, std::list<detail::LoopBody> &loopbody) {
+            std::list< detail::FloatingEdge > likelygoto_;
+
+            if (!ResolveLoopBodyTracing(g, loopbody, likelygoto_)) {
+                // TraceDAG found nothing; try ResolveDisconnectedRoots as final fallback
+                ResolveDisconnectedRoots(g, likelygoto_);
+            }
+
+            // Iterate likelygoto_ and mark the first valid edge as goto
+            for (auto &fe : likelygoto_) {
+                auto [src, edge_idx] = fe.GetCurrentEdge(g);
+                if (src != CNode::kNone) {
+                    g.Node(src).SetGoto(edge_idx);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // ---------------------------------------------------------------
+        // Guard-chain absorption — mark guard→fallback edges as goto so
+        // FoldGoto + FoldSequence chain the guards into the switch,
+        // reducing the fallback block's sizeIn and unblocking FoldSwitch.
+        // ---------------------------------------------------------------
+
+        /// Detect a linear chain of conditional guards leading into a switch
+        /// block, where all guards share a common "bail" target that is also
+        /// the switch's fallback successor.
+        ///
+        /// Pattern:
+        ///   G1(cond) → G2, T     G1 guards: if(cond) goto T; else fall to G2
+        ///   G2(cond) → S,  T     G2 guards: if(cond) goto T; else fall to S
+        ///   S(switch) → cases..., T   switch fallback → T
+        ///
+        /// T has sizeIn > 1 because G1, G2, and S all have edges to it.
+        /// FoldSwitch rejects this because T.sizeIn != 1.
+        ///
+        /// Fix: mark each guard's edge to T as kGoto. Then:
+        ///   FoldGoto converts guards to "if(cond) goto T" (sizeOut→1)
+        ///   FoldSequence chains guards into the switch predecessor
+        ///   T.sizeIn drops → FoldSwitch can fire
+        static bool ResolveSwitchGuards(CGraph &g) {
+            bool changed = false;
+
+            for (auto &sw : g.nodes) {
+                if (sw.collapsed || !sw.IsSwitchOut()) {
+                    continue;
+                }
+                if (sw.SizeIn() != 1) {
+                    continue; // switch needs unique predecessor
+                }
+
+                // Find the fallback target: a successor of the switch with sizeIn > 1.
+                // This is the block that both the guard chain and the switch's
+                // fallback edge point to.
+                size_t fallback_id = CNode::kNone;
+                for (size_t s : sw.succs) {
+                    if (g.Node(s).SizeIn() > 1 && !g.Node(s).collapsed) {
+                        // Prefer a non-conditional single-exit block as fallback
+                        // (the exit/continue block, not the loop header).
+                        auto &candidate = g.Node(s);
+                        if (!candidate.is_conditional && candidate.SizeOut() <= 1) {
+                            fallback_id = s;
+                            break;
+                        }
+                    }
+                }
+                if (fallback_id == CNode::kNone) {
+                    continue;
+                }
+
+                // Walk backwards from the switch through the unique predecessor
+                // chain, collecting guard blocks that have one edge to the
+                // fallback target.
+                std::vector<size_t> guards;
+                size_t cur = sw.preds[0];
+                size_t walk_limit = g.nodes.size();
+                while (walk_limit-- > 0) {
+                    auto &gn = g.Node(cur);
+                    if (gn.collapsed) break;
+                    if (!gn.is_conditional || gn.SizeOut() != 2) {
+                        break;
+                    }
+                    if (gn.SizeIn() < 1) {
+                        break;
+                    }
+
+                    // One successor must be the next block in the chain (or the
+                    // switch), and the other must be the fallback target.
+                    bool has_fallback_edge = false;
+                    for (size_t i = 0; i < 2; ++i) {
+                        if (gn.succs[i] == fallback_id && !gn.IsGotoOut(i)) {
+                            has_fallback_edge = true;
+                        }
+                    }
+                    if (!has_fallback_edge) break;
+
+                    guards.push_back(cur);
+
+                    // Continue walking if this guard has a unique predecessor
+                    if (gn.SizeIn() != 1) {
+                        break;
+                    }
+                    cur = gn.preds[0];
+                }
+
+                if (guards.empty()) continue;
+
+                // Mark each guard's edge to the fallback as kGoto
+                for (size_t gid : guards) {
+                    auto &gn = g.Node(gid);
+                    for (size_t i = 0; i < gn.succs.size(); ++i) {
+                        if (gn.succs[i] == fallback_id && !gn.IsGotoOut(i)) {
+                            gn.SetGoto(i);
+                            LOG(INFO) << "ResolveSwitchGuards: marked guard "
+                                      << gid << " edge to fallback " << fallback_id
+                                      << " as goto (for switch " << sw.id << ")\n";
+                        }
+                    }
+                }
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        // ---------------------------------------------------------------
+        // Control-equivalence hoisting — unblock FoldIfThen /
+        // FoldIfElse by duplicating or absorbing small shared blocks.
+        // ---------------------------------------------------------------
+
+        /// Clause splitting: when a conditional block's clause has sizeIn > 1
+        /// (shared with other predecessors), duplicate it so the conditional
+        /// can fire FoldIfThen.
+        ///
+        /// Pattern: cond→clause→other, cond→other  (clause.sizeIn > 1)
+        /// After:   cond→clause_copy→other, cond→other  (clause_copy.sizeIn == 1)
+        static bool ResolveClauseSplit(CGraph &g) {
+            // Use index-based loop because push_back below may
+            // reallocate g.nodes, invalidating range-based iterators.
+            size_t n = g.nodes.size();
+            for (size_t ni = 0; ni < n; ++ni) {
+                auto &bl = g.nodes[ni];
+                if (bl.collapsed || bl.SizeOut() != 2 || !bl.is_conditional) {
+                    continue;
+                }
+                if (bl.IsGotoOut(0) || bl.IsGotoOut(1)) {
+                    continue;
+                }
+
+                for (size_t i = 0; i < 2; ++i) {
+                    size_t clause_id = bl.succs[i];
+                    if (clause_id == bl.id) continue;
+                    auto &clause = g.Node(clause_id);
+                    if (clause.collapsed) continue;
+
+                    // Clause must exit to the other successor of cond
+                    if (clause.SizeOut() != 1) {
+                        continue;
+                    }
+                    if (clause.succs[0] != bl.succs[1 - i]) continue;
+
+                    // Already unique — FoldIfThen should handle it
+                    if (clause.SizeIn() == 1) {
+                        continue;
+                    }
+
+                    // Don't duplicate conditionals, large blocks, labels,
+                    // or blocks with back-edge predecessors
+                    if (clause.is_conditional) continue;
+                    if (clause.stmts.size() > 16) continue;
+                    if (!clause.label.empty()) continue;
+                    if (clause.IsGotoOut(0)) {
+                        continue;
+                    }
+
+                    bool has_back_pred = false;
+                    for (size_t p : clause.preds) {
+                        auto &pn = g.Node(p);
+                        for (size_t ei = 0; ei < pn.succs.size(); ++ei) {
+                            if (pn.succs[ei] == clause_id && pn.IsBackEdge(ei)) {
+                                has_back_pred = true;
+                                break;
+                            }
+                        }
+                        if (has_back_pred) break;
+                    }
+                    if (has_back_pred) continue;
+
+                    // --- Duplicate clause as a new node ---
+                    // Capture ids before push_back — the vector realloc
+                    // invalidates bl and clause references.
+                    size_t cond_id   = bl.id;
+                    size_t clause_exit = clause.succs[0];
+
+                    CNode copy;
+                    copy.stmts = clause.stmts;
+                    copy.branch_cond = clause.branch_cond;
+                    copy.is_conditional = clause.is_conditional;
+                    copy.structured = clause.structured;
+
+                    size_t copy_id = g.nodes.size();
+                    copy.id = copy_id;
+                    copy.preds = {cond_id};
+                    copy.succs = {clause_exit};
+                    copy.edge_flags = {clause.edge_flags[0]};
+
+                    g.nodes.push_back(std::move(copy));
+                    // bl, clause now dangling — only use ids + g.Node()
+
+                    g.Node(cond_id).succs[i] = copy_id;
+
+                    auto &cpreds = g.Node(clause_id).preds;
+                    cpreds.erase(std::remove(cpreds.begin(), cpreds.end(), cond_id),
+                                 cpreds.end());
+
+                    g.Node(clause_exit).preds.push_back(copy_id);
+
+                    LOG(INFO) << "ResolveClauseSplit: duplicated node " << clause_id
+                              << " as " << copy_id << " for cond " << cond_id << "\n";
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// Join absorption: when both branches of a conditional exit to
+        /// different blocks, but one branch's successor is a small shared
+        /// block that could be absorbed to create a common exit point.
+        ///
+        /// Pattern: cond→A→J, cond→B→K where A,B have sizeIn=1 sizeOut=1,
+        ///          J has sizeIn>1, is small, non-conditional, no label
+        ///          and J.succs matches K (or J.succs[0] == K)
+        /// After:   absorb J's stmts into A, redirect A→K → FoldIfElse fires
+        static bool ResolveJoinAbsorb(CGraph &g) {
+            for (auto &bl : g.nodes) {
+                if (bl.collapsed || bl.SizeOut() != 2 || !bl.is_conditional) {
+                    continue;
+                }
+                if (bl.IsGotoOut(0) || bl.IsGotoOut(1)) {
+                    continue;
+                }
+
+                size_t a_id = bl.succs[1];  // true branch
+                size_t b_id = bl.succs[0];  // false branch
+
+                // Try both orientations: absorb into A or absorb into B
+                for (int orient = 0; orient < 2; ++orient) {
+                    if (orient == 1) std::swap(a_id, b_id);
+
+                    auto &a = g.Node(a_id);
+                    auto &b = g.Node(b_id);
+                    if (a.collapsed || b.collapsed) continue;
+                    if (a.SizeIn() != 1 || a.SizeOut() != 1) {
+                        continue;
+                    }
+                    if (b.SizeIn() != 1 || b.SizeOut() != 1) {
+                        continue;
+                    }
+                    if (a.IsGotoOut(0) || b.IsGotoOut(0)) {
+                        continue;
+                    }
+
+                    size_t j_id = a.succs[0];  // A's successor (candidate for absorption)
+                    size_t k_id = b.succs[0];  // B's successor
+
+                    if (j_id == k_id) continue;  // already same exit → ifElse should fire
+                    auto &j = g.Node(j_id);
+                    if (j.collapsed) continue;
+                    if (j.SizeIn() <= 1) {
+                        continue; // not shared
+                    }
+                    if (j.SizeOut() > 1) {
+                        continue; // must have <=1 exit
+                    }
+                    if (j.is_conditional) continue;
+                    if (!j.label.empty()) continue;
+                    if (j.stmts.size() > 16) continue;
+
+                    // J must exit to K (so after absorption, A→K matches B→K)
+                    if (j.SizeOut() == 1 && j.succs[0] != k_id) {
+                        continue;
+                    }
+                    // If J has no successors, B must also have no successors
+                    if (j.SizeOut() == 0 && b.SizeOut() != 0) {
+                        continue;
+                    }
+
+                    // Absorb: append J's stmts to A, redirect A past J
+                    auto &an = g.Node(a_id);
+                    for (auto *s : g.Node(j_id).stmts) {
+                        an.stmts.push_back(s);
+                    }
+
+                    // Remove edge A→J
+                    g.RemoveEdge(a_id, j_id);
+
+                    if (j.SizeOut() == 1) {
+                        // Add edge A→K
+                        an.succs.push_back(k_id);
+                        an.edge_flags.push_back(0);
+                        g.Node(k_id).preds.push_back(a_id);
+                    }
+
+                    LOG(INFO) << "ResolveJoinAbsorb: absorbed node " << j_id
+                              << " into " << a_id << " for cond " << bl.id << "\n";
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// Try control-equivalence hoisting transforms to unblock the main
+        /// collapse rules before falling back to goto selection.
+        static bool ResolveControlEquivHoist(CGraph &g) {
+            if (ResolveClauseSplit(g)) return true;
+            if (ResolveJoinAbsorb(g)) return true;
+            return false;
+        }
+
+        // ---------------------------------------------------------------
+        // Main collapse loop
+        // ---------------------------------------------------------------
+
+        size_t FoldMainLoop(CGraph &g, SNodeFactory &factory,
+                            clang::ASTContext &ctx, CGraphDotTracer &tracer) {
+            bool change;
+            size_t isolated_count;
+
+            do {
+                do {
+                    change = false;
+                    isolated_count = 0;
+                    for (auto &n : g.nodes) {
+                        if (n.collapsed) continue;
+                        if (n.SizeIn() == 0 && n.SizeOut() == 0) {
+                            isolated_count++;
+                            continue;
+                        }
+
+                        if (FoldGoto(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldGoto"); change = true; continue; }
+                        if (FoldSequence(g, n.id, factory)) { tracer.Dump(g, "FoldSequence"); change = true; continue; }
+                        if (FoldIfThen(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldIfThen"); change = true; continue; }
+                        if (FoldIfElse(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldIfElse"); change = true; continue; }
+                        if (FoldWhileLoop(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldWhileLoop"); change = true; continue; }
+                        if (FoldDoWhileLoop(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldDoWhileLoop"); change = true; continue; }
+                        if (FoldInfiniteLoop(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldInfiniteLoop"); change = true; continue; }
+                        if (FoldSwitch(g, n.id, factory, ctx)) { tracer.Dump(g, "FoldSwitch"); change = true; continue; }
+                    }
+                } while (change);
+
+                // Try IfNoExit as fallback (Ghidra applies this only when stuck)
+                change = false;
+                for (auto &n : g.nodes) {
+                    if (n.collapsed) continue;
+                    if (FoldIfForcedGoto(g, n.id, factory, ctx)) {
+                        tracer.Dump(g, "FoldIfForcedGoto");
+                        change = true;
+                        break;
+                    }
+                    if (FoldCaseFallthrough(g, n.id)) {
+                        tracer.Dump(g, "FoldCaseFallthrough");
+                        change = true;
+                        break;
+                    }
+                    if (FoldIfThenGoto(g, n.id, factory, ctx)) {
+                        tracer.Dump(g, "FoldIfThenGoto");
+                        change = true;
+                        break;
+                    }
+                }
+            } while (change);
+
+            return isolated_count;
+        }
+
+        // ---------------------------------------------------------------
+        // Post-collapse transforms: RefineBreakContinue, RefineWhileToFor, RefineDeadLabels
+        // ---------------------------------------------------------------
+
+        // RefineBreakContinue: convert loop-exit gotos to SBreak and loop-header gotos
+        // to SContinue. Walks the SNode tree, tracking the current loop context
+        // via exit/header label names.
+        void RefineBreakContinue(SNode *node, std::string_view loop_exit_label,
+                        std::string_view loop_header_label, SNodeFactory &factory) {
+            if (!node) return;
+
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                // Recurse into children. When entering a loop child, we need to
+                // determine the new loop exit/header labels from sibling context.
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    auto *child = (*seq)[i];
+
+                    // For SWhile/SDoWhile, compute new loop context labels
+                    if (auto *w = child->dyn_cast<SWhile>()) {
+                        // New loop_exit_label: label of the next sibling (if SLabel)
+                        std::string_view new_exit;
+                        if (i + 1 < seq->Size()) {
+                            if (auto *lbl = (*seq)[i + 1]->dyn_cast<SLabel>()) {
+                                new_exit = lbl->Name();
+                            }
+                        }
+                        if (new_exit.empty()) new_exit = loop_exit_label;
+
+                        // New loop_header_label: if prev sibling is SLabel wrapping
+                        // this while, use that label. Also check if the while body's
+                        // first child is an SLabel (header-stmts-inside-loop pattern).
+                        std::string_view new_header;
+                        if (i > 0) {
+                            if (auto *lbl = (*seq)[i - 1]->dyn_cast<SLabel>()) {
+                                new_header = lbl->Name();
+                            }
+                        }
+                        if (new_header.empty()) {
+                            if (auto *body_seq = w->Body() ? w->Body()->dyn_cast<SSeq>() : nullptr) {
+                                if (body_seq->Size() > 0) {
+                                    if (auto *lbl = (*body_seq)[0]->dyn_cast<SLabel>()) {
+                                        new_header = lbl->Name();
+                                    }
+                                }
+                            }
+                        }
+
+                        RefineBreakContinue(w->Body(), new_exit, new_header, factory);
+                        continue;
+                    }
+
+                    if (auto *dw = child->dyn_cast<SDoWhile>()) {
+                        std::string_view new_exit;
+                        if (i + 1 < seq->Size()) {
+                            if (auto *lbl = (*seq)[i + 1]->dyn_cast<SLabel>()) {
+                                new_exit = lbl->Name();
+                            }
+                        }
+                        if (new_exit.empty()) new_exit = loop_exit_label;
+
+                        std::string_view new_header;
+                        if (i > 0) {
+                            if (auto *lbl = (*seq)[i - 1]->dyn_cast<SLabel>()) {
+                                new_header = lbl->Name();
+                            }
+                        }
+
+                        RefineBreakContinue(dw->Body(), new_exit, new_header, factory);
+                        continue;
+                    }
+
+                    // For non-loop children, recurse with current loop context
+                    RefineBreakContinue(child, loop_exit_label, loop_header_label, factory);
+                }
+
+                // After recursing, check if last child is SGoto targeting loop exit/header
+                if (seq->Size() > 0) {
+                    auto *last = (*seq)[seq->Size() - 1];
+                    if (auto *g = last->dyn_cast<SGoto>()) {
+                        if (!loop_exit_label.empty() && g->Target() == loop_exit_label) {
+                            seq->ReplaceChild(seq->Size() - 1, factory.Make<SBreak>());
+                        } else if (!loop_header_label.empty() && g->Target() == loop_header_label) {
+                            seq->ReplaceChild(seq->Size() - 1, factory.Make<SContinue>());
+                        }
+                    }
+                }
+            }
+            else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RefineBreakContinue(ite->ThenBranch(), loop_exit_label, loop_header_label, factory);
+                RefineBreakContinue(ite->ElseBranch(), loop_exit_label, loop_header_label, factory);
+            }
+            else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                // Switch does not change loop context
+                for (auto &c : sw->Cases()) {
+                    RefineBreakContinue(c.body, loop_exit_label, loop_header_label, factory);
+                }
+                RefineBreakContinue(sw->DefaultBody(), loop_exit_label, loop_header_label, factory);
+            }
+            else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RefineBreakContinue(lbl->Body(), loop_exit_label, loop_header_label, factory);
+            }
+            else if (auto *f = node->dyn_cast<SFor>()) {
+                // SFor has its own loop context
+                RefineBreakContinue(f->Body(), loop_exit_label, loop_header_label, factory);
+            }
+            // SBlock, SGoto, SBreak, SContinue, SReturn: leaf nodes, nothing to do
+        }
+
+        // --- RefineWhileToFor helpers ---
+
+        bool IsAssignOrDecl(clang::Stmt *s) {
+            if (!s) return false;
+            if (auto *bo = llvm::dyn_cast<clang::BinaryOperator>(s)) {
+                return bo->getOpcode() == clang::BO_Assign;
+            }
+            return llvm::isa<clang::DeclStmt>(s);
+        }
+
+        bool IsIncrement(clang::Stmt *s) {
+            if (!s) return false;
+            if (auto *uo = llvm::dyn_cast<clang::UnaryOperator>(s)) {
+                auto op = uo->getOpcode();
+                return op == clang::UO_PreInc || op == clang::UO_PostInc
+                    || op == clang::UO_PreDec || op == clang::UO_PostDec;
+            }
+            if (auto *bo = llvm::dyn_cast<clang::BinaryOperator>(s)) {
+                auto op = bo->getOpcode();
+                return op == clang::BO_Assign || op == clang::BO_AddAssign
+                    || op == clang::BO_SubAssign;
+            }
+            return false;
+        }
+
+        // Extract the DeclRefExpr from an assignment or decl statement
+        clang::DeclRefExpr *GetAssignTarget(clang::Stmt *s) {
+            if (!s) return nullptr;
+            if (auto *bo = llvm::dyn_cast<clang::BinaryOperator>(s)) {
+                return llvm::dyn_cast<clang::DeclRefExpr>(bo->getLHS()->IgnoreParenCasts());
+            }
+            if (auto *uo = llvm::dyn_cast<clang::UnaryOperator>(s)) {
+                return llvm::dyn_cast<clang::DeclRefExpr>(uo->getSubExpr()->IgnoreParenCasts());
+            }
+            if (auto *ds = llvm::dyn_cast<clang::DeclStmt>(s)) {
+                if (ds->isSingleDecl()) {
+                    if (auto *vd = llvm::dyn_cast<clang::VarDecl>(ds->getSingleDecl())) {
+                        (void)vd;
+                        // DeclStmt doesn't directly produce a DeclRefExpr;
+                        // we can't easily manufacture one without an ASTContext.
+                        // Return nullptr — SameVariable will handle this via VarDecl matching.
+                        return nullptr;
+                    }
+                }
+            }
+            return nullptr;
+        }
+
+        // Extract the VarDecl referenced by a statement (works for assign, unary, decl)
+        clang::VarDecl *GetReferencedVar(clang::Stmt *s) {
+            if (auto *dre = GetAssignTarget(s)) {
+                return llvm::dyn_cast<clang::VarDecl>(dre->getDecl());
+            }
+            if (auto *ds = llvm::dyn_cast<clang::DeclStmt>(s)) {
+                if (ds->isSingleDecl()) {
+                    return llvm::dyn_cast<clang::VarDecl>(ds->getSingleDecl());
+                }
+            }
+            return nullptr;
+        }
+
+        // Check if an expression tree contains a reference to the given VarDecl
+        bool ContainsVarRef(clang::Stmt *s, clang::VarDecl *vd) {
+            if (!s || !vd) return false;
+            if (auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(s)) {
+                return dre->getDecl() == vd;
+            }
+            for (auto *child : s->children()) {
+                if (ContainsVarRef(child, vd)) return true;
+            }
+            return false;
+        }
+
+        // Check that init, cond, and inc all reference the same variable
+        bool SameVariable(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc) {
+            auto *init_var = GetReferencedVar(init);
+            if (!init_var) return false;
+            auto *inc_var = GetReferencedVar(inc);
+            if (!inc_var) return false;
+            if (init_var != inc_var) return false;
+            return ContainsVarRef(cond, init_var);
+        }
+
+        // RefineWhileToFor: convert init/while(cond)/inc patterns to SFor
+        void RefineWhileToFor(SNode *node, SNodeFactory &factory, clang::ASTContext &ctx) {
+            if (!node) return;
+
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                // Scan for pattern: SBlock(init), SWhile(cond, SSeq(..., SBlock(inc)))
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    auto *w = (*seq)[i]->dyn_cast<SWhile>();
+                    if (!w) continue;
+
+                    // Check for init before the while
+                    clang::Stmt *init_stmt = nullptr;
+                    bool has_init = false;
+                    if (i > 0) {
+                        auto *prev = (*seq)[i - 1]->dyn_cast<SBlock>();
+                        if (prev && prev->Size() == 1 && IsAssignOrDecl(prev->Stmts()[0])) {
+                            init_stmt = prev->Stmts()[0];
+                            has_init = true;
+                        }
+                    }
+
+                    // Check for inc at end of while body
+                    clang::Expr *inc_expr = nullptr;
+                    auto *body_seq = w->Body() ? w->Body()->dyn_cast<SSeq>() : nullptr;
+                    if (body_seq && body_seq->Size() > 0) {
+                        auto *last = (*body_seq)[body_seq->Size() - 1]->dyn_cast<SBlock>();
+                        if (last && last->Size() == 1 && IsIncrement(last->Stmts()[0])) {
+                            inc_expr = llvm::dyn_cast<clang::Expr>(last->Stmts()[0]);
+                        }
+                    }
+
+                    if (has_init && inc_expr && SameVariable(init_stmt, w->Cond(), inc_expr)) {
+                        // Remove inc from body
+                        body_seq->RemoveChild(body_seq->Size() - 1);
+                        // Build SFor
+                        auto *for_node = factory.Make<SFor>(init_stmt, w->Cond(), inc_expr, w->Body());
+                        // Replace [i-1, i+1) with the for node
+                        seq->ReplaceRange(i - 1, i + 1, for_node);
+                        --i; // adjust for removed element
+                    }
+                }
+
+                // Recurse into remaining children
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    RefineWhileToFor((*seq)[i], factory, ctx);
+                }
+            }
+            else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RefineWhileToFor(ite->ThenBranch(), factory, ctx);
+                RefineWhileToFor(ite->ElseBranch(), factory, ctx);
+            }
+            else if (auto *w = node->dyn_cast<SWhile>()) {
+                RefineWhileToFor(w->Body(), factory, ctx);
+            }
+            else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                RefineWhileToFor(dw->Body(), factory, ctx);
+            }
+            else if (auto *f = node->dyn_cast<SFor>()) {
+                RefineWhileToFor(f->Body(), factory, ctx);
+            }
+            else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) {
+                    RefineWhileToFor(c.body, factory, ctx);
+                }
+                RefineWhileToFor(sw->DefaultBody(), factory, ctx);
+            }
+            else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RefineWhileToFor(lbl->Body(), factory, ctx);
+            }
+        }
+
+        // --- RefineDeadLabels: dead label removal ---
+
+        // Collect all SGoto target names in the tree
+        void CollectGotoTargets(SNode *node, std::unordered_set<std::string> &targets) {
+            if (!node) return;
+
+            if (auto *g = node->dyn_cast<SGoto>()) {
+                targets.emplace(g->Target());
+            }
+            else if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    CollectGotoTargets((*seq)[i], targets);
+                }
+            }
+            else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                CollectGotoTargets(ite->ThenBranch(), targets);
+                CollectGotoTargets(ite->ElseBranch(), targets);
+            }
+            else if (auto *w = node->dyn_cast<SWhile>()) {
+                CollectGotoTargets(w->Body(), targets);
+            }
+            else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                CollectGotoTargets(dw->Body(), targets);
+            }
+            else if (auto *f = node->dyn_cast<SFor>()) {
+                CollectGotoTargets(f->Body(), targets);
+            }
+            else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) {
+                    CollectGotoTargets(c.body, targets);
+                }
+                CollectGotoTargets(sw->DefaultBody(), targets);
+            }
+            else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                CollectGotoTargets(lbl->Body(), targets);
+            }
+            else if (auto *blk = node->dyn_cast<SBlock>()) {
+                // Scan raw Clang AST stmts for GotoStmt targets
+                // (e.g. from OperationStmt switch case inlining)
+                std::function<void(clang::Stmt *)> scanStmt = [&](clang::Stmt *s) {
+                    if (!s) return;
+                    if (auto *gs = llvm::dyn_cast<clang::GotoStmt>(s)) {
+                        targets.emplace(gs->getLabel()->getName().str());
+                    }
+                    for (auto *child : s->children()) scanStmt(child);
+                };
+                for (auto *s : blk->Stmts()) scanStmt(s);
+            }
+        }
+
+        // --- RefineGotoElseNesting ---
+        //
+        // Detects:
+        //   SSeq([..., IfThenElse(C, body, SGoto(L)), sibling0, sibling1, ...])
+        //
+        // and transforms to:
+        //   SSeq([..., IfThenElse(C, SSeq([body, sibling0, sibling1, ...]), SGoto(L))])
+        //
+        // This nests the code that follows an if-with-goto-else into the
+        // then-body, producing e.g. "if (length != 0) { init; while; ... }"
+        // instead of "if (length) { init } else goto L; while; ...".
+        //
+        // Safety: only absorb if no label in the absorbed range is a goto
+        // target from OUTSIDE the absorbed range (except the SGoto(L) itself).
+        // For irreducible cases the transform is skipped.
+
+        // Collect all label names defined in a subtree.
+        static void CollectLabels(SNode *node, std::unordered_set<std::string> &labels) {
+            if (!node) return;
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                labels.emplace(lbl->Name());
+                CollectLabels(lbl->Body(), labels);
+            } else if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    CollectLabels((*seq)[i], labels);
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                CollectLabels(ite->ThenBranch(), labels);
+                CollectLabels(ite->ElseBranch(), labels);
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                CollectLabels(w->Body(), labels);
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                CollectLabels(dw->Body(), labels);
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                CollectLabels(f->Body(), labels);
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) CollectLabels(c.body, labels);
+                CollectLabels(sw->DefaultBody(), labels);
+            }
+        }
+
+        // Phase 4: ancestor_gotos accumulates goto targets from parent
+        // scopes so we can reject absorption when an ancestor goto would
+        // cross into the absorbed range.
+        void RefineGotoElseNesting(SNode *node, SNodeFactory &factory,
+                                   const std::unordered_set<std::string> &ancestor_gotos = {}) {
+            if (!node) return;
+
+            // Collect gotos from this node to pass to children (Phase 4).
+            auto makeChildAncestorGotos = [&](SNode *exclude) {
+                std::unordered_set<std::string> child_ag = ancestor_gotos;
+                // Add gotos from sibling branches at this level.
+                // For an IfThenElse: gotos from the other branch are
+                // "ancestor gotos" for the branch being recursed into.
+                if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                    if (exclude != ite->ThenBranch())
+                        CollectGotoTargets(ite->ThenBranch(), child_ag);
+                    if (exclude != ite->ElseBranch())
+                        CollectGotoTargets(ite->ElseBranch(), child_ag);
+                }
+                return child_ag;
+            };
+
+            // Recurse first (bottom-up) so inner SSeqs are resolved before outer.
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    RefineGotoElseNesting((*seq)[i], factory, ancestor_gotos);
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RefineGotoElseNesting(ite->ThenBranch(), factory,
+                                      makeChildAncestorGotos(ite->ThenBranch()));
+                RefineGotoElseNesting(ite->ElseBranch(), factory,
+                                      makeChildAncestorGotos(ite->ElseBranch()));
+                return;
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                RefineGotoElseNesting(w->Body(), factory, ancestor_gotos);
+                return;
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                RefineGotoElseNesting(dw->Body(), factory, ancestor_gotos);
+                return;
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                RefineGotoElseNesting(f->Body(), factory, ancestor_gotos);
+                return;
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    RefineGotoElseNesting(c.body, factory, ancestor_gotos);
+                RefineGotoElseNesting(sw->DefaultBody(), factory, ancestor_gotos);
+                return;
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RefineGotoElseNesting(lbl->Body(), factory, ancestor_gotos);
+                return;
+            } else {
+                return;
+            }
+
+            // node is an SSeq — scan for IfThenElse with SGoto branch.
+            // Phase 3: iterate until no more changes (fixed point).
+            auto *seq = node->as<SSeq>();
+            bool changed = true;
+            size_t max_rounds = seq->Size() + 1;  // safety bound
+            while (changed && max_rounds-- > 0) {
+                changed = false;
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    auto *child = (*seq)[i];
+
+                    // Peel through wrapping: SSeq→last child, SLabel→body
+                    SNode *candidate = child;
+                    while (candidate) {
+                        if (auto *inner_seq = candidate->dyn_cast<SSeq>()) {
+                            if (inner_seq->Size() == 0) break;
+                            candidate = (*inner_seq)[inner_seq->Size() - 1];
+                        } else if (auto *inner_lbl = candidate->dyn_cast<SLabel>()) {
+                            candidate = inner_lbl->Body();
+                        } else {
+                            break;
+                        }
+                    }
+                    auto *ite = candidate ? candidate->dyn_cast<SIfThenElse>() : nullptr;
+                    if (!ite) continue;
+
+                    // Match SGoto in either branch (Phase 2).
+                    SGoto *branch_goto = nullptr;
+                    bool is_then_goto = false;
+                    if (auto *g = ite->ElseBranch()
+                            ? ite->ElseBranch()->dyn_cast<SGoto>() : nullptr) {
+                        branch_goto = g;
+                        is_then_goto = false;
+                    } else if (auto *g = ite->ThenBranch()
+                            ? ite->ThenBranch()->dyn_cast<SGoto>() : nullptr) {
+                        branch_goto = g;
+                        is_then_goto = true;
+                    }
+                    if (!branch_goto) continue;
+                    if (i + 1 >= seq->Size()) continue;
+
+                    SNode *body_branch = is_then_goto
+                        ? ite->ElseBranch() : ite->ThenBranch();
+
+                    std::string target(branch_goto->Target());
+
+                    // --- Phase 1: find the label boundary ---
+                    auto startsWithLabel = [&](SNode *n) -> bool {
+                        if (!n) return false;
+                        if (auto *lbl = n->dyn_cast<SLabel>())
+                            return lbl->Name() == target;
+                        if (auto *s = n->dyn_cast<SSeq>()) {
+                            for (size_t k = 0; k < s->Size(); ++k) {
+                                if (auto *lbl = (*s)[k]->dyn_cast<SLabel>())
+                                    return lbl->Name() == target;
+                                if (auto *blk = (*s)[k]->dyn_cast<SBlock>()) {
+                                    if (blk->Stmts().empty()) continue;
+                                }
+                                break;
+                            }
+                        }
+                        return false;
+                    };
+
+                    size_t label_pos = seq->Size();
+                    bool label_is_toplevel = false;
+                    for (size_t j = i + 1; j < seq->Size(); ++j) {
+                        if (startsWithLabel((*seq)[j])) {
+                            label_pos = j;
+                            label_is_toplevel = true;
+                            break;
+                        }
+                    }
+
+                    if (!label_is_toplevel) {
+                        std::unordered_set<std::string> nested_labels;
+                        for (size_t j = i + 1; j < seq->Size(); ++j)
+                            CollectLabels((*seq)[j], nested_labels);
+                        if (nested_labels.find(target) == nested_labels.end())
+                            continue;
+                        label_pos = seq->Size();
+                    }
+
+                    if (label_pos == i + 1) continue;
+
+                    size_t absorb_end = label_is_toplevel ? label_pos : seq->Size();
+
+                    // Safety: collect labels in the absorption range.
+                    std::unordered_set<std::string> range_labels;
+                    for (size_t j = i + 1; j < absorb_end; ++j)
+                        CollectLabels((*seq)[j], range_labels);
+
+                    // Collect goto targets from OUTSIDE the absorption range:
+                    // siblings [0..i] + ancestor gotos (Phase 4).
+                    std::unordered_set<std::string> external_gotos = ancestor_gotos;
+                    for (size_t j = 0; j <= i; ++j)
+                        CollectGotoTargets((*seq)[j], external_gotos);
+                    external_gotos.erase(target);
+                    // Gotos from the body branch move with absorbed content.
+                    std::unordered_set<std::string> body_gotos;
+                    CollectGotoTargets(body_branch, body_gotos);
+                    for (auto &tg : body_gotos)
+                        external_gotos.erase(tg);
+
+                    bool unsafe = false;
+                    for (auto &eg : external_gotos) {
+                        if (range_labels.count(eg)) { unsafe = true; break; }
+                    }
+                    if (unsafe) continue;
+
+                    // Absorb siblings [i+1..absorb_end) into the body branch.
+                    auto *new_body = factory.Make<SSeq>();
+                    if (body_branch)
+                        new_body->AddChild(body_branch);
+                    for (size_t j = i + 1; j < absorb_end; ++j)
+                        new_body->AddChild((*seq)[j]);
+
+                    for (size_t j = absorb_end - 1; j > i; --j)
+                        seq->RemoveChild(j);
+
+                    if (is_then_goto) {
+                        ite->SetElseBranch(new_body);
+                    } else {
+                        ite->SetThenBranch(new_body);
+                    }
+
+                    if (label_is_toplevel) {
+                        if (is_then_goto) {
+                            ite->SetThenBranch(nullptr);
+                        } else {
+                            ite->SetElseBranch(nullptr);
+                        }
+                    }
+
+                    changed = true;
+                    break;  // Restart scan from the beginning of this SSeq.
+                }
+            }
+        }
+
+        // --- RefineHoistLabel ---
+        //
+        // Hoists labels out of if-else branches to the enclosing SSeq
+        // when they are cross-scope goto targets.  This eliminates gotos
+        // that jump from one branch of an if into the other.
+        //
+        // Pattern:
+        //   SSeq [
+        //     ...,
+        //     SIfThenElse(C, then_body, SLabel(L, content)),  // label in else
+        //     continuation,
+        //     ...
+        //   ]
+        //   where SGoto(L) exists OUTSIDE this SIfThenElse
+        //
+        // Transform:
+        //   SSeq [
+        //     ...,
+        //     SIfThenElse(C,
+        //       SSeq[then_body, SGoto(after_L)],  // skip-goto appended
+        //       SGoto(L)),                          // replaced label with goto
+        //     SLabel(L, content),                   // hoisted
+        //     SLabel(after_L, continuation),         // skip target
+        //     ...
+        //   ]
+
+        // Find an SLabel in a branch whose name matches one of the target
+        // goto names.  Searches the top-level SSeq children (not deeply
+        // nested in control flow — only in SSeq/SLabel wrappers).
+        static SLabel *FindHoistableLabel(
+                SNode *node,
+                const std::unordered_set<std::string> &goto_targets) {
+            if (!node) return nullptr;
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                if (goto_targets.count(std::string(lbl->Name())))
+                    return lbl;
+                return FindHoistableLabel(lbl->Body(), goto_targets);
+            }
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t k = 0; k < seq->Size(); ++k) {
+                    if (auto *found = FindHoistableLabel((*seq)[k], goto_targets))
+                        return found;
+                }
+            }
+            // Descend into IfThenElse branches — labels there are
+            // the primary hoist targets.
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (auto *f = FindHoistableLabel(ite->ThenBranch(), goto_targets))
+                    return f;
+                if (auto *f = FindHoistableLabel(ite->ElseBranch(), goto_targets))
+                    return f;
+            }
+            // Don't descend into loops or switches — labels inside
+            // those have different scope semantics (break/continue).
+            return nullptr;
+        }
+
+        // Replace a specific SLabel anywhere in SSeq/SLabel wrappers
+        // with an SGoto.  Returns the position in the nearest SSeq
+        // (for insertion of subsequent nodes), or false if not found.
+        static bool ReplaceLabelWithGoto(SNode *node, SLabel *target_lbl,
+                                         SNodeFactory &factory) {
+            if (!node) return false;
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t k = 0; k < seq->Size(); ++k) {
+                    if ((*seq)[k] == target_lbl) {
+                        auto *g = factory.Make<SGoto>(
+                            factory.Intern(target_lbl->Name()));
+                        seq->ReplaceChild(k, g);
+                        return true;
+                    }
+                    if (ReplaceLabelWithGoto((*seq)[k], target_lbl, factory))
+                        return true;
+                }
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                if (lbl->Body() == target_lbl) {
+                    auto *g = factory.Make<SGoto>(
+                        factory.Intern(target_lbl->Name()));
+                    lbl->SetBody(g);
+                    return true;
+                }
+                return ReplaceLabelWithGoto(lbl->Body(), target_lbl, factory);
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (ite->ThenBranch() == target_lbl) {
+                    ite->SetThenBranch(factory.Make<SGoto>(
+                        factory.Intern(target_lbl->Name())));
+                    return true;
+                }
+                if (ite->ElseBranch() == target_lbl) {
+                    ite->SetElseBranch(factory.Make<SGoto>(
+                        factory.Intern(target_lbl->Name())));
+                    return true;
+                }
+                if (ReplaceLabelWithGoto(ite->ThenBranch(), target_lbl, factory))
+                    return true;
+                if (ReplaceLabelWithGoto(ite->ElseBranch(), target_lbl, factory))
+                    return true;
+            }
+            return false;
+        }
+
+        // Append a goto to the end of a branch.  If the branch is an SSeq,
+        // append to it; otherwise wrap in a new SSeq.
+        static SNode *AppendGoto(SNode *branch, std::string_view label,
+                                 SNodeFactory &factory) {
+            auto *g = factory.Make<SGoto>(factory.Intern(label));
+            if (!branch) return g;
+            if (auto *seq = branch->dyn_cast<SSeq>()) {
+                seq->AddChild(g);
+                return seq;
+            }
+            auto *seq = factory.Make<SSeq>();
+            seq->AddChild(branch);
+            seq->AddChild(g);
+            return seq;
+        }
+
+        // Check if a node (or the last node in an SSeq chain) ends with
+        // a control-flow transfer that prevents fallthrough.
+        static bool EndsWithTransfer(SNode *n) {
+            if (!n) return false;
+            // Peel through SSeq tails and SLabel wrappers.
+            for (;;) {
+                if (auto *s = n->dyn_cast<SSeq>()) {
+                    if (s->Size() == 0) return false;
+                    n = (*s)[s->Size() - 1];
+                } else if (auto *l = n->dyn_cast<SLabel>()) {
+                    if (!l->Body()) return false;
+                    n = l->Body();
+                } else {
+                    break;
+                }
+            }
+            if (n->dyn_cast<SGoto>() || n->dyn_cast<SBreak>()
+                || n->dyn_cast<SContinue>() || n->dyn_cast<SReturn>())
+                return true;
+            if (auto *ite = n->dyn_cast<SIfThenElse>()) {
+                return EndsWithTransfer(ite->ThenBranch())
+                    && EndsWithTransfer(ite->ElseBranch());
+            }
+            return false;
+        }
+
+        // Set of label names hoisted by RefineHoistLabel, used by
+        // RefineAddSkipGotos to only process hoisted labels.
+        std::unordered_set<std::string> hoisted_labels_;
+
+        void RefineHoistLabel(SNode *root, SNodeFactory &factory) {
+            if (!root) return;
+            hoisted_labels_.clear();
+
+            std::unordered_set<std::string> all_gotos;
+            CollectGotoTargets(root, all_gotos);
+            if (all_gotos.empty()) return;
+
+            // Collect all SLabels in the tree that are cross-scope goto
+            // targets, along with the SSeq+position where they should
+            // be hoisted to.  We process the outermost occurrences first.
+            //
+            // Strategy: walk every SSeq.  For each child that is (or
+            // contains) an SIfThenElse, check if either branch has a
+            // label that is in all_gotos.  If so, hoist it to THIS SSeq
+            // right after the IfThenElse, add skip-gotos, and restart.
+
+            std::function<bool(SSeq *)> processSeq = [&](SSeq *seq) -> bool {
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    auto *child = (*seq)[i];
+
+                    // Find IfThenElse (direct, or at tail of SSeq,
+                    // or inside SLabel wrapping).
+                    SIfThenElse *ite = nullptr;
+                    SNode *peeled = child;
+                    while (peeled) {
+                        if (auto *d = peeled->dyn_cast<SIfThenElse>()) {
+                            ite = d; break;
+                        } else if (auto *is = peeled->dyn_cast<SSeq>()) {
+                            if (is->Size() == 0) break;
+                            peeled = (*is)[is->Size()-1];
+                        } else if (auto *lb = peeled->dyn_cast<SLabel>()) {
+                            peeled = lb->Body();
+                        } else {
+                            break;
+                        }
+                    }
+                    if (!ite) continue;
+
+                    for (int bi = 0; bi < 2; ++bi) {
+                        SNode *lbl_branch = bi == 0
+                            ? ite->ElseBranch() : ite->ThenBranch();
+
+                        SLabel *lbl = FindHoistableLabel(lbl_branch, all_gotos);
+                        if (!lbl) continue;
+
+                        std::string lname(lbl->Name());
+
+                        // Only hoist if there's a goto to L from OUTSIDE
+                        // the IfThenElse (from siblings in this SSeq).
+                        std::unordered_set<std::string> external_gotos;
+                        for (size_t j = 0; j < seq->Size(); ++j) {
+                            if (j == i) continue;
+                            CollectGotoTargets((*seq)[j], external_gotos);
+                        }
+                        if (!external_gotos.count(lname)) continue;
+                        SNode *lbl_body = lbl->Body();
+
+                        // 1. Replace label with SGoto(L) in the branch.
+                        if (lbl_branch == lbl) {
+                            auto *g = factory.Make<SGoto>(factory.Intern(lname));
+                            if (bi == 0) ite->SetElseBranch(g);
+                            else         ite->SetThenBranch(g);
+                        } else {
+                            ReplaceLabelWithGoto(lbl_branch, lbl, factory);
+                        }
+
+                        // 2. Insert hoisted label right after position i.
+                        seq->InsertChild(i + 1,
+                            factory.Make<SLabel>(factory.Intern(lname), lbl_body));
+                        hoisted_labels_.insert(lname);
+
+                        // Refresh gotos and signal restart.
+                        all_gotos.clear();
+                        CollectGotoTargets(root, all_gotos);
+                        return true;  // restart
+                    }
+                }
+                // Pattern 2: direct SLabel children of this SSeq that are
+                // goto targets from outside (e.g. after an inner hoist put
+                // a label here but a goto from an ancestor's other branch
+                // still targets it).  Only fire if this SSeq is a direct
+                // then/else-branch of a parent IfThenElse (the typical
+                // case after Pattern 1 hoisting).
+                auto *parent_ite = seq->Parent()
+                    ? seq->Parent()->dyn_cast<SIfThenElse>() : nullptr;
+                if (!parent_ite) return false;
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    auto *lbl = (*seq)[i]->dyn_cast<SLabel>();
+                    if (!lbl) continue;
+                    std::string lname(lbl->Name());
+                    if (!all_gotos.count(lname)) continue;
+
+                    // Only fire if the goto to L comes from the
+                    // OTHER branch of the immediate parent IfThenElse.
+                    std::unordered_set<std::string> other_gotos;
+                    if (parent_ite->ThenBranch() == seq)
+                        CollectGotoTargets(parent_ite->ElseBranch(), other_gotos);
+                    else
+                        CollectGotoTargets(parent_ite->ThenBranch(), other_gotos);
+                    if (!other_gotos.count(lname)) continue;
+
+                    // Find the nearest ancestor SSeq to hoist into.
+                    SSeq *target_seq = nullptr;
+                    size_t target_pos = 0;
+                    for (SNode *cur = seq, *p = seq->Parent();
+                         p; cur = p, p = p->Parent()) {
+                        if (auto *ps = p->dyn_cast<SSeq>()) {
+                            for (size_t j = 0; j < ps->Size(); ++j) {
+                                if ((*ps)[j] == cur) {
+                                    target_seq = ps;
+                                    target_pos = j;
+                                    break;
+                                }
+                            }
+                            if (target_seq) break;
+                        }
+                    }
+                    if (!target_seq) continue;
+
+                    SNode *lbl_body = lbl->Body();
+                    seq->RemoveChild(i);
+
+                    // Clean up stale after-labels left by a prior
+                    // inner hoist.  If SLabel("after_"+lname, empty_body)
+                    // exists in this SSeq, remove it — the outer hoist
+                    // will create a fresh one at the correct scope.
+                    std::string after = "after_" + lname;
+                    for (size_t j = 0; j < seq->Size(); ) {
+                        auto *al = (*seq)[j]->dyn_cast<SLabel>();
+                        if (al && al->Name() == after) {
+                            // Check if its body is empty or just an empty block.
+                            bool empty_body = !al->Body();
+                            if (!empty_body) {
+                                if (auto *bb = al->Body()->dyn_cast<SBlock>())
+                                    empty_body = bb->Stmts().empty();
+                            }
+                            if (empty_body) {
+                                seq->RemoveChild(j);
+                                continue;
+                            }
+                        }
+                        ++j;
+                    }
+
+                    // Insert the hoisted label after the child that
+                    // contains our SSeq.
+                    target_seq->InsertChild(target_pos + 1,
+                        factory.Make<SLabel>(factory.Intern(lname), lbl_body));
+                    hoisted_labels_.insert(lname);
+
+                    all_gotos.clear();
+                    CollectGotoTargets(root, all_gotos);
+                    return true;
+                }
+
+                return false;
+            };
+
+            // Walk the tree top-down, processing SSeqs.  When a hoist
+            // happens, restart from the root (the tree structure changed).
+            std::function<bool(SNode *)> walk = [&](SNode *n) -> bool {
+                if (!n) return false;
+                if (auto *seq = n->dyn_cast<SSeq>()) {
+                    if (processSeq(seq)) return true;
+                    for (size_t k = 0; k < seq->Size(); ++k)
+                        if (walk((*seq)[k])) return true;
+                } else if (auto *ite = n->dyn_cast<SIfThenElse>()) {
+                    if (walk(ite->ThenBranch())) return true;
+                    if (walk(ite->ElseBranch())) return true;
+                } else if (auto *w = n->dyn_cast<SWhile>()) {
+                    if (walk(w->Body())) return true;
+                } else if (auto *dw = n->dyn_cast<SDoWhile>()) {
+                    if (walk(dw->Body())) return true;
+                } else if (auto *f = n->dyn_cast<SFor>()) {
+                    if (walk(f->Body())) return true;
+                } else if (auto *sw = n->dyn_cast<SSwitch>()) {
+                    for (auto &c : sw->Cases())
+                        if (walk(c.body)) return true;
+                    if (walk(sw->DefaultBody())) return true;
+                } else if (auto *l = n->dyn_cast<SLabel>()) {
+                    if (walk(l->Body())) return true;
+                }
+                return false;
+            };
+
+            size_t max_rounds = 20;  // safety bound
+            while (max_rounds-- > 0) {
+                if (!walk(root)) break;
+            }
+        }
+
+        // --- RefineFallthroughGoto ---
+        //
+        // Removes SGoto(L) when the next sibling in the same SSeq is
+        // SLabel(L, ...) — the goto is redundant (fallthrough).
+        // Also removes else=SGoto(L) from IfThenElse when the next
+        // sibling is SLabel(L, ...).
+        // --- RefineAddSkipGotos ---
+        //
+        // After RefineHoistLabel moves labels to outer scopes, some
+        // IfThenElse nodes have branches that fall through to a hoisted
+        // label.  This pass adds goto-skip + after-label pairs.
+        //
+        // Pattern: SSeq [..., IfThenElse(C, then, else), SLabel(L, body), ...]
+        //   where then or else doesn't end with a transfer → would fall
+        //   through to L (wrong if that branch shouldn't reach L).
+        void RefineAddSkipGotos(SNode *node, SNodeFactory &factory) {
+            if (!node) return;
+            // Recurse.
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    RefineAddSkipGotos((*seq)[i], factory);
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RefineAddSkipGotos(ite->ThenBranch(), factory);
+                RefineAddSkipGotos(ite->ElseBranch(), factory);
+                return;
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                RefineAddSkipGotos(w->Body(), factory); return;
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                RefineAddSkipGotos(dw->Body(), factory); return;
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                RefineAddSkipGotos(f->Body(), factory); return;
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) RefineAddSkipGotos(c.body, factory);
+                RefineAddSkipGotos(sw->DefaultBody(), factory); return;
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RefineAddSkipGotos(lbl->Body(), factory); return;
+            } else { return; }
+
+            auto *seq = node->as<SSeq>();
+            SNode *tree_root = seq;
+            while (tree_root->Parent()) tree_root = tree_root->Parent();
+            std::unordered_set<std::string> all_gotos;
+            CollectGotoTargets(tree_root, all_gotos);
+
+            for (size_t i = 0; i + 1 < seq->Size(); ++i) {
+                auto *next_lbl = (*seq)[i + 1]->dyn_cast<SLabel>();
+                if (!next_lbl) continue;
+                std::string lname(next_lbl->Name());
+                // Only add skip-gotos for labels that were hoisted by
+                // RefineHoistLabel (not for normal program labels).
+                if (!hoisted_labels_.count(lname)) continue;
+                if (!all_gotos.count(lname)) continue;
+                if (EndsWithTransfer((*seq)[i])) continue;
+
+                // child[i] falls through to goto-target label L.
+                std::string after = "after_" + lname;
+
+                // Append skip-goto into the deepest branch that falls
+                // through to the label.  Peel through SSeq/SLabel/IfThenElse
+                // to find the innermost point where code falls through.
+                auto *cur = (*seq)[i];
+                SNode *target = cur;
+                while (target) {
+                    if (auto *ts = target->dyn_cast<SSeq>()) {
+                        if (ts->Size() == 0) break;
+                        target = (*ts)[ts->Size() - 1];
+                    } else if (auto *tl = target->dyn_cast<SLabel>()) {
+                        target = tl->Body();
+                    } else if (auto *ite = target->dyn_cast<SIfThenElse>()) {
+                        // Descend into the non-transferring branch
+                        // ONLY if exactly one branch transfers.
+                        bool then_t = EndsWithTransfer(ite->ThenBranch());
+                        bool else_t = EndsWithTransfer(ite->ElseBranch());
+                        if (else_t && !then_t) {
+                            target = ite->ThenBranch();
+                        } else if (then_t && !else_t) {
+                            target = ite->ElseBranch();
+                        } else {
+                            // Neither or both transfer — append the goto
+                            // AFTER this IfThenElse in its parent SSeq.
+                            auto *parent_seq = ite->Parent()
+                                ? ite->Parent()->dyn_cast<SSeq>() : nullptr;
+                            if (parent_seq) {
+                                // Find ite's position and append after it.
+                                for (size_t k = 0; k < parent_seq->Size(); ++k) {
+                                    if ((*parent_seq)[k] == ite) {
+                                        parent_seq->InsertChild(k + 1,
+                                            factory.Make<SGoto>(
+                                                factory.Intern(after)));
+                                        break;
+                                    }
+                                }
+                            }
+                            target = nullptr;
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                if (auto *ite = target ? target->dyn_cast<SIfThenElse>()
+                                       : nullptr) {
+                    if (!EndsWithTransfer(ite->ThenBranch()))
+                        ite->SetThenBranch(
+                            AppendGoto(ite->ThenBranch(), after, factory));
+                    if (!EndsWithTransfer(ite->ElseBranch()))
+                        ite->SetElseBranch(
+                            AppendGoto(ite->ElseBranch(), after, factory));
+                } else if (auto *is = target
+                        ? target->dyn_cast<SSeq>() : nullptr) {
+                    is->AddChild(factory.Make<SGoto>(factory.Intern(after)));
+                } else if (auto *is = cur->dyn_cast<SSeq>()) {
+                    is->AddChild(factory.Make<SGoto>(factory.Intern(after)));
+                } else {
+                    auto *wrapper = factory.Make<SSeq>();
+                    wrapper->AddChild(cur);
+                    wrapper->AddChild(factory.Make<SGoto>(factory.Intern(after)));
+                    seq->ReplaceChild(i, wrapper);
+                }
+
+                // Place after-label: find the first ancestor SSeq that
+                // has a continuation sibling after the label L.
+                SSeq *after_seq = seq;
+                size_t lbl_pos = i + 1;  // position of L in after_seq
+                while (lbl_pos + 1 >= after_seq->Size()) {
+                    // L is the last child — walk up.
+                    SNode *ancestor = after_seq;
+                    SSeq *parent_seq = nullptr;
+                    size_t ancestor_pos = 0;
+                    for (SNode *p = ancestor->Parent(); p; p = p->Parent()) {
+                        parent_seq = p->dyn_cast<SSeq>();
+                        if (parent_seq) {
+                            for (size_t j = 0; j < parent_seq->Size(); ++j) {
+                                SNode *w = ancestor;
+                                while (w && w->Parent() != parent_seq)
+                                    w = w->Parent();
+                                if (w == (*parent_seq)[j]) {
+                                    ancestor_pos = j;
+                                    goto found_parent;
+                                }
+                            }
+                            parent_seq = nullptr;
+                        }
+                    }
+                    found_parent:
+                    if (!parent_seq) break;
+                    after_seq = parent_seq;
+                    lbl_pos = ancestor_pos;
+                }
+
+                if (lbl_pos + 1 < after_seq->Size()) {
+                    auto *c = (*after_seq)[lbl_pos + 1];
+                    auto *ex = c->dyn_cast<SLabel>();
+                    if (!ex || ex->Name() != after)
+                        after_seq->ReplaceChild(lbl_pos + 1,
+                            factory.Make<SLabel>(factory.Intern(after), c));
+                } else {
+                    after_seq->AddChild(factory.Make<SLabel>(
+                        factory.Intern(after), factory.Make<SBlock>()));
+                }
+                i += 2;
+            }
+        }
+
+        void RefineFallthroughGoto(SNode *node, SNodeFactory &factory) {
+            if (!node) return;
+
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                // Recurse first.
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    RefineFallthroughGoto((*seq)[i], factory);
+
+                // Scan for goto-then-label patterns.
+                for (size_t i = 0; i + 1 < seq->Size(); ++i) {
+                    auto *next = (*seq)[i + 1];
+                    // Next must start with a label.
+                    std::string_view next_label;
+                    if (auto *lbl = next->dyn_cast<SLabel>()) {
+                        next_label = lbl->Name();
+                    } else if (auto *ns = next->dyn_cast<SSeq>()) {
+                        if (ns->Size() > 0) {
+                            if (auto *lbl = (*ns)[0]->dyn_cast<SLabel>())
+                                next_label = lbl->Name();
+                        }
+                    }
+                    if (next_label.empty()) continue;
+
+                    auto *cur = (*seq)[i];
+
+                    // Case 1: child[i] is SGoto(L) directly.
+                    if (auto *g = cur->dyn_cast<SGoto>()) {
+                        if (g->Target() == next_label) {
+                            seq->RemoveChild(i);
+                            --i;  // Re-check this position.
+                            continue;
+                        }
+                    }
+
+                    // Case 2: IfThenElse (possibly wrapped in SSeq/SLabel)
+                    //         with goto-branch matching next_label — either
+                    //         the branch itself is SGoto(L), or it ends with
+                    //         SGoto(L) at its tail.
+                    {
+                        SNode *tail = cur;
+                        while (tail) {
+                            if (tail->dyn_cast<SIfThenElse>()) break;
+                            if (auto *ts = tail->dyn_cast<SSeq>()) {
+                                if (ts->Size() == 0) { tail = nullptr; break; }
+                                tail = (*ts)[ts->Size() - 1];
+                            } else if (auto *tl = tail->dyn_cast<SLabel>()) {
+                                tail = tl->Body();
+                            } else {
+                                tail = nullptr;
+                            }
+                        }
+                        if (auto *ite = tail ? tail->dyn_cast<SIfThenElse>() : nullptr) {
+                            // Check direct branch gotos.
+                            if (auto *eg = ite->ElseBranch()
+                                    ? ite->ElseBranch()->dyn_cast<SGoto>() : nullptr) {
+                                if (eg->Target() == next_label)
+                                    ite->SetElseBranch(nullptr);
+                            }
+                            if (auto *tg = ite->ThenBranch()
+                                    ? ite->ThenBranch()->dyn_cast<SGoto>() : nullptr) {
+                                if (tg->Target() == next_label)
+                                    ite->SetThenBranch(nullptr);
+                            }
+                            // Note: do NOT remove trailing gotos from IfThenElse
+                            // branches — they may be needed to skip over hoisted
+                            // labels (the goto exits the branch scope).
+                        }
+                    }
+
+                    // Case 3: child[i] (or its tail) is SGoto(L).
+                    {
+                        // Peel through SSeq/SLabel to find trailing SGoto.
+                        auto removeTailGoto = [&](SNode *n) -> bool {
+                            if (auto *g = n->dyn_cast<SGoto>())
+                                return g->Target() == next_label;
+                            if (auto *inner = n->dyn_cast<SSeq>()) {
+                                if (inner->Size() > 0) {
+                                    size_t last = inner->Size() - 1;
+                                    if (auto *g = (*inner)[last]->dyn_cast<SGoto>()) {
+                                        if (g->Target() == next_label) {
+                                            inner->RemoveChild(last);
+                                            return false;  // already handled
+                                        }
+                                    }
+                                }
+                            }
+                            return false;
+                        };
+                        removeTailGoto(cur);
+                    }
+                }
+
+                // Cleanup: remove SGoto(L) that immediately follows SLabel(L,...)
+                // in this SSeq (dead goto to preceding label).
+                for (size_t i = 1; i < seq->Size(); ) {
+                    auto *g = (*seq)[i]->dyn_cast<SGoto>();
+                    if (!g) { ++i; continue; }
+                    auto *prev = (*seq)[i - 1]->dyn_cast<SLabel>();
+                    if (prev && prev->Name() == g->Target()) {
+                        seq->RemoveChild(i);
+                    } else {
+                        ++i;
+                    }
+                }
+                // Cleanup: remove dead trailing gotos after nodes that
+                // already end with a transfer (unreachable code).
+                for (size_t i = 1; i < seq->Size(); ) {
+                    if (!(*seq)[i]->dyn_cast<SGoto>()) { ++i; continue; }
+                    if (EndsWithTransfer((*seq)[i - 1])) {
+                        seq->RemoveChild(i);
+                    } else {
+                        ++i;
+                    }
+                }
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RefineFallthroughGoto(ite->ThenBranch(), factory);
+                RefineFallthroughGoto(ite->ElseBranch(), factory);
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                RefineFallthroughGoto(w->Body(), factory);
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                RefineFallthroughGoto(dw->Body(), factory);
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                RefineFallthroughGoto(f->Body(), factory);
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) RefineFallthroughGoto(c.body, factory);
+                RefineFallthroughGoto(sw->DefaultBody(), factory);
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RefineFallthroughGoto(lbl->Body(), factory);
+            }
+        }
+
+        // Remove SLabel nodes whose name is not in the goto target set.
+        // If the SLabel has a body, replace the label with its body.
+        // If no body, remove entirely.
+        void RemoveDeadLabels(SNode *node,
+                              const std::unordered_set<std::string> &targets) {
+            if (!node) return;
+
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ) {
+                    auto *child = (*seq)[i];
+                    if (auto *lbl = child->dyn_cast<SLabel>()) {
+                        if (targets.find(std::string(lbl->Name())) == targets.end()) {
+                            // Dead label -- replace with body or remove
+                            if (lbl->Body()) {
+                                seq->ReplaceChild(i, lbl->Body());
+                                // Don't increment — re-check the replacement
+                            } else {
+                                seq->RemoveChild(i);
+                            }
+                            continue;
+                        }
+                    }
+                    // Recurse into child
+                    RemoveDeadLabels(child, targets);
+                    ++i;
+                }
+            }
+            else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RemoveDeadLabels(ite->ThenBranch(), targets);
+                RemoveDeadLabels(ite->ElseBranch(), targets);
+            }
+            else if (auto *w = node->dyn_cast<SWhile>()) {
+                RemoveDeadLabels(w->Body(), targets);
+            }
+            else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                RemoveDeadLabels(dw->Body(), targets);
+            }
+            else if (auto *f = node->dyn_cast<SFor>()) {
+                RemoveDeadLabels(f->Body(), targets);
+            }
+            else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) {
+                    RemoveDeadLabels(c.body, targets);
+                }
+                RemoveDeadLabels(sw->DefaultBody(), targets);
+            }
+            else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RemoveDeadLabels(lbl->Body(), targets);
+            }
+        }
+
+        // RefineDeadLabels: remove dead labels left after RefineBreakContinue converts
+        // gotos to break/continue. For v1, this is dead label removal only
+        // (full bump-up optimization deferred).
+        void RefineDeadLabels(SNode *root) {
+            std::unordered_set<std::string> targets;
+            CollectGotoTargets(root, targets);
+            RemoveDeadLabels(root, targets);
+        }
+
+        // --- RefineWhileTrueToDoWhile helpers ---
+
+        // Collect all VarDecl* read by an expression (recursive)
+        void CollectReadVars(clang::Stmt *s,
+                             std::unordered_set<clang::VarDecl *> &vars) {
+            if (!s) return;
+            if (auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(s)) {
+                if (auto *vd = llvm::dyn_cast<clang::VarDecl>(dre->getDecl()))
+                    vars.insert(vd);
+            }
+            for (auto *child : s->children())
+                CollectReadVars(child, vars);
+        }
+
+        // Collect all VarDecl* written by SNode stmts (assignments)
+        void CollectSNodeWrites(const SNode *node,
+                                std::unordered_set<clang::VarDecl *> &vars) {
+            if (!node) return;
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                for (auto *s : blk->Stmts()) {
+                    auto *vd = GetReferencedVar(s);
+                    if (vd) vars.insert(vd);
+                }
+            } else if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    CollectSNodeWrites((*seq)[i], vars);
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                CollectSNodeWrites(ite->ThenBranch(), vars);
+                CollectSNodeWrites(ite->ElseBranch(), vars);
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                CollectSNodeWrites(lbl->Body(), vars);
+            }
+        }
+
+        bool IsLiteralOne(clang::Expr *e) {
+            if (!e) return false;
+            if (auto *il = llvm::dyn_cast<clang::IntegerLiteral>(e))
+                return il->getValue() == 1;
+            return false;
+        }
+
+        // RefineWhileTrueToDoWhile: convert while(true) with if-break
+        // to do-while when safe.
+        [[maybe_unused]]
+        void RefineWhileTrueToDoWhile(SNode *node, SNodeFactory &factory,
+                                       clang::ASTContext &ctx) {
+            if (!node) return;
+
+            // Recurse into children first (bottom-up)
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    RefineWhileTrueToDoWhile((*seq)[i], factory, ctx);
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RefineWhileTrueToDoWhile(ite->ThenBranch(), factory, ctx);
+                RefineWhileTrueToDoWhile(ite->ElseBranch(), factory, ctx);
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                RefineWhileTrueToDoWhile(w->Body(), factory, ctx);
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                RefineWhileTrueToDoWhile(dw->Body(), factory, ctx);
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                RefineWhileTrueToDoWhile(f->Body(), factory, ctx);
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    RefineWhileTrueToDoWhile(c.body, factory, ctx);
+                RefineWhileTrueToDoWhile(sw->DefaultBody(), factory, ctx);
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RefineWhileTrueToDoWhile(lbl->Body(), factory, ctx);
+            }
+
+            // Now check if this node is a parent SSeq containing a while(true)
+            auto *parent_seq = node->dyn_cast<SSeq>();
+            if (!parent_seq) return;
+
+            for (size_t wi = 0; wi < parent_seq->Size(); ++wi) {
+                auto *w = (*parent_seq)[wi]->dyn_cast<SWhile>();
+                if (!w || !IsLiteralOne(w->Cond())) continue;
+
+                auto *body = w->Body() ? w->Body()->dyn_cast<SSeq>() : nullptr;
+                if (!body || body->Size() < 2) continue;
+
+                // Find the first SIfThenElse(cond, SBreak, null)
+                for (size_t k = 0; k < body->Size(); ++k) {
+                    auto *ite = (*body)[k]->dyn_cast<SIfThenElse>();
+                    if (!ite) continue;
+                    if (!ite->ThenBranch() || !ite->ThenBranch()->isa<SBreak>())
+                        continue;
+                    if (ite->ElseBranch()) continue;
+
+                    clang::Expr *exit_cond = ite->Cond();
+                    if (!exit_cond) continue;
+
+                    // Trivial: break is last child
+                    if (k == body->Size() - 1) {
+                        body->RemoveChild(k);
+                        auto *dowhile = factory.Make<SDoWhile>(
+                            body, NegateCond(exit_cond, ctx));
+                        parent_seq->ReplaceChild(wi, dowhile);
+                        break;
+                    }
+
+                    // Middle break: check def-use safety.
+                    // Collect vars read by the exit condition.
+                    std::unordered_set<clang::VarDecl *> cond_vars;
+                    CollectReadVars(exit_cond, cond_vars);
+                    if (cond_vars.empty()) break; // can't verify, skip
+
+                    // Collect vars written by stmts AFTER the break.
+                    std::unordered_set<clang::VarDecl *> body_writes;
+                    for (size_t j = k + 1; j < body->Size(); ++j)
+                        CollectSNodeWrites((*body)[j], body_writes);
+
+                    // Check intersection
+                    bool safe = true;
+                    for (auto *v : cond_vars) {
+                        if (body_writes.count(v)) { safe = false; break; }
+                    }
+                    if (!safe) break;
+
+                    // Safe: wrap post-break stmts in if(!cond) { ... }
+                    auto *guarded = factory.Make<SSeq>();
+                    while (body->Size() > k + 1) {
+                        guarded->AddChild((*body)[k + 1]);
+                        body->RemoveChild(k + 1);
+                    }
+                    body->RemoveChild(k); // remove if-break
+
+                    auto *guard = factory.Make<SIfThenElse>(
+                        NegateCond(exit_cond, ctx), guarded, nullptr);
+                    body->AddChild(guard);
+
+                    auto *dowhile = factory.Make<SDoWhile>(
+                        body, NegateCond(exit_cond, ctx));
+                    parent_seq->ReplaceChild(wi, dowhile);
+                    break;
+                }
+            }
+        }
+
+    } // anonymous namespace
+
+    // ---------------------------------------------------------------
+    // Public API
+    // ---------------------------------------------------------------
+
+    SNode *CfgFoldStructure(const Cfg &cfg, SNodeFactory &factory,
+                             clang::ASTContext &ctx,
+                             const patchestry::Options &options) {
+        if (cfg.blocks.empty()) {
+            return factory.Make<SSeq>();
+        }
+
+        // Set up DOT tracer — output to same directory as output_file
+        // (or input_file's directory as fallback)
+        CGraphDotTracer tracer;
+        tracer.enabled = options.emit_dot_cfg;
+        tracer.audit = options.verify_structuring;
+        if (tracer.enabled || tracer.audit) {
+            std::string dot_dir;
+            const auto &base = options.output_file.empty()
+                ? options.input_file : options.output_file;
+            auto slash = base.find_last_of("/\\");
+            if (slash != std::string::npos) {
+                dot_dir = base.substr(0, slash + 1);
+            }
+            std::string name = cfg.function
+                ? cfg.function->getName().str() : "unknown";
+            tracer.fn_name = dot_dir + name;
+            tracer.original_stmt_count = CountCfgStmts(cfg);
+        }
+
+        // 1. Build the collapse graph
+        detail::CGraph g = detail::BuildCGraph(cfg);
+        tracer.Dump(g, "BuildCGraph");
+
+        // 2. Mark back-edges
+        detail::MarkBackEdges(g);
+
+        // 2b. Discover loops, compute bodies/nesting/exits, order innermost-first
+        std::list<detail::LoopBody> loopbody;
+        detail::OrderLoopBodies(g, loopbody);
+        LOG(INFO) << "CfgFoldStructure: found " << loopbody.size() << " loop(s)\n";
+        tracer.Dump(g, "MarkBackEdges");
+
+        // 2c. Pre-pass: for non-conditional 2-successor blocks where one
+        // edge is a back-edge and the other is a forward exit, remove the
+        // exit edge (the goto is inside the stmts) and clear kBack so the
+        // block can be chained into the loop body.
+        {
+            bool changed = false;
+            for (auto &bl : g.nodes) {
+                if (bl.collapsed || bl.SizeOut() != 2 || bl.is_conditional) {
+                    continue;
+                }
+                int back_idx = -1;
+                for (size_t i = 0; i < 2; ++i) {
+                    if (bl.IsBackEdge(i)) {
+                        back_idx = static_cast< int >(i);
+                    }
+                }
+                if (back_idx < 0) continue;
+
+                size_t exit_idx = 1 - static_cast<size_t>(back_idx);
+                size_t exit_id = bl.succs[exit_idx];
+                g.RemoveEdge(bl.id, exit_id);
+                for (size_t i = 0; i < bl.edge_flags.size(); ++i)
+                    bl.edge_flags[i] &= ~CNode::kBack;
+                changed = true;
+            }
+            // Re-discover loops with updated graph so TraceDAG is consistent.
+            if (changed) {
+                loopbody.clear();
+                detail::MarkBackEdges(g);
+                detail::OrderLoopBodies(g, loopbody);
+            }
+        }
+
+        tracer.Dump(g, "BackEdgePrePass");
+
+        // 2d. Collapse AND/OR conditions before main collapse loop
+        ResolveAllConditionChains(g, factory, ctx);
+        LOG(INFO) << "CfgFoldStructure: condition collapsing complete\n";
+        tracer.Dump(g, "ConditionChains");
+
+        // 2e. Absorb switch guard chains — mark guard→fallback edges as goto
+        // so FoldGoto + FoldSequence chain guards into the switch block,
+        // reducing the fallback block's sizeIn for FoldSwitch.
+        ResolveSwitchGuards(g);
+        tracer.Dump(g, "SwitchGuards");
+
+        // 3. Main collapse loop
+        size_t isolated = FoldMainLoop(g, factory, ctx, tracer);
+
+        // 3b. Try control-equivalence hoisting before falling back to gotos.
+        // This duplicates or absorbs small shared blocks to unblock
+        // FoldIfThen / FoldIfElse.
+        while (isolated < g.ActiveCount()) {
+            if (!ResolveControlEquivHoist(g)) break;
+            tracer.Dump(g, "ControlEquivHoist");
+            isolated = FoldMainLoop(g, factory, ctx, tracer);
+        }
+
+        // 4. When stuck, select gotos via TraceDAG and retry
+        size_t max_iterations = g.nodes.size() * 4;  // safety bound
+        size_t iter = 0;
+        while (isolated < g.ActiveCount() && iter < max_iterations) {
+            if (!ResolveGotoSelection(g, loopbody)) {
+                LOG(WARNING) << "CfgFoldStructure: could not select goto, "
+                             << g.ActiveCount() - isolated << " blocks remaining\n";
+                break;
+            }
+            tracer.Dump(g, "GotoSelection");
+            isolated = FoldMainLoop(g, factory, ctx, tracer);
+            ++iter;
+        }
+
+        // 5. Collect the final structured tree
+        // Find the root (entry node or its collapsed representative)
+        SNode *root = nullptr;
+        for (auto &n : g.nodes) {
+            if (n.collapsed) continue;
+            // LeafFromNode handles both structured and leaf nodes,
+            // and wraps with SLabel when the CNode carries a label.
+            auto *block = LeafFromNode(n, factory);
+            if (!root) {
+                root = block;
+            } else {
+                auto *seq = root->dyn_cast<SSeq>();
+                if (!seq) {
+                    seq = factory.Make<SSeq>();
+                    seq->AddChild(root);
+                    root = seq;
+                }
+                seq->AddChild(block);
+            }
+        }
+
+        if (!root) root = factory.Make<SSeq>();
+
+        // 6. Post-collapse transforms (order matters per research)
+        RefineGotoElseNesting(root, factory);          // 0th: nest siblings into if-then-goto-else
+        RefineHoistLabel(root, factory);               // 0.5: hoist cross-scope labels to outer seq
+        RefineAddSkipGotos(root, factory);             // 0.55: add skip-gotos for hoisted labels
+        RefineFallthroughGoto(root, factory);          // 0.6: remove goto L when next is L:
+        RefineBreakContinue(root, "", "", factory);    // 1st: gotos -> break/continue
+        RefineFallthroughGoto(root, factory);          // 1.5: cleanup after break/continue
+        // TODO: RefineWhileTrueToDoWhile needs fix — incorrectly handles
+        // FoldDoWhileLoop output (self-loop patterns). Disabled until fixed.
+        // RefineWhileTrueToDoWhile(root, factory, ctx);
+        RefineWhileToFor(root, factory, ctx);       // 2nd: while -> for patterns
+        RefineDeadLabels(root);                // 3rd: clean up dead labels
+
+        return root;
+    }
+
+} // namespace patchestry::ast

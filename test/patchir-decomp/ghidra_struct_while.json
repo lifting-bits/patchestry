@@ -1,0 +1,90 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
+// FN: cir.func @ghidra_struct_while(
+// RUN: %file-check -vv -check-prefix=WHILE %s --input-file %t.c
+// WHILE: while (
+// WHILE: return
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:21000000": {
+      "name": "ghidra_struct_while",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:21000000:entry": {
+          "operations": {
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:21000000:0:basic"
+            }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:21000000:0:basic": {
+          "operations": {
+            "cmp": {
+              "mnemonic": "INT_EQUAL",
+              "type": "type_bool",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 1 },
+                { "type": "type_int", "kind": "constant", "value": 1 }
+              ]
+            },
+            "cbr": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:21000000:1:basic",
+              "not_taken_block": "ram:21000000:2:basic",
+              "condition": {
+                "type": "type_bool",
+                "kind": "temporary",
+                "operation": "cmp"
+              }
+            }
+          },
+          "ordered_operations": ["cmp", "cbr"]
+        },
+        "ram:21000000:1:basic": {
+          "operations": {
+            "loop_op": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 1 },
+                { "type": "type_int", "kind": "constant", "value": 0 }
+              ]
+            },
+            "back": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:21000000:0:basic"
+            }
+          },
+          "ordered_operations": ["loop_op", "back"]
+        },
+        "ram:21000000:2:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 0 }]
+            }
+          },
+          "ordered_operations": ["ret"]
+        }
+      },
+      "entry_block": "ram:21000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" },
+    "type_bool": { "name": "bool", "size": 1, "kind": "boolean" }
+  }
+}
