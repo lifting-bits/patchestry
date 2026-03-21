@@ -1191,14 +1191,31 @@ namespace patchestry::ast {
         // ---------------------------------------------------------------
 
         static clang::Expr *NegateCond(clang::Expr *cond, clang::ASTContext &ctx) {
-            // Double negation elimination
+            // Double negation elimination: !!x → x
             if (auto *uo = llvm::dyn_cast<clang::UnaryOperator>(cond)) {
                 if (uo->getOpcode() == clang::UO_LNot) {
                     return uo->getSubExpr();
                 }
             }
+            // Flip comparison operators: (a <= b) → (a > b), etc.
+            // This avoids the precedence bug where !a <= b parses as (!a) <= b.
+            if (auto *bo = llvm::dyn_cast<clang::BinaryOperator>(cond)) {
+                if (!bo->isComparisonOp()) goto fallback_paren;
+                auto flipped = clang::BinaryOperator::negateComparisonOp(bo->getOpcode());
+                if (flipped != bo->getOpcode()) {
+                    return clang::BinaryOperator::Create(
+                        ctx, bo->getLHS(), bo->getRHS(), flipped,
+                        bo->getType(), bo->getValueKind(), bo->getObjectKind(),
+                        bo->getOperatorLoc(), clang::FPOptionsOverride());
+                }
+            }
+            // Fallback: wrap in ParenExpr to ensure correct precedence
+            // when the ! is applied to a non-trivial sub-expression.
+            fallback_paren:
+            auto *parened = new (ctx) clang::ParenExpr(
+                clang::SourceLocation(), clang::SourceLocation(), cond);
             return clang::UnaryOperator::Create(
-                ctx, cond, clang::UO_LNot, ctx.IntTy,
+                ctx, parened, clang::UO_LNot, ctx.IntTy,
                 clang::VK_PRValue, clang::OK_Ordinary,
                 clang::SourceLocation(), false,
                 clang::FPOptionsOverride());
@@ -1268,6 +1285,13 @@ namespace patchestry::ast {
             if (next.IsSwitchOut()) {
                 return false;
             }
+            // Don't chain into a conditional node — FoldIfThen/FoldIfElse need
+            // it as a separate head to match the if-pattern.  Absorbing it into
+            // a sequence buries the branch_cond in an SSeq where it is invisible
+            // to downstream if-rules (see decode_frame uVar7!=0 loss).
+            if (next.is_conditional && next.SizeOut() > 1) {
+                return false;
+            }
 
             // Build a sequence
             auto *seq = factory.Make<SSeq>();
@@ -1284,6 +1308,10 @@ namespace patchestry::ast {
                     break;
                 }
                 if (nxtNode.IsSwitchOut()) {
+                    break;
+                }
+                // Don't chain into a conditional tail (same rationale as above).
+                if (nxtNode.is_conditional && nxtNode.SizeOut() > 1) {
                     break;
                 }
                 chain.push_back(nxt);
@@ -1563,24 +1591,55 @@ namespace patchestry::ast {
                     clause_body = seq;
                 }
 
-                // If the header block has statements (e.g. getopt_long()),
-                // they execute each iteration BEFORE the condition check.
-                // Emit as: while(true) { header_stmts; if(exit_cond) break; body; }
+                // Determine which while-loop pattern to emit based on
+                // the header's content.
                 SNode *while_node;
-                if (!bl.stmts.empty()) {
+
+                // Case A: all header stmts are expressions — use comma
+                // operator in the while condition:
+                //   while (stmt1, stmt2, cond) { body }
+                bool all_expr = !bl.stmts.empty() && bl.branch_cond;
+                if (all_expr) {
+                    for (auto *s : bl.stmts) {
+                        if (!llvm::isa<clang::Expr>(s)
+                            || llvm::isa<clang::DeclStmt>(s)) {
+                            all_expr = false;
+                            break;
+                        }
+                    }
+                }
+
+                bool has_content = !bl.stmts.empty() || bl.structured;
+
+                if (all_expr) {
+                    // Build comma chain: (stmt1, (stmt2, cond))
+                    auto op_loc = clang::SourceLocation();
+                    clang::Expr *while_cond = cond;
+                    for (auto it = bl.stmts.rbegin(); it != bl.stmts.rend(); ++it) {
+                        auto *expr = llvm::dyn_cast<clang::Expr>(*it);
+                        while_cond = clang::BinaryOperator::Create(
+                            ctx, expr, while_cond, clang::BO_Comma,
+                            while_cond->getType(), clang::VK_PRValue,
+                            clang::OK_Ordinary, op_loc,
+                            clang::FPOptionsOverride());
+                    }
+                    while_node = factory.Make<SWhile>(while_cond, clause_body);
+                    if (!bl.label.empty()) {
+                        while_node = factory.Make<SLabel>(
+                            factory.Intern(bl.label), while_node);
+                        bl.label.clear();
+                    }
+                } else if (has_content) {
+                    // Case B: header has DeclStmts, structured content, or
+                    // mix — emit while(true) { header; if(exit) break; body }
                     auto *true_lit = clang::IntegerLiteral::Create(
                         ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
 
-                    // Exit condition: the original condition on the exit branch
                     clang::Expr *exit_cond = bl.branch_cond;
                     if (!exit_cond) {
                         exit_cond = clang::IntegerLiteral::Create(
                             ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
                     }
-                    // When body is on false branch (i==0), exit is on true branch
-                    // → exit_cond is already the exit condition (no negation)
-                    // When body is on true branch (i==1), exit is on false branch
-                    // → negate to get exit condition
                     if (i == 1) {
                         exit_cond = NegateCond(exit_cond, ctx);
                     }
@@ -1588,11 +1647,10 @@ namespace patchestry::ast {
                     auto *break_node = factory.Make<SBreak>();
                     auto *if_break = factory.Make<SIfThenElse>(exit_cond, break_node, nullptr);
 
-                    SNode *header_block = factory.Make<SBlock>();
-                    for (auto *s : bl.stmts) static_cast<SBlock *>(header_block)->AddStmt(s);
-                    if (!bl.label.empty()) {
-                        header_block = factory.Make<SLabel>(factory.Intern(bl.label), header_block);
-                    }
+                    // Use LeafFromNode to capture both raw stmts AND
+                    // structured content (e.g., inner while-loop from
+                    // a prior fold).
+                    SNode *header_block = LeafFromNode(bl, factory);
 
                     auto *seq = factory.Make<SSeq>();
                     seq->AddChild(header_block);
@@ -1600,6 +1658,7 @@ namespace patchestry::ast {
                     seq->AddChild(clause_body);
                     while_node = factory.Make<SWhile>(true_lit, seq);
                 } else {
+                    // Case C: no header content — simple while(cond) { body }
                     while_node = factory.Make<SWhile>(cond, clause_body);
                     if (!bl.label.empty()) {
                         while_node = factory.Make<SLabel>(factory.Intern(bl.label), while_node);
@@ -1775,6 +1834,87 @@ namespace patchestry::ast {
                     if_node = factory.Make<SLabel>(factory.Intern(bl.label), if_node);
                     bl.label.clear();
                 }
+
+                g.CollapseNodes({ id, clause_id }, if_node);
+                return true;
+            }
+            return false;
+        }
+
+        // ---------------------------------------------------------------
+        // FoldIfThenGoto — handles a conditional where one branch is a
+        // single-entry clause and the other is a shared goto target
+        // (SizeIn > 1).  Folds the clause into an if-then body and
+        // emits a goto for the shared branch, reducing its SizeIn to
+        // unblock downstream folds (FoldIfElse, FoldIfThen, etc.).
+        //
+        //  BEFORE:   bl ──→ clause ──→ X        AFTER:  rep ──→ X
+        //            │                                  (structured: if(cond){clause}
+        //            └──→ shared (SizeIn>1)              else{goto shared_label;})
+        //                                        shared.SizeIn decremented
+        // ---------------------------------------------------------------
+        bool FoldIfThenGoto(CGraph &g, size_t id, SNodeFactory &factory,
+                            clang::ASTContext &ctx) {
+            auto &bl = g.Node(id);
+            if (bl.collapsed || bl.SizeOut() != 2) return false;
+            if (bl.IsSwitchOut()) return false;
+            if (bl.IsGotoOut(0) || bl.IsGotoOut(1)) return false;
+
+            for (size_t i = 0; i < 2; ++i) {
+                size_t clause_id = bl.succs[i];
+                if (clause_id == id) continue;
+                auto &clause = g.Node(clause_id);
+                if (clause.collapsed) continue;
+                if (clause.SizeIn() != 1) continue;
+                if (clause.SizeOut() != 1) continue;
+                if (!bl.IsDecisionOut(i)) continue;
+                if (clause.IsGotoOut(0)) continue;
+
+                // The other branch must be a shared goto target.
+                size_t shared_id = bl.succs[1 - i];
+                auto &shared = g.Node(shared_id);
+                if (shared.SizeIn() <= 1) continue;
+                if (shared.label.empty()) continue;
+
+                // Build condition (negate if clause is on false branch)
+                clang::Expr *cond = bl.branch_cond;
+                if (!cond) {
+                    cond = clang::IntegerLiteral::Create(
+                        ctx, llvm::APInt(32, 1), ctx.IntTy, clang::SourceLocation());
+                }
+                if (i == 0) {
+                    cond = NegateCond(cond, ctx);
+                }
+
+                auto *clause_body = LeafFromNode(clause, factory);
+                auto *goto_node = factory.Make<SGoto>(factory.Intern(shared.label));
+                SNode *if_node = factory.Make<SIfThenElse>(cond, clause_body, goto_node);
+
+                // Prepend head block's accumulated content so it is not lost.
+                SNode *head_content = LeafFromNode(bl, factory);
+                bool has_head = false;
+                if (head_content) {
+                    if (head_content->Kind() == SNodeKind::kBlock) {
+                        has_head = !head_content->as<SBlock>()->Stmts().empty();
+                    } else {
+                        has_head = true;
+                    }
+                }
+                if (has_head) {
+                    auto *seq = factory.Make<SSeq>();
+                    seq->AddChild(head_content);
+                    seq->AddChild(if_node);
+                    if_node = seq;
+                }
+
+                if (!bl.label.empty()) {
+                    if_node = factory.Make<SLabel>(factory.Intern(bl.label), if_node);
+                    bl.label.clear();
+                }
+
+                // Remove the edge to the shared target BEFORE collapse so it
+                // is not collected as an ext_succ.  This reduces shared.SizeIn.
+                g.RemoveEdge(id, shared_id);
 
                 g.CollapseNodes({ id, clause_id }, if_node);
                 return true;
@@ -2781,6 +2921,11 @@ namespace patchestry::ast {
                         change = true;
                         break;
                     }
+                    if (FoldIfThenGoto(g, n.id, factory, ctx)) {
+                        tracer.Dump(g, "FoldIfThenGoto");
+                        change = true;
+                        break;
+                    }
                 }
             } while (change);
 
@@ -3099,6 +3244,874 @@ namespace patchestry::ast {
             }
         }
 
+        // --- RefineGotoElseNesting ---
+        //
+        // Detects:
+        //   SSeq([..., IfThenElse(C, body, SGoto(L)), sibling0, sibling1, ...])
+        //
+        // and transforms to:
+        //   SSeq([..., IfThenElse(C, SSeq([body, sibling0, sibling1, ...]), SGoto(L))])
+        //
+        // This nests the code that follows an if-with-goto-else into the
+        // then-body, producing e.g. "if (length != 0) { init; while; ... }"
+        // instead of "if (length) { init } else goto L; while; ...".
+        //
+        // Safety: only absorb if no label in the absorbed range is a goto
+        // target from OUTSIDE the absorbed range (except the SGoto(L) itself).
+        // For irreducible cases the transform is skipped.
+
+        // Collect all label names defined in a subtree.
+        static void CollectLabels(SNode *node, std::unordered_set<std::string> &labels) {
+            if (!node) return;
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                labels.emplace(lbl->Name());
+                CollectLabels(lbl->Body(), labels);
+            } else if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    CollectLabels((*seq)[i], labels);
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                CollectLabels(ite->ThenBranch(), labels);
+                CollectLabels(ite->ElseBranch(), labels);
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                CollectLabels(w->Body(), labels);
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                CollectLabels(dw->Body(), labels);
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                CollectLabels(f->Body(), labels);
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) CollectLabels(c.body, labels);
+                CollectLabels(sw->DefaultBody(), labels);
+            }
+        }
+
+        // Phase 4: ancestor_gotos accumulates goto targets from parent
+        // scopes so we can reject absorption when an ancestor goto would
+        // cross into the absorbed range.
+        void RefineGotoElseNesting(SNode *node, SNodeFactory &factory,
+                                   const std::unordered_set<std::string> &ancestor_gotos = {}) {
+            if (!node) return;
+
+            // Collect gotos from this node to pass to children (Phase 4).
+            auto makeChildAncestorGotos = [&](SNode *exclude) {
+                std::unordered_set<std::string> child_ag = ancestor_gotos;
+                // Add gotos from sibling branches at this level.
+                // For an IfThenElse: gotos from the other branch are
+                // "ancestor gotos" for the branch being recursed into.
+                if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                    if (exclude != ite->ThenBranch())
+                        CollectGotoTargets(ite->ThenBranch(), child_ag);
+                    if (exclude != ite->ElseBranch())
+                        CollectGotoTargets(ite->ElseBranch(), child_ag);
+                }
+                return child_ag;
+            };
+
+            // Recurse first (bottom-up) so inner SSeqs are resolved before outer.
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    RefineGotoElseNesting((*seq)[i], factory, ancestor_gotos);
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RefineGotoElseNesting(ite->ThenBranch(), factory,
+                                      makeChildAncestorGotos(ite->ThenBranch()));
+                RefineGotoElseNesting(ite->ElseBranch(), factory,
+                                      makeChildAncestorGotos(ite->ElseBranch()));
+                return;
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                RefineGotoElseNesting(w->Body(), factory, ancestor_gotos);
+                return;
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                RefineGotoElseNesting(dw->Body(), factory, ancestor_gotos);
+                return;
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                RefineGotoElseNesting(f->Body(), factory, ancestor_gotos);
+                return;
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    RefineGotoElseNesting(c.body, factory, ancestor_gotos);
+                RefineGotoElseNesting(sw->DefaultBody(), factory, ancestor_gotos);
+                return;
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RefineGotoElseNesting(lbl->Body(), factory, ancestor_gotos);
+                return;
+            } else {
+                return;
+            }
+
+            // node is an SSeq — scan for IfThenElse with SGoto branch.
+            // Phase 3: iterate until no more changes (fixed point).
+            auto *seq = node->as<SSeq>();
+            bool changed = true;
+            size_t max_rounds = seq->Size() + 1;  // safety bound
+            while (changed && max_rounds-- > 0) {
+                changed = false;
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    auto *child = (*seq)[i];
+
+                    // Peel through wrapping: SSeq→last child, SLabel→body
+                    SNode *candidate = child;
+                    while (candidate) {
+                        if (auto *inner_seq = candidate->dyn_cast<SSeq>()) {
+                            if (inner_seq->Size() == 0) break;
+                            candidate = (*inner_seq)[inner_seq->Size() - 1];
+                        } else if (auto *inner_lbl = candidate->dyn_cast<SLabel>()) {
+                            candidate = inner_lbl->Body();
+                        } else {
+                            break;
+                        }
+                    }
+                    auto *ite = candidate ? candidate->dyn_cast<SIfThenElse>() : nullptr;
+                    if (!ite) continue;
+
+                    // Match SGoto in either branch (Phase 2).
+                    SGoto *branch_goto = nullptr;
+                    bool is_then_goto = false;
+                    if (auto *g = ite->ElseBranch()
+                            ? ite->ElseBranch()->dyn_cast<SGoto>() : nullptr) {
+                        branch_goto = g;
+                        is_then_goto = false;
+                    } else if (auto *g = ite->ThenBranch()
+                            ? ite->ThenBranch()->dyn_cast<SGoto>() : nullptr) {
+                        branch_goto = g;
+                        is_then_goto = true;
+                    }
+                    if (!branch_goto) continue;
+                    if (i + 1 >= seq->Size()) continue;
+
+                    SNode *body_branch = is_then_goto
+                        ? ite->ElseBranch() : ite->ThenBranch();
+
+                    std::string target(branch_goto->Target());
+
+                    // --- Phase 1: find the label boundary ---
+                    auto startsWithLabel = [&](SNode *n) -> bool {
+                        if (!n) return false;
+                        if (auto *lbl = n->dyn_cast<SLabel>())
+                            return lbl->Name() == target;
+                        if (auto *s = n->dyn_cast<SSeq>()) {
+                            for (size_t k = 0; k < s->Size(); ++k) {
+                                if (auto *lbl = (*s)[k]->dyn_cast<SLabel>())
+                                    return lbl->Name() == target;
+                                if (auto *blk = (*s)[k]->dyn_cast<SBlock>()) {
+                                    if (blk->Stmts().empty()) continue;
+                                }
+                                break;
+                            }
+                        }
+                        return false;
+                    };
+
+                    size_t label_pos = seq->Size();
+                    bool label_is_toplevel = false;
+                    for (size_t j = i + 1; j < seq->Size(); ++j) {
+                        if (startsWithLabel((*seq)[j])) {
+                            label_pos = j;
+                            label_is_toplevel = true;
+                            break;
+                        }
+                    }
+
+                    if (!label_is_toplevel) {
+                        std::unordered_set<std::string> nested_labels;
+                        for (size_t j = i + 1; j < seq->Size(); ++j)
+                            CollectLabels((*seq)[j], nested_labels);
+                        if (nested_labels.find(target) == nested_labels.end())
+                            continue;
+                        label_pos = seq->Size();
+                    }
+
+                    if (label_pos == i + 1) continue;
+
+                    size_t absorb_end = label_is_toplevel ? label_pos : seq->Size();
+
+                    // Safety: collect labels in the absorption range.
+                    std::unordered_set<std::string> range_labels;
+                    for (size_t j = i + 1; j < absorb_end; ++j)
+                        CollectLabels((*seq)[j], range_labels);
+
+                    // Collect goto targets from OUTSIDE the absorption range:
+                    // siblings [0..i] + ancestor gotos (Phase 4).
+                    std::unordered_set<std::string> external_gotos = ancestor_gotos;
+                    for (size_t j = 0; j <= i; ++j)
+                        CollectGotoTargets((*seq)[j], external_gotos);
+                    external_gotos.erase(target);
+                    // Gotos from the body branch move with absorbed content.
+                    std::unordered_set<std::string> body_gotos;
+                    CollectGotoTargets(body_branch, body_gotos);
+                    for (auto &tg : body_gotos)
+                        external_gotos.erase(tg);
+
+                    bool unsafe = false;
+                    for (auto &eg : external_gotos) {
+                        if (range_labels.count(eg)) { unsafe = true; break; }
+                    }
+                    if (unsafe) continue;
+
+                    // Absorb siblings [i+1..absorb_end) into the body branch.
+                    auto *new_body = factory.Make<SSeq>();
+                    if (body_branch)
+                        new_body->AddChild(body_branch);
+                    for (size_t j = i + 1; j < absorb_end; ++j)
+                        new_body->AddChild((*seq)[j]);
+
+                    for (size_t j = absorb_end - 1; j > i; --j)
+                        seq->RemoveChild(j);
+
+                    if (is_then_goto) {
+                        ite->SetElseBranch(new_body);
+                    } else {
+                        ite->SetThenBranch(new_body);
+                    }
+
+                    if (label_is_toplevel) {
+                        if (is_then_goto) {
+                            ite->SetThenBranch(nullptr);
+                        } else {
+                            ite->SetElseBranch(nullptr);
+                        }
+                    }
+
+                    changed = true;
+                    break;  // Restart scan from the beginning of this SSeq.
+                }
+            }
+        }
+
+        // --- RefineHoistLabel ---
+        //
+        // Hoists labels out of if-else branches to the enclosing SSeq
+        // when they are cross-scope goto targets.  This eliminates gotos
+        // that jump from one branch of an if into the other.
+        //
+        // Pattern:
+        //   SSeq [
+        //     ...,
+        //     SIfThenElse(C, then_body, SLabel(L, content)),  // label in else
+        //     continuation,
+        //     ...
+        //   ]
+        //   where SGoto(L) exists OUTSIDE this SIfThenElse
+        //
+        // Transform:
+        //   SSeq [
+        //     ...,
+        //     SIfThenElse(C,
+        //       SSeq[then_body, SGoto(after_L)],  // skip-goto appended
+        //       SGoto(L)),                          // replaced label with goto
+        //     SLabel(L, content),                   // hoisted
+        //     SLabel(after_L, continuation),         // skip target
+        //     ...
+        //   ]
+
+        // Find an SLabel in a branch whose name matches one of the target
+        // goto names.  Searches the top-level SSeq children (not deeply
+        // nested in control flow — only in SSeq/SLabel wrappers).
+        static SLabel *FindHoistableLabel(
+                SNode *node,
+                const std::unordered_set<std::string> &goto_targets) {
+            if (!node) return nullptr;
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                if (goto_targets.count(std::string(lbl->Name())))
+                    return lbl;
+                return FindHoistableLabel(lbl->Body(), goto_targets);
+            }
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t k = 0; k < seq->Size(); ++k) {
+                    if (auto *found = FindHoistableLabel((*seq)[k], goto_targets))
+                        return found;
+                }
+            }
+            // Descend into IfThenElse branches — labels there are
+            // the primary hoist targets.
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (auto *f = FindHoistableLabel(ite->ThenBranch(), goto_targets))
+                    return f;
+                if (auto *f = FindHoistableLabel(ite->ElseBranch(), goto_targets))
+                    return f;
+            }
+            // Don't descend into loops or switches — labels inside
+            // those have different scope semantics (break/continue).
+            return nullptr;
+        }
+
+        // Replace a specific SLabel anywhere in SSeq/SLabel wrappers
+        // with an SGoto.  Returns the position in the nearest SSeq
+        // (for insertion of subsequent nodes), or false if not found.
+        static bool ReplaceLabelWithGoto(SNode *node, SLabel *target_lbl,
+                                         SNodeFactory &factory) {
+            if (!node) return false;
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t k = 0; k < seq->Size(); ++k) {
+                    if ((*seq)[k] == target_lbl) {
+                        auto *g = factory.Make<SGoto>(
+                            factory.Intern(target_lbl->Name()));
+                        seq->ReplaceChild(k, g);
+                        return true;
+                    }
+                    if (ReplaceLabelWithGoto((*seq)[k], target_lbl, factory))
+                        return true;
+                }
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                if (lbl->Body() == target_lbl) {
+                    auto *g = factory.Make<SGoto>(
+                        factory.Intern(target_lbl->Name()));
+                    lbl->SetBody(g);
+                    return true;
+                }
+                return ReplaceLabelWithGoto(lbl->Body(), target_lbl, factory);
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (ite->ThenBranch() == target_lbl) {
+                    ite->SetThenBranch(factory.Make<SGoto>(
+                        factory.Intern(target_lbl->Name())));
+                    return true;
+                }
+                if (ite->ElseBranch() == target_lbl) {
+                    ite->SetElseBranch(factory.Make<SGoto>(
+                        factory.Intern(target_lbl->Name())));
+                    return true;
+                }
+                if (ReplaceLabelWithGoto(ite->ThenBranch(), target_lbl, factory))
+                    return true;
+                if (ReplaceLabelWithGoto(ite->ElseBranch(), target_lbl, factory))
+                    return true;
+            }
+            return false;
+        }
+
+        // Append a goto to the end of a branch.  If the branch is an SSeq,
+        // append to it; otherwise wrap in a new SSeq.
+        static SNode *AppendGoto(SNode *branch, std::string_view label,
+                                 SNodeFactory &factory) {
+            auto *g = factory.Make<SGoto>(factory.Intern(label));
+            if (!branch) return g;
+            if (auto *seq = branch->dyn_cast<SSeq>()) {
+                seq->AddChild(g);
+                return seq;
+            }
+            auto *seq = factory.Make<SSeq>();
+            seq->AddChild(branch);
+            seq->AddChild(g);
+            return seq;
+        }
+
+        // Check if a node (or the last node in an SSeq chain) ends with
+        // a control-flow transfer that prevents fallthrough.
+        static bool EndsWithTransfer(SNode *n) {
+            if (!n) return false;
+            // Peel through SSeq tails and SLabel wrappers.
+            for (;;) {
+                if (auto *s = n->dyn_cast<SSeq>()) {
+                    if (s->Size() == 0) return false;
+                    n = (*s)[s->Size() - 1];
+                } else if (auto *l = n->dyn_cast<SLabel>()) {
+                    if (!l->Body()) return false;
+                    n = l->Body();
+                } else {
+                    break;
+                }
+            }
+            if (n->dyn_cast<SGoto>() || n->dyn_cast<SBreak>()
+                || n->dyn_cast<SContinue>() || n->dyn_cast<SReturn>())
+                return true;
+            if (auto *ite = n->dyn_cast<SIfThenElse>()) {
+                return EndsWithTransfer(ite->ThenBranch())
+                    && EndsWithTransfer(ite->ElseBranch());
+            }
+            return false;
+        }
+
+        // Set of label names hoisted by RefineHoistLabel, used by
+        // RefineAddSkipGotos to only process hoisted labels.
+        std::unordered_set<std::string> hoisted_labels_;
+
+        void RefineHoistLabel(SNode *root, SNodeFactory &factory) {
+            if (!root) return;
+            hoisted_labels_.clear();
+
+            std::unordered_set<std::string> all_gotos;
+            CollectGotoTargets(root, all_gotos);
+            if (all_gotos.empty()) return;
+
+            // Collect all SLabels in the tree that are cross-scope goto
+            // targets, along with the SSeq+position where they should
+            // be hoisted to.  We process the outermost occurrences first.
+            //
+            // Strategy: walk every SSeq.  For each child that is (or
+            // contains) an SIfThenElse, check if either branch has a
+            // label that is in all_gotos.  If so, hoist it to THIS SSeq
+            // right after the IfThenElse, add skip-gotos, and restart.
+
+            std::function<bool(SSeq *)> processSeq = [&](SSeq *seq) -> bool {
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    auto *child = (*seq)[i];
+
+                    // Find IfThenElse (direct, or at tail of SSeq,
+                    // or inside SLabel wrapping).
+                    SIfThenElse *ite = nullptr;
+                    SNode *peeled = child;
+                    while (peeled) {
+                        if (auto *d = peeled->dyn_cast<SIfThenElse>()) {
+                            ite = d; break;
+                        } else if (auto *is = peeled->dyn_cast<SSeq>()) {
+                            if (is->Size() == 0) break;
+                            peeled = (*is)[is->Size()-1];
+                        } else if (auto *lb = peeled->dyn_cast<SLabel>()) {
+                            peeled = lb->Body();
+                        } else {
+                            break;
+                        }
+                    }
+                    if (!ite) continue;
+
+                    for (int bi = 0; bi < 2; ++bi) {
+                        SNode *lbl_branch = bi == 0
+                            ? ite->ElseBranch() : ite->ThenBranch();
+
+                        SLabel *lbl = FindHoistableLabel(lbl_branch, all_gotos);
+                        if (!lbl) continue;
+
+                        std::string lname(lbl->Name());
+
+                        // Only hoist if there's a goto to L from OUTSIDE
+                        // the IfThenElse (from siblings in this SSeq).
+                        std::unordered_set<std::string> external_gotos;
+                        for (size_t j = 0; j < seq->Size(); ++j) {
+                            if (j == i) continue;
+                            CollectGotoTargets((*seq)[j], external_gotos);
+                        }
+                        if (!external_gotos.count(lname)) continue;
+                        SNode *lbl_body = lbl->Body();
+
+                        // 1. Replace label with SGoto(L) in the branch.
+                        if (lbl_branch == lbl) {
+                            auto *g = factory.Make<SGoto>(factory.Intern(lname));
+                            if (bi == 0) ite->SetElseBranch(g);
+                            else         ite->SetThenBranch(g);
+                        } else {
+                            ReplaceLabelWithGoto(lbl_branch, lbl, factory);
+                        }
+
+                        // 2. Insert hoisted label right after position i.
+                        seq->InsertChild(i + 1,
+                            factory.Make<SLabel>(factory.Intern(lname), lbl_body));
+                        hoisted_labels_.insert(lname);
+
+                        // Refresh gotos and signal restart.
+                        all_gotos.clear();
+                        CollectGotoTargets(root, all_gotos);
+                        return true;  // restart
+                    }
+                }
+                // Pattern 2: direct SLabel children of this SSeq that are
+                // goto targets from outside (e.g. after an inner hoist put
+                // a label here but a goto from an ancestor's other branch
+                // still targets it).  Only fire if this SSeq is a direct
+                // then/else-branch of a parent IfThenElse (the typical
+                // case after Pattern 1 hoisting).
+                auto *parent_ite = seq->Parent()
+                    ? seq->Parent()->dyn_cast<SIfThenElse>() : nullptr;
+                if (!parent_ite) return false;
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    auto *lbl = (*seq)[i]->dyn_cast<SLabel>();
+                    if (!lbl) continue;
+                    std::string lname(lbl->Name());
+                    if (!all_gotos.count(lname)) continue;
+
+                    // Only fire if the goto to L comes from the
+                    // OTHER branch of the immediate parent IfThenElse.
+                    std::unordered_set<std::string> other_gotos;
+                    if (parent_ite->ThenBranch() == seq)
+                        CollectGotoTargets(parent_ite->ElseBranch(), other_gotos);
+                    else
+                        CollectGotoTargets(parent_ite->ThenBranch(), other_gotos);
+                    if (!other_gotos.count(lname)) continue;
+
+                    // Find the nearest ancestor SSeq to hoist into.
+                    SSeq *target_seq = nullptr;
+                    size_t target_pos = 0;
+                    for (SNode *cur = seq, *p = seq->Parent();
+                         p; cur = p, p = p->Parent()) {
+                        if (auto *ps = p->dyn_cast<SSeq>()) {
+                            for (size_t j = 0; j < ps->Size(); ++j) {
+                                if ((*ps)[j] == cur) {
+                                    target_seq = ps;
+                                    target_pos = j;
+                                    break;
+                                }
+                            }
+                            if (target_seq) break;
+                        }
+                    }
+                    if (!target_seq) continue;
+
+                    SNode *lbl_body = lbl->Body();
+                    seq->RemoveChild(i);
+
+                    // Clean up stale after-labels left by a prior
+                    // inner hoist.  If SLabel("after_"+lname, empty_body)
+                    // exists in this SSeq, remove it — the outer hoist
+                    // will create a fresh one at the correct scope.
+                    std::string after = "after_" + lname;
+                    for (size_t j = 0; j < seq->Size(); ) {
+                        auto *al = (*seq)[j]->dyn_cast<SLabel>();
+                        if (al && al->Name() == after) {
+                            // Check if its body is empty or just an empty block.
+                            bool empty_body = !al->Body();
+                            if (!empty_body) {
+                                if (auto *bb = al->Body()->dyn_cast<SBlock>())
+                                    empty_body = bb->Stmts().empty();
+                            }
+                            if (empty_body) {
+                                seq->RemoveChild(j);
+                                continue;
+                            }
+                        }
+                        ++j;
+                    }
+
+                    // Insert the hoisted label after the child that
+                    // contains our SSeq.
+                    target_seq->InsertChild(target_pos + 1,
+                        factory.Make<SLabel>(factory.Intern(lname), lbl_body));
+                    hoisted_labels_.insert(lname);
+
+                    all_gotos.clear();
+                    CollectGotoTargets(root, all_gotos);
+                    return true;
+                }
+
+                return false;
+            };
+
+            // Walk the tree top-down, processing SSeqs.  When a hoist
+            // happens, restart from the root (the tree structure changed).
+            std::function<bool(SNode *)> walk = [&](SNode *n) -> bool {
+                if (!n) return false;
+                if (auto *seq = n->dyn_cast<SSeq>()) {
+                    if (processSeq(seq)) return true;
+                    for (size_t k = 0; k < seq->Size(); ++k)
+                        if (walk((*seq)[k])) return true;
+                } else if (auto *ite = n->dyn_cast<SIfThenElse>()) {
+                    if (walk(ite->ThenBranch())) return true;
+                    if (walk(ite->ElseBranch())) return true;
+                } else if (auto *w = n->dyn_cast<SWhile>()) {
+                    if (walk(w->Body())) return true;
+                } else if (auto *dw = n->dyn_cast<SDoWhile>()) {
+                    if (walk(dw->Body())) return true;
+                } else if (auto *f = n->dyn_cast<SFor>()) {
+                    if (walk(f->Body())) return true;
+                } else if (auto *sw = n->dyn_cast<SSwitch>()) {
+                    for (auto &c : sw->Cases())
+                        if (walk(c.body)) return true;
+                    if (walk(sw->DefaultBody())) return true;
+                } else if (auto *l = n->dyn_cast<SLabel>()) {
+                    if (walk(l->Body())) return true;
+                }
+                return false;
+            };
+
+            size_t max_rounds = 20;  // safety bound
+            while (max_rounds-- > 0) {
+                if (!walk(root)) break;
+            }
+        }
+
+        // --- RefineFallthroughGoto ---
+        //
+        // Removes SGoto(L) when the next sibling in the same SSeq is
+        // SLabel(L, ...) — the goto is redundant (fallthrough).
+        // Also removes else=SGoto(L) from IfThenElse when the next
+        // sibling is SLabel(L, ...).
+        // --- RefineAddSkipGotos ---
+        //
+        // After RefineHoistLabel moves labels to outer scopes, some
+        // IfThenElse nodes have branches that fall through to a hoisted
+        // label.  This pass adds goto-skip + after-label pairs.
+        //
+        // Pattern: SSeq [..., IfThenElse(C, then, else), SLabel(L, body), ...]
+        //   where then or else doesn't end with a transfer → would fall
+        //   through to L (wrong if that branch shouldn't reach L).
+        void RefineAddSkipGotos(SNode *node, SNodeFactory &factory) {
+            if (!node) return;
+            // Recurse.
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    RefineAddSkipGotos((*seq)[i], factory);
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RefineAddSkipGotos(ite->ThenBranch(), factory);
+                RefineAddSkipGotos(ite->ElseBranch(), factory);
+                return;
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                RefineAddSkipGotos(w->Body(), factory); return;
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                RefineAddSkipGotos(dw->Body(), factory); return;
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                RefineAddSkipGotos(f->Body(), factory); return;
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) RefineAddSkipGotos(c.body, factory);
+                RefineAddSkipGotos(sw->DefaultBody(), factory); return;
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RefineAddSkipGotos(lbl->Body(), factory); return;
+            } else { return; }
+
+            auto *seq = node->as<SSeq>();
+            SNode *tree_root = seq;
+            while (tree_root->Parent()) tree_root = tree_root->Parent();
+            std::unordered_set<std::string> all_gotos;
+            CollectGotoTargets(tree_root, all_gotos);
+
+            for (size_t i = 0; i + 1 < seq->Size(); ++i) {
+                auto *next_lbl = (*seq)[i + 1]->dyn_cast<SLabel>();
+                if (!next_lbl) continue;
+                std::string lname(next_lbl->Name());
+                // Only add skip-gotos for labels that were hoisted by
+                // RefineHoistLabel (not for normal program labels).
+                if (!hoisted_labels_.count(lname)) continue;
+                if (!all_gotos.count(lname)) continue;
+                if (EndsWithTransfer((*seq)[i])) continue;
+
+                // child[i] falls through to goto-target label L.
+                std::string after = "after_" + lname;
+
+                // Append skip-goto into the deepest branch that falls
+                // through to the label.  Peel through SSeq/SLabel/IfThenElse
+                // to find the innermost point where code falls through.
+                auto *cur = (*seq)[i];
+                SNode *target = cur;
+                while (target) {
+                    if (auto *ts = target->dyn_cast<SSeq>()) {
+                        if (ts->Size() == 0) break;
+                        target = (*ts)[ts->Size() - 1];
+                    } else if (auto *tl = target->dyn_cast<SLabel>()) {
+                        target = tl->Body();
+                    } else if (auto *ite = target->dyn_cast<SIfThenElse>()) {
+                        // Descend into the non-transferring branch
+                        // ONLY if exactly one branch transfers.
+                        bool then_t = EndsWithTransfer(ite->ThenBranch());
+                        bool else_t = EndsWithTransfer(ite->ElseBranch());
+                        if (else_t && !then_t) {
+                            target = ite->ThenBranch();
+                        } else if (then_t && !else_t) {
+                            target = ite->ElseBranch();
+                        } else {
+                            // Neither or both transfer — append the goto
+                            // AFTER this IfThenElse in its parent SSeq.
+                            auto *parent_seq = ite->Parent()
+                                ? ite->Parent()->dyn_cast<SSeq>() : nullptr;
+                            if (parent_seq) {
+                                // Find ite's position and append after it.
+                                for (size_t k = 0; k < parent_seq->Size(); ++k) {
+                                    if ((*parent_seq)[k] == ite) {
+                                        parent_seq->InsertChild(k + 1,
+                                            factory.Make<SGoto>(
+                                                factory.Intern(after)));
+                                        break;
+                                    }
+                                }
+                            }
+                            target = nullptr;
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                if (auto *ite = target ? target->dyn_cast<SIfThenElse>()
+                                       : nullptr) {
+                    if (!EndsWithTransfer(ite->ThenBranch()))
+                        ite->SetThenBranch(
+                            AppendGoto(ite->ThenBranch(), after, factory));
+                    if (!EndsWithTransfer(ite->ElseBranch()))
+                        ite->SetElseBranch(
+                            AppendGoto(ite->ElseBranch(), after, factory));
+                } else if (auto *is = target
+                        ? target->dyn_cast<SSeq>() : nullptr) {
+                    is->AddChild(factory.Make<SGoto>(factory.Intern(after)));
+                } else if (auto *is = cur->dyn_cast<SSeq>()) {
+                    is->AddChild(factory.Make<SGoto>(factory.Intern(after)));
+                } else {
+                    auto *wrapper = factory.Make<SSeq>();
+                    wrapper->AddChild(cur);
+                    wrapper->AddChild(factory.Make<SGoto>(factory.Intern(after)));
+                    seq->ReplaceChild(i, wrapper);
+                }
+
+                // Place after-label: find the first ancestor SSeq that
+                // has a continuation sibling after the label L.
+                SSeq *after_seq = seq;
+                size_t lbl_pos = i + 1;  // position of L in after_seq
+                while (lbl_pos + 1 >= after_seq->Size()) {
+                    // L is the last child — walk up.
+                    SNode *ancestor = after_seq;
+                    SSeq *parent_seq = nullptr;
+                    size_t ancestor_pos = 0;
+                    for (SNode *p = ancestor->Parent(); p; p = p->Parent()) {
+                        parent_seq = p->dyn_cast<SSeq>();
+                        if (parent_seq) {
+                            for (size_t j = 0; j < parent_seq->Size(); ++j) {
+                                SNode *w = ancestor;
+                                while (w && w->Parent() != parent_seq)
+                                    w = w->Parent();
+                                if (w == (*parent_seq)[j]) {
+                                    ancestor_pos = j;
+                                    goto found_parent;
+                                }
+                            }
+                            parent_seq = nullptr;
+                        }
+                    }
+                    found_parent:
+                    if (!parent_seq) break;
+                    after_seq = parent_seq;
+                    lbl_pos = ancestor_pos;
+                }
+
+                if (lbl_pos + 1 < after_seq->Size()) {
+                    auto *c = (*after_seq)[lbl_pos + 1];
+                    auto *ex = c->dyn_cast<SLabel>();
+                    if (!ex || ex->Name() != after)
+                        after_seq->ReplaceChild(lbl_pos + 1,
+                            factory.Make<SLabel>(factory.Intern(after), c));
+                } else {
+                    after_seq->AddChild(factory.Make<SLabel>(
+                        factory.Intern(after), factory.Make<SBlock>()));
+                }
+                i += 2;
+            }
+        }
+
+        void RefineFallthroughGoto(SNode *node, SNodeFactory &factory) {
+            if (!node) return;
+
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                // Recurse first.
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    RefineFallthroughGoto((*seq)[i], factory);
+
+                // Scan for goto-then-label patterns.
+                for (size_t i = 0; i + 1 < seq->Size(); ++i) {
+                    auto *next = (*seq)[i + 1];
+                    // Next must start with a label.
+                    std::string_view next_label;
+                    if (auto *lbl = next->dyn_cast<SLabel>()) {
+                        next_label = lbl->Name();
+                    } else if (auto *ns = next->dyn_cast<SSeq>()) {
+                        if (ns->Size() > 0) {
+                            if (auto *lbl = (*ns)[0]->dyn_cast<SLabel>())
+                                next_label = lbl->Name();
+                        }
+                    }
+                    if (next_label.empty()) continue;
+
+                    auto *cur = (*seq)[i];
+
+                    // Case 1: child[i] is SGoto(L) directly.
+                    if (auto *g = cur->dyn_cast<SGoto>()) {
+                        if (g->Target() == next_label) {
+                            seq->RemoveChild(i);
+                            --i;  // Re-check this position.
+                            continue;
+                        }
+                    }
+
+                    // Case 2: IfThenElse (possibly wrapped in SSeq/SLabel)
+                    //         with goto-branch matching next_label — either
+                    //         the branch itself is SGoto(L), or it ends with
+                    //         SGoto(L) at its tail.
+                    {
+                        SNode *tail = cur;
+                        while (tail) {
+                            if (tail->dyn_cast<SIfThenElse>()) break;
+                            if (auto *ts = tail->dyn_cast<SSeq>()) {
+                                if (ts->Size() == 0) { tail = nullptr; break; }
+                                tail = (*ts)[ts->Size() - 1];
+                            } else if (auto *tl = tail->dyn_cast<SLabel>()) {
+                                tail = tl->Body();
+                            } else {
+                                tail = nullptr;
+                            }
+                        }
+                        if (auto *ite = tail ? tail->dyn_cast<SIfThenElse>() : nullptr) {
+                            // Check direct branch gotos.
+                            if (auto *eg = ite->ElseBranch()
+                                    ? ite->ElseBranch()->dyn_cast<SGoto>() : nullptr) {
+                                if (eg->Target() == next_label)
+                                    ite->SetElseBranch(nullptr);
+                            }
+                            if (auto *tg = ite->ThenBranch()
+                                    ? ite->ThenBranch()->dyn_cast<SGoto>() : nullptr) {
+                                if (tg->Target() == next_label)
+                                    ite->SetThenBranch(nullptr);
+                            }
+                            // Note: do NOT remove trailing gotos from IfThenElse
+                            // branches — they may be needed to skip over hoisted
+                            // labels (the goto exits the branch scope).
+                        }
+                    }
+
+                    // Case 3: child[i] (or its tail) is SGoto(L).
+                    {
+                        // Peel through SSeq/SLabel to find trailing SGoto.
+                        auto removeTailGoto = [&](SNode *n) -> bool {
+                            if (auto *g = n->dyn_cast<SGoto>())
+                                return g->Target() == next_label;
+                            if (auto *inner = n->dyn_cast<SSeq>()) {
+                                if (inner->Size() > 0) {
+                                    size_t last = inner->Size() - 1;
+                                    if (auto *g = (*inner)[last]->dyn_cast<SGoto>()) {
+                                        if (g->Target() == next_label) {
+                                            inner->RemoveChild(last);
+                                            return false;  // already handled
+                                        }
+                                    }
+                                }
+                            }
+                            return false;
+                        };
+                        removeTailGoto(cur);
+                    }
+                }
+
+                // Cleanup: remove SGoto(L) that immediately follows SLabel(L,...)
+                // in this SSeq (dead goto to preceding label).
+                for (size_t i = 1; i < seq->Size(); ) {
+                    auto *g = (*seq)[i]->dyn_cast<SGoto>();
+                    if (!g) { ++i; continue; }
+                    auto *prev = (*seq)[i - 1]->dyn_cast<SLabel>();
+                    if (prev && prev->Name() == g->Target()) {
+                        seq->RemoveChild(i);
+                    } else {
+                        ++i;
+                    }
+                }
+                // Cleanup: remove dead trailing gotos after nodes that
+                // already end with a transfer (unreachable code).
+                for (size_t i = 1; i < seq->Size(); ) {
+                    if (!(*seq)[i]->dyn_cast<SGoto>()) { ++i; continue; }
+                    if (EndsWithTransfer((*seq)[i - 1])) {
+                        seq->RemoveChild(i);
+                    } else {
+                        ++i;
+                    }
+                }
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RefineFallthroughGoto(ite->ThenBranch(), factory);
+                RefineFallthroughGoto(ite->ElseBranch(), factory);
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                RefineFallthroughGoto(w->Body(), factory);
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                RefineFallthroughGoto(dw->Body(), factory);
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                RefineFallthroughGoto(f->Body(), factory);
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) RefineFallthroughGoto(c.body, factory);
+                RefineFallthroughGoto(sw->DefaultBody(), factory);
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RefineFallthroughGoto(lbl->Body(), factory);
+            }
+        }
+
         // Remove SLabel nodes whose name is not in the goto target set.
         // If the SLabel has a body, replace the label with its body.
         // If no body, remove entirely.
@@ -3157,6 +4170,144 @@ namespace patchestry::ast {
             std::unordered_set<std::string> targets;
             CollectGotoTargets(root, targets);
             RemoveDeadLabels(root, targets);
+        }
+
+        // --- RefineWhileTrueToDoWhile helpers ---
+
+        // Collect all VarDecl* read by an expression (recursive)
+        void CollectReadVars(clang::Stmt *s,
+                             std::unordered_set<clang::VarDecl *> &vars) {
+            if (!s) return;
+            if (auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(s)) {
+                if (auto *vd = llvm::dyn_cast<clang::VarDecl>(dre->getDecl()))
+                    vars.insert(vd);
+            }
+            for (auto *child : s->children())
+                CollectReadVars(child, vars);
+        }
+
+        // Collect all VarDecl* written by SNode stmts (assignments)
+        void CollectSNodeWrites(const SNode *node,
+                                std::unordered_set<clang::VarDecl *> &vars) {
+            if (!node) return;
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                for (auto *s : blk->Stmts()) {
+                    auto *vd = GetReferencedVar(s);
+                    if (vd) vars.insert(vd);
+                }
+            } else if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    CollectSNodeWrites((*seq)[i], vars);
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                CollectSNodeWrites(ite->ThenBranch(), vars);
+                CollectSNodeWrites(ite->ElseBranch(), vars);
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                CollectSNodeWrites(lbl->Body(), vars);
+            }
+        }
+
+        bool IsLiteralOne(clang::Expr *e) {
+            if (!e) return false;
+            if (auto *il = llvm::dyn_cast<clang::IntegerLiteral>(e))
+                return il->getValue() == 1;
+            return false;
+        }
+
+        // RefineWhileTrueToDoWhile: convert while(true) with if-break
+        // to do-while when safe.
+        [[maybe_unused]]
+        void RefineWhileTrueToDoWhile(SNode *node, SNodeFactory &factory,
+                                       clang::ASTContext &ctx) {
+            if (!node) return;
+
+            // Recurse into children first (bottom-up)
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    RefineWhileTrueToDoWhile((*seq)[i], factory, ctx);
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                RefineWhileTrueToDoWhile(ite->ThenBranch(), factory, ctx);
+                RefineWhileTrueToDoWhile(ite->ElseBranch(), factory, ctx);
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                RefineWhileTrueToDoWhile(w->Body(), factory, ctx);
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                RefineWhileTrueToDoWhile(dw->Body(), factory, ctx);
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                RefineWhileTrueToDoWhile(f->Body(), factory, ctx);
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    RefineWhileTrueToDoWhile(c.body, factory, ctx);
+                RefineWhileTrueToDoWhile(sw->DefaultBody(), factory, ctx);
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                RefineWhileTrueToDoWhile(lbl->Body(), factory, ctx);
+            }
+
+            // Now check if this node is a parent SSeq containing a while(true)
+            auto *parent_seq = node->dyn_cast<SSeq>();
+            if (!parent_seq) return;
+
+            for (size_t wi = 0; wi < parent_seq->Size(); ++wi) {
+                auto *w = (*parent_seq)[wi]->dyn_cast<SWhile>();
+                if (!w || !IsLiteralOne(w->Cond())) continue;
+
+                auto *body = w->Body() ? w->Body()->dyn_cast<SSeq>() : nullptr;
+                if (!body || body->Size() < 2) continue;
+
+                // Find the first SIfThenElse(cond, SBreak, null)
+                for (size_t k = 0; k < body->Size(); ++k) {
+                    auto *ite = (*body)[k]->dyn_cast<SIfThenElse>();
+                    if (!ite) continue;
+                    if (!ite->ThenBranch() || !ite->ThenBranch()->isa<SBreak>())
+                        continue;
+                    if (ite->ElseBranch()) continue;
+
+                    clang::Expr *exit_cond = ite->Cond();
+                    if (!exit_cond) continue;
+
+                    // Trivial: break is last child
+                    if (k == body->Size() - 1) {
+                        body->RemoveChild(k);
+                        auto *dowhile = factory.Make<SDoWhile>(
+                            body, NegateCond(exit_cond, ctx));
+                        parent_seq->ReplaceChild(wi, dowhile);
+                        break;
+                    }
+
+                    // Middle break: check def-use safety.
+                    // Collect vars read by the exit condition.
+                    std::unordered_set<clang::VarDecl *> cond_vars;
+                    CollectReadVars(exit_cond, cond_vars);
+                    if (cond_vars.empty()) break; // can't verify, skip
+
+                    // Collect vars written by stmts AFTER the break.
+                    std::unordered_set<clang::VarDecl *> body_writes;
+                    for (size_t j = k + 1; j < body->Size(); ++j)
+                        CollectSNodeWrites((*body)[j], body_writes);
+
+                    // Check intersection
+                    bool safe = true;
+                    for (auto *v : cond_vars) {
+                        if (body_writes.count(v)) { safe = false; break; }
+                    }
+                    if (!safe) break;
+
+                    // Safe: wrap post-break stmts in if(!cond) { ... }
+                    auto *guarded = factory.Make<SSeq>();
+                    while (body->Size() > k + 1) {
+                        guarded->AddChild((*body)[k + 1]);
+                        body->RemoveChild(k + 1);
+                    }
+                    body->RemoveChild(k); // remove if-break
+
+                    auto *guard = factory.Make<SIfThenElse>(
+                        NegateCond(exit_cond, ctx), guarded, nullptr);
+                    body->AddChild(guard);
+
+                    auto *dowhile = factory.Make<SDoWhile>(
+                        body, NegateCond(exit_cond, ctx));
+                    parent_seq->ReplaceChild(wi, dowhile);
+                    break;
+                }
+            }
         }
 
     } // anonymous namespace
@@ -3300,7 +4451,15 @@ namespace patchestry::ast {
         if (!root) root = factory.Make<SSeq>();
 
         // 6. Post-collapse transforms (order matters per research)
+        RefineGotoElseNesting(root, factory);          // 0th: nest siblings into if-then-goto-else
+        RefineHoistLabel(root, factory);               // 0.5: hoist cross-scope labels to outer seq
+        RefineAddSkipGotos(root, factory);             // 0.55: add skip-gotos for hoisted labels
+        RefineFallthroughGoto(root, factory);          // 0.6: remove goto L when next is L:
         RefineBreakContinue(root, "", "", factory);    // 1st: gotos -> break/continue
+        RefineFallthroughGoto(root, factory);          // 1.5: cleanup after break/continue
+        // TODO: RefineWhileTrueToDoWhile needs fix — incorrectly handles
+        // FoldDoWhileLoop output (self-loop patterns). Disabled until fixed.
+        // RefineWhileTrueToDoWhile(root, factory, ctx);
         RefineWhileToFor(root, factory, ctx);       // 2nd: while -> for patterns
         RefineDeadLabels(root);                // 3rd: clean up dead labels
 
