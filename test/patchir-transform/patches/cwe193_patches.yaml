@@ -1,0 +1,24 @@
+# patches/cwe193_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe193_patches"
+  version: "1.0.0"
+  description: "CWE-193 off-by-one patches"
+  author: "Security Team"
+  created: "2026-03-23"
+
+patches:
+  - name: "cwe193_fixed_wrap_check"
+    description: "Replace off-by-one wrap condition with correct bounds check"
+    category: "bounds_safety"
+    code_file: "patches/patch_fixed_wrap_check.c"
+    function_name: "patch::replace::wrap_cmp"
+    parameters:
+      - name: "new_head"
+        type: "unsigned int"
+        description: "Next write index (head_ + 1)"
+      - name: "capacity"
+        type: "unsigned int"
+        description: "Buffer capacity N"

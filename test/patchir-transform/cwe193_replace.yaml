@@ -1,0 +1,42 @@
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe193-replace"
+  description: "Fix off-by-one in circular buffer by replacing >= comparison with >"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-03-23"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/cwe193_patches.yaml"
+
+meta_patches:
+  - name: "cwe193_wrap_fix"
+    description: "Fix off-by-one wrap condition in CircularBuffer::Put"
+
+    patch_actions:
+      - id: "CWE-193-001"
+        description: "Replace >= comparison with corrected > check"
+
+        match:
+          - name: "cir.cmp"
+            kind: "operation"
+            function_context:
+              - name: "circular_buffer_put"
+
+        action:
+          - mode: "replace"
+            patch_id: "cwe193_fixed_wrap_check"
+            description: "Replace wrap comparison with fixed bounds check"
+            arguments:
+              - name: "new_head"
+                source: "operand"
+                index: 0
+              - name: "capacity"
+                source: "operand"
+                index: 1
