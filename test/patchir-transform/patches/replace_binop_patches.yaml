@@ -1,0 +1,22 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "replace_binop_patches"
+  version: "1.0.0"
+  description: "Patches for replacing binary operations"
+  author: "Security Team"
+  created: "2026-03-23"
+
+patches:
+  - name: "checked_mul"
+    description: "Replace unchecked multiply with overflow-checked version"
+    category: "integer_safety"
+    code_file: "patches/patch_checked_mul.c"
+    function_name: "patch::replace::int_mul"
+    parameters:
+      - name: "a"
+        type: "unsigned int"
+        description: "Left operand"
+      - name: "b"
+        type: "unsigned int"
+        description: "Right operand"

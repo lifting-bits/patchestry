@@ -1,0 +1,110 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t1 >> /dev/null 2>&1
+//
+// RUN: %patchir-transform %t1.cir --spec %S/replace_cmp.yaml -o %t2.cir
+// RUN: %file-check -vv -check-prefix=REPLACE %s --input-file %t2.cir
+// REPLACE: cir.call @patch__replace__bounds_cmp({{.*}}) {patchestry_operation = "cir.cmp"}
+//
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "circular_buffer_put",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_u32",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["t_u32", "t_u32", "t_u32"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "unique:00000001:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "write_idx",
+              "type": "t_u32"
+            },
+            "unique:00000002:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "capacity",
+              "type": "t_u32"
+            },
+            "unique:00000003:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "value",
+              "type": "t_u32"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00000001:0:0",
+            "unique:00000002:0:0",
+            "unique:00000003:0:0",
+            "entry.exit"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ram:10000004:1:0": {
+              "mnemonic": "INT_LESSEQUAL",
+              "type": "t_bool",
+              "inputs": [
+                { "type": "t_u32", "kind": "parameter", "operation": "unique:00000001:0:0" },
+                { "type": "t_u32", "kind": "parameter", "operation": "unique:00000002:0:0" }
+              ]
+            },
+            "ram:10000008:2:0": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:10000010:1:basic",
+              "not_taken_block": "ram:10000020:2:basic",
+              "condition": {
+                "type": "t_bool",
+                "kind": "temporary",
+                "operation": "ram:10000004:1:0"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:10000004:1:0",
+            "ram:10000008:2:0"
+          ]
+        },
+        "ram:10000010:1:basic": {
+          "operations": {
+            "ram:10000010:3:0": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                { "type": "t_u32", "kind": "parameter", "operation": "unique:00000003:0:0" }
+              ]
+            }
+          },
+          "ordered_operations": ["ram:10000010:3:0"]
+        },
+        "ram:10000020:2:basic": {
+          "operations": {
+            "ram:10000020:4:0": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                { "type": "t_u32", "kind": "constant", "value": 0 }
+              ]
+            }
+          },
+          "ordered_operations": ["ram:10000020:4:0"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_u32": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "t_bool": { "name": "bool", "size": 1, "kind": "integer" },
+    "t_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

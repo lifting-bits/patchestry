@@ -290,5 +290,95 @@ namespace patchestry {
             }
         }
 
+        void PatchOperationImpl::replaceOperationWithPatch(
+            InstrumentationPass &pass, mlir::Operation *op,
+            const PatchInformation &patch, mlir::ModuleOp patch_module,
+            bool inline_patches
+        ) {
+            if (op->getNumResults() == 0) {
+                LOG(ERROR) << "REPLACE mode requires an operation with results, got: "
+                           << op->getName().getStringRef().str() << "\n";
+                return;
+            }
+
+            mlir::OpBuilder builder(op);
+            auto loc    = op->getLoc();
+            auto *ctx   = op->getContext();
+            auto module = op->getParentOfType< mlir::ModuleOp >();
+            assert(module && "Replace operation: no module found");
+
+            builder.setInsertionPoint(op);
+
+            const auto &patch_spec = patch.spec.value();
+
+            auto patch_function_name = namifyFunction(patch_spec.function_name);
+            auto patch_func          = ensurePatchFunctionAvailable(
+                pass, module, patch_module, patch_function_name, "Replace operation"
+            );
+            if (!patch_func) {
+                return;
+            }
+
+            auto patch_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
+            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            pass.prepare_patch_call_arguments(
+                builder, op, patch_func, patch, function_args_map
+            );
+            llvm::SmallVector< mlir::Value > call_args;
+            for (auto &[old_arg, new_arg] : function_args_map) {
+                call_args.push_back(new_arg);
+            }
+            auto patch_func_type = patch_func.getFunctionType();
+            auto patch_call_op   = builder.create< cir::CallOp >(
+                loc, patch_func_ref,
+                patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
+                call_args
+            );
+
+            mlir::OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointAfter(patch_call_op);
+
+            // Replace all uses of old operation results with new call results
+            auto op_num_results   = op->getNumResults();
+            auto call_num_results = patch_call_op.getNumResults();
+
+            if (call_num_results == 0) {
+                LOG(ERROR) << "Patch function returns void but original operation "
+                           << "has " << op_num_results << " result(s)\n";
+            } else {
+                unsigned result_index = 0;
+                for (auto result : patch_call_op.getResults()) {
+                    if (result_index >= op_num_results) {
+                        break;
+                    }
+                    auto original_result = op->getResult(result_index);
+                    if (original_result.getType() != result.getType()) {
+                        auto cast_value = pass.create_cast_if_needed(
+                            builder, patch_call_op, result, original_result.getType()
+                        );
+                        original_result.replaceAllUsesWith(cast_value);
+                    } else {
+                        original_result.replaceAllUsesWith(result);
+                    }
+                    result_index++;
+                }
+            }
+
+            // Set appropriate attributes based on operation type
+            pass.set_instrumentation_call_attributes(patch_call_op, op);
+
+            if (!op->use_empty()) {
+                LOG(ERROR) << "Cannot erase operation, it still has uses: "
+                           << op->getName().getStringRef().str() << "\n";
+                return;
+            }
+
+            op->erase();
+
+            if (inline_patches) {
+                pass.inline_worklists.insert(patch_call_op);
+            }
+        }
+
     } // namespace passes
 } // namespace patchestry

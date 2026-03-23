@@ -82,6 +82,26 @@ namespace patchestry::passes {
              mlir::ModuleOp patch_module, bool inline_patches
          );
 
+        /**
+         * @brief Replaces a generic operation with a patch function call.
+         *
+         * This method replaces non-call operations (e.g., cir.binop, cir.cmp)
+         * with a call to the patch function. The operation's operands are passed
+         * as arguments to the patch function, and the original result is replaced
+         * by the call's return value.
+         *
+         * @param pass The instrumentation pass instance
+         * @param op The operation to replace (must have at least one result)
+         * @param patch The patch information containing the replacement function
+         * @param patch_module The module containing the patch function
+         * @param inline_patches Whether or not to inline at application
+         */
+        static void replaceOperationWithPatch(
+            InstrumentationPass &pass, mlir::Operation *op,
+            const PatchInformation &patch, mlir::ModuleOp patch_module,
+            bool inline_patches
+        );
+
          /**
           * @brief Ensures that the patch function is available in the target module.
           *
