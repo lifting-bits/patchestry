@@ -5,6 +5,8 @@
 // CIR: cir.func @call_arg_mismatch_test
 // CIR: cir.call @ext_func(
 // RUN: %file-check -vv -check-prefix=CCHECK %s --input-file %t.c
+// RUN: %gen-call-checks %t.json > %t.call.checks
+// RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 // CCHECK: ext_func(
 // CCHECK: 42
 //

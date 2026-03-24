@@ -133,6 +133,8 @@ tools = [
     ToolSubst('%patchir-cir2llvm', command=config.patchir_cir2llvm_tool),
     ToolSubst('%patchir-yaml-parser', command=config.patchir_yaml_parser_tool),
     ToolSubst('%strip-json-comments', command=config.json_strip_comments),
+    ToolSubst('%gen-call-checks', command=config.python_executable,
+              extra_args=[os.path.join(config.patchestry_src_root, 'scripts', 'gen-call-checks.py')]),
 ]
 
 

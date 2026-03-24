@@ -1,5 +1,7 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
+// FN: cir.func @switch_successor_blocks(
 // RUN: %file-check -vv -check-prefix=SW3 %s --input-file %t.c
 // SW3: switch (
 // SW3: case {{[0-9]+[U]?}}:
