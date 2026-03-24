@@ -27,6 +27,15 @@ config.environment['PATCHESTRY_ROOT'] = config.patchestry_src_root
 if 'HOST_WORKSPACE' in os.environ:
     config.environment['HOST_WORKSPACE'] = os.environ['HOST_WORKSPACE']
 
+# Make LLVM helper tools such as `not` available to shell-based tests.
+tool_paths = []
+for maybe_path in [getattr(config, 'llvm_tools_dir', ''), getattr(config, 'lit_tools_dir', '')]:
+    if maybe_path and os.path.isdir(maybe_path):
+        tool_paths.append(maybe_path)
+
+for tool_path in tool_paths:
+    llvm_config.with_environment('PATH', tool_path, append_path=True)
+
 config.python_executable = config.python_executable if config.python_executable else sys.executable
 
 # Define file suffixes for test files
@@ -126,6 +135,8 @@ tools = [
     ToolSubst('%patchir-cir2llvm', command=config.patchir_cir2llvm_tool),
     ToolSubst('%patchir-yaml-parser', command=config.patchir_yaml_parser_tool),
     ToolSubst('%strip-json-comments', command=config.json_strip_comments),
+    ToolSubst('%gen-call-checks', command=config.python_executable,
+              extra_args=[os.path.join(config.patchestry_src_root, 'scripts', 'gen-call-checks.py')]),
 ]
 
 

@@ -1,0 +1,275 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t1 >> /dev/null 2>&1
+//
+// RUN: %patchir-transform %t1.cir --spec %S/cwe415_after.yaml -o %t2.cir
+// RUN: %file-check -vv -check-prefix=AFTER %s --input-file %t2.cir
+// AFTER: @patch__after__free
+//
+// CWE-415: Double Free in Interface::ProcessCommand()
+// The vulnerable pattern: cmd_log is allocated with new[], freed inside
+// an error-handling block, then unconditionally freed again after the
+// block (missing return statement). The patch applies null-after-free
+// via is_reference: after the first free(), the pointer is set to NULL
+// so the second free(NULL) is a safe no-op.
+//
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "process_command",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_ptr_void"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "unique:00000001:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "context",
+              "type": "t_ptr_void",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00000002:0:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "cmd_log",
+              "type": "t_ptr_void"
+            },
+            "unique:00000003:0:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "error",
+              "type": "t_u32"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000010:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00000001:0:0",
+            "unique:00000002:0:0",
+            "unique:00000003:0:0",
+            "entry.exit"
+          ]
+        },
+        "ram:10000010:0:basic": {
+          "operations": {
+            "ram:10000010:100:0": {
+              "mnemonic": "CALL",
+              "type": "t_ptr_void",
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000002:0:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:malloc",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_u32",
+                  "kind": "constant",
+                  "value": 64
+                }
+              ]
+            },
+            "ram:10000018:101:1": {
+              "mnemonic": "CALL",
+              "type": "t_u32",
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000003:0:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:handler_process",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_ptr_void",
+                  "kind": "parameter",
+                  "operation": "unique:00000001:0:0"
+                }
+              ]
+            },
+            "ram:1000001c:102:2": {
+              "mnemonic": "INT_NOTEQUAL",
+              "type": "t_bool",
+              "inputs": [
+                {
+                  "type": "t_u32",
+                  "kind": "local",
+                  "operation": "unique:00000003:0:0"
+                },
+                {
+                  "type": "t_u32",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:10000020:103:3": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:10000030:1:basic",
+              "not_taken_block": "ram:10000040:2:basic",
+              "condition": {
+                "type": "t_bool",
+                "kind": "temporary",
+                "operation": "ram:1000001c:102:2"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:10000010:100:0",
+            "ram:10000018:101:1",
+            "ram:1000001c:102:2",
+            "ram:10000020:103:3"
+          ]
+        },
+        "ram:10000030:1:basic": {
+          "operations": {
+            "ram:10000030:200:0": {
+              "mnemonic": "CALL",
+              "type": "t_void",
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:free",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_ptr_void",
+                  "kind": "local",
+                  "operation": "unique:00000002:0:0"
+                }
+              ]
+            },
+            "ram:10000034:201:1": {
+              "mnemonic": "CALL",
+              "type": "t_void",
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:send_error",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_u32",
+                  "kind": "local",
+                  "operation": "unique:00000003:0:0"
+                }
+              ]
+            },
+            "ram:10000038:202:2": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000040:2:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:10000030:200:0",
+            "ram:10000034:201:1",
+            "ram:10000038:202:2"
+          ]
+        },
+        "ram:10000040:2:basic": {
+          "operations": {
+            "ram:10000040:300:0": {
+              "mnemonic": "CALL",
+              "type": "t_void",
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:free",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_ptr_void",
+                  "kind": "local",
+                  "operation": "unique:00000002:0:0"
+                }
+              ]
+            },
+            "ram:10000044:301:1": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:10000040:300:0",
+            "ram:10000044:301:1"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:malloc": {
+      "name": "malloc",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_ptr_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["t_u32"]
+      }
+    },
+    "EXTERNAL:free": {
+      "name": "free",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["t_ptr_void"]
+      }
+    },
+    "EXTERNAL:handler_process": {
+      "name": "handler_process",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_u32",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["t_ptr_void"]
+      }
+    },
+    "EXTERNAL:send_error": {
+      "name": "send_error",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["t_u32"]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_u32": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "t_bool": { "name": "bool", "size": 1, "kind": "integer" },
+    "t_ptr_void": { "kind": "pointer", "size": 4, "element_type": "t_void" },
+    "t_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

@@ -1,0 +1,41 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "replace-cmp"
+  description: "Replace off-by-one bounds comparison with correct check"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-03-23"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/replace_cmp_patches.yaml"
+
+meta_patches:
+  - name: "cmp_bounds_fix"
+    description: "Fix off-by-one in circular buffer Put"
+
+    patch_actions:
+      - id: "CMP-REPLACE-001"
+        description: "Replace >= comparison with corrected bounds check"
+
+        match:
+          - name: "cir.cmp"
+            kind: "operation"
+            function_context:
+              - name: "circular_buffer_put"
+
+        action:
+          - mode: "replace"
+            patch_id: "fixed_bounds_check"
+            description: "Replace comparison with fixed bounds check"
+            arguments:
+              - name: "index"
+                source: "operand"
+                index: 0
+              - name: "size"
+                source: "operand"
+                index: 1

@@ -50,7 +50,7 @@ namespace patchestry::ast {
         // Virtual destructor
         virtual ~FunctionBuilder() = default;
 
-        void initialize_op_builder(void);
+        void InitializeOpBuilder(void);
 
         /**
          * @brief Creates a `FunctionDecl` object for the given function, including its type,
@@ -91,6 +91,8 @@ namespace patchestry::ast {
 
         clang::FunctionDecl *create_definition(clang::ASTContext &ctx);
 
+        bool has_basic_blocks() const { return !function.get().basic_blocks.empty(); }
+
       private:
         void create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl);
 
@@ -108,6 +110,13 @@ namespace patchestry::ast {
         clang::DeclContext *get_sema_context(void) { return sema().CurContext; }
 
         clang::Sema &sema(void) const { return cii.get().getSema(); }
+
+        /// The C-visible name for the function: display_name if set, else name.
+        const std::string &GetCName() const {
+            return function.get().display_name.empty()
+                ? function.get().name
+                : function.get().display_name;
+        }
 
         clang::FunctionDecl *prev_decl;
         std::reference_wrapper< const clang::CompilerInstance > cii;
@@ -136,6 +145,11 @@ namespace patchestry::ast {
         // Blocks whose operations have been inlined into a switch case body.
         // create_function_body skips these entirely.
         std::unordered_set< std::string > inlined_blocks;
+
+        // Number of distinct predecessor blocks for each block.  Computed once
+        // at the start of create_function_body so that switch-case inlining can
+        // avoid inlining blocks that are shared across multiple predecessors.
+        std::unordered_map< std::string, unsigned > block_predecessor_count;
 
         // Blocks targeted by has_exit cases that could not be inlined.
         // create_function_body emits "label: break;" for these.

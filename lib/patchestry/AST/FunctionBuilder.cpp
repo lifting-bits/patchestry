@@ -110,8 +110,12 @@ namespace patchestry::ast {
                     addr = std::stoull(
                         key.substr(first_colon + 1, second_colon - first_colon - 1), nullptr, 16
                     );
-                } catch (...) {
-                    LOG(WARNING) << "BlockKeyComparator: failed to parse hex address in key: " << key;
+                } catch (const std::invalid_argument &) {
+                    LOG(WARNING) << "BlockKeyComparator: non-numeric hex address in key: " << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
+                } catch (const std::out_of_range &) {
+                    LOG(WARNING) << "BlockKeyComparator: hex address out of range in key: " << key;
                     return {std::numeric_limits< uint64_t >::max(),
                             std::numeric_limits< int64_t >::max()};
                 }
@@ -130,8 +134,11 @@ namespace patchestry::ast {
                 int64_t idx = 0;
                 try {
                     idx = std::stoll(idx_str);
-                } catch (...) {
-                    LOG(WARNING) << "BlockKeyComparator: failed to parse block index in key: " << key;
+                } catch (const std::invalid_argument &) {
+                    LOG(WARNING) << "BlockKeyComparator: non-numeric block index in key: " << key;
+                    return {addr, std::numeric_limits< int64_t >::max()};
+                } catch (const std::out_of_range &) {
+                    LOG(WARNING) << "BlockKeyComparator: block index out of range in key: " << key;
                     return {addr, std::numeric_limits< int64_t >::max()};
                 }
 
@@ -169,22 +176,30 @@ namespace patchestry::ast {
                     // taken_block before not_taken_block — mirrors BasicBlockReorderPass DFS
                     // order so the emitted block sequence is identical to what that pass
                     // would produce.
-                    if (op.taken_block) {
+                    // Only add successors that actually exist in the function's
+                    // basic_blocks map — phantom targets from stale JSON would
+                    // otherwise enter the DFS and silently become "unreachable".
+                    const auto &blocks = function.basic_blocks;
+                    if (op.taken_block && blocks.contains(*op.taken_block)) {
                         succs[key].push_back(*op.taken_block);
                     }
-                    if (op.not_taken_block) {
+                    if (op.not_taken_block && blocks.contains(*op.not_taken_block)) {
                         succs[key].push_back(*op.not_taken_block);
                     }
-                    if (op.target_block) {
+                    if (op.target_block && blocks.contains(*op.target_block)) {
                         succs[key].push_back(*op.target_block);
                     }
                     for (const auto &s : op.successor_blocks) {
-                        succs[key].push_back(s);
+                        if (blocks.contains(s)) {
+                            succs[key].push_back(s);
+                        }
                     }
                     for (const auto &sc : op.switch_cases) {
-                        succs[key].push_back(sc.target_block);
+                        if (blocks.contains(sc.target_block)) {
+                            succs[key].push_back(sc.target_block);
+                        }
                     }
-                    if (op.fallback_block.has_value()) {
+                    if (op.fallback_block.has_value() && blocks.contains(*op.fallback_block)) {
                         succs[key].push_back(*op.fallback_block);
                     }
                 }
@@ -261,7 +276,7 @@ namespace patchestry::ast {
         }
     }
 
-    void FunctionBuilder::initialize_op_builder(void) {
+    void FunctionBuilder::InitializeOpBuilder(void) {
         // If `op_builder` is initialized don't initailize them
         if (!op_builder) {
             op_builder =
@@ -285,7 +300,9 @@ namespace patchestry::ast {
     clang::FunctionDecl *FunctionBuilder::create_declaration(
         clang::ASTContext &ctx, const clang::QualType &function_type, bool is_definition
     ) {
-        if (function.get().name.empty()) {
+        const auto &c_name = GetCName();
+
+        if (c_name.empty()) {
             LOG(ERROR) << "Function name is empty. function key " << function.get().key << "\n";
             return {};
         }
@@ -293,7 +310,7 @@ namespace patchestry::ast {
         auto location   = clang::SourceLocation();
         auto *func_decl = clang::FunctionDecl::Create(
             ctx, ctx.getTranslationUnitDecl(), location, location,
-            &ctx.Idents.get(function.get().name), function_type,
+            &ctx.Idents.get(c_name), function_type,
             ctx.getTrivialTypeSourceInfo(function_type), clang::SC_None
         );
 
@@ -306,12 +323,20 @@ namespace patchestry::ast {
         func_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
-        // if function is a declaration, add asm attribute with symbol name
-        // only when the symbol name differs from the C identifier (otherwise
-        // Clang's printer emits invalid syntax: asm("sym") void fn(void);)
-        if (!is_definition && function.get().name != func_decl->getName()) {
+        // Add asm label with the binary linker symbol when:
+        //   (1) the original name differs from the C identifier, AND
+        //   (2) the original name is a genuine mangled symbol (_Z for
+        //       Itanium ABI, ? for MSVC).
+        // Short demangled names like "append" or "operator=" are NOT valid
+        // linker symbols and must not appear in asm labels — they would
+        // cause link failures when recompiling for binary patching.
+        const auto &original_name = function.get().name;
+        bool is_mangled = original_name.size() >= 2
+            && ((original_name[0] == '_' && original_name[1] == 'Z')
+                || original_name[0] == '?');
+        if (is_mangled && original_name != c_name) {
             if (auto *asm_attr = clang::AsmLabelAttr::Create(
-                    ctx, function.get().name, true, func_decl->getSourceRange()
+                    ctx, original_name, true, func_decl->getSourceRange()
                 ))
             {
                 func_decl->addAttr(asm_attr);
@@ -338,8 +363,13 @@ namespace patchestry::ast {
                            << param_op->key;
                 continue;
             }
-            const auto &param_type =
-                type_builder.get().get_serialized_types().at(*param_op->type);
+            auto type_iter = type_builder.get().GetSerializedTypes().find(*param_op->type);
+            if (type_iter == type_builder.get().GetSerializedTypes().end()) {
+                LOG(ERROR) << "Parameter type not found in serialized types: "
+                           << *param_op->type << ", key: " << param_op->key;
+                continue;
+            }
+            const auto &param_type = type_iter->second;
             auto location = SourceLocation(ctx.getSourceManager(), param_op->key);
 
             auto *param_decl = clang::ParmVarDecl::Create(
@@ -395,25 +425,31 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder.get().get_serialized_types().contains(proto.rttype_key)) {
+        if (!type_builder.get().GetSerializedTypes().contains(proto.rttype_key)) {
             LOG(ERROR) << "Function return type is not serialized.\n";
             return {};
         }
 
         std::vector< clang::QualType > args_vector;
-        const auto &rttype = type_builder.get().get_serialized_types().at(proto.rttype_key);
+        const auto &rttype = type_builder.get().GetSerializedTypes().at(proto.rttype_key);
         for (const auto &param : proto.parameters) {
-            if (!type_builder.get().get_serialized_types().contains(param)) {
+            if (!type_builder.get().GetSerializedTypes().contains(param)) {
                 LOG(ERROR) << "Skipping, invalid parameter key in function.\n";
                 continue;
             }
 
-            args_vector.emplace_back(type_builder.get().get_serialized_types().at(param));
+            args_vector.emplace_back(type_builder.get().GetSerializedTypes().at(param));
         }
 
         clang::FunctionProtoType::ExtProtoInfo ext_proto_info;
         ext_proto_info.Variadic           = proto.is_variadic;
         ext_proto_info.ExceptionSpec.Type = clang::EST_None;
+
+        // TODO: Map non-default Ghidra calling conventions (e.g. __stdcall,
+        // __fastcall, __thiscall, __vectorcall) to clang::CallingConv once
+        // ClangIR supports them. Currently ClangIR only handles the default
+        // CC_C convention; all others hit UNREACHABLE in CIRGenTypes.cpp.
+        // The calling convention string is available in proto.calling_convention.
 
         return ctx.getFunctionType(rttype, args_vector, ext_proto_info);
     }
@@ -450,12 +486,12 @@ namespace patchestry::ast {
         uint index = 0;
         std::vector< clang::ParmVarDecl * > parameter_vec;
         for (const auto &param_key : proto.parameters) {
-            if (!type_builder.get().get_serialized_types().contains(param_key)) {
+            if (!type_builder.get().GetSerializedTypes().contains(param_key)) {
                 LOG(ERROR) << "Skipping, invalid paramater type key in function prototype.\n";
                 continue;
             }
 
-            auto param_type  = type_builder.get().get_serialized_types().at(param_key);
+            auto param_type  = type_builder.get().GetSerializedTypes().at(param_key);
             auto *param_decl = clang::ParmVarDecl::Create(
                 ctx, func_decl, SourceLocation(ctx.getSourceManager(), param_key),
                 SourceLocation(ctx.getSourceManager(), param_key),
@@ -481,13 +517,14 @@ namespace patchestry::ast {
      * blocks, or if the function definition cannot be created.
      */
     clang::FunctionDecl *FunctionBuilder::create_definition(clang::ASTContext &ctx) {
-        if (function.get().name.empty()) {
+        const auto &c_name = GetCName();
+        if (c_name.empty()) {
             LOG(ERROR) << "Can't create function definition. Missing function name.\n";
             return {};
         }
 
         if (function.get().basic_blocks.empty()) {
-            LOG(ERROR) << "Can't create function definition for '" << function.get().name << "'. Function has no basic blocks.\n";
+            LOG(ERROR) << "Can't create function definition for '" << c_name << "'. Function has no basic blocks.\n";
             return {};
         }
 
@@ -584,6 +621,26 @@ namespace patchestry::ast {
 
         std::vector< clang::Stmt * > stmt_vec;
         create_labels(ctx, func_decl);
+
+        // Compute per-block predecessor counts so that switch-case inlining
+        // can avoid inlining blocks that are targeted by multiple predecessors.
+        block_predecessor_count.clear();
+        for (const auto &[key, blk] : function.get().basic_blocks) {
+            std::unordered_set< std::string > targets;
+            for (const auto &op_key : blk.ordered_operations) {
+                if (!blk.operations.contains(op_key)) { continue; }
+                const auto &op = blk.operations.at(op_key);
+                if (op.taken_block) { targets.insert(*op.taken_block); }
+                if (op.not_taken_block) { targets.insert(*op.not_taken_block); }
+                if (op.target_block) { targets.insert(*op.target_block); }
+                for (const auto &s : op.successor_blocks) { targets.insert(s); }
+                for (const auto &sc : op.switch_cases) { targets.insert(sc.target_block); }
+                if (op.fallback_block) { targets.insert(*op.fallback_block); }
+            }
+            for (const auto &t : targets) {
+                block_predecessor_count[t]++;
+            }
+        }
 
         // Compute RPO block order from the P-Code CFG.  Emitting in RPO order
         // matches what BasicBlockReorderPass would produce, making that pass a
@@ -686,9 +743,15 @@ namespace patchestry::ast {
             }
 
             const auto &operation = block.operations.at(operation_key);
+
+            // Save pending_materialized in case create_operation re-enters
+            // (e.g., create_temporary resolving a forward reference triggers
+            // nested operation building that appends to the same vector).
+            auto saved_pending = std::move(pending_materialized);
+            pending_materialized.clear();
+
             if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
-                // Drain any VarDecl materializations queued during create_operation
-                // (e.g., from create_temporary promoting a cached expr into a VarDecl).
+                // Drain any VarDecl materializations queued during create_operation.
                 // These must appear before the consuming statement in the output.
                 for (auto *pending : pending_materialized) {
                     stmt_vec.push_back(pending);
@@ -699,6 +762,13 @@ namespace patchestry::ast {
                 if (!should_merge_to_next) {
                     stmt_vec.push_back(stmt);
                 }
+            } else {
+                pending_materialized.clear();
+            }
+
+            // Restore any outer-level pending materializations
+            for (auto *s : saved_pending) {
+                pending_materialized.push_back(s);
             }
         }
 

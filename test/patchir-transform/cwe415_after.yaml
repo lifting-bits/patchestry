@@ -1,0 +1,40 @@
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe415-after"
+  description: "Fix double free by nulling pointer after first free via is_reference"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-03-23"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/cwe415_patches.yaml"
+
+meta_patches:
+  - name: "cwe415_null_after_free"
+    description: "Null pointer after free in ProcessCommand to prevent double free"
+
+    patch_actions:
+      - id: "CWE-415-001"
+        description: "Apply null-after-free guard after first free() call"
+
+        match:
+          - name: "free"
+            kind: "function"
+            function_context:
+              - name: "process_command"
+
+        action:
+          - mode: "apply_after"
+            patch_id: "cwe415_null_after_free"
+            description: "Null the pointer after free via is_reference"
+            arguments:
+              - name: "ptr_ref"
+                source: "operand"
+                index: 0
+                is_reference: true

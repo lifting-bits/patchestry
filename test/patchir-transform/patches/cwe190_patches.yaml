@@ -1,0 +1,24 @@
+# patches/cwe190_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe190_patches"
+  version: "1.0.0"
+  description: "CWE-190 integer overflow patches"
+  author: "Security Team"
+  created: "2026-03-23"
+
+patches:
+  - name: "cwe190_checked_mul16"
+    description: "Replace unchecked 16-bit multiply with overflow-checked version"
+    category: "integer_safety"
+    code_file: "patches/patch_checked_mul16.c"
+    function_name: "patch::replace::int_mul16"
+    parameters:
+      - name: "count"
+        type: "unsigned int"
+        description: "Number of items (from debug request)"
+      - name: "block_size"
+        type: "unsigned int"
+        description: "Size per item (from debug request)"

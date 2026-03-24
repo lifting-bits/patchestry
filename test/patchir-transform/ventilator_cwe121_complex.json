@@ -1,0 +1,360 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t1 >> /dev/null 2>&1
+//
+// RUN: %patchir-transform %t1.cir --spec %S/cwe121_complex_replace.yaml -o %t2.cir
+// RUN: %file-check -vv -check-prefix=REPLACE %s --input-file %t2.cir
+// REPLACE: cir.call @patch__replace__strcat({{.*}}) {patchestry_operation = "cir.call"}
+//
+
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "eeprom_write",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_u16",
+          "t_ptr_u8"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "unique:00000000:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "address",
+              "type": "t_u16",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00000001:1:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "data",
+              "type": "t_ptr_u8",
+              "kind": "parameter",
+              "index": 1
+            },
+            "unique:00000002:2:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "hex_log",
+              "type": "t_array_char_64"
+            },
+            "unique:00000003:3:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "byte_hex",
+              "type": "t_array_char_4"
+            },
+            "unique:00000004:4:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "i",
+              "type": "t_u16"
+            },
+            "unique:00000005:5:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "sprintf_ret",
+              "type": "t_int"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000010:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00000000:0:0",
+            "unique:00000001:1:0",
+            "unique:00000002:2:0",
+            "unique:00000003:3:0",
+            "unique:00000004:4:0",
+            "unique:00000005:5:0",
+            "entry.exit"
+          ]
+        },
+        "ram:10000010:0:basic": {
+          "operations": {
+            "ram:10000010:100:0": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "t_ptr_char",
+              "inputs": [
+                {
+                  "type": "t_array_char_64",
+                  "kind": "local",
+                  "operation": "unique:00000002:2:0"
+                }
+              ]
+            },
+            "ram:10000018:101:1": {
+              "mnemonic": "COPY",
+              "type": "t_ptr_char",
+              "inputs": [
+                {
+                  "type": "t_ptr_char",
+                  "kind": "string",
+                  "string_value": "EEPROM W @%04X: "
+                }
+              ]
+            },
+            "ram:10000020:102:2": {
+              "mnemonic": "CALL",
+              "type": "t_int",
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000005:5:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000001",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_ptr_char",
+                  "kind": "temporary",
+                  "operation": "ram:10000010:100:0"
+                },
+                {
+                  "type": "t_ptr_char",
+                  "kind": "temporary",
+                  "operation": "ram:10000018:101:1"
+                },
+                {
+                  "type": "t_u16",
+                  "kind": "parameter",
+                  "operation": "unique:00000000:0:0"
+                }
+              ]
+            },
+            "ram:10000028:103:3": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000030:1:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:10000010:100:0",
+            "ram:10000018:101:1",
+            "ram:10000020:102:2",
+            "ram:10000028:103:3"
+          ]
+        },
+        "ram:10000030:1:basic": {
+          "operations": {
+            "ram:10000030:200:0": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "t_ptr_char",
+              "inputs": [
+                {
+                  "type": "t_array_char_4",
+                  "kind": "local",
+                  "operation": "unique:00000003:3:0"
+                }
+              ]
+            },
+            "ram:10000038:201:1": {
+              "mnemonic": "COPY",
+              "type": "t_ptr_char",
+              "inputs": [
+                {
+                  "type": "t_ptr_char",
+                  "kind": "string",
+                  "string_value": "%02X "
+                }
+              ]
+            },
+            "ram:10000040:202:2": {
+              "mnemonic": "CALL",
+              "type": "t_int",
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000005:5:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000001",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_ptr_char",
+                  "kind": "temporary",
+                  "operation": "ram:10000030:200:0"
+                },
+                {
+                  "type": "t_ptr_char",
+                  "kind": "temporary",
+                  "operation": "ram:10000038:201:1"
+                },
+                {
+                  "type": "t_ptr_u8",
+                  "kind": "parameter",
+                  "operation": "unique:00000001:1:0"
+                }
+              ]
+            },
+            "ram:10000048:203:3": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "t_ptr_char",
+              "inputs": [
+                {
+                  "type": "t_array_char_64",
+                  "kind": "local",
+                  "operation": "unique:00000002:2:0"
+                }
+              ]
+            },
+            "ram:10000050:204:4": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "t_ptr_char",
+              "inputs": [
+                {
+                  "type": "t_array_char_4",
+                  "kind": "local",
+                  "operation": "unique:00000003:3:0"
+                }
+              ]
+            },
+            "ram:10000058:205:5": {
+              "mnemonic": "CALL",
+              "type": "t_ptr_char",
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000005:5:0"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000002",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_ptr_char",
+                  "kind": "temporary",
+                  "operation": "ram:10000048:203:3"
+                },
+                {
+                  "type": "t_ptr_char",
+                  "kind": "temporary",
+                  "operation": "ram:10000050:204:4"
+                }
+              ]
+            },
+            "ram:10000060:206:6": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000070:2:basic"
+            }
+          },
+          "ordered_operations": [
+            "ram:10000030:200:0",
+            "ram:10000038:201:1",
+            "ram:10000040:202:2",
+            "ram:10000048:203:3",
+            "ram:10000050:204:4",
+            "ram:10000058:205:5",
+            "ram:10000060:206:6"
+          ]
+        },
+        "ram:10000070:2:basic": {
+          "operations": {
+            "ram:10000070:300:0": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:10000070:300:0"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "sprintf",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": true,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_ptr_char",
+          "t_ptr_char"
+        ]
+      }
+    },
+    "EXTERNAL:00000002": {
+      "name": "strcat",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_ptr_char",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_ptr_char",
+          "t_ptr_char"
+        ]
+      }
+    }
+  },
+  "types": {
+    "t_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "t_int": {
+      "name": "int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t_u16": {
+      "name": "unsigned short",
+      "size": 2,
+      "kind": "integer"
+    },
+    "t_u8": {
+      "name": "unsigned char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "t_char": {
+      "name": "char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "t_ptr_char": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "t_char"
+    },
+    "t_ptr_u8": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "t_u8"
+    },
+    "t_array_char_64": {
+      "kind": "array",
+      "size": 64,
+      "num_elements": 64,
+      "element_type": "t_char"
+    },
+    "t_array_char_4": {
+      "kind": "array",
+      "size": 4,
+      "num_elements": 4,
+      "element_type": "t_char"
+    }
+  }
+}

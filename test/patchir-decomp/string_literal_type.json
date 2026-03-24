@@ -7,6 +7,8 @@
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // LL: define dso_local i32 @string_literal_test
 // RUN: %file-check -vv -check-prefix=CCHECK %s --input-file %t.c
+// RUN: %gen-call-checks %t.json > %t.call.checks
+// RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 // CCHECK: sprintf(
 // CCHECK: "hello %s"
 {

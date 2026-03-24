@@ -6,11 +6,16 @@
  */
 
 #include <algorithm>
-#include <llvm/ADT/StringRef.h>
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
+#include <cctype>
+#include <cstdlib>
+
+#include <llvm/ADT/StringRef.h>
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/Support/FormatVariadic.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -18,7 +23,6 @@
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
 #include <patchestry/Util/Log.hpp>
-#include <vector>
 
 namespace patchestry::ghidra {
 
@@ -119,11 +123,16 @@ namespace patchestry::ghidra {
             return;
         }
 
-        std::unordered_map< std::string, const JsonValue & > types_value_map;
+        std::unordered_map< std::string, const JsonValue * > types_value_map;
 
         for (const auto &type : type_obj) {
             const auto &type_value = type.getSecond();
-            auto vnode_type        = create_vnode_type(*type_value.getAsObject());
+            const auto *type_obj_ptr = type_value.getAsObject();
+            if (!type_obj_ptr) {
+                LOG(ERROR) << "Invalid JSON object for type entry\n";
+                continue;
+            }
+            auto vnode_type = create_vnode_type(*type_obj_ptr);
             if (!vnode_type) {
                 LOG(ERROR) << "Failed to create varnode type\n";
                 continue;
@@ -132,7 +141,7 @@ namespace patchestry::ghidra {
             const auto type_key = type.getFirst().str();
             vnode_type->SetKey(type_key);
             serialized_types.emplace(type_key, std::move(vnode_type));
-            types_value_map.emplace(type_key, type_value);
+            types_value_map.emplace(type_key, &type_value);
         }
 
         LOG(INFO) << "Number of entry in serialized types: " << serialized_types.size() << "\n";
@@ -141,11 +150,17 @@ namespace patchestry::ghidra {
         for (const auto &[type_key, vnode_type] : serialized_types) {
             auto iter = types_value_map.find(type_key);
             if (iter == types_value_map.end()) {
-                assert(false && "type_key is missing from value map");
+                LOG(ERROR) << "type_key is missing from value map: " << type_key << "\n";
                 continue;
             }
 
-            const auto &json_value = iter->second;
+            const auto *json_value = iter->second;
+            const auto *json_obj = json_value->getAsObject();
+            if (!json_obj) {
+                LOG(ERROR) << "Invalid JSON object for type key: " << type_key << "\n";
+                continue;
+            }
+
             switch (vnode_type->kind) {
                 case VarnodeType::Kind::VT_BOOLEAN:
                 case VarnodeType::Kind::VT_INTEGER:
@@ -155,73 +170,62 @@ namespace patchestry::ghidra {
                 case VarnodeType::Kind::VT_VOID:
                     deserialize_buildin(
                         *dynamic_cast< BuiltinType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                case VarnodeType::Kind::VT_ARRAY: {
-                    auto *obj = json_value.getAsObject();
-                    if (!obj) {
-                        LOG(ERROR) << "Invalid JSON object for array type";
-                        break;
-                    }
+                case VarnodeType::Kind::VT_ARRAY:
                     deserialize_array(
                         *dynamic_cast< ArrayType * >(vnode_type.get()),
-                        obj, serialized_types
+                        json_obj, serialized_types
                     );
                     break;
-                }
-                case VarnodeType::Kind::VT_POINTER: {
+                case VarnodeType::Kind::VT_POINTER:
                     deserialize_pointer(
                         *dynamic_cast< PointerType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                }
-                case VarnodeType::Kind::VT_FUNCTION: {
+                case VarnodeType::Kind::VT_FUNCTION:
                     deserialize_function_type(
                         *dynamic_cast< FunctionType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                }
                 case VarnodeType::Kind::VT_STRUCT:
-                case VarnodeType::Kind::VT_UNION: {
+                case VarnodeType::Kind::VT_UNION:
                     deserialize_composite(
                         *dynamic_cast< CompositeType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                }
-                case VarnodeType::Kind::VT_ENUM: {
+                case VarnodeType::Kind::VT_ENUM:
                     deserialize_enum(
                         *dynamic_cast< EnumType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                }
-                case VarnodeType::Kind::VT_TYPEDEF: {
+                case VarnodeType::Kind::VT_TYPEDEF:
                     deserialize_typedef(
                         *dynamic_cast< TypedefType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
-                }
                 case VarnodeType::Kind::VT_UNDEFINED:
                     deserialize_undefined_type(
                         *dynamic_cast< UndefinedType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
                 case VarnodeType::Kind::VT_BITFIELD:
                     deserialize_bitfield(
                         *dynamic_cast< BitFieldType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
                 case VarnodeType::Kind::VT_STRING:
                     deserialize_string(
                         *dynamic_cast< StringType * >(vnode_type.get()),
-                        *json_value.getAsObject(), serialized_types
+                        *json_obj, serialized_types
                     );
                     break;
                 case VarnodeType::Kind::VT_INVALID:
@@ -286,27 +290,6 @@ namespace patchestry::ghidra {
             || varnode.kind == VarnodeType::Kind::VT_VOID
         );
         varnode.is_signed = obj.getBoolean("is_signed").value_or(false);
-    }
-
-    void JsonParser::deserialize_bitfield(
-        BitFieldType &varnode, const JsonObject &obj, const TypeMap &serialized_types
-    ) {
-        varnode.bit_offset = static_cast< uint32_t >(obj.getInteger("bit_offset").value_or(0));
-        varnode.bit_size   = static_cast< uint32_t >(obj.getInteger("bit_size").value_or(0));
-
-        auto base_key = get_string_if_valid(obj, "base_type");
-        if (base_key) {
-            auto iter = serialized_types.find(*base_key);
-            if (iter != serialized_types.end()) {
-                varnode.SetBaseType(iter->second);
-            }
-        }
-    }
-
-    void JsonParser::deserialize_string(
-        StringType &varnode, const JsonObject &obj, const TypeMap & /*unused*/
-    ) {
-        varnode.charset = get_string(obj, "charset", "US-ASCII");
     }
 
     // Deserialize array types
@@ -432,7 +415,7 @@ namespace patchestry::ghidra {
             }
 
             varnode.AddComponents(
-                field_name, *iter->second, static_cast< uint32_t >(*maybe_offset)
+                field_name, iter->second, static_cast< uint32_t >(*maybe_offset)
             );
 
             ++field_index;
@@ -517,6 +500,33 @@ namespace patchestry::ghidra {
         (void) varnode;
     }
 
+    void JsonParser::deserialize_bitfield(
+        BitFieldType &varnode, const JsonObject &bf_obj, const TypeMap &type_map
+    ) {
+        assert(varnode.kind == VarnodeType::Kind::VT_BITFIELD);
+        varnode.bit_offset = static_cast< uint32_t >(
+            bf_obj.getInteger("bit_offset").value_or(0));
+        varnode.bit_size = static_cast< uint32_t >(
+            bf_obj.getInteger("bit_size").value_or(0));
+
+        auto base_key = get_string(bf_obj, "base_type");
+        if (!base_key.empty()) {
+            auto it = type_map.find(base_key);
+            if (it != type_map.end()) {
+                varnode.SetBaseType(it->second);
+            } else {
+                LOG(WARNING) << "BitField base type key '" << base_key << "' not found\n";
+            }
+        }
+    }
+
+    void JsonParser::deserialize_string(
+        StringType &varnode, const JsonObject &str_obj, const TypeMap & /*unused*/
+    ) {
+        assert(varnode.kind == VarnodeType::Kind::VT_STRING);
+        varnode.charset = get_string(str_obj, "charset");
+    }
+
     // Deserialize operation varnode
     std::optional< Varnode > JsonParser::create_varnode(const JsonObject &var_obj) {
         auto type_key = get_string(var_obj, "type");
@@ -544,6 +554,154 @@ namespace patchestry::ghidra {
         return vnode;
     }
 
+    // Sanitize a string to a valid C identifier: replace non-alphanumeric
+    // characters with '_', collapse consecutive underscores, strip edges.
+    static std::string sanitize_to_c_identifier(const std::string &input) {
+        std::string result = input;
+
+        // Handle destructors: "~Foo" → "dtor_Foo"
+        auto tilde = result.find('~');
+        if (tilde != std::string::npos) {
+            result.replace(tilde, 1, "dtor_");
+        }
+
+        // Handle operator names: "operator=" → "operator_assign", etc.
+        auto op_pos = result.find("operator");
+        if (op_pos != std::string::npos) {
+            auto suffix_start = op_pos + 8; // strlen("operator")
+            if (suffix_start < result.size()) {
+                std::string op_suffix = result.substr(suffix_start);
+                std::string replacement;
+                if (op_suffix.find("=") == 0 && op_suffix.find("==") != 0)
+                    replacement = "assign";
+                else if (op_suffix.find("==") == 0) replacement = "eq";
+                else if (op_suffix.find("!=") == 0) replacement = "ne";
+                else if (op_suffix.find("new") == 0) replacement = "new";
+                else if (op_suffix.find("delete") == 0) replacement = "delete";
+                else if (op_suffix.find(".delete") == 0) replacement = "delete";
+                else if (op_suffix.find("<=") == 0) replacement = "le";
+                else if (op_suffix.find(">=") == 0) replacement = "ge";
+                else if (op_suffix.find("<<") == 0) replacement = "lshift";
+                else if (op_suffix.find(">>") == 0) replacement = "rshift";
+                else if (op_suffix.find("<") == 0) replacement = "lt";
+                else if (op_suffix.find(">") == 0) replacement = "gt";
+                else if (op_suffix.find("+=") == 0) replacement = "add_assign";
+                else if (op_suffix.find("-=") == 0) replacement = "sub_assign";
+                else if (op_suffix.find("*=") == 0) replacement = "mul_assign";
+                else if (op_suffix.find("/=") == 0) replacement = "div_assign";
+                else if (op_suffix.find("->") == 0) replacement = "arrow";
+                else if (op_suffix.find("++") == 0) replacement = "inc";
+                else if (op_suffix.find("--") == 0) replacement = "dec";
+                else if (op_suffix.find("+") == 0) replacement = "add";
+                else if (op_suffix.find("-") == 0) replacement = "sub";
+                else if (op_suffix.find("*") == 0) replacement = "mul";
+                else if (op_suffix.find("/") == 0) replacement = "div";
+                else if (op_suffix.find("%") == 0) replacement = "mod";
+                else if (op_suffix.find("^") == 0) replacement = "xor";
+                else if (op_suffix.find("|") == 0) replacement = "or";
+                else if (op_suffix.find("&") == 0) replacement = "and";
+                else if (op_suffix.find("!") == 0) replacement = "not";
+                else if (op_suffix.find("()") == 0) replacement = "call";
+                else if (op_suffix.find("[]") == 0) replacement = "index";
+                else if (op_suffix.find(",") == 0) replacement = "comma";
+                if (!replacement.empty()) {
+                    result = result.substr(0, suffix_start) + "_" + replacement;
+                }
+            }
+        }
+
+        // Replace non-identifier characters (::, <>, spaces, *, &, .) with '_'
+        // Track which underscores are synthetic (from replacement) so we only
+        // collapse those, preserving intentional double underscores in the
+        // original name (e.g. "bl_usb__send_message").
+        std::vector< bool > is_synthetic(result.size(), false);
+        for (size_t i = 0; i < result.size(); ++i) {
+            char c = result[i];
+            if (!std::isalnum(static_cast< unsigned char >(c)) && c != '_') {
+                result[i]       = '_';
+                is_synthetic[i] = true;
+            }
+        }
+
+        // Collapse consecutive underscores only when at least one in the
+        // run is synthetic (from character replacement above).
+        std::string collapsed;
+        collapsed.reserve(result.size());
+        for (size_t i = 0; i < result.size(); ++i) {
+            if (result[i] == '_' && i > 0 && collapsed.back() == '_') {
+                // Two adjacent underscores — collapse only if the current
+                // or previous underscore was synthetic.
+                if (is_synthetic[i] || is_synthetic[i - 1]) {
+                    continue; // skip this duplicate
+                }
+            }
+            collapsed.push_back(result[i]);
+        }
+
+        // Remove leading/trailing underscores
+        while (!collapsed.empty() && collapsed.front() == '_') {
+            collapsed.erase(collapsed.begin());
+        }
+        while (!collapsed.empty() && collapsed.back() == '_') {
+            collapsed.pop_back();
+        }
+
+        // If stripping produced an empty string (input was all non-alnum),
+        // return a safe fallback instead of the unsanitized input.
+        if (collapsed.empty()) {
+            return "fn";
+        }
+
+        // A valid C identifier must not start with a digit.
+        if (std::isdigit(static_cast< unsigned char >(collapsed.front()))) {
+            collapsed.insert(collapsed.begin(), '_');
+        }
+
+        return collapsed;
+    }
+
+    // Demangle a C++ mangled symbol name and sanitize it to a valid C
+    // identifier.  Also sanitizes non-mangled names that contain C++
+    // artifacts (::, ~, operator) so they become valid C identifiers
+    // while preserving the original name for asm labels.
+    static std::string demangle_to_c_identifier(const std::string &mangled) {
+        // Attempt Itanium ABI demangling (_Z prefix)
+        if (mangled.size() >= 2 && mangled[0] == '_' && mangled[1] == 'Z') {
+            char *raw = llvm::itaniumDemangle(mangled);
+            if (raw) {
+                std::string result(raw);
+                std::free(raw);
+
+                // Strip parameter list: "Foo::Bar(int, char)" → "Foo::Bar"
+                auto paren = result.find('(');
+                if (paren != std::string::npos) {
+                    result = result.substr(0, paren);
+                }
+                while (!result.empty() && result.back() == ' ') {
+                    result.pop_back();
+                }
+
+                return sanitize_to_c_identifier(result);
+            }
+        }
+
+        // For non-mangled names that still have C++ artifacts
+        // (e.g., "~QDir", "operator=", "QString::append"), sanitize them.
+        bool needs_sanitize = false;
+        for (char c : mangled) {
+            if (!std::isalnum(static_cast< unsigned char >(c)) && c != '_') {
+                needs_sanitize = true;
+                break;
+            }
+        }
+
+        if (needs_sanitize) {
+            return sanitize_to_c_identifier(mangled);
+        }
+
+        return mangled;
+    }
+
     std::optional< Function > JsonParser::create_function(const JsonObject &func_obj) {
         const auto function_name = stripNull(func_obj.getString("name"));
         if (!function_name || function_name->empty()) {
@@ -554,6 +712,16 @@ namespace patchestry::ghidra {
         Function function;
 
         function.name = *function_name;
+
+        // Use display_name from JSON if the serializer provided one;
+        // otherwise compute it by demangling/sanitizing the binary name.
+        auto json_display_name = stripNull(func_obj.getString("display_name"));
+        if (json_display_name && !json_display_name->empty()) {
+            function.display_name = sanitize_to_c_identifier(*json_display_name);
+        } else {
+            function.display_name = demangle_to_c_identifier(function.name);
+        }
+
         if (const auto *proto_obj = func_obj.getObject("type")) {
             if (auto maybe_prototype = create_function_prototype(*proto_obj)) {
                 function.prototype = *maybe_prototype;
@@ -699,7 +867,11 @@ namespace patchestry::ghidra {
 
         if (const auto *input_array = pcode_obj.getArray("inputs")) {
             for (auto input : *input_array) {
-                if (auto maybe_varnode = create_varnode(*input.getAsObject())) {
+                const auto *input_obj = input.getAsObject();
+                if (!input_obj) {
+                    continue;
+                }
+                if (auto maybe_varnode = create_varnode(*input_obj)) {
                     operation.inputs.emplace_back(std::move(*maybe_varnode));
                 }
             }

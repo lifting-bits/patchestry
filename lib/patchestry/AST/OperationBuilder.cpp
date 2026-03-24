@@ -48,7 +48,7 @@ namespace patchestry::ast {
             }
         }
 
-        llvm_unreachable("Failed to find operation for varnode lookup key");
+        return std::nullopt;
     }
 
     clang::Stmt *OpBuilder::create_varnode(
@@ -92,7 +92,7 @@ namespace patchestry::ast {
 
     clang::Stmt *OpBuilder::create_parameter(clang::ASTContext &ctx, const Varnode &vnode) {
         if (!vnode.operation || vnode.kind != Varnode::VARNODE_PARAM) {
-            assert(false && "Invalid parameter varnode");
+            LOG(ERROR) << "Invalid parameter varnode\n";
             return nullptr;
         }
 
@@ -109,7 +109,7 @@ namespace patchestry::ast {
 
     clang::Stmt *OpBuilder::create_global(clang::ASTContext &ctx, const Varnode &vnode) {
         if (!vnode.global || vnode.kind != Varnode::VARNODE_GLOBAL) {
-            assert(false && "Invalid global varnode");
+            LOG(ERROR) << "Invalid global varnode\n";
             return {};
         }
 
@@ -141,6 +141,10 @@ namespace patchestry::ast {
             );
         }
 
+        // Case 2: result cached in operation_stmts (merge_to_next op whose expression has
+        // not yet been given a name).  Materialize it as a VarDecl so that every use site
+        // gets a fresh DeclRefExpr instead of sharing the same Stmt* node across multiple
+        // parent expressions (which violates the AST tree property).
         if (function_builder().operation_stmts.contains(*vnode.operation)) {
             return function_builder().operation_stmts.at(*vnode.operation);
         }
@@ -150,18 +154,29 @@ namespace patchestry::ast {
         // via a recursive call (which will fall into Case 2).  This prevents re-execution
         // if create_temporary is called again for the same key before create_basic_block
         // reaches the defining block.
-        if (auto maybe_operation = operationFromKey(function, vnode.operation.value())) {
+        const auto &op_key = *vnode.operation;
+        if (resolving_temporaries.contains(op_key)) {
+            LOG(ERROR) << "Cyclic forward reference detected for temporary: " << op_key << "\n";
+            return {};
+        }
+        resolving_temporaries.insert(op_key);
+
+        clang::Stmt *result = nullptr;
+        if (auto maybe_operation = operationFromKey(function, op_key)) {
             auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
             if (stmt) {
-                function_builder().operation_stmts.emplace(*vnode.operation, stmt);
+                function_builder().operation_stmts.emplace(op_key, stmt);
                 // Recurse: will hit Case 1 (if already local) or Case 2.
-                return create_temporary(ctx, function, vnode);
+                result = create_temporary(ctx, function, vnode);
+            } else {
+                result = stmt;
             }
-            return stmt;
+        } else {
+            LOG(ERROR) << "Failed to get operation for key: " << op_key << "\n";
         }
 
-        assert(false && "Failed to get operation for key");
-        return {};
+        resolving_temporaries.erase(op_key);
+        return result;
     }
 
     clang::Stmt *OpBuilder::create_function(clang::ASTContext &ctx, const Varnode &vnode) {
@@ -274,7 +289,9 @@ namespace patchestry::ast {
                 auto *literal =
                     new (ctx) clang::IntegerLiteral(ctx, wide_val, wide_type, location);
                 return make_implicit_cast(
-                    ctx, literal, vnode_type, clang::CK_IntegralCast
+                    ctx, literal, vnode_type,
+                    vnode_type->isBooleanType() ? clang::CK_IntegralToBoolean
+                                                : clang::CK_IntegralCast
                 );
             }
 
@@ -336,8 +353,8 @@ namespace patchestry::ast {
         // Determine if this is a wide string based on the type
         bool is_wide = false;
         if (!vnode.type_key.empty()) {
-            if (type_builder().get_serialized_types().contains(vnode.type_key)) {
-                auto type = type_builder().get_serialized_types().at(vnode.type_key);
+            if (type_builder().GetSerializedTypes().contains(vnode.type_key)) {
+                auto type = type_builder().GetSerializedTypes().at(vnode.type_key);
                 is_wide   = type->isWideCharType();
             }
         }
@@ -382,8 +399,8 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (type_builder().get_serialized_types().contains(vnode.type_key)) {
-            return type_builder().get_serialized_types().at(vnode.type_key);
+        if (type_builder().GetSerializedTypes().contains(vnode.type_key)) {
+            return type_builder().GetSerializedTypes().at(vnode.type_key);
         }
 
         return GetTypeFromSize(ctx, vnode.size, /*is_signed=*/false, /*is_integer=*/true);

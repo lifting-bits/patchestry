@@ -88,13 +88,16 @@ namespace patchestry::ast {
                 ci, function, *type_builder, function_declarations, global_variable_declarations
             );
 
-            builder->initialize_op_builder();
+            builder->InitializeOpBuilder();
             func_builders.emplace_back(std::move(builder));
         }
 
         for (auto &builder : func_builders) {
-            auto *func_decl = builder->create_definition(ctx);
-            (void) func_decl;
+            // Functions without basic blocks (externals/callees) already have a
+            // forward declaration created in FunctionBuilder's constructor.
+            if (builder->has_basic_blocks()) {
+                builder->create_definition(ctx);
+            }
         }
         (void) serialized_types;
     }
@@ -107,7 +110,7 @@ namespace patchestry::ast {
                 continue;
             }
 
-            auto var_type       = type_builder->get_serialized_types().at(variable.type);
+            auto var_type       = type_builder->GetSerializedTypes().at(variable.type);
             auto location       = SourceLocation(ctx.getSourceManager(), key);
             auto sanitized_name = SanitizeKeyToIdent(variable.name);
             auto *var_decl      = clang::VarDecl::Create(

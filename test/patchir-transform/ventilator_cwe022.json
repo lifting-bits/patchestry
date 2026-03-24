@@ -1,0 +1,124 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t1 >> /dev/null 2>&1
+//
+// RUN: %patchir-transform %t1.cir --spec %S/cwe022_before.yaml -o %t2.cir
+// RUN: %file-check -vv -check-prefix=BEFORE %s --input-file %t2.cir
+// BEFORE: @patch__before__mkdir
+//
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "init_logger",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_ptr_void"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "unique:00000000:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "log_dir",
+              "type": "t_ptr_void",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000010:0:basic"
+            },
+            "unique:00000001:1:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "mkdir_ret",
+              "type": "t_u32"
+            }
+          },
+          "ordered_operations": [
+            "unique:00000000:0:0",
+            "unique:00000001:1:0",
+            "entry.exit"
+          ]
+        },
+        "ram:10000010:0:basic": {
+          "operations": {
+            "ram:10000010:100:0": {
+              "mnemonic": "CALL",
+              "type": "t_u32",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000001",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_ptr_void",
+                  "kind": "parameter",
+                  "operation": "unique:00000000:0:0"
+                },
+                {
+                  "type": "t_u32",
+                  "kind": "constant",
+                  "value": 511
+                }
+              ],
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000001:1:0"
+              }
+            },
+            "ram:10000018:101:1": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:10000010:100:0",
+            "ram:10000018:101:1"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "mkdir",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_u32",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_ptr_void",
+          "t_u32"
+        ]
+      }
+    }
+  },
+  "types": {
+    "t_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "t_u32": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t_ptr_void": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "t_void"
+    }
+  }
+}

@@ -615,9 +615,14 @@ namespace patchestry::passes {
                                     options.enable_inlining
                                         || meta_patch.optimization.contains("inline-patches")
                                 );
+                            } else if (mlir::isa< cir::BinOp, cir::CmpOp >(op)) {
+                                PatchOperationImpl::replaceOperationWithPatch(
+                                    *this, op, patch_to_apply, patch_module.get(),
+                                    options.enable_inlining
+                                        || meta_patch.optimization.contains("inline-patches")
+                                );
                             } else {
-                                LOG(ERROR) << "REPLACE mode is only supported for call "
-                                              "operations, got: "
+                                LOG(ERROR) << "REPLACE mode is not supported for: "
                                            << op->getName().getStringRef().str() << "\n";
                             }
                             break;

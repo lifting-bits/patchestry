@@ -1,0 +1,21 @@
+# patches/cwe022_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe022_patches"
+  version: "1.0.0"
+  description: "CWE-022 patches"
+  author: "Security Team"
+  created: "2026-03-17"
+
+patches:
+  - name: "cwe022_path_validation"
+    description: "Validate path against directory traversal before mkdir"
+    category: "input_validation"
+    code_file: "patches/patch_mkdir.c"
+    function_name: "patch::before::mkdir"
+    parameters:
+      - name: "path"
+        type: "const void*"
+        description: "Path to validate"

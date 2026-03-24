@@ -8,6 +8,7 @@
 #pragma once
 
 #include <functional>
+#include <unordered_set>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/OperationKinds.h>
@@ -229,6 +230,10 @@ namespace patchestry::ast {
             clang::SourceLocation loc
         );
 
+        clang::Expr *coerce_record_to_integer(
+            clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc
+        );
+
         clang::Expr *make_member_expr(
             clang::ASTContext &ctx, clang::Expr *base, unsigned offset,
             clang::SourceLocation loc = clang::SourceLocation()
@@ -268,6 +273,9 @@ namespace patchestry::ast {
 
         // Cache for intrinsic function declarations
         std::unordered_map< std::string, clang::FunctionDecl * > intrinsic_decls;
+
+        // Cycle detection for create_temporary forward-reference resolution
+        std::unordered_set< std::string > resolving_temporaries;
     };
 
 } // namespace patchestry::ast

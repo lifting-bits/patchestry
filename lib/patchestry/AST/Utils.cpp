@@ -22,7 +22,7 @@ namespace patchestry::ast {
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key) {
         auto &fm = sm.getFileManager();
         auto fe  = fm.getVirtualFileRef(key, static_cast< int >(key.size()), 0);
-        std::unique_ptr< llvm::MemoryBuffer > buffer = llvm::MemoryBuffer::getMemBuffer(key);
+        std::unique_ptr< llvm::MemoryBuffer > buffer = llvm::MemoryBuffer::getMemBufferCopy(key);
         sm.overrideFileContents(fe, std::move(buffer));
         auto fid = sm.createFileID(fe, clang::SourceLocation(), clang::SrcMgr::C_User, 0);
         return sm.getLocForStartOfFile(fid);
@@ -182,7 +182,7 @@ namespace patchestry::ast {
     ShouldReinterpretCast(const clang::QualType &from_type, const clang::QualType &to_type) {
         if (from_type->isRecordType()) {
             return to_type->isArithmeticType() || to_type->isAnyPointerType()
-                || to_type->isArrayType();
+                || to_type->isArrayType() || to_type->isRecordType();
         }
         if (from_type->isArithmeticType() || from_type->isPointerType()) {
             return to_type->isArrayType() || to_type->isRecordType();

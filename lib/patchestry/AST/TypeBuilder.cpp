@@ -90,7 +90,7 @@ namespace patchestry::ast {
             case VarnodeType::VT_INTEGER: {
                 auto &builtin = dynamic_cast< const BuiltinType & >(*vnode_type);
                 return GetTypeFromSize(
-                    ctx, vnode_type->size * TypeBuilder::num_bits_in_byte,
+                    ctx, vnode_type->size * TypeBuilder::kNumBitsInByte,
                     /*is_signed=*/builtin.is_signed, /*is_integer=*/true
                 );
             }
@@ -103,7 +103,7 @@ namespace patchestry::ast {
 
             case VarnodeType::VT_FLOAT:
                 return GetTypeFromSize(
-                    ctx, vnode_type->size * TypeBuilder::num_bits_in_byte, /*is_signed=*/false,
+                    ctx, vnode_type->size * TypeBuilder::kNumBitsInByte, /*is_signed=*/false,
                     /*is_integer=*/false
                 );
 
@@ -143,7 +143,7 @@ namespace patchestry::ast {
                         } else {
                             LOG(ERROR) << "Unknown param type key '" << pk
                                          << "' in function type '" << fn_type.key
-                                         << "'; using voidi*\n";
+                                         << "'; using void*\n";
                             param_types.push_back(ctx.getPointerType(ctx.VoidTy));
                         }
                     }
@@ -179,7 +179,7 @@ namespace patchestry::ast {
                     return create_type(ctx, bf.GetBaseType());
                 }
                 return GetTypeFromSize(
-                    ctx, vnode_type->size * TypeBuilder::num_bits_in_byte,
+                    ctx, vnode_type->size * TypeBuilder::kNumBitsInByte,
                     /*is_signed=*/false, /*is_integer=*/true
                 );
             }
@@ -189,7 +189,7 @@ namespace patchestry::ast {
                 if (vnode_type->size > 0) {
                     return ctx.getConstantArrayType(
                         ctx.CharTy,
-                        llvm::APInt(num_bits_uint, vnode_type->size), nullptr,
+                        llvm::APInt(TypeBuilder::kNumBitsUint, vnode_type->size), nullptr,
                         clang::ArraySizeModifier::Normal, 0
                     );
                 }
@@ -351,7 +351,7 @@ namespace patchestry::ast {
 
         auto size = array_type.GetElementCount();
         return ctx.getConstantArrayType(
-            element_type, llvm::APInt(num_bits_uint, size), nullptr,
+            element_type, llvm::APInt(kNumBitsUint, size), nullptr,
             clang::ArraySizeModifier::Normal, 0
         );
     }
@@ -397,12 +397,18 @@ namespace patchestry::ast {
             auto field_type  = iter->second;
             auto location    = SourceLocation(ctx.getSourceManager(), component.type->key);
 
-            // For bitfield components, create an IntegerLiteral for the bit width.
+            // For bitfield components, create a ConstantExpr wrapping the bit width.
             clang::Expr *bit_width = nullptr;
             if (component.type->kind == VarnodeType::VT_BITFIELD) {
                 auto &bf = dynamic_cast< const BitFieldType & >(*component.type);
-                bit_width = clang::IntegerLiteral::Create(
-                    ctx, llvm::APInt(num_bits_uint, bf.bit_size), ctx.UnsignedIntTy, location
+                auto *int_lit = clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(TypeBuilder::kNumBitsUint, bf.bit_size),
+                    ctx.UnsignedIntTy, location
+                );
+                bit_width = clang::ConstantExpr::Create(
+                    ctx, int_lit, clang::APValue(llvm::APSInt(
+                        llvm::APInt(TypeBuilder::kNumBitsUint, bf.bit_size), /*isUnsigned=*/true
+                    ))
                 );
             }
 
@@ -488,16 +494,16 @@ namespace patchestry::ast {
         ctx.getTranslationUnitDecl()->addDecl(enum_decl);
 
         // Derive the underlying integer type from the serialized enum size.
-        unsigned bit_width = enum_type.size * TypeBuilder::num_bits_in_byte;
+        unsigned bit_width = enum_type.size * TypeBuilder::kNumBitsInByte;
         if (bit_width == 0) {
-            bit_width = num_bits_uint;
+            bit_width = TypeBuilder::kNumBitsUint;
         }
 
         auto underlying_type =
             GetTypeFromSize(ctx, bit_width, /*is_signed=*/true, /*is_integer=*/true);
         if (underlying_type.isNull()) {
             underlying_type = ctx.IntTy;
-            bit_width       = num_bits_uint;
+            bit_width       = TypeBuilder::kNumBitsUint;
         }
 
         // Populate enum with actual Ghidra-serialized constants.
@@ -542,7 +548,7 @@ namespace patchestry::ast {
     clang::QualType
     TypeBuilder::create_undefined(clang::ASTContext &ctx, const UndefinedType &undefined_type) {
         auto base_type = GetTypeFromSize(
-            ctx, undefined_type.size * num_bits_in_byte, /*is_signed=*/false,
+            ctx, undefined_type.size * TypeBuilder::kNumBitsInByte, /*is_signed=*/false,
             /*is_integer=*/true
         );
 

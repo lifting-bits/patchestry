@@ -1,0 +1,42 @@
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe078-replace"
+  description: "Sanitize shell metacharacters before system() calls"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-03-17"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/cwe078_patches.yaml"
+
+meta_patches:
+  - name: "cwe078_system_sanitize"
+    description: "Replace system() with sanitized wrapper"
+
+    patch_actions:
+      - id: "CWE-078-001"
+        description: "Replace system() in create_port with metacharacter-filtered version"
+
+        match:
+          - name: "system"
+            kind: "function"
+            function_context:
+              - name: "create_port"
+
+        action:
+          - mode: "replace"
+            patch_id: "cwe078_sanitized_system"
+            description: "Validate command string before execution"
+            arguments:
+              - name: "command"
+                source: "operand"
+                index: 0
+              - name: "max_len"
+                source: "constant"
+                value: 512
