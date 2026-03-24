@@ -8,6 +8,8 @@
 // RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir
 // MLIR: llvm.func @open_memmap
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// RUN: %gen-call-checks %t.json > %t.call.checks
+// RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 // LL: define dso_local i64 @open_memmap(i64 %0)
 {
   "architecture": "AARCH64",

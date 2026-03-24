@@ -3,6 +3,8 @@
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=CCHECK %s --input-file %t.c
 // CCHECK: arr[
+// RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
+// FN: cir.func @ptradd_array_test(
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // LL: define dso_local i32 @ptradd_array_test
 // LL: getelementptr
