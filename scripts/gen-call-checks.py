@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 
 
@@ -30,16 +31,40 @@ def find_target_function(functions, func_name):
 
 
 def sanitize_to_c_identifier(name):
-    """Mirror the C++ sanitize_to_c_identifier: keep alnum/_, collapse
-    runs of _, strip leading/trailing _, prepend _ if starts with digit."""
-    import re
-    result = re.sub(r'[^A-Za-z0-9_]', '_', name)
-    result = re.sub(r'_+', '_', result)
-    result = result.strip('_')
+    """Sanitize display names to CIR-safe C identifiers.
+
+    - Replace non-alnum characters with '_', preserving runs of '_'
+      (do not collapse multiple underscores).
+    - Strip leading/trailing '_'.
+    - Prepend '_' if the identifier would start with a digit.
+    - Apply simple normalization for destructor (~Foo) and operator*
+      forms (operator<<, operator new, etc.) before generic cleanup.
+    """
+    if not isinstance(name, str):
+        name = str(name)
+
+    # Handle common C++-style special names before generic sanitization.
+    if name.startswith("~") and len(name) > 1:
+        # Destructor: ~Foo -> dtor_Foo (then sanitized below).
+        name = "dtor_" + name[1:]
+    elif name.startswith("operator"):
+        # Operators: operatorX / operator X / operator<< -> opX / op X / op<<
+        # (the rest will be sanitized char-by-char).
+        name = "op" + name[len("operator"):]
+
+    # Generic character-wise sanitization: keep alnum and '_', map others to '_'.
+    chars = []
+    for ch in name:
+        if ch.isalnum() or ch == "_":
+            chars.append(ch)
+        else:
+            chars.append("_")
+
+    result = "".join(chars).strip("_")
     if not result:
         return "fn"
     if result[0].isdigit():
-        result = '_' + result
+        result = "_" + result
     return result
 
 
@@ -99,7 +124,7 @@ def main():
         sys.exit(1)
 
     if "basic_blocks" not in func:
-        print(f"error: function {func['name']} has no body", file=sys.stderr)
+        print(f"error: function {func.get('name', '<unknown>')} has no body", file=sys.stderr)
         sys.exit(1)
 
     callees, indirect_count = collect_call_targets(func, functions)
