@@ -1,0 +1,42 @@
+# Test patching specification
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe190-replace"
+  description: "Fix integer overflow by replacing unchecked 16-bit multiply with overflow-checked version"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-03-23"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/cwe190_patches.yaml"
+
+meta_patches:
+  - name: "cwe190_int_overflow_fix"
+    description: "Replace unchecked count * block_size in PeekHandler::Process"
+
+    patch_actions:
+      - id: "CWE-190-001"
+        description: "Replace 16-bit multiply with overflow-checked version"
+
+        match:
+          - name: "cir.binop"
+            kind: "operation"
+            function_context:
+              - name: "peek_process"
+
+        action:
+          - mode: "replace"
+            patch_id: "cwe190_checked_mul16"
+            description: "Replace multiply with overflow-safe version"
+            arguments:
+              - name: "count"
+                source: "operand"
+                index: 0
+              - name: "block_size"
+                source: "operand"
+                index: 1
