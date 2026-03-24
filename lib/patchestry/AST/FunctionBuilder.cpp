@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <algorithm>
 #include <limits>
 #include <map>
 #include <memory>
@@ -77,177 +78,6 @@ namespace patchestry::ast {
             return operation_vec;
         }
 
-        /**
-         * @brief Comparator for basic-block keys that sorts numerically rather than
-         * lexicographically.
-         *
-         * Block keys have the form "ram:HEXADDR:DECIMALIDX:basic" (or ":entry" for the entry
-         * block).  A plain std::map<string> would sort "10" before "2", producing wrong block
-         * ordering for functions with >= 10 basic blocks.  This comparator parses the address
-         * and index fields as integers so the ordering is always correct.
-         */
-        struct BlockKeyComparator {
-            static std::pair< uint64_t, int64_t > parse_key(const std::string &key) {
-                // "ram:HEXADDR:DECIMALIDX:basic"  or  "ram:HEXADDR:entry"
-                constexpr std::string_view kExpectedPrefix = "ram:";
-                if (key.substr(0, kExpectedPrefix.size()) != kExpectedPrefix) {
-                    LOG(WARNING) << "BlockKeyComparator: unexpected key format (no 'ram:' prefix): "
-                                 << key;
-                    return {std::numeric_limits< uint64_t >::max(),
-                            std::numeric_limits< int64_t >::max()};
-                }
-
-                auto first_colon = key.find(':');
-                auto second_colon = key.find(':', first_colon + 1);
-                if (second_colon == std::string::npos) {
-                    LOG(WARNING) << "BlockKeyComparator: malformed key (missing second ':'): " << key;
-                    return {std::numeric_limits< uint64_t >::max(),
-                            std::numeric_limits< int64_t >::max()};
-                }
-
-                uint64_t addr = 0;
-                try {
-                    addr = std::stoull(
-                        key.substr(first_colon + 1, second_colon - first_colon - 1), nullptr, 16
-                    );
-                } catch (const std::invalid_argument &) {
-                    LOG(WARNING) << "BlockKeyComparator: non-numeric hex address in key: " << key;
-                    return {std::numeric_limits< uint64_t >::max(),
-                            std::numeric_limits< int64_t >::max()};
-                } catch (const std::out_of_range &) {
-                    LOG(WARNING) << "BlockKeyComparator: hex address out of range in key: " << key;
-                    return {std::numeric_limits< uint64_t >::max(),
-                            std::numeric_limits< int64_t >::max()};
-                }
-
-                auto third_colon = key.find(':', second_colon + 1);
-                std::string idx_str = key.substr(
-                    second_colon + 1,
-                    third_colon == std::string::npos ? std::string::npos
-                                                     : third_colon - second_colon - 1
-                );
-
-                if (idx_str == "entry") {
-                    return {addr, -1};
-                }
-
-                int64_t idx = 0;
-                try {
-                    idx = std::stoll(idx_str);
-                } catch (const std::invalid_argument &) {
-                    LOG(WARNING) << "BlockKeyComparator: non-numeric block index in key: " << key;
-                    return {addr, std::numeric_limits< int64_t >::max()};
-                } catch (const std::out_of_range &) {
-                    LOG(WARNING) << "BlockKeyComparator: block index out of range in key: " << key;
-                    return {addr, std::numeric_limits< int64_t >::max()};
-                }
-
-                return {addr, idx};
-            }
-
-            bool operator()(const std::string &a, const std::string &b) const {
-                auto [addr_a, idx_a] = parse_key(a);
-                auto [addr_b, idx_b] = parse_key(b);
-                if (addr_a != addr_b) {
-                    return addr_a < addr_b;
-                }
-                return idx_a < idx_b;
-            }
-        };
-
-        /**
-         * @brief Compute RPO block order from the P-Code CFG embedded in the function.
-         *
-         * Performs an iterative post-order DFS from the entry block, then reverses to
-         * obtain RPO.  Successor order (taken before not_taken) mirrors the ordering
-         * used by BasicBlockReorderPass so that the two orderings are identical.
-         * Unreachable blocks are appended after the RPO sequence in deterministic
-         * (address-sorted) order.
-         */
-        std::vector< std::string > compute_rpo(const Function &function) {
-            // Build per-block successor lists from branch operations.
-            std::unordered_map< std::string, std::vector< std::string > > succs;
-            for (const auto &[key, blk] : function.basic_blocks) {
-                for (const auto &op_key : blk.ordered_operations) {
-                    if (!blk.operations.contains(op_key)) {
-                        continue;
-                    }
-                    const auto &op = blk.operations.at(op_key);
-                    // taken_block before not_taken_block — mirrors BasicBlockReorderPass DFS
-                    // order so the emitted block sequence is identical to what that pass
-                    // would produce.
-                    // Only add successors that actually exist in the function's
-                    // basic_blocks map — phantom targets from stale JSON would
-                    // otherwise enter the DFS and silently become "unreachable".
-                    const auto &blocks = function.basic_blocks;
-                    if (op.taken_block && blocks.contains(*op.taken_block)) {
-                        succs[key].push_back(*op.taken_block);
-                    }
-                    if (op.not_taken_block && blocks.contains(*op.not_taken_block)) {
-                        succs[key].push_back(*op.not_taken_block);
-                    }
-                    if (op.target_block && blocks.contains(*op.target_block)) {
-                        succs[key].push_back(*op.target_block);
-                    }
-                    for (const auto &s : op.successor_blocks) {
-                        if (blocks.contains(s)) {
-                            succs[key].push_back(s);
-                        }
-                    }
-                    for (const auto &sc : op.switch_cases) {
-                        if (blocks.contains(sc.target_block)) {
-                            succs[key].push_back(sc.target_block);
-                        }
-                    }
-                    if (op.fallback_block.has_value() && blocks.contains(*op.fallback_block)) {
-                        succs[key].push_back(*op.fallback_block);
-                    }
-                }
-            }
-
-            // Iterative post-order DFS, then reverse to get RPO.
-            std::vector< std::string > post_order;
-            std::unordered_set< std::string > visited;
-            std::stack< std::pair< std::string, bool > > stk;
-            if (!function.entry_block.empty()
-                && function.basic_blocks.contains(function.entry_block))
-            {
-                stk.push({function.entry_block, false});
-            }
-            while (!stk.empty()) {
-                auto [key, expanded] = stk.top();
-                stk.pop();
-                if (expanded) {
-                    post_order.push_back(key);
-                    continue;
-                }
-                if (visited.count(key)) {
-                    continue;
-                }
-                visited.insert(key);
-                stk.push({key, true});
-                for (const auto &s : succs[key]) {
-                    if (!visited.count(s)) {
-                        stk.push({s, false});
-                    }
-                }
-            }
-            std::reverse(post_order.begin(), post_order.end());
-
-            // Append unreachable blocks in deterministic (address-sorted) order.
-            std::vector< std::string > unreachable;
-            for (const auto &[key, block] : function.basic_blocks) {
-                if (!visited.count(key)) {
-                    unreachable.push_back(key);
-                }
-            }
-            std::sort(unreachable.begin(), unreachable.end(), BlockKeyComparator{});
-            for (auto &key : unreachable) {
-                post_order.push_back(std::move(key));
-            }
-
-            return post_order;
-        }
 
     } // namespace
 
@@ -445,7 +275,7 @@ namespace patchestry::ast {
         ext_proto_info.Variadic           = proto.is_variadic;
         ext_proto_info.ExceptionSpec.Type = clang::EST_None;
 
-        // TODO: Map non-default Ghidra calling conventions (e.g. __stdcall,
+        // TODO: Map non-default calling conventions (e.g. __stdcall,
         // __fastcall, __thiscall, __vectorcall) to clang::CallingConv once
         // ClangIR supports them. Currently ClangIR only handles the default
         // CC_C convention; all others hit UNREACHABLE in CIRGenTypes.cpp.
@@ -519,44 +349,150 @@ namespace patchestry::ast {
     clang::FunctionDecl *FunctionBuilder::create_definition(clang::ASTContext &ctx) {
         const auto &c_name = GetCName();
         if (c_name.empty()) {
-            LOG(ERROR) << "Can't create function definition. Missing function name.\n";
+            LOG(ERROR) << "Can't create function shell. Missing function name.\n";
             return {};
         }
 
         if (function.get().basic_blocks.empty()) {
-            LOG(ERROR) << "Can't create function definition for '" << c_name << "'. Function has no basic blocks.\n";
+            LOG(ERROR) << "Can't create function shell for '" << c_name << "'. No basic blocks.\n";
             return {};
         }
 
-        // if previous declaration exist use it's type
         auto function_type = prev_decl != nullptr
             ? prev_decl->getType()
             : create_function_type(ctx, function.get().prototype);
 
         auto *function_def = create_declaration(ctx, function_type, /*is_definition=*/true);
         if (function_def == nullptr) {
-            LOG(ERROR) << "Failed to create function definition. key: " << function.get().key
-                       << "\n";
+            LOG(ERROR) << "Failed to create function shell. key: " << function.get().key << "\n";
             return {};
         }
 
-        // Set previous declaration if exist
         function_def->setPreviousDecl(prev_decl);
+        function_def->setWillHaveBody(true);
 
-        // Before creating function body, set sema context to the current function. It gets used
-        // to set lexical and sema decl context for ast nodes.
         auto *prev_context = get_sema_context();
         set_sema_context(function_def);
-        auto body_vec = create_function_body(ctx, function_def);
-        function_def->setBody(clang::CompoundStmt::Create(
-            ctx, body_vec, clang::FPOptionsOverride(),
-            SourceLocation(ctx.getSourceManager(), function.get().key),
-            SourceLocation(ctx.getSourceManager(), function.get().key)
-        ));
-        function_def->setWillHaveBody(true);
+        create_labels(ctx, function_def);
         set_sema_context(prev_context);
 
         return function_def;
+    }
+
+    std::vector<clang::Stmt *>
+    FunctionBuilder::create_block_stmts(clang::ASTContext &ctx, const BasicBlock &block) {
+        if (block.ordered_operations.empty()) {
+            return {};
+        }
+
+        std::vector<clang::Stmt *> stmt_vec;
+        for (const auto &operation_key : block.ordered_operations) {
+            if (!block.operations.contains(operation_key)) {
+                LOG(ERROR) << "Skipping, invalid operations key in the block. key "
+                           << operation_key << "\n";
+                continue;
+            }
+
+            const auto &operation = block.operations.at(operation_key);
+
+            // Skip branch terminals — these become edges in the CGraph.
+            // RETURN is NOT skipped: it produces a ReturnStmt that must
+            // appear in the block's stmts (RETURN has no outgoing edges,
+            // and its inputs may chain from preceding operations via the
+            // merge mechanism).
+            if (operation.mnemonic == Mnemonic::OP_BRANCH
+                || operation.mnemonic == Mnemonic::OP_CBRANCH
+                || operation.mnemonic == Mnemonic::OP_BRANCHIND) {
+                continue;
+            }
+
+            auto saved_pending = std::move(pending_materialized);
+            pending_materialized.clear();
+
+            if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
+                for (auto *pending : pending_materialized) {
+                    stmt_vec.push_back(pending);
+                }
+                pending_materialized.clear();
+                operation_stmts.emplace(operation.key, stmt);
+                if (!should_merge_to_next) {
+                    stmt_vec.push_back(stmt);
+                }
+            } else {
+                pending_materialized.clear();
+            }
+
+            for (auto *s : saved_pending) {
+                pending_materialized.push_back(s);
+            }
+        }
+
+        InlineSingleUseTemps(ctx, stmt_vec);
+        return stmt_vec;
+    }
+
+    clang::Expr *FunctionBuilder::create_branch_condition(
+        clang::ASTContext &ctx, const Operation &op
+    ) {
+        if (!op.condition) {
+            LOG(ERROR) << "CBRANCH with no condition. key: " << op.key << "\n";
+            return nullptr;
+        }
+
+        auto *cond_stmt = op_builder->create_varnode(ctx, function.get(), *op.condition);
+        auto *cond_expr = clang::dyn_cast_or_null<clang::Expr>(cond_stmt);
+        if (!cond_expr) {
+            LOG(ERROR) << "Failed to create condition for CBRANCH. key: " << op.key << "\n";
+        }
+        return cond_expr;
+    }
+
+    clang::Expr *FunctionBuilder::create_switch_discriminant(
+        clang::ASTContext &ctx, const Operation &op
+    ) {
+        if (op.inputs.empty()) {
+            LOG(ERROR) << "BRANCHIND with no inputs. key: " << op.key << "\n";
+            return nullptr;
+        }
+
+        clang::Expr *disc = nullptr;
+        // Prefer named local/param as discriminant, then switch_input,
+        // then fall back to inputs[0] regardless of kind (handles constants
+        // for address-based jump tables).
+        if (op.inputs[0].kind == Varnode::VARNODE_LOCAL
+            || op.inputs[0].kind == Varnode::VARNODE_PARAM) {
+            disc = clang::dyn_cast_or_null<clang::Expr>(
+                op_builder->create_varnode(ctx, function.get(), op.inputs[0]));
+        } else if (op.switch_input.has_value()) {
+            disc = clang::dyn_cast_or_null<clang::Expr>(
+                op_builder->create_varnode(ctx, function.get(), *op.switch_input));
+        } else {
+            disc = clang::dyn_cast_or_null<clang::Expr>(
+                op_builder->create_varnode(ctx, function.get(), op.inputs[0]));
+        }
+
+        if (disc) {
+            // Promote narrow discriminant to int width
+            auto disc_type = disc->getType();
+            bool needs_cast = !disc_type->isIntegerType()
+                || ctx.getIntWidth(disc_type) < ctx.getIntWidth(ctx.IntTy);
+            if (needs_cast) {
+                auto loc = SourceLocation(ctx.getSourceManager(), op.key);
+                disc = op_builder->make_cast(ctx, disc, ctx.IntTy, loc);
+            }
+        }
+
+        if (!disc) {
+            LOG(ERROR) << "Failed to create switch discriminant. key: " << op.key << "\n";
+        }
+        return disc;
+    }
+
+    clang::Expr *FunctionBuilder::create_cast(
+        clang::ASTContext &ctx, clang::Expr *expr,
+        const clang::QualType &to_type, clang::SourceLocation loc
+    ) {
+        return op_builder->make_cast(ctx, expr, to_type, loc);
     }
 
     /**
@@ -597,182 +533,84 @@ namespace patchestry::ast {
         }
     }
 
-    /**
-     * @brief Creates the body of a function in the form of a vector of Clang statements.
-     *
-     * This method constructs the Abstract Syntax Tree (AST) for a function body based on
-     * its basic blocks. It processes the function's entry block first, then processes
-     * remaining basic blocks, assigning labels to each block and appending the generated
-     * statements in sequence.
-     *
-     * @param ctx The ASTContext object used for managing AST nodes.
-     * @param func_decl The function declaration associated with the function body.
-     *
-     * @return A vector of Clang statements representing the function body.
-     *         Returns an empty vector if the function has no basic blocks.
-     */
-    std::vector< clang::Stmt * > FunctionBuilder::create_function_body(
-        clang::ASTContext &ctx, clang::FunctionDecl *func_decl
-    ) {
-        if (function.get().basic_blocks.empty()) {
-            LOG(ERROR) << "Function " << function.get().name << " doesn't have body\n";
-            return {};
+    namespace {
+
+        // Count references to a VarDecl within a Clang Stmt tree.
+        unsigned CountVarRefs(const clang::Stmt *s, const clang::VarDecl *vd) {
+            if (!s) return 0;
+            if (auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(s)) {
+                if (dre->getDecl() == vd) return 1;
+            }
+            unsigned count = 0;
+            for (auto *child : s->children())
+                count += CountVarRefs(child, vd);
+            return count;
         }
 
-        std::vector< clang::Stmt * > stmt_vec;
-        create_labels(ctx, func_decl);
+        // Replace all DeclRefExpr(vd) with replacement_expr in the stmt tree.
+        // Returns true if a replacement was made.
+        bool ReplaceVarRef(clang::Stmt *s, clang::VarDecl *vd,
+                           clang::Expr *replacement, clang::ASTContext &ctx) {
+            if (!s) return false;
 
-        // Compute per-block predecessor counts so that switch-case inlining
-        // can avoid inlining blocks that are targeted by multiple predecessors.
-        block_predecessor_count.clear();
-        for (const auto &[key, blk] : function.get().basic_blocks) {
-            std::unordered_set< std::string > targets;
-            for (const auto &op_key : blk.ordered_operations) {
-                if (!blk.operations.contains(op_key)) { continue; }
-                const auto &op = blk.operations.at(op_key);
-                if (op.taken_block) { targets.insert(*op.taken_block); }
-                if (op.not_taken_block) { targets.insert(*op.not_taken_block); }
-                if (op.target_block) { targets.insert(*op.target_block); }
-                for (const auto &s : op.successor_blocks) { targets.insert(s); }
-                for (const auto &sc : op.switch_cases) { targets.insert(sc.target_block); }
-                if (op.fallback_block) { targets.insert(*op.fallback_block); }
-            }
-            for (const auto &t : targets) {
-                block_predecessor_count[t]++;
-            }
-        }
-
-        // Compute RPO block order from the P-Code CFG.  Emitting in RPO order
-        // matches what BasicBlockReorderPass would produce, making that pass a
-        // near-no-op and letting GotoCanonicalizePass see clean input earlier.
-        const auto rpo = compute_rpo(function.get());
-
-        // Emit the entry block first (no label).  Set current_next_block_key so
-        // that create_branch can skip the goto when it targets the immediately
-        // following block (RPO[1]).
-        if (function.get().basic_blocks.contains(function.get().entry_block)) {
-            current_next_block_key = (rpo.size() > 1) ? rpo[1] : std::string{};
-            const auto &entry_block =
-                function.get().basic_blocks.at(function.get().entry_block);
-            auto entry_stmts = create_basic_block(ctx, entry_block);
-            stmt_vec.insert(stmt_vec.end(), entry_stmts.begin(), entry_stmts.end());
-        }
-
-        // Emit non-entry blocks in RPO order with labels.  RPO[0] is the entry
-        // block so the loop starts at index 1.
-        for (size_t i = 1; i < rpo.size(); ++i) {
-            const auto &key = rpo[i];
-            if (!function.get().basic_blocks.contains(key)) {
-                continue;
-            }
-            const auto &bb = function.get().basic_blocks.at(key);
-            if (bb.is_entry_block) {
-                continue;
-            }
-
-            // Block body was inlined into a switch case — skip entirely.
-            if (inlined_blocks.contains(key)) {
-                continue;
-            }
-
-            // has_exit target that could not be inlined — emit "label: break;".
-            // TODO(kumarak): Generating break statement outside switch/loop will cause error
-            // while lowering to CIR. At the moment create a goto to fallback or next block. It
-            // should be fixed after integrating minimal ast passes to inline the break inside
-            // switch statement.
-            /*if (break_target_blocks.contains(key)) {
-                auto loc         = SourceLocation(ctx.getSourceManager(), key);
-                auto *break_stmt = new (ctx) clang::BreakStmt(loc);
-                auto *label_stmt = new (ctx)
-                    clang::LabelStmt(loc, labels_declaration.at(key), break_stmt);
-                stmt_vec.push_back(label_stmt);
-                continue;
-            }*/
-
-            LOG(INFO) << "Processing basic block with key " << key << "\n";
-
-            // Expose the next block in RPO order so create_branch can elide
-            // gotos to the immediately following block.
-            current_next_block_key = (i + 1 < rpo.size()) ? rpo[i + 1] : std::string{};
-
-            auto block_stmts = create_basic_block(ctx, bb);
-            auto loc         = SourceLocation(ctx.getSourceManager(), key);
-            clang::Stmt *first = block_stmts.empty()
-                ? static_cast< clang::Stmt * >(new (ctx) clang::NullStmt(loc, false))
-                : block_stmts[0];
-            auto *label_stmt = new (ctx)
-                clang::LabelStmt(loc, labels_declaration.at(key), first);
-            if (block_stmts.empty()) {
-                stmt_vec.push_back(label_stmt);
-            } else {
-                block_stmts[0] = label_stmt;
-                stmt_vec.insert(stmt_vec.end(), block_stmts.begin(), block_stmts.end());
-            }
-        }
-
-        return stmt_vec;
-    }
-
-    /**
-     * @brief Generates a vector of `clang::Stmt*` representing the operations in a basic block.
-     *
-     * This function iterates over the `ordered_operations` of a `BasicBlock` object to create
-     * corresponding `clang::Stmt` objects. Each statement is created using the
-     * `create_operation` method and added to the vector `stmt_vec` unless the operation is
-     * flagged to merge with the next.
-     *
-     * @param ctx The Clang ASTContext used for creating statements.
-     * @param block The BasicBlock containing the operations to be processed.
-     *
-     * @return A vector of `clang::Stmt*` representing the operations in the basic block.
-     *
-     */
-    std::vector< clang::Stmt * >
-    FunctionBuilder::create_basic_block(clang::ASTContext &ctx, const BasicBlock &block) {
-        if (block.ordered_operations.empty()) {
-            LOG(ERROR) << "Basic block with no ordered operations. key: " << block.key << "\n";
-            return {};
-        }
-
-        std::vector< clang::Stmt * > stmt_vec;
-        for (const auto &operation_key : block.ordered_operations) {
-            if (!block.operations.contains(operation_key)) {
-                LOG(ERROR) << "Skipping, invalid operations key in the block. key "
-                           << operation_key << "\n";
-                continue;
-            }
-
-            const auto &operation = block.operations.at(operation_key);
-
-            // Save pending_materialized in case create_operation re-enters
-            // (e.g., create_temporary resolving a forward reference triggers
-            // nested operation building that appends to the same vector).
-            auto saved_pending = std::move(pending_materialized);
-            pending_materialized.clear();
-
-            if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
-                // Drain any VarDecl materializations queued during create_operation.
-                // These must appear before the consuming statement in the output.
-                for (auto *pending : pending_materialized) {
-                    stmt_vec.push_back(pending);
+            // Check each child. If a child is a DeclRefExpr to vd, replace it
+            // by mutating the parent's child pointer.
+            for (auto it = s->child_begin(); it != s->child_end(); ++it) {
+                if (!*it) continue;
+                if (auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(*it)) {
+                    if (dre->getDecl() == vd) {
+                        // Clang Stmt children are mutable via the iterator
+                        *it = replacement;
+                        return true;
+                    }
                 }
-                pending_materialized.clear();
-
-                operation_stmts.emplace(operation.key, stmt);
-                if (!should_merge_to_next) {
-                    stmt_vec.push_back(stmt);
-                }
-            } else {
-                pending_materialized.clear();
+                if (ReplaceVarRef(*it, vd, replacement, ctx))
+                    return true;
             }
-
-            // Restore any outer-level pending materializations
-            for (auto *s : saved_pending) {
-                pending_materialized.push_back(s);
-            }
+            return false;
         }
 
-        return stmt_vec;
+    } // anonymous namespace
+
+    void FunctionBuilder::InlineSingleUseTemps(
+            clang::ASTContext &ctx,
+            std::vector<clang::Stmt *> &stmts) {
+        for (size_t i = 0; i + 1 < stmts.size(); ) {
+            // Look for: DeclStmt { VarDecl var = init_expr; }
+            auto *ds = llvm::dyn_cast<clang::DeclStmt>(stmts[i]);
+            if (!ds || !ds->isSingleDecl()) { ++i; continue; }
+            auto *vd = llvm::dyn_cast<clang::VarDecl>(ds->getSingleDecl());
+            if (!vd || !vd->hasInit()) { ++i; continue; }
+
+            // Don't inline if the init has side effects that must execute
+            // at this point (calls, increments, volatile loads).
+            auto *init = vd->getInit();
+            if (init->HasSideEffects(ctx)) { ++i; continue; }
+
+            // Count references in the NEXT statement only.
+            // If exactly 1 reference, inline; otherwise skip.
+            unsigned refs_in_next = CountVarRefs(stmts[i + 1], vd);
+            if (refs_in_next != 1) { ++i; continue; }
+
+            // Check no references in any later statements
+            bool used_later = false;
+            for (size_t j = i + 2; j < stmts.size(); ++j) {
+                if (CountVarRefs(stmts[j], vd) > 0) {
+                    used_later = true;
+                    break;
+                }
+            }
+            if (used_later) { ++i; continue; }
+
+            // Inline: replace the DeclRefExpr in stmts[i+1] with init
+            if (ReplaceVarRef(stmts[i + 1], vd, init, ctx)) {
+                // Remove the DeclStmt
+                stmts.erase(stmts.begin() + static_cast<ptrdiff_t>(i));
+                // Don't increment — re-check same index (the next stmt shifted down)
+            } else {
+                ++i;
+            }
+        }
     }
 
     /**

@@ -33,7 +33,7 @@ meta_patches:
             kind: "operation"
             symbol_matches:
               - name: "bl_spi_mode"
-                type: "!cir.int<u, 32>"
+                type: "!cir.int<s, 8>"
 
         # Actions to Apply
         action:

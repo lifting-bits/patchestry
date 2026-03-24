@@ -347,6 +347,9 @@ namespace patchestry::passes {
             }
         }
         for (auto &spec : config->libraries.contracts) {
+            // STATIC contracts have no code_file — skip compilation.
+            if (spec.code_file.empty()) continue;
+
             auto contracts_file_path =
                 ConfigurationFile::GetInstance().ResolvePath(spec.code_file);
             if (!llvm::sys::fs::exists(contracts_file_path)) {

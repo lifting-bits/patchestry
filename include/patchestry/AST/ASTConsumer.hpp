@@ -51,12 +51,6 @@ namespace patchestry::ast {
 
         void create_globals(clang::ASTContext &ctx, VariableMap &serialized_variables);
 
-        void create_functions(
-            clang::ASTContext &ctx, FunctionMap &serialized_functions, TypeMap &serialized_types
-        );
-
-        std::unique_ptr< clang::ASTUnit > create_astunit(clang::ASTContext &ctx) const;
-
         Program &get_program(void) const { return program; }
 
         clang::Sema &sema(void) const { return ci.getSema(); }

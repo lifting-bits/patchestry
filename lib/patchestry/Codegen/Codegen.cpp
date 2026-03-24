@@ -129,19 +129,9 @@ namespace patchestry::codegen {
     }
 
     void CodeGenerator::emit_cir(clang::ASTContext &ctx, const patchestry::Options &options) {
-        if (options.print_tu) {
-            LOG(INFO) << "Printing AST\n";
-#ifdef ENABLE_DEBUG
-            value.ast->getASTContext().getTranslationUnitDecl()->dumpColor();
-#endif
-            std::error_code ec;
-            auto out = std::make_unique< llvm::raw_fd_ostream >(
-                options.output_file + ".c", ec, llvm::sys::fs::OF_Text
-            );
-            ctx.getTranslationUnitDecl()->print(
-                *llvm::dyn_cast< llvm::raw_ostream >(out), ctx.getPrintingPolicy(), 0
-            );
-        }
+        // C pretty-print is now handled by ASTConsumer::HandleTranslationUnit
+        // (before codegen) so the .c file is always produced even when CIR
+        // lowering encounters a diagnostic error.
 
         auto maybe_mod = lower_ast_to_mlir(ctx);
         if (!maybe_mod.has_value()) {

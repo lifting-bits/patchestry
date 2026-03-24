@@ -10,6 +10,12 @@ add_library(patchestry_ast STATIC
   OperationStmt.cpp
   TypeBuilder.cpp
   Utils.cpp
+  SNode.cpp
+  SNodeDebug.cpp
+  ClangEmitter.cpp
+  CfgDotEmitter.cpp
+  CGraph.cpp
+  CGraphBuilder.cpp
 )
 
 add_library(patchestry::ast ALIAS patchestry_ast)
