@@ -67,6 +67,7 @@ def patchestry_tool_path(tool):
     return os.path.join(*path, tool)
 
 config.decompiler_headless_tool = os.path.join(config.patchestry_script_dir, 'decompile-headless.sh')
+
 config.json_strip_comments = os.path.join(config.test_scripts_dir, 'strip-json-comments.sh')
 
 config.patchir_decomp_tool = patchestry_tool_path('patchir-decomp')
@@ -128,6 +129,7 @@ tools = [
     ToolSubst('%host_cc', command=config.host_cc),
     ToolSubst('%host_cxx', command=config.host_cxx),
     ToolSubst('%decompile-headless', command=config.decompiler_headless_tool),
+
     ToolSubst('%patchir-decomp', command=config.patchir_decomp_tool),
     ToolSubst('%patchir-transform', command=config.patchir_transform_tool),
     ToolSubst('%patchir-cir2llvm', command=config.patchir_cir2llvm_tool),
