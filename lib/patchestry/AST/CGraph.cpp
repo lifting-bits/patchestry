@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <functional>
 #include <list>
 #include <unordered_set>
 #include <vector>
@@ -57,7 +56,6 @@ namespace patchestry::ast {
         nodes[rep].children.clear();
         for (size_t nid : ids) {
             if (nid != rep) {
-                nodes[nid].collapsed = true;
                 nodes[nid].collapsed_into = rep;
                 nodes[rep].children.push_back(nid);
             }
@@ -123,7 +121,7 @@ namespace patchestry::ast {
                 size_t cur = from;
                 for (size_t step = 0; step < limit; ++step) {
                     auto &cn = nodes[cur];
-                    if (cn.collapsed) break;
+                    if (cn.IsCollapsed()) break;
                     for (size_t s : cn.succs) {
                         if (s == target) return true;
                     }
@@ -141,7 +139,7 @@ namespace patchestry::ast {
                             if (!found) {
                                 // One-hop check from each branch
                                 auto &sn = nodes[s];
-                                if (!sn.collapsed) {
+                                if (!sn.IsCollapsed()) {
                                     for (size_t ss : sn.succs) {
                                         if (ss == target) { found = true; break; }
                                     }
@@ -180,14 +178,14 @@ namespace patchestry::ast {
                 // Find common target by checking 1-hop successors.
                 auto first_succ = [&](size_t nid) -> size_t {
                     auto &n = nodes[nid];
-                    if (n.collapsed || n.succs.empty()) return CNode::kNone;
+                    if (n.IsCollapsed() || n.succs.empty()) return CNode::kNone;
                     if (n.succs.size() == 1) return n.succs[0];
                     // For conditionals, check if both branches go to same target
                     if (n.succs.size() == 2) {
                         auto &s0 = nodes[n.succs[0]];
                         auto &s1 = nodes[n.succs[1]];
-                        if (!s0.collapsed && s0.succs.size() == 1
-                            && !s1.collapsed && s1.succs.size() == 1
+                        if (!s0.IsCollapsed() && s0.succs.size() == 1
+                            && !s1.IsCollapsed() && s1.succs.size() == 1
                             && s0.succs[0] == s1.succs[0]) {
                             return s0.succs[0];
                         }
@@ -260,26 +258,33 @@ namespace patchestry::ast {
 
 
 
-    // Detect back-edges using DFS
+    // Detect back-edges using iterative DFS
     void MarkBackEdges(CGraph &g) {
         enum Color { WHITE, GRAY, BLACK };
         std::vector<Color> color(g.nodes.size(), WHITE);
 
-        std::function<void(size_t)> dfs = [&](size_t u) {
-            color[u] = GRAY;
-            auto &nd = g.Node(u);
-            for (size_t i = 0; i < nd.succs.size(); ++i) {
-                size_t v = nd.succs[i];
-                if (color[v] == GRAY) {
-                    nd.edge_flags[i] |= CNode::kBack;
-                } else if (color[v] == WHITE) {
-                    dfs(v);
-                }
-            }
-            color[u] = BLACK;
-        };
+        struct Frame { size_t u; size_t i; };
+        std::vector<Frame> stack;
+        stack.push_back({g.entry, 0});
+        color[g.entry] = GRAY;
 
-        dfs(g.entry);
+        while (!stack.empty()) {
+            auto &[u, i] = stack.back();
+            auto &nd = g.Node(u);
+            if (i < nd.succs.size()) {
+                size_t v = nd.succs[i];
+                ++i;
+                if (color[v] == GRAY) {
+                    nd.edge_flags[i - 1] |= CNode::kBack;
+                } else if (color[v] == WHITE) {
+                    color[v] = GRAY;
+                    stack.push_back({v, 0});
+                }
+            } else {
+                color[u] = BLACK;
+                stack.pop_back();
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -310,7 +315,7 @@ namespace patchestry::ast {
             auto &nd = g.Node(body[idx]);
             for (size_t p : nd.preds) {
                 if (g.Node(p).mark) continue;
-                if (g.Node(p).collapsed) continue;
+                if (g.Node(p).IsCollapsed()) continue;
 
                 bool is_goto = false;
                 auto &pn = g.Node(p);
@@ -375,7 +380,7 @@ namespace patchestry::ast {
         CGraph &g, std::list<LoopBody> &loopbody, std::vector<LoopBody *> &looporder
     ) {
         for (auto &n : g.nodes) {
-            if (n.collapsed) continue;
+            if (n.IsCollapsed()) continue;
             for (size_t i = 0; i < n.succs.size(); ++i) {
                 if (n.IsBackEdge(i)) {
                     size_t hd = n.succs[i];
@@ -412,7 +417,7 @@ namespace patchestry::ast {
     // LoopBody exit detection, tail ordering, extension, exit labeling
     // -------------------------------------------------------------------
 
-    void LoopBody::FindExit(const CGraph &g, const std::vector<size_t> &body) {
+    void LoopBody::FindExit(CGraph &g, const std::vector<size_t> &body) {
         std::vector<size_t> candidates;
 
         // Phase 1: scan tails for exits
@@ -471,22 +476,21 @@ namespace patchestry::ast {
         // Phase 3: Container filtering (structural)
         std::vector<size_t> container_body;
         {
-            auto &cg = const_cast<CGraph &>(g);
-            cg.Node(immed_container->head).visit_count = 1;
+            g.Node(immed_container->head).visit_count = 1;
             container_body.push_back(immed_container->head);
             for (size_t t : immed_container->tails) {
-                if (cg.Node(t).visit_count == 0) {
-                    cg.Node(t).visit_count = 1;
+                if (g.Node(t).visit_count == 0) {
+                    g.Node(t).visit_count = 1;
                     container_body.push_back(t);
                 }
             }
             for (size_t idx = 1; idx < container_body.size(); ++idx) {
-                auto &nd = cg.Node(container_body[idx]);
+                auto &nd = g.Node(container_body[idx]);
                 for (size_t p : nd.preds) {
-                    if (cg.Node(p).visit_count != 0) continue;
-                    if (cg.Node(p).collapsed) continue;
+                    if (g.Node(p).visit_count != 0) continue;
+                    if (g.Node(p).IsCollapsed()) continue;
                     bool is_goto = false;
-                    auto &pn = cg.Node(p);
+                    auto &pn = g.Node(p);
                     for (size_t si = 0; si < pn.succs.size(); ++si) {
                         if (pn.succs[si] == container_body[idx]) {
                             if (pn.IsGotoOut(si)) is_goto = true;
@@ -494,7 +498,7 @@ namespace patchestry::ast {
                         }
                     }
                     if (is_goto) continue;
-                    cg.Node(p).visit_count = 1;
+                    g.Node(p).visit_count = 1;
                     container_body.push_back(p);
                 }
             }
@@ -513,7 +517,7 @@ namespace patchestry::ast {
         }
 
         for (size_t nid : container_body) {
-            const_cast<CGraph &>(g).Node(nid).visit_count = 0;
+            g.Node(nid).visit_count = 0;
         }
     }
 
@@ -543,7 +547,7 @@ namespace patchestry::ast {
                 size_t s = bn.succs[i];
                 auto &sn = g.Node(s);
                 if (sn.mark) continue;
-                if (sn.collapsed) continue;
+                if (sn.IsCollapsed()) continue;
                 if (s == exit_block) continue;
 
                 if (sn.visit_count == 0) trial.push_back(s);
@@ -618,7 +622,7 @@ namespace patchestry::ast {
         }
     }
 
-    bool LoopBody::Update(const CGraph &g) const { return !g.Node(head).collapsed; }
+    bool LoopBody::Update(const CGraph &g) const { return !g.Node(head).IsCollapsed(); }
 
     // -------------------------------------------------------------------
     // FloatingEdge
@@ -626,13 +630,13 @@ namespace patchestry::ast {
 
     std::pair<size_t, size_t> FloatingEdge::GetCurrentEdge(const CGraph &g) const {
         size_t top = top_id;
-        while (top < g.nodes.size() && g.Node(top).collapsed) {
+        while (top < g.nodes.size() && g.Node(top).IsCollapsed()) {
             size_t next = g.Node(top).collapsed_into;
             if (next == CNode::kNone || next == top) break;
             top = next;
         }
         size_t bot = bottom_id;
-        while (bot < g.nodes.size() && g.Node(bot).collapsed) {
+        while (bot < g.nodes.size() && g.Node(bot).IsCollapsed()) {
             size_t next = g.Node(bot).collapsed_into;
             if (next == CNode::kNone || next == bot) break;
             bot = next;
@@ -640,7 +644,7 @@ namespace patchestry::ast {
 
         if (top >= g.nodes.size() || bot >= g.nodes.size())
             return {CNode::kNone, 0};
-        if (g.Node(top).collapsed || g.Node(bot).collapsed)
+        if (g.Node(top).IsCollapsed() || g.Node(bot).IsCollapsed())
             return {CNode::kNone, 0};
         if (top == bot)
             return {CNode::kNone, 0};
@@ -744,7 +748,7 @@ namespace patchestry::ast {
         }
 
         auto &n = g.Node(dest);
-        if (n.collapsed) {
+        if (n.IsCollapsed()) {
             trace->flags |= BlockTrace::kTerminal;
             return true;
         }
@@ -771,7 +775,7 @@ namespace patchestry::ast {
         if (dag_out_count == 1) {
             trace->bottom_id = dest;
             trace->dest_id = single_succ;
-            if (single_succ < g.nodes.size() && !g.Node(single_succ).collapsed) {
+            if (single_succ < g.nodes.size() && !g.Node(single_succ).IsCollapsed()) {
                 g.Node(single_succ).visit_count += 1;
             }
             return true;
@@ -810,7 +814,7 @@ namespace patchestry::ast {
             bt->dest_id = succ_id;
             bp->paths.push_back(bt);
 
-            if (!succ_node.collapsed && succ_node.visit_count > 0) {
+            if (!succ_node.IsCollapsed() && succ_node.visit_count > 0) {
                 for (auto *existing : activetrace_) {
                     if (existing->dest_id == succ_id || existing->bottom_id == succ_id) {
                         existing->edgelump += 1;
@@ -825,7 +829,7 @@ namespace patchestry::ast {
                 InsertActive(bt);
             }
 
-            if (!succ_node.collapsed) {
+            if (!succ_node.IsCollapsed()) {
                 succ_node.visit_count += 1;
             }
         }
@@ -965,7 +969,7 @@ namespace patchestry::ast {
         ClearVisitCount(g);
 
         for (size_t root_id : rootlist_) {
-            if (root_id < g.nodes.size() && !g.Node(root_id).collapsed) {
+            if (root_id < g.nodes.size() && !g.Node(root_id).IsCollapsed()) {
                 g.Node(root_id).visit_count = 1;
             }
         }
@@ -1025,7 +1029,7 @@ namespace patchestry::ast {
                     const auto &dest_node = g.Node(bt->dest_id);
                     size_t dag_preds = 0;
                     for (size_t p : dest_node.preds) {
-                        if (!g.Node(p).collapsed) ++dag_preds;
+                        if (!g.Node(p).IsCollapsed()) ++dag_preds;
                     }
                     if (dag_preds > 1
                         && dest_node.visit_count < static_cast<int>(dag_preds))

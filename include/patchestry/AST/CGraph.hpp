@@ -72,8 +72,9 @@ namespace patchestry::ast {
         std::vector<SwitchCaseEntry> switch_cases;
 
         // Set when absorbed into a parent structured node
-        bool collapsed = false;
         size_t collapsed_into = kNone;  // representative node after collapse
+
+        bool IsCollapsed() const { return collapsed_into != kNone; }
 
         // Hierarchical block type
         enum class BlockType : uint8_t {
@@ -146,7 +147,7 @@ namespace patchestry::ast {
         std::vector<size_t> ActiveIds() const {
             std::vector<size_t> result;
             for (auto &n : nodes) {
-                if (!n.collapsed) result.push_back(n.id);
+                if (!n.IsCollapsed()) result.push_back(n.id);
             }
             return result;
         }
@@ -154,13 +155,13 @@ namespace patchestry::ast {
         size_t ActiveCount() const {
             size_t c = 0;
             for (auto &n : nodes) {
-                if (!n.collapsed) ++c;
+                if (!n.IsCollapsed()) ++c;
             }
             return c;
         }
 
-        CNode &Node(size_t id) { return nodes[id]; }
-        const CNode &Node(size_t id) const { return nodes[id]; }
+        CNode &Node(size_t id) { assert(id < nodes.size()); return nodes[id]; }
+        const CNode &Node(size_t id) const { assert(id < nodes.size()); return nodes[id]; }
 
         /// Remove an edge from the active graph
         void RemoveEdge(size_t from, size_t to) {
@@ -217,7 +218,7 @@ namespace patchestry::ast {
                                const std::vector<LoopBody *> &looporder);
 
         /// Exit detection, tail ordering, body extension, exit edge labeling.
-        void FindExit(const CGraph &g, const std::vector<size_t> &body);
+        void FindExit(CGraph &g, const std::vector<size_t> &body);
         void OrderTails(const CGraph &g);
         void Extend(CGraph &g, std::vector<size_t> &body) const;
         void LabelExitEdges(CGraph &g, const std::vector<size_t> &body) const;

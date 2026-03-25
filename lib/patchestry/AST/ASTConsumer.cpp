@@ -124,7 +124,7 @@ namespace patchestry::ast {
                 auto *seq = factory.Make<SSeq>();
 
                 for (auto &node : flow_graph.nodes) {
-                    if (node.collapsed) continue;
+                    if (node.IsCollapsed()) continue;
                     auto *blk = factory.Make<SBlock>();
                     for (auto *s : node.stmts) blk->AddStmt(s);
 

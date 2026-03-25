@@ -167,17 +167,16 @@ namespace patchestry::ast {
         os << "  entry [shape=point];\n";
         // Find the actual entry (may have been collapsed into another)
         size_t entry_id = g.entry;
-        if (entry_id < g.nodes.size() && g.nodes[entry_id].collapsed) {
+        if (entry_id < g.nodes.size() && g.nodes[entry_id].IsCollapsed()) {
             // Walk collapsed_into chain
-            while (entry_id < g.nodes.size() && g.nodes[entry_id].collapsed
-                   && g.nodes[entry_id].collapsed_into != detail::CNode::kNone) {
+            while (entry_id < g.nodes.size() && g.nodes[entry_id].IsCollapsed()) {
                 entry_id = g.nodes[entry_id].collapsed_into;
             }
         }
         os << "  entry -> N" << entry_id << ";\n";
 
         for (const auto &n : g.nodes) {
-            if (n.collapsed) continue;
+            if (n.IsCollapsed()) continue;
 
             // Node label: N<id> header, then label: and statements in order,
             // followed by structured content from fold rules
@@ -380,7 +379,7 @@ namespace patchestry::ast {
     size_t CountCGraphStmts(const detail::CGraph &g) {
         size_t total = 0;
         for (const auto &n : g.nodes) {
-            if (n.collapsed) continue;
+            if (n.IsCollapsed()) continue;
             total += n.stmts.size();
             if (n.structured) {
                 total += CountSNodeStmts(n.structured);
@@ -455,7 +454,7 @@ namespace patchestry::ast {
     void CollectCGraphStmtPtrs(const detail::CGraph &g,
                                 std::unordered_set<const clang::Stmt *> &out) {
         for (const auto &n : g.nodes) {
-            if (n.collapsed) continue;
+            if (n.IsCollapsed()) continue;
             for (auto *s : n.stmts)
                 if (s) out.insert(s);
             if (n.structured)
