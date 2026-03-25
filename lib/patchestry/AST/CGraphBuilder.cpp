@@ -112,12 +112,20 @@ namespace patchestry::ast {
                     auto p3 = k.find(':', p2 + 1);
                     uint64_t addr = 0, idx = 0;
                     try { addr = std::stoull(k.substr(p1 + 1, p2 - p1 - 1), nullptr, 16); }
-                    catch (const std::invalid_argument &) {}
-                    catch (const std::out_of_range &) {}
+                    catch (const std::invalid_argument &e) {
+                        LOG(ERROR) << "malformed block key address in '" << k << "': " << e.what() << "\n";
+                    }
+                    catch (const std::out_of_range &e) {
+                        LOG(ERROR) << "block key address out of range in '" << k << "': " << e.what() << "\n";
+                    }
                     if (p3 != std::string::npos) {
                         try { idx = std::stoull(k.substr(p2 + 1, p3 - p2 - 1)); }
-                        catch (const std::invalid_argument &) {}
-                        catch (const std::out_of_range &) {}
+                        catch (const std::invalid_argument &e) {
+                            LOG(ERROR) << "malformed block key index in '" << k << "': " << e.what() << "\n";
+                        }
+                        catch (const std::out_of_range &e) {
+                            LOG(ERROR) << "block key index out of range in '" << k << "': " << e.what() << "\n";
+                        }
                     }
                     return {addr, idx};
                 };

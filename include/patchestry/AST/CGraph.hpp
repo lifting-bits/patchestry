@@ -160,13 +160,13 @@ namespace patchestry::ast {
             return c;
         }
 
-        CNode &Node(size_t id) { assert(id < nodes.size()); return nodes[id]; }
-        const CNode &Node(size_t id) const { assert(id < nodes.size()); return nodes[id]; }
+        CNode &Node(size_t id) { assert(id < nodes.size()); return nodes.at(id); }
+        const CNode &Node(size_t id) const { assert(id < nodes.size()); return nodes.at(id); }
 
         /// Remove an edge from the active graph
         void RemoveEdge(size_t from, size_t to) {
-            auto &s = nodes[from].succs;
-            auto &f = nodes[from].edge_flags;
+            auto &s = Node(from).succs;
+            auto &f = Node(from).edge_flags;
             for (size_t i = 0; i < s.size(); ++i) {
                 if (s[i] == to) {
                     s.erase(s.begin() + static_cast<ptrdiff_t>(i));
@@ -174,7 +174,7 @@ namespace patchestry::ast {
                     break;
                 }
             }
-            auto &p = nodes[to].preds;
+            auto &p = Node(to).preds;
             p.erase(std::remove(p.begin(), p.end(), from), p.end());
         }
 

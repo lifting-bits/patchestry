@@ -269,6 +269,8 @@ namespace patchestry::ast {
         color[g.entry] = GRAY;
 
         while (!stack.empty()) {
+            // Note: u and i are references into stack.back() and must not be
+            // read after push_back (which may reallocate the stack vector).
             auto &[u, i] = stack.back();
             auto &nd = g.Node(u);
             if (i < nd.succs.size()) {
