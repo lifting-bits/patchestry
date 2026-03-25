@@ -125,6 +125,67 @@ namespace {
         };
     }
 
+    bool validateUnsupportedOptions(const patchestry::Options &options) {
+        if (options.emit_obj) {
+            LOG(ERROR) << "--emit-obj is not implemented. Use --emit-cir, --emit-mlir, "
+                          "--emit-llvm, or --print-tu instead.\n";
+            return false;
+        }
+
+        if (options.use_structuring_pass) {
+            LOG(ERROR) << "--use-structuring-pass is not implemented. The direct JSON -> CGraph "
+                          "path is the only supported structuring mode in this branch.\n";
+            return false;
+        }
+
+        if (options.verify_structuring) {
+            LOG(ERROR) << "--verify-structuring is not implemented. No statement-preservation "
+                          "verification pass is wired into patchir-decomp yet.\n";
+            return false;
+        }
+
+        return true;
+    }
+
+    bool validateBranchindSwitchMetadata(const patchestry::ghidra::Program &program) {
+        for (const auto &[func_key, function] : program.serialized_functions) {
+            (void)func_key;
+            for (const auto &[block_key, block] : function.basic_blocks) {
+                (void)block_key;
+                for (const auto &operation_key : block.ordered_operations) {
+                    auto op_it = block.operations.find(operation_key);
+                    if (op_it == block.operations.end()) continue;
+
+                    const auto &op = op_it->second;
+                    if (op.mnemonic != patchestry::ghidra::Mnemonic::OP_BRANCHIND) continue;
+                    if (op.switch_cases.empty()) continue;
+
+                    size_t valid_targets = 0;
+                    for (const auto &sc : op.switch_cases) {
+                        if (function.basic_blocks.contains(sc.target_block)) {
+                            ++valid_targets;
+                        }
+                    }
+
+                    const bool has_successor_fallback = !op.successor_blocks.empty();
+                    const bool has_valid_fallback_block =
+                        op.fallback_block.has_value()
+                        && function.basic_blocks.contains(*op.fallback_block);
+
+                    if (valid_targets == 0 && !has_successor_fallback && !has_valid_fallback_block) {
+                        LOG(ERROR) << "BRANCHIND switch_cases has no valid target blocks in "
+                                   << function.name << " at operation " << op.key
+                                   << "; add successor_blocks or at least one valid switch_cases "
+                                      "target.\n";
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
     void createSourceManager(clang::CompilerInstance &ci) {
         // Create file manager and setup source manager
         ci.createFileManager();
@@ -242,6 +303,9 @@ namespace {
 
 int main(int argc, char **argv) {
     auto options = parseCommandLineOptions(argc, argv);
+    if (!validateUnsupportedOptions(options)) {
+        return EXIT_FAILURE;
+    }
 
     llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
         llvm::MemoryBuffer::getFile(options.input_file);
@@ -268,6 +332,10 @@ int main(int argc, char **argv) {
     if (!program.has_value()) {
         LOG(ERROR) << "Failed to deserialize JSON file '" << options.input_file
                    << "' as patchestry program\n";
+        return EXIT_FAILURE;
+    }
+
+    if (!validateBranchindSwitchMetadata(*program)) {
         return EXIT_FAILURE;
     }
 

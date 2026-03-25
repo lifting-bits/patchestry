@@ -200,6 +200,7 @@ patchir-yaml-parser config.yaml --validate
 - Firmware example flow: `docs/GettingStarted/firmware_examples.md`
 - Host ARM64 image build for macOS: `.devcontainer/README-HOST-BUILD.md`
 - System data flow diagram: `docs/system_data_flow.md`
+- Decompilation semantics and JSON/CFG structuring notes: `docs/system_data_flow.md`
 - Claude-specific workflow notes: `.claude/rules/*.md`
 
 ## Test Suites

@@ -1,0 +1,46 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: not %patchir-decomp -input %t.json -emit-obj -output %t 2>&1 | %file-check -vv -check-prefix=OBJ %s
+// RUN: not %patchir-decomp -input %t.json -use-structuring-pass -output %t 2>&1 | %file-check -vv -check-prefix=STRUCT %s
+// RUN: not %patchir-decomp -input %t.json -verify-structuring -output %t 2>&1 | %file-check -vv -check-prefix=VERIFY %s
+// OBJ: --emit-obj is not implemented
+// STRUCT: --use-structuring-pass is not implemented
+// VERIFY: --verify-structuring is not implemented
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "unimplemented_flags_smoke",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "entry.exit": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["entry.exit"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret0": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 0 }]
+            }
+          },
+          "ordered_operations": ["ret0"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" }
+  }
+}
