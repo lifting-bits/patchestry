@@ -142,6 +142,10 @@ namespace patchestry::ast {
                                         : tn.original_label;
                                     sw->SetDefaultBody(factory.Make<SGoto>(
                                         factory.Intern(lbl)));
+                                } else {
+                                    LOG(WARNING) << "switch default succ_index "
+                                                 << sc.succ_index << " out of range (succs="
+                                                 << node.succs.size() << ")\n";
                                 }
                             } else {
                                 auto *val = clang::IntegerLiteral::Create(
@@ -154,6 +158,11 @@ namespace patchestry::ast {
                                         ? "block_" + std::to_string(node.succs[sc.succ_index])
                                         : tn.original_label;
                                     body = factory.Make<SGoto>(factory.Intern(lbl));
+                                } else {
+                                    LOG(WARNING) << "switch case " << sc.value
+                                                 << " succ_index " << sc.succ_index
+                                                 << " out of range (succs="
+                                                 << node.succs.size() << ")\n";
                                 }
                                 sw->AddCase(val, body);
                             }

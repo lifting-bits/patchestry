@@ -118,6 +118,10 @@ namespace patchestry::ast {
         }
 
         /// Find the terminal operation (BRANCH/CBRANCH/BRANCHIND/RETURN) in a block.
+        /// Assumes the terminal is the last entry in ordered_operations, which
+        /// holds for P-Code serialization (Ghidra always places the branch last).
+        /// If non-terminal ops follow the branch, the terminal won't be found
+        /// and the block will be treated as a fallthrough.
         const ghidra::Operation *find_terminal_op(const ghidra::BasicBlock &block) {
             if (block.ordered_operations.empty()) return nullptr;
             const auto &last_key = block.ordered_operations.back();

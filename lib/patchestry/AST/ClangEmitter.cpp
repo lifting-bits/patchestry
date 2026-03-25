@@ -37,9 +37,9 @@ namespace patchestry::ast {
     namespace {
 
         // Deep-clone a Clang Expr tree to prevent shared Expr* nodes.
-        // CfgFoldStructure reuses branch_cond pointers across SNode conditions
-        // (e.g., original and negated forms). CIR lowering requires tree-unique
-        // Expr* nodes, so every condition must be cloned before emission.
+        // The CGraph pipeline may reuse branch_cond pointers across SNode
+        // conditions (e.g., original and negated forms). CIR lowering requires
+        // tree-unique Expr* nodes, so every condition must be cloned before emission.
         clang::Expr *CloneExpr(clang::ASTContext &ctx, clang::Expr *expr) {
             if (!expr) return nullptr;
 
@@ -108,13 +108,32 @@ namespace patchestry::ast {
                     me->getObjectKind()
                 );
             }
-            // Fallback: return original expression.  This is safe for leaf
-            // expressions (literals, DeclRefExprs) that are already handled
-            // above.  If a new compound expression type reaches here, it may
-            // become a shared AST node — log so we can add explicit handling.
+            if (auto *ce = llvm::dyn_cast< clang::CallExpr >(expr)) {
+                llvm::SmallVector< clang::Expr *, 4 > args;
+                for (auto *a : ce->arguments())
+                    args.push_back(CloneExpr(ctx, a));
+                auto *cloned = clang::CallExpr::Create(
+                    ctx, CloneExpr(ctx, ce->getCallee()), args,
+                    ce->getType(), ce->getValueKind(), loc,
+                    clang::FPOptionsOverride()
+                );
+                return cloned;
+            }
+            if (auto *co = llvm::dyn_cast< clang::ConditionalOperator >(expr)) {
+                return new (ctx) clang::ConditionalOperator(
+                    CloneExpr(ctx, co->getCond()),
+                    loc, CloneExpr(ctx, co->getTrueExpr()),
+                    loc, CloneExpr(ctx, co->getFalseExpr()),
+                    co->getType(), co->getValueKind(),
+                    co->getObjectKind()
+                );
+            }
+            // Fallback: wrap in a ParenExpr to force a unique AST node.
+            // This prevents shared Expr* pointers from causing CIR lowering
+            // assertions when the same condition is used in multiple SNodes.
             LOG(WARNING) << "CloneExpr: unhandled expression type "
-                         << expr->getStmtClassName() << ", returning original\n";
-            return expr;
+                         << expr->getStmtClassName() << ", wrapping in ParenExpr\n";
+            return new (ctx) clang::ParenExpr(loc, loc, expr);
         }
 
         // Check if a stmt ends with a control flow terminator (goto/break/continue/return).
@@ -163,7 +182,7 @@ namespace patchestry::ast {
                 case SNodeKind::kReturn:
                     return EmitReturn(node->as< SReturn >());
                 }
-                return nullptr;
+                llvm_unreachable("unhandled SNodeKind in Emitter::Emit");
             }
 
             // After emitting, add LabelStmt for any goto targets that don't have
@@ -540,8 +559,8 @@ namespace patchestry::ast {
         }
 
         // Phase 2: Synthesize DeclStmts for any VarDecls referenced but not
-        // declared in the body. CfgFoldStructure may drop unreachable blocks
-        // containing DeclStmts while retaining blocks that reference those vars.
+        // declared in the body. Unreachable blocks may be dropped during graph
+        // construction while retaining blocks that reference those vars.
         // CIR crashes with "DeclRefExpr for decl not entered in LocalDeclMap"
         // when it encounters a reference to an undeclared variable.
         {
