@@ -1,0 +1,207 @@
+#!/bin/bash
+# Entrypoint for the KLEE Docker container.
+#
+# Modes:
+#   --run-harness   Compile a C harness to LLVM bitcode and run KLEE on it.
+#   --run-bitcode   Run KLEE directly on a pre-compiled .bc file.
+#   --compile-only  Compile harness to bitcode without running KLEE.
+#   --interactive   Drop into a shell for manual use.
+#
+# Options:
+#   --input <file>          Input C harness or .bc file (required)
+#   --output <dir>          Output directory for KLEE results (default: /work/klee-out)
+#   --klee-args <args>      Additional arguments to pass to KLEE
+#   --clang-args <args>     Additional arguments to pass to clang (compile mode)
+#   --max-time <seconds>    Maximum KLEE execution time (default: 300)
+#   --search <strategy>     KLEE search strategy (default: random-path)
+#   --solver <backend>      Solver backend: stp, z3, or stp:z3 (default: stp:z3)
+
+set -euo pipefail
+
+# ------------------------------------------------------------------
+# Defaults
+# ------------------------------------------------------------------
+INPUT_FILE=""
+OUTPUT_DIR="/work/klee-out"
+MODE="run-harness"
+MAX_TIME=300
+SEARCH_STRATEGY="random-path"
+SOLVER_BACKEND="stp:z3"
+EXTRA_KLEE_ARGS=()
+EXTRA_CLANG_ARGS=()
+
+# ------------------------------------------------------------------
+# Parse arguments
+# ------------------------------------------------------------------
+show_help() {
+    cat <<'USAGE'
+Usage: klee-entrypoint.sh [MODE] --input <file> [OPTIONS]
+
+Modes:
+  --run-harness    Compile C harness → bitcode → run KLEE (default)
+  --run-bitcode    Run KLEE on pre-compiled .bc file
+  --compile-only   Compile C harness to .bc only
+  --interactive    Drop into bash shell
+
+Options:
+  --input <file>          Input file (.c or .bc)
+  --output <dir>          Output directory (default: /work/klee-out)
+  --max-time <seconds>    KLEE timeout (default: 300)
+  --search <strategy>     Search strategy (default: random-path)
+  --solver <backend>      stp, z3, or stp:z3 (default: stp:z3)
+  --klee-args <args>      Extra KLEE arguments (quoted)
+  --clang-args <args>     Extra clang arguments (quoted)
+  -h, --help              Show this help
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --run-harness)   MODE="run-harness"; shift ;;
+        --run-bitcode)   MODE="run-bitcode"; shift ;;
+        --compile-only)  MODE="compile-only"; shift ;;
+        --interactive)   MODE="interactive"; shift ;;
+        --input)         INPUT_FILE="$2"; shift 2 ;;
+        --output)        OUTPUT_DIR="$2"; shift 2 ;;
+        --max-time)      MAX_TIME="$2"; shift 2 ;;
+        --search)        SEARCH_STRATEGY="$2"; shift 2 ;;
+        --solver)        SOLVER_BACKEND="$2"; shift 2 ;;
+        --klee-args)     IFS=' ' read -ra EXTRA_KLEE_ARGS <<< "$2"; shift 2 ;;
+        --clang-args)    IFS=' ' read -ra EXTRA_CLANG_ARGS <<< "$2"; shift 2 ;;
+        -h|--help)       show_help; exit 0 ;;
+        *)               echo "Unknown option: $1" >&2; show_help; exit 1 ;;
+    esac
+done
+
+# ------------------------------------------------------------------
+# Interactive mode
+# ------------------------------------------------------------------
+if [[ "${MODE}" == "interactive" ]]; then
+    exec /bin/bash
+fi
+
+# ------------------------------------------------------------------
+# Validate inputs
+# ------------------------------------------------------------------
+if [[ -z "${INPUT_FILE}" ]]; then
+    echo "Error: --input is required" >&2
+    show_help
+    exit 1
+fi
+
+if [[ ! -f "${INPUT_FILE}" ]]; then
+    echo "Error: input file not found: ${INPUT_FILE}" >&2
+    exit 1
+fi
+
+# ------------------------------------------------------------------
+# Compile C harness to LLVM bitcode
+# ------------------------------------------------------------------
+compile_to_bitcode() {
+    local src="$1"
+    local bc="$2"
+    echo "[klee] Compiling ${src} → ${bc}"
+
+    clang \
+        -emit-llvm -c -g -O0 \
+        -fno-discard-value-names \
+        -I /opt/klee/include \
+        "${EXTRA_CLANG_ARGS[@]+"${EXTRA_CLANG_ARGS[@]}"}" \
+        -o "${bc}" \
+        "${src}"
+
+    echo "[klee] Bitcode generated: $(wc -c < "${bc}") bytes"
+}
+
+# ------------------------------------------------------------------
+# Run KLEE on bitcode
+# ------------------------------------------------------------------
+run_klee() {
+    local bc="$1"
+    local out="$2"
+
+    # Remove stale output if present (KLEE refuses to overwrite)
+    rm -rf "${out}"
+
+    # Build solver chain
+    local solver_args=()
+    case "${SOLVER_BACKEND}" in
+        stp)     solver_args=("--solver-backend=stp") ;;
+        z3)      solver_args=("--solver-backend=z3") ;;
+        stp:z3)  solver_args=("--solver-backend=stp" "--use-forked-solver" "--use-query-log=solver:smt2") ;;
+        *)       solver_args=("--solver-backend=${SOLVER_BACKEND}") ;;
+    esac
+
+    echo "[klee] Running KLEE on ${bc}"
+    echo "[klee]   output:   ${out}"
+    echo "[klee]   timeout:  ${MAX_TIME}s"
+    echo "[klee]   search:   ${SEARCH_STRATEGY}"
+    echo "[klee]   solver:   ${SOLVER_BACKEND}"
+
+    klee \
+        --output-dir="${out}" \
+        --max-time="${MAX_TIME}" \
+        --search="${SEARCH_STRATEGY}" \
+        --posix-runtime \
+        --libc=uclibc \
+        --emit-all-errors \
+        --only-output-states-covering-new \
+        --write-cov \
+        --write-paths \
+        --write-test-info \
+        "${solver_args[@]}" \
+        "${EXTRA_KLEE_ARGS[@]+"${EXTRA_KLEE_ARGS[@]}"}" \
+        "${bc}"
+
+    local exit_code=$?
+
+    # Summary
+    echo ""
+    echo "[klee] === Results ==="
+    if [[ -d "${out}" ]]; then
+        local total_tests
+        total_tests=$(find "${out}" -name '*.ktest' 2>/dev/null | wc -l)
+        local errors
+        errors=$(find "${out}" -name '*.err' 2>/dev/null | wc -l)
+        echo "[klee]   Tests generated: ${total_tests}"
+        echo "[klee]   Errors found:    ${errors}"
+
+        # List error files
+        if [[ "${errors}" -gt 0 ]]; then
+            echo "[klee]   Error details:"
+            find "${out}" -name '*.err' -exec basename {} \; | sort | \
+                while read -r f; do echo "    - ${f}"; done
+        fi
+    fi
+
+    # Fix output permissions for volume mounts
+    chmod -R a+rX "${out}" 2>/dev/null || true
+
+    return ${exit_code}
+}
+
+# ------------------------------------------------------------------
+# Execute mode
+# ------------------------------------------------------------------
+case "${MODE}" in
+    compile-only)
+        bc_file="${INPUT_FILE%.c}.bc"
+        compile_to_bitcode "${INPUT_FILE}" "${bc_file}"
+        echo "[klee] Done. Bitcode at: ${bc_file}"
+        ;;
+
+    run-harness)
+        bc_file="/tmp/harness.bc"
+        compile_to_bitcode "${INPUT_FILE}" "${bc_file}"
+        run_klee "${bc_file}" "${OUTPUT_DIR}"
+        ;;
+
+    run-bitcode)
+        run_klee "${INPUT_FILE}" "${OUTPUT_DIR}"
+        ;;
+
+    *)
+        echo "Error: unknown mode: ${MODE}" >&2
+        exit 1
+        ;;
+esac

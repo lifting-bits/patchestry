@@ -1,0 +1,92 @@
+#
+# Copyright (c) 2024, Trail of Bits, Inc.
+#
+# This source code is licensed in accordance with the terms specified in
+# the LICENSE file found in the root directory of this source tree.
+#
+
+name: Build KLEE Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      llvm-version:
+        description: 'LLVM version for the base image'
+        required: false
+        default: '20'
+      image-version:
+        description: 'Ubuntu version for the base image'
+        required: false
+        default: '22.04'
+      no-cache:
+        description: 'Build without Docker cache'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    permissions:
+      packages: write
+      contents: read
+
+    env:
+      LLVM_VER: ${{ inputs.llvm-version || '20' }}
+      IMAGE_VER: ${{ inputs.image-version || '22.04' }}
+      NO_CACHE: ${{ inputs.no-cache || 'false' }}
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          docker system prune -af
+          df -h
+
+      - name: Clone the Patchestry repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+
+      - name: Set derived image names
+        run: |
+          echo "IMAGE_NAME=ghcr.io/lifting-bits/patchestry-klee-ubuntu-${IMAGE_VER}-llvm-${LLVM_VER}:latest" >> "$GITHUB_ENV"
+          echo "BASE_IMAGE=ghcr.io/lifting-bits/patchestry-ubuntu-${IMAGE_VER}-llvm-${LLVM_VER}-dev:latest" >> "$GITHUB_ENV"
+
+      - name: Pull base image
+        run: docker pull "${BASE_IMAGE}"
+
+      - name: Build KLEE image
+        working-directory: analysis/klee
+        run: |
+          CACHE_FLAG=""
+          if [ "${NO_CACHE}" = "true" ]; then
+            CACHE_FLAG="--no-cache"
+          fi
+          DOCKER_BUILDKIT=1 docker build \
+            --platform linux/amd64 \
+            ${CACHE_FLAG} \
+            --build-arg IMAGE_VERSION="${IMAGE_VER}" \
+            --build-arg LLVM_VERSION="${LLVM_VER}" \
+            -t "${IMAGE_NAME}" \
+            -f Dockerfile \
+            .
+
+      - name: Verify KLEE installation
+        run: |
+          docker run --rm --platform linux/amd64 --entrypoint klee "${IMAGE_NAME}" --version
+
+      - name: Log in to registry
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push image
+        if: github.event_name == 'workflow_dispatch'
+        run: docker push "${IMAGE_NAME}"
+
+      - name: Print image details
+        run: |
+          echo "Image: ${IMAGE_NAME}"
+          docker images "${IMAGE_NAME}" --format "Size: {{.Size}}"
