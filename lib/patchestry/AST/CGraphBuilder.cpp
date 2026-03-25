@@ -53,6 +53,9 @@ namespace patchestry::ast {
                         if (blocks.contains(sc.target_block))
                             succs[key].push_back(sc.target_block);
                     }
+                    if (op.fallback_block && blocks.contains(*op.fallback_block)) {
+                        succs[key].push_back(*op.fallback_block);
+                    }
                 }
             }
 
@@ -89,13 +92,36 @@ namespace patchestry::ast {
             // Reverse for RPO
             std::reverse(post_order.begin(), post_order.end());
 
-            // Append unreachable blocks in sorted order
+            // Append unreachable blocks sorted by address then numeric index.
+            // Keys have the form "ram:HEXADDR:NUM:suffix"; lexicographic sort
+            // would mis-order "...:10:..." before "...:2:..." so we parse the
+            // numeric fields for a correct comparison.
             if (post_order.size() < function.basic_blocks.size()) {
                 std::vector<std::string> unreachable;
                 for (const auto &[key, _] : function.basic_blocks) {
                     if (!visited.contains(key)) unreachable.push_back(key);
                 }
-                std::sort(unreachable.begin(), unreachable.end());
+                auto parse_key = [](const std::string &k)
+                    -> std::pair<uint64_t, uint64_t> {
+                    // "ram:HEXADDR:NUM:suffix"
+                    auto p1 = k.find(':');
+                    if (p1 == std::string::npos) return {0, 0};
+                    auto p2 = k.find(':', p1 + 1);
+                    if (p2 == std::string::npos) return {0, 0};
+                    auto p3 = k.find(':', p2 + 1);
+                    uint64_t addr = 0, idx = 0;
+                    try { addr = std::stoull(k.substr(p1 + 1, p2 - p1 - 1), nullptr, 16); }
+                    catch (...) {}
+                    if (p3 != std::string::npos) {
+                        try { idx = std::stoull(k.substr(p2 + 1, p3 - p2 - 1)); }
+                        catch (...) {}
+                    }
+                    return {addr, idx};
+                };
+                std::sort(unreachable.begin(), unreachable.end(),
+                    [&](const std::string &a, const std::string &b) {
+                        return parse_key(a) < parse_key(b);
+                    });
                 post_order.insert(post_order.end(), unreachable.begin(), unreachable.end());
             }
 
@@ -356,12 +382,10 @@ namespace patchestry::ast {
                 }
 
             } else if (term->mnemonic == M::OP_RETURN) {
-                // Return: no outgoing edges
-                // The return stmt is already in node.stmts from create_block_stmts
-                // ... actually, create_block_stmts skips RETURN. We need to
-                // handle it here.
-                // For now, don't add edges. The ClangEmitter will handle
-                // generating a return stmt from the SNode tree.
+                // Return: no outgoing edges.
+                // The corresponding ReturnStmt has already been emitted into
+                // node.stmts by create_block_stmts, so there is nothing to do
+                // here other than leave the successor list empty.
             }
         }
 

@@ -8,6 +8,7 @@
 #include <patchestry/AST/ClangEmitter.hpp>
 #include <patchestry/Util/Log.hpp>
 
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>

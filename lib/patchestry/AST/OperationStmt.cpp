@@ -770,34 +770,17 @@ namespace patchestry::ast {
 
     std::pair< clang::Stmt *, bool >
     OpBuilder::create_branch(clang::ASTContext &ctx, const Operation &op) {
+        (void) ctx;
         if (!op.target_block) {
             LOG(ERROR) << "Branch instruction with no target block. key: " << op.key << "\n";
             return {};
         }
 
-        // If the target is the immediately next block in the RPO emission order,
-        // control falls through naturally — no goto required.
-        {
-            return { nullptr, false };
-        }
-
-        if (!function_builder().labels_declaration.contains(*op.target_block)) {
-            LOG(ERROR) << "Target block does not have a label declaration. key: " << op.key
-                       << "\n";
-            return {};
-        }
-
-        auto op_loc     = SourceLocation(ctx.getSourceManager(), op.key);
-        auto target_loc = SourceLocation(ctx.getSourceManager(), *op.target_block);
-        auto *expr      = new (ctx) clang::GotoStmt(
-            function_builder().labels_declaration.at(*op.target_block), op_loc, target_loc
-        );
-        if (expr == nullptr) {
-            LOG(ERROR) << "Failed to create goto statement. key " << op.key << "\n";
-            return {};
-        }
-
-        return { expr, false };
+        // BRANCH terminals are handled by CGraphBuilder which builds the
+        // GotoStmt/IfStmt into CNode::terminal.  create_block_stmts skips
+        // terminals, so this function just returns nullptr to suppress the
+        // operation from the block's statement list.
+        return { nullptr, false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_cbranch(
@@ -2297,11 +2280,13 @@ namespace patchestry::ast {
         // oversized record types, we'll retry with a coerced fallback.
         // Suppressing prevents the error from being counted/printed,
         // avoiding the need to Reset() (which clears ALL accumulated state).
-        sema().getDiagnostics().setSuppressAllDiagnostics(true);
+        auto &diags = sema().getDiagnostics();
+        const bool prev_suppress = diags.getSuppressAllDiagnostics();
+        diags.setSuppressAllDiagnostics(true);
         auto result = sema().CreateBuiltinBinOp(
             op_loc, kind, make_paren_expr(ctx, lhs, op_loc), make_paren_expr(ctx, rhs, op_loc)
         );
-        sema().getDiagnostics().setSuppressAllDiagnostics(false);
+        diags.setSuppressAllDiagnostics(prev_suppress);
 
         if (result.isInvalid()) {
             // Fallback: force-coerce both operands to unsigned long long

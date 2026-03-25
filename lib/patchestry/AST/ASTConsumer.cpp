@@ -122,7 +122,6 @@ namespace patchestry::ast {
                 // Switch blocks get an SSwitch with goto-to-label cases.
                 SNodeFactory factory;
                 auto *seq = factory.Make<SSeq>();
-                unsigned iw = ctx.getIntWidth(ctx.IntTy);
 
                 for (auto &node : flow_graph.nodes) {
                     if (node.collapsed) continue;
@@ -132,6 +131,16 @@ namespace patchestry::ast {
                     // Switch block: build SSwitch with goto cases
                     if (!node.switch_cases.empty() && node.branch_cond) {
                         auto *sw = factory.Make<SSwitch>(node.branch_cond);
+                        // Use the discriminant's type for case literals to
+                        // avoid truncation on targets where uintptr_t > int.
+                        // For enum types, use the underlying integer type for
+                        // the width since getIntWidth requires a BuiltinType.
+                        auto case_type = node.branch_cond->getType();
+                        if (case_type->isEnumeralType()) {
+                            case_type = case_type->castAs<clang::EnumType>()
+                                ->getDecl()->getIntegerType();
+                        }
+                        unsigned case_width = ctx.getIntWidth(case_type);
                         for (const auto &sc : node.switch_cases) {
                             if (sc.is_default) {
                                 // Default arm: goto target label
@@ -149,8 +158,8 @@ namespace patchestry::ast {
                                 }
                             } else {
                                 auto *val = clang::IntegerLiteral::Create(
-                                    ctx, llvm::APInt(iw, static_cast<uint64_t>(sc.value), true),
-                                    ctx.IntTy, clang::SourceLocation());
+                                    ctx, llvm::APInt(case_width, static_cast<uint64_t>(sc.value), true),
+                                    case_type, clang::SourceLocation());
                                 SNode *body = nullptr;
                                 if (sc.succ_index < node.succs.size()) {
                                     auto &tn = flow_graph.Node(node.succs[sc.succ_index]);
