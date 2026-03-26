@@ -1,0 +1,41 @@
+# patches/cwe476_klee_patches.yaml
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe476-klee-patches"
+  version: "1.0.0"
+  description: "CWE-476 patches with static contract for KLEE verification"
+  author: "Security Team"
+  created: "2026-03-26"
+
+patches:
+  - name: "cwe476_null_check"
+    description: "Check for NULL pointer before method call"
+    category: "memory_safety"
+    code_file: "../patchir-transform/patches/patch_get_name.c"
+    function_name: "patch::before::get_name"
+    parameters:
+      - name: "var_ptr"
+        type: "const void*"
+        description: "Pointer to validate"
+
+contracts:
+  - name: "cwe476_static_contract"
+    description: "Static contract: arg0 must be non-null"
+    category: "memory_safety"
+    type: "STATIC"
+
+    preconditions:
+      - id: "ptr_nonnull"
+        pred:
+          kind: "nonnull"
+          target: "arg0"
+
+    postconditions:
+      - id: "return_range"
+        pred:
+          kind: "range"
+          target: "return_value"
+          range:
+            min: "0"
+            max: "1"

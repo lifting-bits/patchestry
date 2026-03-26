@@ -1,0 +1,84 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t_s1 >> /dev/null 2>&1
+// RUN: %patchir-transform %t_s1.cir --spec %S/cwe476_klee_spec.yaml -o %t_s2.cir
+// RUN: %patchir-cir2llvm %t_s2.cir -S -o %t_s3.ll
+// RUN: %patchir-klee-verifier %t_s3.ll --target-function poke_process -S -o %t_harness.ll
+// RUN: %file-check -check-prefix=KLEE %s --input-file %t_harness.ll
+
+// E2E test: ventilator_cwe476.json → decomp → transform (patch + static contract) → cir2llvm → klee-verifier
+// Exercises the full pipeline from Ghidra JSON to KLEE harness.
+
+// KLEE: define i32 @main()
+// KLEE: call void @klee_make_symbolic(
+// KLEE: call i32 @poke_process(
+// KLEE: ret i32 0
+
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000010": {
+      "name": "poke_process",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t0",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": ["t1"]
+      },
+      "basic_blocks": {
+        "ram:10000010:0:basic": {
+          "operations": {
+            "ram:10000010:1:0": {
+              "mnemonic": "CALL",
+              "type": "t1",
+              "output": {"kind": "local", "operation": "unique:00010002:2:0"},
+              "has_return_value": true,
+              "target": {"kind": "function", "function": "EXTERNAL:00000001", "is_variadic": false, "is_noreturn": false},
+              "inputs": [{"type": "t1", "kind": "parameter", "operation": "unique:00010000:0:0"}]
+            },
+            "ram:10000010:2:1": {
+              "mnemonic": "COPY", "type": "t0",
+              "output": {"kind": "local", "operation": "unique:00010001:1:0"},
+              "inputs": [{"type": "t0", "kind": "constant", "value": 0}]
+            },
+            "ram:10000010:3:2": {
+              "mnemonic": "RETURN",
+              "inputs": [{"type": "t0", "kind": "local", "operation": "unique:00010001:1:0"}]
+            }
+          },
+          "ordered_operations": ["ram:10000010:1:0", "ram:10000010:2:1", "ram:10000010:3:2"]
+        },
+        "ram:10000010:entry": {
+          "operations": {
+            "unique:00010000:0:0": {"mnemonic": "DECLARE_PARAMETER", "name": "param_1", "type": "t1", "kind": "parameter", "index": 0},
+            "unique:00010001:1:0": {"mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "local_0", "type": "t0"},
+            "unique:00010002:2:0": {"mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "pcVar1", "type": "t1"},
+            "entry.exit": {"mnemonic": "BRANCH", "target_block": "ram:10000010:0:basic"}
+          },
+          "ordered_operations": ["unique:00010000:0:0", "unique:00010001:1:0", "unique:00010002:2:0", "entry.exit"]
+        }
+      },
+      "entry_block": "ram:10000010:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "get_name",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t1",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": ["t1"]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "t0": {"is_signed": true, "name": "int", "size": 4, "kind": "integer"},
+    "t1": {"kind": "pointer", "size": 4, "element_type": "t2"},
+    "t2": {"name": "void", "size": 0, "kind": "void"}
+  }
+}
