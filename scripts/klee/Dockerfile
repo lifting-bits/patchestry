@@ -45,7 +45,9 @@ ENV LLVM_DIR=/usr/local/lib/cmake/llvm
 # ---- Build minisat + STP solver ----
 # Combined into one step because minisat's installed cmake config references
 # the build-tree source path; /tmp/minisat must exist when STP compiles.
-RUN git clone --depth 1 https://github.com/stp/minisat.git /tmp/minisat \
+RUN git clone https://github.com/stp/minisat.git /tmp/minisat \
+    && cd /tmp/minisat && git checkout 14c78206cd12d1d36b7e042fa758747c135670a4 \
+    && cd / \
     && mkdir /tmp/minisat/build && cd /tmp/minisat/build \
     && cmake -G Ninja \
         -DCMAKE_INSTALL_PREFIX=/opt/minisat \

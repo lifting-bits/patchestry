@@ -29,7 +29,7 @@ IMAGE_NAME="${KLEE_IMAGE:-patchestry/klee:latest}"
 ensure_klee_image() {
     if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
         echo "KLEE Docker image not found. Building..."
-        bash "${SCRIPT_DIR}/build-klee-docker.sh"
+        KLEE_IMAGE="${IMAGE_NAME}" bash "${SCRIPT_DIR}/build-klee-docker.sh"
     fi
 }
 
@@ -66,7 +66,8 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h|--help)
-            docker run --rm "${IMAGE_NAME}" --help 2>/dev/null || true
+            ensure_klee_image
+            docker run --rm --platform linux/amd64 "${IMAGE_NAME}" --help 2>/dev/null || true
             exit 0
             ;;
         *)

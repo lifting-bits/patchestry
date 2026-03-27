@@ -161,6 +161,9 @@ run_klee() {
     echo "[klee]   search:   ${SEARCH_STRATEGY}"
     echo "[klee]   solver:   ${SOLVER_BACKEND}"
 
+    # Temporarily disable errexit so we can capture KLEE's exit code
+    # and still print the summary / fix permissions.
+    set +e
     klee \
         --output-dir="${klee_out}" \
         --max-time="${MAX_TIME}" \
@@ -174,24 +177,24 @@ run_klee() {
         "${solver_args[@]}" \
         "${EXTRA_KLEE_ARGS[@]+"${EXTRA_KLEE_ARGS[@]}"}" \
         "${bc}"
-
     local exit_code=$?
+    set -e
 
     # Summary
     echo ""
     echo "[klee] === Results ==="
-    if [[ -d "${out}" ]]; then
+    if [[ -d "${klee_out}" ]]; then
         local total_tests
-        total_tests=$(find "${out}" -name '*.ktest' 2>/dev/null | wc -l)
+        total_tests=$(find "${klee_out}" -name '*.ktest' 2>/dev/null | wc -l)
         local errors
-        errors=$(find "${out}" -name '*.err' 2>/dev/null | wc -l)
+        errors=$(find "${klee_out}" -name '*.err' 2>/dev/null | wc -l)
         echo "[klee]   Tests generated: ${total_tests}"
         echo "[klee]   Errors found:    ${errors}"
 
         # List error files
         if [[ "${errors}" -gt 0 ]]; then
             echo "[klee]   Error details:"
-            find "${out}" -name '*.err' -exec basename {} \; | sort | \
+            find "${klee_out}" -name '*.err' -exec basename {} \; | sort | \
                 while read -r f; do echo "    - ${f}"; done
         fi
     fi

@@ -7,7 +7,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE_NAME="patchestry/klee:latest"
+IMAGE_NAME="${KLEE_IMAGE:-patchestry/klee:latest}"
 
 EXTRA_ARGS=""
 if [[ "${1:-}" == "--no-cache" ]]; then
