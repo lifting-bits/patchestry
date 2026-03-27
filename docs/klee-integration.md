@@ -82,18 +82,20 @@ symbolic execution to proceed.
 **Upstream fix needed:** The llvm20 branch needs proper implementations of
 these functions ported from the mainline KLEE branch.
 
-### 1b. RaiseAsmPass segfault on non-x86_64 modules
+### 1b. 32-bit modules unsupported on 64-bit hosts
 
-`RaiseAsmPass::runOnInstruction` calls `TargetLowering::ParseConstraints`
-which requires a registered `TargetMachine`. When the module has no target
-triple or a non-x86_64 triple, KLEE crashes with a segfault because no
-`TargetMachine` is created.
+KLEE's memory allocator uses host addresses as simulated target addresses.
+On a 64-bit host, allocated addresses exceed 2^32, making 32-bit pointer
+modules (ARM32, i386) incompatible. Commit `4006851` adds a clear error
+for this at `Executor.cpp:609`, but the crash in `RaiseAsmPass` occurs
+earlier (at `instrument()`, line 564) because KLEE links the 32-bit input
+with x86_64 uclibc, creating a mixed-architecture module where inline asm
+from uclibc triggers a segfault.
 
-**Impact:** ARM32 bitcode cannot be processed even with an ARM uclibc.
+**Impact:** ARM32 bitcode cannot be executed on a 64-bit host.
 
-**Upstream fix needed:** `RaiseAsmPass` should skip modules without a
-registered target machine, or KLEE should create a `TargetMachine` based
-on the module's data layout.
+**Root cause:** Architectural limitation — not a bug. KLEE would need
+a separate 32-bit address space emulation layer to support this.
 
 ### 2. x86_64-only execution
 

@@ -872,6 +872,28 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    // Retarget module to x86_64 for KLEE compatibility.
+    // KLEE's memory allocator uses host (64-bit) addresses, so 32-bit target
+    // modules (e.g. ARM32 from Ghidra decompilation) cannot run directly.
+    // Since KLEE interprets IR semantically and the harness only exercises
+    // contract predicates (nonnull, range, relation), retargeting is safe.
+    {
+        static constexpr const char *kX86_64_Triple = "x86_64-unknown-linux-gnu";
+        static constexpr const char *kX86_64_DataLayout =
+            "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128"
+            "-f80:128-n8:16:32:64-S128";
+        std::string currentTriple = module->getTargetTriple();
+        if (currentTriple.empty() || currentTriple.find("x86_64") == std::string::npos) {
+            if (verbose) {
+                llvm::outs() << "Retargeting module from '"
+                             << (currentTriple.empty() ? "<none>" : currentTriple)
+                             << "' to x86_64 for KLEE compatibility\n";
+            }
+            module->setTargetTriple(kX86_64_Triple);
+            module->setDataLayout(kX86_64_DataLayout);
+        }
+    }
+
     if (verbose) {
         llvm::outs() << "Loaded module: " << module->getName() << "\n";
         llvm::outs() << "Target function: " << target_function << "\n";
