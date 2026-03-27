@@ -99,6 +99,19 @@ if [[ "${MODE}" == "run-harness" && "${INPUT_FILE}" == *.bc ]]; then
     MODE="run-bitcode"
 fi
 
+# Validate file extension matches mode
+if [[ "${MODE}" == "compile-only" || "${MODE}" == "run-harness" ]]; then
+    if [[ "${INPUT_FILE}" != *.c ]]; then
+        echo "Error: ${MODE} requires a .c input file, got: ${INPUT_FILE}" >&2
+        exit 1
+    fi
+elif [[ "${MODE}" == "run-bitcode" ]]; then
+    if [[ "${INPUT_FILE}" != *.bc ]]; then
+        echo "Error: run-bitcode requires a .bc input file, got: ${INPUT_FILE}" >&2
+        exit 1
+    fi
+fi
+
 # ------------------------------------------------------------------
 # Compile C harness to LLVM bitcode
 # ------------------------------------------------------------------
