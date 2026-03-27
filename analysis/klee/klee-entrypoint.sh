@@ -94,6 +94,11 @@ if [[ ! -f "${INPUT_FILE}" ]]; then
     exit 1
 fi
 
+# Auto-detect mode from file extension
+if [[ "${MODE}" == "run-harness" && "${INPUT_FILE}" == *.bc ]]; then
+    MODE="run-bitcode"
+fi
+
 # ------------------------------------------------------------------
 # Compile C harness to LLVM bitcode
 # ------------------------------------------------------------------
@@ -120,8 +125,10 @@ run_klee() {
     local bc="$1"
     local out="$2"
 
-    # Remove stale output if present (KLEE refuses to overwrite)
-    rm -rf "${out}"
+    # KLEE requires the output directory to not exist. When the output path
+    # is a Docker volume mount we cannot remove it, so use a subdirectory.
+    local klee_out="${out}/klee-last"
+    rm -rf "${klee_out}"
 
     # Build solver chain
     local solver_args=()
@@ -132,18 +139,33 @@ run_klee() {
         *)       solver_args=("--solver-backend=${SOLVER_BACKEND}") ;;
     esac
 
+    # Detect whether the bitcode needs uclibc/POSIX runtime.
+    # Harnesses from patchir-klee-verifier have all externals stubbed and
+    # use klee_make_symbolic/klee_assume/klee_assert directly, so they
+    # don't need uclibc. The uclibc link also causes RaiseAsmPass crashes
+    # due to inline asm in uclibc that KLEE can't handle.
+    local runtime_args=()
+    local bc_ir
+    bc_ir=$(llvm-dis -o - "${bc}" 2>/dev/null | head -30 || true)
+
+    if echo "${bc_ir}" | grep -q 'klee_make_symbolic\|klee_assume\|klee_assert'; then
+        echo "[klee] Detected KLEE harness — running without uclibc (externals stubbed)"
+    else
+        runtime_args=("--posix-runtime" "--libc=uclibc")
+        echo "[klee] Using POSIX + uclibc runtime"
+    fi
+
     echo "[klee] Running KLEE on ${bc}"
-    echo "[klee]   output:   ${out}"
+    echo "[klee]   output:   ${klee_out}"
     echo "[klee]   timeout:  ${MAX_TIME}s"
     echo "[klee]   search:   ${SEARCH_STRATEGY}"
     echo "[klee]   solver:   ${SOLVER_BACKEND}"
 
     klee \
-        --output-dir="${out}" \
+        --output-dir="${klee_out}" \
         --max-time="${MAX_TIME}" \
         --search="${SEARCH_STRATEGY}" \
-        --posix-runtime \
-        --libc=uclibc \
+        "${runtime_args[@]+"${runtime_args[@]}"}" \
         --emit-all-errors \
         --only-output-states-covering-new \
         --write-cov \
