@@ -59,7 +59,7 @@ jobs:
         run: docker pull "${BASE_IMAGE}"
 
       - name: Build KLEE image
-        working-directory: analysis/klee
+        working-directory: scripts/klee
         run: |
           CACHE_FLAG=""
           if [ "${NO_CACHE}" = "true" ]; then

@@ -2,7 +2,7 @@
 # Build the KLEE Docker image for patchestry harness execution.
 #
 # Usage:
-#   ./analysis/klee/build-klee-docker.sh [--no-cache]
+#   ./scripts/klee/build-klee-docker.sh [--no-cache]
 
 set -euo pipefail
 

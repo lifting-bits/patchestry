@@ -2,20 +2,20 @@
 # Host wrapper to run KLEE on a harness file via Docker.
 #
 # Usage:
-#   ./analysis/klee/run-klee.sh --input <harness.c> [--output <dir>] [OPTIONS]
+#   ./scripts/klee/run-klee.sh --input <harness.c> [--output <dir>] [OPTIONS]
 #
 # Examples:
 #   # Run a static contract harness
-#   ./analysis/klee/run-klee.sh --input tests/static_contract_harness.c
+#   ./scripts/klee/run-klee.sh --input tests/static_contract_harness.c
 #
 #   # Run with custom timeout and output directory
-#   ./analysis/klee/run-klee.sh --input harness.c --output ./results --max-time 600
+#   ./scripts/klee/run-klee.sh --input harness.c --output ./results --max-time 600
 #
 #   # Run pre-compiled bitcode
-#   ./analysis/klee/run-klee.sh --run-bitcode --input harness.bc
+#   ./scripts/klee/run-klee.sh --run-bitcode --input harness.bc
 #
 #   # Interactive debugging
-#   ./analysis/klee/run-klee.sh --interactive
+#   ./scripts/klee/run-klee.sh --interactive
 
 set -euo pipefail
 

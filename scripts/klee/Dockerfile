@@ -5,7 +5,7 @@
 # Platform:   linux/amd64 only (CI builds for amd64)
 #
 # Usage:
-#   docker build --platform linux/amd64 -t patchestry/klee:latest -f analysis/klee/Dockerfile analysis/klee
+#   docker build --platform linux/amd64 -t patchestry/klee:latest -f scripts/klee/Dockerfile scripts/klee
 #   docker run --rm --platform linux/amd64 -v /path/to/harness:/work patchestry/klee:latest \
 #       --input /work/harness.c --output /work/results
 
