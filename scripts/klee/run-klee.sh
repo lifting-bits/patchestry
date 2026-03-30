@@ -60,7 +60,7 @@ while [[ $# -gt 0 ]]; do
             INTERACTIVE=true
             shift
             ;;
-        --run-bitcode|--compile-only|--run-harness)
+        --run-bitcode|--run-harness)
             MODE="$1"
             CONTAINER_ARGS+=("$1")
             shift

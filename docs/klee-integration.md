@@ -15,6 +15,26 @@ possible inputs.
 Ghidra JSON -> patchir-decomp -> patchir-transform -> patchir-cir2llvm -> patchir-klee-verifier -> KLEE
 ```
 
+### Architecture Retargeting
+
+Ghidra decompiles firmware for its native architecture (typically ARM32), but
+**KLEE only supports x86_64 execution**. KLEE's interpreter, uclibc runtime,
+POSIX model, and memory allocator are all built for x86_64. ARM32 bitcode
+cannot be executed — KLEE's memory allocator uses host addresses that exceed
+2^32, and linking 32-bit input with x86_64 uclibc creates mixed-architecture
+modules that crash in `RaiseAsmPass`.
+
+`patchir-klee-verifier` solves this by **re-emitting the harness bitcode with
+an x86_64 target triple and data layout**, regardless of the original firmware
+architecture. This is correct because:
+
+- KLEE interprets LLVM IR **semantically** — it does not execute native
+  instructions. The target triple only affects data layout choices.
+- Patchestry contracts verify **value-level properties** (nonnull, range,
+  relation) rather than memory layout or pointer arithmetic.
+- All external functions are stubbed with symbolic return values, so there
+  are no ABI-specific calling convention dependencies.
+
 ## Docker Image
 
 KLEE runs inside a Docker container (`patchestry/klee:latest`) built on
@@ -27,33 +47,36 @@ the patchestry dev base image with LLVM 20. The image is **linux/amd64 only**.
 | KLEE | 3.3-pre (trail-of-forks/klee, llvm20 branch) | `/opt/klee` |
 | STP solver | 2.3.4 | `/opt/stp` |
 | Z3 solver | 4.8.15 | `/opt/z3` |
-| minisat | latest | `/opt/minisat` |
-| klee-uclibc | v1.4 | `/opt/klee-uclibc` |
+| minisat | pinned commit `14c78206` | `/opt/minisat` |
+| klee-uclibc | v1.4 (x86_64 only) | `/opt/klee-uclibc` |
 
 ### Building
 
 ```bash
 # Local build
-./analysis/klee/build-klee-docker.sh
+./scripts/klee/build-klee-docker.sh
 
-# With custom image
-./analysis/klee/build-klee-docker.sh --no-cache
+# With no cache
+./scripts/klee/build-klee-docker.sh --no-cache
+
+# With custom image name
+KLEE_IMAGE=my-klee:dev ./scripts/klee/build-klee-docker.sh
 ```
 
 ### Running
 
 ```bash
 # Run a C harness (compile + KLEE)
-./analysis/klee/run-klee.sh --input harness.c --output ./results
+./scripts/klee/run-klee.sh --input harness.c --output ./results
 
 # Run pre-compiled bitcode
-./analysis/klee/run-klee.sh --input harness.bc --output ./results
+./scripts/klee/run-klee.sh --input harness.bc --output ./results
 
 # Use CI-pushed image
-./analysis/klee/run-klee.sh --image ghcr.io/lifting-bits/patchestry-klee-ubuntu-22.04-llvm-20:latest --input harness.bc
+./scripts/klee/run-klee.sh --image ghcr.io/lifting-bits/patchestry-klee-ubuntu-22.04-llvm-20:latest --input harness.bc
 
 # Interactive debugging
-./analysis/klee/run-klee.sh --interactive
+./scripts/klee/run-klee.sh --interactive
 ```
 
 ### Scripts
@@ -82,47 +105,24 @@ symbolic execution to proceed.
 **Upstream fix needed:** The llvm20 branch needs proper implementations of
 these functions ported from the mainline KLEE branch.
 
-### 1b. 32-bit modules unsupported on 64-bit hosts
+### 2. ARM32 / 32-bit architectures not supported
 
-KLEE's memory allocator uses host addresses as simulated target addresses.
-On a 64-bit host, allocated addresses exceed 2^32, making 32-bit pointer
-modules (ARM32, i386) incompatible. Commit `4006851` adds a clear error
-for this at `Executor.cpp:609`, but the crash in `RaiseAsmPass` occurs
-earlier (at `instrument()`, line 564) because KLEE links the 32-bit input
-with x86_64 uclibc, creating a mixed-architecture module where inline asm
-from uclibc triggers a segfault.
+KLEE does **not** support ARM32 or any 32-bit target architecture:
 
-**Impact:** ARM32 bitcode cannot be executed on a 64-bit host.
+- **Memory allocator:** KLEE uses host (x86_64) addresses as simulated target
+  addresses. On a 64-bit host, allocated addresses exceed 2^32, making 32-bit
+  pointer modules incompatible. Commit `4006851` adds an error for this at
+  `Executor.cpp:609`.
+- **RaiseAsmPass crash:** Before the address-space error is reached, KLEE
+  links the 32-bit input with x86_64 uclibc, creating a mixed-architecture
+  module where inline asm from uclibc triggers a segfault in `RaiseAsmPass`.
+- **Root cause:** Architectural limitation — not a bug. KLEE would need a
+  separate 32-bit address space emulation layer.
 
-**Root cause:** Architectural limitation — not a bug. KLEE would need
-a separate 32-bit address space emulation layer to support this.
-
-### 2. x86_64-only execution
-
-KLEE's interpreter, uclibc runtime, and POSIX model are built for **x86_64
-only**. Bitcode compiled for other architectures (e.g., ARM 32-bit from
-Ghidra decompilation) cannot be executed directly.
-
-**Workaround:** The entrypoint script auto-detects non-x86_64 bitcode
-(via `target datalayout` inspection) and retargets it to x86_64 by
-rewriting the data layout and target triple using `llvm-dis`/`llvm-as`.
-This works because KLEE interprets LLVM IR semantically and does not
-execute native instructions.
-
-**Caveat:** Pointer size differences (32-bit vs 64-bit) may affect
-the accuracy of pointer arithmetic analysis. For patchestry harnesses
-this is acceptable since contracts focus on value-level properties
-(nonnull, range, relation) rather than memory layout.
-
-**ARM32 uclibc:** The Docker image includes a cross-compiled ARM32
-klee-uclibc at `/opt/klee-uclibc-arm32`. The entrypoint auto-detects
-ARM32 bitcode and sets `KLEE_UCLIBC_PATH` accordingly. However, KLEE's
-compiled-in uclibc path takes precedence over the env var, and the
-`RaiseAsmPass` segfault (see #1b) blocks ARM execution regardless.
-
-**Recommended workaround:** Have `patchir-klee-verifier` emit x86_64
-target triples in harness output. KLEE interprets IR semantically, so
-the target architecture doesn't affect contract verification.
+**Solution:** `patchir-klee-verifier` re-emits all harness bitcode targeting
+x86_64 (`target datalayout` and `target triple` are rewritten). Since KLEE
+interprets IR semantically, this does not affect contract verification
+correctness. See [Architecture Retargeting](#architecture-retargeting) above.
 
 ### 3. minisat cmake config references build tree
 
@@ -155,7 +155,7 @@ The GitHub Actions workflow (`.github/workflows/klee-image.yml`) builds
 and pushes the KLEE image to `ghcr.io`.
 
 - **Triggers:** `workflow_dispatch` (manual) and `pull_request` (on
-  changes to `analysis/klee/**`)
+  changes to `scripts/klee/**`)
 - **Push:** Only on `workflow_dispatch`; PR triggers build and verify
   without pushing
 
@@ -167,8 +167,14 @@ from Ghidra JSON through to KLEE harness generation:
 | Test | CWE | Patch Type | Contract |
 |------|-----|-----------|----------|
 | `cwe476_e2e.json` | CWE-476 (null deref) | apply_before | nonnull precondition |
-| `cwe415_e2e.json` | CWE-415 (double free) | apply_after | nonnull precondition |
-| `cwe190_e2e.json` | CWE-190 (integer overflow) | replace | nonnull + range |
 
 Unit-level tests (`.ll` files) test the `patchir-klee-verifier` harness
-generation directly without the decomp/transform stages.
+generation directly without the decomp/transform stages:
+
+| Test | Coverage |
+|------|----------|
+| `bl_usb__send_message.ll` | nonnull pre, range post, external stub, global symbolic |
+| `all_predicates.ll` | nonnull + alignment + relation(ne) pre, range post |
+| `entrypoint_nonnull_only.ll` | void target, precondition-only, no assert emitted |
+| `usb_static_contract.ll` | relation(ne) pre, PK_RangeArg, range post |
+| `no_contracts.ll` | no contracts, float args, no assume/assert |

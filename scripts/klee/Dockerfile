@@ -33,11 +33,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Ensure clang/llvm-config symlinks exist (base image may use
 # versioned names or /usr/local paths — create both)
-RUN for tool in clang clang++ llvm-config llvm-link llvm-ar llvm-dis opt; do \
-        if [ ! -e /usr/bin/${tool} ] && [ -e /usr/local/bin/${tool} ]; then \
-            ln -sf /usr/local/bin/${tool} /usr/bin/${tool}; \
-        fi; \
-    done
+COPY create-llvm-symlinks.sh /tmp/create-llvm-symlinks.sh
+RUN chmod +x /tmp/create-llvm-symlinks.sh && /tmp/create-llvm-symlinks.sh
 
 # Detect LLVM cmake dir — base image installs to /usr/local
 ENV LLVM_DIR=/usr/local/lib/cmake/llvm
@@ -98,42 +95,6 @@ RUN git clone --depth 1 --branch klee_uclibc_v1.4 \
     && cp -a . /opt/klee-uclibc/ \
     && rm -rf /tmp/klee-uclibc
 
-# ---- Build klee-uclibc (ARM32) ----
-# Cross-compile uclibc to ARM32 LLVM bitcode so KLEE can link with
-# ARM32 harnesses without data layout mismatches.
-# Uses a wrapper script so configure detects ARM, patches out the
-# ncurses check (only needed for menuconfig), and uses ARM sysroot.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc-arm-linux-gnueabihf libc6-dev-armhf-cross \
-        linux-libc-dev-armhf-cross \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    && git clone --depth 1 --branch klee_uclibc_v1.4 \
-        https://github.com/klee/klee-uclibc.git /tmp/klee-uclibc-arm32 \
-    && cd /tmp/klee-uclibc-arm32 \
-    && printf '#!/bin/sh\nexec clang --target=arm-linux-gnueabihf --sysroot=/usr/arm-linux-gnueabihf "$@"\n' \
-        > /tmp/arm-clang && chmod +x /tmp/arm-clang \
-    && sed -i '/checkForNCurses/s/not checkForNCurses([^)]*)/False/' configure \
-    && CC=/tmp/arm-clang ./configure \
-        --make-llvm-lib \
-        --with-llvm-config=$(which llvm-config) \
-        --with-cc=/tmp/arm-clang \
-    && sed -i \
-        -e 's/# TARGET_arm is not set/TARGET_arm=y/' \
-        -e 's/TARGET_x86_64=y/# TARGET_x86_64 is not set/' \
-        -e 's|^KERNEL_HEADERS=.*|KERNEL_HEADERS="/usr/arm-linux-gnueabihf/include"|' \
-        -e 's/^UCLIBC_EXTRA_CFLAGS=.*/UCLIBC_EXTRA_CFLAGS="-Wno-error=int-conversion -Wno-error=incompatible-function-pointer-types --target=arm-linux-gnueabihf --sysroot=\/usr\/arm-linux-gnueabihf"/' \
-        -e 's/UCLIBC_HAS_LOCALE=y/# UCLIBC_HAS_LOCALE is not set/' \
-        .config \
-    && sed -i \
-        -e 's|^HOSTCC.*|HOSTCC = gcc|' \
-        -e 's|^BUILD_CFLAGS.*|BUILD_CFLAGS = -O2 -Wall|' \
-        Makefile.klee \
-    && yes '' | make oldconfig \
-    && make -j$(nproc) \
-    && mkdir -p /opt/klee-uclibc-arm32 \
-    && cp -a . /opt/klee-uclibc-arm32/ \
-    && rm -rf /tmp/klee-uclibc-arm32
-
 # ---- Build GoogleTest (for KLEE unit tests) ----
 RUN git clone --depth 1 --branch v1.16.0 \
         https://github.com/google/googletest.git /opt/googletest
@@ -183,12 +144,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Ensure clang/llvm-config symlinks
-RUN for tool in clang clang++ llvm-config llvm-link llvm-ar llvm-dis opt \
-        llvm-nm llvm-objdump; do \
-        if [ ! -e /usr/bin/${tool} ] && [ -e /usr/local/bin/${tool} ]; then \
-            ln -sf /usr/local/bin/${tool} /usr/bin/${tool}; \
-        fi; \
-    done
+COPY create-llvm-symlinks.sh /tmp/create-llvm-symlinks.sh
+RUN chmod +x /tmp/create-llvm-symlinks.sh && /tmp/create-llvm-symlinks.sh
 
 # Copy KLEE installation + solver libraries
 COPY --from=builder /opt/klee /opt/klee
@@ -196,12 +153,10 @@ COPY --from=builder /opt/minisat/lib /opt/minisat/lib
 COPY --from=builder /opt/stp/lib /opt/stp/lib
 COPY --from=builder /opt/z3/lib /opt/z3/lib
 COPY --from=builder /opt/klee-uclibc /opt/klee-uclibc
-COPY --from=builder /opt/klee-uclibc-arm32 /opt/klee-uclibc-arm32
 
 ENV PATH="/opt/klee/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/klee/lib:/opt/stp/lib:/opt/z3/lib:/opt/minisat/lib"
 ENV KLEE_UCLIBC_PATH="/opt/klee-uclibc"
-ENV KLEE_UCLIBC_ARM32_PATH="/opt/klee-uclibc-arm32"
 ENV KLEE_INCLUDE="/opt/klee/include/klee"
 
 # Copy entrypoint
