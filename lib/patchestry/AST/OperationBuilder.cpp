@@ -311,10 +311,33 @@ namespace patchestry::ast {
         }
 
         if (vnode_type->isPointerType()) {
-            // Use the target's pointer-integer width so that pointer constants are
-            // not truncated on 64-bit targets.
             unsigned ptr_bits = ctx.getIntWidth(ctx.getUIntPtrType());
-            auto *literal     = new (ctx) clang::IntegerLiteral(
+
+            // Null pointer constant: cast to void* instead of the specific
+            // pointer type.  (void *)0 is idiomatic C and avoids verbose
+            // casts like (signed char *)0UL or (undefined *)0UL.
+            if (*vnode.value == 0) {
+                auto *literal = new (ctx) clang::IntegerLiteral(
+                    ctx, llvm::APInt(ptr_bits, 0), ctx.getUIntPtrType(), location
+                );
+                auto null_type = ctx.VoidPtrTy;
+                auto result = sema().BuildCStyleCastExpr(
+                    location, ctx.getTrivialTypeSourceInfo(null_type), location, literal
+                );
+                assert(!result.isInvalid());
+                auto *null_expr = result.getAs< clang::Expr >();
+                // If the target is void* already, we're done. Otherwise Sema
+                // will insert an implicit conversion at the use site.
+                if (ctx.hasSameUnqualifiedType(vnode_type, null_type))
+                    return null_expr;
+                // For non-void pointer types, one explicit cast is still
+                // needed but now it's from void* (cleaner than from uintptr_t).
+                return make_cast(ctx, null_expr, vnode_type, location);
+            }
+
+            // Non-null pointer constant: use target's pointer-integer width
+            // so values are not truncated on 64-bit targets.
+            auto *literal = new (ctx) clang::IntegerLiteral(
                 ctx, llvm::APInt(ptr_bits, *vnode.value), ctx.getUIntPtrType(), location
             );
             auto result = sema().BuildCStyleCastExpr(

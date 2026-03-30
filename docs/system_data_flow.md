@@ -19,7 +19,7 @@ internals of LLVM, MLIR, or vendored dependencies.
     | patchir-decomp
     |   uses:
     |   - patchestry_ghidra: JSON -> in-memory program/P-Code model
-    |   - patchestry_ast: Ghidra model -> Clang AST/CIR-ready structures
+    |   - patchestry_ast: Ghidra model -> CGraph -> SNode -> Clang AST/CIR-ready structures
     |   - patchestry_codegen: emit selected output form
     v
 [Decompilation outputs]
@@ -27,17 +27,8 @@ internals of LLVM, MLIR, or vendored dependencies.
     |- CIR                    (--emit-cir)       [tested]
     |- LLVM IR                (--emit-llvm)      [tested]
     |- Pretty-printed C TU    (--print-tu)       [tested]
-    |- Assembly               (--emit-asm)       [supported in code]
-    \- Object file            (--emit-obj)       [supported in code]
-
-Optional side path:
-[Ghidra-exported JSON]
-    |
-    | pcode-translate
-    |   uses patchestry_ghidra + MLIRPcode registration
-    v
-[P-Code translation output]
-    \- textual translation output via mlir-translate driver   [tested]
+    |- Assembly               (--emit-asm)       [flag exists, path unimplemented]
+    \- Object file            (--emit-obj)       [flag exists, path unimplemented]
 
 Main patching path:
 [CIR from patchir-decomp or hand-provided CIR]
@@ -73,13 +64,65 @@ Downstream of this repo:
 ## Notes on Outputs
 
 - `patchir-decomp` can stop at multiple output layers depending on flags:
-  high-level MLIR, CIR, LLVM IR, pretty-printed C, assembly, or object output.
+  high-level MLIR, CIR, LLVM IR, and pretty-printed C are exercised by tests.
+- `--emit-asm` and `--emit-obj` are currently exposed by CLI parsing but are not
+  implemented end-to-end in the reviewed PR branch.
 - `patchir-transform` produces patched CIR.
 - `patchir-cir2llvm` produces LLVM IR text or LLVM bitcode.
 - `patchir-yaml-parser` produces validation/inspection output, not a transformed
   firmware artifact.
 - Final patched binaries are downstream of this repository's core toolchain and
   are not the primary in-repo artifact produced by the tested flows here.
+
+## Decompilation Semantics
+
+### What the JSON is
+
+- The Ghidra-side serializer does not emit raw assembly text.
+- It emits a repository-specific JSON schema that contains:
+  - recovered type information
+  - functions and globals
+  - basic blocks and operation order
+  - high P-Code operations and varnodes
+  - branch metadata such as `taken_block`, `not_taken_block`, `target_block`
+  - switch metadata such as `switch_input`, `switch_cases`, and fallback edges
+- The schema boundary is defined by `include/patchestry/Ghidra/PcodeOperations.hpp`
+  and loaded by `patchestry_ghidra`.
+
+### How `patchir-decomp` bridges to C
+
+`patchir-decomp` is not translating assembly directly to C syntax in one step.
+The flow is layered:
+
+1. `patchestry_ghidra` deserializes Ghidra JSON into an in-memory typed P-Code
+   and CFG model.
+2. `patchestry_ast` lifts individual P-Code operations into Clang expressions
+   and statements mechanically where possible.
+3. Branch terminals are separated from block contents and turned into CFG edges.
+4. `CGraph` represents that CFG explicitly for control-flow structuring.
+5. `SNode` represents structured control flow (`if`, `switch`, loops, labels,
+   gotos, break, continue, return).
+6. Clang AST emission lowers the `SNode` tree into a function body, and later
+   codegen emits CIR / MLIR / LLVM / pretty-printed C.
+
+### Mechanical vs semantic recovery
+
+- Mechanical recovery:
+  opcode-level lifting such as integer arithmetic, comparisons, loads, stores,
+  calls, casts, and pointer operations.
+- Semantic recovery:
+  recovering higher-level control flow from CFG and Ghidra metadata, especially
+  conditional branches and jump-table-based `switch` statements.
+- The direct JSON -> CGraph path exists so control-flow structuring happens
+  before CIR/LLVM lowering, while branch and switch intent is still explicit.
+
+### Current state in PR #182
+
+- The reviewed branch clearly moves the default path to:
+  `JSON -> CGraph -> SNode -> Clang AST`.
+- The implementation is intentionally partial:
+  switch recovery is present and tested, while broader goto elimination and
+  loop/if restructuring are still in progress.
 
 ## Maintenance Contract
 

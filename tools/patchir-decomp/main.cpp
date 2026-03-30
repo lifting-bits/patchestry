@@ -78,11 +78,29 @@ namespace {
 
     const llvm::cl::opt< bool > use_rellic_transform( // NOLINT(cert-err58-cpp)
         "use-rellic-transform", llvm::cl::desc("Enable rellic decompilation transform"),
-        llvm::cl::init(true)
+        llvm::cl::init(false)
     ); // NOLINT(cert-err58-cpp)
 
     const llvm::cl::opt< bool > print_tu( // NOLINT(cert-err58-cpp)
         "print-tu", llvm::cl::desc("Pretty print translation unit"), llvm::cl::init(false)
+    );
+
+    const llvm::cl::opt< bool > use_structuring_pass( // NOLINT(cert-err58-cpp)
+        "use-structuring-pass",
+        llvm::cl::desc("Enable the CfgFoldStructure structuring pass"),
+        llvm::cl::init(false)
+    );
+
+    const llvm::cl::opt< bool > emit_dot_cfg( // NOLINT(cert-err58-cpp)
+        "emit-dot-cfg",
+        llvm::cl::desc("Dump DOT graphs at phase boundaries (debug)"),
+        llvm::cl::init(false)
+    );
+
+    const llvm::cl::opt< bool > verify_structuring( // NOLINT(cert-err58-cpp)
+        "verify-structuring",
+        llvm::cl::desc("Verify no statements are dropped during CFG structuring"),
+        llvm::cl::init(false)
     );
 
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
@@ -91,17 +109,81 @@ namespace {
         );
 
         return {
-            .emit_cir             = emit_cir.getValue(),
-            .emit_mlir            = emit_mlir.getValue(), // It is set to true by default
-            .emit_llvm            = emit_llvm.getValue(),
-            .emit_asm             = emit_asm.getValue(),
-            .emit_obj             = emit_obj.getValue(),
-            .verbose              = verbose.getValue(),
-            .use_rellic_transform = use_rellic_transform.getValue(),
-            .output_file          = output_filename.getValue(),
-            .input_file           = input_filename.getValue(),
-            .print_tu             = print_tu.getValue(),
+            .emit_cir                   = emit_cir.getValue(),
+            .emit_mlir                  = emit_mlir.getValue(), // It is set to true by default
+            .emit_llvm                  = emit_llvm.getValue(),
+            .emit_asm                   = emit_asm.getValue(),
+            .emit_obj                   = emit_obj.getValue(),
+            .verbose                    = verbose.getValue(),
+            .use_rellic_transform       = use_rellic_transform.getValue(),
+            .use_structuring_pass       = use_structuring_pass.getValue(),
+            .output_file                = output_filename.getValue(),
+            .input_file                 = input_filename.getValue(),
+            .print_tu                   = print_tu.getValue(),
+            .emit_dot_cfg               = emit_dot_cfg.getValue(),
+            .verify_structuring         = verify_structuring.getValue(),
         };
+    }
+
+    bool validateUnsupportedOptions(const patchestry::Options &options) {
+        if (options.emit_obj) {
+            LOG(ERROR) << "--emit-obj is not implemented. Use --emit-cir, --emit-mlir, "
+                          "--emit-llvm, or --print-tu instead.\n";
+            return false;
+        }
+
+        if (options.use_structuring_pass) {
+            LOG(ERROR) << "--use-structuring-pass is not implemented. The direct JSON -> CGraph "
+                          "path is the only supported structuring mode in this branch.\n";
+            return false;
+        }
+
+        if (options.verify_structuring) {
+            LOG(ERROR) << "--verify-structuring is not implemented. No statement-preservation "
+                          "verification pass is wired into patchir-decomp yet.\n";
+            return false;
+        }
+
+        return true;
+    }
+
+    bool validateBranchindSwitchMetadata(const patchestry::ghidra::Program &program) {
+        for (const auto &[func_key, function] : program.serialized_functions) {
+            (void)func_key;
+            for (const auto &[block_key, block] : function.basic_blocks) {
+                (void)block_key;
+                for (const auto &operation_key : block.ordered_operations) {
+                    auto op_it = block.operations.find(operation_key);
+                    if (op_it == block.operations.end()) continue;
+
+                    const auto &op = op_it->second;
+                    if (op.mnemonic != patchestry::ghidra::Mnemonic::OP_BRANCHIND) continue;
+                    if (op.switch_cases.empty()) continue;
+
+                    size_t valid_targets = 0;
+                    for (const auto &sc : op.switch_cases) {
+                        if (function.basic_blocks.contains(sc.target_block)) {
+                            ++valid_targets;
+                        }
+                    }
+
+                    const bool has_successor_fallback = !op.successor_blocks.empty();
+                    const bool has_valid_fallback_block =
+                        op.fallback_block.has_value()
+                        && function.basic_blocks.contains(*op.fallback_block);
+
+                    if (valid_targets == 0 && !has_successor_fallback && !has_valid_fallback_block) {
+                        LOG(ERROR) << "BRANCHIND switch_cases has no valid target blocks in "
+                                   << function.name << " at operation " << op.key
+                                   << "; add successor_blocks or at least one valid switch_cases "
+                                      "target.\n";
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
     }
 
     void createSourceManager(clang::CompilerInstance &ci) {
@@ -221,6 +303,9 @@ namespace {
 
 int main(int argc, char **argv) {
     auto options = parseCommandLineOptions(argc, argv);
+    if (!validateUnsupportedOptions(options)) {
+        return EXIT_FAILURE;
+    }
 
     llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
         llvm::MemoryBuffer::getFile(options.input_file);
@@ -247,6 +332,10 @@ int main(int argc, char **argv) {
     if (!program.has_value()) {
         LOG(ERROR) << "Failed to deserialize JSON file '" << options.input_file
                    << "' as patchestry program\n";
+        return EXIT_FAILURE;
+    }
+
+    if (!validateBranchindSwitchMetadata(*program)) {
         return EXIT_FAILURE;
     }
 
@@ -284,9 +373,12 @@ int main(int argc, char **argv) {
     ast_consumer.HandleTranslationUnit(ast_context);
 
     auto *pcode_consumer = dynamic_cast< patchestry::ast::PcodeASTConsumer * >(&ast_consumer);
-    if (pcode_consumer != nullptr) {
+    if (pcode_consumer != nullptr && !ci.getDiagnostics().hasErrorOccurred()) {
         auto codegen = std::make_unique< patchestry::codegen::CodeGenerator >(ci);
         codegen->lower_to_ir(ast_context, options);
+    } else if (ci.getDiagnostics().hasErrorOccurred()) {
+        LOG(ERROR) << "Skipping code generation due to prior diagnostics errors.\n";
+        return EXIT_FAILURE;
     }
 
     return EXIT_SUCCESS;
