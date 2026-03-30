@@ -62,7 +62,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --run-bitcode|--run-harness)
             MODE="$1"
-            CONTAINER_ARGS+=("$1")
             shift
             ;;
         -h|--help)

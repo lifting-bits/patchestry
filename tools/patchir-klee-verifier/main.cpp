@@ -178,7 +178,11 @@ namespace {
 
         auto target_it = kv.find("target");
         if (target_it != kv.end()) {
-            parseTarget(target_it->second, pred.target, pred.arg_index);
+            if (!parseTarget(target_it->second, pred.target, pred.arg_index)) {
+                LOG(WARNING) << "malformed target '" << target_it->second
+                             << "' — skipping predicate\n";
+                return pred; // kind remains PK_Unknown → predicate is skipped
+            }
         }
 
         if (kind_str == "nonnull") {
@@ -381,9 +385,19 @@ namespace {
         for (auto &BB : *F) {
             for (auto &I : BB) {
                 for (unsigned i = 0; i < I.getNumOperands(); ++i) {
-                    if (auto *GV = llvm::dyn_cast< llvm::GlobalVariable >(I.getOperand(i))) {
+                    auto *op = I.getOperand(i);
+                    if (auto *GV = llvm::dyn_cast< llvm::GlobalVariable >(op)) {
                         if (!GV->isConstant()) {
                             out_globals.insert(GV);
+                        }
+                    } else {
+                        // Walk through ConstantExpr wrappers (bitcast, GEP)
+                        // to find the underlying GlobalVariable.
+                        auto *val = op->stripPointerCasts();
+                        if (auto *GV = llvm::dyn_cast< llvm::GlobalVariable >(val)) {
+                            if (!GV->isConstant()) {
+                                out_globals.insert(GV);
+                            }
                         }
                     }
                 }
@@ -429,7 +443,9 @@ namespace {
         }
 
         // Also check if the target function itself has contract metadata
-        // (on non-call instructions or calls to other functions)
+        // (e.g., on non-call instructions). Only collect contracts whose
+        // function-name operand (tuple operand(0)) matches the target function
+        // to avoid picking up contracts for callees inside the target.
         if (target_fn && !target_fn->isDeclaration()) {
             for (auto &BB : *target_fn) {
                 for (auto &I : BB) {
@@ -445,6 +461,12 @@ namespace {
                     auto *tuple = llvm::dyn_cast< llvm::MDTuple >(contract_md);
                     if (!tuple || tuple->getNumOperands() < 2)
                         continue;
+
+                    // Filter: only collect if the contract's function name matches
+                    auto *fn_name = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(0));
+                    if (!fn_name || fn_name->getString() != target_fn->getName())
+                        continue;
+
                     auto *md_str = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1));
                     if (md_str)
                         contracts.push_back(md_str->getString().str());
@@ -508,15 +530,40 @@ namespace {
             break;
         }
         case PK_RelNeqArgConst: {
-            if (!V->getType()->isIntegerTy())
-                break;
-            cond = B.CreateICmpNE(V, llvm::ConstantInt::getSigned(V->getType(), P.constant));
+            if (V->getType()->isPointerTy()) {
+                // ptr != 0 is equivalent to nonnull
+                if (P.constant == 0) {
+                    auto *null_ptr = llvm::ConstantPointerNull::get(
+                        llvm::cast< llvm::PointerType >(V->getType()));
+                    cond = B.CreateICmpNE(V, null_ptr);
+                } else {
+                    auto *intptr_ty = B.getIntPtrTy(M.getDataLayout());
+                    auto *ptr_int   = B.CreatePtrToInt(V, intptr_ty);
+                    cond = B.CreateICmpNE(
+                        ptr_int, llvm::ConstantInt::get(intptr_ty,
+                                     static_cast< uint64_t >(P.constant)));
+                }
+            } else if (V->getType()->isIntegerTy()) {
+                cond = B.CreateICmpNE(V, llvm::ConstantInt::getSigned(V->getType(), P.constant));
+            }
             break;
         }
         case PK_RelEqArgConst: {
-            if (!V->getType()->isIntegerTy())
-                break;
-            cond = B.CreateICmpEQ(V, llvm::ConstantInt::getSigned(V->getType(), P.constant));
+            if (V->getType()->isPointerTy()) {
+                if (P.constant == 0) {
+                    auto *null_ptr = llvm::ConstantPointerNull::get(
+                        llvm::cast< llvm::PointerType >(V->getType()));
+                    cond = B.CreateICmpEQ(V, null_ptr);
+                } else {
+                    auto *intptr_ty = B.getIntPtrTy(M.getDataLayout());
+                    auto *ptr_int   = B.CreatePtrToInt(V, intptr_ty);
+                    cond = B.CreateICmpEQ(
+                        ptr_int, llvm::ConstantInt::get(intptr_ty,
+                                     static_cast< uint64_t >(P.constant)));
+                }
+            } else if (V->getType()->isIntegerTy()) {
+                cond = B.CreateICmpEQ(V, llvm::ConstantInt::getSigned(V->getType(), P.constant));
+            }
             break;
         }
         case PK_RelLtArgConst: {
@@ -627,6 +674,23 @@ namespace {
             } else if (!ret_ty->isSized()) {
                 // Unsized return type (e.g. opaque struct) — return undef
                 B.CreateRet(llvm::UndefValue::get(ret_ty));
+            } else if (ret_ty->isPointerTy()) {
+                // For pointer-returning externals, return a pointer to a fresh
+                // symbolic buffer so KLEE can dereference it without hitting
+                // "invalid pointer" errors from unconstrained symbolic pointers.
+                uint64_t buf_size = symbolic_ptr_size;
+                auto *buf_ty = llvm::ArrayType::get(
+                    llvm::Type::getInt8Ty(Ctx), buf_size);
+                auto *buf = B.CreateAlloca(buf_ty);
+
+                std::string sym_name = (F->getName() + "_ret_buf").str();
+                llvm::Value *cast_ptr = B.CreateBitCast(buf, ptrTy);
+                llvm::Value *size_val = llvm::ConstantInt::get(sizeTy, buf_size);
+                llvm::Value *name_str = B.CreateGlobalString(sym_name);
+                B.CreateCall(make_sym, { cast_ptr, size_val, name_str });
+
+                llvm::Value *ret_ptr = B.CreateBitCast(buf, ret_ty);
+                B.CreateRet(ret_ptr);
             } else {
                 uint64_t ret_size = M.getDataLayout().getTypeAllocSize(ret_ty);
                 if (ret_size == 0) {

@@ -45,11 +45,13 @@ entry:
 ; CHECK:       call void @klee_make_symbolic(
 ; CHECK:       call void @klee_make_symbolic(
 
-; Precondition 1: arg0 (pointer) != 0 — relation neq on pointer is skipped
-;   (pointer args are icmp ne for nonnull, but relation neq with value=0
-;    on a pointer type falls through since isIntegerTy() is false)
+; Precondition 1: arg0 (pointer) != 0 — treated as nonnull
+; CHECK:       icmp ne ptr
+; CHECK:       call void @klee_assume(
 
-; Precondition 2: arg1 (pointer) != 0 — same as above
+; Precondition 2: arg1 (pointer) != 0 — treated as nonnull
+; CHECK:       icmp ne ptr
+; CHECK:       call void @klee_assume(
 
 ; Precondition 3: range on arg2 (integer) 0..512
 ; CHECK:       icmp sge i64
