@@ -38,7 +38,7 @@ meta_patches:
             argument_matches:
               - index: 0
                 name: "usb_g"
-                type: "struct struct_anon_struct_4_1_58265f66*"
+                type: "struct _usbd_device*"
 
          # Actions to Apply
          action:
@@ -49,9 +49,9 @@ meta_patches:
               - name: "operand_0"
                 source: "operand"
                 index: "0"
-              - name: "variable_2"
-                source: "variable"
-                symbol: "var1"
+              - name: "operand_2"
+                source: "operand"
+                index: "2"
 
 
 meta_contracts:

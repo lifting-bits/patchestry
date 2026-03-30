@@ -506,7 +506,7 @@ namespace patchestry::ast {
             bit_width       = TypeBuilder::kNumBitsUint;
         }
 
-        // Populate enum with actual Ghidra-serialized constants.
+        // Populate enum with actual serialized constants.
         const auto &constants = enum_type.GetConstants();
         for (const auto &c : constants) {
             auto *val = clang::IntegerLiteral::Create(

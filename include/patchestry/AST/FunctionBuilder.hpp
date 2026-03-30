@@ -89,21 +89,59 @@ namespace patchestry::ast {
             const FunctionPrototype &proto
         );
 
+        /// Create a FunctionDecl with proper type, params, and label
+        /// declarations, but an empty body.  Used by the CGraph
+        /// pipeline where the body is filled later by EmitClangAST.
         clang::FunctionDecl *create_definition(clang::ASTContext &ctx);
 
+        /// Process all non-terminal operations in a block (skips
+        /// BRANCH/CBRANCH/BRANCHIND/RETURN).  Returns the stmts.
+        std::vector<clang::Stmt *>
+        create_block_stmts(clang::ASTContext &ctx, const BasicBlock &block);
+
+        /// Build just the branch condition expression from a CBRANCH op.
+        clang::Expr *create_branch_condition(clang::ASTContext &ctx, const Operation &op);
+
+        /// Build just the switch discriminant expression from a BRANCHIND op.
+        clang::Expr *create_switch_discriminant(clang::ASTContext &ctx, const Operation &op);
+
         bool has_basic_blocks() const { return !function.get().basic_blocks.empty(); }
+
+        /// Cast an expression to the target type (delegates to OpBuilder::make_cast).
+        clang::Expr *create_cast(clang::ASTContext &ctx, clang::Expr *expr,
+                                  const clang::QualType &to_type,
+                                  clang::SourceLocation loc);
+
+        /// Access to the ghidra::Function for CGraph building.
+        const Function &get_function() const { return function.get(); }
+
+        /// Access to labels_declaration for CGraph building.
+        const std::unordered_map<std::string, clang::LabelDecl *> &
+        get_labels() const { return labels_declaration; }
+
+        /// Set the sema context to the given function for building stmts.
+        /// Returns the previous context for later restoration.
+        clang::DeclContext *enter_function_context(clang::FunctionDecl *fn) {
+            auto *prev = get_sema_context();
+            set_sema_context(fn);
+            return prev;
+        }
+
+        /// Restore sema context to a previously saved value.
+        void leave_function_context(clang::DeclContext *prev) {
+            set_sema_context(prev);
+        }
 
       private:
         void create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl);
 
-        std::vector< clang::Stmt * >
-        create_function_body(clang::ASTContext &ctx, clang::FunctionDecl *func_decl);
-
-        std::vector< clang::Stmt * >
-        create_basic_block(clang::ASTContext &ctx, const BasicBlock &block);
-
         std::pair< clang::Stmt *, bool >
         create_operation(clang::ASTContext &ctx, const Operation &op);
+
+        /// Inline single-use temporaries: replace DeclStmt+single-ref patterns
+        /// with the initializer expression inlined at the use site.
+        static void InlineSingleUseTemps(clang::ASTContext &ctx,
+                                         std::vector<clang::Stmt *> &stmts);
 
         void set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
 
@@ -134,31 +172,20 @@ namespace patchestry::ast {
         std::unordered_map< std::string, clang::Stmt * > operation_stmts;
 
         // Tracks how many times each local variable name has been declared so
-        // that duplicates (e.g. multiple Ghidra "UNNAMED" vars) get unique suffixes.
+        // that duplicates (e.g. multiple "UNNAMED" vars) get unique suffixes.
         std::unordered_map< std::string, unsigned > declared_name_counts;
+
+        // First VarDecl created for each name — used for variable coalescing.
+        // When a later SSA version of the same register has the same type,
+        // we reuse this VarDecl instead of creating x3_1, x3_2, etc.
+        std::unordered_map< std::string, clang::VarDecl * > declared_first_var;
+
+        // Counter for unique temporary variable names for call return values.
+        unsigned call_ret_counter = 0;
 
         // Statements queued by create_temporary during an operation build that must be
         // emitted immediately before the operation that triggered them.  Drained by
-        // create_basic_block after each create_operation call.
+        // create_block_stmts after each create_operation call.
         std::vector< clang::Stmt * > pending_materialized;
-
-        // Blocks whose operations have been inlined into a switch case body.
-        // create_function_body skips these entirely.
-        std::unordered_set< std::string > inlined_blocks;
-
-        // Number of distinct predecessor blocks for each block.  Computed once
-        // at the start of create_function_body so that switch-case inlining can
-        // avoid inlining blocks that are shared across multiple predecessors.
-        std::unordered_map< std::string, unsigned > block_predecessor_count;
-
-        // Blocks targeted by has_exit cases that could not be inlined.
-        // create_function_body emits "label: break;" for these.
-        std::unordered_set< std::string > break_target_blocks;
-
-        // Key of the next block to be emitted after the current one in RPO order.
-        // Set by create_function_body before building each block; read by
-        // create_branch to decide whether a BRANCH goto is redundant (i.e. the
-        // target is the immediately following block and control falls through).
-        std::string current_next_block_key;
     };
 } // namespace patchestry::ast

@@ -1,0 +1,90 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: rm -f direct_switch_cfg.step_000.BuildCGraph.dot
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -print-tu -emit-dot-cfg -output %t >> /dev/null 2>&1
+// RUN: test -e direct_switch_cfg.step_000.BuildCGraph.dot
+// RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=DOT %s --input-file direct_switch_cfg.step_000.BuildCGraph.dot
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// DOT: digraph CGraph
+// DOT: switch:
+// DOT: 5->N
+// DOT: 6->N
+// C: void direct_switch_cfg(void)
+// C: switch (
+// C: case 5
+// C: case 6
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:16000000": {
+      "name": "direct_switch_cfg",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:16000000:entry": {
+          "operations": {
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:16000000:0:basic" }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:16000000:0:basic": {
+          "operations": {
+            "add_op": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 0 },
+                { "type": "type_int", "kind": "constant", "value": 0 }
+              ]
+            },
+            "ind": {
+              "mnemonic": "BRANCHIND",
+              "inputs": [
+                { "type": "type_ptr", "kind": "constant", "value": 0 }
+              ],
+              "switch_input": { "type": "type_int", "kind": "temporary", "operation": "add_op" },
+              "switch_cases": [
+                { "value": 5, "target_block": "ram:16000000:1:basic", "has_exit": true },
+                { "value": 6, "target_block": "ram:16000000:2:basic", "has_exit": true }
+              ],
+              "fallback_block": "ram:16000000:3:basic"
+            }
+          },
+          "ordered_operations": ["add_op", "ind"]
+        },
+        "ram:16000000:1:basic": {
+          "operations": {
+            "ret1": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["ret1"]
+        },
+        "ram:16000000:2:basic": {
+          "operations": {
+            "ret2": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["ret2"]
+        },
+        "ram:16000000:3:basic": {
+          "operations": {
+            "ret3": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["ret3"]
+        }
+      },
+      "entry_block": "ram:16000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int":  { "name": "int",  "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void"    },
+    "type_ptr":  { "kind": "pointer", "size": 4, "element_type": "type_void" }
+  }
+}

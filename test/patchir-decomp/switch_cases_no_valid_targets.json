@@ -1,0 +1,51 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: not %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -print-tu -output %t 2>&1 | %file-check -vv -check-prefix=ERR %s
+// ERR: BRANCHIND switch_cases has no valid target blocks
+// ERR: add successor_blocks or at least one valid switch_cases target
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:19000000": {
+      "name": "switch_cases_no_valid_targets",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:19000000:entry": {
+          "operations": {
+            "loc_sel": { "mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "sel", "type": "type_int" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:19000000:0:basic" }
+          },
+          "ordered_operations": ["loc_sel", "br"]
+        },
+        "ram:19000000:0:basic": {
+          "operations": {
+            "ind": {
+              "mnemonic": "BRANCHIND",
+              "inputs": [
+                { "type": "type_int", "kind": "local", "operation": "loc_sel" }
+              ],
+              "switch_cases": [
+                { "value": 0, "target_block": "MISSING_BLOCK_A" },
+                { "value": 1, "target_block": "MISSING_BLOCK_B" }
+              ]
+            }
+          },
+          "ordered_operations": ["ind"]
+        }
+      },
+      "entry_block": "ram:19000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int":  { "name": "int",  "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void"    }
+  }
+}
