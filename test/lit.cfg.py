@@ -158,3 +158,4 @@ os.makedirs(ci_output_folder, exist_ok=True)
 
 config.substitutions.append(('%PATH%', config.environment['PATH']))
 config.substitutions.append(('%ci_output_folder', f"--ci {ci_output_folder}"))
+config.substitutions.append(('%patchestry_src_root', config.patchestry_src_root))

@@ -6,6 +6,7 @@
  */
 
 #include <llvm/Bitcode/BitcodeWriter.h>
+#include <llvm/Linker/Linker.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
@@ -44,6 +45,12 @@ namespace {
 
     const llvm::cl::opt< bool >
         emit_ll("S", llvm::cl::desc("Emit LLVM IR instead of bitcode"), llvm::cl::init(false));
+
+    const llvm::cl::opt< std::string > model_library(
+        "model-library",
+        llvm::cl::desc("LLVM IR/bitcode file with external function models (linked before stubbing)"),
+        llvm::cl::value_desc("file"), llvm::cl::init("")
+    );
 
     const llvm::cl::opt< bool >
         verbose("v", llvm::cl::desc("Enable verbose output"), llvm::cl::init(false));
@@ -976,19 +983,43 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    // 1. Stub external functions (must do before harness so stubs exist)
+    // 1. Link model library if provided (replaces declarations with definitions)
+    if (!model_library.empty()) {
+        auto model_mod = llvm::parseIRFile(model_library, err, context);
+        if (!model_mod) {
+            LOG(ERROR) << "failed to load model library '" << model_library << "'\n";
+            err.print(argv[0], llvm::errs());
+            return EXIT_FAILURE;
+        }
+
+        // Retarget model to match input module
+        model_mod->setTargetTriple(module->getTargetTriple());
+        model_mod->setDataLayout(module->getDataLayout());
+
+        if (llvm::Linker::linkModules(*module, std::move(model_mod),
+                                      llvm::Linker::Flags::LinkOnlyNeeded)) {
+            LOG(ERROR) << "failed to link model library '" << model_library << "'\n";
+            return EXIT_FAILURE;
+        }
+
+        if (verbose) {
+            llvm::outs() << "Linked model library: " << model_library << "\n";
+        }
+    }
+
+    // 2. Stub external functions (must do before harness so stubs exist)
     unsigned stub_count = stubExternalFunctions(*module, target_fn);
     if (verbose) {
         llvm::outs() << "Stubbed " << stub_count << " external function(s)\n";
     }
 
-    // 2. Generate main() harness
+    // 3. Generate main() harness
     if (!generateHarness(*module, target_fn)) {
         LOG(ERROR) << "failed to generate harness\n";
         return EXIT_FAILURE;
     }
 
-    // 3. Write output
+    // 4. Write output
     if (!writeModuleToFile(*module, output_filename)) {
         LOG(ERROR) << "failed to write output\n";
         return EXIT_FAILURE;

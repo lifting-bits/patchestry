@@ -13,6 +13,7 @@ target_link_libraries(patchir-klee-verifier
         LLVMSupport
         LLVMIRReader
         LLVMBitWriter
+        LLVMLinker
         patchestry_settings
 )
 
