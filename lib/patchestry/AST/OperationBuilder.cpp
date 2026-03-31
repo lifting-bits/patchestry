@@ -370,11 +370,22 @@ namespace patchestry::ast {
             clang::ArraySizeModifier::Normal, 0
         );
 
-        return clang::StringLiteral::Create(
+        auto *str_lit = clang::StringLiteral::Create(
             ctx,
             *vnode.string_value, // Use the string value directly
             is_wide ? clang::StringLiteralKind::Wide : clang::StringLiteralKind::Ordinary,
             false, string_array, clang::SourceLocation()
+        );
+
+        // Always apply array-to-pointer decay so the StringLiteral is never
+        // exposed as a raw array type to downstream codegen. Both ClangIR's
+        // CIRGenExprScalar and Clang's CGExprScalar lack a VisitStringLiteral
+        // handler — a bare StringLiteral in scalar context causes a segfault
+        // or "cannot compile this scalar expression" error.
+        auto decayed_type = ctx.getDecayedType(string_array);
+        return clang::ImplicitCastExpr::Create(
+            ctx, decayed_type, clang::CastKind::CK_ArrayToPointerDecay, str_lit,
+            nullptr, clang::VK_PRValue, clang::FPOptionsOverride()
         );
     }
 
