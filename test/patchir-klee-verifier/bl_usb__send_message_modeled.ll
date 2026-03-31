@@ -15,7 +15,7 @@
 ; Verifies:
 ;   1. usbd_ep_write_packet has a body from the model (NOT auto-stubbed)
 ;   2. Model body contains klee_make_symbolic + klee_assume calls
-;   3. main() harness still has klee_assert for the postcondition
+;   3. main() harness still has klee_abort for the postcondition
 ;   4. Global usb_g is still made symbolic
 
 target datalayout = "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
@@ -55,5 +55,8 @@ entry:
 ; CHECK:       define i32 @main()
 ; CHECK:       call void @klee_make_symbolic(ptr @usb_g,
 ; CHECK:       call i32 @bl_usb__send_message(
-; CHECK:       call void @klee_assert(
+; CHECK:       br i1 %{{[0-9]+}}, label %assert.cont, label %assert.fail
+; CHECK:       call void @klee_abort()
+; CHECK:       unreachable
+; CHECK:       assert.cont:
 ; CHECK:       ret i32 0

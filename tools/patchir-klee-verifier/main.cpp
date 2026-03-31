@@ -371,13 +371,14 @@ namespace {
         return M.getOrInsertFunction("klee_assume", FT);
     }
 
-    // Get or declare klee_assert: void klee_assert(int)
-    static llvm::FunctionCallee getKleeAssert(llvm::Module &M) {
-        auto &Ctx   = M.getContext();
+    // Get or declare klee_abort: void klee_abort(void)
+    // KLEE's klee_assert is a macro (not a function), so we use
+    // if (!cond) klee_abort() to implement postcondition assertions.
+    static llvm::FunctionCallee getKleeAbort(llvm::Module &M) {
+        auto &Ctx    = M.getContext();
         auto *voidTy = llvm::Type::getVoidTy(Ctx);
-        auto *i32Ty = llvm::Type::getInt32Ty(Ctx);
-        auto *FT    = llvm::FunctionType::get(voidTy, { i32Ty }, false);
-        return M.getOrInsertFunction("klee_assert", FT);
+        auto *FT     = llvm::FunctionType::get(voidTy, {}, false);
+        return M.getOrInsertFunction("klee_abort", FT);
     }
 
     // Collect all GlobalVariable references from a function (transitively through internal calls)
@@ -508,7 +509,6 @@ namespace {
         const ParsedPredicate &P, llvm::Value *arg_val, llvm::Value *ret_val
     ) {
         auto &Ctx    = M.getContext();
-        auto *i32Ty  = llvm::Type::getInt32Ty(Ctx);
         auto *i64Ty  = llvm::Type::getInt64Ty(Ctx);
 
         llvm::Value *V = nullptr;
@@ -636,9 +636,19 @@ namespace {
             llvm::Value *cond_intptr = B.CreateZExt(cond, intptr_ty);
             B.CreateCall(getKleeAssume(M), { cond_intptr });
         } else {
-            // klee_assert takes int (i32)
-            llvm::Value *cond_i32 = B.CreateZExt(cond, i32Ty);
-            B.CreateCall(getKleeAssert(M), { cond_i32 });
+            // Postcondition: if (!cond) klee_abort()
+            // KLEE's klee_assert is a macro, not a function, so we
+            // emit a conditional branch to klee_abort() instead.
+            auto *parent_fn = B.GetInsertBlock()->getParent();
+            auto *abort_bb  = llvm::BasicBlock::Create(Ctx, "assert.fail", parent_fn);
+            auto *cont_bb   = llvm::BasicBlock::Create(Ctx, "assert.cont", parent_fn);
+            B.CreateCondBr(cond, cont_bb, abort_bb);
+
+            B.SetInsertPoint(abort_bb);
+            B.CreateCall(getKleeAbort(M), {});
+            B.CreateUnreachable();
+
+            B.SetInsertPoint(cont_bb);
         }
     }
 

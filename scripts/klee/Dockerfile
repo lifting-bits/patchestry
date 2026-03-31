@@ -76,12 +76,12 @@ RUN git clone --depth 1 --branch z3-4.8.15 https://github.com/Z3Prover/z3.git /t
     && ninja -j$(nproc) && ninja install \
     && rm -rf /tmp/z3
 
-# ---- Build klee-uclibc (x86_64) ----
+# ---- Build klee-uclibc (x86_64, compiled to LLVM bitcode) ----
 # Disable locale download (www.uclibc.org has intermittent SSL timeouts)
 # by disabling UCLIBC_HAS_LOCALE in the config after configure.
 RUN git clone --depth 1 --branch klee_uclibc_v1.4 \
-        https://github.com/klee/klee-uclibc.git /tmp/klee-uclibc \
-    && cd /tmp/klee-uclibc \
+        https://github.com/klee/klee-uclibc.git /opt/klee-uclibc \
+    && cd /opt/klee-uclibc \
     && ./configure \
         --make-llvm-lib \
         --with-llvm-config=$(which llvm-config) \
@@ -90,10 +90,7 @@ RUN git clone --depth 1 --branch klee_uclibc_v1.4 \
         -e 's/__UCLIBC_HAS_XLOCALE__=y/# __UCLIBC_HAS_XLOCALE__ is not set/' \
         .config \
     && yes '' | make oldconfig \
-    && make -j$(nproc) \
-    && mkdir -p /opt/klee-uclibc \
-    && cp -a . /opt/klee-uclibc/ \
-    && rm -rf /tmp/klee-uclibc
+    && make -j$(nproc)
 
 # ---- Build GoogleTest (for KLEE unit tests) ----
 RUN git clone --depth 1 --branch v1.16.0 \
@@ -102,9 +99,13 @@ RUN git clone --depth 1 --branch v1.16.0 \
 # ---- Build KLEE ----
 # Make minisat/STP/Z3 libs visible to the linker
 ENV LIBRARY_PATH="/opt/minisat/lib:/opt/stp/lib:/opt/z3/lib"
+# Copy patches applied during KLEE build
+COPY patches/ /tmp/klee-patches/
+
 RUN git clone --branch llvm20 \
         https://github.com/trail-of-forks/klee.git /tmp/klee \
     && cd /tmp/klee && git checkout 4006851f09af391a368578fd4644d236e36d77b7 \
+    && git apply /tmp/klee-patches/raise-asm-guard-tri.patch \
     && mkdir build && cd build \
     && cmake -G Ninja \
         -DCMAKE_INSTALL_PREFIX=/opt/klee \
@@ -153,7 +154,6 @@ COPY --from=builder /opt/minisat/lib /opt/minisat/lib
 COPY --from=builder /opt/stp/lib /opt/stp/lib
 COPY --from=builder /opt/z3/lib /opt/z3/lib
 COPY --from=builder /opt/klee-uclibc /opt/klee-uclibc
-
 ENV PATH="/opt/klee/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/klee/lib:/opt/stp/lib:/opt/z3/lib:/opt/minisat/lib"
 ENV KLEE_UCLIBC_PATH="/opt/klee-uclibc"

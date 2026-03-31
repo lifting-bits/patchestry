@@ -137,14 +137,15 @@ run_klee() {
 
     # Detect whether the bitcode needs uclibc/POSIX runtime.
     # Harnesses from patchir-klee-verifier have all externals stubbed and
-    # use klee_make_symbolic/klee_assume/klee_assert directly, so they
-    # don't need uclibc. The uclibc link also causes RaiseAsmPass crashes
-    # due to inline asm in uclibc that KLEE can't handle.
+    # use klee_make_symbolic/klee_assume/klee_abort directly, so they
+    # don't need uclibc. Non-harness bitcode gets full uclibc for POSIX
+    # libc support. The RaiseAsmPass crash with uclibc inline asm is
+    # fixed by the raise-asm-guard-tri patch applied during the KLEE build.
     local runtime_args=()
     local bc_ir
-    bc_ir=$(llvm-dis -o - "${bc}" 2>/dev/null | head -30 || true)
+    bc_ir=$(llvm-dis -o - "${bc}" 2>/dev/null || true)
 
-    if echo "${bc_ir}" | grep -q 'klee_make_symbolic\|klee_assume\|klee_assert'; then
+    if echo "${bc_ir}" | grep -q 'klee_make_symbolic\|klee_assume\|klee_abort'; then
         echo "[klee] Detected KLEE harness — running without uclibc (externals stubbed)"
     else
         runtime_args=("--posix-runtime" "--libc=uclibc")

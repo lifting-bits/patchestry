@@ -46,6 +46,6 @@ entry:
 ; CHECK:       call void @bl_usb__send_message(
 
 ; No klee_assert should appear (no postconditions)
-; CHECK-NOT:   call void @klee_assert(
+; CHECK-NOT:   call void @klee_abort(
 
 ; CHECK:       ret i32 0

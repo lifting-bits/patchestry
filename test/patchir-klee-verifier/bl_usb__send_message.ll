@@ -12,7 +12,7 @@
 ;      - Pointer argument allocated and made symbolic
 ;      - klee_assume for nonnull precondition on arg0
 ;      - Call to target function
-;      - klee_assert for range postcondition on return value [0, 255]
+;      - klee_abort for range postcondition on return value [0, 255]
 
 target datalayout = "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
 
@@ -59,9 +59,13 @@ entry:
 ; HARNESS:       call i32 @bl_usb__send_message(
 ; HARNESS:       icmp sge i64 %{{[0-9]+}}, 0
 ; HARNESS:       icmp sle i64 %{{[0-9]+}}, 255
-; HARNESS:       call void @klee_assert(
+; HARNESS:       br i1 %{{[0-9]+}}, label %assert.cont, label %assert.fail
+; HARNESS:       assert.fail:
+; HARNESS:       call void @klee_abort()
+; HARNESS:       unreachable
+; HARNESS:       assert.cont:
 ; HARNESS:       ret i32 0
 
 ; --- FileCheck: declarations (after main) ---
 ; HARNESS:       declare void @klee_assume(
-; HARNESS:       declare void @klee_assert(
+; HARNESS:       declare void @klee_abort()

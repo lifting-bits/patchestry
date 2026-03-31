@@ -23,5 +23,5 @@ entry:
 ; CHECK:       icmp eq ptr
 ; CHECK:       call void @klee_assume(
 ; CHECK:       call void @check_eq_ptr(
-; CHECK-NOT:   call void @klee_assert(
+; CHECK-NOT:   call void @klee_abort(
 ; CHECK:       ret i32 0

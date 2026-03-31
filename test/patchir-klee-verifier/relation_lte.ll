@@ -23,5 +23,5 @@ entry:
 ; CHECK:       icmp sle i32 %{{[0-9]+}}, 50
 ; CHECK:       call void @klee_assume(
 ; CHECK:       call void @check_lte(
-; CHECK-NOT:   call void @klee_assert(
+; CHECK-NOT:   call void @klee_abort(
 ; CHECK:       ret i32 0

@@ -6,7 +6,7 @@
 # Compile C model files to LLVM bitcode using clang -emit-llvm.
 # These bitcode files can be linked into KLEE harnesses via --model-library.
 
-set(MODEL_SOURCES libc_models.c usb_hal_models.c)
+set(MODEL_SOURCES usb_hal_models.c)
 set(MODEL_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR})
 
 foreach(src ${MODEL_SOURCES})

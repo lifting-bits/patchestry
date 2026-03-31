@@ -30,6 +30,8 @@ entry:
 
 ; Postcondition: return value nonnull
 ; CHECK:       icmp ne ptr
-; CHECK:       call void @klee_assert(
-
+; CHECK:       br i1 %{{[0-9]+}}, label %assert.cont, label %assert.fail
+; CHECK:       call void @klee_abort()
+; CHECK:       unreachable
+; CHECK:       assert.cont:
 ; CHECK:       ret i32 0

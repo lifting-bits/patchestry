@@ -45,7 +45,7 @@ entry:
 
 ; No assumes or asserts (no contracts)
 ; CHECK-NOT:   call void @klee_assume(
-; CHECK-NOT:   call void @klee_assert(
+; CHECK-NOT:   call void @klee_abort(
 
 ; Void call to target
 ; CHECK:       call void @measurement_update(

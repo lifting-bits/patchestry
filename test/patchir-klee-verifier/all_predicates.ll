@@ -60,6 +60,8 @@ entry:
 ; Postcondition: range on return [0, 32]
 ; CHECK:       icmp sge i64
 ; CHECK:       icmp sle i64 %{{[0-9]+}}, 32
-; CHECK:       call void @klee_assert(
-
+; CHECK:       br i1 %{{[0-9]+}}, label %assert.cont, label %assert.fail
+; CHECK:       call void @klee_abort()
+; CHECK:       unreachable
+; CHECK:       assert.cont:
 ; CHECK:       ret i32 0

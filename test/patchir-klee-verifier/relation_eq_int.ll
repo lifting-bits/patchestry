@@ -42,6 +42,6 @@ entry:
 ; CHECK:       call void @contract__entrypoint__message_entry_check(
 
 ; No postconditions
-; CHECK-NOT:   call void @klee_assert(
+; CHECK-NOT:   call void @klee_abort(
 
 ; CHECK:       ret i32 0

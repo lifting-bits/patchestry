@@ -116,6 +116,9 @@ KLEE does **not** support ARM32 or any 32-bit target architecture:
 - **RaiseAsmPass crash:** Before the address-space error is reached, KLEE
   links the 32-bit input with x86_64 uclibc, creating a mixed-architecture
   module where inline asm from uclibc triggers a segfault in `RaiseAsmPass`.
+  (Note: the x86_64-only RaiseAsmPass crash with uclibc inline asm has been
+  fixed by the `raise-asm-guard-tri` patch; this limitation only applies to
+  cross-architecture scenarios.)
 - **Root cause:** Architectural limitation — not a bug. KLEE would need a
   separate 32-bit address space emulation layer.
 
