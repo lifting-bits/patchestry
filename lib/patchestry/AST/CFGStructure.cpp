@@ -2245,6 +2245,225 @@ namespace patchestry::ast {
 
     } // anonymous namespace
 
+    // ---------------------------------------------------------------
+    // EliminateGotoToNextLabel — SNode post-pass
+    //
+    // Walk SSeq children.  For each child followed by an SLabel,
+    // chase through nesting (SLabel body → SSeq last child → SBlock
+    // trailing stmt) to find the deepest trailing stmt.  If it's a
+    // goto (SGoto or clang::GotoStmt) targeting the next label, or
+    // an IfStmt with one arm being such a goto, eliminate it.
+    // ---------------------------------------------------------------
+
+    namespace {
+
+        /// Chase through SLabel/SSeq/SBlock to find the deepest trailing
+        /// SNode or clang::Stmt.  Returns {leaf_snode, clang_stmt_or_null}.
+        /// The leaf_snode is the SNode containing the trailing stmt.
+        struct TrailingInfo {
+            SNode *container = nullptr;  // innermost SNode (SBlock, SGoto, etc.)
+            clang::Stmt *stmt = nullptr; // if container is SBlock, its last stmt
+        };
+
+        TrailingInfo DeepTrailingSNode(SNode *node) {
+            if (!node) return {};
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                return DeepTrailingSNode(lbl->Body());
+            }
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                auto &ch = seq->Children();
+                if (ch.empty()) return {};
+                return DeepTrailingSNode(ch.back());
+            }
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                if (blk->Empty()) return {};
+                return {blk, blk->Stmts().back()};
+            }
+            // SGoto, SIfThenElse, etc. — the node itself is the trailing
+            return {node, nullptr};
+        }
+
+        /// Get goto target name from an SGoto SNode.
+        std::string_view SNodeGotoTarget(SNode *node) {
+            if (auto *g = node->dyn_cast<SGoto>()) return g->Target();
+            return {};
+        }
+
+        /// Get goto target name from a clang::GotoStmt.
+        std::string ClangGotoTarget(clang::Stmt *s) {
+            if (auto *gs = llvm::dyn_cast_or_null<clang::GotoStmt>(s))
+                return gs->getLabel()->getName().str();
+            return {};
+        }
+
+        bool EliminateInSSeq(SSeq *seq, SNodeFactory &factory,
+                             clang::ASTContext &ctx);
+
+        bool EliminateRecursive(SNode *node, SNodeFactory &factory,
+                                clang::ASTContext &ctx) {
+            if (!node) return false;
+            bool changed = false;
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (auto *child : seq->Children())
+                    if (EliminateRecursive(child, factory, ctx)) changed = true;
+                if (EliminateInSSeq(seq, factory, ctx)) changed = true;
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (EliminateRecursive(ite->ThenBranch(), factory, ctx)) changed = true;
+                if (EliminateRecursive(ite->ElseBranch(), factory, ctx)) changed = true;
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                if (EliminateRecursive(w->Body(), factory, ctx)) changed = true;
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                if (EliminateRecursive(dw->Body(), factory, ctx)) changed = true;
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                if (EliminateRecursive(lbl->Body(), factory, ctx)) changed = true;
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    if (EliminateRecursive(c.body, factory, ctx)) changed = true;
+                if (EliminateRecursive(sw->DefaultBody(), factory, ctx)) changed = true;
+            }
+            return changed;
+        }
+
+        bool EliminateInSSeq(SSeq *seq, SNodeFactory &factory,
+                             clang::ASTContext &ctx) {
+            auto &children = seq->Children();
+            bool changed = false;
+            bool local_changed = true;
+
+            while (local_changed) {
+                local_changed = false;
+                for (size_t i = 0; i + 1 < children.size(); ++i) {
+                    auto *nxt_label = children[i + 1]->dyn_cast<SLabel>();
+                    if (!nxt_label) continue;
+                    auto next_name = nxt_label->Name();
+
+                    auto info = DeepTrailingSNode(children[i]);
+                    if (!info.container) continue;
+
+                    // --- Check SGoto SNode ---
+                    auto snode_tgt = SNodeGotoTarget(info.container);
+                    if (!snode_tgt.empty() && snode_tgt == next_name) {
+                        // Find the parent SSeq containing this SGoto and remove it
+                        // If it's a direct child, remove from this SSeq
+                        if (info.container == children[i]) {
+                            seq->RemoveChild(i);
+                        } else {
+                            // It's nested — find the parent SSeq's last child
+                            // and remove the SGoto from there
+                            // Walk to find the innermost SSeq containing it
+                            std::function<bool(SNode *)> remove_trailing;
+                            remove_trailing = [&](SNode *n) -> bool {
+                                if (auto *s = n->dyn_cast<SSeq>()) {
+                                    auto &ch = s->Children();
+                                    if (!ch.empty() && ch.back() == info.container) {
+                                        s->RemoveChild(ch.size() - 1);
+                                        return true;
+                                    }
+                                    if (!ch.empty()) return remove_trailing(ch.back());
+                                }
+                                if (auto *l = n->dyn_cast<SLabel>())
+                                    return remove_trailing(l->Body());
+                                return false;
+                            };
+                            remove_trailing(children[i]);
+                        }
+                        local_changed = true; changed = true;
+                        break;
+                    }
+
+                    // --- Check clang::GotoStmt in SBlock ---
+                    if (info.stmt) {
+                        auto clang_tgt = ClangGotoTarget(info.stmt);
+                        if (!clang_tgt.empty() && clang_tgt == next_name) {
+                            // Remove the trailing GotoStmt from the SBlock
+                            auto *blk = info.container->dyn_cast<SBlock>();
+                            if (blk && !blk->Empty()) {
+                                blk->Stmts().pop_back();
+                                local_changed = true; changed = true;
+                                break;
+                            }
+                        }
+
+                        // --- Check clang::IfStmt with goto arm ---
+                        if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(info.stmt)) {
+                            auto else_tgt = ClangGotoTarget(ifs->getElse());
+                            auto then_tgt = ClangGotoTarget(ifs->getThen());
+
+                            if (!else_tgt.empty() && else_tgt == next_name) {
+                                // else goto L; L: → drop else arm
+                                auto loc = ifs->getIfLoc();
+                                auto *new_if = clang::IfStmt::Create(
+                                    ctx, loc, clang::IfStatementKind::Ordinary,
+                                    nullptr, nullptr,
+                                    ifs->getCond(), loc, loc,
+                                    ifs->getThen(), loc, nullptr);
+                                auto *blk = info.container->dyn_cast<SBlock>();
+                                if (blk && !blk->Empty()) {
+                                    blk->Stmts().back() = new_if;
+                                    local_changed = true; changed = true;
+                                    break;
+                                }
+                            }
+
+                            if (!then_tgt.empty() && then_tgt == next_name
+                                && ifs->getElse()) {
+                                // if(c) goto L; else S; L: → if(!c) S
+                                auto *neg = NegateExpr(ctx, ifs->getCond());
+                                auto loc = ifs->getIfLoc();
+                                auto *new_if = clang::IfStmt::Create(
+                                    ctx, loc, clang::IfStatementKind::Ordinary,
+                                    nullptr, nullptr,
+                                    neg, loc, loc,
+                                    ifs->getElse(), loc, nullptr);
+                                auto *blk = info.container->dyn_cast<SBlock>();
+                                if (blk && !blk->Empty()) {
+                                    blk->Stmts().back() = new_if;
+                                    local_changed = true; changed = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Check SIfThenElse with SGoto arm ---
+                    if (auto *ite = info.container->dyn_cast<SIfThenElse>()) {
+                        auto else_tgt = ite->ElseBranch()
+                            ? SNodeGotoTarget(ite->ElseBranch()) : std::string_view{};
+                        auto then_tgt = ite->ThenBranch()
+                            ? SNodeGotoTarget(ite->ThenBranch()) : std::string_view{};
+
+                        if (!else_tgt.empty() && else_tgt == next_name) {
+                            ite->SetElseBranch(nullptr);
+                            local_changed = true; changed = true;
+                            break;
+                        }
+                        if (!then_tgt.empty() && then_tgt == next_name
+                            && ite->ElseBranch() && ite->Cond()) {
+                            auto *neg = NegateExpr(ctx, ite->Cond());
+                            auto *new_ite = factory.Make<SIfThenElse>(
+                                neg, ite->ElseBranch(), nullptr);
+                            // Replace in parent
+                            if (info.container == children[i]) {
+                                children[i] = new_ite;
+                            }
+                            // TODO: handle deeply nested SIfThenElse
+                            local_changed = true; changed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            return changed;
+        }
+
+    } // anonymous namespace (EliminateGotoToNextLabel helpers)
+
+    bool EliminateGotoToNextLabel(SNode *root, SNodeFactory &factory,
+                                  clang::ASTContext &ctx) {
+        if (!root) return false;
+        return EliminateRecursive(root, factory, ctx);
+    }
+
     bool InlineResidualGotos(SNode *root, SNodeFactory &factory) {
         if (!root) return false;
 

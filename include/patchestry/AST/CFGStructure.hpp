@@ -123,6 +123,12 @@ namespace patchestry::ast {
         bool SelectAndMarkGotoEdge();
     };
 
+    /// Eliminate gotos whose target label immediately follows in the
+    /// same SSeq.  Chases through SLabel→SSeq→SBlock nesting to find
+    /// deeply buried gotos (DeepTrailingStmt pattern).
+    bool EliminateGotoToNextLabel(SNode *root, SNodeFactory &factory,
+                                  clang::ASTContext &ctx);
+
     /// Post-structuring cleanup: inline residual goto-to-label pairs.
     ///
     /// Walks the SNode tree looking for SGoto nodes whose target SLabel
