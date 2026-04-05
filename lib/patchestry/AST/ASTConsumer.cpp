@@ -146,11 +146,10 @@ namespace patchestry::ast {
                                 // Default arm: goto target label
                                 if (sc.succ_index < node.succs.size()) {
                                     auto &tn = flow_graph.Node(node.succs[sc.succ_index]);
-                                    std::string lbl = tn.original_label.empty()
-                                        ? "block_" + std::to_string(node.succs[sc.succ_index])
-                                        : tn.original_label;
+                                    assert(!tn.original_label.empty()
+                                           && "switch default target missing label");
                                     sw->SetDefaultBody(factory.Make<SGoto>(
-                                        factory.Intern(lbl)));
+                                        factory.Intern(tn.original_label)));
                                 } else {
                                     LOG(WARNING) << "switch default succ_index "
                                                  << sc.succ_index << " out of range (succs="
@@ -163,10 +162,10 @@ namespace patchestry::ast {
                                 SNode *body = nullptr;
                                 if (sc.succ_index < node.succs.size()) {
                                     auto &tn = flow_graph.Node(node.succs[sc.succ_index]);
-                                    std::string lbl = tn.original_label.empty()
-                                        ? "block_" + std::to_string(node.succs[sc.succ_index])
-                                        : tn.original_label;
-                                    body = factory.Make<SGoto>(factory.Intern(lbl));
+                                    assert(!tn.original_label.empty()
+                                           && "switch case target missing label");
+                                    body = factory.Make<SGoto>(
+                                        factory.Intern(tn.original_label));
                                 } else {
                                     LOG(WARNING) << "switch case " << sc.value
                                                  << " succ_index " << sc.succ_index

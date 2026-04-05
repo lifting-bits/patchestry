@@ -97,12 +97,6 @@ namespace {
         llvm::cl::init(false)
     );
 
-    const llvm::cl::opt< bool > verify_structuring( // NOLINT(cert-err58-cpp)
-        "verify-structuring",
-        llvm::cl::desc("Verify no statements are dropped during CFG structuring"),
-        llvm::cl::init(false)
-    );
-
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -121,7 +115,6 @@ namespace {
             .input_file                 = input_filename.getValue(),
             .print_tu                   = print_tu.getValue(),
             .emit_dot_cfg               = emit_dot_cfg.getValue(),
-            .verify_structuring         = verify_structuring.getValue(),
         };
     }
 
@@ -135,12 +128,6 @@ namespace {
         if (options.use_structuring_pass) {
             LOG(ERROR) << "--use-structuring-pass is not implemented. The direct JSON -> CGraph "
                           "path is the only supported structuring mode in this branch.\n";
-            return false;
-        }
-
-        if (options.verify_structuring) {
-            LOG(ERROR) << "--verify-structuring is not implemented. No statement-preservation "
-                          "verification pass is wired into patchir-decomp yet.\n";
             return false;
         }
 

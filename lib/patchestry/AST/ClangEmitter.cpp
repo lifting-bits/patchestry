@@ -6,6 +6,7 @@
  */
 
 #include <patchestry/AST/ClangEmitter.hpp>
+#include <patchestry/AST/Utils.hpp>
 #include <patchestry/Util/Log.hpp>
 
 #include <functional>
@@ -20,13 +21,6 @@
 namespace patchestry::ast {
 
     namespace detail {
-        clang::Expr *EnsureRValue(clang::ASTContext &ctx, clang::Expr *expr) {
-            if (expr == nullptr || !expr->isGLValue()) return expr;
-            return clang::ImplicitCastExpr::Create(
-                ctx, expr->getType(), clang::CK_LValueToRValue, expr, nullptr,
-                clang::VK_PRValue, clang::FPOptionsOverride());
-        }
-
         clang::CompoundStmt *MakeCompound(
             clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts,
             clang::SourceLocation l = clang::SourceLocation(),
@@ -206,7 +200,7 @@ namespace patchestry::ast {
             }
 
             clang::Stmt *EmitIfThenElse(const SIfThenElse *ite) {
-                auto *cond = detail::EnsureRValue(ctx_, CloneExpr(ctx_, ite->Cond()));
+                auto *cond = EnsureRValue(ctx_, CloneExpr(ctx_, ite->Cond()));
                 auto *then_stmt = Emit(ite->ThenBranch());
                 auto *else_stmt = ite->ElseBranch() ? Emit(ite->ElseBranch()) : nullptr;
 
@@ -220,7 +214,7 @@ namespace patchestry::ast {
             }
 
             clang::Stmt *EmitWhile(const SWhile *w) {
-                auto *cond = detail::EnsureRValue(ctx_, CloneExpr(ctx_, w->Cond()));
+                auto *cond = EnsureRValue(ctx_, CloneExpr(ctx_, w->Cond()));
                 auto *body = Emit(w->Body());
                 if (!body) body = new (ctx_) clang::NullStmt(Loc());
 
@@ -232,7 +226,7 @@ namespace patchestry::ast {
             clang::Stmt *EmitDoWhile(const SDoWhile *dw) {
                 auto *body = Emit(dw->Body());
                 if (!body) body = new (ctx_) clang::NullStmt(Loc());
-                auto *cond = detail::EnsureRValue(ctx_, CloneExpr(ctx_, dw->Cond()));
+                auto *cond = EnsureRValue(ctx_, CloneExpr(ctx_, dw->Cond()));
 
                 return new (ctx_) clang::DoStmt(body, cond, Loc(), Loc(), Loc());
             }
@@ -243,13 +237,13 @@ namespace patchestry::ast {
 
                 return new (ctx_) clang::ForStmt(
                     ctx_, f->Init(),
-                    f->Cond() ? detail::EnsureRValue(ctx_, CloneExpr(ctx_, f->Cond())) : nullptr,
+                    f->Cond() ? EnsureRValue(ctx_, CloneExpr(ctx_, f->Cond())) : nullptr,
                     nullptr, f->Inc(), body, Loc(), Loc(), Loc()
                 );
             }
 
             clang::Stmt *EmitSwitch(const SSwitch *sw) {
-                auto *disc = detail::EnsureRValue(ctx_, CloneExpr(ctx_, sw->Discriminant()));
+                auto *disc = EnsureRValue(ctx_, CloneExpr(ctx_, sw->Discriminant()));
                 auto *switch_stmt = clang::SwitchStmt::Create(
                     ctx_, nullptr, nullptr, disc, Loc(), Loc()
                 );
@@ -903,6 +897,58 @@ namespace patchestry::ast {
                 auto *cleaned = RemoveDeadLabels(ctx, child, live);
                 if (cleaned) children.push_back(cleaned);
             }
+
+            // Drop unreachable children after a terminator.  When
+            // RemoveDeadLabels strips a dead label, the body remains as
+            // a bare stmt.  If it follows a return/goto/break/continue
+            // and contains no live labels, it is unreachable and can
+            // be removed.
+            auto is_terminator = [](clang::Stmt *st) -> bool {
+                if (!st) {
+                    return false;
+                }
+                if (llvm::isa< clang::ReturnStmt >(st) || llvm::isa< clang::GotoStmt >(st)
+                    || llvm::isa< clang::BreakStmt >(st)
+                    || llvm::isa< clang::ContinueStmt >(st))
+                {
+                    return true;
+                }
+                if (auto *cs_inner = llvm::dyn_cast< clang::CompoundStmt >(st)) {
+                    return !cs_inner->body_empty()
+                        && (llvm::isa< clang::ReturnStmt >(cs_inner->body_back())
+                            || llvm::isa< clang::GotoStmt >(cs_inner->body_back())
+                            || llvm::isa< clang::BreakStmt >(cs_inner->body_back()));
+                }
+                return false;
+            };
+
+            for (size_t i = 1; i < children.size();) {
+                if (!is_terminator(children[i - 1])) {
+                    ++i;
+                    continue;
+                }
+                bool has_live_label                        = false;
+                std::function< void(clang::Stmt *) > check = [&](clang::Stmt *st) {
+                    if (!st || has_live_label) {
+                        return;
+                    }
+                    if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(st)) {
+                        if (live.count(ls->getDecl())) {
+                            has_live_label = true;
+                        }
+                    }
+                    for (auto *c : st->children()) {
+                        check(c);
+                    }
+                };
+                check(children[i]);
+                if (has_live_label) {
+                    ++i;
+                    continue;
+                }
+                children.erase(children.begin() + static_cast< ptrdiff_t >(i));
+            }
+
             return detail::MakeCompound(ctx, children);
         }
 
@@ -940,10 +986,605 @@ namespace patchestry::ast {
         return s;
     }
 
+    // Helper: extract if(cond) goto L pattern. Returns {label, cond} or nulls.
+    static std::pair< clang::LabelDecl *, clang::Expr * >
+    ExtractIfGotoPattern(clang::Stmt *s) {
+        auto *ifs = llvm::dyn_cast_or_null< clang::IfStmt >(s);
+        if (!ifs || ifs->getElse()) {
+            return { nullptr, nullptr };
+        }
+        auto *then_s = ifs->getThen();
+        if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(then_s)) {
+            if (cs->size() == 1) {
+                then_s = cs->body_front();
+            }
+        }
+        auto *gs = llvm::dyn_cast_or_null< clang::GotoStmt >(then_s);
+        if (!gs) {
+            return { nullptr, nullptr };
+        }
+        return { gs->getLabel(), ifs->getCond() };
+    }
+
+    // Recursively remove empty CompoundStmts, NullStmts, and merge
+    // consecutive if(c1) goto L; if(c2) goto L; into if(c1||c2) goto L;
+    static clang::Stmt *RemoveEmptyBlocks(clang::ASTContext &ctx, clang::Stmt *s) {
+        if (!s) {
+            return nullptr;
+        }
+
+        auto safe = [&](clang::Stmt *r) -> clang::Stmt * {
+            return r ? r : new (ctx) clang::NullStmt(clang::SourceLocation());
+        };
+
+        if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s)) {
+            std::vector< clang::Stmt * > children;
+            for (auto *child : cs->body()) {
+                auto *cleaned = RemoveEmptyBlocks(ctx, child);
+                if (!cleaned) {
+                    continue;
+                }
+                if (llvm::isa< clang::NullStmt >(cleaned)) {
+                    continue;
+                }
+                if (auto *inner = llvm::dyn_cast< clang::CompoundStmt >(cleaned)) {
+                    if (inner->body_empty()) {
+                        continue;
+                    }
+                }
+                children.push_back(cleaned);
+            }
+
+            // Merge consecutive if(c1) goto L; if(c2) goto L;
+            for (size_t i = 0; i + 1 < children.size(); ++i) {
+                auto [l1, c1] = ExtractIfGotoPattern(children[i]);
+                if (!l1) {
+                    continue;
+                }
+                auto [l2, c2] = ExtractIfGotoPattern(children[i + 1]);
+                if (!l2) {
+                    continue;
+                }
+                if (l1->getName() != l2->getName()) {
+                    continue;
+                }
+
+                auto *merged = clang::BinaryOperator::Create(
+                    ctx, EnsureRValue(ctx, c1), EnsureRValue(ctx, c2), clang::BO_LOr,
+                    ctx.BoolTy, clang::VK_PRValue, clang::OK_Ordinary,
+                    clang::SourceLocation(), clang::FPOptionsOverride()
+                );
+                llvm::cast< clang::IfStmt >(children[i])->setCond(merged);
+                children.erase(children.begin() + static_cast< long >(i) + 1);
+                --i; // re-check for third consecutive
+            }
+
+            return detail::MakeCompound(ctx, children);
+        }
+        if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s)) {
+            ifs->setThen(safe(RemoveEmptyBlocks(ctx, ifs->getThen())));
+            if (ifs->getElse()) {
+                ifs->setElse(safe(RemoveEmptyBlocks(ctx, ifs->getElse())));
+            }
+            return s;
+        }
+        if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(s)) {
+            ws->setBody(safe(RemoveEmptyBlocks(ctx, ws->getBody())));
+            return s;
+        }
+        if (auto *ds = llvm::dyn_cast< clang::DoStmt >(s)) {
+            ds->setBody(safe(RemoveEmptyBlocks(ctx, ds->getBody())));
+            return s;
+        }
+        if (auto *fs = llvm::dyn_cast< clang::ForStmt >(s)) {
+            fs->setBody(safe(RemoveEmptyBlocks(ctx, fs->getBody())));
+            return s;
+        }
+        if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
+            ls->setSubStmt(safe(RemoveEmptyBlocks(ctx, ls->getSubStmt())));
+            return s;
+        }
+        if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(s)) {
+            sw->setBody(safe(RemoveEmptyBlocks(ctx, sw->getBody())));
+            return s;
+        }
+        return s;
+    }
+
+    // ---------------------------------------------------------------
+    // EliminateGotoToNextLabel — recursively drop gotos whose target
+    // is the immediately following LabelStmt in the same CompoundStmt.
+    //
+    // The goto may be deeply nested: inside an IfStmt else-arm, inside
+    // a LabelStmt body, inside a CompoundStmt.  We chase through
+    // nesting to find the "deepest trailing stmt" and check if it's a
+    // goto to the next sibling label.
+    // ---------------------------------------------------------------
+
+    namespace {
+
+        /// Get label name from a LabelStmt, empty otherwise.
+        llvm::StringRef GotoElimGetLabel(clang::Stmt *s) {
+            if (auto *ls = llvm::dyn_cast_or_null< clang::LabelStmt >(s)) {
+                return ls->getDecl()->getName();
+            }
+            return {};
+        }
+
+        /// Get goto target name, empty if not a GotoStmt.
+        llvm::StringRef GotoElimGetTarget(clang::Stmt *s) {
+            if (auto *gs = llvm::dyn_cast_or_null< clang::GotoStmt >(s)) {
+                return gs->getLabel()->getName();
+            }
+            return {};
+        }
+
+        /// Recursively find the deepest trailing stmt — chasing through
+        /// CompoundStmt (last child), LabelStmt (sub-stmt), IfStmt
+        /// (else arm if present, then arm otherwise).
+        clang::Stmt *DeepTrailingStmt(clang::Stmt *s) {
+            if (!s) {
+                return nullptr;
+            }
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s)) {
+                if (cs->body_empty()) {
+                    return nullptr;
+                }
+                return DeepTrailingStmt(*(cs->body_end() - 1));
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
+                return DeepTrailingStmt(ls->getSubStmt());
+            }
+            return s; // leaf: GotoStmt, IfStmt, etc.
+        }
+
+        /// Check if an IfStmt has a goto to `target` in one of its arms.
+        /// Returns: 0=no match, 1=else arm matches, 2=then arm matches.
+        int IfStmtGotoArm(clang::IfStmt *ifs, llvm::StringRef target) {
+            if (!ifs) {
+                return 0;
+            }
+            auto et = GotoElimGetTarget(ifs->getElse());
+            if (!et.empty() && et == target) {
+                return 1;
+            }
+            auto tt = GotoElimGetTarget(ifs->getThen());
+            if (!tt.empty() && tt == target && ifs->getElse()) {
+                return 2;
+            }
+            return 0;
+        }
+
+        /// Process a CompoundStmt: for each pair of adjacent stmts where
+        /// the second is a LabelStmt, check if the first's deepest trailing
+        /// stmt is a goto to that label.  Returns new stmt if changed.
+        clang::Stmt *EliminateGotoToNextLabel(clang::ASTContext &ctx, clang::Stmt *s);
+
+        clang::Stmt *ProcessCompound(clang::ASTContext &ctx, clang::CompoundStmt *cs) {
+            std::vector< clang::Stmt * > body(cs->body_begin(), cs->body_end());
+
+            // First: recurse into all children
+            for (auto *&child : body) {
+                child = EliminateGotoToNextLabel(ctx, child);
+            }
+
+            // Then: find goto-to-next-label patterns
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (size_t i = 0; i + 1 < body.size(); ++i) {
+                    auto next_label = GotoElimGetLabel(body[i + 1]);
+                    if (next_label.empty()) {
+                        continue;
+                    }
+
+                    // Find the deepest trailing stmt of body[i]
+                    auto *deep = DeepTrailingStmt(body[i]);
+                    if (!deep) {
+                        continue;
+                    }
+
+                    // Pattern 1: deepest trailing is goto L; next is L:
+                    auto tgt = GotoElimGetTarget(deep);
+                    if (!tgt.empty() && tgt == next_label) {
+                        // Simple case: body[i] IS the goto
+                        if (deep == body[i]) {
+                            body.erase(body.begin() + static_cast< ptrdiff_t >(i));
+                            changed = true;
+                            break;
+                        }
+                        // Otherwise: rebuild without the trailing goto.
+                        std::function< clang::Stmt *(clang::Stmt *) > strip_tail;
+                        strip_tail = [&](clang::Stmt *st) -> clang::Stmt * {
+                            if (auto *inner = llvm::dyn_cast< clang::CompoundStmt >(st)) {
+                                if (inner->body_empty()) {
+                                    return st;
+                                }
+                                auto *last = *(inner->body_end() - 1);
+                                if (last == deep) {
+                                    std::vector< clang::Stmt * > b(
+                                        inner->body_begin(), inner->body_end() - 1
+                                    );
+                                    if (b.empty()) {
+                                        return new (ctx)
+                                            clang::NullStmt(clang::SourceLocation());
+                                    }
+                                    return detail::MakeCompound(ctx, b);
+                                }
+                                std::vector< clang::Stmt * > b(
+                                    inner->body_begin(), inner->body_end()
+                                );
+                                b.back() = strip_tail(b.back());
+                                return detail::MakeCompound(ctx, b);
+                            }
+                            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(st)) {
+                                ls->setSubStmt(strip_tail(ls->getSubStmt()));
+                                return st;
+                            }
+                            // Reached the goto itself — replace with NullStmt
+                            return new (ctx) clang::NullStmt(clang::SourceLocation());
+                        };
+                        body[i] = strip_tail(body[i]);
+                        changed = true;
+                        break;
+                    }
+
+                    // Pattern 2: deepest trailing is IfStmt with goto arm
+                    if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(deep)) {
+                        int arm = IfStmtGotoArm(ifs, next_label);
+                        if (arm == 1) {
+                            // else goto L; L: → drop else
+                            auto loc     = ifs->getIfLoc();
+                            auto *new_if = clang::IfStmt::Create(
+                                ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                                ifs->getCond(), loc, loc, ifs->getThen(), loc, nullptr
+                            );
+                            if (deep == body[i]) {
+                                body[i] = new_if;
+                            } else {
+                                std::function< clang::Stmt *(clang::Stmt *) > replace_deep;
+                                replace_deep = [&](clang::Stmt *st) -> clang::Stmt * {
+                                    if (auto *inner =
+                                            llvm::dyn_cast< clang::CompoundStmt >(st)) {
+                                        std::vector< clang::Stmt * > b(
+                                            inner->body_begin(), inner->body_end()
+                                        );
+                                        if (!b.empty()
+                                            && DeepTrailingStmt(b.back()) == deep)
+                                        {
+                                            b.back() = replace_deep(b.back());
+                                        }
+                                        return detail::MakeCompound(ctx, b);
+                                    }
+                                    if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(st))
+                                    {
+                                        ls->setSubStmt(replace_deep(ls->getSubStmt()));
+                                        return st;
+                                    }
+                                    return new_if;
+                                };
+                                body[i] = replace_deep(body[i]);
+                            }
+                            changed = true;
+                            break;
+                        }
+                        if (arm == 2) {
+                            // if(c) goto L; else S; L: → if(!c) S
+                            auto *neg    = NegateExpr(ctx, ifs->getCond());
+                            auto loc     = ifs->getIfLoc();
+                            auto *new_if = clang::IfStmt::Create(
+                                ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                                neg, loc, loc, ifs->getElse(), loc, nullptr
+                            );
+                            if (deep == body[i]) {
+                                body[i] = new_if;
+                            } else {
+                                std::function< clang::Stmt *(clang::Stmt *) > replace_deep;
+                                replace_deep = [&](clang::Stmt *st) -> clang::Stmt * {
+                                    if (auto *inner =
+                                            llvm::dyn_cast< clang::CompoundStmt >(st)) {
+                                        std::vector< clang::Stmt * > b(
+                                            inner->body_begin(), inner->body_end()
+                                        );
+                                        if (!b.empty()
+                                            && DeepTrailingStmt(b.back()) == deep)
+                                        {
+                                            b.back() = replace_deep(b.back());
+                                        }
+                                        return detail::MakeCompound(ctx, b);
+                                    }
+                                    if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(st))
+                                    {
+                                        ls->setSubStmt(replace_deep(ls->getSubStmt()));
+                                        return st;
+                                    }
+                                    return new_if;
+                                };
+                                body[i] = replace_deep(body[i]);
+                            }
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Pattern: switch case goto L; } L: → replace goto with break.
+            // When a switch stmt is followed by a LabelStmt, any case
+            // body ending in goto-to-that-label can use break instead.
+            for (size_t i = 0; i + 1 < body.size(); ++i) {
+                auto *sw = llvm::dyn_cast< clang::SwitchStmt >(body[i]);
+                if (!sw) {
+                    continue;
+                }
+                auto next_label = GotoElimGetLabel(body[i + 1]);
+                if (next_label.empty()) {
+                    continue;
+                }
+
+                auto *sw_body = llvm::dyn_cast_or_null< clang::CompoundStmt >(sw->getBody());
+                if (!sw_body) {
+                    continue;
+                }
+
+                std::vector< clang::Stmt * > sw_stmts(
+                    sw_body->body_begin(), sw_body->body_end()
+                );
+                bool sw_changed = false;
+
+                std::function< clang::Stmt *(clang::Stmt *) > replace_goto_break;
+                replace_goto_break = [&](clang::Stmt *st) -> clang::Stmt * {
+                    if (!st) {
+                        return st;
+                    }
+                    if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(st)) {
+                        if (gs->getLabel()->getName() == next_label) {
+                            sw_changed = true;
+                            return new (ctx) clang::BreakStmt(clang::SourceLocation());
+                        }
+                        return st;
+                    }
+                    if (auto *cs2 = llvm::dyn_cast< clang::CompoundStmt >(st)) {
+                        if (cs2->body_empty()) {
+                            return st;
+                        }
+                        std::vector< clang::Stmt * > cb(cs2->body_begin(), cs2->body_end());
+                        cb.back() = replace_goto_break(cb.back());
+                        return detail::MakeCompound(ctx, cb);
+                    }
+                    return st;
+                };
+
+                for (auto *&case_stmt : sw_stmts) {
+                    if (auto *cs2 = llvm::dyn_cast< clang::CaseStmt >(case_stmt)) {
+                        cs2->setSubStmt(replace_goto_break(cs2->getSubStmt()));
+                    } else if (auto *ds = llvm::dyn_cast< clang::DefaultStmt >(case_stmt)) {
+                        ds->setSubStmt(replace_goto_break(ds->getSubStmt()));
+                    }
+                }
+
+                if (sw_changed) {
+                    sw->setBody(detail::MakeCompound(ctx, sw_stmts));
+                    changed = true;
+                }
+            }
+
+            return detail::MakeCompound(ctx, body);
+        }
+
+        clang::Stmt *EliminateGotoToNextLabel(clang::ASTContext &ctx, clang::Stmt *s) {
+            if (!s) {
+                return s;
+            }
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s)) {
+                return ProcessCompound(ctx, cs);
+            }
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s)) {
+                ifs->setThen(EliminateGotoToNextLabel(ctx, ifs->getThen()));
+                if (ifs->getElse()) {
+                    ifs->setElse(EliminateGotoToNextLabel(ctx, ifs->getElse()));
+                }
+                return s;
+            }
+            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(s)) {
+                ws->setBody(EliminateGotoToNextLabel(ctx, ws->getBody()));
+                return s;
+            }
+            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(s)) {
+                ds->setBody(EliminateGotoToNextLabel(ctx, ds->getBody()));
+                return s;
+            }
+            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(s)) {
+                fs->setBody(EliminateGotoToNextLabel(ctx, fs->getBody()));
+                return s;
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
+                ls->setSubStmt(EliminateGotoToNextLabel(ctx, ls->getSubStmt()));
+                return s;
+            }
+            if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(s)) {
+                sw->setBody(EliminateGotoToNextLabel(ctx, sw->getBody()));
+                return s;
+            }
+            return s;
+        }
+
+        // ---------------------------------------------------------------
+        // ScopeifyIfGotos — convert if(c) goto L; stmts; L: into
+        // if(!c) { stmts; } L:
+        //
+        // Only fires when no intermediate LabelStmts exist between
+        // the if-goto and the target label (labels are goto targets
+        // from elsewhere and can't be moved into a scope).
+        // ---------------------------------------------------------------
+
+        clang::Stmt *ScopeifyIfGotos(clang::ASTContext &ctx, clang::Stmt *s) {
+            if (!s) {
+                return s;
+            }
+
+            // Recurse into structured bodies first
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s)) {
+                ifs->setThen(ScopeifyIfGotos(ctx, ifs->getThen()));
+                if (ifs->getElse()) {
+                    ifs->setElse(ScopeifyIfGotos(ctx, ifs->getElse()));
+                }
+                return s;
+            }
+            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(s)) {
+                ws->setBody(ScopeifyIfGotos(ctx, ws->getBody()));
+                return s;
+            }
+            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(s)) {
+                ds->setBody(ScopeifyIfGotos(ctx, ds->getBody()));
+                return s;
+            }
+            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(s)) {
+                fs->setBody(ScopeifyIfGotos(ctx, fs->getBody()));
+                return s;
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
+                ls->setSubStmt(ScopeifyIfGotos(ctx, ls->getSubStmt()));
+                return s;
+            }
+            if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(s)) {
+                sw->setBody(ScopeifyIfGotos(ctx, sw->getBody()));
+                return s;
+            }
+
+            auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s);
+            if (!cs) {
+                return s;
+            }
+
+            std::vector< clang::Stmt * > body(cs->body_begin(), cs->body_end());
+
+            // Recurse into children first
+            for (auto *&child : body) {
+                child = ScopeifyIfGotos(ctx, child);
+            }
+
+            // Find if(c) goto L; ... L: patterns
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (size_t i = 0; i < body.size(); ++i) {
+                    auto *ifs = llvm::dyn_cast< clang::IfStmt >(body[i]);
+                    if (!ifs || ifs->getElse()) {
+                        continue;
+                    }
+                    auto *gs = llvm::dyn_cast_or_null< clang::GotoStmt >(ifs->getThen());
+                    if (!gs) {
+                        continue;
+                    }
+                    auto *target_decl = gs->getLabel();
+                    if (!target_decl) {
+                        continue;
+                    }
+                    auto target_name = target_decl->getName();
+
+                    // Find the target LabelStmt in the same CompoundStmt
+                    size_t label_idx = body.size();
+                    for (size_t j = i + 1; j < body.size(); ++j) {
+                        if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(body[j])) {
+                            if (ls->getDecl()->getName() == target_name) {
+                                label_idx = j;
+                                break;
+                            }
+                        }
+                    }
+                    if (label_idx >= body.size()) {
+                        continue;
+                    }
+                    // Skip adjacent if-goto (label_idx == i+1) — the
+                    // goto looks dead but the condition may be a guard
+                    // for code after the label.  Let it remain as a
+                    // no-op if-goto.
+                    if (label_idx == i + 1) {
+                        continue;
+                    }
+
+                    // Check: no intermediate LabelStmts
+                    bool has_label = false;
+                    for (size_t j = i + 1; j < label_idx; ++j) {
+                        if (llvm::isa< clang::LabelStmt >(body[j])) {
+                            has_label = true;
+                            break;
+                        }
+                    }
+                    if (has_label) {
+                        continue;
+                    }
+
+                    // Collect intermediate stmts
+                    std::vector< clang::Stmt * > scoped;
+                    for (size_t j = i + 1; j < label_idx; ++j) {
+                        scoped.push_back(body[j]);
+                    }
+
+                    // Build: if(!cond) { scoped_stmts }
+                    auto *neg        = NegateExpr(ctx, ifs->getCond());
+                    auto *scope_body = detail::MakeCompound(ctx, scoped);
+                    auto loc         = ifs->getIfLoc();
+                    auto *new_if     = clang::IfStmt::Create(
+                        ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr, neg,
+                        loc, loc, scope_body, loc, nullptr
+                    );
+
+                    // Replace: remove if-goto + intermediates, insert new if
+                    body.erase(
+                        body.begin() + static_cast< ptrdiff_t >(i),
+                        body.begin() + static_cast< ptrdiff_t >(label_idx)
+                    );
+                    body.insert(body.begin() + static_cast< ptrdiff_t >(i), new_if);
+
+                    changed = true;
+                    break;
+                }
+            }
+
+            return detail::MakeCompound(ctx, body);
+        }
+
+    } // anonymous namespace
+
     void CleanupPrettyPrint(clang::FunctionDecl *fn, clang::ASTContext &ctx) {
-        if (!fn || !fn->hasBody()) return;
+        if (!fn || !fn->hasBody()) {
+            return;
+        }
         auto *body = CleanupStmtTree(ctx, fn->getBody());
-        if (body) fn->setBody(body);
+        if (body) {
+            fn->setBody(body);
+        }
+
+        // Eliminate gotos to immediately following labels.  Iterates
+        // to handle cascading patterns.
+        for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+            body = EliminateGotoToNextLabel(ctx, fn->getBody());
+            if (body) {
+                fn->setBody(body);
+            } else {
+                break;
+            }
+        }
+
+        // Scope creation + goto-to-next-label cascade.  ScopeifyIfGotos
+        // converts if(c) goto L; stmts; L: → if(!c) { stmts; }, which
+        // may create new goto-to-next-label adjacencies, so iterate.
+        for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+            auto *prev = fn->getBody();
+            body       = ScopeifyIfGotos(ctx, fn->getBody());
+            if (body) {
+                fn->setBody(body);
+            }
+            body = EliminateGotoToNextLabel(ctx, fn->getBody());
+            if (body) {
+                fn->setBody(body);
+            }
+            if (fn->getBody() == prev) {
+                break;
+            }
+        }
 
         // Remove labels that are not the target of any goto.
         // Run after CleanupStmtTree which may convert gotos to break/continue.
@@ -951,7 +1592,15 @@ namespace patchestry::ast {
         std::unordered_set< clang::Stmt * > seen;
         CollectGotoTargets(fn->getBody(), goto_targets, seen);
         body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-        if (body) fn->setBody(body);
+        if (body) {
+            fn->setBody(body);
+        }
+
+        // Final pass: remove empty CompoundStmts and NullStmts.
+        body = RemoveEmptyBlocks(ctx, fn->getBody());
+        if (body) {
+            fn->setBody(body);
+        }
     }
 
 } // namespace patchestry::ast

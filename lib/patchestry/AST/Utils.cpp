@@ -5,9 +5,11 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <cassert>
 #include <cctype>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Expr.h>
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
@@ -194,6 +196,27 @@ namespace patchestry::ast {
         }
 
         return false;
+    }
+
+    clang::Expr *EnsureRValue(clang::ASTContext &ctx, clang::Expr *expr) {
+        if (!expr || !expr->isGLValue()) {
+            return expr;
+        }
+        return clang::ImplicitCastExpr::Create(
+            ctx, expr->getType(), clang::CK_LValueToRValue, expr, nullptr,
+            clang::VK_PRValue, clang::FPOptionsOverride()
+        );
+    }
+
+    clang::Expr *NegateExpr(clang::ASTContext &ctx, clang::Expr *expr) {
+        assert(expr && "NegateExpr called with null expression");
+        auto *rv   = EnsureRValue(ctx, expr);
+        auto loc   = expr->getExprLoc();
+        auto *paren = new (ctx) clang::ParenExpr(loc, loc, rv);
+        return clang::UnaryOperator::Create(
+            ctx, paren, clang::UO_LNot, ctx.BoolTy, clang::VK_PRValue, clang::OK_Ordinary, loc,
+            false, clang::FPOptionsOverride()
+        );
     }
 
 } // namespace patchestry::ast
