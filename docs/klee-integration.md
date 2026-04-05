@@ -114,18 +114,6 @@ directory (`/tmp/minisat`) must exist when STP is compiled against it.
 **Workaround:** The Dockerfile merges the minisat and STP builds into
 a single `RUN` step.
 
-## Operational Notes
-
-- **Docker volume mount output directory.** KLEE requires its output
-  directory to not exist before execution. When the output path is a
-  Docker volume mount, the directory cannot be removed. The entrypoint
-  writes KLEE output to a `klee-last` subdirectory inside the mounted
-  output path to work around this.
-- **Root-owned output files.** KLEE runs as root inside the container,
-  so output files are owned by root on the host. The entrypoint runs
-  `chmod -R a+rX` on the output directory after execution, but cleanup
-  may still require elevated privileges.
-
 ## CI Workflow
 
 The GitHub Actions workflow (`.github/workflows/klee-image.yml`) builds
