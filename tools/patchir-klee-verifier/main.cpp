@@ -20,6 +20,7 @@
 #include <llvm/Support/InitLLVM.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/TargetParser/Triple.h>
 
 #include <patchestry/Util/Log.hpp>
 
@@ -284,64 +285,54 @@ namespace {
         return std::string::npos;
     }
 
+    // Parses one section (either "preconditions" or "postconditions") of a
+    // contract string. Appends successfully parsed predicates to `preds` and
+    // increments `dropped` for every `{...}` block whose contents fail to
+    // produce a valid predicate, so the caller can surface silent drops.
+    static void parseContractSection(
+        const std::string &contract_str, llvm::StringRef section_key,
+        bool is_precondition, std::vector< ParsedPredicate > &preds,
+        unsigned &dropped
+    ) {
+        std::string key_eq = (section_key + "=[").str();
+        size_t start_key = contract_str.find(key_eq);
+        if (start_key == std::string::npos)
+            return;
+        size_t section_start = start_key + key_eq.length();
+        size_t section_end   = findMatchingBracket(contract_str, section_start);
+        if (section_end == std::string::npos)
+            return;
+
+        std::string section = contract_str.substr(section_start, section_end - section_start);
+        size_t pos = 0;
+        while (pos < section.length()) {
+            size_t start = section.find('{', pos);
+            if (start == std::string::npos)
+                break;
+            start++;
+            size_t end = section.find('}', start);
+            if (end == std::string::npos)
+                break;
+            std::string pred_str = section.substr(start, end - start);
+            auto kv              = parseKeyValues(pred_str);
+            auto pred            = kvToPredicate(kv);
+            if (pred.kind != PK_Unknown) {
+                pred.is_precondition = is_precondition;
+                preds.push_back(pred);
+            } else {
+                dropped++;
+                LOG(WARNING) << section_key << " predicate dropped: {"
+                             << pred_str << "}\n";
+            }
+            pos = end + 1;
+        }
+    }
+
     static std::vector< ParsedPredicate >
-    parseStaticContractText(const std::string &contract_str) {
+    parseStaticContractText(const std::string &contract_str, unsigned &dropped) {
         std::vector< ParsedPredicate > preds;
-
-        size_t pre_start = contract_str.find("preconditions=[");
-        if (pre_start != std::string::npos) {
-            pre_start += 15;
-            size_t pre_end = findMatchingBracket(contract_str, pre_start);
-            if (pre_end != std::string::npos) {
-                std::string pre_section = contract_str.substr(pre_start, pre_end - pre_start);
-                size_t pos = 0;
-                while (pos < pre_section.length()) {
-                    size_t start = pre_section.find('{', pos);
-                    if (start == std::string::npos)
-                        break;
-                    start++;
-                    size_t end = pre_section.find('}', start);
-                    if (end == std::string::npos)
-                        break;
-                    std::string pred_str = pre_section.substr(start, end - start);
-                    auto kv              = parseKeyValues(pred_str);
-                    auto pred            = kvToPredicate(kv);
-                    if (pred.kind != PK_Unknown) {
-                        pred.is_precondition = true;
-                        preds.push_back(pred);
-                    }
-                    pos = end + 1;
-                }
-            }
-        }
-
-        size_t post_start = contract_str.find("postconditions=[");
-        if (post_start != std::string::npos) {
-            post_start += 16;
-            size_t post_end = findMatchingBracket(contract_str, post_start);
-            if (post_end != std::string::npos) {
-                std::string post_section = contract_str.substr(post_start, post_end - post_start);
-                size_t pos = 0;
-                while (pos < post_section.length()) {
-                    size_t start = post_section.find('{', pos);
-                    if (start == std::string::npos)
-                        break;
-                    start++;
-                    size_t end = post_section.find('}', start);
-                    if (end == std::string::npos)
-                        break;
-                    std::string pred_str = post_section.substr(start, end - start);
-                    auto kv              = parseKeyValues(pred_str);
-                    auto pred            = kvToPredicate(kv);
-                    if (pred.kind != PK_Unknown) {
-                        pred.is_precondition = false;
-                        preds.push_back(pred);
-                    }
-                    pos = end + 1;
-                }
-            }
-        }
-
+        parseContractSection(contract_str, "preconditions", true, preds, dropped);
+        parseContractSection(contract_str, "postconditions", false, preds, dropped);
         return preds;
     }
 } // namespace
@@ -381,7 +372,15 @@ namespace {
         return M.getOrInsertFunction("klee_abort", FT);
     }
 
-    // Collect all GlobalVariable references from a function (transitively through internal calls)
+    // Collect all GlobalVariable references from a function (transitively
+    // through internal calls).
+    //
+    // Limitation: only direct calls are followed. Indirect calls (function
+    // pointers, HAL dispatch tables, calls through aliases or bitcast
+    // constant-exprs) are not traversed, so globals that are only reached
+    // via an indirect dispatch will not be symbolized. KLEE will then see
+    // their initializer values as concrete constants and may over-constrain
+    // the search.
     static void collectGlobals(
         llvm::Function *F,
         std::set< llvm::GlobalVariable * > &out_globals,
@@ -485,8 +484,17 @@ namespace {
         return contracts;
     }
 
-    // Helper to extend/truncate integer value to i64
-    static llvm::Value *toI64(llvm::IRBuilder<> &B, llvm::Value *V) {
+    // Helper to extend integer value to i64 for range comparisons.
+    // `is_signed` selects sign- vs zero-extension so that an operand's full
+    // value range is preserved under the signed i64 comparison used by
+    // PK_Range predicates. A range whose min is < 0 is treated as signed;
+    // otherwise the operand is zero-extended so the full unsigned range
+    // (e.g. a size_t) maps cleanly into non-negative i64.
+    //
+    // Operands wider than 64 bits are rejected rather than truncated —
+    // silently dropping high bits can hide a real out-of-range value.
+    static llvm::Value *
+    toI64(llvm::IRBuilder<> &B, llvm::Value *V, bool is_signed) {
         if (!V || !V->getType()->isIntegerTy())
             return nullptr;
 
@@ -495,12 +503,13 @@ namespace {
             return V;
 
         unsigned width = V->getType()->getIntegerBitWidth();
-        if (width < 64)
-            return B.CreateSExt(V, i64);
-        else if (width > 64)
-            return B.CreateTrunc(V, i64);
+        if (width > 64) {
+            LOG(WARNING) << "range predicate on " << width
+                         << "-bit operand exceeds i64; skipping\n";
+            return nullptr;
+        }
 
-        return V;
+        return is_signed ? B.CreateSExt(V, i64) : B.CreateZExt(V, i64);
     }
 
     // Build a KLEE condition from a predicate and emit klee_assume or klee_assert
@@ -601,7 +610,11 @@ namespace {
         case PK_RangeArg: {
             if (!V->getType()->isIntegerTy())
                 break;
-            llvm::Value *v64 = toI64(B, V);
+            // Treat the operand as signed only if the contract's min is
+            // negative; otherwise zero-extend so unsigned ranges (e.g.
+            // [0, UINT32_MAX]) are preserved under the signed compares below.
+            bool is_signed = P.min_val < 0;
+            llvm::Value *v64 = toI64(B, V, is_signed);
             if (!v64)
                 break;
             llvm::Value *lo = B.CreateICmpSGE(v64, llvm::ConstantInt::getSigned(i64Ty, P.min_val));
@@ -769,9 +782,17 @@ namespace {
         // 1. Collect static contract predicates
         auto contracts = collectStaticContracts(M, target_fn);
         std::vector< ParsedPredicate > all_preds;
+        unsigned dropped_preds = 0;
         for (auto &c : contracts) {
-            auto preds = parseStaticContractText(c);
+            auto preds = parseStaticContractText(c, dropped_preds);
             all_preds.insert(all_preds.end(), preds.begin(), preds.end());
+        }
+
+        if (dropped_preds > 0) {
+            LOG(WARNING) << dropped_preds
+                         << " predicate(s) dropped during parsing for target '"
+                         << target_fn->getName()
+                         << "' — harness may be under-constrained\n";
         }
 
         if (verbose) {
@@ -920,6 +941,12 @@ namespace {
             } else {
                 llvm::WriteBitcodeToFile(module, llvm::outs());
             }
+            llvm::outs().flush();
+            if (llvm::outs().has_error()) {
+                LOG(ERROR) << "writing to stdout: stream error\n";
+                llvm::outs().clear_error();
+                return false;
+            }
             return true;
         }
 
@@ -934,6 +961,13 @@ namespace {
             module.print(os, nullptr);
         } else {
             llvm::WriteBitcodeToFile(module, os);
+        }
+
+        os.flush();
+        if (os.has_error()) {
+            LOG(ERROR) << "writing to " << out << ": stream error\n";
+            os.clear_error();
+            return false;
         }
 
         return true;
@@ -964,7 +998,9 @@ int main(int argc, char **argv) {
             "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128"
             "-f80:128-n8:16:32:64-S128";
         std::string currentTriple = module->getTargetTriple();
-        if (currentTriple.empty() || currentTriple.find("x86_64") == std::string::npos) {
+        llvm::Triple parsed(currentTriple);
+        bool is_x86_64 = parsed.getArch() == llvm::Triple::x86_64;
+        if (currentTriple.empty() || !is_x86_64) {
             if (verbose) {
                 llvm::outs() << "Retargeting module from '"
                              << (currentTriple.empty() ? "<none>" : currentTriple)
@@ -1002,9 +1038,27 @@ int main(int argc, char **argv) {
             return EXIT_FAILURE;
         }
 
-        // Retarget model to match input module
-        model_mod->setTargetTriple(module->getTargetTriple());
-        model_mod->setDataLayout(module->getDataLayout());
+        // The model must have been compiled against the same (retargeted)
+        // datalayout as the input module — mismatched pointer widths or
+        // struct alignments would produce miscompiled code after linking.
+        // Accept an empty triple/DL (older bitcode) and stamp it with the
+        // module's values; otherwise require an exact match and reject
+        // anything else loudly rather than silently rewriting it.
+        const std::string &model_triple = model_mod->getTargetTriple();
+        const std::string &model_dl     = model_mod->getDataLayoutStr();
+        const std::string &host_triple  = module->getTargetTriple();
+        const std::string &host_dl      = module->getDataLayoutStr();
+
+        if (model_triple.empty() && model_dl.empty()) {
+            model_mod->setTargetTriple(host_triple);
+            model_mod->setDataLayout(module->getDataLayout());
+        } else if (model_triple != host_triple || model_dl != host_dl) {
+            LOG(ERROR) << "model library '" << model_library
+                       << "' targets '" << model_triple << "' / '" << model_dl
+                       << "', expected '" << host_triple << "' / '"
+                       << host_dl << "'; rebuild the model for the host layout\n";
+            return EXIT_FAILURE;
+        }
 
         if (llvm::Linker::linkModules(*module, std::move(model_mod),
                                       llvm::Linker::Flags::LinkOnlyNeeded)) {

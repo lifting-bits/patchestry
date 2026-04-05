@@ -74,9 +74,6 @@ KLEE_IMAGE=my-klee:dev ./scripts/klee/build-klee-docker.sh
 
 # Use CI-pushed image
 ./scripts/klee/run-klee.sh --image ghcr.io/lifting-bits/patchestry-klee-ubuntu-22.04-llvm-20:latest --input harness.bc
-
-# Interactive debugging
-./scripts/klee/run-klee.sh --interactive
 ```
 
 ### Scripts
@@ -89,23 +86,7 @@ KLEE_IMAGE=my-klee:dev ./scripts/klee/build-klee-docker.sh
 
 ## Known Limitations
 
-### 1. Instrument.cpp stubs (trail-of-forks/klee llvm20 branch)
-
-The `trail-of-forks/klee` `llvm20` branch has **unimplemented stub functions**
-in `lib/Module/Instrument.cpp`. Both `checkModule()` and `instrument()` contain
-`assert(0)`, causing an unconditional crash during module setup.
-
-**Impact:** KLEE aborts on any input without this fix.
-
-**Workaround:** The Dockerfile patches `Instrument.cpp` at build time,
-replacing the stubs with empty no-op implementations. This disables
-KLEE's division-by-zero and overshift instrumentation passes but allows
-symbolic execution to proceed.
-
-**Upstream fix needed:** The llvm20 branch needs proper implementations of
-these functions ported from the mainline KLEE branch.
-
-### 2. ARM32 / 32-bit architectures not supported
+### 1. ARM32 / 32-bit architectures not supported
 
 KLEE does **not** support ARM32 or any 32-bit target architecture:
 
@@ -116,9 +97,6 @@ KLEE does **not** support ARM32 or any 32-bit target architecture:
 - **RaiseAsmPass crash:** Before the address-space error is reached, KLEE
   links the 32-bit input with x86_64 uclibc, creating a mixed-architecture
   module where inline asm from uclibc triggers a segfault in `RaiseAsmPass`.
-  (Note: the x86_64-only RaiseAsmPass crash with uclibc inline asm has been
-  fixed by the `raise-asm-guard-tri` patch; this limitation only applies to
-  cross-architecture scenarios.)
 - **Root cause:** Architectural limitation — not a bug. KLEE would need a
   separate 32-bit address space emulation layer.
 
@@ -127,7 +105,7 @@ x86_64 (`target datalayout` and `target triple` are rewritten). Since KLEE
 interprets IR semantically, this does not affect contract verification
 correctness. See [Architecture Retargeting](#architecture-retargeting) above.
 
-### 3. minisat cmake config references build tree
+### 2. minisat cmake config references build tree
 
 minisat's installed cmake config files reference the build-tree source
 path rather than the install prefix. This means the minisat source
@@ -136,21 +114,17 @@ directory (`/tmp/minisat`) must exist when STP is compiled against it.
 **Workaround:** The Dockerfile merges the minisat and STP builds into
 a single `RUN` step.
 
-### 4. Docker volume mount output directory
+## Operational Notes
 
-KLEE requires its output directory to **not exist** before execution.
-When the output path is a Docker volume mount, the directory cannot be
-removed.
-
-**Workaround:** The entrypoint writes KLEE output to a `klee-last`
-subdirectory inside the mounted output path.
-
-### 5. Root-owned output files
-
-KLEE runs as root inside the container, so output files are owned by
-root on the host. The entrypoint runs `chmod -R a+rX` on the output
-directory after execution, but cleanup may still require elevated
-privileges.
+- **Docker volume mount output directory.** KLEE requires its output
+  directory to not exist before execution. When the output path is a
+  Docker volume mount, the directory cannot be removed. The entrypoint
+  writes KLEE output to a `klee-last` subdirectory inside the mounted
+  output path to work around this.
+- **Root-owned output files.** KLEE runs as root inside the container,
+  so output files are owned by root on the host. The entrypoint runs
+  `chmod -R a+rX` on the output directory after execution, but cleanup
+  may still require elevated privileges.
 
 ## CI Workflow
 

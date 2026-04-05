@@ -170,7 +170,6 @@ jobs:
 
       - name: Run KLEE on generated harnesses
         if: matrix.build-type == 'Debug' && matrix.sanitizers == 'OFF'
-        continue-on-error: true
         env:
           KLEE_IMAGE: ghcr.io/lifting-bits/patchestry-klee-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}:latest
         run: |
