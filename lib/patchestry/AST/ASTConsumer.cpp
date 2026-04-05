@@ -213,9 +213,9 @@ namespace patchestry::ast {
                     InlineResidualGotos(root_snode, factory);
 
                     // Post-pass: eliminate gotos to immediately following
-                    // labels.  Iterates with InlineResidualGotos for
-                    // cascading cleanup.
-                    for (int pass = 0; pass < 3; ++pass) {
+                    // labels.  Iterates with InlineResidualGotos until
+                    // convergence (no more changes).
+                    for (;;) {
                         bool did_elim = EliminateGotoToNextLabel(
                             root_snode, factory, ctx);
                         bool did_inline = InlineResidualGotos(
