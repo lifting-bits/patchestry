@@ -64,6 +64,19 @@ namespace {
         llvm::cl::desc("Default symbolic buffer size (bytes) for pointer arguments"),
         llvm::cl::value_desc("bytes"), llvm::cl::init(256)
     );
+
+    // When any contract predicate fails to parse, a silently-passing
+    // verifier run is worse than one that refuses to run: the resulting
+    // harness is under-constrained and can "verify" against a weaker
+    // condition than the author intended. Default-on so typos in contract
+    // YAML always surface; set to false to fall back to the old
+    // warn-and-continue behavior (e.g. for CI jobs that parse partial
+    // contracts intentionally).
+    const llvm::cl::opt< bool > strict_contracts(
+        "strict-contracts",
+        llvm::cl::desc("Exit non-zero when any contract predicate fails to parse"),
+        llvm::cl::init(true)
+    );
 } // namespace
 
 // ============================================================================
@@ -95,23 +108,45 @@ namespace {
         bool is_precondition = true;
     };
 
+    // Parse a contract-target string of the form `Arg(N)` or `ReturnValue`.
+    //
+    // On success, `target` is set to the canonical string form and `index`
+    // to the parsed argument index (0 for `ReturnValue`). On any failure,
+    // *both* out-parameters are reset to an unambiguously-invalid state
+    // (`target` empty, `index = 0`) so a caller that accidentally ignores
+    // the return value cannot silently reinterpret a malformed target as
+    // `Arg(0)`. Downstream code then sees an empty target and its
+    // PK_Range/PK_Nonnull/etc. dispatch naturally leaves `pred.kind`
+    // at `PK_Unknown`, which `parseContractSection` drops.
     static bool parseTarget(const std::string &target_str, std::string &target, unsigned &index) {
-        target = target_str;
+        target.clear();
+        index = 0;
+
         if (target_str.substr(0, 4) == "Arg(") {
             auto end_pos = target_str.find(')');
-            if (end_pos != std::string::npos) {
-                std::string index_str = target_str.substr(4, end_pos - 4);
-                try {
-                    index = static_cast< unsigned >(std::stoul(index_str));
-                    return true;
-                } catch (const std::exception &e) {
-                    LOG(WARNING) << "failed to parse argument index '"
-                                 << index_str << "': " << e.what() << "\n";
-                    return false;
-                }
+            if (end_pos == std::string::npos) {
+                LOG(WARNING) << "malformed target '" << target_str
+                             << "': missing ')'\n";
+                return false;
             }
+            std::string index_str = target_str.substr(4, end_pos - 4);
+            try {
+                index = static_cast< unsigned >(std::stoul(index_str));
+            } catch (const std::exception &e) {
+                LOG(WARNING) << "failed to parse argument index '"
+                             << index_str << "': " << e.what() << "\n";
+                return false;
+            }
+            target = target_str;
+            return true;
         }
-        return target_str == "ReturnValue";
+
+        if (target_str == "ReturnValue") {
+            target = target_str;
+            return true;
+        }
+
+        return false;
     }
 
     static size_t findMatchingBracket(const std::string &str, size_t start);
@@ -225,23 +260,32 @@ namespace {
                 }
             }
         } else if (kind_str == "range") {
+            // Tentatively classify by target — we'll revert to PK_Unknown
+            // below if min/max parsing fails or the `range` field is
+            // missing/empty, so a typo like `range=[min=oops,max=10]`
+            // cannot ship as a [0, parsed-max] silently-narrower bound.
+            PredicateKind tentative = PK_Unknown;
             if (pred.target == "ReturnValue") {
-                pred.kind = PK_RangeRet;
+                tentative = PK_RangeRet;
             } else if (pred.target.substr(0, 3) == "Arg") {
-                pred.kind = PK_RangeArg;
+                tentative = PK_RangeArg;
             }
 
             auto range_it = kv.find("range");
-            if (range_it != kv.end()) {
+            if (tentative != PK_Unknown && range_it != kv.end()) {
                 std::string range_str = range_it->second;
                 size_t min_pos = range_str.find("min=");
                 size_t max_pos = range_str.find("max=");
+
+                bool min_ok = false;
+                bool max_ok = false;
 
                 if (min_pos != std::string::npos) {
                     min_pos += 4;
                     size_t min_end = range_str.find_first_of(",]", min_pos);
                     try {
                         pred.min_val = std::stoll(range_str.substr(min_pos, min_end - min_pos));
+                        min_ok = true;
                     } catch (const std::exception &e) {
                         LOG(WARNING) << "failed to parse range min: " << e.what() << "\n";
                     }
@@ -252,19 +296,45 @@ namespace {
                     size_t max_end = range_str.find_first_of(",]", max_pos);
                     try {
                         pred.max_val = std::stoll(range_str.substr(max_pos, max_end - max_pos));
+                        max_ok = true;
                     } catch (const std::exception &e) {
                         LOG(WARNING) << "failed to parse range max: " << e.what() << "\n";
                     }
                 }
+
+                // Require BOTH bounds: a one-sided range that silently
+                // defaults the other side to 0 is almost certainly a
+                // typo, and "Arg(0) ∈ [0, parsed-max]" is strictly
+                // weaker than any intended full bound.
+                if (min_ok && max_ok && pred.min_val <= pred.max_val) {
+                    pred.kind = tentative;
+                } else if (min_ok != max_ok) {
+                    LOG(WARNING) << "range predicate requires both 'min' and "
+                                    "'max'; got only one — dropping\n";
+                } else if (min_ok && max_ok) {
+                    LOG(WARNING) << "range predicate has min > max ("
+                                 << pred.min_val << " > " << pred.max_val
+                                 << ") — dropping\n";
+                }
             }
         } else if (kind_str == "alignment") {
-            pred.kind = PK_Alignment;
             auto align_it = kv.find("align");
-            if (align_it != kv.end()) {
+            if (align_it == kv.end()) {
+                LOG(WARNING) << "alignment predicate missing 'align' key\n";
+            } else {
                 try {
                     pred.alignment = std::stoull(align_it->second);
+                    // Alignment 0 is meaningless (it would emit `x & -1 == 0`
+                    // which is trivially true and wastes a constraint slot);
+                    // treat it the same as a parse failure.
+                    if (pred.alignment != 0) {
+                        pred.kind = PK_Alignment;
+                    } else {
+                        LOG(WARNING) << "alignment predicate has align=0 — dropping\n";
+                    }
                 } catch (const std::exception &e) {
-                    LOG(WARNING) << "failed to parse alignment: " << e.what() << "\n";
+                    LOG(WARNING) << "failed to parse alignment '"
+                                 << align_it->second << "': " << e.what() << "\n";
                 }
             }
         } else {
@@ -847,6 +917,15 @@ namespace {
         }
 
         if (dropped_preds > 0) {
+            if (strict_contracts) {
+                LOG(ERROR)
+                    << dropped_preds
+                    << " predicate(s) failed to parse for target '"
+                    << target_fn->getName()
+                    << "' — refusing to emit an under-constrained harness "
+                       "(pass --strict-contracts=false to override)\n";
+                return false;
+            }
             LOG(WARNING) << dropped_preds
                          << " predicate(s) dropped during parsing for target '"
                          << target_fn->getName()
