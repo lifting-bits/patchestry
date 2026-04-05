@@ -46,6 +46,7 @@
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/CfgDotEmitter.hpp>
 #include <patchestry/AST/ClangEmitter.hpp>
+#include <patchestry/AST/CFGStructure.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
@@ -117,16 +118,14 @@ namespace patchestry::ast {
                     tracer.Dump(flow_graph, "BuildCGraph", true);
                 }
 
-                // Emit the CGraph blocks sequentially with goto-based
-                // control flow from terminals.
-                // Switch blocks get an SSwitch with goto-to-label cases.
                 SNodeFactory factory;
-                auto *seq = factory.Make<SSeq>();
+                SNode *root_snode = nullptr;
 
-                for (auto &node : flow_graph.nodes) {
-                    if (node.IsCollapsed()) continue;
-                    auto *blk = factory.Make<SBlock>();
-                    for (auto *s : node.stmts) blk->AddStmt(s);
+                if (options.use_structuring_pass) {
+                    // Structured path: run CFGStructure to fold the
+                    // CGraph into hierarchical SNodes.
+                    CFGStructure cfg_structure(flow_graph, factory, ctx);
+                    cfg_structure.StructureAll();
 
                     // Switch block: build SSwitch with goto cases
                     if (!node.switch_cases.empty() && node.branch_cond) {
@@ -201,18 +200,118 @@ namespace patchestry::ast {
                         }
                         continue;
                     }
+                    root_snode = seq;
 
-                    // Non-switch: append terminal (goto/if-goto)
-                    if (node.terminal) blk->AddStmt(node.terminal);
-                    if (!node.label.empty()) {
-                        auto *lbl = factory.Make<SLabel>(
-                            factory.Intern(node.label), blk);
-                        seq->AddChild(lbl);
-                    } else {
-                        seq->AddChild(blk);
-                    }
+                    // Post-pass: replace goto→break/continue for loop labels.
+                    ConvertGotoToBreakContinue(root_snode, factory);
+
+                    // Post-pass: replace goto→return patterns.
+                    ConvertGotoToReturn(root_snode, factory);
+
+                    // Post-pass: inline residual goto-to-label pairs
+                    // where the label is only referenced once.
+                    InlineResidualGotos(root_snode, factory);
+
+                    // TODO: add RemoveUnreferencedLabels pass once
+                    // CountAllGotoRefs fully walks all clang::Stmt
+                    // trees in all SNode types (current impl misses
+                    // gotos in terminals embedded by BuildLeafSNode).
+
                 }
-                EmitClangAST(seq, fn, ctx);
+
+                if (!root_snode) {
+                    // Goto-based path (original, unchanged).
+                    // Emit the CGraph blocks sequentially with goto-based
+                    // control flow from terminals.
+                    // Switch blocks get an SSwitch with goto-to-label cases.
+                    auto *seq = factory.Make<SSeq>();
+
+                    for (auto &node : flow_graph.nodes) {
+                        if (node.IsCollapsed()) continue;
+                        auto *blk = factory.Make<SBlock>();
+                        for (auto *s : node.stmts) blk->AddStmt(s);
+
+                        // Switch block: build SSwitch with goto cases
+                        if (!node.switch_cases.empty() && node.branch_cond) {
+                            auto *sw = factory.Make<SSwitch>(node.branch_cond);
+                            // Use the discriminant's type for case literals to
+                            // avoid truncation on targets where uintptr_t > int.
+                            // For enum types, use the underlying integer type for
+                            // the width since getIntWidth requires a BuiltinType.
+                            auto case_type = node.branch_cond->getType();
+                            if (case_type->isEnumeralType()) {
+                                case_type = case_type->castAs<clang::EnumType>()
+                                    ->getDecl()->getIntegerType();
+                            }
+                            unsigned case_width = ctx.getIntWidth(case_type);
+                            for (const auto &sc : node.switch_cases) {
+                                if (sc.is_default) {
+                                    // Default arm: goto target label
+                                    if (sc.succ_index < node.succs.size()) {
+                                        auto &tn = flow_graph.Node(
+                                            node.succs[sc.succ_index]);
+                                        assert(!tn.original_label.empty()
+                                               && "switch default target missing label");
+                                        sw->SetDefaultBody(factory.Make<SGoto>(
+                                            factory.Intern(tn.original_label)));
+                                    } else {
+                                        LOG(WARNING)
+                                            << "switch default succ_index "
+                                            << sc.succ_index
+                                            << " out of range (succs="
+                                            << node.succs.size() << ")\n";
+                                    }
+                                } else {
+                                    auto *val = clang::IntegerLiteral::Create(
+                                        ctx,
+                                        llvm::APInt(case_width,
+                                                    static_cast<uint64_t>(sc.value),
+                                                    true),
+                                        case_type, clang::SourceLocation());
+                                    SNode *body = nullptr;
+                                    if (sc.succ_index < node.succs.size()) {
+                                        auto &tn = flow_graph.Node(
+                                            node.succs[sc.succ_index]);
+                                        assert(!tn.original_label.empty()
+                                               && "switch case target missing label");
+                                        body = factory.Make<SGoto>(
+                                            factory.Intern(tn.original_label));
+                                    } else {
+                                        LOG(WARNING)
+                                            << "switch case " << sc.value
+                                            << " succ_index " << sc.succ_index
+                                            << " out of range (succs="
+                                            << node.succs.size() << ")\n";
+                                    }
+                                    sw->AddCase(val, body);
+                                }
+                            }
+                            auto *sw_seq = factory.Make<SSeq>();
+                            if (!blk->Stmts().empty()) sw_seq->AddChild(blk);
+                            sw_seq->AddChild(sw);
+                            if (!node.label.empty()) {
+                                seq->AddChild(factory.Make<SLabel>(
+                                    factory.Intern(node.label), sw_seq));
+                            } else {
+                                seq->AddChild(sw_seq);
+                            }
+                            continue;
+                        }
+
+                        // Non-switch: append terminal (goto/if-goto)
+                        if (node.terminal) blk->AddStmt(node.terminal);
+                        if (!node.label.empty()) {
+                            auto *lbl = factory.Make<SLabel>(
+                                factory.Intern(node.label), blk);
+                            seq->AddChild(lbl);
+                        } else {
+                            seq->AddChild(blk);
+                        }
+                    }
+                    root_snode = seq;
+                }
+
+                EmitClangAST(root_snode, fn, ctx);
 
                 CleanupPrettyPrint(fn, ctx);
             }

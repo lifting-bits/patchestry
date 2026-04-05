@@ -139,6 +139,8 @@ namespace patchestry::ast {
                 return true;
             if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s))
                 return !cs->body_empty() && EndsWithTerminator(cs->body_back());
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s))
+                return EndsWithTerminator(ls->getSubStmt());
             return false;
         }
 
@@ -205,6 +207,13 @@ namespace patchestry::ast {
                 auto *else_stmt = ite->ElseBranch() ? Emit(ite->ElseBranch()) : nullptr;
 
                 if (!then_stmt) then_stmt = new (ctx_) clang::NullStmt(Loc());
+
+                // Unwrap CompoundStmt around a single IfStmt in the else
+                // branch so Clang's printer emits "else if" not "else { if".
+                if (auto *cs = llvm::dyn_cast_or_null< clang::CompoundStmt >(else_stmt)) {
+                    if (cs->size() == 1 && llvm::isa< clang::IfStmt >(cs->body_front()))
+                        else_stmt = cs->body_front();
+                }
 
                 return clang::IfStmt::Create(
                     ctx_, Loc(), clang::IfStatementKind::Ordinary,
