@@ -17,6 +17,7 @@ add_library(patchestry_ast STATIC
   CfgDotEmitter.cpp
   CGraph.cpp
   CGraphBuilder.cpp
+  CFGStructure.cpp
 )
 
 add_library(patchestry::ast ALIAS patchestry_ast)

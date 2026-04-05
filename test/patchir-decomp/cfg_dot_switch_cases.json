@@ -1,6 +1,6 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: rm -f direct_switch_cfg.step_000.BuildCGraph.dot
-// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -print-tu -emit-dot-cfg -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -print-tu -emit-dot-cfg -output %t >> /dev/null 2>&1
 // RUN: test -e direct_switch_cfg.step_000.BuildCGraph.dot
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=DOT %s --input-file direct_switch_cfg.step_000.BuildCGraph.dot

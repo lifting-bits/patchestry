@@ -29,7 +29,7 @@ namespace patchestry::ast {
     /// Create !(expr) using clang::UnaryOperator (logical not).
     /// Wraps in ParenExpr so the pretty-printer emits !(a == b).
     clang::Expr *NegateExpr(clang::ASTContext &ctx, clang::Expr *expr);
-
+    
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key);
 
     clang::QualType
