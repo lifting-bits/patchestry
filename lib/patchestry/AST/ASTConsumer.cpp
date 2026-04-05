@@ -212,6 +212,17 @@ namespace patchestry::ast {
                     // where the label is only referenced once.
                     InlineResidualGotos(root_snode, factory);
 
+                    // Post-pass: eliminate gotos to immediately following
+                    // labels.  Iterates with InlineResidualGotos for
+                    // cascading cleanup.
+                    for (int pass = 0; pass < 3; ++pass) {
+                        bool did_elim = EliminateGotoToNextLabel(
+                            root_snode, factory, ctx);
+                        bool did_inline = InlineResidualGotos(
+                            root_snode, factory);
+                        if (!did_elim && !did_inline) break;
+                    }
+
                     // TODO: add RemoveUnreferencedLabels pass once
                     // CountAllGotoRefs fully walks all clang::Stmt
                     // trees in all SNode types (current impl misses
