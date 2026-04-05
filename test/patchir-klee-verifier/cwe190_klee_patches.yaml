@@ -1,0 +1,41 @@
+# KLEE verification patches for CWE-190 integer overflow
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe190-klee-patches"
+  version: "1.0.0"
+  description: "CWE-190 patches with static contract for KLEE verification"
+  author: "Security Team"
+  created: "2026-03-26"
+
+patches:
+  - name: "cwe190_checked_mul16"
+    description: "Replace unchecked 16-bit multiply with overflow-checked version"
+    category: "integer_safety"
+    code_file: "../patchir-transform/patches/patch_checked_mul16.c"
+    function_name: "patch::replace::int_mul16"
+    parameters:
+      - name: "count"
+        type: "unsigned int"
+        description: "Number of items"
+      - name: "block_size"
+        type: "unsigned int"
+        description: "Size per item"
+
+contracts:
+  - name: "cwe190_static_contract"
+    description: "Static contract: memcpy size must be in valid range"
+    category: "integer_safety"
+    type: "STATIC"
+
+    preconditions:
+      - id: "ptr_nonnull"
+        pred:
+          kind: "nonnull"
+          target: "arg0"
+
+    postconditions:
+      - id: "return_valid"
+        pred:
+          kind: "nonnull"
+          target: "return_value"

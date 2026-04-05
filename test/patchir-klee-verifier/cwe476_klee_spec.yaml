@@ -1,0 +1,61 @@
+# KLEE verification spec for CWE-476 null pointer dereference
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe476-klee-verification"
+  description: "E2E test: decomp → transform (patch + static contract) → cir2llvm → klee-verifier"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-03-26"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "cwe476_klee_patches.yaml"
+
+execution_order:
+  - "meta_patches::cwe476_patch"
+  - "meta_contracts::cwe476_contract"
+
+meta_patches:
+  - name: "cwe476_patch"
+    description: "Inject null pointer check before get_name"
+
+    patch_actions:
+      - id: "CWE-476-KLEE-001"
+        description: "Null check before get_name"
+
+        match:
+          - name: "get_name"
+            kind: "function"
+            function_context:
+              - name: "poke_process"
+
+        action:
+          - mode: "apply_before"
+            patch_id: "cwe476_null_check"
+            description: "Inject null pointer check"
+            arguments:
+              - name: "var_ptr"
+                source: "operand"
+                index: 0
+
+meta_contracts:
+  - name: "cwe476_contract"
+    description: "Static contract on the patched get_name call"
+
+    contract_actions:
+      - id: "CWE-476-KLEE-002"
+        description: "Attach nonnull precondition to get_name"
+
+        match:
+          - name: "get_name"
+            kind: "function"
+            function_context:
+              - name: "poke_process"
+
+        action:
+          - mode: "apply_before"
+            contract_id: "cwe476_static_contract"

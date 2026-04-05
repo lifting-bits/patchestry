@@ -4,8 +4,6 @@
 # Modes:
 #   --run-harness   Compile a C harness to LLVM bitcode and run KLEE on it.
 #   --run-bitcode   Run KLEE directly on a pre-compiled .bc file.
-#   --compile-only  Compile harness to bitcode without running KLEE.
-#   --interactive   Drop into a shell for manual use.
 #
 # Options:
 #   --input <file>          Input C harness or .bc file (required)
@@ -13,7 +11,6 @@
 #   --klee-args <args>      Additional arguments to pass to KLEE
 #   --clang-args <args>     Additional arguments to pass to clang (compile mode)
 #   --max-time <seconds>    Maximum KLEE execution time (default: 300)
-#   --search <strategy>     KLEE search strategy (default: random-path)
 #   --solver <backend>      Solver backend: stp, z3, or stp:z3 (default: stp:z3)
 
 set -euo pipefail
@@ -25,7 +22,6 @@ INPUT_FILE=""
 OUTPUT_DIR="/work/klee-out"
 MODE="run-harness"
 MAX_TIME=300
-SEARCH_STRATEGY="random-path"
 SOLVER_BACKEND="stp:z3"
 EXTRA_KLEE_ARGS=()
 EXTRA_CLANG_ARGS=()
@@ -40,14 +36,11 @@ Usage: klee-entrypoint.sh [MODE] --input <file> [OPTIONS]
 Modes:
   --run-harness    Compile C harness → bitcode → run KLEE (default)
   --run-bitcode    Run KLEE on pre-compiled .bc file
-  --compile-only   Compile C harness to .bc only
-  --interactive    Drop into bash shell
 
 Options:
   --input <file>          Input file (.c or .bc)
   --output <dir>          Output directory (default: /work/klee-out)
   --max-time <seconds>    KLEE timeout (default: 300)
-  --search <strategy>     Search strategy (default: random-path)
   --solver <backend>      stp, z3, or stp:z3 (default: stp:z3)
   --klee-args <args>      Extra KLEE arguments (quoted)
   --clang-args <args>     Extra clang arguments (quoted)
@@ -59,12 +52,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --run-harness)   MODE="run-harness"; shift ;;
         --run-bitcode)   MODE="run-bitcode"; shift ;;
-        --compile-only)  MODE="compile-only"; shift ;;
-        --interactive)   MODE="interactive"; shift ;;
         --input)         INPUT_FILE="$2"; shift 2 ;;
         --output)        OUTPUT_DIR="$2"; shift 2 ;;
         --max-time)      MAX_TIME="$2"; shift 2 ;;
-        --search)        SEARCH_STRATEGY="$2"; shift 2 ;;
         --solver)        SOLVER_BACKEND="$2"; shift 2 ;;
         --klee-args)     IFS=' ' read -ra EXTRA_KLEE_ARGS <<< "$2"; shift 2 ;;
         --clang-args)    IFS=' ' read -ra EXTRA_CLANG_ARGS <<< "$2"; shift 2 ;;
@@ -72,13 +62,6 @@ while [[ $# -gt 0 ]]; do
         *)               echo "Unknown option: $1" >&2; show_help; exit 1 ;;
     esac
 done
-
-# ------------------------------------------------------------------
-# Interactive mode
-# ------------------------------------------------------------------
-if [[ "${MODE}" == "interactive" ]]; then
-    exec /bin/bash
-fi
 
 # ------------------------------------------------------------------
 # Validate inputs
@@ -100,7 +83,7 @@ if [[ "${MODE}" == "run-harness" && "${INPUT_FILE}" == *.bc ]]; then
 fi
 
 # Validate file extension matches mode
-if [[ "${MODE}" == "compile-only" || "${MODE}" == "run-harness" ]]; then
+if [[ "${MODE}" == "run-harness" ]]; then
     if [[ "${INPUT_FILE}" != *.c ]]; then
         echo "Error: ${MODE} requires a .c input file, got: ${INPUT_FILE}" >&2
         exit 1
@@ -154,14 +137,17 @@ run_klee() {
 
     # Detect whether the bitcode needs uclibc/POSIX runtime.
     # Harnesses from patchir-klee-verifier have all externals stubbed and
-    # use klee_make_symbolic/klee_assume/klee_assert directly, so they
-    # don't need uclibc. The uclibc link also causes RaiseAsmPass crashes
-    # due to inline asm in uclibc that KLEE can't handle.
+    # reference klee_make_symbolic/klee_assume/klee_abort as undefined
+    # symbols, so they don't need uclibc. Non-harness bitcode gets full
+    # uclibc for POSIX libc support. We use llvm-nm's --undefined-only
+    # output — matching on actual symbol references rather than grepping
+    # llvm-dis output avoids false positives from comments/string literals
+    # and false negatives from name mangling.
     local runtime_args=()
-    local bc_ir
-    bc_ir=$(llvm-dis -o - "${bc}" 2>/dev/null | head -30 || true)
+    local undefined_syms
+    undefined_syms=$(llvm-nm --undefined-only "${bc}" 2>/dev/null || true)
 
-    if echo "${bc_ir}" | grep -q 'klee_make_symbolic\|klee_assume\|klee_assert'; then
+    if echo "${undefined_syms}" | grep -qE '\b(klee_make_symbolic|klee_assume|klee_abort)\b'; then
         echo "[klee] Detected KLEE harness — running without uclibc (externals stubbed)"
     else
         runtime_args=("--posix-runtime" "--libc=uclibc")
@@ -171,7 +157,6 @@ run_klee() {
     echo "[klee] Running KLEE on ${bc}"
     echo "[klee]   output:   ${klee_out}"
     echo "[klee]   timeout:  ${MAX_TIME}s"
-    echo "[klee]   search:   ${SEARCH_STRATEGY}"
     echo "[klee]   solver:   ${SOLVER_BACKEND}"
 
     # Temporarily disable errexit so we can capture KLEE's exit code
@@ -180,7 +165,7 @@ run_klee() {
     klee \
         --output-dir="${klee_out}" \
         --max-time="${MAX_TIME}" \
-        --search="${SEARCH_STRATEGY}" \
+        --search=random-path \
         "${runtime_args[@]+"${runtime_args[@]}"}" \
         --emit-all-errors \
         --only-output-states-covering-new \
@@ -222,12 +207,6 @@ run_klee() {
 # Execute mode
 # ------------------------------------------------------------------
 case "${MODE}" in
-    compile-only)
-        bc_file="${INPUT_FILE%.c}.bc"
-        compile_to_bitcode "${INPUT_FILE}" "${bc_file}"
-        echo "[klee] Done. Bitcode at: ${bc_file}"
-        ;;
-
     run-harness)
         bc_file="/tmp/harness.bc"
         compile_to_bitcode "${INPUT_FILE}" "${bc_file}"

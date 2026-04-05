@@ -9,6 +9,7 @@ add_subdirectory(Dialect)
 add_subdirectory(Ghidra)
 add_subdirectory(Passes)
 add_subdirectory(YAML)
+add_subdirectory(klee)
 
 # intrinsic library should be build standalone
 # and should not be part of main project

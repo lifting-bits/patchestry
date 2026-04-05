@@ -39,7 +39,7 @@ for tool_path in tool_paths:
 config.python_executable = config.python_executable if config.python_executable else sys.executable
 
 # Define file suffixes for test files
-config.suffixes = ['.c', '.cpp', '.json']
+config.suffixes = ['.c', '.cpp', '.json', '.ll']
 
 # Set the root directory where tests should be executed
 config.test_exec_root = os.path.join(config.patchestry_obj_root, 'test')
@@ -77,6 +77,8 @@ config.patchir_transform_tool = patchestry_tool_path('patchir-transform')
 config.patchir_cir2llvm_tool = patchestry_tool_path('patchir-cir2llvm')
 
 config.patchir_yaml_parser_tool = patchestry_tool_path('patchir-yaml-parser')
+
+config.patchir_klee_verifier_tool = patchestry_tool_path('patchir-klee-verifier')
 
 def get_musl_include_path(arch):
     """Get the musl include path for the given architecture on macOS.
@@ -134,6 +136,7 @@ tools = [
     ToolSubst('%patchir-transform', command=config.patchir_transform_tool),
     ToolSubst('%patchir-cir2llvm', command=config.patchir_cir2llvm_tool),
     ToolSubst('%patchir-yaml-parser', command=config.patchir_yaml_parser_tool),
+    ToolSubst('%patchir-klee-verifier', command=config.patchir_klee_verifier_tool),
     ToolSubst('%strip-json-comments', command=config.json_strip_comments),
     ToolSubst('%gen-call-checks', command=config.python_executable,
               extra_args=[os.path.join(config.patchestry_src_root, 'scripts', 'gen-call-checks.py')]),
@@ -155,3 +158,4 @@ os.makedirs(ci_output_folder, exist_ok=True)
 
 config.substitutions.append(('%PATH%', config.environment['PATH']))
 config.substitutions.append(('%ci_output_folder', f"--ci {ci_output_folder}"))
+config.substitutions.append(('%patchestry_src_root', config.patchestry_src_root))

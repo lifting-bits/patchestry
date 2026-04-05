@@ -167,3 +167,105 @@ jobs:
             -e HOST_WORKSPACE=${{ github.workspace }} \
             "$DEV_IMAGE" \
             lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=/workspace/builds/ci/test/ghidra/Output
+
+      - name: Run KLEE on generated harnesses
+        if: matrix.build-type == 'Debug' && matrix.sanitizers == 'OFF'
+        continue-on-error: true
+        env:
+          KLEE_IMAGE: ghcr.io/lifting-bits/patchestry-klee-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}:latest
+        run: |
+          # Pull KLEE image — skip this step if not available
+          if ! docker pull "${KLEE_IMAGE}" 2>/dev/null; then
+            echo "::warning::KLEE image not available — skipping KLEE execution tests"
+            exit 0
+          fi
+
+          VERIFIER="./builds/ci/tools/patchir-klee-verifier/Debug/patchir-klee-verifier"
+          PASSED=0
+          FAILED=0
+          SKIPPED=0
+
+          for TEST_LL in ./test/patchir-klee-verifier/*.ll; do
+            TEST_NAME="$(basename "${TEST_LL}" .ll)"
+
+            # Extract --target-function from the RUN line
+            TARGET_FN=$(grep -o '\-\-target-function [^ ]*' "${TEST_LL}" | head -1 | awk '{print $2}')
+            if [ -z "${TARGET_FN}" ]; then
+              echo "::warning::${TEST_NAME}: no --target-function found — skipping"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            echo ""
+            echo "=== ${TEST_NAME} (target: ${TARGET_FN}) ==="
+            WORK_DIR="/tmp/klee-ci/${TEST_NAME}"
+            mkdir -p "${WORK_DIR}/klee-out"
+
+            # Generate harness inside dev container
+            if ! docker run --rm \
+              -v ${{ github.workspace }}:/workspace \
+              -v "${WORK_DIR}:/out" \
+              -w /workspace \
+              "$DEV_IMAGE" \
+              "${VERIFIER}" "${TEST_LL}" \
+                --target-function "${TARGET_FN}" \
+                -S -o /out/harness.ll 2>&1; then
+              echo "::warning::${TEST_NAME}: harness generation failed"
+              FAILED=$((FAILED + 1))
+              continue
+            fi
+
+            # Verify harness has main()
+            if ! grep -q 'define i32 @main()' "${WORK_DIR}/harness.ll"; then
+              echo "::warning::${TEST_NAME}: harness missing main()"
+              FAILED=$((FAILED + 1))
+              continue
+            fi
+
+            # Assemble to bitcode inside KLEE container
+            if ! docker run --rm --platform linux/amd64 \
+              -v "${WORK_DIR}:/work" \
+              --entrypoint llvm-as \
+              "${KLEE_IMAGE}" \
+              /work/harness.ll -o /work/harness.bc 2>&1; then
+              echo "::warning::${TEST_NAME}: llvm-as failed"
+              FAILED=$((FAILED + 1))
+              continue
+            fi
+
+            # Run KLEE (30s per harness)
+            if ! docker run --rm --platform linux/amd64 \
+              -v "${WORK_DIR}:/work" \
+              "${KLEE_IMAGE}" \
+              --run-bitcode \
+              --input /work/harness.bc \
+              --output /work/klee-out \
+              --max-time 30 2>&1; then
+              echo "::warning::${TEST_NAME}: KLEE exited with error"
+            fi
+
+            # Check results
+            KLEE_OUT="${WORK_DIR}/klee-out/klee-last"
+            TESTS=$(find "${KLEE_OUT}" -name '*.ktest' 2>/dev/null | wc -l)
+            ERRORS=$(find "${KLEE_OUT}" -name '*.err' 2>/dev/null | wc -l)
+            echo "  Tests: ${TESTS}, Errors: ${ERRORS}"
+
+            if [ "${TESTS}" -gt 0 ]; then
+              echo "  PASS"
+              PASSED=$((PASSED + 1))
+            else
+              echo "::warning::${TEST_NAME}: KLEE generated no test cases"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          echo ""
+          echo "=== KLEE Summary ==="
+          echo "  Passed:  ${PASSED}"
+          echo "  Failed:  ${FAILED}"
+          echo "  Skipped: ${SKIPPED}"
+
+          if [ "${FAILED}" -gt 0 ]; then
+            echo "::warning::${FAILED} KLEE test(s) failed"
+            exit 1
+          fi

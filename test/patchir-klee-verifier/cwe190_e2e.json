@@ -1,0 +1,258 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t_s1 >> /dev/null 2>&1
+// RUN: %patchir-transform %t_s1.cir --spec %S/cwe190_klee_spec.yaml -o %t_s2.cir
+// RUN: %patchir-cir2llvm %t_s2.cir -S -o %t_s3.ll
+// RUN: %patchir-klee-verifier %t_s3.ll --target-function peek_process -S -o %t_harness.ll
+// RUN: %file-check -check-prefix=KLEE %s --input-file %t_harness.ll
+
+// E2E test: CWE-190 integer overflow → decomp → transform (patch + static contract) → cir2llvm → klee-verifier
+// The patch replaces unchecked multiply with overflow-checked version.
+// The static contract verifies the return value is within expected range.
+
+// KLEE: define i32 @main()
+// KLEE: call void @klee_make_symbolic(
+// KLEE: call i32 @peek_process(
+// KLEE: ret i32 0
+
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "peek_process",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_u32",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_ptr_void",
+          "t_u32"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "unique:00000001:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "context",
+              "type": "t_ptr_void",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00000002:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "address_msw",
+              "type": "t_u32",
+              "kind": "parameter",
+              "index": 1
+            },
+            "unique:00000003:0:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "count",
+              "type": "t_u32"
+            },
+            "unique:00000004:0:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "block_size",
+              "type": "t_u32"
+            },
+            "unique:00000005:0:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "total_bytes",
+              "type": "t_u32"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000010:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00000001:0:0",
+            "unique:00000002:0:0",
+            "unique:00000003:0:0",
+            "unique:00000004:0:0",
+            "unique:00000005:0:0",
+            "entry.exit"
+          ]
+        },
+        "ram:10000010:0:basic": {
+          "operations": {
+            "ram:10000010:100:0": {
+              "mnemonic": "COPY",
+              "type": "t_u32",
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000003:0:0"
+              },
+              "inputs": [
+                {
+                  "type": "t_u32",
+                  "kind": "constant",
+                  "value": 256
+                }
+              ]
+            },
+            "ram:10000014:101:1": {
+              "mnemonic": "COPY",
+              "type": "t_u32",
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000004:0:0"
+              },
+              "inputs": [
+                {
+                  "type": "t_u32",
+                  "kind": "constant",
+                  "value": 257
+                }
+              ]
+            },
+            "ram:10000018:102:2": {
+              "mnemonic": "INT_MULT",
+              "type": "t_u32",
+              "output": {
+                "kind": "local",
+                "operation": "unique:00000005:0:0"
+              },
+              "inputs": [
+                {
+                  "type": "t_u32",
+                  "kind": "local",
+                  "operation": "unique:00000003:0:0"
+                },
+                {
+                  "type": "t_u32",
+                  "kind": "local",
+                  "operation": "unique:00000004:0:0"
+                }
+              ]
+            },
+            "ram:1000001c:103:3": {
+              "mnemonic": "INT_LESSEQUAL",
+              "type": "t_bool",
+              "inputs": [
+                {
+                  "type": "t_u32",
+                  "kind": "local",
+                  "operation": "unique:00000005:0:0"
+                },
+                {
+                  "type": "t_u32",
+                  "kind": "constant",
+                  "value": 497
+                }
+              ]
+            },
+            "ram:10000020:104:4": {
+              "mnemonic": "CBRANCH",
+              "taken_block": "ram:10000030:1:basic",
+              "not_taken_block": "ram:10000040:2:basic",
+              "condition": {
+                "type": "t_bool",
+                "kind": "temporary",
+                "operation": "ram:1000001c:103:3"
+              }
+            }
+          },
+          "ordered_operations": [
+            "ram:10000010:100:0",
+            "ram:10000014:101:1",
+            "ram:10000018:102:2",
+            "ram:1000001c:103:3",
+            "ram:10000020:104:4"
+          ]
+        },
+        "ram:10000030:1:basic": {
+          "operations": {
+            "ram:10000030:200:0": {
+              "mnemonic": "CALL",
+              "type": "t_ptr_void",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:memcpy",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t_ptr_void",
+                  "kind": "parameter",
+                  "operation": "unique:00000001:0:0"
+                },
+                {
+                  "type": "t_ptr_void",
+                  "kind": "parameter",
+                  "operation": "unique:00000001:0:0"
+                },
+                {
+                  "type": "t_u32",
+                  "kind": "local",
+                  "operation": "unique:00000005:0:0"
+                }
+              ]
+            },
+            "ram:10000034:201:1": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_u32",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ram:10000030:200:0",
+            "ram:10000034:201:1"
+          ]
+        },
+        "ram:10000040:2:basic": {
+          "operations": {
+            "ram:10000040:300:0": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_u32",
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ram:10000040:300:0"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:memcpy": {
+      "name": "memcpy",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_ptr_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_ptr_void",
+          "t_ptr_void",
+          "t_u32"
+        ]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_u32": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "t_bool": { "name": "bool", "size": 1, "kind": "integer" },
+    "t_ptr_void": { "kind": "pointer", "size": 4, "element_type": "t_void" },
+    "t_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}
