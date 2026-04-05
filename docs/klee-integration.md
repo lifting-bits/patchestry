@@ -35,6 +35,34 @@ architecture. This is correct because:
 - All external functions are stubbed with symbolic return values, so there
   are no ABI-specific calling convention dependencies.
 
+> **⚠️ Layout reshaping limitation.** When the original module uses 32-bit
+> pointers (ARM32, MIPS32, etc.), retargeting to x86_64 **silently changes
+> the layout of every struct that transitively contains a pointer** —
+> sizes, field offsets, and alignment are all recomputed under the 64-bit
+> datalayout. Typed GEPs stay correct because LLVM recomputes them from
+> the new struct layout, **but the following patterns are miscompiled
+> after retargeting**:
+>
+> - Raw `memcpy` / `memset` / `memmove` sized against the *original*
+>   struct (e.g. a literal `24` that matched the 32-bit layout where the
+>   64-bit layout is now 32 bytes).
+> - Constant byte-array globals whose bytes encode a pointer-bearing
+>   struct instance — initializer bytes no longer align to the new
+>   field offsets.
+> - `inttoptr` / `ptrtoint` round-trips through a 32-bit integer — the
+>   upper 32 bits of the 64-bit pointer are lost.
+>
+> `patchir-klee-verifier` detects this case automatically: when the
+> original pointer width differs from 64, it scans the module's named
+> struct types and emits a warning of the form
+> `retargeted module pointer width 32 -> 64 bits: N named struct type(s)
+> transitively contain pointer fields and were silently reshaped ...`.
+> If a harness hits any of the patterns above, move the affected
+> construct out of the contracted region or rewrite it to use typed
+> accesses before handing the bitcode to the verifier. Value-level
+> contract predicates (nonnull / range / relation) are unaffected and
+> remain valid under retargeting.
+
 ## Docker Image
 
 KLEE runs inside a Docker container (`patchestry/klee:latest`) built on

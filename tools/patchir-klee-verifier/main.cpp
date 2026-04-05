@@ -5,8 +5,11 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Linker/Linker.h>
+#include <llvm/IR/DataLayout.h>
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
@@ -419,10 +422,34 @@ namespace {
         }
     }
 
-    // Collect static_contract metadata from all call instructions to the target function
+    // Collect static_contract metadata pertaining to the target function.
+    //
+    // The `static_contract` MDTuple schema is:
+    //   operand(0) -> MDString: function name the contract applies to
+    //   operand(1) -> MDString: serialised contract body
+    //
+    // We match on the *name* in operand(0) rather than deriving the target
+    // from `CallBase::getCalledFunction()`. Pointer equality on the called
+    // function is brittle: it returns null for indirect calls through a
+    // function pointer (decompiled dispatch tables, callbacks), for calls
+    // that go through a bitcast `ConstantExpr` (common when the Ghidra
+    // decompiler emits a call-site signature that doesn't exactly match
+    // the callee's definition), and for calls through a `GlobalAlias`.
+    // Every one of those cases silently dropped contract predicates with
+    // no diagnostic before. Since the decompiler stamps operand(0) at
+    // attachment time, it's the authoritative identifier and covers all
+    // call-site shapes uniformly.
+    //
+    // We walk the whole module once and collect any instruction whose
+    // metadata names the target, regardless of whether it's a call site
+    // or an instruction inside the target function's body.
     static std::vector< std::string >
     collectStaticContracts(llvm::Module &M, llvm::Function *target_fn) {
         std::vector< std::string > contracts;
+        if (!target_fn)
+            return contracts;
+
+        llvm::StringRef target_name = target_fn->getName();
 
         for (auto &F : M) {
             for (auto &BB : F) {
@@ -435,48 +462,15 @@ namespace {
                     if (!tuple || tuple->getNumOperands() < 2)
                         continue;
 
+                    auto *fn_name = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(0));
+                    if (!fn_name || fn_name->getString() != target_name)
+                        continue;
+
                     auto *md_str = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1));
                     if (!md_str)
                         continue;
 
-                    // Check if this contract is for the target function
-                    if (auto *CB = llvm::dyn_cast< llvm::CallBase >(&I)) {
-                        if (CB->getCalledFunction() == target_fn) {
-                            contracts.push_back(md_str->getString().str());
-                        }
-                    }
-                }
-            }
-        }
-
-        // Also check if the target function itself has contract metadata
-        // (e.g., on non-call instructions). Only collect contracts whose
-        // function-name operand (tuple operand(0)) matches the target function
-        // to avoid picking up contracts for callees inside the target.
-        if (target_fn && !target_fn->isDeclaration()) {
-            for (auto &BB : *target_fn) {
-                for (auto &I : BB) {
-                    // Skip recursive self-calls — already collected by the first loop
-                    if (auto *CB = llvm::dyn_cast< llvm::CallBase >(&I)) {
-                        if (CB->getCalledFunction() == target_fn)
-                            continue;
-                    }
-
-                    auto *contract_md = I.getMetadata("static_contract");
-                    if (!contract_md)
-                        continue;
-                    auto *tuple = llvm::dyn_cast< llvm::MDTuple >(contract_md);
-                    if (!tuple || tuple->getNumOperands() < 2)
-                        continue;
-
-                    // Filter: only collect if the contract's function name matches
-                    auto *fn_name = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(0));
-                    if (!fn_name || fn_name->getString() != target_fn->getName())
-                        continue;
-
-                    auto *md_str = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1));
-                    if (md_str)
-                        contracts.push_back(md_str->getString().str());
+                    contracts.push_back(md_str->getString().str());
                 }
             }
         }
@@ -665,10 +659,35 @@ namespace {
         }
     }
 
+    // Get or declare malloc: i8* malloc(size_t). KLEE intercepts this at
+    // runtime and returns a tracked heap allocation that survives the
+    // caller's stack frame — the pointer-returning stub path below relies
+    // on this to avoid returning a dangling alloca. We declare it unconditionally
+    // so every pointer stub lowers to the same call site.
+    static llvm::FunctionCallee getMalloc(llvm::Module &M) {
+        auto &Ctx    = M.getContext();
+        auto *ptrTy  = llvm::PointerType::getUnqual(Ctx);
+        auto *sizeTy = M.getDataLayout().getIntPtrType(Ctx);
+        auto *FT     = llvm::FunctionType::get(ptrTy, { sizeTy }, /*isVarArg=*/false);
+        return M.getOrInsertFunction("malloc", FT);
+    }
+
     // Stub undefined external functions with symbolic return values
     static unsigned stubExternalFunctions(llvm::Module &M, llvm::Function *target_fn) {
         unsigned count = 0;
         auto make_sym   = getKleeMakeSymbolic(M);
+        auto malloc_fn  = getMalloc(M);
+
+        // Names we must never stub: the allocator family is intercepted
+        // natively by KLEE, so the declarations have to reach KLEE intact.
+        // If we stubbed e.g. `malloc`, the pointer-returning stub path below
+        // would synthesize a `malloc` body that in turn calls `malloc` on
+        // itself — infinite recursion, plus the original critical bug
+        // (returning a pointer to the stub's own stack frame) is back.
+        static const llvm::StringRef kKleeAllocators[] = {
+            "malloc", "calloc", "realloc", "free",
+            "posix_memalign", "valloc", "memalign",
+        };
 
         // Collect declarations to stub (avoid modifying while iterating)
         std::vector< llvm::Function * > to_stub;
@@ -684,6 +703,16 @@ namespace {
                 continue;
             // Skip LLVM intrinsics
             if (name.starts_with("llvm."))
+                continue;
+            // Skip allocator family — KLEE intercepts these.
+            bool is_allocator = false;
+            for (auto allocator : kKleeAllocators) {
+                if (name == allocator) {
+                    is_allocator = true;
+                    break;
+                }
+            }
+            if (is_allocator)
                 continue;
 
             to_stub.push_back(&F);
@@ -705,20 +734,28 @@ namespace {
                 // Unsized return type (e.g. opaque struct) — return undef
                 B.CreateRet(llvm::UndefValue::get(ret_ty));
             } else if (ret_ty->isPointerTy()) {
-                // For pointer-returning externals, return a pointer to a fresh
-                // symbolic buffer so KLEE can dereference it without hitting
-                // "invalid pointer" errors from unconstrained symbolic pointers.
-                uint64_t buf_size = symbolic_ptr_size;
-                auto *buf_ty = llvm::ArrayType::get(
-                    llvm::Type::getInt8Ty(Ctx), buf_size);
-                auto *buf = B.CreateAlloca(buf_ty);
-
-                std::string sym_name = (F->getName() + "_ret_buf").str();
-                llvm::Value *cast_ptr = B.CreateBitCast(buf, ptrTy);
+                // For pointer-returning externals, hand the caller a fresh
+                // *heap* allocation filled with symbolic bytes. We MUST NOT
+                // use `alloca` here: an alloca lives in the stub's own stack
+                // frame, so returning it would hand the caller a dangling
+                // pointer — the caller's first load/store would hit freed
+                // stack memory (KLEE reports this as an out-of-bound pointer
+                // error, and the semantics are undefined in LLVM). `malloc`
+                // is intercepted by KLEE and produces a tracked allocation
+                // that outlives this call, so the returned pointer remains
+                // valid for the duration of the caller's use.
+                uint64_t buf_size     = symbolic_ptr_size;
                 llvm::Value *size_val = llvm::ConstantInt::get(sizeTy, buf_size);
-                llvm::Value *name_str = B.CreateGlobalString(sym_name);
-                B.CreateCall(make_sym, { cast_ptr, size_val, name_str });
+                llvm::Value *buf      = B.CreateCall(malloc_fn, { size_val });
 
+                std::string sym_name  = (F->getName() + "_ret_buf").str();
+                llvm::Value *name_str = B.CreateGlobalString(sym_name);
+                B.CreateCall(make_sym, { buf, size_val, name_str });
+
+                // `malloc` already returns an opaque pointer; with typed
+                // pointers we'd need a bitcast, with opaque pointers it's
+                // a no-op, so emit the bitcast unconditionally and let
+                // LLVM fold it.
                 llvm::Value *ret_ptr = B.CreateBitCast(buf, ret_ty);
                 B.CreateRet(ret_ptr);
             } else {
@@ -758,12 +795,33 @@ namespace {
         auto *ptrTy = llvm::PointerType::getUnqual(Ctx);
         auto *sizeTy = DL.getIntPtrType(Ctx);
 
-        // Remove existing main if present — but not if it's the target function
+        // Remove existing main if present — but not if it's the target function.
+        //
+        // A decompiled firmware module often contains a `main` that is still
+        // called from an (also-decompiled) startup stub or referenced from a
+        // constant initializer (e.g. a vtable / interrupt table / `@llvm.*.ctors`
+        // entry). `Function::eraseFromParent()` asserts when the value still
+        // has users, so we must break those uses explicitly before the erase:
+        // rewrite every remaining use to a poison value of the correct function
+        // pointer type. The old callers become unreachable dead code which the
+        // harness never enters — KLEE only executes the freshly-synthesized
+        // `main` we create below.
         if (auto *old_main = M.getFunction("main")) {
             if (old_main == target_fn) {
-                // Rename the target out of the way so we can create a new main()
+                // Rename the target out of the way so we can create a new main().
+                // Renames don't touch uses, so no RAUW is needed here.
                 old_main->setName("__klee_orig_main");
             } else {
+                if (!old_main->use_empty()) {
+                    LOG(WARNING)
+                        << "existing main() has " << old_main->getNumUses()
+                        << " remaining use(s); replacing with poison before "
+                           "erase (dead startup-path callers become "
+                           "unreachable)\n";
+                    old_main->replaceAllUsesWith(
+                        llvm::PoisonValue::get(old_main->getType())
+                    );
+                }
                 old_main->eraseFromParent();
             }
         }
@@ -933,17 +991,33 @@ namespace {
         return true;
     }
 
-    // Write module to output file
+    // Write module to output file.
+    //
+    // Error handling contract: we must catch stream errors at every stage
+    // of the write pipeline. `Module::print` and `WriteBitcodeToFile` swallow
+    // write failures into the stream's sticky error flag, so we have to
+    // probe that flag ourselves. For on-disk output, failures can surface
+    // *after* the last bitcode byte is handed to the kernel — flush errors,
+    // and in particular close() errors from delayed allocation on NFS/SMB
+    // and ENOSPC/EDQUOT flushed on close — so we explicitly `close()` the
+    // fd stream and re-check `has_error()` before letting its destructor
+    // run. `raw_fd_ostream`'s destructor calls `report_fatal_error` (which
+    // aborts) if the error flag is still set at teardown, so every failure
+    // path clears the flag before returning.
     static bool writeModuleToFile(llvm::Module &module, llvm::StringRef out) {
-        if (out == "-") {
+        auto emitTo = [&](llvm::raw_ostream &os) {
             if (emit_ll) {
-                module.print(llvm::outs(), nullptr);
+                module.print(os, nullptr);
             } else {
-                llvm::WriteBitcodeToFile(module, llvm::outs());
+                llvm::WriteBitcodeToFile(module, os);
             }
+        };
+
+        if (out == "-") {
+            emitTo(llvm::outs());
             llvm::outs().flush();
             if (llvm::outs().has_error()) {
-                LOG(ERROR) << "writing to stdout: stream error\n";
+                LOG(ERROR) << "writing module to stdout: stream error\n";
                 llvm::outs().clear_error();
                 return false;
             }
@@ -957,20 +1031,139 @@ namespace {
             return false;
         }
 
-        if (emit_ll) {
-            module.print(os, nullptr);
-        } else {
-            llvm::WriteBitcodeToFile(module, os);
-        }
+        emitTo(os);
 
+        // Surface write/flush errors before close so the diagnostic can
+        // attribute them to the write phase rather than the close phase.
         os.flush();
         if (os.has_error()) {
-            LOG(ERROR) << "writing to " << out << ": stream error\n";
+            LOG(ERROR) << "writing module to " << out << ": stream error\n";
+            os.clear_error();
+            return false;
+        }
+
+        // Explicitly close to capture late errors (delayed allocation on
+        // network filesystems, disk-quota/ENOSPC flushed on close). If we
+        // let the destructor do this the error surfaces via
+        // report_fatal_error and aborts the process.
+        os.close();
+        if (os.has_error()) {
+            LOG(ERROR) << "closing " << out << ": stream error\n";
             os.clear_error();
             return false;
         }
 
         return true;
+    }
+
+    // Recursively test whether a type (transitively) contains a pointer.
+    // Used by the retargeting check to count named struct types whose
+    // layout changes when pointer width changes (32-bit -> 64-bit).
+    static bool typeContainsPointer(
+        llvm::Type *T, llvm::SmallPtrSetImpl< llvm::Type * > &seen
+    ) {
+        if (!T || !seen.insert(T).second)
+            return false;
+        if (T->isPointerTy())
+            return true;
+        if (auto *ST = llvm::dyn_cast< llvm::StructType >(T)) {
+            if (ST->isOpaque())
+                return false;
+            for (llvm::Type *elt : ST->elements()) {
+                if (typeContainsPointer(elt, seen))
+                    return true;
+            }
+            return false;
+        }
+        if (auto *AT = llvm::dyn_cast< llvm::ArrayType >(T))
+            return typeContainsPointer(AT->getElementType(), seen);
+        if (auto *VT = llvm::dyn_cast< llvm::VectorType >(T))
+            return typeContainsPointer(VT->getElementType(), seen);
+        return false;
+    }
+
+    // Retarget `module` to x86_64 in-place for KLEE compatibility.
+    //
+    // KLEE's memory allocator uses host (64-bit) addresses, so 32-bit
+    // target modules (e.g. ARM32 from Ghidra decompilation) cannot run
+    // directly. Since KLEE interprets IR semantically and the harness
+    // only exercises value-level contract predicates (nonnull, range,
+    // relation), retargeting is safe for *those* predicates.
+    //
+    // **Layout reshaping caveat.** When the original pointer width differs
+    // from 64, every struct that (transitively) contains a pointer has
+    // its size, field offsets, and alignment silently recomputed under
+    // the new datalayout. Typed GEPs stay correct because LLVM recomputes
+    // them from the (new) struct layout, but any of the following patterns
+    // will be miscompiled after retargeting:
+    //
+    //   - raw memcpy/memset/memmove sized against the original struct
+    //     (e.g. `memcpy(dst, src, 24)` where the original 32-bit layout
+    //     was 24 bytes but the 64-bit layout is 32);
+    //   - constant byte-array globals whose bytes encode a pointer-
+    //     containing struct instance (initializer bytes no longer align
+    //     to the new field offsets);
+    //   - inttoptr / ptrtoint round-trips through a 32-bit integer
+    //     (upper 32 bits of the 64-bit pointer are lost).
+    //
+    // Detect the case and emit a prominent warning quantifying how many
+    // named struct types are affected. See
+    // docs/klee-integration.md#architecture-retargeting for the full
+    // limitation write-up.
+    static void retargetModuleToX86_64(llvm::Module &M, bool verbose) {
+        static constexpr const char *kX86_64_Triple = "x86_64-unknown-linux-gnu";
+        static constexpr const char *kX86_64_DataLayout =
+            "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128"
+            "-f80:128-n8:16:32:64-S128";
+
+        std::string currentTriple = M.getTargetTriple();
+        llvm::Triple parsed(currentTriple);
+        bool is_x86_64 = parsed.getArch() == llvm::Triple::x86_64;
+        if (!currentTriple.empty() && is_x86_64)
+            return;
+
+        // Snapshot the original pointer width (address space 0) before
+        // we stamp in the x86_64 datalayout. An empty datalayout yields 0,
+        // which we treat as "unknown, do not warn".
+        unsigned old_ptr_bits = 0;
+        if (!M.getDataLayoutStr().empty()) {
+            llvm::DataLayout old_dl(M.getDataLayoutStr());
+            old_ptr_bits = old_dl.getPointerSizeInBits(/*AS=*/0);
+        }
+
+        if (verbose) {
+            llvm::outs() << "Retargeting module from '"
+                         << (currentTriple.empty() ? "<none>" : currentTriple)
+                         << "' to x86_64 for KLEE compatibility\n";
+        }
+
+        M.setTargetTriple(kX86_64_Triple);
+        M.setDataLayout(kX86_64_DataLayout);
+
+        if (old_ptr_bits == 0 || old_ptr_bits == 64)
+            return;
+
+        unsigned reshaped_structs = 0;
+        for (llvm::StructType *ST : M.getIdentifiedStructTypes()) {
+            if (ST->isOpaque())
+                continue;
+            llvm::SmallPtrSet< llvm::Type *, 8 > seen;
+            if (typeContainsPointer(ST, seen))
+                ++reshaped_structs;
+        }
+
+        LOG(WARNING)
+            << "retargeted module pointer width " << old_ptr_bits
+            << " -> 64 bits: " << reshaped_structs
+            << " named struct type(s) transitively contain pointer "
+               "fields and were silently reshaped (sizes, offsets, and "
+               "alignment recomputed under the x86_64 datalayout). "
+               "Value-level contract predicates (nonnull/range/relation) "
+               "remain valid, but raw memcpy/memset sized against the "
+               "original layout, byte-initialized globals encoding "
+               "pointer-bearing structs, and inttoptr round-trips "
+               "through 32-bit integers will be miscompiled. See "
+               "docs/klee-integration.md#architecture-retargeting.\n";
     }
 } // namespace
 
@@ -987,29 +1180,11 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    // Retarget module to x86_64 for KLEE compatibility.
-    // KLEE's memory allocator uses host (64-bit) addresses, so 32-bit target
-    // modules (e.g. ARM32 from Ghidra decompilation) cannot run directly.
-    // Since KLEE interprets IR semantically and the harness only exercises
-    // contract predicates (nonnull, range, relation), retargeting is safe.
-    {
-        static constexpr const char *kX86_64_Triple = "x86_64-unknown-linux-gnu";
-        static constexpr const char *kX86_64_DataLayout =
-            "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128"
-            "-f80:128-n8:16:32:64-S128";
-        std::string currentTriple = module->getTargetTriple();
-        llvm::Triple parsed(currentTriple);
-        bool is_x86_64 = parsed.getArch() == llvm::Triple::x86_64;
-        if (currentTriple.empty() || !is_x86_64) {
-            if (verbose) {
-                llvm::outs() << "Retargeting module from '"
-                             << (currentTriple.empty() ? "<none>" : currentTriple)
-                             << "' to x86_64 for KLEE compatibility\n";
-            }
-            module->setTargetTriple(kX86_64_Triple);
-            module->setDataLayout(kX86_64_DataLayout);
-        }
-    }
+    // Retarget module to x86_64 for KLEE compatibility. See the comment on
+    // retargetModuleToX86_64 for the layout-reshaping caveat — this call
+    // will emit a prominent warning if the original pointer width differed
+    // from 64 and any struct types had to be silently reshaped.
+    retargetModuleToX86_64(*module, verbose);
 
     if (verbose) {
         llvm::outs() << "Loaded module: " << module->getName() << "\n";
