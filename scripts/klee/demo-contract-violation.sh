@@ -1,6 +1,10 @@
 #!/bin/bash
 # Demo: KLEE catching a static contract violation on bl_usb__send_message
 #
+# Generates bl_usb__send_message.ll from Ghidra JSON through the full pipeline:
+#   JSON -> patchir-decomp -> patchir-transform -> patchir-cir2llvm -> LLVM IR
+# then runs patchir-klee-verifier for two setups:
+#
 # Case 1 (VIOLATION): External usbd_ep_write_packet is fully symbolic (any i32).
 #   -> KLEE finds return > 255, violating postcondition range [0, 255]
 #
@@ -9,10 +13,10 @@
 #   -> All paths satisfy the contract. 0 assertion errors.
 #
 # Usage:
-#   ./scripts/klee/demo-contract-violation.sh [build-dir]
+#   ./scripts/klee/demo-contract-violation.sh [build-dir] [output-dir]
 #
 # Prerequisites:
-#   - patchir-klee-verifier built (cmake --build <build-dir> --target patchir-klee-verifier)
+#   - patchir-decomp, patchir-transform, patchir-cir2llvm, patchir-klee-verifier built
 #   - clang available in PATH
 #   - KLEE available in PATH (for full end-to-end demo)
 
@@ -20,38 +24,78 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="${1:-${REPO_ROOT}/builds/default}"
+OUTPUT_DIR="${2:-${REPO_ROOT}/builds/klee-demo-output}"
 
-# Tool paths
-VERIFIER="${BUILD_DIR}/tools/patchir-klee-verifier/Debug/patchir-klee-verifier"
-if [ ! -f "${VERIFIER}" ]; then
-    VERIFIER="${BUILD_DIR}/tools/patchir-klee-verifier/Release/patchir-klee-verifier"
-fi
-if [ ! -f "${VERIFIER}" ]; then
-    echo "ERROR: patchir-klee-verifier not found in ${BUILD_DIR}"
-    echo "Build it first: cmake --build ${BUILD_DIR} --target patchir-klee-verifier"
-    exit 1
-fi
+# --- Locate tools ---
+find_tool() {
+    local name="$1"
+    local tool="${BUILD_DIR}/tools/${name}/Debug/${name}"
+    if [ ! -f "${tool}" ]; then
+        tool="${BUILD_DIR}/tools/${name}/Release/${name}"
+    fi
+    if [ ! -f "${tool}" ]; then
+        echo "ERROR: ${name} not found in ${BUILD_DIR}" >&2
+        echo "Build it first: cmake --build ${BUILD_DIR} --target ${name}" >&2
+        exit 1
+    fi
+    echo "${tool}"
+}
 
-TEST_LL="${REPO_ROOT}/test/patchir-klee-verifier/bl_usb__send_message.ll"
+DECOMP=$(find_tool patchir-decomp)
+TRANSFORM=$(find_tool patchir-transform)
+CIR2LLVM=$(find_tool patchir-cir2llvm)
+VERIFIER=$(find_tool patchir-klee-verifier)
+
+# --- Source files ---
+TEST_JSON="${REPO_ROOT}/test/patchir-transform/bl_usb__send_message.json"
+KLEE_SPEC="${REPO_ROOT}/test/patchir-klee-verifier/bl_usb_klee_spec.yaml"
 MODEL_C="${REPO_ROOT}/lib/patchestry/klee/models/usb_hal_models.c"
 STUB_H="${REPO_ROOT}/lib/patchestry/klee/models/klee_stub.h"
+STRIP_COMMENTS="${REPO_ROOT}/test/scripts/strip-json-comments.sh"
 
-WORK=$(mktemp -d)
-trap "rm -rf ${WORK}" EXIT
+mkdir -p "${OUTPUT_DIR}"
+WORK="${OUTPUT_DIR}"
 
 echo "=== KLEE Contract Violation Demo ==="
 echo ""
 echo "Target: bl_usb__send_message"
-echo "Contract: postcondition return in [0, 255]"
+echo "Contract: precondition nonnull arg0, postcondition return in [0, 255]"
 echo ""
 
-# Step 1: Compile C model to bitcode
-echo "--- Step 1: Compiling USB HAL model to bitcode ---"
+# Step 1: Generate LLVM IR from Ghidra JSON through the full pipeline
+echo "--- Step 1: JSON -> decomp -> transform -> cir2llvm ---"
+echo "  Source: ${TEST_JSON}"
+
+# 1a: Strip JSON comments
+echo "  [1/4] Stripping JSON comments..."
+bash "${STRIP_COMMENTS}" "${TEST_JSON}" > "${WORK}/bl_usb.json"
+
+# 1b: Decompile JSON to CIR + C source
+echo "  [2/4] patchir-decomp: JSON -> CIR + C"
+"${DECOMP}" -input "${WORK}/bl_usb.json" -emit-cir -print-tu -output "${WORK}/bl_usb_s1" > /dev/null 2>&1
+echo "  -> ${WORK}/bl_usb_s1.cir"
+echo "  -> ${WORK}/bl_usb_s1.c"
+
+# 1c: Apply static contract via patchir-transform
+echo "  [3/4] patchir-transform: CIR + YAML spec -> patched CIR"
+"${TRANSFORM}" "${WORK}/bl_usb_s1.cir" --spec "${KLEE_SPEC}" -o "${WORK}/bl_usb_s2.cir"
+echo "  -> ${WORK}/bl_usb_s2.cir"
+
+# 1d: Lower CIR to LLVM IR
+echo "  [4/4] patchir-cir2llvm: CIR -> LLVM IR"
+"${CIR2LLVM}" "${WORK}/bl_usb_s2.cir" -S -o "${WORK}/bl_usb__send_message.ll"
+echo "  -> ${WORK}/bl_usb__send_message.ll"
+echo ""
+
+TEST_LL="${WORK}/bl_usb__send_message.ll"
+
+# Step 2: Compile C model to bitcode
+echo "--- Step 2: Compiling USB HAL model to bitcode ---"
 clang -emit-llvm -c -O0 -include "${STUB_H}" "${MODEL_C}" -o "${WORK}/usb_hal_models.bc"
 echo "  -> ${WORK}/usb_hal_models.bc"
 echo ""
 
-# Step 2: Case 1 — Violation (no model library, external fully symbolic)
+# Step 3: Case 1 — Violation (no model library, external fully symbolic)
 echo "--- Case 1: VIOLATION (no model library) ---"
 echo "  External usbd_ep_write_packet returns unconstrained i32."
 echo "  KLEE can find ret > 255, violating postcondition."
@@ -61,7 +105,7 @@ echo "  KLEE can find ret > 255, violating postcondition."
 echo "  -> Harness: ${WORK}/violation.ll"
 echo ""
 
-# Step 3: Case 2 — Pass (with model library, external constrained [0,255])
+# Step 4: Case 2 — Pass (with model library, external constrained [0,255])
 echo "--- Case 2: PASS (with --model-library) ---"
 echo "  External usbd_ep_write_packet modeled with return in [0, 255]."
 echo "  All symbolic paths satisfy the contract."
@@ -72,7 +116,7 @@ echo "  All symbolic paths satisfy the contract."
 echo "  -> Harness: ${WORK}/modeled.ll"
 echo ""
 
-# Step 4: Show the difference
+# Step 5: Show the difference
 echo "--- Comparison ---"
 echo ""
 echo "VIOLATION harness (usbd_ep_write_packet auto-stubbed):"
@@ -86,7 +130,7 @@ if grep -q "define.*@usbd_ep_write_packet" "${WORK}/modeled.ll"; then
 fi
 echo ""
 
-# Step 5: Check if KLEE is available for end-to-end execution
+# Step 6: Check if KLEE is available for end-to-end execution
 if command -v klee &>/dev/null; then
     echo "--- Running KLEE (end-to-end) ---"
     echo ""
@@ -117,3 +161,7 @@ fi
 
 echo ""
 echo "=== Demo complete ==="
+echo ""
+echo "All generated artifacts are in: ${OUTPUT_DIR}"
+echo ""
+ls -1 "${OUTPUT_DIR}"

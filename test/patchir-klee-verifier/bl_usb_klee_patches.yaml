@@ -1,0 +1,30 @@
+# patches/bl_usb_klee_patches.yaml
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "bl-usb-klee-patches"
+  version: "1.0.0"
+  description: "Static contract for KLEE verification of bl_usb__send_message"
+  author: "Security Team"
+  created: "2026-04-06"
+
+contracts:
+  - name: "bl_usb_send_message_static_contract"
+    description: "Static contract: nonnull arg0, return in [0, 255]"
+    category: "usb_safety"
+    type: "STATIC"
+
+    preconditions:
+      - id: "msg_nonnull"
+        pred:
+          kind: "nonnull"
+          target: "arg0"
+
+    postconditions:
+      - id: "return_range"
+        pred:
+          kind: "range"
+          target: "return_value"
+          range:
+            min: "0"
+            max: "255"

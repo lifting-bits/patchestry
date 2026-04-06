@@ -494,25 +494,19 @@ namespace {
 
     // Collect static_contract metadata pertaining to the target function.
     //
-    // The `static_contract` MDTuple schema is:
+    // The `static_contract` MDTuple schema produced by patchir-cir2llvm is:
+    //   operand(0) -> MDString: "static_contract" (tag)
+    //   operand(1) -> MDString: serialised contract body
+    //
+    // We also accept the legacy/hand-written schema where:
     //   operand(0) -> MDString: function name the contract applies to
     //   operand(1) -> MDString: serialised contract body
     //
-    // We match on the *name* in operand(0) rather than deriving the target
-    // from `CallBase::getCalledFunction()`. Pointer equality on the called
-    // function is brittle: it returns null for indirect calls through a
-    // function pointer (decompiled dispatch tables, callbacks), for calls
-    // that go through a bitcast `ConstantExpr` (common when the Ghidra
-    // decompiler emits a call-site signature that doesn't exactly match
-    // the callee's definition), and for calls through a `GlobalAlias`.
-    // Every one of those cases silently dropped contract predicates with
-    // no diagnostic before. Since the decompiler stamps operand(0) at
-    // attachment time, it's the authoritative identifier and covers all
-    // call-site shapes uniformly.
-    //
-    // We walk the whole module once and collect any instruction whose
-    // metadata names the target, regardless of whether it's a call site
-    // or an instruction inside the target function's body.
+    // Collection strategy (checked in order):
+    //   1. Instructions inside the target function body that carry
+    //      `static_contract` metadata (pipeline-generated contracts).
+    //   2. Instructions anywhere in the module whose operand(0) matches
+    //      the target function name (hand-written / legacy contracts).
     static std::vector< std::string >
     collectStaticContracts(llvm::Module &M, llvm::Function *target_fn) {
         std::vector< std::string > contracts;
@@ -521,7 +515,30 @@ namespace {
 
         llvm::StringRef target_name = target_fn->getName();
 
+        // Pass 1: collect from instructions inside the target function.
+        for (auto &BB : *target_fn) {
+            for (auto &I : BB) {
+                auto *contract_md = I.getMetadata("static_contract");
+                if (!contract_md)
+                    continue;
+
+                auto *tuple = llvm::dyn_cast< llvm::MDTuple >(contract_md);
+                if (!tuple || tuple->getNumOperands() < 2)
+                    continue;
+
+                auto *md_str = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1));
+                if (!md_str)
+                    continue;
+
+                contracts.push_back(md_str->getString().str());
+            }
+        }
+
+        // Pass 2: collect legacy format — metadata anywhere whose
+        // operand(0) names the target function.
         for (auto &F : M) {
+            if (&F == target_fn)
+                continue; // already handled above
             for (auto &BB : F) {
                 for (auto &I : BB) {
                     auto *contract_md = I.getMetadata("static_contract");
@@ -532,11 +549,13 @@ namespace {
                     if (!tuple || tuple->getNumOperands() < 2)
                         continue;
 
-                    auto *fn_name = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(0));
+                    auto *fn_name =
+                        llvm::dyn_cast< llvm::MDString >(tuple->getOperand(0));
                     if (!fn_name || fn_name->getString() != target_name)
                         continue;
 
-                    auto *md_str = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1));
+                    auto *md_str =
+                        llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1));
                     if (!md_str)
                         continue;
 
