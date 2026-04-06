@@ -1037,27 +1037,30 @@ namespace patchestry::ast {
             }
 
             // Merge consecutive if(c1) goto L; if(c2) goto L;
-            for (size_t i = 0; i + 1 < children.size(); ++i) {
-                auto [l1, c1] = ExtractIfGotoPattern(children[i]);
-                if (!l1) {
-                    continue;
-                }
-                auto [l2, c2] = ExtractIfGotoPattern(children[i + 1]);
-                if (!l2) {
-                    continue;
-                }
-                if (l1->getName() != l2->getName()) {
-                    continue;
-                }
+            {
+                size_t i = 0;
+                while (i + 1 < children.size()) {
+                    auto [l1, c1] = ExtractIfGotoPattern(children[i]);
+                    if (!l1) {
+                        ++i;
+                        continue;
+                    }
+                    auto [l2, c2] = ExtractIfGotoPattern(children[i + 1]);
+                    if (!l2 || l1->getName() != l2->getName()) {
+                        ++i;
+                        continue;
+                    }
 
-                auto *merged = clang::BinaryOperator::Create(
-                    ctx, EnsureRValue(ctx, c1), EnsureRValue(ctx, c2), clang::BO_LOr,
-                    ctx.BoolTy, clang::VK_PRValue, clang::OK_Ordinary,
-                    clang::SourceLocation(), clang::FPOptionsOverride()
-                );
-                llvm::cast< clang::IfStmt >(children[i])->setCond(merged);
-                children.erase(children.begin() + static_cast< long >(i) + 1);
-                --i; // re-check for third consecutive
+                    auto *merged = clang::BinaryOperator::Create(
+                        ctx, EnsureRValue(ctx, c1), EnsureRValue(ctx, c2),
+                        clang::BO_LOr, ctx.BoolTy, clang::VK_PRValue,
+                        clang::OK_Ordinary, clang::SourceLocation(),
+                        clang::FPOptionsOverride()
+                    );
+                    llvm::cast< clang::IfStmt >(children[i])->setCond(merged);
+                    children.erase(children.begin() + static_cast< long >(i) + 1);
+                    // Don't advance i — re-check for third consecutive
+                }
             }
 
             return detail::MakeCompound(ctx, children);
