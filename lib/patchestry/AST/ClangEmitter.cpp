@@ -1160,6 +1160,22 @@ namespace patchestry::ast {
             return 0;
         }
 
+        /// Recursively check whether stmt tree contains any LabelStmt.
+        bool ContainsAnyLabelStmt(clang::Stmt *s) {
+            if (!s) {
+                return false;
+            }
+            if (llvm::isa< clang::LabelStmt >(s)) {
+                return true;
+            }
+            for (auto *child : s->children()) {
+                if (ContainsAnyLabelStmt(child)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /// Process a CompoundStmt: for each pair of adjacent stmts where
         /// the second is a LabelStmt, check if the first's deepest trailing
         /// stmt is a goto to that label.  Returns new stmt if changed.
@@ -1509,10 +1525,12 @@ namespace patchestry::ast {
                         continue;
                     }
 
-                    // Check: no intermediate LabelStmts
+                    // Check: no intermediate labels at any depth. Labels are
+                    // function-scope goto targets; moving nested labels into
+                    // a conditional block can change control-flow semantics.
                     bool has_label = false;
                     for (size_t j = i + 1; j < label_idx; ++j) {
-                        if (llvm::isa< clang::LabelStmt >(body[j])) {
+                        if (ContainsAnyLabelStmt(body[j])) {
                             has_label = true;
                             break;
                         }

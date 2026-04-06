@@ -131,6 +131,23 @@ namespace patchestry::ast {
                     // Switch block: build SSwitch with goto cases
                     if (!node.switch_cases.empty() && node.branch_cond) {
                         auto *sw = factory.Make<SSwitch>(node.branch_cond);
+                        auto resolve_switch_target_label = [&](size_t succ_id) -> std::string {
+                            auto &tn = flow_graph.Node(succ_id);
+                            if (!tn.original_label.empty()) {
+                                return tn.original_label;
+                            }
+                            if (!tn.label.empty()) {
+                                tn.original_label = tn.label;
+                                return tn.original_label;
+                            }
+
+                            // Deterministic fallback for unlabeled synthetic/collapsed targets.
+                            // Write back to node labels so goto target and emitted SLabel match.
+                            tn.label          = "switch_target_" + std::to_string(succ_id);
+                            tn.original_label = tn.label;
+                            return tn.original_label;
+                        };
+
                         // Use the discriminant's type for case literals to
                         // avoid truncation on targets where uintptr_t > int.
                         // For enum types, use the underlying integer type for
@@ -145,14 +162,10 @@ namespace patchestry::ast {
                             if (sc.is_default) {
                                 // Default arm: goto target label
                                 if (sc.succ_index < node.succs.size()) {
-                                    auto &tn = flow_graph.Node(node.succs[sc.succ_index]);
-                                    LOG_FATAL_IF(
-                                        tn.original_label.empty(),
-                                        "switch default target missing label"
-                                        " for succ {0}",
-                                        node.succs[sc.succ_index]);
+                                    auto target_id = node.succs[sc.succ_index];
+                                    auto lbl = resolve_switch_target_label(target_id);
                                     sw->SetDefaultBody(factory.Make<SGoto>(
-                                        factory.Intern(tn.original_label)));
+                                        factory.Intern(lbl)));
                                 } else {
                                     LOG(WARNING) << "switch default succ_index "
                                                  << sc.succ_index << " out of range (succs="
@@ -164,14 +177,10 @@ namespace patchestry::ast {
                                     case_type, clang::SourceLocation());
                                 SNode *body = nullptr;
                                 if (sc.succ_index < node.succs.size()) {
-                                    auto &tn = flow_graph.Node(node.succs[sc.succ_index]);
-                                    LOG_FATAL_IF(
-                                        tn.original_label.empty(),
-                                        "switch case {0} target missing label"
-                                        " for succ {1}",
-                                        sc.value, node.succs[sc.succ_index]);
+                                    auto target_id = node.succs[sc.succ_index];
+                                    auto lbl = resolve_switch_target_label(target_id);
                                     body = factory.Make<SGoto>(
-                                        factory.Intern(tn.original_label));
+                                        factory.Intern(lbl));
                                 } else {
                                     LOG(WARNING) << "switch case " << sc.value
                                                  << " succ_index " << sc.succ_index

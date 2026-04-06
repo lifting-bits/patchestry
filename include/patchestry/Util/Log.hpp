@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FormatVariadic.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -25,14 +26,14 @@ enum LogLevel { DEBUG, INFO, WARNING, ERROR, FATAL };
 #define LOG_FATAL(...) \
     do { \
         LOG(FATAL) << llvm::formatv(__VA_ARGS__); \
-        llvm_unreachable(nullptr); \
+        llvm::report_fatal_error("fatal error in patchestry", false); \
     } while (0)
 
 #define LOG_FATAL_IF(cond, ...) \
     do { \
         if (cond) { \
             LOG(FATAL) << llvm::formatv(__VA_ARGS__); \
-            llvm_unreachable(nullptr); \
+            llvm::report_fatal_error("fatal error in patchestry", false); \
         } \
     } while (0)
 
