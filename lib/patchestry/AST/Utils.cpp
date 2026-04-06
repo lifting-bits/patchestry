@@ -18,6 +18,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 
 #include <patchestry/AST/Utils.hpp>
+#include <patchestry/Util/Log.hpp>
 
 namespace patchestry::ast {
 
@@ -209,7 +210,7 @@ namespace patchestry::ast {
     }
 
     clang::Expr *NegateExpr(clang::ASTContext &ctx, clang::Expr *expr) {
-        assert(expr && "NegateExpr called with null expression");
+        LOG_FATAL_IF(!expr, "NegateExpr called with null expression");
         auto *rv   = EnsureRValue(ctx, expr);
         auto loc   = expr->getExprLoc();
         auto *paren = new (ctx) clang::ParenExpr(loc, loc, rv);
