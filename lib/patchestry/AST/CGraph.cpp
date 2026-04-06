@@ -1005,6 +1005,9 @@ namespace patchestry::ast {
         while (activecount_ > 0 && outer_iter < max_outer) {
             ++outer_iter;
             if (current_activeiter_ == activetrace_.end()) {
+                if (activetrace_.empty()) {
+                    break;
+                }
                 current_activeiter_ = activetrace_.begin();
             }
 
