@@ -43,7 +43,7 @@ namespace patchestry::codegen {
 
     mlir::ModuleOp Serializer::
         DeserializeFromFile(mlir::MLIRContext * /*unused*/, const std::string & /*unused*/) {
-        UNIMPLEMENTED("not implemented"); // NOLINT
+        LOG_FATAL("Serializer::DeserializeFromFile is not implemented.");
         return {};
     }
 

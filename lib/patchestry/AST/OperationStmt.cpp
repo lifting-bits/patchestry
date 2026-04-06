@@ -286,10 +286,10 @@ namespace patchestry::ast {
         if (!expr->isPRValue()) {
             switch (kind) {
                 default:
-                    UNREACHABLE(("can't implicitly cast glvalue to prvalue with this cast "
-                                 "kind: "
-                                 + std::string(clang::CastExpr::getCastKindName(kind)))
-                                    .c_str());
+                    LOG_FATAL(
+                        "can't implicitly cast glvalue to prvalue with cast kind: {0}",
+                        clang::CastExpr::getCastKindName(kind)
+                    );
                 case clang::CastKind::CK_Dependent:
                 case clang::CastKind::CK_LValueToRValue:
                 case clang::CastKind::CK_ArrayToPointerDecay:
