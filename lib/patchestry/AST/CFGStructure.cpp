@@ -2490,6 +2490,330 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
+    // InlineCrossScopeSingleRef — cross-scope single-ref label inliner
+    //
+    // Extends InlineResidualGotos to the case where the goto and its
+    // target label live in *different* SSeq nodes.  When a label has
+    // exactly one goto reference, its body always terminates, and no
+    // fallthrough can reach the label, the body is moved (not cloned)
+    // into the goto's slot and the label node is deleted.
+    // ---------------------------------------------------------------
+
+    namespace {
+
+        /// Return true if this SNode always terminates control flow —
+        /// every execution path through the node exits via return,
+        /// break, continue, throw, or an unconditional goto.  Such a
+        /// node never "falls off the end".
+        bool SNodeAlwaysTerminates(SNode *node) {
+            if (!node) return false;
+
+            if (node->dyn_cast<SReturn>()) return true;
+            if (node->dyn_cast<SBreak>()) return true;
+            if (node->dyn_cast<SContinue>()) return true;
+            if (node->dyn_cast<SGoto>()) return true;
+
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                if (blk->Empty()) return false;
+                auto *last = blk->Stmts().back();
+                return llvm::isa<clang::ReturnStmt>(last)
+                    || llvm::isa<clang::BreakStmt>(last)
+                    || llvm::isa<clang::ContinueStmt>(last)
+                    || llvm::isa<clang::GotoStmt>(last);
+            }
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                if (seq->Empty()) return false;
+                return SNodeAlwaysTerminates(
+                    seq->Children().back());
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                return SNodeAlwaysTerminates(lbl->Body());
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                // Both branches must terminate (else fallthrough
+                // when one arm is missing).
+                if (!ite->ThenBranch() || !ite->ElseBranch())
+                    return false;
+                return SNodeAlwaysTerminates(ite->ThenBranch())
+                    && SNodeAlwaysTerminates(ite->ElseBranch());
+            }
+            if (auto *sw = node->dyn_cast<SSwitch>()) {
+                // Every case + default must terminate, and default
+                // must be present (otherwise unmatched values fall
+                // out of the switch).
+                if (!sw->DefaultBody()) return false;
+                if (!SNodeAlwaysTerminates(sw->DefaultBody()))
+                    return false;
+                for (auto &c : sw->Cases()) {
+                    if (!SNodeAlwaysTerminates(c.body))
+                        return false;
+                }
+                return true;
+            }
+            // Loops may iterate zero times → conservative: not
+            // guaranteed to terminate via fallthrough.
+            return false;
+        }
+
+        /// Recursively check whether a subtree contains any SLabel.
+        /// Moving a subtree containing a label would displace the
+        /// label and invalidate any goto references still pointing at
+        /// the original lexical position.
+        bool SubtreeHasLabel(SNode *node) {
+            if (!node) return false;
+            if (node->dyn_cast<SLabel>()) return true;
+
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (auto *c : seq->Children())
+                    if (SubtreeHasLabel(c)) return true;
+                return false;
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                return SubtreeHasLabel(ite->ThenBranch())
+                    || SubtreeHasLabel(ite->ElseBranch());
+            }
+            if (auto *w = node->dyn_cast<SWhile>())
+                return SubtreeHasLabel(w->Body());
+            if (auto *dw = node->dyn_cast<SDoWhile>())
+                return SubtreeHasLabel(dw->Body());
+            if (auto *f = node->dyn_cast<SFor>())
+                return SubtreeHasLabel(f->Body());
+            if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    if (SubtreeHasLabel(c.body)) return true;
+                return SubtreeHasLabel(sw->DefaultBody());
+            }
+            // SBlock may hold a clang::LabelStmt — check too.
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                for (auto *s : blk->Stmts())
+                    if (llvm::isa<clang::LabelStmt>(s)) return true;
+                return false;
+            }
+            return false;
+        }
+
+        /// Locate an SLabel by name anywhere in the tree, returning
+        /// the enclosing SSeq and the label's index within it.  Only
+        /// labels that are *direct children of an SSeq* are returned —
+        /// labels embedded as bodies of if/while/switch or as the sole
+        /// child of an SLabel do not qualify (removing them requires
+        /// parent-slot mutation which the caller cannot perform with a
+        /// generic SSeq interface).
+        struct LabelLoc {
+            SSeq *parent = nullptr;
+            size_t idx = 0;
+        };
+
+        bool FindLabelInSSeq(SNode *node, std::string_view name,
+                             LabelLoc &out) {
+            if (!node) return false;
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    if (auto *lbl = (*seq)[i]->dyn_cast<SLabel>()) {
+                        if (lbl->Name() == name) {
+                            out.parent = seq;
+                            out.idx = i;
+                            return true;
+                        }
+                    }
+                }
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    if (FindLabelInSSeq((*seq)[i], name, out))
+                        return true;
+                }
+                return false;
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                return FindLabelInSSeq(ite->ThenBranch(), name, out)
+                    || FindLabelInSSeq(ite->ElseBranch(), name, out);
+            }
+            if (auto *w = node->dyn_cast<SWhile>())
+                return FindLabelInSSeq(w->Body(), name, out);
+            if (auto *dw = node->dyn_cast<SDoWhile>())
+                return FindLabelInSSeq(dw->Body(), name, out);
+            if (auto *f = node->dyn_cast<SFor>())
+                return FindLabelInSSeq(f->Body(), name, out);
+            if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    if (FindLabelInSSeq(c.body, name, out)) return true;
+                return FindLabelInSSeq(sw->DefaultBody(), name, out);
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>())
+                return FindLabelInSSeq(lbl->Body(), name, out);
+            return false;
+        }
+
+        /// Attempt to inline a single goto slot.  `get` returns the
+        /// current node occupying the slot; `set` installs a
+        /// replacement.  Returns true if the goto was inlined.
+        bool TryInlineGotoSlot(
+            std::function<SNode *()> get,
+            std::function<void(SNode *)> set,
+            SNode *root,
+            std::unordered_map<std::string_view, int> &refs
+        ) {
+            auto *n = get();
+            auto *g = n ? n->dyn_cast<SGoto>() : nullptr;
+            if (!g) return false;
+
+            auto target = g->Target();
+            auto it = refs.find(target);
+            if (it == refs.end() || it->second != 1) return false;
+
+            LabelLoc loc;
+            if (!FindLabelInSSeq(root, target, loc)) return false;
+
+            auto *lbl = (*loc.parent)[loc.idx]->as<SLabel>();
+            SNode *body = lbl->Body();
+            if (!body) return false;
+
+            if (!SNodeAlwaysTerminates(body)) return false;
+            if (SubtreeHasLabel(body)) return false;
+
+            // No fallthrough may reach the label in its original
+            // position.  Require a preceding terminating sibling.
+            if (loc.idx == 0) return false;
+            if (!SNodeAlwaysTerminates((*loc.parent)[loc.idx - 1]))
+                return false;
+
+            // Splice: install body in goto's slot, remove original
+            // label from its SSeq.
+            set(body);
+            loc.parent->RemoveChild(loc.idx);
+            refs[target] = 0;
+            return true;
+        }
+
+        /// Walk every SNode slot in the tree and try inlining any
+        /// SGoto found there.  Returns true on first successful
+        /// inline (caller reruns with fresh ref counts).
+        bool CrossScopeInlineRecursive(
+            SNode *node, SNode *root,
+            std::unordered_map<std::string_view, int> &refs
+        ) {
+            if (!node) return false;
+
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                // Visit each child slot.  Recurse first so innermost
+                // gotos are handled before parent-level scans.
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    if (CrossScopeInlineRecursive(
+                            (*seq)[i], root, refs))
+                        return true;
+                }
+                for (size_t i = 0; i < seq->Size(); ++i) {
+                    if (TryInlineGotoSlot(
+                            [seq, i]() { return (*seq)[i]; },
+                            [seq, i](SNode *n) { seq->ReplaceChild(i, n); },
+                            root, refs))
+                        return true;
+                }
+                return false;
+            }
+
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (CrossScopeInlineRecursive(
+                        ite->ThenBranch(), root, refs))
+                    return true;
+                if (CrossScopeInlineRecursive(
+                        ite->ElseBranch(), root, refs))
+                    return true;
+                if (TryInlineGotoSlot(
+                        [ite]() { return ite->ThenBranch(); },
+                        [ite](SNode *n) { ite->SetThenBranch(n); },
+                        root, refs))
+                    return true;
+                if (TryInlineGotoSlot(
+                        [ite]() { return ite->ElseBranch(); },
+                        [ite](SNode *n) { ite->SetElseBranch(n); },
+                        root, refs))
+                    return true;
+                return false;
+            }
+            if (auto *w = node->dyn_cast<SWhile>()) {
+                if (CrossScopeInlineRecursive(w->Body(), root, refs))
+                    return true;
+                return TryInlineGotoSlot(
+                    [w]() { return w->Body(); },
+                    [w](SNode *n) { w->SetBody(n); },
+                    root, refs);
+            }
+            if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                if (CrossScopeInlineRecursive(dw->Body(), root, refs))
+                    return true;
+                return TryInlineGotoSlot(
+                    [dw]() { return dw->Body(); },
+                    [dw](SNode *n) { dw->SetBody(n); },
+                    root, refs);
+            }
+            if (auto *f = node->dyn_cast<SFor>()) {
+                if (CrossScopeInlineRecursive(f->Body(), root, refs))
+                    return true;
+                return TryInlineGotoSlot(
+                    [f]() { return f->Body(); },
+                    [f](SNode *n) { f->SetBody(n); },
+                    root, refs);
+            }
+            if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (size_t ci = 0; ci < sw->Cases().size(); ++ci) {
+                    auto &c = sw->Cases()[ci];
+                    if (CrossScopeInlineRecursive(c.body, root, refs))
+                        return true;
+                }
+                if (CrossScopeInlineRecursive(
+                        sw->DefaultBody(), root, refs))
+                    return true;
+                for (size_t ci = 0; ci < sw->Cases().size(); ++ci) {
+                    if (TryInlineGotoSlot(
+                            [sw, ci]() { return sw->Cases()[ci].body; },
+                            [sw, ci](SNode *n) {
+                                sw->Cases()[ci].body = n;
+                                if (n) n->SetParent(sw);
+                            },
+                            root, refs))
+                        return true;
+                }
+                if (TryInlineGotoSlot(
+                        [sw]() { return sw->DefaultBody(); },
+                        [sw](SNode *n) { sw->SetDefaultBody(n); },
+                        root, refs))
+                    return true;
+                return false;
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                if (CrossScopeInlineRecursive(lbl->Body(), root, refs))
+                    return true;
+                return TryInlineGotoSlot(
+                    [lbl]() { return lbl->Body(); },
+                    [lbl](SNode *n) { lbl->SetBody(n); },
+                    root, refs);
+            }
+            return false;
+        }
+
+    } // anonymous namespace
+
+    bool InlineCrossScopeSingleRef(SNode *root, SNodeFactory & /*factory*/) {
+        if (!root) return false;
+
+        std::unordered_map<std::string_view, int> refs;
+        CountGotoRefs(root, refs);
+
+        bool any_changed = false;
+        // Fixed-point iteration — each pass eliminates at least one
+        // goto, so the initial ref count bounds the loop.
+        size_t max_passes = refs.size() + 1;
+        for (size_t p = 0; p < max_passes; ++p) {
+            if (!CrossScopeInlineRecursive(root, root, refs))
+                break;
+            any_changed = true;
+            refs.clear();
+            CountGotoRefs(root, refs);
+        }
+        return any_changed;
+    }
+
+    // ---------------------------------------------------------------
     // ConvertGotoToBreakContinue — replace gotos to loop exit/header
     //
     // Walks the SNode tree with a scope stack of enclosing loops.
@@ -2704,7 +3028,7 @@ namespace patchestry::ast {
         ///   - end with clang::ReturnStmt
         ///   - have ≤ max_stmts statements
         ///   - contain no GotoStmt or LabelStmt (no new label references)
-        bool IsSafeReturnBlock(SBlock *block, size_t max_stmts = 4) {
+        bool IsSafeReturnBlock(SBlock *block, size_t max_stmts = 8) {
             if (!block || block->Empty()) return false;
             if (block->Size() > max_stmts) return false;
             if (!llvm::isa<clang::ReturnStmt>(block->Stmts().back()))
@@ -3096,6 +3420,422 @@ namespace patchestry::ast {
         std::unordered_set<std::string_view> refs;
         CountAllGotoRefs(root, refs);
         return RemoveDeadLabelsRecursive(root, refs);
+    }
+
+    // ---------------------------------------------------------------
+    // DuplicateSwitchCaseTargets — replace case bodies ending in
+    // `SGoto L` with a cloned copy of L's body, making switches
+    // goto-free even when the target is shared, a collapsed block,
+    // or (critically) another switch.
+    //
+    // Safety invariant: the goto/label pairing of the whole tree must
+    // stay consistent.  We enforce this by refusing to clone any
+    // subtree that defines an SLabel or clang::LabelStmt — that would
+    // duplicate a label definition and break Clang's one-decl-per-label
+    // rule.  Outbound gotos *from* the clone are allowed: they add a
+    // new reference to an already-live label, and RemoveUnreferencedLabels
+    // recomputes liveness from scratch after the pass.
+    // ---------------------------------------------------------------
+
+    namespace {
+
+        constexpr size_t kMaxCloneStmts = 8;
+
+        /// Count approximate clang::Stmt-equivalent size of a subtree.
+        size_t CountCloneStmts(const SNode *node) {
+            if (!node) return 0;
+            if (auto *blk = node->dyn_cast<SBlock>())
+                return blk->Size();
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                size_t n = 0;
+                for (auto *c : seq->Children()) {
+                    n += CountCloneStmts(c);
+                    if (n > kMaxCloneStmts) return n;
+                }
+                return n;
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                return 1 + CountCloneStmts(ite->ThenBranch())
+                         + CountCloneStmts(ite->ElseBranch());
+            }
+            if (auto *sw = node->dyn_cast<SSwitch>()) {
+                size_t n = 1;
+                for (auto &c : sw->Cases()) {
+                    n += CountCloneStmts(c.body);
+                    if (n > kMaxCloneStmts) return n;
+                }
+                n += CountCloneStmts(sw->DefaultBody());
+                return n;
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>())
+                return 1 + CountCloneStmts(lbl->Body());
+            return 1; // goto / break / continue / return
+        }
+
+        /// True iff \p node is safe to deep-clone: contains no label
+        /// definitions (SLabel or clang::LabelStmt), no loops, and no
+        /// SFor (loops would be duplicated, changing complexity).
+        bool SubtreeIsSafeToClone(const SNode *node) {
+            if (!node) return true;
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                std::function<bool(const clang::Stmt *)> has_label =
+                    [&](const clang::Stmt *st) -> bool {
+                        if (!st) return false;
+                        if (llvm::isa<clang::LabelStmt>(st)) return true;
+                        for (const auto *c : st->children())
+                            if (has_label(c)) return true;
+                        return false;
+                    };
+                for (auto *s : blk->Stmts())
+                    if (has_label(s)) return false;
+                return true;
+            }
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (auto *c : seq->Children())
+                    if (!SubtreeIsSafeToClone(c)) return false;
+                return true;
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                return SubtreeIsSafeToClone(ite->ThenBranch())
+                    && SubtreeIsSafeToClone(ite->ElseBranch());
+            }
+            if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    if (!SubtreeIsSafeToClone(c.body)) return false;
+                return SubtreeIsSafeToClone(sw->DefaultBody());
+            }
+            // Reject SLabel (would duplicate definition) and all loops.
+            switch (node->Kind()) {
+                case SNodeKind::kLabel:
+                case SNodeKind::kWhile:
+                case SNodeKind::kDoWhile:
+                case SNodeKind::kFor:
+                    return false;
+                default:
+                    return true; // SGoto / SBreak / SContinue / SReturn
+            }
+        }
+
+        /// Deep-clone a subtree.  Pre-condition: SubtreeIsSafeToClone(src).
+        /// clang::Stmt* pointers are shared — clang::Stmt has no single
+        /// parent, so aliasing the same stmt in two SBlocks is legal.
+        SNode *CloneSNode(SNode *src, SNodeFactory &factory) {
+            if (!src) return nullptr;
+            if (auto *blk = src->dyn_cast<SBlock>()) {
+                auto *out = factory.Make<SBlock>();
+                out->SetLabel(blk->Label());
+                for (auto *s : blk->Stmts()) out->AddStmt(s);
+                return out;
+            }
+            if (auto *seq = src->dyn_cast<SSeq>()) {
+                auto *out = factory.Make<SSeq>();
+                for (auto *c : seq->Children()) {
+                    auto *cc = CloneSNode(c, factory);
+                    if (cc) out->AddChild(cc);
+                }
+                return out;
+            }
+            if (auto *ite = src->dyn_cast<SIfThenElse>()) {
+                return factory.Make<SIfThenElse>(
+                    ite->Cond(),
+                    CloneSNode(ite->ThenBranch(), factory),
+                    CloneSNode(ite->ElseBranch(), factory));
+            }
+            if (auto *sw = src->dyn_cast<SSwitch>()) {
+                auto *out = factory.Make<SSwitch>(sw->Discriminant());
+                for (auto &c : sw->Cases())
+                    out->AddCase(c.value, CloneSNode(c.body, factory));
+                if (sw->DefaultBody())
+                    out->SetDefaultBody(CloneSNode(sw->DefaultBody(), factory));
+                return out;
+            }
+            if (auto *g = src->dyn_cast<SGoto>())
+                return factory.Make<SGoto>(factory.Intern(g->Target()));
+            if (auto *br = src->dyn_cast<SBreak>())
+                return factory.Make<SBreak>(br->Depth());
+            if (src->dyn_cast<SContinue>())
+                return factory.Make<SContinue>();
+            if (auto *ret = src->dyn_cast<SReturn>())
+                return factory.Make<SReturn>(ret->Value());
+            return nullptr;
+        }
+
+        /// True iff \p node already ends in a terminator that transfers
+        /// out of the enclosing switch; false if we need to append an
+        /// SBreak so fallthrough does not leak into the next case.
+        bool NeedsTerminatorBreak(const SNode *node) {
+            if (!node) return true;
+            if (node->dyn_cast<SReturn>()
+                || node->dyn_cast<SBreak>()
+                || node->dyn_cast<SContinue>()
+                || node->dyn_cast<SGoto>())
+                return false;
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                if (blk->Empty()) return true;
+                auto *last = blk->Stmts().back();
+                if (llvm::isa<clang::ReturnStmt>(last)
+                    || llvm::isa<clang::BreakStmt>(last)
+                    || llvm::isa<clang::ContinueStmt>(last)
+                    || llvm::isa<clang::GotoStmt>(last))
+                    return false;
+                return true;
+            }
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                if (seq->Empty()) return true;
+                return NeedsTerminatorBreak(seq->Children().back());
+            }
+            return true;
+        }
+
+        /// Return the trailing goto target name if \p body ends in a
+        /// goto (bare SGoto, SBlock with trailing GotoStmt, SSeq whose
+        /// last child is one of those, or SLabel wrapping any of those).
+        /// Empty otherwise.
+        std::string_view TrailingGotoTarget(const SNode *body) {
+            if (!body) return {};
+            if (auto *g = body->dyn_cast<SGoto>()) return g->Target();
+            if (auto *blk = body->dyn_cast<SBlock>()) {
+                if (blk->Empty()) return {};
+                if (auto *gs = llvm::dyn_cast<clang::GotoStmt>(
+                        blk->Stmts().back()))
+                    return gs->getLabel()->getName();
+                return {};
+            }
+            if (auto *seq = body->dyn_cast<SSeq>()) {
+                if (seq->Empty()) return {};
+                return TrailingGotoTarget(seq->Children().back());
+            }
+            if (auto *lbl = body->dyn_cast<SLabel>()) {
+                return TrailingGotoTarget(lbl->Body());
+            }
+            return {};
+        }
+
+        /// Try to clone \p target_label's body.  Returns nullptr if
+        /// unsafe or too large.
+        SNode *TryCloneLabelBody(
+            std::string_view target_label,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            SNodeFactory &factory
+        ) {
+            auto it = labels.find(target_label);
+            if (it == labels.end()) return nullptr;
+            SNode *label_body = it->second.label->Body();
+            if (!label_body) return nullptr;
+            if (CountCloneStmts(label_body) > kMaxCloneStmts) return nullptr;
+            if (!SubtreeIsSafeToClone(label_body)) return nullptr;
+            return CloneSNode(label_body, factory);
+        }
+
+        /// Build a replacement case body by splicing \p clone in place
+        /// of the trailing goto in \p existing.  Returns the new body
+        /// node (possibly a fresh SSeq) or nullptr on failure.
+        ///
+        /// Handles:
+        ///   - existing is SGoto → clone (+ break)
+        ///   - existing is SBlock ending in GotoStmt → SSeq(trimmed_block, clone, break?)
+        ///   - existing is SSeq ending in SGoto → SSeq(prefix_children..., clone, break?)
+        ///   - existing is SSeq ending in SBlock-with-trailing-goto → recurse
+        SNode *BuildSplicedBody(
+            SNode *existing, SNode *clone, SNodeFactory &factory
+        ) {
+            if (!existing || !clone) return nullptr;
+
+            bool need_break = NeedsTerminatorBreak(clone);
+            auto wrap_with_break = [&](SNode *n) -> SNode * {
+                if (!need_break) return n;
+                auto *seq = factory.Make<SSeq>();
+                seq->AddChild(n);
+                seq->AddChild(factory.Make<SBreak>());
+                return seq;
+            };
+
+            // Pure SGoto — replace with clone (+ break).
+            if (existing->dyn_cast<SGoto>()) {
+                return wrap_with_break(clone);
+            }
+
+            // SBlock whose last stmt is GotoStmt.
+            if (auto *blk = existing->dyn_cast<SBlock>()) {
+                if (blk->Empty()) return nullptr;
+                if (!llvm::isa<clang::GotoStmt>(blk->Stmts().back()))
+                    return nullptr;
+                if (blk->Size() == 1) {
+                    // Pure redirect wrapped in a block — replace whole.
+                    return wrap_with_break(clone);
+                }
+                // Build a new SBlock without the trailing goto, then
+                // wrap in SSeq(new_block, clone, break?).
+                auto *trimmed = factory.Make<SBlock>();
+                trimmed->SetLabel(blk->Label());
+                for (size_t i = 0; i + 1 < blk->Size(); ++i)
+                    trimmed->AddStmt(blk->Stmts()[i]);
+                auto *seq = factory.Make<SSeq>();
+                seq->AddChild(trimmed);
+                seq->AddChild(clone);
+                if (need_break) seq->AddChild(factory.Make<SBreak>());
+                return seq;
+            }
+
+            // SLabel wrapping any of the above: splice inside, keep the
+            // label node.  Mutate via SetBody so the label identity is
+            // preserved (outside gotos may still reference this label).
+            if (auto *lbl = existing->dyn_cast<SLabel>()) {
+                SNode *inner = BuildSplicedBody(lbl->Body(), clone, factory);
+                if (!inner) return nullptr;
+                lbl->SetBody(inner);
+                return lbl;
+            }
+
+            // SSeq whose last child carries the trailing goto.
+            if (auto *seq = existing->dyn_cast<SSeq>()) {
+                if (seq->Empty()) return nullptr;
+                SNode *last = seq->Children().back();
+
+                // Case A: last child is bare SGoto → drop it.
+                if (last->dyn_cast<SGoto>()) {
+                    auto *out = factory.Make<SSeq>();
+                    for (size_t i = 0; i + 1 < seq->Size(); ++i)
+                        out->AddChild(seq->Children()[i]);
+                    out->AddChild(clone);
+                    if (need_break) out->AddChild(factory.Make<SBreak>());
+                    return out;
+                }
+                // Case B: last child is SBlock with trailing GotoStmt.
+                if (auto *blk = last->dyn_cast<SBlock>()) {
+                    if (!blk->Empty()
+                        && llvm::isa<clang::GotoStmt>(blk->Stmts().back())) {
+                        auto *out = factory.Make<SSeq>();
+                        for (size_t i = 0; i + 1 < seq->Size(); ++i)
+                            out->AddChild(seq->Children()[i]);
+                        if (blk->Size() > 1) {
+                            auto *trimmed = factory.Make<SBlock>();
+                            trimmed->SetLabel(blk->Label());
+                            for (size_t i = 0; i + 1 < blk->Size(); ++i)
+                                trimmed->AddStmt(blk->Stmts()[i]);
+                            out->AddChild(trimmed);
+                        }
+                        out->AddChild(clone);
+                        if (need_break) out->AddChild(factory.Make<SBreak>());
+                        return out;
+                    }
+                }
+                return nullptr;
+            }
+
+            return nullptr;
+        }
+
+        bool DuplicateInSwitch(
+            SSwitch *sw, SNodeFactory &factory,
+            const std::unordered_map<std::string_view, LabelEntry> &labels
+        ) {
+            bool changed = false;
+            for (auto &c : sw->Cases()) {
+                auto target = TrailingGotoTarget(c.body);
+                if (target.empty()) continue;
+                SNode *clone = TryCloneLabelBody(target, labels, factory);
+                if (!clone) continue;
+                SNode *spliced = BuildSplicedBody(c.body, clone, factory);
+                if (!spliced) continue;
+                c.body = spliced;
+                spliced->SetParent(sw);
+                changed = true;
+            }
+            if (SNode *def = sw->DefaultBody()) {
+                auto target = TrailingGotoTarget(def);
+                if (!target.empty()) {
+                    SNode *clone = TryCloneLabelBody(target, labels, factory);
+                    if (clone) {
+                        if (SNode *spliced = BuildSplicedBody(
+                                def, clone, factory)) {
+                            sw->SetDefaultBody(spliced);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            return changed;
+        }
+
+        bool WalkAndDuplicate(
+            SNode *node, SNodeFactory &factory,
+            const std::unordered_map<std::string_view, LabelEntry> &labels
+        ) {
+            if (!node) return false;
+            bool changed = false;
+            if (auto *sw = node->dyn_cast<SSwitch>()) {
+                if (DuplicateInSwitch(sw, factory, labels)) changed = true;
+                for (auto &c : sw->Cases())
+                    if (WalkAndDuplicate(c.body, factory, labels))
+                        changed = true;
+                if (WalkAndDuplicate(sw->DefaultBody(), factory, labels))
+                    changed = true;
+                return changed;
+            }
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (auto *c : seq->Children())
+                    if (WalkAndDuplicate(c, factory, labels))
+                        changed = true;
+                return changed;
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (WalkAndDuplicate(ite->ThenBranch(), factory, labels))
+                    changed = true;
+                if (WalkAndDuplicate(ite->ElseBranch(), factory, labels))
+                    changed = true;
+                return changed;
+            }
+            if (auto *w = node->dyn_cast<SWhile>())
+                return WalkAndDuplicate(w->Body(), factory, labels);
+            if (auto *dw = node->dyn_cast<SDoWhile>())
+                return WalkAndDuplicate(dw->Body(), factory, labels);
+            if (auto *f = node->dyn_cast<SFor>())
+                return WalkAndDuplicate(f->Body(), factory, labels);
+            if (auto *lbl = node->dyn_cast<SLabel>())
+                return WalkAndDuplicate(lbl->Body(), factory, labels);
+            return false;
+        }
+
+        /// Debug assertion: every remaining goto target resolves to a
+        /// live SLabel.  Runs only in debug builds; aborts on failure
+        /// so misbehaviour is caught before a broken TU ships.
+        void VerifyGotoLabelPairing(SNode *root) {
+#ifndef NDEBUG
+            std::unordered_map<std::string_view, LabelEntry> labels;
+            CollectLabels(root, labels);
+            std::unordered_set<std::string_view> refs;
+            CountAllGotoRefs(root, refs);
+            for (auto name : refs) {
+                if (labels.find(name) == labels.end()) {
+                    LOG(ERROR) << "DuplicateSwitchCaseTargets: dangling "
+                               << "goto target '" << std::string(name)
+                               << "' after duplication\n";
+                    assert(false && "dangling goto target after duplication");
+                }
+            }
+#else
+            (void)root;
+#endif
+        }
+
+    } // anonymous namespace
+
+    bool DuplicateSwitchCaseTargets(SNode *root, SNodeFactory &factory) {
+        if (!root) return false;
+        bool any_changed = false;
+        // Re-scan labels on each iteration: a previous duplication may
+        // expose new opportunities (e.g., cloning a label body that
+        // itself contained a case goto to another label).  Bound the
+        // loop to avoid pathological growth.
+        for (int pass = 0; pass < 4; ++pass) {
+            std::unordered_map<std::string_view, LabelEntry> labels;
+            CollectLabels(root, labels);
+            if (!WalkAndDuplicate(root, factory, labels)) break;
+            any_changed = true;
+        }
+        if (any_changed) VerifyGotoLabelPairing(root);
+        return any_changed;
     }
 
 } // namespace patchestry::ast

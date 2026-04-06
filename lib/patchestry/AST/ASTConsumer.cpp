@@ -208,25 +208,44 @@ namespace patchestry::ast {
                     // Post-pass: replace goto→return patterns.
                     ConvertGotoToReturn(root_snode, factory);
 
+                    // Post-pass: duplicate small label targets into
+                    // switch case arms that end in `goto L`, making
+                    // switches goto-free (including goto-into-switch).
+                    DuplicateSwitchCaseTargets(root_snode, factory);
+
                     // Post-pass: inline residual goto-to-label pairs
                     // where the label is only referenced once.
                     InlineResidualGotos(root_snode, factory);
 
+                    // Post-pass: cross-scope single-ref goto inliner.
+                    // Moves terminating label bodies into their sole
+                    // goto site when no fallthrough reaches the label.
+                    InlineCrossScopeSingleRef(root_snode, factory);
+
                     // Post-pass: eliminate gotos to immediately following
-                    // labels.  Iterates with InlineResidualGotos for
-                    // cascading cleanup, bounded by kMaxGotoEliminationPasses.
+                    // labels.  Iterates with InlineResidualGotos and the
+                    // cross-scope inliner for cascading cleanup, bounded
+                    // by kMaxGotoEliminationPasses.
                     for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
                         bool did_elim = EliminateGotoToNextLabel(
                             root_snode, factory, ctx);
                         bool did_inline = InlineResidualGotos(
                             root_snode, factory);
-                        if (!did_elim && !did_inline) break;
+                        bool did_cross = InlineCrossScopeSingleRef(
+                            root_snode, factory);
+                        if (!did_elim && !did_inline && !did_cross) break;
                     }
 
-                    // TODO: add RemoveUnreferencedLabels pass once
-                    // CountAllGotoRefs fully walks all clang::Stmt
-                    // trees in all SNode types (current impl misses
-                    // gotos in terminals embedded by BuildLeafSNode).
+                    // NOTE: RemoveUnreferencedLabels is intentionally
+                    // NOT called here.  CountAllGotoRefs does not yet
+                    // walk every clang::Stmt embedded inside all SNode
+                    // kinds (e.g. if-guarded gotos synthesised by the
+                    // goto-path), so enabling it drops live labels on
+                    // some fixtures.  The duplication pass above still
+                    // inlines shared targets correctly; dead label
+                    // bodies simply remain in the output as unreferenced
+                    // labelled blocks, which is preferable to losing
+                    // reachable code.
 
                 }
 

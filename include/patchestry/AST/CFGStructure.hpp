@@ -160,4 +160,30 @@ namespace patchestry::ast {
     /// is dropped — it is dead code reachable only via the removed label.
     bool RemoveUnreferencedLabels(SNode *root, SNodeFactory &factory);
 
+    /// Duplicate small, side-effect-contained label targets into switch
+    /// case arms that end in `SGoto L`, making the case bodies goto-free.
+    /// Handles goto-into-another-switch by recursively cloning the inner
+    /// switch.  Refuses to clone subtrees containing labels or loops so
+    /// that goto/label pairing stays consistent.  After successful
+    /// cloning, dead labels are reclaimed by RemoveUnreferencedLabels.
+    ///
+    /// Returns true if any duplication was performed.
+    bool DuplicateSwitchCaseTargets(SNode *root, SNodeFactory &factory);
+
+    /// Cross-scope version of InlineResidualGotos: for each goto whose
+    /// target label has exactly one reference, the label's body always
+    /// terminates (every path ends in return/break/continue/unconditional
+    /// goto), the label sits as a direct child of some SSeq, and the
+    /// label's preceding sibling in that SSeq also terminates (so no
+    /// fallthrough reaches the label), splice the body into the goto's
+    /// slot by *move* — no cloning.  Removes the now-dead label.
+    ///
+    /// This is safe because: (a) refs==1 means no other goto observes the
+    /// label; (b) no fallthrough reaches the label; (c) the moved body
+    /// terminates, so there is no post-body continuation whose location
+    /// matters.
+    ///
+    /// Returns true if any label was inlined.
+    bool InlineCrossScopeSingleRef(SNode *root, SNodeFactory &factory);
+
 } // namespace patchestry::ast
