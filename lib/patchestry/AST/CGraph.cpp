@@ -979,7 +979,7 @@ namespace patchestry::ast {
 
         // Single-loop structure matching Ghidra's pushBranches():
         // one while(activecount>0) with wrap-around, no nested loops.
-        // Convergence is detected by missedcount >= activecount_ —
+        // Convergence is detected by missed_count >= activecount_ —
         // when all active traces are stuck, selectBadEdge removes the
         // worst trace (reducing activecount_) and retries.
         //
@@ -999,7 +999,7 @@ namespace patchestry::ast {
         size_t e               = total_edges + 1;
         const size_t max_outer = (n <= kLimit / e) ? n * e * 4 + 512 : kLimit;
         size_t outer_iter      = 0;
-        int missedcount        = 0;
+        int missed_count        = 0;
         current_activeiter_    = activetrace_.begin();
 
         while (activecount_ > 0 && outer_iter < max_outer) {
@@ -1010,7 +1010,7 @@ namespace patchestry::ast {
 
             BlockTrace *bt = *current_activeiter_;
 
-            if (missedcount >= activecount_) {
+            if (missed_count >= activecount_) {
                 BlockTrace *bad = SelectBadEdge();
                 if (bad == nullptr) {
                     ClearVisitCount(g);
@@ -1020,7 +1020,7 @@ namespace patchestry::ast {
                     likelygoto_.emplace_back(bad->bottom_id, bad->dest_id);
                 }
                 RemoveTrace(bad);
-                missedcount         = 0;
+                missed_count         = 0;
                 current_activeiter_ = activetrace_.begin();
                 continue;
             }
@@ -1029,7 +1029,7 @@ namespace patchestry::ast {
                 size_t exit_id = CNode::kNone;
                 if (CheckRetirement(bt, exit_id)) {
                     current_activeiter_ = RetireBranch(bt->top, exit_id);
-                    missedcount         = 0;
+                    missed_count         = 0;
                     continue;
                 }
             }
@@ -1039,9 +1039,9 @@ namespace patchestry::ast {
                 if (CheckOpen(g, bt)) {
                     ++current_activeiter_;
                     if (was_terminal) {
-                        ++missedcount;
+                        ++missed_count;
                     } else {
-                        missedcount = 0;
+                        missed_count = 0;
                     }
                     continue;
                 }
@@ -1058,13 +1058,13 @@ namespace patchestry::ast {
                 if (dag_preds > 1 && dest_node.visit_count < static_cast< int >(dag_preds))
                 {
                     ++current_activeiter_;
-                    ++missedcount;
+                    ++missed_count;
                     continue;
                 }
             }
 
             current_activeiter_ = OpenBranch(g, bt);
-            missedcount         = 0;
+            missed_count         = 0;
         }
 
         if (outer_iter >= max_outer) {
