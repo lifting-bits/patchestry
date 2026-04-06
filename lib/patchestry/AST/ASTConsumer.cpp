@@ -146,12 +146,11 @@ namespace patchestry::ast {
                                 // Default arm: goto target label
                                 if (sc.succ_index < node.succs.size()) {
                                     auto &tn = flow_graph.Node(node.succs[sc.succ_index]);
-                                    if (tn.original_label.empty()) {
-                                        UNREACHABLE(
-                                            "switch default target missing label"
-                                            " for succ {0}",
-                                            node.succs[sc.succ_index]);
-                                    }
+                                    LOG_FATAL_IF(
+                                        tn.original_label.empty(),
+                                        "switch default target missing label"
+                                        " for succ {0}",
+                                        node.succs[sc.succ_index]);
                                     sw->SetDefaultBody(factory.Make<SGoto>(
                                         factory.Intern(tn.original_label)));
                                 } else {
@@ -166,12 +165,11 @@ namespace patchestry::ast {
                                 SNode *body = nullptr;
                                 if (sc.succ_index < node.succs.size()) {
                                     auto &tn = flow_graph.Node(node.succs[sc.succ_index]);
-                                    if (tn.original_label.empty()) {
-                                        UNREACHABLE(
-                                            "switch case {0} target missing label"
-                                            " for succ {1}",
-                                            sc.value, node.succs[sc.succ_index]);
-                                    }
+                                    LOG_FATAL_IF(
+                                        tn.original_label.empty(),
+                                        "switch case {0} target missing label"
+                                        " for succ {1}",
+                                        sc.value, node.succs[sc.succ_index]);
                                     body = factory.Make<SGoto>(
                                         factory.Intern(tn.original_label));
                                 } else {
