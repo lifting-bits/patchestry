@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <limits>
 #include <list>
 #include <unordered_set>
 #include <vector>
@@ -976,75 +977,103 @@ namespace patchestry::ast {
             }
         }
 
-        const size_t max_outer = g.nodes.size() * g.nodes.size() * 8 + 512;
-        size_t outer_iter = 0;
-        while (activecount_ > 0) {
-            if (++outer_iter > max_outer) {
-                LOG(WARNING) << "PushBranches: iteration limit reached (" << max_outer
-                             << " on " << g.nodes.size() << " nodes), bailing out\n";
-                break;
+        // Single-loop structure matching Ghidra's pushBranches():
+        // one while(activecount>0) with wrap-around, no nested loops.
+        // Convergence is detected by missed_count >= activecount_ —
+        // when all active traces are stuck, selectBadEdge removes the
+        // worst trace (reducing activecount_) and retries.
+        //
+        // Safety bound: scale by edges (N*E*4) rather than nodes squared
+        // to handle switch-heavy graphs where edge count dominates.
+        // This should never trigger in correct operation but prevents
+        // hangs from bugs in trace logic.
+        size_t total_edges = 0;
+        for (auto &n : g.nodes) {
+            if (!n.IsCollapsed()) {
+                total_edges += n.succs.size();
             }
-            int missedcount = 0;
-            current_activeiter_ = activetrace_.begin();
+        }
+        // Saturate to avoid overflow on huge graphs.
+        constexpr size_t kLimit = std::numeric_limits< size_t >::max() / 8;
+        size_t n               = g.nodes.size() + 1;
+        size_t e               = total_edges + 1;
+        const size_t max_outer = (n <= kLimit / e) ? n * e * 4 + 512 : kLimit;
+        size_t outer_iter      = 0;
+        int missed_count        = 0;
+        current_activeiter_    = activetrace_.begin();
 
-            while (current_activeiter_ != activetrace_.end()) {
-                BlockTrace *bt = *current_activeiter_;
+        while (activecount_ > 0 && outer_iter < max_outer) {
+            ++outer_iter;
+            if (current_activeiter_ == activetrace_.end()) {
+                if (activetrace_.empty()) {
+                    break;
+                }
+                current_activeiter_ = activetrace_.begin();
+            }
 
-                if (missedcount >= activecount_) {
-                    BlockTrace *bad = SelectBadEdge();
-                    if (bad == nullptr) {
-                        ClearVisitCount(g);
-                        return;
-                    }
-                    if (bad->bottom_id != CNode::kNone && bad->dest_id != CNode::kNone) {
-                        likelygoto_.emplace_back(bad->bottom_id, bad->dest_id);
-                    }
-                    RemoveTrace(bad);
-                    missedcount = 0;
-                    current_activeiter_ = activetrace_.begin();
+            BlockTrace *bt = *current_activeiter_;
+
+            if (missed_count >= activecount_) {
+                BlockTrace *bad = SelectBadEdge();
+                if (bad == nullptr) {
+                    ClearVisitCount(g);
+                    return;
+                }
+                if (bad->bottom_id != CNode::kNone && bad->dest_id != CNode::kNone) {
+                    likelygoto_.emplace_back(bad->bottom_id, bad->dest_id);
+                }
+                RemoveTrace(bad);
+                missed_count         = 0;
+                current_activeiter_ = activetrace_.begin();
+                continue;
+            }
+
+            {
+                size_t exit_id = CNode::kNone;
+                if (CheckRetirement(bt, exit_id)) {
+                    current_activeiter_ = RetireBranch(bt->top, exit_id);
+                    missed_count         = 0;
                     continue;
                 }
-
-                {
-                    size_t exit_id = CNode::kNone;
-                    if (CheckRetirement(bt, exit_id)) {
-                        current_activeiter_ = RetireBranch(bt->top, exit_id);
-                        missedcount = 0;
-                        continue;
-                    }
-                }
-
-                {
-                    bool was_terminal = bt->IsTerminal();
-                    if (CheckOpen(g, bt)) {
-                        ++current_activeiter_;
-                        if (was_terminal) {
-                            ++missedcount;
-                        } else {
-                            missedcount = 0;
-                        }
-                        continue;
-                    }
-                }
-
-                {
-                    const auto &dest_node = g.Node(bt->dest_id);
-                    size_t dag_preds = 0;
-                    for (size_t p : dest_node.preds) {
-                        if (!g.Node(p).IsCollapsed()) ++dag_preds;
-                    }
-                    if (dag_preds > 1
-                        && dest_node.visit_count < static_cast<int>(dag_preds))
-                    {
-                        ++current_activeiter_;
-                        ++missedcount;
-                        continue;
-                    }
-                }
-
-                current_activeiter_ = OpenBranch(g, bt);
-                missedcount = 0;
             }
+
+            {
+                bool was_terminal = bt->IsTerminal();
+                if (CheckOpen(g, bt)) {
+                    ++current_activeiter_;
+                    if (was_terminal) {
+                        ++missed_count;
+                    } else {
+                        missed_count = 0;
+                    }
+                    continue;
+                }
+            }
+
+            {
+                const auto &dest_node = g.Node(bt->dest_id);
+                size_t dag_preds      = 0;
+                for (size_t p : dest_node.preds) {
+                    if (!g.Node(p).IsCollapsed()) {
+                        ++dag_preds;
+                    }
+                }
+                if (dag_preds > 1 && dest_node.visit_count < static_cast< int >(dag_preds))
+                {
+                    ++current_activeiter_;
+                    ++missed_count;
+                    continue;
+                }
+            }
+
+            current_activeiter_ = OpenBranch(g, bt);
+            missed_count         = 0;
+        }
+
+        if (outer_iter >= max_outer) {
+            LOG(WARNING) << "PushBranches: safety limit reached (" << max_outer
+                         << " iterations on " << g.nodes.size() << " nodes, " << total_edges
+                         << " edges)\n";
         }
 
         ClearVisitCount(g);

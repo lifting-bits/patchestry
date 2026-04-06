@@ -164,7 +164,7 @@ namespace patchestry::codegen {
         }
 
         if (options.emit_asm) {
-            UNIMPLEMENTED("Support for lowering to asm not implemented"); // NOLINT
+            LOG_FATAL("Support for lowering to asm not implemented.");
         }
     }
 

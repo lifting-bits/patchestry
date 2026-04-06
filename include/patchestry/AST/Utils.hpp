@@ -11,11 +11,25 @@
 #include <string_view>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Expr.h>
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 
 namespace patchestry::ast {
+
+    /// Maximum depth for cascading goto-elimination passes.
+    /// Each pass may expose new goto→next-label adjacencies; this
+    /// bounds the iteration to prevent runaway on pathological inputs.
+    inline constexpr int kMaxGotoEliminationPasses = 8;
+
+    /// Ensure expr is a prvalue (insert lvalue-to-rvalue conversion if needed).
+    clang::Expr *EnsureRValue(clang::ASTContext &ctx, clang::Expr *expr);
+
+    /// Create !(expr) using clang::UnaryOperator (logical not).
+    /// Wraps in ParenExpr so the pretty-printer emits !(a == b).
+    clang::Expr *NegateExpr(clang::ASTContext &ctx, clang::Expr *expr);
+
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key);
 
     clang::QualType
