@@ -150,10 +150,13 @@ namespace patchestry::ast {
     /// Replace goto-to-return: when a trailing clang::GotoStmt in an SBlock
     /// (or an SGoto SNode) targets a label whose body ends with a
     /// clang::ReturnStmt, replace the goto with the label's return stmts.
+    /// Also handles non-trailing gotos inside clang::IfStmt arms within
+    /// SBlocks — the most common residual pattern.
     /// Dead labels are cleaned up by a subsequent InlineResidualGotos pass.
     ///
     /// Returns true if any replacement was performed.
-    bool ConvertGotoToReturn(SNode *root, SNodeFactory &factory);
+    bool ConvertGotoToReturn(SNode *root, SNodeFactory &factory,
+                             clang::ASTContext &ctx);
 
     /// Remove SLabel nodes from SSeq whose label has zero references
     /// (no SGoto and no clang::GotoStmt targets it).  The label's body
