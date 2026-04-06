@@ -917,7 +917,8 @@ namespace patchestry::ast {
                     return !cs_inner->body_empty()
                         && (llvm::isa< clang::ReturnStmt >(cs_inner->body_back())
                             || llvm::isa< clang::GotoStmt >(cs_inner->body_back())
-                            || llvm::isa< clang::BreakStmt >(cs_inner->body_back()));
+                            || llvm::isa< clang::BreakStmt >(cs_inner->body_back())
+                            || llvm::isa< clang::ContinueStmt >(cs_inner->body_back()));
                 }
                 return false;
             };
