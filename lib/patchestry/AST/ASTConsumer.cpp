@@ -206,7 +206,7 @@ namespace patchestry::ast {
                     ConvertGotoToBreakContinue(root_snode, factory);
 
                     // Post-pass: replace goto→return patterns.
-                    ConvertGotoToReturn(root_snode, factory);
+                    ConvertGotoToReturn(root_snode, factory, ctx);
 
                     // Post-pass: duplicate small label targets into
                     // switch case arms that end in `goto L`, making
