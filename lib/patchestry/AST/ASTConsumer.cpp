@@ -127,78 +127,15 @@ namespace patchestry::ast {
                     CFGStructure cfg_structure(flow_graph, factory, ctx);
                     cfg_structure.StructureAll();
 
-                    // Switch block: build SSwitch with goto cases
-                    if (!node.switch_cases.empty() && node.branch_cond) {
-                        auto *sw = factory.Make<SSwitch>(node.branch_cond);
-                        auto resolve_switch_target_label = [&](size_t succ_id) -> std::string {
-                            auto &tn = flow_graph.Node(succ_id);
-                            if (!tn.original_label.empty()) {
-                                return tn.original_label;
-                            }
-                            if (!tn.label.empty()) {
-                                tn.original_label = tn.label;
-                                return tn.original_label;
-                            }
-
-                            // Deterministic fallback for unlabeled synthetic/collapsed targets.
-                            // Write back to node labels so goto target and emitted SLabel match.
-                            tn.label          = "switch_target_" + std::to_string(succ_id);
-                            tn.original_label = tn.label;
-                            return tn.original_label;
-                        };
-
-                        // Use the discriminant's type for case literals to
-                        // avoid truncation on targets where uintptr_t > int.
-                        // For enum types, use the underlying integer type for
-                        // the width since getIntWidth requires a BuiltinType.
-                        auto case_type = node.branch_cond->getType();
-                        if (case_type->isEnumeralType()) {
-                            case_type = case_type->castAs<clang::EnumType>()
-                                ->getDecl()->getIntegerType();
+                    // Build root SSeq from the remaining active (uncollapsed)
+                    // nodes.  After StructureAll, each active node has a
+                    // ->structured SNode set.
+                    auto *seq = factory.Make<SSeq>();
+                    for (auto &node : flow_graph.nodes) {
+                        if (node.IsCollapsed()) continue;
+                        if (node.structured) {
+                            seq->AddChild(node.structured);
                         }
-                        unsigned case_width = ctx.getIntWidth(case_type);
-                        for (const auto &sc : node.switch_cases) {
-                            if (sc.is_default) {
-                                // Default arm: goto target label
-                                if (sc.succ_index < node.succs.size()) {
-                                    auto target_id = node.succs[sc.succ_index];
-                                    auto lbl = resolve_switch_target_label(target_id);
-                                    sw->SetDefaultBody(factory.Make<SGoto>(
-                                        factory.Intern(lbl)));
-                                } else {
-                                    LOG(WARNING) << "switch default succ_index "
-                                                 << sc.succ_index << " out of range (succs="
-                                                 << node.succs.size() << ")\n";
-                                }
-                            } else {
-                                auto *val = clang::IntegerLiteral::Create(
-                                    ctx, llvm::APInt(case_width, static_cast<uint64_t>(sc.value), true),
-                                    case_type, clang::SourceLocation());
-                                SNode *body = nullptr;
-                                if (sc.succ_index < node.succs.size()) {
-                                    auto target_id = node.succs[sc.succ_index];
-                                    auto lbl = resolve_switch_target_label(target_id);
-                                    body = factory.Make<SGoto>(
-                                        factory.Intern(lbl));
-                                } else {
-                                    LOG(WARNING) << "switch case " << sc.value
-                                                 << " succ_index " << sc.succ_index
-                                                 << " out of range (succs="
-                                                 << node.succs.size() << ")\n";
-                                }
-                                sw->AddCase(val, body);
-                            }
-                        }
-                        auto *sw_seq = factory.Make<SSeq>();
-                        if (!blk->Stmts().empty()) sw_seq->AddChild(blk);
-                        sw_seq->AddChild(sw);
-                        if (!node.label.empty()) {
-                            seq->AddChild(factory.Make<SLabel>(
-                                factory.Intern(node.label), sw_seq));
-                        } else {
-                            seq->AddChild(sw_seq);
-                        }
-                        continue;
                     }
                     root_snode = seq;
 
