@@ -1124,8 +1124,9 @@ namespace patchestry::ast {
         }
 
         /// Recursively find the deepest trailing stmt — chasing through
-        /// CompoundStmt (last child), LabelStmt (sub-stmt), IfStmt
-        /// (else arm if present, then arm otherwise).
+        /// CompoundStmt (last child) and LabelStmt (sub-stmt).
+        /// IfStmts and other nodes are returned as-is so the caller
+        /// can inspect their arms via IfStmtGotoArm.
         clang::Stmt *DeepTrailingStmt(clang::Stmt *s) {
             if (!s) {
                 return nullptr;
