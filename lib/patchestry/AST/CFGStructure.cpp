@@ -1263,7 +1263,10 @@ namespace patchestry::ast {
         // exits the loop (not in bodyset), emit if (exit_cond) goto label;
         // to preserve the exit path that would be lost when the terminal
         // is stripped.
-        auto build_node = [&](size_t nid) -> SNode * {
+        // next_rpo_id: node ID of the next interior block in RPO order,
+        // or SIZE_MAX if this is the last block.  Used to decide whether
+        // stripping a terminal goto produces correct fallthrough.
+        auto build_node = [&](size_t nid, size_t next_rpo_id) -> SNode * {
             auto &nd = graph_.Node(nid);
 
             // Collapsed nodes with a pre-built structured SNode: return
@@ -1272,9 +1275,28 @@ namespace patchestry::ast {
 
             SNode *leaf = BuildLeafSNode(nid, /*include_terminal=*/false);
 
-            // Only for conditional nodes with a branch condition.
-            if (!nd.is_conditional || !nd.branch_cond || nd.succs.size() != 2)
+            // Non-conditional nodes: check if the sole successor is
+            // the next RPO block.  If not, emit an explicit goto to
+            // preserve the control-flow edge.
+            if (!nd.is_conditional || !nd.branch_cond || nd.succs.size() != 2) {
+                if (nd.succs.size() == 1) {
+                    size_t target = nd.succs[0];
+                    if (bodyset.count(target) > 0
+                        && target != next_rpo_id
+                        && !nd.IsGotoOut(0)) {
+                        auto &tn = graph_.Node(target);
+                        if (!tn.original_label.empty()) {
+                            auto *go = factory_.Make<SGoto>(
+                                factory_.Intern(tn.original_label));
+                            auto *w = factory_.Make<SSeq>();
+                            if (leaf) w->AddChild(leaf);
+                            w->AddChild(go);
+                            return static_cast<SNode *>(w);
+                        }
+                    }
+                }
                 return leaf;
+            }
 
             // Check if one successor exits the loop body.
             // CGraph convention: succs[0] = not-taken (cond false),
@@ -1284,8 +1306,42 @@ namespace patchestry::ast {
             bool s0_in = bodyset.count(s0) > 0;
             bool s1_in = bodyset.count(s1) > 0;
 
-            // Both inside or both outside — nothing to emit.
-            if (s0_in == s1_in) return leaf;
+            // Both outside — should not happen in a valid loop body.
+            if (!s0_in && !s1_in) return leaf;
+
+            // Both inside: preserve the conditional as
+            //   if(branch_cond) goto taken_label;
+            // The not-taken path falls through to the next RPO block.
+            if (s0_in && s1_in) {
+                auto &s1_node = graph_.Node(s1);
+                if (!s1_node.original_label.empty()) {
+                    auto *taken_goto = factory_.Make<SGoto>(
+                        factory_.Intern(s1_node.original_label));
+                    SNode *else_branch = nullptr;
+                    // If not-taken is NOT the next RPO block, add else-goto.
+                    if (s0 != next_rpo_id && next_rpo_id != SIZE_MAX) {
+                        auto &s0_node = graph_.Node(s0);
+                        if (!s0_node.original_label.empty()) {
+                            else_branch = factory_.Make<SGoto>(
+                                factory_.Intern(s0_node.original_label));
+                        }
+                    }
+                    auto *if_goto = factory_.Make<SIfThenElse>(
+                        nd.branch_cond, taken_goto, else_branch);
+
+                    auto *leaf_blk = leaf ? leaf->dyn_cast<SBlock>() : nullptr;
+                    bool leaf_empty = !nd.structured
+                        && nd.original_label.empty()
+                        && ((!leaf) || (leaf_blk && leaf_blk->Stmts().empty()));
+                    if (leaf_empty) return if_goto;
+
+                    auto *w = factory_.Make<SSeq>();
+                    if (leaf) w->AddChild(leaf);
+                    w->AddChild(if_goto);
+                    return static_cast<SNode *>(w);
+                }
+                return leaf;
+            }
 
             // One exits: build if (exit_cond) goto exit_label;
             size_t exit_id = s0_in ? s1 : s0;
@@ -1328,14 +1384,16 @@ namespace patchestry::ast {
         };
 
         if (interior.size() == 1) {
-            return build_node(interior[0]);
+            return build_node(interior[0], SIZE_MAX);
         }
 
         // Build all nodes, then merge consecutive if-gotos that target
         // the same label into a single if (cond1 || cond2) goto label;
         std::vector<SNode *> children;
-        for (size_t nid : interior) {
-            SNode *child = build_node(nid);
+        for (size_t idx = 0; idx < interior.size(); ++idx) {
+            size_t next = (idx + 1 < interior.size())
+                ? interior[idx + 1] : SIZE_MAX;
+            SNode *child = build_node(interior[idx], next);
             if (child) children.push_back(child);
         }
 
@@ -1435,12 +1493,57 @@ namespace patchestry::ast {
         bool s0_in_body = bodyset.count(s0) > 0;
         bool s1_in_body = bodyset.count(s1) > 0;
 
-        // For a while-do, exactly one successor should be in the body
-        // (the other is the exit).  If both are in body, this might be
-        // a do-while or inf-loop instead.
-        if (s0_in_body == s1_in_body) {
+        // Neither successor in body — not a while-do.
+        if (!s0_in_body && !s1_in_body) {
             ClearMarks(graph_, body);
             return false;
+        }
+
+        // Both successors in body: the header doesn't directly control
+        // loop exit — all exits are from interior nodes.  Build as
+        // while(1) { header_stmts; if(cond) goto taken; body; }
+        if (s0_in_body && s1_in_body) {
+            SNode *loop_body_snode = BuildLoopBodySNode(body, id, bodyset);
+
+            auto *inner = factory_.Make<SSeq>();
+            if (h.structured) {
+                inner->AddChild(h.structured);
+            } else if (!h.stmts.empty()) {
+                auto *h_blk = factory_.Make<SBlock>();
+                for (auto *s : h.stmts) h_blk->AddStmt(s);
+                inner->AddChild(h_blk);
+            }
+
+            // Header conditional: if(branch_cond) goto taken_label;
+            auto &s1_node = graph_.Node(s1);
+            if (!s1_node.original_label.empty()) {
+                auto *taken_goto = factory_.Make<SGoto>(
+                    factory_.Intern(s1_node.original_label));
+                inner->AddChild(factory_.Make<SIfThenElse>(
+                    h.branch_cond, taken_goto, nullptr));
+            }
+
+            if (loop_body_snode) inner->AddChild(loop_body_snode);
+
+            auto *while_node = factory_.Make<SWhile>(nullptr, inner);
+            if (!h.original_label.empty())
+                while_node->SetHeaderLabel(factory_.Intern(h.original_label));
+            if (lb->exit_block != LoopBody::kNone) {
+                auto &exit_node = graph_.Node(lb->exit_block);
+                if (!exit_node.original_label.empty())
+                    while_node->SetExitLabel(
+                        factory_.Intern(exit_node.original_label));
+            }
+
+            SNode *result = while_node;
+            if (!h.original_label.empty()) {
+                result = factory_.Make<SLabel>(
+                    factory_.Intern(h.original_label), result);
+            }
+
+            ClearMarks(graph_, body);
+            graph_.IdentifyInternal(body, CNode::BlockType::kWhile, result);
+            return true;
         }
 
         // Build the while loop SNode.
