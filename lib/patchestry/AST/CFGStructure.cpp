@@ -2339,6 +2339,9 @@ namespace patchestry::ast {
             return changed;
         }
 
+        // Forward declaration — defined in InlineCrossScopeSingleRef namespace.
+        bool SNodeAlwaysTerminates(SNode *node);
+
         bool EliminateInSSeq(SSeq *seq, SNodeFactory &factory,
                              clang::ASTContext &ctx) {
             auto &children = seq->Children();
@@ -2351,14 +2354,23 @@ namespace patchestry::ast {
             while (local_changed && restart_budget-- > 0) {
                 local_changed = false;
                 for (size_t i = 0; i + 1 < children.size(); ++i) {
-                    auto *nxt_label = children[i + 1]->dyn_cast<SLabel>();
-                    // Also unwrap: if next child is SSeq, check its
-                    // first child for the target SLabel.
-                    if (!nxt_label) {
-                        if (auto *nxt_seq = children[i + 1]->dyn_cast<SSeq>()) {
-                            if (!nxt_seq->Empty())
-                                nxt_label = (*nxt_seq)[0]->dyn_cast<SLabel>();
+                    // Find the next SLabel sibling, possibly skipping
+                    // dead code after a terminating child.  Also unwrap
+                    // one level of SSeq nesting to find wrapped labels.
+                    SLabel *nxt_label = nullptr;
+                    for (size_t k = i + 1; k < children.size() && !nxt_label; ++k) {
+                        nxt_label = children[k]->dyn_cast<SLabel>();
+                        if (!nxt_label) {
+                            if (auto *ns = children[k]->dyn_cast<SSeq>()) {
+                                if (!ns->Empty())
+                                    nxt_label = (*ns)[0]->dyn_cast<SLabel>();
+                            }
                         }
+                        if (nxt_label) break;
+                        // Only skip over siblings that are unreachable
+                        // (preceded by a terminating node).
+                        if (!SNodeAlwaysTerminates(children[k - 1]))
+                            break;
                     }
                     if (!nxt_label) continue;
                     auto next_name = nxt_label->Name();
@@ -2580,10 +2592,33 @@ namespace patchestry::ast {
             if (auto *blk = node->dyn_cast<SBlock>()) {
                 if (blk->Empty()) return false;
                 auto *last = blk->Stmts().back();
-                return llvm::isa<clang::ReturnStmt>(last)
+                if (llvm::isa<clang::ReturnStmt>(last)
                     || llvm::isa<clang::BreakStmt>(last)
                     || llvm::isa<clang::ContinueStmt>(last)
-                    || llvm::isa<clang::GotoStmt>(last);
+                    || llvm::isa<clang::GotoStmt>(last))
+                    return true;
+                // clang::IfStmt where both arms terminate.
+                if (auto *ifs = llvm::dyn_cast<clang::IfStmt>(last)) {
+                    auto *th = ifs->getThen();
+                    auto *el = ifs->getElse();
+                    if (!th || !el) return false;
+                    auto terminates = [](clang::Stmt *s) {
+                        if (llvm::isa<clang::ReturnStmt>(s)
+                            || llvm::isa<clang::BreakStmt>(s)
+                            || llvm::isa<clang::GotoStmt>(s))
+                            return true;
+                        if (auto *cs = llvm::dyn_cast<clang::CompoundStmt>(s)) {
+                            if (cs->body_empty()) return false;
+                            auto *b = cs->body_back();
+                            return llvm::isa<clang::ReturnStmt>(b)
+                                || llvm::isa<clang::BreakStmt>(b)
+                                || llvm::isa<clang::GotoStmt>(b);
+                        }
+                        return false;
+                    };
+                    return terminates(th) && terminates(el);
+                }
+                return false;
             }
             if (auto *seq = node->dyn_cast<SSeq>()) {
                 if (seq->Empty()) return false;
