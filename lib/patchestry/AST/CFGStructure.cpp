@@ -464,16 +464,31 @@ namespace patchestry::ast {
         // count, so 2 * initial count is generous.
         const size_t max_iterations = graph_.ActiveCount() * 2 + 1;
         size_t iterations = 0;
+        size_t stall_count = 0;
+        size_t last_active = graph_.ActiveCount();
+        // Stop if SelectAndMarkGotoEdge fires repeatedly without
+        // reducing the active node count — further goto edges won't
+        // enable new rules and each call burns O(N×E) in PushBranches.
+        constexpr size_t kMaxStall = 20;
 
         while (graph_.ActiveCount() > 1 && iterations < max_iterations) {
             if (StructureInternal()) {
                 ++iterations;
+                size_t cur = graph_.ActiveCount();
+                if (cur < last_active) { last_active = cur; stall_count = 0; }
                 continue;
             }
             // No structural rule fired — use TraceDAG to select the
             // least-disruptive edge and mark it as a goto, then retry.
             if (SelectAndMarkGotoEdge()) {
                 ++iterations;
+                size_t cur = graph_.ActiveCount();
+                if (cur < last_active) {
+                    last_active = cur;
+                    stall_count = 0;
+                } else if (++stall_count >= kMaxStall) {
+                    break;
+                }
                 continue;
             }
             // TraceDAG couldn't find an edge to cut either — done.
@@ -2329,8 +2344,11 @@ namespace patchestry::ast {
             auto &children = seq->Children();
             bool changed = false;
             bool local_changed = true;
+            // Cap restarts to avoid O(N²) on large SSeq (e.g., 100+
+            // uncollapsed leaf nodes from a partially-structured graph).
+            int restart_budget = 50;
 
-            while (local_changed) {
+            while (local_changed && restart_budget-- > 0) {
                 local_changed = false;
                 for (size_t i = 0; i + 1 < children.size(); ++i) {
                     auto *nxt_label = children[i + 1]->dyn_cast<SLabel>();
