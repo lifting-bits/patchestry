@@ -2406,6 +2406,17 @@ namespace patchestry::ast {
                             }
 
                             if (!then_tgt.empty() && then_tgt == next_name
+                                && !ifs->getElse()) {
+                                // if(c) goto L; L: → nop (remove the if-stmt)
+                                auto *blk = info.container->dyn_cast<SBlock>();
+                                if (blk && !blk->Empty()) {
+                                    blk->Stmts().pop_back();
+                                    local_changed = true; changed = true;
+                                    break;
+                                }
+                            }
+
+                            if (!then_tgt.empty() && then_tgt == next_name
                                 && ifs->getElse()) {
                                 // if(c) goto L; else S; L: → if(!c) S
                                 auto *neg = NegateExpr(ctx, ifs->getCond());
@@ -2434,6 +2445,33 @@ namespace patchestry::ast {
 
                         if (!else_tgt.empty() && else_tgt == next_name) {
                             ite->SetElseBranch(nullptr);
+                            local_changed = true; changed = true;
+                            break;
+                        }
+                        if (!then_tgt.empty() && then_tgt == next_name
+                            && !ite->ElseBranch()) {
+                            // if(c) goto L; L: → nop (remove the if-then-goto)
+                            if (info.container == children[i]) {
+                                seq->RemoveChild(i);
+                            } else {
+                                // Nested — chase to the parent SSeq and
+                                // remove the trailing SIfThenElse.
+                                std::function<bool(SNode *)> remove_trailing;
+                                remove_trailing = [&](SNode *n) -> bool {
+                                    if (auto *s = n->dyn_cast<SSeq>()) {
+                                        auto &ch = s->Children();
+                                        if (!ch.empty() && ch.back() == info.container) {
+                                            s->RemoveChild(ch.size() - 1);
+                                            return true;
+                                        }
+                                        if (!ch.empty()) return remove_trailing(ch.back());
+                                    }
+                                    if (auto *l = n->dyn_cast<SLabel>())
+                                        return remove_trailing(l->Body());
+                                    return false;
+                                };
+                                remove_trailing(children[i]);
+                            }
                             local_changed = true; changed = true;
                             break;
                         }
@@ -2477,7 +2515,7 @@ namespace patchestry::ast {
         // pass inlines at least one, so we can't need more passes than
         // there are gotos.
         bool any_changed = false;
-        size_t max_passes = refs.size() + 1;
+        size_t max_passes = std::min(refs.size() + 1, size_t{20});
         for (size_t pass = 0; pass < max_passes; ++pass) {
             if (!InlineGotosRecursive(root, factory, refs))
                 break;
@@ -2802,7 +2840,7 @@ namespace patchestry::ast {
         bool any_changed = false;
         // Fixed-point iteration — each pass eliminates at least one
         // goto, so the initial ref count bounds the loop.
-        size_t max_passes = refs.size() + 1;
+        size_t max_passes = std::min(refs.size() + 1, size_t{20});
         for (size_t p = 0; p < max_passes; ++p) {
             if (!CrossScopeInlineRecursive(root, root, refs))
                 break;
@@ -3657,15 +3695,10 @@ namespace patchestry::ast {
         std::unordered_map<std::string_view, LabelEntry> labels;
         CollectLabels(root, labels);
 
-        bool any_changed = false;
-        // Iterate: replacing gotos may expose new single-body-return labels
-        // (e.g., a label body was SSeq{SGoto "L2", ...} and L2 is a return —
-        // after replacing the inner goto, L2's body may simplify).
-        for (size_t pass = 0; pass < labels.size() + 1; ++pass) {
-            if (!ReplaceGotoWithReturn(root, factory, ctx, labels))
-                break;
-            any_changed = true;
-        }
+        // Single pass: chain resolution (ResolveGotoChain) already
+        // follows multi-hop goto chains in one shot, so iterating
+        // here would duplicate epilogue bodies exponentially.
+        bool any_changed = ReplaceGotoWithReturn(root, factory, ctx, labels);
 
         return any_changed;
     }
