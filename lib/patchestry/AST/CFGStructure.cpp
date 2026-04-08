@@ -3016,6 +3016,87 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
+    // RemoveDeadSSeqChildren — strip unreachable SSeq children
+    //
+    // Walk SSeq nodes bottom-up.  When child[i] always terminates
+    // (SNodeAlwaysTerminates), remove children [i+1..end) that are
+    // NOT SLabel nodes.  SLabel nodes are preserved because they may
+    // be goto targets from other scopes — removing them without a
+    // full reference count would break goto/label pairing.
+    // ---------------------------------------------------------------
+
+    namespace {
+
+        /// Check if an SNode contains any SLabel (directly or nested).
+        bool ContainsLabel(SNode *node) {
+            if (!node) return false;
+            if (node->dyn_cast<SLabel>()) return true;
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (auto *c : seq->Children())
+                    if (ContainsLabel(c)) return true;
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                return ContainsLabel(ite->ThenBranch())
+                    || ContainsLabel(ite->ElseBranch());
+            }
+            return false;
+        }
+
+        bool RemoveDeadInSSeq(SSeq *seq) {
+            auto &children = seq->Children();
+            bool changed = false;
+            for (size_t i = 0; i + 1 < children.size(); ++i) {
+                if (!SNodeAlwaysTerminates(children[i])) continue;
+                // children[i] terminates — everything after it that
+                // contains no labels is dead code.
+                size_t j = i + 1;
+                while (j < children.size()) {
+                    if (ContainsLabel(children[j])) {
+                        ++j; // keep — may contain goto targets
+                    } else {
+                        seq->RemoveChild(j);
+                        changed = true;
+                    }
+                }
+                break; // only process first terminator
+            }
+            return changed;
+        }
+
+        bool RemoveDeadRecursive(SNode *node) {
+            if (!node) return false;
+            bool changed = false;
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (size_t i = 0; i < seq->Size(); ++i)
+                    if (RemoveDeadRecursive((*seq)[i])) changed = true;
+                if (RemoveDeadInSSeq(seq)) changed = true;
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (RemoveDeadRecursive(ite->ThenBranch())) changed = true;
+                if (RemoveDeadRecursive(ite->ElseBranch())) changed = true;
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                if (RemoveDeadRecursive(w->Body())) changed = true;
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                if (RemoveDeadRecursive(dw->Body())) changed = true;
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                if (RemoveDeadRecursive(f->Body())) changed = true;
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                if (RemoveDeadRecursive(lbl->Body())) changed = true;
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    if (RemoveDeadRecursive(c.body)) changed = true;
+                if (RemoveDeadRecursive(sw->DefaultBody())) changed = true;
+            }
+            return changed;
+        }
+
+    } // anonymous namespace
+
+    bool RemoveDeadSSeqChildren(SNode *root) {
+        if (!root) return false;
+        return RemoveDeadRecursive(root);
+    }
+
+    // ---------------------------------------------------------------
     // ConvertGotoToBreakContinue — replace gotos to loop exit/header
     //
     // Walks the SNode tree with a scope stack of enclosing loops.

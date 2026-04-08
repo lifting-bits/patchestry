@@ -173,6 +173,10 @@ namespace patchestry::ast {
                         if (!did_elim && !did_inline && !did_cross) break;
                     }
 
+                    // Post-pass: remove unreachable SSeq children after
+                    // terminating siblings (dead code from block sequencing).
+                    RemoveDeadSSeqChildren(root_snode);
+
                     // NOTE: RemoveUnreferencedLabels is intentionally
                     // NOT called here.  CountAllGotoRefs does not yet
                     // walk every clang::Stmt embedded inside all SNode

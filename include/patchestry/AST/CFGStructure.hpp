@@ -189,4 +189,9 @@ namespace patchestry::ast {
     /// Returns true if any label was inlined.
     bool InlineCrossScopeSingleRef(SNode *root, SNodeFactory &factory);
 
+    /// Remove unreachable SSeq children that follow a terminating
+    /// sibling.  Preserves SLabel children (may be goto targets from
+    /// other scopes).  Bottom-up recursive.
+    bool RemoveDeadSSeqChildren(SNode *root);
+
 } // namespace patchestry::ast
