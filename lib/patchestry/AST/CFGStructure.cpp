@@ -2352,6 +2352,14 @@ namespace patchestry::ast {
                 local_changed = false;
                 for (size_t i = 0; i + 1 < children.size(); ++i) {
                     auto *nxt_label = children[i + 1]->dyn_cast<SLabel>();
+                    // Also unwrap: if next child is SSeq, check its
+                    // first child for the target SLabel.
+                    if (!nxt_label) {
+                        if (auto *nxt_seq = children[i + 1]->dyn_cast<SSeq>()) {
+                            if (!nxt_seq->Empty())
+                                nxt_label = (*nxt_seq)[0]->dyn_cast<SLabel>();
+                        }
+                    }
                     if (!nxt_label) continue;
                     auto next_name = nxt_label->Name();
 
