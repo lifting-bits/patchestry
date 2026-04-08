@@ -1436,11 +1436,49 @@ namespace patchestry::ast {
         bool s1_in_body = bodyset.count(s1) > 0;
 
         // For a while-do, exactly one successor should be in the body
-        // (the other is the exit).  If both are in body, this might be
-        // a do-while or inf-loop instead.
-        if (s0_in_body == s1_in_body) {
+        // (the other is the exit).  If neither is in the body, bail.
+        if (!s0_in_body && !s1_in_body) {
             ClearMarks(graph_, body);
             return false;
+        }
+
+        // Both successors in body: the header doesn't directly control
+        // loop exit — all exits are from interior nodes.  Build as
+        // while(1) { header_content; body_with_interior_exits_as_break; }
+        if (s0_in_body && s1_in_body) {
+            SNode *loop_body_snode = BuildLoopBodySNode(body, id, bodyset);
+
+            auto *inner = factory_.Make<SSeq>();
+            if (h.structured) {
+                inner->AddChild(h.structured);
+            } else if (!h.stmts.empty()) {
+                auto *h_blk = factory_.Make<SBlock>();
+                for (auto *s : h.stmts) h_blk->AddStmt(s);
+                inner->AddChild(h_blk);
+            }
+            if (loop_body_snode) inner->AddChild(loop_body_snode);
+
+            auto *while_node = factory_.Make<SWhile>(nullptr, inner);
+            if (!h.original_label.empty())
+                while_node->SetHeaderLabel(factory_.Intern(h.original_label));
+
+            // Set exit label from LoopBody's detected exit block.
+            if (lb->exit_block != LoopBody::kNone) {
+                auto &exit_node = graph_.Node(lb->exit_block);
+                if (!exit_node.original_label.empty())
+                    while_node->SetExitLabel(
+                        factory_.Intern(exit_node.original_label));
+            }
+
+            SNode *result = while_node;
+            if (!h.original_label.empty()) {
+                result = factory_.Make<SLabel>(
+                    factory_.Intern(h.original_label), result);
+            }
+
+            ClearMarks(graph_, body);
+            graph_.IdentifyInternal(body, CNode::BlockType::kWhile, result);
+            return true;
         }
 
         // Build the while loop SNode.
