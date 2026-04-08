@@ -3445,6 +3445,32 @@ namespace patchestry::ast {
             size_t max_stmts = 16,
             size_t max_hops = 8);
 
+        /// Check if a clang::Stmt always terminates (for dead-code trim).
+        bool StmtTerminates(clang::Stmt *s) {
+            if (!s) return false;
+            if (llvm::isa<clang::ReturnStmt>(s) || llvm::isa<clang::BreakStmt>(s)
+                || llvm::isa<clang::ContinueStmt>(s) || llvm::isa<clang::GotoStmt>(s))
+                return true;
+            if (auto *ifs = llvm::dyn_cast<clang::IfStmt>(s))
+                return ifs->getThen() && ifs->getElse()
+                    && StmtTerminates(ifs->getThen())
+                    && StmtTerminates(ifs->getElse());
+            if (auto *cs = llvm::dyn_cast<clang::CompoundStmt>(s))
+                return !cs->body_empty() && StmtTerminates(cs->body_back());
+            return false;
+        }
+
+        /// Trim dead stmts after the first terminator in a stmt vector.
+        void TrimDeadStmts(std::vector<clang::Stmt *> &stmts) {
+            for (size_t i = 0; i < stmts.size(); ++i) {
+                if (StmtTerminates(stmts[i]) && i + 1 < stmts.size()) {
+                    stmts.erase(stmts.begin() + static_cast<ptrdiff_t>(i + 1),
+                                stmts.end());
+                    return;
+                }
+            }
+        }
+
         /// Build a clang::ReturnStmt from an SReturn.
         clang::ReturnStmt *MakeReturn(clang::ASTContext &ctx, SReturn *sr) {
             auto loc = clang::SourceLocation();
@@ -3578,6 +3604,7 @@ namespace patchestry::ast {
                 block->Stmts().pop_back();
                 for (auto *s : ret_block->Stmts())
                     block->AddStmt(s);
+                TrimDeadStmts(block->Stmts());
                 return true;
             }
 
@@ -3588,6 +3615,7 @@ namespace patchestry::ast {
                 block->Stmts().pop_back();
                 for (auto *s : tail)
                     block->AddStmt(s);
+                TrimDeadStmts(block->Stmts());
                 return true;
             }
 
@@ -3598,6 +3626,7 @@ namespace patchestry::ast {
                 block->Stmts().pop_back();
                 for (auto *s : chain)
                     block->AddStmt(s);
+                TrimDeadStmts(block->Stmts());
                 return true;
             }
 
@@ -3635,6 +3664,7 @@ namespace patchestry::ast {
                 if (ret_block) {
                     for (auto *s : ret_block->Stmts())
                         out.push_back(s);
+                    TrimDeadStmts(out);
                     return out.size() <= max_stmts;
                 }
 
@@ -3642,6 +3672,7 @@ namespace patchestry::ast {
                 std::vector<clang::Stmt *> tail;
                 if (CollectReturnTail(it->second, tail)) {
                     for (auto *s : tail) out.push_back(s);
+                    TrimDeadStmts(out);
                     return out.size() <= max_stmts;
                 }
 
@@ -3649,6 +3680,7 @@ namespace patchestry::ast {
                 std::vector<clang::Stmt *> flat;
                 if (FlattenTerminatingBody(body, ctx, flat, max_stmts)) {
                     for (auto *s : flat) out.push_back(s);
+                    TrimDeadStmts(out);
                     return out.size() <= max_stmts;
                 }
 
