@@ -131,8 +131,9 @@ namespace patchestry::ast {
             return new (ctx) clang::ParenExpr(loc, loc, expr);
         }
 
-    } // close anonymous namespace
+    } // anonymous namespace
 
+    // Shared utility — used by both ClangEmitter and ClangEmitterCleanup.
     namespace detail {
         bool EndsWithTerminator(clang::Stmt *s) {
             llvm::SmallVector< clang::Stmt *, 4 > worklist;
@@ -271,7 +272,14 @@ namespace patchestry::ast {
             clang::Stmt *EmitDoWhile(const SDoWhile *dw) {
                 auto *body = Emit(dw->Body());
                 if (!body) body = new (ctx_) clang::NullStmt(Loc());
-                auto *cond = EnsureRValue(ctx_, CloneExpr(ctx_, dw->Cond()));
+                clang::Expr *cond = nullptr;
+                if (dw->Cond()) {
+                    cond = EnsureRValue(ctx_, CloneExpr(ctx_, dw->Cond()));
+                } else {
+                    // do { ... } while(1) — SDoWhile with null condition.
+                    cond = clang::IntegerLiteral::Create(
+                        ctx_, llvm::APInt(32, 1), ctx_.IntTy, Loc());
+                }
 
                 return new (ctx_) clang::DoStmt(body, cond, Loc(), Loc(), Loc());
             }

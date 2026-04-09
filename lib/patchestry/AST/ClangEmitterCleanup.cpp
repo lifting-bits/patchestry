@@ -1000,14 +1000,17 @@ namespace detail {
 
         // Collect all LabelDecls that have a LabelStmt definition in the tree.
         void CollectDefinedLabels(clang::Stmt *s,
-                                  std::unordered_set< clang::LabelDecl * > &defined,
-                                  std::unordered_set< clang::Stmt * > &seen) {
-            if (!s || !seen.insert(s).second) return;
-            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
-                defined.insert(ls->getDecl());
-            }
-            for (auto *child : s->children()) {
-                CollectDefinedLabels(child, defined, seen);
+                                  std::unordered_set< clang::LabelDecl * > &defined) {
+            llvm::SmallVector< clang::Stmt *, 16 > worklist;
+            if (s) worklist.push_back(s);
+
+            while (!worklist.empty()) {
+                auto *cur = worklist.pop_back_val();
+                if (!cur) continue;
+                if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(cur))
+                    defined.insert(ls->getDecl());
+                for (auto *child : cur->children())
+                    if (child) worklist.push_back(child);
             }
         }
 
@@ -1016,9 +1019,16 @@ namespace detail {
         // were made, nullptr otherwise.
         clang::Stmt *RemoveOrphanedGotos(
             clang::ASTContext &ctx, clang::Stmt *s,
-            const std::unordered_set< clang::LabelDecl * > &defined
+            const std::unordered_set< clang::LabelDecl * > &defined,
+            unsigned depth = 0
         ) {
             if (!s) return nullptr;
+            if (depth > 256) {
+                LOG(ERROR) << "RemoveOrphanedGotos: recursion depth exceeded "
+                              "(depth=" << depth << "). Possible malformed AST "
+                              "or unexpectedly deep nesting — skipping subtree.\n";
+                return nullptr;
+            }
 
             if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
                 if (!defined.count(gs->getLabel())) {
@@ -1036,7 +1046,7 @@ namespace detail {
                 std::vector< clang::Stmt * > children;
                 bool changed = false;
                 for (auto *child : cs->body()) {
-                    auto *repl = RemoveOrphanedGotos(ctx, child, defined);
+                    auto *repl = RemoveOrphanedGotos(ctx, child, defined, depth + 1);
                     children.push_back(repl ? repl : child);
                     if (repl) changed = true;
                 }
@@ -1047,7 +1057,7 @@ namespace detail {
             bool changed = false;
             for (auto it = s->child_begin(); it != s->child_end(); ++it) {
                 if (!*it) continue;
-                auto *repl = RemoveOrphanedGotos(ctx, *it, defined);
+                auto *repl = RemoveOrphanedGotos(ctx, *it, defined, depth + 1);
                 if (repl) {
                     *it = repl;
                     changed = true;
@@ -1109,8 +1119,7 @@ namespace detail {
         // Remove gotos whose target label was never emitted (orphaned
         // by structuring rules that absorbed the target block).
         std::unordered_set< clang::LabelDecl * > defined;
-        std::unordered_set< clang::Stmt * > seen2;
-        CollectDefinedLabels(fn->getBody(), defined, seen2);
+        CollectDefinedLabels(fn->getBody(), defined);
         body = RemoveOrphanedGotos(ctx, fn->getBody(), defined);
         if (body) {
             fn->setBody(body);

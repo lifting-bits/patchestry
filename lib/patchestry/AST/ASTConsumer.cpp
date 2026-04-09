@@ -121,8 +121,8 @@ namespace patchestry::ast {
                 SNode *root_snode = nullptr;
 
                 if (options.use_structuring_pass) {
-                    LOG(ERROR) << "--use-structuring-pass is not implemented yet.\n";
-
+                    LOG(WARNING) << "--use-structuring-pass is not implemented yet. "
+                                    "Falling back to goto-based Clang AST emission.\n";
                 }
 
                 if (!root_snode) {
