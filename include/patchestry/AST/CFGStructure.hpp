@@ -51,7 +51,6 @@ namespace patchestry::ast {
         std::vector< size_t > ipdom_;
 
         // Phase methods
-        void RecomputeRPO();
         void ComputeDominatorTree();
         void ComputePostDominatorTree();
         void NormalizeConditionPolarityIPdom();

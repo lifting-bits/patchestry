@@ -100,73 +100,33 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
-    // RecomputeRPO — pre-pass Phase 4
     // ---------------------------------------------------------------
-    //
-    // DFS from entry on active (non-collapsed) nodes to assign fresh
-    // RPO positions.  Stores result in rpo_pos_[node_id] = position.
-    // Used by ComputeDominatorTree's intersect function.
-
-    void CFGStructure::RecomputeRPO() {
-        const size_t n = graph_.nodes.size();
-        constexpr size_t kNone = CNode::kNone;
-        rpo_pos_.assign(n, kNone);
-
-        // Iterative post-order DFS
-        std::vector<size_t> post_order;
-        std::vector<bool> visited(n, false);
-
-        struct Frame {
-            size_t id;
-            size_t child_idx;
-        };
-        std::vector<Frame> stack;
-
-        size_t entry = graph_.entry;
-        if (entry >= n || graph_.Node(entry).IsCollapsed()) return;
-
-        stack.push_back({entry, 0});
-        visited[entry] = true;
-
-        while (!stack.empty()) {
-            auto &top = stack.back();
-            auto &node = graph_.Node(top.id);
-
-            if (top.child_idx < node.succs.size()) {
-                size_t child = node.succs[top.child_idx];
-                ++top.child_idx;
-                if (child < n && !visited[child] && !graph_.Node(child).IsCollapsed()) {
-                    visited[child] = true;
-                    stack.push_back({child, 0});
-                }
-            } else {
-                post_order.push_back(top.id);
-                stack.pop_back();
-            }
-        }
-
-        // Reverse post-order: first visited = position 0
-        size_t pos = 0;
-        for (auto it = post_order.rbegin(); it != post_order.rend(); ++it) {
-            rpo_pos_[*it] = pos++;
-        }
-    }
-
-    // ---------------------------------------------------------------
-    // ComputeDominatorTree — pre-pass Phase 5
+    // ComputeDominatorTree
     // ---------------------------------------------------------------
     //
     // Cooper-Harvey-Kennedy iterative dominator algorithm.
-    // Uses rpo_pos_[] from Phase 4 for RPO comparisons.
+    //
+    // RPO positions: CGraph nodes are allocated in RPO order by
+    // BuildCGraph (compute_rpo_from_function assigns index i to
+    // rpo[i]).  MergeConditionalForwarders preserves this ordering
+    // — it only collapses B into a preceding A.  We use node.id
+    // directly as RPO position for active nodes and mark collapsed
+    // nodes with kNone so the intersect function skips them.
 
     void CFGStructure::ComputeDominatorTree() {
         const size_t n = graph_.nodes.size();
         constexpr size_t kNone = CNode::kNone;
         idom_.assign(n, kNone);
 
+        // Initialize RPO positions from node indices (already RPO-ordered).
+        rpo_pos_.assign(n, kNone);
+        for (size_t i = 0; i < n; ++i) {
+            if (!graph_.nodes[i].IsCollapsed())
+                rpo_pos_[i] = i;
+        }
+
         size_t entry = graph_.entry;
         if (entry >= n || graph_.Node(entry).IsCollapsed()) return;
-        if (rpo_pos_[entry] == kNone) return;
 
         idom_[entry] = entry;
 
@@ -381,7 +341,7 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
-    // NormalizeConditionPolarityIPdom — pre-pass Phase 7
+    // NormalizeConditionPolarityIPdom — pre-pass 5
     // ---------------------------------------------------------------
     //
     // Refine conditional polarity using the post-dominator tree.
@@ -433,21 +393,20 @@ namespace patchestry::ast {
     void CFGStructure::StructureAll() {
         if (graph_.nodes.empty()) return;
 
-        // Pre-pass Phase 1: identify back-edges so subsequent phases
+        // Pre-pass 1: identify back-edges so subsequent phases
         // can distinguish loop-back predecessors from forward predecessors.
         MarkBackEdges(graph_);
 
-        // Pre-pass Phase 3: merge conditional forwarders into predecessors.
+        // Pre-pass 2: merge conditional forwarders into predecessors.
         MergeConditionalForwarders(graph_);
 
-        // Pre-pass Phase 4: recompute RPO positions after merges/swaps.
-        // Provides correct ordering for dominator computation.
-        RecomputeRPO();
-
-        // Pre-pass Phase 5: compute immediate dominators.
+        // Pre-pass 3: compute immediate dominators.
+        // RPO positions are derived from node indices (already RPO-ordered
+        // by BuildCGraph).  MergeConditionalForwarders preserves this
+        // ordering, so no separate RPO recomputation is needed.
         ComputeDominatorTree();
 
-        // Pre-pass Phase 6: compute immediate post-dominators.
+        // Pre-pass 4: compute immediate post-dominators.
         ComputePostDominatorTree();
 
         // Re-mark back-edges after topology changes, then discover loops.
@@ -455,7 +414,7 @@ namespace patchestry::ast {
         MarkBackEdges(graph_);
         OrderLoops();
 
-        // Pre-pass Phase 7: refine polarity using ipdom.
+        // Pre-pass 5: refine polarity using ipdom.
         // Runs AFTER loop detection so loop body membership is stable.
         // Loop rules handle both polarities dynamically (s1_in_body check).
         NormalizeConditionPolarityIPdom();
