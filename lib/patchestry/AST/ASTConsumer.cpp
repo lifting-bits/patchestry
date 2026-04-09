@@ -157,13 +157,10 @@ namespace patchestry::ast {
                                         auto &tn = flow_graph.Node(
                                             node.succs[sc.succ_index]);
                                         if (tn.original_label.empty()) {
-                                            LOG(ERROR) << "switch default target node "
+                                            LOG(FATAL) << "switch default target node "
                                                        << node.succs[sc.succ_index]
-                                                       << " has no label — possible CGraph "
-                                                          "builder bug. Generating fallback.\n";
-                                            tn.original_label = "switch_target_"
-                                                + std::to_string(node.succs[sc.succ_index]);
-                                            tn.label = tn.original_label;
+                                                       << " has no original_label — "
+                                                          "CGraph builder bug.\n";
                                         }
                                         sw->SetDefaultBody(factory.Make<SGoto>(
                                             factory.Intern(tn.original_label)));
@@ -186,14 +183,11 @@ namespace patchestry::ast {
                                         auto &tn = flow_graph.Node(
                                             node.succs[sc.succ_index]);
                                         if (tn.original_label.empty()) {
-                                            LOG(ERROR) << "switch case " << sc.value
+                                            LOG(FATAL) << "switch case " << sc.value
                                                        << " target node "
                                                        << node.succs[sc.succ_index]
-                                                       << " has no label — possible CGraph "
-                                                          "builder bug. Generating fallback.\n";
-                                            tn.original_label = "switch_target_"
-                                                + std::to_string(node.succs[sc.succ_index]);
-                                            tn.label = tn.original_label;
+                                                       << " has no original_label — "
+                                                          "CGraph builder bug.\n";
                                         }
                                         body = factory.Make<SGoto>(
                                             factory.Intern(tn.original_label));

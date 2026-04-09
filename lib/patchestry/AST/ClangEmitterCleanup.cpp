@@ -1015,12 +1015,13 @@ namespace detail {
         }
 
         // Replace GotoStmts whose target label has no LabelStmt in the
-        // function body with NullStmt.  Returns a new tree if changes
-        // were made, nullptr otherwise.
+        // function body with NullStmt.  When the orphaned goto is inside
+        // a switch case body (in_switch_case=true), replace with BreakStmt
+        // instead to prevent unintended fallthrough.
         clang::Stmt *RemoveOrphanedGotos(
             clang::ASTContext &ctx, clang::Stmt *s,
             const std::unordered_set< clang::LabelDecl * > &defined,
-            unsigned depth = 0
+            unsigned depth = 0, bool in_switch_case = false
         ) {
             if (!s) return nullptr;
             if (depth > 256) {
@@ -1037,16 +1038,25 @@ namespace detail {
                                << "' with no matching LabelStmt in function body. "
                                   "This may indicate a structuring rule bug that "
                                   "dropped the target label — verify emitted output.\n";
+                    if (in_switch_case) {
+                        return new (ctx) clang::BreakStmt(gs->getGotoLoc());
+                    }
                     return new (ctx) clang::NullStmt(gs->getGotoLoc());
                 }
                 return nullptr;
             }
 
+            // Track whether children are inside a switch case body.
+            bool child_in_case = in_switch_case
+                || llvm::isa< clang::CaseStmt >(s)
+                || llvm::isa< clang::DefaultStmt >(s);
+
             if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s)) {
                 std::vector< clang::Stmt * > children;
                 bool changed = false;
                 for (auto *child : cs->body()) {
-                    auto *repl = RemoveOrphanedGotos(ctx, child, defined, depth + 1);
+                    auto *repl = RemoveOrphanedGotos(
+                        ctx, child, defined, depth + 1, child_in_case);
                     children.push_back(repl ? repl : child);
                     if (repl) changed = true;
                 }
@@ -1057,7 +1067,8 @@ namespace detail {
             bool changed = false;
             for (auto it = s->child_begin(); it != s->child_end(); ++it) {
                 if (!*it) continue;
-                auto *repl = RemoveOrphanedGotos(ctx, *it, defined, depth + 1);
+                auto *repl = RemoveOrphanedGotos(
+                    ctx, *it, defined, depth + 1, child_in_case);
                 if (repl) {
                     *it = repl;
                     changed = true;
