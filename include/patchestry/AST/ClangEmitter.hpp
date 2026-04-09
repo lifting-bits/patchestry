@@ -11,8 +11,16 @@
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
+#include <clang/AST/Stmt.h>
 
 namespace patchestry::ast {
+
+    namespace detail {
+        // Check if a stmt ends with a control flow terminator
+        // (goto/break/continue/return).  Recurses into CompoundStmt,
+        // LabelStmt, and IfStmt (both arms must terminate).
+        bool EndsWithTerminator(clang::Stmt *s);
+    } // namespace detail
 
     // Convert an SNode tree back to a Clang CompoundStmt and set it as the
     // function body.

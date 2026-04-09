@@ -131,16 +131,45 @@ namespace patchestry::ast {
             return new (ctx) clang::ParenExpr(loc, loc, expr);
         }
 
-        // Check if a stmt ends with a control flow terminator (goto/break/continue/return).
+    } // anonymous namespace
+
+    // Shared utility — used by both ClangEmitter and ClangEmitterCleanup.
+    namespace detail {
         bool EndsWithTerminator(clang::Stmt *s) {
-            if (!s) return false;
-            if (llvm::isa< clang::GotoStmt >(s) || llvm::isa< clang::BreakStmt >(s) ||
-                llvm::isa< clang::ContinueStmt >(s) || llvm::isa< clang::ReturnStmt >(s))
-                return true;
-            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s))
-                return !cs->body_empty() && EndsWithTerminator(cs->body_back());
-            return false;
+            llvm::SmallVector< clang::Stmt *, 4 > worklist;
+            if (s) worklist.push_back(s);
+
+            while (!worklist.empty()) {
+                auto *cur = worklist.pop_back_val();
+                if (!cur) return false;
+
+                if (llvm::isa< clang::GotoStmt >(cur)
+                    || llvm::isa< clang::BreakStmt >(cur)
+                    || llvm::isa< clang::ContinueStmt >(cur)
+                    || llvm::isa< clang::ReturnStmt >(cur))
+                    continue;
+                if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(cur)) {
+                    if (cs->body_empty()) return false;
+                    worklist.push_back(cs->body_back());
+                    continue;
+                }
+                if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(cur)) {
+                    worklist.push_back(ls->getSubStmt());
+                    continue;
+                }
+                if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(cur)) {
+                    if (!ifs->getThen() || !ifs->getElse()) return false;
+                    worklist.push_back(ifs->getThen());
+                    worklist.push_back(ifs->getElse());
+                    continue;
+                }
+                return false;
+            }
+            return true;
         }
+    } // namespace detail
+
+    namespace {
 
         // Recursively convert SNode tree to Clang Stmt*
         class Emitter {
@@ -200,11 +229,21 @@ namespace patchestry::ast {
             }
 
             clang::Stmt *EmitIfThenElse(const SIfThenElse *ite) {
+                LOG_FATAL_IF(!ite->Cond(),
+                    "SIfThenElse has null condition - structuring "
+                    "rule produced a branch without a guard expression");
                 auto *cond = EnsureRValue(ctx_, CloneExpr(ctx_, ite->Cond()));
                 auto *then_stmt = Emit(ite->ThenBranch());
                 auto *else_stmt = ite->ElseBranch() ? Emit(ite->ElseBranch()) : nullptr;
 
                 if (!then_stmt) then_stmt = new (ctx_) clang::NullStmt(Loc());
+
+                // Unwrap CompoundStmt around a single IfStmt in the else
+                // branch so Clang's printer emits "else if" not "else { if".
+                if (auto *cs = llvm::dyn_cast_or_null< clang::CompoundStmt >(else_stmt)) {
+                    if (cs->size() == 1 && llvm::isa< clang::IfStmt >(cs->body_front()))
+                        else_stmt = cs->body_front();
+                }
 
                 return clang::IfStmt::Create(
                     ctx_, Loc(), clang::IfStatementKind::Ordinary,
@@ -214,7 +253,14 @@ namespace patchestry::ast {
             }
 
             clang::Stmt *EmitWhile(const SWhile *w) {
-                auto *cond = EnsureRValue(ctx_, CloneExpr(ctx_, w->Cond()));
+                clang::Expr *cond = nullptr;
+                if (w->Cond()) {
+                    cond = EnsureRValue(ctx_, CloneExpr(ctx_, w->Cond()));
+                } else {
+                    // while(1) — SWhile with null condition.
+                    cond = clang::IntegerLiteral::Create(
+                        ctx_, llvm::APInt(32, 1), ctx_.IntTy, Loc());
+                }
                 auto *body = Emit(w->Body());
                 if (!body) body = new (ctx_) clang::NullStmt(Loc());
 
@@ -226,7 +272,14 @@ namespace patchestry::ast {
             clang::Stmt *EmitDoWhile(const SDoWhile *dw) {
                 auto *body = Emit(dw->Body());
                 if (!body) body = new (ctx_) clang::NullStmt(Loc());
-                auto *cond = EnsureRValue(ctx_, CloneExpr(ctx_, dw->Cond()));
+                clang::Expr *cond = nullptr;
+                if (dw->Cond()) {
+                    cond = EnsureRValue(ctx_, CloneExpr(ctx_, dw->Cond()));
+                } else {
+                    // do { ... } while(1) — SDoWhile with null condition.
+                    cond = clang::IntegerLiteral::Create(
+                        ctx_, llvm::APInt(32, 1), ctx_.IntTy, Loc());
+                }
 
                 return new (ctx_) clang::DoStmt(body, cond, Loc(), Loc(), Loc());
             }
@@ -266,7 +319,7 @@ namespace patchestry::ast {
                         }
 
                         std::vector< clang::Stmt * > case_stmts = { case_body };
-                        if (!EndsWithTerminator(case_body)) {
+                        if (!detail::EndsWithTerminator(case_body)) {
                             case_stmts.push_back(new (ctx_) clang::BreakStmt(Loc()));
                         }
                         case_stmt->setSubStmt(detail::MakeCompound(ctx_, case_stmts));
@@ -283,7 +336,7 @@ namespace patchestry::ast {
                     }
 
                     std::vector< clang::Stmt * > def_stmts = { def_body };
-                    if (!EndsWithTerminator(def_body)) {
+                    if (!detail::EndsWithTerminator(def_body)) {
                         def_stmts.push_back(new (ctx_) clang::BreakStmt(Loc()));
                     }
 

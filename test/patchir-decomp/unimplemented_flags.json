@@ -1,8 +1,6 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: not %patchir-decomp -input %t.json -emit-obj -output %t 2>&1 | %file-check -vv -check-prefix=OBJ %s
-// RUN: not %patchir-decomp -input %t.json -use-structuring-pass -output %t 2>&1 | %file-check -vv -check-prefix=STRUCT %s
 // OBJ: --emit-obj is not implemented
-// STRUCT: --use-structuring-pass is not implemented
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

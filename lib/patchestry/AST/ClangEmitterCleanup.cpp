@@ -7,6 +7,7 @@
 
 #include <patchestry/AST/ClangEmitter.hpp>
 #include <patchestry/AST/Utils.hpp>
+#include <patchestry/Util/Log.hpp>
 
 #include <functional>
 #include <string>
@@ -348,23 +349,7 @@ namespace detail {
             // and contains no live labels, it is unreachable and can
             // be removed.
             auto is_terminator = [](clang::Stmt *st) -> bool {
-                if (!st) {
-                    return false;
-                }
-                if (llvm::isa< clang::ReturnStmt >(st) || llvm::isa< clang::GotoStmt >(st)
-                    || llvm::isa< clang::BreakStmt >(st)
-                    || llvm::isa< clang::ContinueStmt >(st))
-                {
-                    return true;
-                }
-                if (auto *cs_inner = llvm::dyn_cast< clang::CompoundStmt >(st)) {
-                    return !cs_inner->body_empty()
-                        && (llvm::isa< clang::ReturnStmt >(cs_inner->body_back())
-                            || llvm::isa< clang::GotoStmt >(cs_inner->body_back())
-                            || llvm::isa< clang::BreakStmt >(cs_inner->body_back())
-                            || llvm::isa< clang::ContinueStmt >(cs_inner->body_back()));
-                }
-                return false;
+                return detail::EndsWithTerminator(st);
             };
 
             for (size_t i = 1; i < children.size();) {
@@ -1013,6 +998,85 @@ namespace detail {
             return detail::MakeCompound(ctx, body);
         }
 
+        // Collect all LabelDecls that have a LabelStmt definition in the tree.
+        void CollectDefinedLabels(clang::Stmt *s,
+                                  std::unordered_set< clang::LabelDecl * > &defined) {
+            llvm::SmallVector< clang::Stmt *, 16 > worklist;
+            if (s) worklist.push_back(s);
+
+            while (!worklist.empty()) {
+                auto *cur = worklist.pop_back_val();
+                if (!cur) continue;
+                if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(cur))
+                    defined.insert(ls->getDecl());
+                for (auto *child : cur->children())
+                    if (child) worklist.push_back(child);
+            }
+        }
+
+        // Replace GotoStmts whose target label has no LabelStmt in the
+        // function body with NullStmt.  When the orphaned goto is inside
+        // a switch case body (in_switch_case=true), replace with BreakStmt
+        // instead to prevent unintended fallthrough.
+        clang::Stmt *RemoveOrphanedGotos(
+            clang::ASTContext &ctx, clang::Stmt *s,
+            const std::unordered_set< clang::LabelDecl * > &defined,
+            unsigned depth = 0, bool in_switch_case = false
+        ) {
+            if (!s) return nullptr;
+            if (depth > 256) {
+                LOG(ERROR) << "RemoveOrphanedGotos: recursion depth exceeded "
+                              "(depth=" << depth << "). Possible malformed AST "
+                              "or unexpectedly deep nesting — skipping subtree.\n";
+                return nullptr;
+            }
+
+            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                if (!defined.count(gs->getLabel())) {
+                    LOG(ERROR) << "ORPHANED GOTO: removing 'goto "
+                               << gs->getLabel()->getName()
+                               << "' with no matching LabelStmt in function body. "
+                                  "This may indicate a structuring rule bug that "
+                                  "dropped the target label — verify emitted output.\n";
+                    if (in_switch_case) {
+                        return new (ctx) clang::BreakStmt(gs->getGotoLoc());
+                    }
+                    return new (ctx) clang::NullStmt(gs->getGotoLoc());
+                }
+                return nullptr;
+            }
+
+            // Track whether children are inside a switch case body.
+            bool child_in_case = in_switch_case
+                || llvm::isa< clang::CaseStmt >(s)
+                || llvm::isa< clang::DefaultStmt >(s);
+
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s)) {
+                std::vector< clang::Stmt * > children;
+                bool changed = false;
+                for (auto *child : cs->body()) {
+                    auto *repl = RemoveOrphanedGotos(
+                        ctx, child, defined, depth + 1, child_in_case);
+                    children.push_back(repl ? repl : child);
+                    if (repl) changed = true;
+                }
+                return changed ? detail::MakeCompound(ctx, children) : nullptr;
+            }
+
+            // Recurse into IfStmt, LabelStmt, etc. via child iteration.
+            bool changed = false;
+            for (auto it = s->child_begin(); it != s->child_end(); ++it) {
+                if (!*it) continue;
+                auto *repl = RemoveOrphanedGotos(
+                    ctx, *it, defined, depth + 1, child_in_case);
+                if (repl) {
+                    *it = repl;
+                    changed = true;
+                }
+            }
+            return changed ? s : nullptr;
+        }
+
     } // anonymous namespace
 
     void CleanupPrettyPrint(clang::FunctionDecl *fn, clang::ASTContext &ctx) {
@@ -1059,6 +1123,15 @@ namespace detail {
         std::unordered_set< clang::Stmt * > seen;
         CollectGotoTargets(fn->getBody(), goto_targets, seen);
         body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
+        if (body) {
+            fn->setBody(body);
+        }
+
+        // Remove gotos whose target label was never emitted (orphaned
+        // by structuring rules that absorbed the target block).
+        std::unordered_set< clang::LabelDecl * > defined;
+        CollectDefinedLabels(fn->getBody(), defined);
+        body = RemoveOrphanedGotos(ctx, fn->getBody(), defined);
         if (body) {
             fn->setBody(body);
         }
