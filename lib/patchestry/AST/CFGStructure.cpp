@@ -2680,6 +2680,28 @@ namespace patchestry::ast {
 
     namespace {
 
+        /// Check if a clang::Stmt always terminates control flow
+        /// (return, break, continue, goto, or an IfStmt / CompoundStmt
+        /// whose every path ends in one of those).
+        bool ClangStmtIsTerminator(clang::Stmt *s) {
+            if (!s) return false;
+            if (llvm::isa< clang::ReturnStmt >(s)
+                || llvm::isa< clang::BreakStmt >(s)
+                || llvm::isa< clang::ContinueStmt >(s)
+                || llvm::isa< clang::GotoStmt >(s))
+                return true;
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s)) {
+                if (cs->body_empty()) return false;
+                return ClangStmtIsTerminator(cs->body_back());
+            }
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s)) {
+                if (!ifs->getThen() || !ifs->getElse()) return false;
+                return ClangStmtIsTerminator(ifs->getThen())
+                    && ClangStmtIsTerminator(ifs->getElse());
+            }
+            return false;
+        }
+
         /// Return true if this SNode always terminates control flow —
         /// every execution path through the node exits via return,
         /// break, continue, throw, or an unconditional goto.  Such a
@@ -2694,34 +2716,7 @@ namespace patchestry::ast {
 
             if (auto *blk = node->dyn_cast<SBlock>()) {
                 if (blk->Empty()) return false;
-                auto *last = blk->Stmts().back();
-                if (llvm::isa<clang::ReturnStmt>(last)
-                    || llvm::isa<clang::BreakStmt>(last)
-                    || llvm::isa<clang::ContinueStmt>(last)
-                    || llvm::isa<clang::GotoStmt>(last))
-                    return true;
-                // clang::IfStmt where both arms terminate.
-                if (auto *ifs = llvm::dyn_cast<clang::IfStmt>(last)) {
-                    auto *th = ifs->getThen();
-                    auto *el = ifs->getElse();
-                    if (!th || !el) return false;
-                    auto terminates = [](clang::Stmt *s) {
-                        if (llvm::isa<clang::ReturnStmt>(s)
-                            || llvm::isa<clang::BreakStmt>(s)
-                            || llvm::isa<clang::GotoStmt>(s))
-                            return true;
-                        if (auto *cs = llvm::dyn_cast<clang::CompoundStmt>(s)) {
-                            if (cs->body_empty()) return false;
-                            auto *b = cs->body_back();
-                            return llvm::isa<clang::ReturnStmt>(b)
-                                || llvm::isa<clang::BreakStmt>(b)
-                                || llvm::isa<clang::GotoStmt>(b);
-                        }
-                        return false;
-                    };
-                    return terminates(th) && terminates(el);
-                }
-                return false;
+                return ClangStmtIsTerminator(blk->Stmts().back());
             }
             if (auto *seq = node->dyn_cast<SSeq>()) {
                 if (seq->Empty()) return false;
@@ -3042,6 +3037,20 @@ namespace patchestry::ast {
             return false;
         }
 
+        /// Trim dead stmts inside an SBlock after the first terminator.
+        bool TrimDeadStmtsInSBlock(SBlock *blk) {
+            auto &stmts = blk->Stmts();
+            for (size_t i = 0; i < stmts.size(); ++i) {
+                if (!ClangStmtIsTerminator(stmts[i])) continue;
+                if (i + 1 >= stmts.size()) return false;
+                stmts.erase(
+                    stmts.begin() + static_cast< ptrdiff_t >(i) + 1,
+                    stmts.end());
+                return true;
+            }
+            return false;
+        }
+
         bool RemoveDeadInSSeq(SSeq *seq) {
             auto &children = seq->Children();
             bool changed = false;
@@ -3085,6 +3094,8 @@ namespace patchestry::ast {
                 for (auto &c : sw->Cases())
                     if (RemoveDeadRecursive(c.body)) changed = true;
                 if (RemoveDeadRecursive(sw->DefaultBody())) changed = true;
+            } else if (auto *blk = node->dyn_cast<SBlock>()) {
+                if (TrimDeadStmtsInSBlock(blk)) changed = true;
             }
             return changed;
         }
