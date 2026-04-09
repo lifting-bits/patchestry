@@ -1,4 +1,4 @@
-*
+/*
  * Copyright (c) 2024, Trail of Bits, Inc.
  *
  * This source code is licensed in accordance with the terms specified in
@@ -156,8 +156,15 @@ namespace patchestry::ast {
                                     if (sc.succ_index < node.succs.size()) {
                                         auto &tn = flow_graph.Node(
                                             node.succs[sc.succ_index]);
-                                        assert(!tn.original_label.empty()
-                                               && "switch default target missing label");
+                                        if (tn.original_label.empty()) {
+                                            LOG(ERROR) << "switch default target node "
+                                                       << node.succs[sc.succ_index]
+                                                       << " has no label — possible CGraph "
+                                                          "builder bug. Generating fallback.\n";
+                                            tn.original_label = "switch_target_"
+                                                + std::to_string(node.succs[sc.succ_index]);
+                                            tn.label = tn.original_label;
+                                        }
                                         sw->SetDefaultBody(factory.Make<SGoto>(
                                             factory.Intern(tn.original_label)));
                                     } else {
@@ -178,8 +185,16 @@ namespace patchestry::ast {
                                     if (sc.succ_index < node.succs.size()) {
                                         auto &tn = flow_graph.Node(
                                             node.succs[sc.succ_index]);
-                                        assert(!tn.original_label.empty()
-                                               && "switch case target missing label");
+                                        if (tn.original_label.empty()) {
+                                            LOG(ERROR) << "switch case " << sc.value
+                                                       << " target node "
+                                                       << node.succs[sc.succ_index]
+                                                       << " has no label — possible CGraph "
+                                                          "builder bug. Generating fallback.\n";
+                                            tn.original_label = "switch_target_"
+                                                + std::to_string(node.succs[sc.succ_index]);
+                                            tn.label = tn.original_label;
+                                        }
                                         body = factory.Make<SGoto>(
                                             factory.Intern(tn.original_label));
                                     } else {

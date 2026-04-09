@@ -7,6 +7,7 @@
 
 #include <patchestry/AST/ClangEmitter.hpp>
 #include <patchestry/AST/Utils.hpp>
+#include <patchestry/Util/Log.hpp>
 
 #include <functional>
 #include <string>
@@ -348,22 +349,7 @@ namespace detail {
             // and contains no live labels, it is unreachable and can
             // be removed.
             auto is_terminator = [](clang::Stmt *st) -> bool {
-                std::function< bool(clang::Stmt *) > check;
-                check = [&](clang::Stmt *s) -> bool {
-                    if (!s) return false;
-                    if (llvm::isa< clang::ReturnStmt >(s)
-                        || llvm::isa< clang::GotoStmt >(s)
-                        || llvm::isa< clang::BreakStmt >(s)
-                        || llvm::isa< clang::ContinueStmt >(s))
-                        return true;
-                    if (auto *cs_inner = llvm::dyn_cast< clang::CompoundStmt >(s))
-                        return !cs_inner->body_empty() && check(cs_inner->body_back());
-                    if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s))
-                        return ifs->getThen() && ifs->getElse()
-                            && check(ifs->getThen()) && check(ifs->getElse());
-                    return false;
-                };
-                return check(st);
+                return detail::EndsWithTerminator(st);
             };
 
             for (size_t i = 1; i < children.size();) {
@@ -1036,6 +1022,11 @@ namespace detail {
 
             if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
                 if (!defined.count(gs->getLabel())) {
+                    LOG(ERROR) << "ORPHANED GOTO: removing 'goto "
+                               << gs->getLabel()->getName()
+                               << "' with no matching LabelStmt in function body. "
+                                  "This may indicate a structuring rule bug that "
+                                  "dropped the target label — verify emitted output.\n";
                     return new (ctx) clang::NullStmt(gs->getGotoLoc());
                 }
                 return nullptr;
@@ -1117,14 +1108,12 @@ namespace detail {
 
         // Remove gotos whose target label was never emitted (orphaned
         // by structuring rules that absorbed the target block).
-        {
-            std::unordered_set< clang::LabelDecl * > defined;
-            std::unordered_set< clang::Stmt * > seen2;
-            CollectDefinedLabels(fn->getBody(), defined, seen2);
-            body = RemoveOrphanedGotos(ctx, fn->getBody(), defined);
-            if (body) {
-                fn->setBody(body);
-            }
+        std::unordered_set< clang::LabelDecl * > defined;
+        std::unordered_set< clang::Stmt * > seen2;
+        CollectDefinedLabels(fn->getBody(), defined, seen2);
+        body = RemoveOrphanedGotos(ctx, fn->getBody(), defined);
+        if (body) {
+            fn->setBody(body);
         }
 
         // Final pass: remove empty CompoundStmts and NullStmts.
