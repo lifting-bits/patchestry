@@ -348,23 +348,22 @@ namespace detail {
             // and contains no live labels, it is unreachable and can
             // be removed.
             auto is_terminator = [](clang::Stmt *st) -> bool {
-                if (!st) {
+                std::function< bool(clang::Stmt *) > check;
+                check = [&](clang::Stmt *s) -> bool {
+                    if (!s) return false;
+                    if (llvm::isa< clang::ReturnStmt >(s)
+                        || llvm::isa< clang::GotoStmt >(s)
+                        || llvm::isa< clang::BreakStmt >(s)
+                        || llvm::isa< clang::ContinueStmt >(s))
+                        return true;
+                    if (auto *cs_inner = llvm::dyn_cast< clang::CompoundStmt >(s))
+                        return !cs_inner->body_empty() && check(cs_inner->body_back());
+                    if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s))
+                        return ifs->getThen() && ifs->getElse()
+                            && check(ifs->getThen()) && check(ifs->getElse());
                     return false;
-                }
-                if (llvm::isa< clang::ReturnStmt >(st) || llvm::isa< clang::GotoStmt >(st)
-                    || llvm::isa< clang::BreakStmt >(st)
-                    || llvm::isa< clang::ContinueStmt >(st))
-                {
-                    return true;
-                }
-                if (auto *cs_inner = llvm::dyn_cast< clang::CompoundStmt >(st)) {
-                    return !cs_inner->body_empty()
-                        && (llvm::isa< clang::ReturnStmt >(cs_inner->body_back())
-                            || llvm::isa< clang::GotoStmt >(cs_inner->body_back())
-                            || llvm::isa< clang::BreakStmt >(cs_inner->body_back())
-                            || llvm::isa< clang::ContinueStmt >(cs_inner->body_back()));
-                }
-                return false;
+                };
+                return check(st);
             };
 
             for (size_t i = 1; i < children.size();) {
@@ -1013,6 +1012,59 @@ namespace detail {
             return detail::MakeCompound(ctx, body);
         }
 
+        // Collect all LabelDecls that have a LabelStmt definition in the tree.
+        void CollectDefinedLabels(clang::Stmt *s,
+                                  std::unordered_set< clang::LabelDecl * > &defined,
+                                  std::unordered_set< clang::Stmt * > &seen) {
+            if (!s || !seen.insert(s).second) return;
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
+                defined.insert(ls->getDecl());
+            }
+            for (auto *child : s->children()) {
+                CollectDefinedLabels(child, defined, seen);
+            }
+        }
+
+        // Replace GotoStmts whose target label has no LabelStmt in the
+        // function body with NullStmt.  Returns a new tree if changes
+        // were made, nullptr otherwise.
+        clang::Stmt *RemoveOrphanedGotos(
+            clang::ASTContext &ctx, clang::Stmt *s,
+            const std::unordered_set< clang::LabelDecl * > &defined
+        ) {
+            if (!s) return nullptr;
+
+            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                if (!defined.count(gs->getLabel())) {
+                    return new (ctx) clang::NullStmt(gs->getGotoLoc());
+                }
+                return nullptr;
+            }
+
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s)) {
+                std::vector< clang::Stmt * > children;
+                bool changed = false;
+                for (auto *child : cs->body()) {
+                    auto *repl = RemoveOrphanedGotos(ctx, child, defined);
+                    children.push_back(repl ? repl : child);
+                    if (repl) changed = true;
+                }
+                return changed ? detail::MakeCompound(ctx, children) : nullptr;
+            }
+
+            // Recurse into IfStmt, LabelStmt, etc. via child iteration.
+            bool changed = false;
+            for (auto it = s->child_begin(); it != s->child_end(); ++it) {
+                if (!*it) continue;
+                auto *repl = RemoveOrphanedGotos(ctx, *it, defined);
+                if (repl) {
+                    *it = repl;
+                    changed = true;
+                }
+            }
+            return changed ? s : nullptr;
+        }
+
     } // anonymous namespace
 
     void CleanupPrettyPrint(clang::FunctionDecl *fn, clang::ASTContext &ctx) {
@@ -1061,6 +1113,18 @@ namespace detail {
         body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
         if (body) {
             fn->setBody(body);
+        }
+
+        // Remove gotos whose target label was never emitted (orphaned
+        // by structuring rules that absorbed the target block).
+        {
+            std::unordered_set< clang::LabelDecl * > defined;
+            std::unordered_set< clang::Stmt * > seen2;
+            CollectDefinedLabels(fn->getBody(), defined, seen2);
+            body = RemoveOrphanedGotos(ctx, fn->getBody(), defined);
+            if (body) {
+                fn->setBody(body);
+            }
         }
 
         // Final pass: remove empty CompoundStmts and NullStmts.

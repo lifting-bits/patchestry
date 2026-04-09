@@ -87,7 +87,7 @@ namespace {
 
     const llvm::cl::opt< bool > use_structuring_pass( // NOLINT(cert-err58-cpp)
         "use-structuring-pass",
-        llvm::cl::desc("Enable the CfgFoldStructure structuring pass"),
+        llvm::cl::desc("Enable the CFGStructure structuring pass"),
         llvm::cl::init(false)
     );
 
@@ -125,11 +125,6 @@ namespace {
             return false;
         }
 
-        if (options.use_structuring_pass) {
-            LOG(ERROR) << "--use-structuring-pass is not implemented. The direct JSON -> CGraph "
-                          "path is the only supported structuring mode in this branch.\n";
-            return false;
-        }
 
         return true;
     }
