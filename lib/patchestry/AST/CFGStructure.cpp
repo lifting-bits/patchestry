@@ -2198,6 +2198,22 @@ namespace patchestry::ast {
                 refs[g->Target()]++;
                 return;
             }
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                // Also count clang::GotoStmt inside SBlock stmts.
+                // These are raw gotos from CGraph terminals that were
+                // not converted to SGoto by the structuring pass.
+                std::function< void(clang::Stmt *) > walk =
+                    [&](clang::Stmt *s) {
+                    if (!s) return;
+                    if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                        refs[gs->getLabel()->getName()]++;
+                        return;
+                    }
+                    for (auto *child : s->children()) walk(child);
+                };
+                for (auto *s : blk->Stmts()) walk(s);
+                return;
+            }
             if (auto *seq = node->dyn_cast<SSeq>()) {
                 for (auto *c : seq->Children()) CountGotoRefs(c, refs);
                 return;
