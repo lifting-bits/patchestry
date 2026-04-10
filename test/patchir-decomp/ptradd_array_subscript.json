@@ -1,5 +1,5 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=CCHECK %s --input-file %t.c
 // CCHECK: arr[

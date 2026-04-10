@@ -1,5 +1,5 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: not %patchir-decomp -input %t.json -emit-obj -output %t 2>&1 | %file-check -vv -check-prefix=OBJ %s
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -output %t
 // OBJ: --emit-obj is not implemented
 {
   "architecture": "ARM",

@@ -6,11 +6,11 @@
  */
 
 #include <cassert>
-#include <clang/Frontend/ASTUnit.h>
-#include <clang/Frontend/CompilerInvocation.h>
 #include <memory>
 #include <unordered_map>
 
+#include <clang/Frontend/ASTUnit.h>
+#include <clang/Frontend/CompilerInvocation.h>
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Attr.h>
 #include <clang/AST/Attrs.inc>
@@ -46,6 +46,7 @@
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/CfgDotEmitter.hpp>
 #include <patchestry/AST/ClangEmitter.hpp>
+#include <patchestry/AST/CFGStructure.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
@@ -121,8 +122,78 @@ namespace patchestry::ast {
                 SNode *root_snode = nullptr;
 
                 if (options.use_structuring_pass) {
-                    LOG(WARNING) << "--use-structuring-pass is not implemented yet. "
-                                    "Falling back to goto-based Clang AST emission.\n";
+                    // Structured path: run CFGStructure to fold the
+                    // CGraph into hierarchical SNodes.
+                    CFGStructure cfg_structure(flow_graph, factory, ctx);
+                    cfg_structure.StructureAll();
+
+                    // Build root SSeq from the remaining active (uncollapsed)
+                    // nodes.  After StructureAll, each active node has a
+                    // ->structured SNode set.
+                    auto *seq = factory.Make<SSeq>();
+                    for (auto &node : flow_graph.nodes) {
+                        if (node.IsCollapsed()) continue;
+                        if (node.structured) {
+                            seq->AddChild(node.structured);
+                        }
+                    }
+                    root_snode = seq;
+
+                    // Post-pass: replace goto→break/continue for loop labels.
+                    ConvertGotoToBreakContinue(root_snode, factory);
+
+                    // Post-pass: replace goto→return patterns.
+                    ConvertGotoToReturn(root_snode, factory, ctx);
+
+                    // Post-pass: duplicate small label targets into
+                    // switch case arms that end in `goto L`, making
+                    // switches goto-free (including goto-into-switch).
+                    DuplicateSwitchCaseTargets(root_snode, factory);
+
+                    // Post-pass: inline residual goto-to-label pairs
+                    // where the label is only referenced once.
+                    InlineResidualGotos(root_snode, factory);
+
+                    // Post-pass: cross-scope single-ref goto inliner.
+                    // Moves terminating label bodies into their sole
+                    // goto site when no fallthrough reaches the label.
+                    InlineCrossScopeSingleRef(root_snode, factory);
+
+                    // Post-pass: eliminate gotos to immediately following
+                    // labels.  Iterates with InlineResidualGotos and the
+                    // cross-scope inliner for cascading cleanup, bounded
+                    // by kMaxGotoEliminationPasses.
+                    for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                        bool did_absorb = AbsorbFallthroughIntoElse(
+                            root_snode, factory);
+                        bool did_scope = ScopeifyIfGotos(
+                            root_snode, factory, ctx);
+                        bool did_elim = EliminateGotoToNextLabel(
+                            root_snode, factory, ctx);
+                        bool did_inline = InlineResidualGotos(
+                            root_snode, factory);
+                        bool did_cross = InlineCrossScopeSingleRef(
+                            root_snode, factory);
+                        if (!did_absorb && !did_scope && !did_elim
+                            && !did_inline && !did_cross)
+                            break;
+                    }
+
+                    // Post-pass: remove unreachable SSeq children after
+                    // terminating siblings (dead code from block sequencing).
+                    RemoveDeadSSeqChildren(root_snode);
+
+                    // NOTE: RemoveUnreferencedLabels is intentionally
+                    // NOT called here.  CountAllGotoRefs does not yet
+                    // walk every clang::Stmt embedded inside all SNode
+                    // kinds (e.g. if-guarded gotos synthesised by the
+                    // goto-path), so enabling it drops live labels on
+                    // some fixtures.  The duplication pass above still
+                    // inlines shared targets correctly; dead label
+                    // bodies simply remain in the output as unreferenced
+                    // labelled blocks, which is preferable to losing
+                    // reachable code.
+
                 }
 
                 if (!root_snode) {

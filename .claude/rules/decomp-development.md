@@ -34,6 +34,32 @@ cmake --build builds/ci --config Release --target patchestry_ast -j$(nproc)
 lit ./builds/ci/test/patchir-decomp -D BUILD_TYPE=Release -v
 ```
 
+## Structuring Validation
+
+After modifying CFGStructure, ClangEmitter, CGraphBuilder, or ASTConsumer,
+run `/patchir-inspect --debug --batch` to verify functional equivalence between
+the goto baseline and structured output across all test fixtures.
+
+The batch run checks:
+- Function signature preservation
+- Call graph preservation (no lost function calls)
+- Condition preservation (no lost if-guards — structuring should add ifs, never remove them)
+- Duplicate assignment detection (same lvalue written twice without guard = lost condition)
+- Return preservation
+- Goto elimination metrics
+
+**When to run:**
+- Before committing any change to structuring rules or post-passes
+- After adding a new CGraph rule or modifying BuildLoopBodySNode
+- When goto counts change (verify no correctness regression alongside improvement)
+
+**Interpreting results:**
+- `Conds: OK` — all conditions preserved
+- `Conds: LOST:N` — investigate: check for condition inversion (false positive) vs real guard loss
+- `Conds: FP:-N` — triaged as false positive from condition inversion/merging
+
+If `/patchir-inspect` is not installed, skip structuring validation.
+
 ## Inspection
 
 ```sh
