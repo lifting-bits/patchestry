@@ -62,16 +62,29 @@ variable declarations, statements, control flow, call graph, and return values.
 - **2.5 Condition Preservation:** Count `if (` in both outputs. If structured has
   fewer, triage: check for negation (condition inversion) or merging (`&&`/`||`).
   If no negation/merge match → **Critical: lost guard**.
-- **2.6 Duplicate Assignments:** Find consecutive writes to same lvalue in structured
-  output without intervening condition, label, or brace. Cross-check goto output
-  for guarded single-write → **Bug: lost guard**.
-  Skip typedef/struct/enum lines. Reset on labels (different control paths).
+- **2.6 Duplicate/Overwritten Assignments:** Two sub-checks:
+  - **2.6a Consecutive:** Find consecutive writes to same lvalue in structured
+    output without intervening condition, label, or brace. Cross-check goto output
+    for guarded single-write → **Bug: lost guard**.
+    Skip typedef/struct/enum lines. Reset on labels (different control paths).
+  - **2.6b Cross-scope overwrite:** For each `if (cond) { ... assigns X ... }` block
+    in structured output, check if `X = expr;` appears **immediately after** the
+    closing `}` (within 3 lines, ignoring blank/label lines). If so, the assignment
+    after the if-block unconditionally overwrites values set conditionally inside.
+    Cross-check goto output: if the overwriting assignment was goto-only (only
+    reached via goto, not fallthrough), this is a **Critical: fallthrough overwrite**.
 - **2.7 Dead Code (structuring-introduced):** Scan structured output for code made
   unreachable by the structuring pass. Detect breakless `while(1)` barriers and
   post-return dead code. Exclude label lines (goto targets remain reachable).
-- **2.8 Fallthrough into Goto-Only Labels:** Check if labels that were only reached
-  via `goto` in baseline gained unconditional fallthrough in structured output.
-  Labels inside if/else bodies are NOT fallthrough.
+- **2.8 Fallthrough into Goto-Only Labels:** For each label `L:` in structured output:
+  1. Check the line before `L:` — if NOT a terminator (`return`, `goto`, `break`,
+     `continue`, or `}` of a terminating block) AND NOT a conditional (`if`, `else`),
+     then `L` has **unconditional fallthrough**.
+  2. Check same label in goto output — if the line before `L:` IS a terminator,
+     then `L` was **goto-only** (never reached by fallthrough).
+  3. If structured has fallthrough AND goto had no fallthrough →
+     **Critical: spurious fallthrough changes semantics**.
+  Labels inside if/else bodies are NOT fallthrough — they are conditionally guarded.
 
 For full methodology (checks 2.1-2.10), consult
 **`references/structuring-diff-checks.md`**.
@@ -177,22 +190,32 @@ Cross-check goto output: if the goto output has the same consecutive pattern
 With `--batch`, run on all JSON fixtures and present a summary table:
 
 ```
-| Fixture                   | Status | G(goto) | G(struct) | Elim% | Conds | JSON | Flags   |
-|---------------------------|--------|---------|-----------|-------|-------|------|---------|
-| bloodview__parse_cli.json | PASS   | 23      | 3         | 86%   | FP:-1 | OK   |         |
-| decode_frame.json         | PASS   | 15      | 5         | 66%   | OK    | OK   |         |
-| decode_basic_field.json   | FLAG   | 97      | 70        | 27%   | OK    | FLAG | DUP:3   |
+| Fixture                   | Status | G(goto) | G(struct) | Elim% | Conds | Fall | JSON | Flags   |
+|---------------------------|--------|---------|-----------|-------|-------|------|------|---------|
+| bloodview__parse_cli.json | PASS   | 23      | 3         | 86%   | FP:-1 | 0    | OK   |         |
+| decode_frame.json         | PASS   | 15      | 5         | 66%   | OK    | 0    | OK   |         |
+| decode_basic_field.json   | FLAG   | 97      | 70        | 27%   | OK    | 0    | FLAG | DUP:3   |
 ```
 
 **Column definitions:**
 - `Conds`: condition preservation (OK / FP:-N / LOST:N)
+- `Fall`: fallthrough into goto-only labels (0 = clean, N>0 = **Critical**)
 - `JSON`: JSON ground-truth audit result (OK / FLAG)
 - `Flags`: specific flags from JSON audit (CALL_LOST, DUP_ASSIGN, etc.)
 
-**Batch triage:** When `JSON` shows `FLAG`:
+**Batch check 2.8 implementation (Fall column):**
+For each fixture with gotos, run the fallthrough check:
+1. Extract all labels from structured output (`grep -n '^\s*\w\+:'`)
+2. For each label, check line before it — is it a terminator?
+3. Check same label in goto output — was it goto-only?
+4. Count labels that gained spurious fallthrough → `Fall:N`
+5. `Fall:N > 0` is **Critical** — escalate to single-fixture analysis
+
+**Batch triage:** When `JSON` shows `FLAG` or `Fall` > 0:
 1. Run single-fixture mode on that fixture.
 2. For each flag, determine: emission bug (both paths) vs structuring bug (struct only).
 3. `DUP_ASSIGN` flags: verify by checking if goto output has a guard.
+4. `Fall:N` flags: identify which label gained fallthrough and what code executes spuriously.
 
 Print aggregate stats: total/pass/fail/flag, fully structured count, goto elimination rate,
 condition-loss count, JSON audit flag count.
@@ -201,8 +224,8 @@ condition-loss count, JSON audit flag count.
 
 | Severity | Examples |
 |----------|----------|
-| **Critical** | Missing function calls (CALL_LOST), missing switch cases, crash, lost conditions, fallthrough into goto-only label |
-| **Bug** | Lost assignments, duplicate unconditional assignments (DUP_ASSIGN), dead code from structuring, assignment overwrite from fallthrough |
+| **Critical** | Missing function calls (CALL_LOST), missing switch cases, crash, lost conditions, fallthrough into goto-only label (Fall>0), cross-scope overwrite (2.6b) |
+| **Bug** | Lost assignments, duplicate unconditional assignments (DUP_ASSIGN), dead code from structuring |
 | **Flag** | JSON audit warnings that need manual triage: COND_DEFICIT, STORE_DEFICIT, BLOCK_LOST |
 | **Warning** | Remaining gotos, dead labels, redundant breaks, statement reordering |
 
