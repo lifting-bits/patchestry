@@ -563,6 +563,14 @@ namespace patchestry::ast {
             if (RuleBlockCat(id)) return true;
             if (RuleBlockIfElse(id)) return true;
             if (RuleBlockIfReturn(id)) return true;
+            // ProperIf: body.succs[0] == merge (direct edge to merge).
+            //   Also merges conditional forwarders into &&/|| conditions.
+            // PostDomIf: body.succs[0] != merge (body eventually reaches
+            //   merge via ipdom/BFS).  Defers when body's successor is a
+            //   loop header or has other active preds — lets loop/other
+            //   rules collapse the successor first.
+            // Non-overlapping: ProperIf skips when succ != merge,
+            // PostDomIf skips when succ == merge.
             if (RuleBlockProperIf(id)) return true;
             if (RuleBlockPostDomIf(id)) return true;
             if (RuleBlockWhileDo(id)) return true;
