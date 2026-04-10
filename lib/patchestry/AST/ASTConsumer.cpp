@@ -164,6 +164,8 @@ namespace patchestry::ast {
                     // cross-scope inliner for cascading cleanup, bounded
                     // by kMaxGotoEliminationPasses.
                     for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                        bool did_absorb = AbsorbFallthroughIntoElse(
+                            root_snode, factory);
                         bool did_scope = ScopeifyIfGotos(
                             root_snode, factory, ctx);
                         bool did_elim = EliminateGotoToNextLabel(
@@ -172,7 +174,8 @@ namespace patchestry::ast {
                             root_snode, factory);
                         bool did_cross = InlineCrossScopeSingleRef(
                             root_snode, factory);
-                        if (!did_scope && !did_elim && !did_inline && !did_cross)
+                        if (!did_absorb && !did_scope && !did_elim
+                            && !did_inline && !did_cross)
                             break;
                     }
 

@@ -3026,6 +3026,161 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
+    // AbsorbFallthroughIntoElse
+    //
+    // When an SIfThenElse(cond, body, null) — if-then with no else —
+    // is immediately followed by an SLabel sibling with zero goto
+    // references, the label is only reached by fallthrough from the
+    // if's false path.  Move the label body into the else branch to
+    // prevent spurious fallthrough that overwrites values set inside
+    // the then-body.
+    // ---------------------------------------------------------------
+
+    namespace {
+
+        void AbsorbCountRefs(SNode *node,
+                             std::unordered_map<std::string_view, int> &refs) {
+            if (!node) return;
+            if (auto *g = node->dyn_cast<SGoto>()) {
+                refs[g->Target()]++; return;
+            }
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                std::function< void(clang::Stmt *) > walk =
+                    [&](clang::Stmt *s) {
+                    if (!s) return;
+                    if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                        refs[gs->getLabel()->getName()]++; return;
+                    }
+                    for (auto *child : s->children()) walk(child);
+                };
+                for (auto *s : blk->Stmts()) walk(s);
+                return;
+            }
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (auto *c : seq->Children()) AbsorbCountRefs(c, refs);
+                return;
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                AbsorbCountRefs(ite->ThenBranch(), refs);
+                AbsorbCountRefs(ite->ElseBranch(), refs);
+                return;
+            }
+            if (auto *w = node->dyn_cast<SWhile>()) {
+                AbsorbCountRefs(w->Body(), refs); return;
+            }
+            if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                AbsorbCountRefs(dw->Body(), refs); return;
+            }
+            if (auto *f = node->dyn_cast<SFor>()) {
+                AbsorbCountRefs(f->Body(), refs); return;
+            }
+            if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) AbsorbCountRefs(c.body, refs);
+                AbsorbCountRefs(sw->DefaultBody(), refs);
+                return;
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                AbsorbCountRefs(lbl->Body(), refs); return;
+            }
+        }
+
+        bool AbsorbInSSeq(SSeq *seq,
+                          const std::unordered_map<std::string_view, int> &refs) {
+            auto &children = seq->Children();
+            bool changed = false;
+            for (size_t i = 0; i + 1 < children.size(); ++i) {
+                auto *ite = children[i]->dyn_cast<SIfThenElse>();
+                if (!ite || ite->ElseBranch()) {
+                    if (children[i]->dyn_cast<SIfThenElse>())
+                        llvm::errs() << "ABSORB: skip child[" << i << "] has else\n";
+                    continue;
+                }
+
+                // Check if next sibling is an SLabel, or an SSeq/SBlock
+                // whose first element is an SLabel.  Also handle bare
+                // SBlock (label already stripped — nothing to absorb by
+                // name, but if the block has no label it can't be
+                // verified as 0-ref, so skip).
+                SLabel *lbl = nullptr;
+                bool lbl_is_direct = false;
+                size_t lbl_seq_idx = 0;
+                SSeq *lbl_parent_seq = nullptr;
+
+                if (auto *l = children[i + 1]->dyn_cast<SLabel>()) {
+                    lbl = l;
+                    lbl_is_direct = true;
+                } else if (auto *ns = children[i + 1]->dyn_cast<SSeq>()) {
+                    // Search for first SLabel in the SSeq
+                    for (size_t k = 0; k < ns->Size(); ++k) {
+                        if (auto *l2 = (*ns)[k]->dyn_cast<SLabel>()) {
+                            lbl = l2;
+                            lbl_seq_idx = k;
+                            lbl_parent_seq = ns;
+                            break;
+                        }
+                    }
+                }
+                if (!lbl) continue;
+
+                auto rc = refs.find(lbl->Name());
+                if (rc != refs.end() && rc->second > 0) continue;
+
+                // Label has 0 goto refs — only reached by fallthrough.
+                // Move its body into the else branch.
+                SNode *else_body = lbl->Body();
+                ite->SetElseBranch(else_body);
+
+                // Remove the absorbed SLabel.
+                if (lbl_is_direct) {
+                    seq->RemoveChild(i + 1);
+                } else if (lbl_parent_seq) {
+                    lbl_parent_seq->RemoveChild(lbl_seq_idx);
+                    if (lbl_parent_seq->Empty())
+                        seq->RemoveChild(i + 1);
+                }
+                changed = true;
+                // Don't break — continue scanning for more opportunities.
+            }
+            return changed;
+        }
+
+        bool AbsorbRecursive(SNode *node,
+                             const std::unordered_map<std::string_view, int> &refs) {
+            if (!node) return false;
+            bool changed = false;
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (auto *child : seq->Children())
+                    if (AbsorbRecursive(child, refs)) changed = true;
+                if (AbsorbInSSeq(seq, refs)) changed = true;
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (AbsorbRecursive(ite->ThenBranch(), refs)) changed = true;
+                if (AbsorbRecursive(ite->ElseBranch(), refs)) changed = true;
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                if (AbsorbRecursive(w->Body(), refs)) changed = true;
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                if (AbsorbRecursive(dw->Body(), refs)) changed = true;
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                if (AbsorbRecursive(f->Body(), refs)) changed = true;
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                if (AbsorbRecursive(lbl->Body(), refs)) changed = true;
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    if (AbsorbRecursive(c.body, refs)) changed = true;
+                if (AbsorbRecursive(sw->DefaultBody(), refs)) changed = true;
+            }
+            return changed;
+        }
+
+    } // anonymous namespace
+
+    bool AbsorbFallthroughIntoElse(SNode *root, SNodeFactory & /*factory*/) {
+        if (!root) return false;
+        std::unordered_map<std::string_view, int> refs;
+        AbsorbCountRefs(root, refs);
+        return AbsorbRecursive(root, refs);
+    }
+
+    // ---------------------------------------------------------------
     // ScopeifyIfGotos — convert if(cond) goto L; stmts; L: → if(!cond){stmts}
     //
     // Scan SSeq children for: children[i] = SIfThenElse(cond, SGoto("L"), null)

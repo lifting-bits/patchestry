@@ -128,6 +128,11 @@ namespace patchestry::ast {
     bool EliminateGotoToNextLabel(SNode *root, SNodeFactory &factory,
                                   clang::ASTContext &ctx);
 
+    /// Absorb unreferenced SLabel siblings after if-then (no else) into
+    /// the else branch.  Prevents spurious fallthrough from the false path
+    /// into code that was goto-only in the original CFG.
+    bool AbsorbFallthroughIntoElse(SNode *root, SNodeFactory &factory);
+
     /// Convert if(cond) goto L; stmts; L: patterns into if(!cond) { stmts }
     /// within SSeq nodes.  Only fires when label L has a single goto
     /// reference and no intermediate SLabel nodes exist between the goto
