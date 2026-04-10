@@ -2098,39 +2098,81 @@ namespace patchestry::ast {
 
         if (likely_goto_.empty()) {
             // TraceDAG couldn't find any candidate.  Fall back to
-            // picking the first non-goto, non-back outgoing edge from
-            // any multi-successor active node.
+            // scored selection: prefer edges that don't target the
+            // immediate post-dominator (preserve merge structure),
+            // penalize intra-loop edges, and prefer targets with
+            // more predecessors (merge points that already need labels).
+            constexpr size_t kNone = CNode::kNone;
+
+            auto is_intra_loop = [&](size_t src, size_t dest) -> bool {
+                for (auto *lb : loop_order_) {
+                    if (graph_.Node(lb->head).IsCollapsed()) continue;
+                    std::vector<size_t> body;
+                    lb->FindBase(graph_, body);
+                    bool src_in = false, dest_in = false;
+                    for (size_t b : body) {
+                        if (b == src) src_in = true;
+                        if (b == dest) dest_in = true;
+                    }
+                    if (src_in && dest_in) return true;
+                }
+                return false;
+            };
+
+            size_t best_src = kNone;
+            size_t best_idx = 0;
+            int best_score = -1;
+
             for (size_t nid : active) {
                 auto &n = graph_.Node(nid);
+                if (n.succs.size() <= 1) continue;
+                size_t ipd = (nid < ipdom_.size()) ? ipdom_[nid] : kNone;
                 for (size_t i = 0; i < n.succs.size(); ++i) {
-                    if (!n.IsGotoOut(i) && !n.IsBackEdge(i)
-                        && n.succs.size() > 1)
-                    {
-                        n.SetGoto(i);
-                        return true;
+                    if (n.IsGotoOut(i) || n.IsBackEdge(i)) continue;
+                    size_t dest = n.succs[i];
+                    int score = 0;
+                    if (dest != ipd) score += 10;
+                    if (is_intra_loop(nid, dest)) score -= 20;
+                    score += static_cast<int>(graph_.Node(dest).preds.size());
+                    if (score > best_score) {
+                        best_score = score;
+                        best_src = nid;
+                        best_idx = i;
                     }
                 }
             }
-            return false;
-        }
-
-        // Mark the first likely-goto edge.
-        auto &fe                = likely_goto_.front();
-        auto [src_id, edge_idx] = fe.GetCurrentEdge(graph_);
-        if (src_id == CNode::kNone) {
-            // Edge no longer exists (collapsed away).  Try next.
-            for (auto &edge : likely_goto_) {
-                auto [s, ei] = edge.GetCurrentEdge(graph_);
-                if (s != CNode::kNone) {
-                    graph_.Node(s).SetGoto(ei);
-                    return true;
-                }
+            if (best_src != kNone) {
+                graph_.Node(best_src).SetGoto(best_idx);
+                return true;
             }
             return false;
         }
 
-        graph_.Node(src_id).SetGoto(edge_idx);
-        return true;
+        // Select from TraceDAG candidates.  Prefer edges that don't
+        // target the source's immediate post-dominator.
+        {
+            constexpr size_t kNone = CNode::kNone;
+            FloatingEdge *best = nullptr;
+            int best_score = -1;
+            for (auto &fe : likely_goto_) {
+                auto [s, ei] = fe.GetCurrentEdge(graph_);
+                if (s == kNone) continue;
+                int score = 0;
+                size_t dest = graph_.Node(s).succs[ei];
+                size_t ipd = (s < ipdom_.size()) ? ipdom_[s] : kNone;
+                if (dest != ipd) score += 10;
+                if (score > best_score) {
+                    best_score = score;
+                    best = &fe;
+                }
+            }
+            if (best) {
+                auto [s, ei] = best->GetCurrentEdge(graph_);
+                graph_.Node(s).SetGoto(ei);
+                return true;
+            }
+        }
+        return false;
     }
 
     // ---------------------------------------------------------------
