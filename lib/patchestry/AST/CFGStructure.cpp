@@ -3084,17 +3084,30 @@ namespace patchestry::ast {
             }
         }
 
+        /// Chase through SLabel/SSeq nesting to find the deepest
+        /// trailing SIfThenElse that has no else branch.
+        SIfThenElse *DeepTrailingIfThen(SNode *node) {
+            if (!node) return nullptr;
+            if (auto *ite = node->dyn_cast<SIfThenElse>())
+                return ite->ElseBranch() ? nullptr : ite;
+            if (auto *lbl = node->dyn_cast<SLabel>())
+                return DeepTrailingIfThen(lbl->Body());
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                if (seq->Empty()) return nullptr;
+                return DeepTrailingIfThen(seq->Children().back());
+            }
+            return nullptr;
+        }
+
         bool AbsorbInSSeq(SSeq *seq,
                           const std::unordered_map<std::string_view, int> &refs) {
             auto &children = seq->Children();
             bool changed = false;
             for (size_t i = 0; i + 1 < children.size(); ++i) {
-                auto *ite = children[i]->dyn_cast<SIfThenElse>();
-                if (!ite || ite->ElseBranch()) {
-                    if (children[i]->dyn_cast<SIfThenElse>())
-                        llvm::errs() << "ABSORB: skip child[" << i << "] has else\n";
-                    continue;
-                }
+                // Chase into SLabel/SSeq nesting to find a deeply
+                // buried trailing if-then (no else).
+                auto *ite = DeepTrailingIfThen(children[i]);
+                if (!ite) continue;
 
                 // Check if next sibling is an SLabel, or an SSeq/SBlock
                 // whose first element is an SLabel.  Also handle bare
