@@ -37,7 +37,7 @@ lit ./builds/ci/test/patchir-decomp -D BUILD_TYPE=Release -v
 ## Structuring Validation
 
 After modifying CFGStructure, ClangEmitter, CGraphBuilder, or ASTConsumer,
-run `/patchir-debugger --batch` to verify functional equivalence between
+run `/patchir-inspect --debug --batch` to verify functional equivalence between
 the goto baseline and structured output across all test fixtures.
 
 The batch run checks:
@@ -58,7 +58,7 @@ The batch run checks:
 - `Conds: LOST:N` — investigate: check for condition inversion (false positive) vs real guard loss
 - `Conds: FP:-N` — triaged as false positive from condition inversion/merging
 
-If `/patchir-debugger` is not installed, skip structuring validation.
+If `/patchir-inspect` is not installed, skip structuring validation.
 
 ## Inspection
 
