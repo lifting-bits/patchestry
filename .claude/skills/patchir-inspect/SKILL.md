@@ -26,350 +26,168 @@ description: >
 
 Two modes for the patchir-decomp pipeline:
 
-- **Debug mode** (`--debug`): Verify that `--use-structuring-pass` produces
-  functionally equivalent C output compared to the goto-based baseline.
-  Audit both outputs against the input P-Code JSON to catch Clang AST
-  emission bugs (missing calls, lost operations, dropped blocks).
+- **`--debug`**: verify `--use-structuring-pass` produces functionally
+  equivalent C output compared to the goto-based baseline, and audit
+  both outputs against the input P-Code JSON for emission bugs.
+- **`--test-gen`**: extract P-Code from a binary function via Ghidra
+  headless and generate a complete LIT test with FileCheck patterns.
 
-- **Test-gen mode** (`--test-gen`): Extract P-Code JSON from a binary
-  function via Ghidra headless, generate a complete LIT test file with
-  FileCheck patterns, and validate it passes.
+## Arguments
 
-ARGUMENTS: `[--debug|--test-gen] <args>`
+```
+--debug <fixture.json>                        # equivalence checks (default)
+--debug --batch                               # run on ALL fixtures in test/patchir-decomp/
+--test-gen --binary <path> --function <name>  # generate LIT test from binary
+```
 
-- `--debug <fixture.json>`: run equivalence checks on one JSON file (default mode).
-- `--debug --batch`: run on ALL fixtures in `test/patchir-decomp/`.
-- `--test-gen --binary <path> --function <name>`: generate LIT test from binary.
-- No mode flag: defaults to `--debug`.
+When no mode flag is present, default to `--debug`.
 
 ## Mode Dispatch
 
-Parse the argument list for `--debug` or `--test-gen`. If neither is present,
-default to `--debug`.
+Each mode runs inside its own isolated `general-purpose` subagent via the
+Task tool. This keeps the main context clean — raw decomp outputs, batch
+tables, and Docker logs never reach the parent conversation.
 
-- **Debug mode:** Execute Steps 1-3 below (equivalence checks + JSON audit).
-- **Test-gen mode:** Execute Step 4 below (binary extraction + LIT generation).
+- `--debug` → spawn the **Debug Agent** (Task prompt defined below)
+- `--test-gen` → spawn the **Test-Gen Agent** (Task prompt defined below)
 
----
-
-## Debug Mode
-
-### Setup
-
-1. Find the project root from the input file path or cwd.
-2. Locate `patchir-decomp` binary (`builds/*/tools/patchir-decomp/*/patchir-decomp`)
-   and `test/scripts/strip-json-comments.sh`.
-3. Strip comment lines if the file starts with `//`:
-```bash
-bash <project>/test/scripts/strip-json-comments.sh <input.json> > /tmp/patchdbg_clean.json
-```
-
-### Step 1: Run Both Paths
-
-```bash
-<decomp> -input /tmp/patchdbg_clean.json -emit-cir -print-tu \
-    -output /tmp/patchdbg_goto 2>/tmp/patchdbg_goto_err.txt
-GOTO_EXIT=$?
-
-<decomp> -input /tmp/patchdbg_clean.json -use-structuring-pass -emit-cir -print-tu \
-    -output /tmp/patchdbg_struct 2>/tmp/patchdbg_struct_err.txt
-STRUCT_EXIT=$?
-```
-
-If the structuring path crashes when the goto path succeeds, report as
-**Critical: structuring pass crash** with stderr output.
-
-### Step 2: Functional Equivalence Checks (Goto vs Structured)
-
-Read both `.c` outputs and verify preservation of function signatures,
-variable declarations, statements, control flow, call graph, and return values.
-
-**Critical checks (2.5-2.8):**
-- **2.5 Condition Preservation:** Count `if (` in both outputs. If structured has
-  fewer, triage: check for negation (condition inversion) or merging (`&&`/`||`).
-  If no negation/merge match -> **Critical: lost guard**.
-- **2.6 Duplicate/Overwritten Assignments:** Two sub-checks:
-  - **2.6a Consecutive:** Find consecutive writes to same lvalue in structured
-    output without intervening condition, label, or brace. Cross-check goto output
-    for guarded single-write -> **Bug: lost guard**.
-    Skip typedef/struct/enum lines. Reset on labels (different control paths).
-  - **2.6b Cross-scope overwrite:** For each `if (cond) { ... assigns X ... }` block
-    in structured output, check if `X = expr;` appears **immediately after** the
-    closing `}` (within 3 lines, ignoring blank/label lines). If so, the assignment
-    after the if-block unconditionally overwrites values set conditionally inside.
-    Cross-check goto output: if the overwriting assignment was goto-only (only
-    reached via goto, not fallthrough), this is a **Critical: fallthrough overwrite**.
-- **2.7 Dead Code (structuring-introduced):** Scan structured output for code made
-  unreachable by the structuring pass. Detect breakless `while(1)` barriers and
-  post-return dead code. Exclude label lines (goto targets remain reachable).
-- **2.8 Fallthrough into Goto-Only Labels:** For each label `L:` in structured output:
-  1. Check the line before `L:` -- if NOT a terminator (`return`, `goto`, `break`,
-     `continue`, or `}` of a terminating block) AND NOT a conditional (`if`, `else`),
-     then `L` has **unconditional fallthrough**.
-  2. Check same label in goto output -- if the line before `L:` IS a terminator,
-     then `L` was **goto-only** (never reached by fallthrough).
-  3. If structured has fallthrough AND goto had no fallthrough ->
-     **Critical: spurious fallthrough changes semantics**.
-  Labels inside if/else bodies are NOT fallthrough -- they are conditionally guarded.
-
-For full methodology (checks 2.1-2.10), consult
-**`references/structuring-diff-checks.md`**.
-
-### Step 3: JSON Ground-Truth Audit
-
-Parse the input P-Code JSON and cross-reference against BOTH C outputs to
-catch Clang AST emission bugs that affect goto and structured paths equally.
-
-#### 3.1 Parse JSON Structure
-
-```python
-data = json.load(clean_json)
-# Extract: functions (with basic_blocks, operations), globals, types
-# Build maps: function_addr->name, global_addr->name
-```
-
-**Key JSON fields per operation:**
-- `mnemonic`: CALL, STORE, CBRANCH, RETURN, INT_*, COPY, etc.
-- `inputs`: operands with `kind` (parameter, global, temporary, local)
-- `output`: result destination
-- `type`: result type reference
-
-#### 3.2 CALL Coverage Audit
-
-Extract all CALL/CALLIND operations from JSON. Resolve target names via:
-1. `inputs[0].global` -> lookup in `data["globals"]` for name
-2. `inputs[0].operation` -> trace through COPY/ADDRESS_OF chains to find function address
-3. Match function address against `data["functions"]` for name
-
-For each resolved call target, verify `target_name(` appears in both C outputs.
-
-**Flags:**
-- `CALL_LOST_GOTO`: call in JSON but missing from goto output -> emission bug
-- `CALL_LOST_STRUCT`: call in goto but missing from structured -> structuring bug
-- `CALL_LOST_BOTH`: call in JSON but missing from both -> emission bug
-
-#### 3.3 CBRANCH -> Condition Audit
-
-Count CBRANCH operations in JSON. Each CBRANCH should produce a condition
-in the C output (`if(`, `while(`, `switch(`, or merged via `&&`/`||`).
-
-Compare: `json_cbranch_count` vs `c_if + c_while + c_switch + merge_delta`.
-
-**Flags:**
-- `COND_DEFICIT`: fewer total conditions than CBRANCHes (after accounting for merges)
-- Note: some CBRANCHes become `switch` case routing (1 BRANCHIND -> N cases), so
-  exact 1:1 mapping is not expected. Flag only large deficits (>30% fewer).
-
-#### 3.4 STORE -> Assignment Audit
-
-Count STORE operations in JSON. Count assignment statements (`lvalue = expr;`)
-in C outputs, excluding `==` comparisons and type declarations.
-
-Compare goto vs structured assignment counts. If structured has significantly
-fewer assignments than goto -> possible lost STOREs from collapse.
-
-**Flags:**
-- `STORE_DEFICIT`: structured has >20% fewer assignments than goto
-
-#### 3.5 RETURN Audit
-
-Count RETURN operations in JSON. Compare with `return` statement count in
-C outputs.
-
-**Important:** Skip void functions -- P-Code RETURN with no output value
-produces no `return;` in C. Check if the function's JSON has a non-void
-return type before flagging.
-
-**Flags:**
-- `RET_DEFICIT`: fewer returns in C than non-void RETURNs in JSON
-
-#### 3.6 Global Variable Coverage
-
-Extract all global variable names from `data["globals"]`. For each, check
-presence in both C outputs.
-
-**Flags:**
-- `GLOBAL_LOST`: global referenced in goto but missing from structured
-
-#### 3.7 Per-Block Reachability
-
-For each basic block with side-effect operations (CALL, STORE, RETURN),
-check that its operations appear in the C output. Blocks with only
-DECLARE/COPY/BRANCH ops may not have visible C output -- skip those.
-
-**Flags:**
-- `BLOCK_LOST`: block with CALL/STORE/RETURN operations has no trace in C output
-
-#### 3.8 Duplicate Assignment Detection (enhanced)
-
-Find consecutive writes to same lvalue in structured output. Reset tracking
-on: `if`, `else`, `while`, `switch`, labels (`identifier:`), closing braces.
-
-Cross-check goto output: if the goto output has the same consecutive pattern
--> false positive (pre-existing). If goto has a guard between them -> real bug.
-
-**Flags:**
-- `DUP_ASSIGN`: consecutive writes to same lvalue, goto has guard between them
-
-### Batch Mode
-
-With `--batch`, run on all JSON fixtures and present a summary table:
-
-```
-| Fixture                   | Status | G(goto) | G(struct) | Elim% | Conds | Fall | JSON | Flags   |
-|---------------------------|--------|---------|-----------|-------|-------|------|------|---------|
-| bloodview__parse_cli.json | PASS   | 23      | 3         | 86%   | FP:-1 | 0    | OK   |         |
-| decode_frame.json         | PASS   | 15      | 5         | 66%   | OK    | 0    | OK   |         |
-| decode_basic_field.json   | FLAG   | 97      | 70        | 27%   | OK    | 0    | FLAG | DUP:3   |
-```
-
-**Column definitions:**
-- `Conds`: condition preservation (OK / FP:-N / LOST:N)
-- `Fall`: fallthrough into goto-only labels (0 = clean, N>0 = **Critical**)
-- `JSON`: JSON ground-truth audit result (OK / FLAG)
-- `Flags`: specific flags from JSON audit (CALL_LOST, DUP_ASSIGN, etc.)
-
-**Batch check 2.8 implementation (Fall column):**
-For each fixture with gotos, run the fallthrough check:
-1. Extract all labels from structured output (`grep -n '^\s*\w\+:'`)
-2. For each label, check line before it -- is it a terminator?
-3. Check same label in goto output -- was it goto-only?
-4. Count labels that gained spurious fallthrough -> `Fall:N`
-5. `Fall:N > 0` is **Critical** -- escalate to single-fixture analysis
-
-**Batch triage:** When `JSON` shows `FLAG` or `Fall` > 0:
-1. Run single-fixture mode on that fixture.
-2. For each flag, determine: emission bug (both paths) vs structuring bug (struct only).
-3. `DUP_ASSIGN` flags: verify by checking if goto output has a guard.
-4. `Fall:N` flags: identify which label gained fallthrough and what code executes spuriously.
-
-Print aggregate stats: total/pass/fail/flag, fully structured count, goto elimination rate,
-condition-loss count, JSON audit flag count.
-
-### Report Format
-
-| Severity | Examples |
-|----------|----------|
-| **Critical** | Missing function calls (CALL_LOST), missing switch cases, crash, lost conditions, fallthrough into goto-only label (Fall>0), cross-scope overwrite (2.6b) |
-| **Bug** | Lost assignments, duplicate unconditional assignments (DUP_ASSIGN), dead code from structuring |
-| **Flag** | JSON audit warnings that need manual triage: COND_DEFICIT, STORE_DEFICIT, BLOCK_LOST |
-| **Warning** | Remaining gotos, dead labels, redundant breaks, statement reordering |
-
-End with:
-- **VERDICT: PASS** -- no Critical/Bug, no unresolved Flags
-- **VERDICT: FLAG** -- no Critical/Bug, but has Flags needing triage
-- **VERDICT: FAIL** -- has Critical or Bug issues
+After the subagent returns, relay its verdict and any findings back to
+the user. Do not re-run the checks in the parent context.
 
 ---
 
-## Test-Gen Mode
+## Debug Agent
 
-### Usage
-
-```
-/patchir-inspect --test-gen --binary /path/to/firmware.elf --function my_function
-```
-
-Generates a LIT test file at `test/patchir-decomp/<function_name>.json` from
-a real binary function.
-
-### Step 4.1: Ensure Docker Image
-
-Check if the Ghidra headless Docker image is available:
-```bash
-docker image inspect trailofbits/patchestry-decompilation:latest > /dev/null 2>&1
-```
-
-If not found, build it automatically:
-```bash
-bash scripts/ghidra/build-headless-docker.sh
-```
-
-Report: "Building Ghidra headless Docker image (one-time setup)..."
-
-If the build fails, report the error and stop.
-
-### Step 4.2: Extract P-Code JSON
-
-```bash
-bash scripts/ghidra/decompile-headless.sh \
-  --input <--binary value> --function <--function value> \
-  --output /tmp/patchdbg_testgen
-```
-
-Produces `/tmp/patchdbg_testgen` (P-Code JSON).
-
-If extraction fails, report error with stderr and stop.
-
-### Step 4.3: Generate Baseline Outputs
-
-Run patchir-decomp on the extracted JSON:
-```bash
-<decomp> -input /tmp/patchdbg_testgen \
-  -use-structuring-pass -emit-cir -emit-llvm -print-tu \
-  -output /tmp/patchdbg_testgen_out
-```
-
-Produces `.cir`, `.ll`, `.c` files for deriving FileCheck patterns.
-
-### Step 4.4: Generate FileCheck Patterns
-
-From the baseline outputs, extract:
-
-1. **Function signature** (from `.cir`):
-   ```
-   // FN: cir.func @<function_name>(
-   ```
-
-2. **Call targets** (via `gen-call-checks.py`):
-   ```bash
-   python3 scripts/gen-call-checks.py /tmp/patchdbg_testgen > /tmp/call_checks.txt
-   ```
-   Produces `// CALL-CHECK-DAG: cir.call @target_name(` lines.
-
-3. **CIR operation patterns** (from `.cir`, optional):
-   - Key CIR operations: `cir.if`, `cir.scope`, `cir.return`
-   - Type patterns: `cir.cast`, `cir.unary`, `cir.binop`
-
-### Step 4.5: Assemble LIT Test File
-
-Write `test/patchir-decomp/<function_name>.json` with this structure:
+When dispatched, spawn a `general-purpose` subagent using the Task tool
+with the prompt template below. Substitute `<FIXTURE>` with the target
+JSON (or the literal string `--batch` when batch mode is requested).
 
 ```
-// RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
-// RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
-// FN: cir.func @<function_name>(
-// RUN: %gen-call-checks %t.json > %t.call.checks
-// RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
-<raw P-Code JSON content>
+You are running the patchir-inspect debug-mode workflow against <FIXTURE>.
+
+Project root: <cwd>
+Binary: builds/*/tools/patchir-decomp/*/patchir-decomp
+Strip script: test/scripts/strip-json-comments.sh
+Reference methodology: .claude/skills/patchir-inspect/references/structuring-diff-checks.md
+
+Workflow:
+
+1. For each input fixture (one file or every JSON in test/patchir-decomp/
+   when --batch), strip // comments with the strip script and run
+   patchir-decomp twice — once without --use-structuring-pass (goto
+   baseline) and once with it (structured output). Capture stderr.
+
+2. Run the Step 2 functional equivalence checks on both .c outputs:
+   - 2.5 Condition preservation (if/while/switch counts, &&/|| merge
+     triage)
+   - 2.6 Duplicate and cross-scope overwrite detection
+   - 2.7 Structuring-introduced dead code
+   - 2.8 Fallthrough into goto-only labels
+   Full check definitions are in references/structuring-diff-checks.md.
+
+3. Run the Step 3 JSON ground-truth audit on the input P-Code JSON
+   vs both C outputs: CALL coverage, CBRANCH/condition, STORE/
+   assignment, RETURN, globals, per-block reachability, duplicate
+   assignment. Flag definitions are in the reference file.
+
+4. For --batch, emit the summary table with columns Fixture, Status,
+   G(goto), G(struct), Elim%, Conds, Fall, JSON, Flags. Aggregate
+   stats: total, pass, flag, skip, fully-structured count, goto
+   elimination %, condition losses, fallthrough count.
+
+5. Classify findings:
+   - Critical: CALL_LOST, missing switch cases, crash, lost conditions,
+     Fall>0, 2.6b cross-scope overwrite
+   - Bug: DUP_ASSIGN, lost assignments, structuring-introduced dead code
+   - Flag: COND_DEFICIT, STORE_DEFICIT, BLOCK_LOST
+   - Warning: remaining gotos, dead labels, redundant breaks
+
+6. End with a single VERDICT line:
+   - VERDICT: PASS — no Critical/Bug, no unresolved Flags
+   - VERDICT: FLAG — Flags present, need triage
+   - VERDICT: FAIL — Critical or Bug present
+
+Report concisely. For --batch, include the full table but limit per-
+fixture triage narrative to fixtures flagged as non-PASS. For a single
+fixture, include any Critical/Bug findings with file:line references.
 ```
 
-The RUN/CHECK directives follow the existing test pattern
-(see `bloodview__parse_cli.json`, `bool_ops.json`).
+---
 
-### Step 4.6: Validate
+## Test-Gen Agent
 
-Run the generated test through LIT to confirm it passes:
-```bash
-lit builds/default/test/patchir-decomp/<function_name>.json -D BUILD_TYPE=Debug -v
-```
-
-If it fails, report the LIT output and keep the generated file for debugging.
-
-### Step 4.7: Report
+When dispatched, spawn a `general-purpose` subagent using the Task tool
+with the prompt template below. Substitute `<BINARY>` and `<FUNCTION>`
+with the user-provided values.
 
 ```
-Generated: test/patchir-decomp/<function_name>.json
-  Source:  <binary> :: <function_name>
-  Blocks:  N basic blocks, M operations
-  Checks:  FN (signature), CALL-CHECK (N call targets)
-  LIT:     PASS
+You are running the patchir-inspect test-gen workflow for function
+"<FUNCTION>" from binary "<BINARY>".
+
+Project root: <cwd>
+Decomp binary: builds/*/tools/patchir-decomp/*/patchir-decomp
+Ghidra wrapper: scripts/ghidra/decompile-headless.sh
+Docker build: scripts/ghidra/build-headless-docker.sh
+Call-check generator: scripts/gen-call-checks.py
+
+Workflow:
+
+1. Ensure the Ghidra Docker image exists:
+      docker image inspect trailofbits/patchestry-decompilation:latest
+   If missing, run scripts/ghidra/build-headless-docker.sh and report
+   "Building Ghidra headless Docker image (one-time setup)...". Stop
+   on build failure and report stderr.
+
+2. Extract P-Code JSON:
+      bash scripts/ghidra/decompile-headless.sh \
+        --input <BINARY> \
+        --function <FUNCTION> \
+        --output /tmp/patchdbg_testgen/<FUNCTION>.json
+   Stop on extraction failure and report stderr.
+
+3. Generate baseline outputs from the extracted JSON:
+      <decomp> -input <extracted> -use-structuring-pass \
+        -emit-cir -emit-llvm -print-tu -output <baseline>
+
+4. Build FileCheck patterns from the baseline:
+   - Function signature: grep `cir.func @<FUNCTION>(` from the .cir
+     output and emit it as the FN check line.
+   - Call targets: run
+       python3 scripts/gen-call-checks.py <extracted.json>
+     to produce `// CALL-CHECK-DAG: cir.call @<target>(` lines.
+
+5. Assemble test/patchir-decomp/<FUNCTION>.json with this header,
+   followed by the raw extracted JSON as-is:
+       // RUN: bash %strip-json-comments %s > %t.json
+       // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+       // RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
+       // FN: cir.func @<FUNCTION>(
+       // RUN: %gen-call-checks %t.json > %t.call.checks
+       // RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
+   Follow the pattern in existing fixtures like bloodview__parse_cli.json
+   and bool_ops.json.
+
+6. Validate the generated test:
+      lit builds/default/test/patchir-decomp/<FUNCTION>.json \
+          -D BUILD_TYPE=Debug -v
+   On LIT failure, report the output and leave the file in place.
+
+7. Report:
+       Generated: test/patchir-decomp/<FUNCTION>.json
+         Source:  <BINARY> :: <FUNCTION>
+         Blocks:  N basic blocks, M operations
+         Checks:  FN (signature), CALL-CHECK (K call targets)
+         LIT:     PASS
 ```
 
 ---
 
 ## Additional Resources
 
-- **`references/structuring-diff-checks.md`** -- Equivalence checks 2.1-2.10 and metrics
-- **`USAGE_PLAN.md`** -- Development workflow recipes for pre-commit gating, regression checking, and test generation
+### Reference Files
+
+- **`references/structuring-diff-checks.md`** — full methodology for
+  checks 2.1–2.10 and 3.1–3.7, flag definitions, triage rules, concrete
+  bug examples
+- **`references/usage-plan.md`** — development workflow recipes for
+  pre-commit gating, regression checking, and test generation
