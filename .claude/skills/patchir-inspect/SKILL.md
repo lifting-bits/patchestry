@@ -1,19 +1,25 @@
 ---
 name: patchir-inspect
 description: >
-  This skill should be used when the user asks to **"debug patchir output"**,
-  **"analyze decompilation issues"**, **"find structuring bugs"**, **"compare structuring output"**,
-  **"diff structured vs goto"**, **"check structuring quality"**, **"analyze structuring pass"**,
-  **"find structuring issues"**, **"test structuring on JSON"**, **"verify structuring correctness"**,
-  **"test patchir-decomp on JSON"**, **"debug a fixture"**, **"find missing statements"**,
-  **"run patchir-inspect"**, **"run structuring-diff"**, **"audit patchir-decomp"**,
-  **"check ClangAST emission"**, **"find emission bugs"**, **"generate test"**,
-  **"test-gen"**, **"create LIT test from binary"**, **"generate regression test"**,
-  or invokes **"/patchir-inspect [--debug|--test-gen] <args>"**.
-  Two modes: --debug verifies that --use-structuring-pass produces functionally
-  equivalent C output compared to the goto-based baseline and performs JSON
-  ground-truth audit. --test-gen extracts P-Code from a binary via Ghidra
-  headless and generates a LIT test with FileCheck patterns.
+  This skill should be used when the user asks to verify, debug, or
+  generate regression tests for the patchir-decomp structuring pipeline.
+  Operates in two modes: --debug verifies that --use-structuring-pass
+  produces functionally equivalent C output compared to the goto-based
+  baseline and performs JSON ground-truth audit. --test-gen extracts
+  P-Code from a binary via Ghidra headless and generates a LIT test
+  with FileCheck patterns.
+
+
+  Trigger the skill when the user asks to "debug patchir output",
+  "analyze decompilation issues", "find structuring bugs", "compare
+  structuring output", "diff structured vs goto", "check structuring
+  quality", "analyze structuring pass", "find structuring issues",
+  "test structuring on JSON", "verify structuring correctness", "test
+  patchir-decomp on JSON", "debug a fixture", "find missing statements",
+  "audit patchir-decomp", "check ClangAST emission", "find emission
+  bugs", "generate test", "create LIT test from binary", "generate
+  regression test", or invokes "/patchir-inspect [--debug|--test-gen]
+  <args>".
 ---
 
 # patchir-inspect: Structuring Verification & Test Generation Tool
