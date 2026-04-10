@@ -853,9 +853,21 @@ namespace patchestry::ast {
         }
 
         // Case 1b: T is a conditional forwarder (no stmts, just a branch)
-        // with one arm going to F (merge).  Merge conditions:
-        //   if (c1 && inner_cond) goto other_succ;
-        // Guard: must not have a structured SNode — collapsed nodes have
+        // with one arm going to F (merge).  Two emission forms:
+        //   (a) Disjunctive targeting merge (F):
+        //         if (!a.cond || inner_cond) goto F.label;
+        //       Used when F's label is "independently referenced" -- either
+        //       a collapsed SNode tree already emits a goto to it, or some
+        //       other live graph node will also reach it.  Guarantees the
+        //       label survives cleanup so the guard isn't dropped.
+        //   (b) Conjunctive targeting non-merge (goto_target):
+        //         if (a.cond && inner_cond) goto goto_target.label;
+        //       Used when the merge is only referenced by this collapse
+        //       path.  Relies on ClangEmitterCleanup::ScopeifyIfGotos to
+        //       scope the body; fails if the target becomes adjacent but
+        //       safe for the majority of short-range skip patterns (see
+        //       cwe22_init_logger pre-fix state).
+        // Guard: must not have a structured SNode -- collapsed nodes have
         // stmts cleared by IdentifyInternal but carry content in structured.
         if (!skip_case1
             && HasSoleRealPredecessor(t_id, id) && t.is_conditional
@@ -865,10 +877,48 @@ namespace patchestry::ast {
             bool t_s0_is_merge = (t.succs[0] == f_id);
             bool t_s1_is_merge = (t.succs[1] == f_id);
             if (t_s0_is_merge || t_s1_is_merge) {
+                // Is the merge (F) independently labeled in live graph
+                // state?  If yes, form (a) is safe; else fall back to (b).
+                auto merge_is_safe_goto_target = [&]() {
+                    if (collapsed_succ_targets_.count(f_id)) return true;
+                    for (size_t p : f.preds) {
+                        if (p == id || p == t_id) continue;
+                        if (graph_.Node(p).IsCollapsed()) continue;
+                        return true;
+                    }
+                    return false;
+                };
+
+                if (!f.original_label.empty() && merge_is_safe_goto_target()) {
+                    // Form (a): disjunctive, goto F (merge).
+                    // A.cond FALSE -> F directly, so outer = !a.cond.
+                    // If T.succs[1] (taken) is F, t.cond TRUE -> F, so
+                    // inner = t.cond; else inner = !t.cond.
+                    clang::Expr *outer_cond = NegateExpr(ctx_, a.branch_cond);
+                    clang::Expr *inner_cond = t_s1_is_merge
+                        ? t.branch_cond
+                        : NegateExpr(ctx_, t.branch_cond);
+                    auto *merged_cond = clang::BinaryOperator::Create(
+                        ctx_,
+                        EnsureRValue(ctx_, outer_cond),
+                        EnsureRValue(ctx_, inner_cond),
+                        clang::BO_LOr, ctx_.BoolTy, clang::VK_PRValue,
+                        clang::OK_Ordinary, clang::SourceLocation(),
+                        clang::FPOptionsOverride());
+
+                    auto *if_goto = factory_.Make<SIfThenElse>(
+                        merged_cond,
+                        factory_.Make<SGoto>(factory_.Intern(f.original_label)),
+                        nullptr);
+
+                    SNode *result = WrapWithPriorContent(id, if_goto);
+                    graph_.IdentifyInternal({id, t_id}, CNode::BlockType::kIf, result);
+                    return true;
+                }
+
+                // Form (b): original conjunctive, goto non-merge.
                 size_t goto_target = t_s0_is_merge ? t.succs[1] : t.succs[0];
                 auto &target_node = graph_.Node(goto_target);
-
-                // Refuse if target has no label — would produce dangling goto.
                 if (!target_node.original_label.empty()) {
                     // succs[1] = taken (cond true).  If taken goes to merge,
                     // the goto fires when cond is false — negate.
@@ -889,7 +939,6 @@ namespace patchestry::ast {
                         nullptr);
 
                     SNode *result = WrapWithPriorContent(id, if_goto);
-
                     graph_.IdentifyInternal({id, t_id}, CNode::BlockType::kIf, result);
                     return true;
                 }
@@ -916,9 +965,14 @@ namespace patchestry::ast {
         }
 
         // Case 2b: F is a conditional forwarder (no stmts, just a branch)
-        // with one arm going to T (merge).  Outer condition negated, then
-        // merged with inner:  if (!c1 && inner_cond) goto other_succ;
-        // Guard: must not have a structured SNode (same as Case 1b).
+        // with one arm going to T (merge).  Mirror of Case 1b with T as
+        // the merge.  Two emission forms:
+        //   (a) Disjunctive targeting merge (T):
+        //         if (a.cond || inner_cond) goto T.label;
+        //       (A.cond TRUE -> T directly, so outer = a.cond, no negate.)
+        //   (b) Conjunctive targeting non-merge (goto_target):
+        //         if (!a.cond && inner_cond) goto goto_target.label;
+        // See Case 1b for rationale.  Guard: must not have structured SNode.
         if (!skip_case2
             && HasSoleRealPredecessor(f_id, id) && f.is_conditional
             && f.stmts.empty() && !f.structured
@@ -927,9 +981,47 @@ namespace patchestry::ast {
             bool f_s0_is_merge = (f.succs[0] == t_id);
             bool f_s1_is_merge = (f.succs[1] == t_id);
             if (f_s0_is_merge || f_s1_is_merge) {
+                // Is the merge (T) independently labeled?
+                auto merge_is_safe_goto_target = [&]() {
+                    if (collapsed_succ_targets_.count(t_id)) return true;
+                    for (size_t p : t.preds) {
+                        if (p == id || p == f_id) continue;
+                        if (graph_.Node(p).IsCollapsed()) continue;
+                        return true;
+                    }
+                    return false;
+                };
+
+                if (!t.original_label.empty() && merge_is_safe_goto_target()) {
+                    // Form (a): disjunctive, goto T (merge).
+                    // A.cond TRUE -> T directly, no negation on outer.
+                    // If F.succs[1] (taken) is T, f.cond TRUE -> T, so
+                    // inner = f.cond; else inner = !f.cond.
+                    clang::Expr *outer_cond = a.branch_cond;
+                    clang::Expr *inner_cond = f_s1_is_merge
+                        ? f.branch_cond
+                        : NegateExpr(ctx_, f.branch_cond);
+                    auto *merged_cond = clang::BinaryOperator::Create(
+                        ctx_,
+                        EnsureRValue(ctx_, outer_cond),
+                        EnsureRValue(ctx_, inner_cond),
+                        clang::BO_LOr, ctx_.BoolTy, clang::VK_PRValue,
+                        clang::OK_Ordinary, clang::SourceLocation(),
+                        clang::FPOptionsOverride());
+
+                    auto *if_goto = factory_.Make<SIfThenElse>(
+                        merged_cond,
+                        factory_.Make<SGoto>(factory_.Intern(t.original_label)),
+                        nullptr);
+
+                    SNode *result = WrapWithPriorContent(id, if_goto);
+                    graph_.IdentifyInternal({id, f_id}, CNode::BlockType::kIf, result);
+                    return true;
+                }
+
+                // Form (b): original conjunctive, goto non-merge.
                 size_t goto_target = f_s0_is_merge ? f.succs[1] : f.succs[0];
                 auto &target_node = graph_.Node(goto_target);
-
                 if (!target_node.original_label.empty()) {
                     // Outer condition: F is the not-taken arm, so body
                     // executes when c1 is false — negate outer.
@@ -951,7 +1043,6 @@ namespace patchestry::ast {
                         nullptr);
 
                     SNode *result = WrapWithPriorContent(id, if_goto);
-
                     graph_.IdentifyInternal({id, f_id}, CNode::BlockType::kIf, result);
                     return true;
                 }
