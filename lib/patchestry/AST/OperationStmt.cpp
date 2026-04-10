@@ -1279,21 +1279,15 @@ namespace patchestry::ast {
                 continue;
             }
             auto arg_type = get_argument_type(callee, vnode_expr, index++);
-            if (!vnode_expr->isPRValue()) {
-                vnode_expr = make_implicit_cast(
-                    ctx, vnode_expr, vnode_expr->getType(), clang::CastKind::CK_LValueToRValue
-                );
-                if (!vnode_expr) {
-                    LOG(ERROR) << "Failed to convert call arg to rvalue. key: " << op.key << "\n";
-                    continue;
-                }
-            }
-            auto *arg = make_implicit_cast(
-                ctx, vnode_expr, arg_type, GetCastKind(ctx, vnode_expr->getType(), arg_type)
-            );
+            // Route through make_cast which handles L/R-value conversion,
+            // array/function decay, ShouldReinterpretCast for record↔scalar,
+            // and reinterpret-cast fallback for exotic pairs.
+            auto *arg = make_cast(ctx, vnode_expr, arg_type, op_loc);
             if (!arg) {
-                LOG(ERROR) << "Failed to cast call argument. key: " << op.key << "\n";
-                arg = vnode_expr;  // use uncast expr as fallback
+                LOG(ERROR) << "Failed to cast call argument " << (index - 1)
+                           << " of '" << callee->getNameAsString()
+                           << "'. key: " << op.key << "\n";
+                arg = vnode_expr; // use uncast expr as fallback
             }
             arguments.push_back(arg);
         }

@@ -75,73 +75,68 @@ namespace patchestry::ast {
         assert(!to_type.isNull() && "to_type is null");
         assert(!from_type.isNull() && "from_type is null");
 
-        // Identity cast
+        // 1. Identity.
         if (ctx.hasSameUnqualifiedType(from_type, to_type)) {
-            return clang::CastKind::CK_NoOp;
+            return clang::CK_NoOp;
         }
 
-        // Void cast
+        // 2. Void.
         if (to_type->isVoidType()) {
-            return clang::CastKind::CK_ToVoid;
+            return clang::CK_ToVoid;
         }
 
-        // Boolean conversion
+        // 3. Boolean.
         if (to_type->isBooleanType()) {
-            if (from_type->isIntegerType()) {
+            if (from_type->isIntegralOrEnumerationType()) {
                 return clang::CK_IntegralToBoolean;
             }
             if (from_type->isFloatingType()) {
                 return clang::CK_FloatingToBoolean;
             }
-            if (from_type->isPointerType()) {
+            if (from_type->isAnyPointerType() || from_type->isArrayType()
+                || from_type->isFunctionType() || from_type->isNullPtrType())
+            {
                 return clang::CK_PointerToBoolean;
             }
             if (from_type->isMemberPointerType()) {
                 return clang::CK_MemberPointerToBoolean;
             }
+            // Complex / record → fall through to CK_BitCast guard.
         }
 
-        if (from_type->isIntegerType() && to_type->isCharType()) {
-            return clang::CK_IntegralCast;
-        }
-
-        if (from_type->isIntegerType() && to_type->isArrayType()) {
-            return clang::CK_IntegralToPointer;
-        }
-
-        if (from_type->isIntegerType() && to_type->isRecordType()) {
-            return clang::CK_BitCast;
-        }
-
-        // Integer conversion
-        if (to_type->isIntegerType()) {
-            if (from_type->isBooleanType()) {
-                return clang::CK_BooleanToSignedIntegral;
+        // 4. Integral (includes char and unscoped enum).
+        if (to_type->isIntegralOrEnumerationType()) {
+            if (from_type->isIntegralOrEnumerationType()) {
+                return clang::CK_IntegralCast;
             }
             if (from_type->isFloatingType()) {
                 return clang::CK_FloatingToIntegral;
             }
-            if (from_type->isPointerType()) {
+            if (from_type->isAnyPointerType() || from_type->isArrayType()
+                || from_type->isFunctionType() || from_type->isNullPtrType())
+            {
                 return clang::CK_PointerToIntegral;
             }
-            if (from_type->isEnumeralType() || from_type->isIntegerType()) {
-                return clang::CK_IntegralCast;
-            }
+            // Complex / record → fall through.
         }
 
-        // Floating conversion
+        // 5. Floating.
         if (to_type->isFloatingType()) {
-            if (from_type->isIntegerType()) {
+            if (from_type->isIntegralOrEnumerationType()) {
                 return clang::CK_IntegralToFloating;
             }
             if (from_type->isFloatingType()) {
                 return clang::CK_FloatingCast;
             }
+            // Pointer / array / complex → fall through.
         }
 
-        // Handle pointer target type
+        // 6. Pointer.
         if (to_type->isAnyPointerType()) {
-            if (from_type->isIntegerType()) {
+            if (from_type->isNullPtrType()) {
+                return clang::CK_NullToPointer;
+            }
+            if (from_type->isIntegralOrEnumerationType()) {
                 return clang::CK_IntegralToPointer;
             }
             if (from_type->isArrayType()) {
@@ -153,32 +148,57 @@ namespace patchestry::ast {
             if (from_type->isAnyPointerType()) {
                 return clang::CK_BitCast;
             }
+            // Floating / complex / record → fall through.
         }
-        // Array conversions
+
+        // 7. Array. Only the canonical decay-equivalent source is meaningful.
         if (to_type->isArrayType()) {
             if (from_type->canDecayToPointerType()) {
                 return clang::CK_ArrayToPointerDecay;
             }
+            // All other to-array paths fall through.
         }
 
-        // Complex numbers
-        if (to_type->isComplexType()) {
-            if (from_type->isIntegerType()) {
-                return clang::CK_IntegralComplexCast;
+        // 8. Complex.
+        if (to_type->isAnyComplexType()) {
+            if (from_type->isIntegralOrEnumerationType()) {
+                return clang::CK_IntegralRealToComplex;
             }
             if (from_type->isFloatingType()) {
-                return clang::CK_FloatingComplexCast;
+                return clang::CK_FloatingRealToComplex;
+            }
+            if (from_type->isAnyComplexType()) {
+                const bool from_is_int_complex = from_type->isComplexIntegerType();
+                const bool to_is_int_complex   = to_type->isComplexIntegerType();
+                if (from_is_int_complex && to_is_int_complex) {
+                    return clang::CK_IntegralComplexCast;
+                }
+                if (!from_is_int_complex && !to_is_int_complex) {
+                    return clang::CK_FloatingComplexCast;
+                }
+                return from_is_int_complex
+                    ? clang::CK_IntegralComplexToFloatingComplex
+                    : clang::CK_FloatingComplexToIntegralComplex;
             }
         }
 
-        // Member pointer conversions
+        // 9. Member pointer.
         if (to_type->isMemberPointerType() && from_type->isMemberPointerType()) {
-            return clang::CK_BaseToDerived;
+            return clang::CK_BaseToDerivedMemberPointer;
         }
 
-        assert(false && "Failed to find implicit cast kind");
-
-        return clang::CastKind::CK_NoOp;
+        // 10. Ultimate fallback. Reached only by genuinely exotic pairs:
+        //     float ↔ pointer, pointer ↔ complex, record-involved pairs
+        //     that slipped past ShouldReinterpretCast, etc. Log so the
+        //     specific pair is visible in stderr, then emit CK_BitCast so
+        //     the decomp does not abort. OpBuilder::make_cast has a
+        //     reinterpret-cast final fallback that can still rescue the
+        //     result upstream if BitCast is wrong.
+        LOG(ERROR) << "GetCastKind: no specific handler for cast: from='"
+                   << from_type.getAsString() << "' to='"
+                   << to_type.getAsString()
+                   << "' -- falling back to CK_BitCast.\n";
+        return clang::CK_BitCast;
     }
 
     bool
