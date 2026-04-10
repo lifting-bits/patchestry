@@ -128,6 +128,13 @@ namespace patchestry::ast {
     bool EliminateGotoToNextLabel(SNode *root, SNodeFactory &factory,
                                   clang::ASTContext &ctx);
 
+    /// Convert if(cond) goto L; stmts; L: patterns into if(!cond) { stmts }
+    /// within SSeq nodes.  Only fires when label L has a single goto
+    /// reference and no intermediate SLabel nodes exist between the goto
+    /// and its target.  Recurses into all nested SNode bodies.
+    bool ScopeifyIfGotos(SNode *root, SNodeFactory &factory,
+                         clang::ASTContext &ctx);
+
     /// Post-structuring cleanup: inline residual goto-to-label pairs.
     ///
     /// Walks the SNode tree looking for SGoto nodes whose target SLabel

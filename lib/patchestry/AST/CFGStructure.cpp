@@ -924,6 +924,48 @@ namespace patchestry::ast {
             // Body's succ must NOT be the merge (RuleBlockProperIf handles that).
             if (body.succs[0] == merge_id) continue;
 
+            // Defer when the body's successor is a loop header or has
+            // other active non-goto predecessors.  This lets loop/switch/
+            // if/cat rules collapse the successor first, so RuleBlockCat
+            // can merge body + collapsed successor into a complete
+            // if-body on a later pass.
+            {
+                size_t bsucc = body.succs[0];
+
+                // Check if bsucc is a loop header — always defer so
+                // loop rules structure it first.
+                bool is_loop_header = false;
+                for (auto *lb : loop_order_) {
+                    if (lb->head == bsucc && !graph_.Node(bsucc).IsCollapsed()) {
+                        is_loop_header = true;
+                        break;
+                    }
+                }
+                if (is_loop_header) continue;
+
+                // Also defer if bsucc has other active non-goto preds.
+                auto &bs = graph_.Node(bsucc);
+                bool has_other_active_pred = false;
+                for (size_t p : bs.preds) {
+                    if (p == body_id) continue;
+                    if (graph_.Node(p).IsCollapsed()) continue;
+                    auto &pn = graph_.Node(p);
+                    bool all_pure_goto = true;
+                    for (size_t si = 0; si < pn.succs.size(); ++si) {
+                        if (pn.succs[si] != bsucc) continue;
+                        if (!pn.IsGotoOut(si)) {
+                            all_pure_goto = false;
+                            break;
+                        }
+                    }
+                    if (!all_pure_goto) {
+                        has_other_active_pred = true;
+                        break;
+                    }
+                }
+                if (has_other_active_pred) continue;
+            }
+
             // Verify body eventually reaches merge.
             // Fast path: ipdom_[A] == merge_id (O(1)).
             // Slow path: BFS reachability when ipdom doesn't match
@@ -2981,6 +3023,224 @@ namespace patchestry::ast {
             CountGotoRefs(root, refs);
         }
         return any_changed;
+    }
+
+    // ---------------------------------------------------------------
+    // ScopeifyIfGotos — convert if(cond) goto L; stmts; L: → if(!cond){stmts}
+    //
+    // Scan SSeq children for: children[i] = SIfThenElse(cond, SGoto("L"), null)
+    // followed by intermediate children, then children[j] = SLabel("L", body).
+    // When label "L" has exactly one goto reference and no intermediate
+    // children contain SLabel nodes, negate the condition, wrap the
+    // intermediates in a scoped if(!cond){...}, and inline the label body.
+    // ---------------------------------------------------------------
+
+    namespace {
+
+        bool ScopeifyHasLabel(SNode *node) {
+            if (!node) return false;
+            if (node->dyn_cast<SLabel>()) return true;
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (auto *c : seq->Children())
+                    if (ScopeifyHasLabel(c)) return true;
+                return false;
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                return ScopeifyHasLabel(ite->ThenBranch())
+                    || ScopeifyHasLabel(ite->ElseBranch());
+            }
+            if (auto *w = node->dyn_cast<SWhile>())
+                return ScopeifyHasLabel(w->Body());
+            if (auto *dw = node->dyn_cast<SDoWhile>())
+                return ScopeifyHasLabel(dw->Body());
+            if (auto *f = node->dyn_cast<SFor>())
+                return ScopeifyHasLabel(f->Body());
+            if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    if (ScopeifyHasLabel(c.body)) return true;
+                return ScopeifyHasLabel(sw->DefaultBody());
+            }
+            return false;
+        }
+
+        // Count SGoto + clang::GotoStmt references (local copy — the
+        // same logic lives in the InlineResidualGotos namespace but is
+        // not visible here).
+        void ScopeifyCountRefs(SNode *node,
+                               std::unordered_map<std::string_view, int> &refs) {
+            if (!node) return;
+            if (auto *g = node->dyn_cast<SGoto>()) {
+                refs[g->Target()]++;
+                return;
+            }
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                std::function< void(clang::Stmt *) > walk =
+                    [&](clang::Stmt *s) {
+                    if (!s) return;
+                    if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                        refs[gs->getLabel()->getName()]++;
+                        return;
+                    }
+                    for (auto *child : s->children()) walk(child);
+                };
+                for (auto *s : blk->Stmts()) walk(s);
+                return;
+            }
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (auto *c : seq->Children()) ScopeifyCountRefs(c, refs);
+                return;
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                ScopeifyCountRefs(ite->ThenBranch(), refs);
+                ScopeifyCountRefs(ite->ElseBranch(), refs);
+                return;
+            }
+            if (auto *w = node->dyn_cast<SWhile>()) {
+                ScopeifyCountRefs(w->Body(), refs); return;
+            }
+            if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                ScopeifyCountRefs(dw->Body(), refs); return;
+            }
+            if (auto *f = node->dyn_cast<SFor>()) {
+                ScopeifyCountRefs(f->Body(), refs); return;
+            }
+            if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases()) ScopeifyCountRefs(c.body, refs);
+                ScopeifyCountRefs(sw->DefaultBody(), refs);
+                return;
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                ScopeifyCountRefs(lbl->Body(), refs);
+                return;
+            }
+        }
+
+        bool ScopeifyInSSeq(SSeq *seq, SNodeFactory &factory,
+                            clang::ASTContext &ctx,
+                            const std::unordered_map<std::string_view, int> &refs) {
+            auto &children = seq->Children();
+            bool any_change = false;
+            bool changed = true;
+
+            while (changed) {
+                changed = false;
+                for (size_t i = 0; i < children.size(); ++i) {
+                    // Match: SIfThenElse(cond, SGoto("L"), null)
+                    auto *ite = children[i]->dyn_cast<SIfThenElse>();
+                    if (!ite || !ite->Cond() || ite->ElseBranch()) continue;
+                    auto *goto_node = ite->ThenBranch()
+                        ? ite->ThenBranch()->dyn_cast<SGoto>() : nullptr;
+                    if (!goto_node) continue;
+
+                    auto target = goto_node->Target();
+
+                    // Find target SLabel in same SSeq (forward only)
+                    size_t label_idx = children.size();
+                    for (size_t j = i + 1; j < children.size(); ++j) {
+                        if (auto *lbl = children[j]->dyn_cast<SLabel>()) {
+                            if (lbl->Name() == target) {
+                                label_idx = j;
+                                break;
+                            }
+                        }
+                    }
+                    if (label_idx >= children.size()) continue;
+                    // Adjacent — handled by EliminateGotoToNextLabel
+                    if (label_idx == i + 1) continue;
+
+                    // Single reference only
+                    auto rc = refs.find(target);
+                    if (rc == refs.end() || rc->second != 1) continue;
+
+                    // No intermediate labels
+                    bool has_label = false;
+                    for (size_t j = i + 1; j < label_idx; ++j) {
+                        if (ScopeifyHasLabel(children[j])) {
+                            has_label = true;
+                            break;
+                        }
+                    }
+                    if (has_label) continue;
+
+                    // Build scoped body from intermediates
+                    SNode *scoped_body;
+                    if (label_idx - i - 1 == 1) {
+                        scoped_body = children[i + 1];
+                    } else {
+                        auto *inner = factory.Make<SSeq>();
+                        for (size_t j = i + 1; j < label_idx; ++j)
+                            inner->AddChild(children[j]);
+                        scoped_body = inner;
+                    }
+
+                    // Negate condition
+                    auto *neg = NegateExpr(ctx, ite->Cond());
+                    auto *new_if = factory.Make<SIfThenElse>(
+                        neg, scoped_body, nullptr);
+
+                    // Get label body
+                    auto *lbl = children[label_idx]->as<SLabel>();
+                    SNode *label_body = lbl->Body()
+                        ? lbl->Body() : factory.Make<SBlock>();
+
+                    // Replace range [i, label_idx+1) with {new_if, label_body}
+                    std::vector<SNode *> replacements = {new_if, label_body};
+                    seq->ReplaceRange(i, label_idx + 1, replacements);
+
+                    changed = true;
+                    any_change = true;
+                    break; // restart scan
+                }
+            }
+            return any_change;
+        }
+
+        bool ScopeifyRecursive(SNode *node, SNodeFactory &factory,
+                               clang::ASTContext &ctx,
+                               const std::unordered_map<std::string_view, int> &refs) {
+            if (!node) return false;
+            bool changed = false;
+            if (auto *seq = node->dyn_cast<SSeq>()) {
+                for (auto *child : seq->Children())
+                    if (ScopeifyRecursive(child, factory, ctx, refs))
+                        changed = true;
+                if (ScopeifyInSSeq(seq, factory, ctx, refs))
+                    changed = true;
+            } else if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (ScopeifyRecursive(ite->ThenBranch(), factory, ctx, refs))
+                    changed = true;
+                if (ScopeifyRecursive(ite->ElseBranch(), factory, ctx, refs))
+                    changed = true;
+            } else if (auto *w = node->dyn_cast<SWhile>()) {
+                if (ScopeifyRecursive(w->Body(), factory, ctx, refs))
+                    changed = true;
+            } else if (auto *dw = node->dyn_cast<SDoWhile>()) {
+                if (ScopeifyRecursive(dw->Body(), factory, ctx, refs))
+                    changed = true;
+            } else if (auto *f = node->dyn_cast<SFor>()) {
+                if (ScopeifyRecursive(f->Body(), factory, ctx, refs))
+                    changed = true;
+            } else if (auto *lbl = node->dyn_cast<SLabel>()) {
+                if (ScopeifyRecursive(lbl->Body(), factory, ctx, refs))
+                    changed = true;
+            } else if (auto *sw = node->dyn_cast<SSwitch>()) {
+                for (auto &c : sw->Cases())
+                    if (ScopeifyRecursive(c.body, factory, ctx, refs))
+                        changed = true;
+                if (ScopeifyRecursive(sw->DefaultBody(), factory, ctx, refs))
+                    changed = true;
+            }
+            return changed;
+        }
+
+    } // anonymous namespace
+
+    bool ScopeifyIfGotos(SNode *root, SNodeFactory &factory,
+                         clang::ASTContext &ctx) {
+        if (!root) return false;
+        std::unordered_map<std::string_view, int> refs;
+        ScopeifyCountRefs(root, refs);
+        return ScopeifyRecursive(root, factory, ctx, refs);
     }
 
     // ---------------------------------------------------------------

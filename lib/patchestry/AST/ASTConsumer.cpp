@@ -164,13 +164,16 @@ namespace patchestry::ast {
                     // cross-scope inliner for cascading cleanup, bounded
                     // by kMaxGotoEliminationPasses.
                     for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                        bool did_scope = ScopeifyIfGotos(
+                            root_snode, factory, ctx);
                         bool did_elim = EliminateGotoToNextLabel(
                             root_snode, factory, ctx);
                         bool did_inline = InlineResidualGotos(
                             root_snode, factory);
                         bool did_cross = InlineCrossScopeSingleRef(
                             root_snode, factory);
-                        if (!did_elim && !did_inline && !did_cross) break;
+                        if (!did_scope && !did_elim && !did_inline && !did_cross)
+                            break;
                     }
 
                     // Post-pass: remove unreachable SSeq children after
