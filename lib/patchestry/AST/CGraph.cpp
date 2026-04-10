@@ -261,6 +261,13 @@ namespace patchestry::ast {
 
     // Detect back-edges using iterative DFS
     void MarkBackEdges(CGraph &g) {
+        // Clear previous back-edge marks so stale flags from earlier
+        // calls don't accumulate after topology changes.
+        for (auto &n : g.nodes) {
+            for (auto &f : n.edge_flags)
+                f &= ~CNode::kBack;
+        }
+
         enum Color { WHITE, GRAY, BLACK };
         std::vector<Color> color(g.nodes.size(), WHITE);
 
@@ -277,6 +284,8 @@ namespace patchestry::ast {
             if (i < nd.succs.size()) {
                 size_t v = nd.succs[i];
                 ++i;
+                // Skip collapsed nodes — not part of the active graph.
+                if (g.Node(v).IsCollapsed()) continue;
                 if (color[v] == GRAY) {
                     nd.edge_flags[i - 1] |= CNode::kBack;
                 } else if (color[v] == WHITE) {
