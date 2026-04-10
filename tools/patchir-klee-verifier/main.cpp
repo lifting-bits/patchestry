@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/Linker/Linker.h>
@@ -27,9 +28,14 @@
 
 #include <patchestry/Util/Log.hpp>
 
+#include <cctype>
+#include <cstdint>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -63,6 +69,32 @@ namespace {
         "symbolic-ptr-size",
         llvm::cl::desc("Default symbolic buffer size (bytes) for pointer arguments"),
         llvm::cl::value_desc("bytes"), llvm::cl::init(256)
+    );
+
+    // Runtime depth cap for the recursive globals initializer. Self-
+    // referential and mutually-recursive types emit a call to the
+    // already-being-built per-type init function at codegen time (the
+    // TypeInitCache is the cycle breaker), so a runtime guard is needed
+    // to stop KLEE from evaluating malloc -> init -> malloc -> init …
+    // forever. At depth >= max the pointer field is set to null and
+    // the recursive call is skipped. 2 is enough for list.next.next;
+    // raise for deeper structures (trees, chains) at the cost of larger
+    // symbolic states.
+    const llvm::cl::opt< unsigned > klee_init_max_depth(
+        "klee-init-max-depth",
+        llvm::cl::desc("Runtime depth cap for recursive pointee initialization"),
+        llvm::cl::value_desc("depth"), llvm::cl::init(2)
+    );
+
+    // Arrays longer than this collapse to a single flat klee_make_symbolic
+    // call over the whole storage (matching the pre-change behavior for
+    // the whole module). Keeps generated IR bounded on modules with huge
+    // static tables. Pointer fields inside the fall-back array are then
+    // left as symbolic bytes — a known limitation documented in the plan.
+    const llvm::cl::opt< unsigned > klee_init_array_expand_limit(
+        "klee-init-array-expand-limit",
+        llvm::cl::desc("Above this length, arrays of aggregates fall back to flat byte symbolization"),
+        llvm::cl::value_desc("elements"), llvm::cl::init(64)
     );
 
     // When any contract predicate fails to parse, a silently-passing
@@ -454,7 +486,13 @@ namespace {
     // via an indirect dispatch will not be symbolized. KLEE will then see
     // their initializer values as concrete constants and may over-constrain
     // the search.
-    static void collectGlobals(
+    //
+    // Note: no longer called from the harness path as of the globals-init
+    // rewrite (generateHarness now uses collectModuleGlobals for a
+    // module-wide walk). Retained — marked maybe_unused — because the
+    // transitive-reachability walk is the right building block for a
+    // future reachability-based skip hook on the runtime dispatcher.
+    [[maybe_unused]] static void collectGlobals(
         llvm::Function *F,
         std::set< llvm::GlobalVariable * > &out_globals,
         std::set< llvm::Function * > &visited_fns
@@ -857,6 +895,898 @@ namespace {
         return count;
     }
 
+    // ========================================================================
+    // Symbolic global-variable initialization
+    //
+    // Replaces the old inline-per-global klee_make_symbolic loop in
+    // generateHarness with a four-stage design:
+    //
+    //   1. inferPointerFieldTypes — one linear pass over the module's
+    //      instructions to recover pointee types for every struct field of
+    //      type `ptr`. Under LLVM opaque pointers the `ptr` field in a
+    //      struct carries no pointee info, so we reconstruct it from the
+    //      types used at load/store/GEP/call sites that consume the field.
+    //
+    //   2. getOrCreatePerTypeInit — synthesizes one
+    //      @__klee_init_type_<T>(ptr p, i32 depth) per struct type reachable
+    //      from a symbolizable global. Critically, the Function* is inserted
+    //      into a cache BEFORE its body is built. When the recursive body
+    //      walker encounters a pointer field whose inferred pointee is the
+    //      same (or an ancestor on the construction stack), the cache hit
+    //      returns the existing in-progress function and the walker emits a
+    //      plain call. That closes self-reference and longer type cycles at
+    //      codegen time without any explicit on-stack bookkeeping.
+    //
+    //   3. getOrCreatePerGlobalInit + emitGlobalsDescriptorTable — per
+    //      symbolizable global, a trivial wrapper
+    //      `@__klee_init_g_<name>() { call @__klee_init_type_<T>(@g, 0); ret }`.
+    //      All wrappers are enumerated in an internal `{name, init_fn}`
+    //      descriptor table that future runtime hooks (skip lists, logging,
+    //      constraint injection) can iterate.
+    //
+    //   4. getOrCreateInitGlobalsDispatcher — synthesizes @__klee_init_globals
+    //      as a counted loop over the descriptor table. main()'s first
+    //      instruction is a single call to this dispatcher.
+    //
+    // A runtime depth cap (`--klee-init-max-depth`, default 2) bounds the
+    // live recursion of cyclic type initializers: at `depth >= max` the
+    // pointer field is set to null and the recursive call is skipped,
+    // so KLEE doesn't explode on self-referential lists/trees.
+    // ========================================================================
+
+    // Forward declaration — definition lives further down the file
+    // (near the retargeting helpers). We need the predicate here to
+    // short-circuit the fast-path in buildTypeInitBody.
+    static bool typeContainsPointer(
+        llvm::Type *T, llvm::SmallPtrSetImpl< llvm::Type * > &seen
+    );
+
+    // Inference result for a single `(StructType *, fieldIdx)` pointer field.
+    //
+    // The kinds are mutually exclusive. The resolution rule when multiple
+    // use sites across the module produce different candidates is documented
+    // in inferPointerFieldTypes and boils down to: prefer PointeeType (most
+    // specific), then ScalarBytes, then FunctionPointer; on unresolvable
+    // struct-vs-struct conflicts, degrade to Unknown.
+    struct PointerFieldInference {
+        enum Kind {
+            // No useful signal from any use site. The field is either dead,
+            // only ever stored to, or only accessed through operations that
+            // do not carry a type. At codegen time this falls back to a
+            // flat `symbolic_ptr_size`-byte malloc'd buffer — same behavior
+            // the old code produced for every pointer field.
+            Unknown,
+            // The field is called indirectly (the loaded pointer is the
+            // callee of a call site). At codegen time the field is set to
+            // null and no buffer is allocated: KLEE will report a clean
+            // null-function-pointer error if the target actually makes the
+            // call, rather than jumping to arbitrary bits.
+            FunctionPointer,
+            // The field is used for byte-level pointer arithmetic (a GEP
+            // whose source element type is i8, or a plain byte load). The
+            // `size` is the largest observed offset + 1, used as a lower
+            // bound on how many bytes the allocation must cover. Falls
+            // back to `symbolic_ptr_size` if the observed offset is 0.
+            ScalarBytes,
+            // The field points at a concrete LLVM type (usually a struct)
+            // discovered from a typed load/store/GEP of the loaded pointer.
+            // This is the path that enables recursive typed initialization
+            // and lets cycles close via the TypeInitCache.
+            PointeeType,
+        };
+
+        Kind kind             = Unknown;
+        llvm::Type *pointee   = nullptr; // Set for PointeeType
+        uint64_t scalar_bytes = 0;       // Set for ScalarBytes
+        llvm::FunctionType *fn_type = nullptr; // Set for FunctionPointer (may be null if mixed)
+    };
+
+    using PointerFieldInferenceMap =
+        llvm::DenseMap< std::pair< llvm::StructType *, unsigned >,
+                        PointerFieldInference >;
+
+    // Merge a new candidate into the existing inference slot for a field.
+    //
+    // Resolution rules (documented in the plan):
+    //   * PointeeType beats ScalarBytes beats FunctionPointer beats Unknown
+    //     (more-specific wins).
+    //   * Two PointeeType candidates with the *same* concrete type reinforce
+    //     each other (no-op). Two PointeeType candidates with *different*
+    //     concrete types degrade to Unknown — decompiled IR sometimes
+    //     reuses a pointer slot across incompatible struct views (e.g.
+    //     union-through-ptr) and we cannot safely pick one.
+    //   * Two FunctionPointer candidates with different function types
+    //     degrade to FunctionPointer with a null function type (still
+    //     stored as null at runtime; the caller handles nullptr fn_type).
+    //   * ScalarBytes candidates take the MAX of observed sizes (lower
+    //     bound on the buffer we must allocate).
+    static void mergeInference(
+        PointerFieldInference &slot, const PointerFieldInference &cand
+    ) {
+        if (cand.kind == PointerFieldInference::Unknown)
+            return;
+
+        if (slot.kind == PointerFieldInference::Unknown) {
+            slot = cand;
+            return;
+        }
+
+        // Both non-Unknown. Handle same-kind merges, then mixed-kind.
+        if (slot.kind == cand.kind) {
+            switch (slot.kind) {
+            case PointerFieldInference::PointeeType:
+                if (slot.pointee != cand.pointee) {
+                    // Irreconcilable struct-vs-struct conflict.
+                    slot.kind    = PointerFieldInference::Unknown;
+                    slot.pointee = nullptr;
+                }
+                break;
+            case PointerFieldInference::FunctionPointer:
+                if (slot.fn_type != cand.fn_type) {
+                    slot.fn_type = nullptr; // Still FunctionPointer, but type-erased
+                }
+                break;
+            case PointerFieldInference::ScalarBytes:
+                if (cand.scalar_bytes > slot.scalar_bytes)
+                    slot.scalar_bytes = cand.scalar_bytes;
+                break;
+            default:
+                break;
+            }
+            return;
+        }
+
+        // Mixed kinds: prefer more specific.
+        //   PointeeType > ScalarBytes > FunctionPointer > Unknown
+        auto rank = [](PointerFieldInference::Kind k) {
+            switch (k) {
+            case PointerFieldInference::PointeeType:     return 3;
+            case PointerFieldInference::ScalarBytes:     return 2;
+            case PointerFieldInference::FunctionPointer: return 1;
+            case PointerFieldInference::Unknown:         return 0;
+            }
+            return 0;
+        };
+
+        if (rank(cand.kind) > rank(slot.kind))
+            slot = cand;
+    }
+
+    // Walk every instruction in the module and infer pointer-field pointee
+    // types from the typed operations that consume the loaded field value.
+    //
+    // Why this works under opaque pointers: while `%struct.Foo` has no
+    // pointee type on any of its `ptr` fields, the *operations* that
+    // consume the loaded pointer value do carry types — every load/store/
+    // GEP has an explicit source-element type, and every call site has a
+    // function type. By collecting the typed operations that use the
+    // loaded value for each `(ST, fieldIdx)` we can reconstruct the
+    // high-level intent ("this is a Buffer*", "this is an fn pointer",
+    // "this is an i8 array").
+    //
+    // The walk is a single linear pass (~O(module instructions)). It is
+    // consulted but not mutated by stage 2, so no synchronization is
+    // needed and no re-inference happens during harness generation.
+    static PointerFieldInferenceMap
+    inferPointerFieldTypes(llvm::Module &M) {
+        PointerFieldInferenceMap result;
+
+        // For each GEP of form `gep StructType, ptr base, i32 0, i32 fieldIdx`
+        // where the field is a `ptr`, we trace users to recover the pointee
+        // type. We do this in two phases to keep the code readable:
+        //
+        //   Phase A — find GEPs into pointer fields and their loaded values.
+        //   Phase B — classify each loaded value's uses into a candidate.
+        //
+        // Store sites directly into the field also contribute a
+        // FunctionPointer hint when the stored value is a global function.
+
+        for (auto &F : M) {
+            for (auto &BB : F) {
+                for (auto &I : BB) {
+                    auto *gep = llvm::dyn_cast< llvm::GetElementPtrInst >(&I);
+                    if (!gep)
+                        continue;
+
+                    auto *ST = llvm::dyn_cast< llvm::StructType >(
+                        gep->getSourceElementType());
+                    if (!ST)
+                        continue;
+
+                    // We only care about `gep %ST, ptr, 0, fieldIdx` — a
+                    // direct field access. Anything fancier (non-zero
+                    // leading index, nested multi-index GEP) is harder to
+                    // interpret and we skip it; the field still gets
+                    // inferred via other sites that use the simple form.
+                    if (gep->getNumIndices() != 2)
+                        continue;
+
+                    auto *zero_idx = llvm::dyn_cast< llvm::ConstantInt >(
+                        gep->getOperand(1));
+                    if (!zero_idx || !zero_idx->isZero())
+                        continue;
+
+                    auto *field_idx_val = llvm::dyn_cast< llvm::ConstantInt >(
+                        gep->getOperand(2));
+                    if (!field_idx_val)
+                        continue;
+
+                    unsigned fieldIdx = static_cast< unsigned >(
+                        field_idx_val->getZExtValue());
+                    if (fieldIdx >= ST->getNumElements())
+                        continue;
+
+                    llvm::Type *field_ty = ST->getElementType(fieldIdx);
+                    if (!field_ty->isPointerTy())
+                        continue;
+
+                    auto key = std::make_pair(ST, fieldIdx);
+
+                    // Classify uses of the GEP itself.
+                    for (auto *U : gep->users()) {
+                        // Store *into* the field: stored value may be a
+                        // global function (strong FunctionPointer hint)
+                        // or a typed pointer value (weak type hint).
+                        if (auto *store = llvm::dyn_cast< llvm::StoreInst >(U)) {
+                            if (store->getPointerOperand() != gep)
+                                continue;
+                            llvm::Value *stored = store->getValueOperand();
+                            if (llvm::isa< llvm::Function >(stored)) {
+                                PointerFieldInference cand;
+                                cand.kind    = PointerFieldInference::FunctionPointer;
+                                cand.fn_type = llvm::cast< llvm::Function >(stored)
+                                                   ->getFunctionType();
+                                mergeInference(result[key], cand);
+                            }
+                            continue;
+                        }
+
+                        // Load from the field: the loaded value is a
+                        // `ptr` whose uses tell us the pointee type.
+                        auto *load = llvm::dyn_cast< llvm::LoadInst >(U);
+                        if (!load || !load->getType()->isPointerTy())
+                            continue;
+
+                        for (auto *LU : load->users()) {
+                            // Typed load: `load Ty, ptr %loaded` ->
+                            // pointee is Ty.
+                            if (auto *inner_load =
+                                    llvm::dyn_cast< llvm::LoadInst >(LU)) {
+                                if (inner_load->getPointerOperand() != load)
+                                    continue;
+                                PointerFieldInference cand;
+                                if (inner_load->getType()->isIntegerTy(8)) {
+                                    cand.kind = PointerFieldInference::ScalarBytes;
+                                    cand.scalar_bytes = 1;
+                                } else {
+                                    cand.kind    = PointerFieldInference::PointeeType;
+                                    cand.pointee = inner_load->getType();
+                                }
+                                mergeInference(result[key], cand);
+                                continue;
+                            }
+                            // Typed store: `store Ty %v, ptr %loaded`.
+                            if (auto *inner_store =
+                                    llvm::dyn_cast< llvm::StoreInst >(LU)) {
+                                if (inner_store->getPointerOperand() != load)
+                                    continue;
+                                llvm::Type *VT = inner_store->getValueOperand()->getType();
+                                PointerFieldInference cand;
+                                if (VT->isIntegerTy(8)) {
+                                    cand.kind = PointerFieldInference::ScalarBytes;
+                                    cand.scalar_bytes = 1;
+                                } else {
+                                    cand.kind    = PointerFieldInference::PointeeType;
+                                    cand.pointee = VT;
+                                }
+                                mergeInference(result[key], cand);
+                                continue;
+                            }
+                            // Typed GEP through the loaded pointer:
+                            // `gep Ty, ptr %loaded, ...` -> pointee is Ty.
+                            if (auto *inner_gep =
+                                    llvm::dyn_cast< llvm::GetElementPtrInst >(LU)) {
+                                if (inner_gep->getPointerOperand() != load)
+                                    continue;
+                                llvm::Type *SET = inner_gep->getSourceElementType();
+                                PointerFieldInference cand;
+                                if (SET->isIntegerTy(8)) {
+                                    // Byte-level pointer arithmetic. Use
+                                    // the constant offset (if any) as a
+                                    // lower bound on the needed buffer.
+                                    uint64_t lower = 1;
+                                    if (inner_gep->getNumIndices() == 1) {
+                                        if (auto *CI = llvm::dyn_cast< llvm::ConstantInt >(
+                                                inner_gep->getOperand(1))) {
+                                            lower = CI->getZExtValue() + 1;
+                                        }
+                                    }
+                                    cand.kind         = PointerFieldInference::ScalarBytes;
+                                    cand.scalar_bytes = lower;
+                                } else {
+                                    cand.kind    = PointerFieldInference::PointeeType;
+                                    cand.pointee = SET;
+                                }
+                                mergeInference(result[key], cand);
+                                continue;
+                            }
+                            // Indirect call: the loaded pointer is the callee.
+                            if (auto *call = llvm::dyn_cast< llvm::CallBase >(LU)) {
+                                if (call->getCalledOperand() != load)
+                                    continue;
+                                PointerFieldInference cand;
+                                cand.kind    = PointerFieldInference::FunctionPointer;
+                                cand.fn_type = call->getFunctionType();
+                                mergeInference(result[key], cand);
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // Stage-1.5: collect the set of module-wide symbolizable globals.
+    //
+    // Widened from the old target-reachable walk (`collectGlobals` higher
+    // up in this file) to every non-constant, defined global in the module.
+    // Sound over-approximation: symbolic is a superset of concrete, so
+    // initializing more globals never introduces false verdicts (it can
+    // cost solver time, but not correctness). The dispatcher is the
+    // future hook for narrowing this at runtime.
+    //
+    // Filters:
+    //   * skip external declarations (no storage to symbolize)
+    //   * skip constants (their value is authoritative)
+    //   * skip zero-sized / unsized globals
+    //   * skip LLVM-internal globals (@llvm.global_ctors etc.)
+    //   * skip the tool's own synthesized descriptor/name storage, so we
+    //     don't accidentally symbolize our own runtime data on re-runs
+    static bool isToolSynthesizedGlobal(const llvm::GlobalVariable *GV) {
+        llvm::StringRef name = GV->getName();
+        return name.starts_with("__klee_") || name.starts_with(".str.klee_");
+    }
+
+    static void collectModuleGlobals(
+        llvm::Module &M, std::vector< llvm::GlobalVariable * > &out
+    ) {
+        auto &DL = M.getDataLayout();
+        for (auto &GV : M.globals()) {
+            if (GV.isDeclaration())
+                continue;
+            if (GV.isConstant())
+                continue;
+            if (GV.getName().starts_with("llvm."))
+                continue;
+            if (isToolSynthesizedGlobal(&GV))
+                continue;
+            llvm::Type *VT = GV.getValueType();
+            if (!VT->isSized())
+                continue;
+            if (DL.getTypeAllocSize(VT) == 0)
+                continue;
+            out.push_back(&GV);
+        }
+    }
+
+    // Cache mapping LLVM types to their synthesized per-type init function.
+    // Critically, entries are inserted BEFORE the function body is built,
+    // so a recursive call during body construction observes an existing
+    // Function* for the in-progress type and short-circuits with a plain
+    // call rather than infinitely re-entering the builder. This is the
+    // codegen-time cycle breaker for self-referential and mutually-
+    // recursive types.
+    using TypeInitCache = llvm::DenseMap< llvm::Type *, llvm::Function * >;
+
+    // Forward declarations — these four functions form a tight recursive
+    // cluster (per-type init bodies invoke emitPointerField, which calls
+    // getOrCreatePerTypeInit, which calls back into buildTypeInitBody).
+    static llvm::Function *getOrCreatePerTypeInit(
+        llvm::Module &M, llvm::Type *T,
+        const PointerFieldInferenceMap &im, TypeInitCache &cache
+    );
+    static void buildTypeInitBody(
+        llvm::IRBuilder<> &B, llvm::Value *addr, llvm::Value *depth,
+        llvm::Type *T, const PointerFieldInferenceMap &im,
+        TypeInitCache &cache, const llvm::Twine &name, llvm::Module &M
+    );
+
+    // Sanitize an LLVM type name so it can be embedded in a function
+    // symbol. Non-identifier characters are replaced with '_'. Anonymous
+    // and literal struct types get a "anon_<N>" suffix based on a running
+    // counter so the generated symbols stay unique per type instance.
+    static std::string mangleTypeName(llvm::Type *T) {
+        std::string result;
+        llvm::raw_string_ostream os(result);
+        if (auto *ST = llvm::dyn_cast< llvm::StructType >(T)) {
+            if (ST->hasName()) {
+                for (char c : ST->getName()) {
+                    if (std::isalnum(static_cast< unsigned char >(c)) || c == '_')
+                        os << c;
+                    else
+                        os << '_';
+                }
+                return os.str();
+            }
+            // Literal / anonymous: use the type's address as a disambiguator.
+            os << "anon_" << reinterpret_cast< uintptr_t >(ST);
+            return os.str();
+        }
+        if (auto *AT = llvm::dyn_cast< llvm::ArrayType >(T)) {
+            os << "arr" << AT->getNumElements() << "_"
+               << mangleTypeName(AT->getElementType());
+            return os.str();
+        }
+        if (T->isIntegerTy()) {
+            os << "i" << T->getIntegerBitWidth();
+            return os.str();
+        }
+        if (T->isFloatTy())   return "f32";
+        if (T->isDoubleTy())  return "f64";
+        if (T->isPointerTy()) return "ptr";
+        os << "ty" << reinterpret_cast< uintptr_t >(T);
+        return os.str();
+    }
+
+    // Emit the pointer-field initialization logic into the current insertion
+    // point of B. Three branches, selected by the inference result:
+    //
+    //   * FunctionPointer  — store null. An indirect call through a null
+    //                        function pointer surfaces as a clean KLEE
+    //                        error instead of today's arbitrary-bits crash.
+    //   * Unknown/ScalarBytes — malloc a flat symbolic byte buffer of
+    //                           `symbolic_ptr_size` (or the inferred
+    //                           ScalarBytes size), symbolize, store.
+    //                           Matches the one-level-of-indirection
+    //                           behavior the old harness had for pointer
+    //                           arguments.
+    //   * PointeeType     — emit a runtime depth check. At depth >= max
+    //                       store null (bounds cyclic recursion). Otherwise
+    //                       malloc(sizeof(pointee)), store, and call the
+    //                       per-type init function for the pointee with
+    //                       depth+1. The called function may be the one
+    //                       we are currently building (self-reference) —
+    //                       getOrCreatePerTypeInit returns the cached
+    //                       in-progress Function*.
+    static void emitPointerField(
+        llvm::IRBuilder<> &B, llvm::Value *field_ptr, llvm::Value *depth,
+        std::pair< llvm::StructType *, unsigned > key,
+        const PointerFieldInferenceMap &im, TypeInitCache &cache,
+        const llvm::Twine &name, llvm::Module &M
+    ) {
+        auto &Ctx    = M.getContext();
+        auto *ptrTy  = llvm::PointerType::getUnqual(Ctx);
+        auto *sizeTy = M.getDataLayout().getIntPtrType(Ctx);
+        auto *i32Ty  = llvm::Type::getInt32Ty(Ctx);
+
+        PointerFieldInference inf;
+        auto it = im.find(key);
+        if (it != im.end())
+            inf = it->second;
+
+        if (inf.kind == PointerFieldInference::FunctionPointer) {
+            B.CreateStore(llvm::ConstantPointerNull::get(ptrTy), field_ptr);
+            return;
+        }
+
+        auto make_sym = getKleeMakeSymbolic(M);
+        auto malloc_fn = getMalloc(M);
+
+        if (inf.kind == PointerFieldInference::Unknown ||
+            inf.kind == PointerFieldInference::ScalarBytes)
+        {
+            uint64_t buf_size = symbolic_ptr_size;
+            if (inf.kind == PointerFieldInference::ScalarBytes &&
+                inf.scalar_bytes > buf_size)
+            {
+                buf_size = inf.scalar_bytes;
+            }
+            llvm::Value *size_val = llvm::ConstantInt::get(sizeTy, buf_size);
+            llvm::Value *buf      = B.CreateCall(malloc_fn, { size_val });
+            llvm::Value *name_str = B.CreateGlobalString(name.str());
+            B.CreateCall(make_sym, { buf, size_val, name_str });
+            B.CreateStore(buf, field_ptr);
+            return;
+        }
+
+        // PointeeType — emit the runtime depth gate and recursive call.
+        llvm::Type *pointee = inf.pointee;
+        uint64_t pointee_size = M.getDataLayout().getTypeAllocSize(pointee);
+        if (pointee_size == 0) {
+            // Nothing to allocate; treat as Unknown flat buffer.
+            llvm::Value *size_val = llvm::ConstantInt::get(sizeTy, symbolic_ptr_size);
+            llvm::Value *buf      = B.CreateCall(malloc_fn, { size_val });
+            llvm::Value *name_str = B.CreateGlobalString(name.str());
+            B.CreateCall(make_sym, { buf, size_val, name_str });
+            B.CreateStore(buf, field_ptr);
+            return;
+        }
+
+        llvm::Function *parent_fn = B.GetInsertBlock()->getParent();
+        auto *recurse_bb = llvm::BasicBlock::Create(Ctx, "init.recurse", parent_fn);
+        auto *null_bb    = llvm::BasicBlock::Create(Ctx, "init.null", parent_fn);
+        auto *cont_bb    = llvm::BasicBlock::Create(Ctx, "init.cont", parent_fn);
+
+        llvm::Value *max_depth_val =
+            llvm::ConstantInt::get(i32Ty, klee_init_max_depth);
+        llvm::Value *too_deep = B.CreateICmpSGE(depth, max_depth_val);
+        B.CreateCondBr(too_deep, null_bb, recurse_bb);
+
+        // Null branch — bounds the cyclic recursion at runtime.
+        B.SetInsertPoint(null_bb);
+        B.CreateStore(llvm::ConstantPointerNull::get(ptrTy), field_ptr);
+        B.CreateBr(cont_bb);
+
+        // Recurse branch — allocate a typed pointee and call its init.
+        B.SetInsertPoint(recurse_bb);
+        llvm::Value *pointee_size_val =
+            llvm::ConstantInt::get(sizeTy, pointee_size);
+        llvm::Value *buf = B.CreateCall(malloc_fn, { pointee_size_val });
+        B.CreateStore(buf, field_ptr);
+        // Cache hit on cycle — returns the in-progress Function*.
+        llvm::Function *init_fn = getOrCreatePerTypeInit(M, pointee, im, cache);
+        llvm::Value *next_depth =
+            B.CreateAdd(depth, llvm::ConstantInt::get(i32Ty, 1));
+        B.CreateCall(init_fn, { buf, next_depth });
+        B.CreateBr(cont_bb);
+
+        B.SetInsertPoint(cont_bb);
+    }
+
+    // Recursive structural walker: drives the per-type init function body.
+    // Terminates on aggregate leaves (no cycle detection needed inside
+    // aggregates — LLVM rejects infinite-size types) and at pointer fields
+    // (handled by emitPointerField, which uses the TypeInitCache to close
+    // type-graph cycles).
+    static void buildTypeInitBody(
+        llvm::IRBuilder<> &B, llvm::Value *addr, llvm::Value *depth,
+        llvm::Type *T, const PointerFieldInferenceMap &im,
+        TypeInitCache &cache, const llvm::Twine &name, llvm::Module &M
+    ) {
+        auto &Ctx    = M.getContext();
+        auto *ptrTy  = llvm::PointerType::getUnqual(Ctx);
+        auto *sizeTy = M.getDataLayout().getIntPtrType(Ctx);
+        auto &DL     = M.getDataLayout();
+
+        // Fast path: no pointers transitively reachable from this type —
+        // one flat klee_make_symbolic over the whole storage. Matches the
+        // old per-global shape and avoids structural recursion when it
+        // isn't needed.
+        {
+            llvm::SmallPtrSet< llvm::Type *, 8 > seen;
+            if (!typeContainsPointer(T, seen)) {
+                uint64_t size = DL.getTypeAllocSize(T);
+                if (size == 0)
+                    return;
+                auto make_sym = getKleeMakeSymbolic(M);
+                llvm::Value *size_val = llvm::ConstantInt::get(sizeTy, size);
+                llvm::Value *name_str = B.CreateGlobalString(name.str());
+                (void) ptrTy; // addr is already a ptr in opaque-pointer world
+                B.CreateCall(make_sym, { addr, size_val, name_str });
+                return;
+            }
+        }
+
+        if (auto *ST = llvm::dyn_cast< llvm::StructType >(T)) {
+            for (unsigned i = 0, e = ST->getNumElements(); i != e; ++i) {
+                llvm::Type *field_ty = ST->getElementType(i);
+                llvm::Value *field_ptr = B.CreateStructGEP(ST, addr, i);
+                llvm::Twine child_name = name + ".f" + llvm::Twine(i);
+                if (field_ty->isPointerTy()) {
+                    emitPointerField(
+                        B, field_ptr, depth, std::make_pair(ST, i),
+                        im, cache, child_name, M
+                    );
+                } else {
+                    buildTypeInitBody(
+                        B, field_ptr, depth, field_ty, im, cache, child_name, M
+                    );
+                }
+            }
+            return;
+        }
+
+        if (auto *AT = llvm::dyn_cast< llvm::ArrayType >(T)) {
+            uint64_t N = AT->getNumElements();
+            llvm::Type *ET = AT->getElementType();
+
+            // Fast-path scalar array — one flat call.
+            {
+                llvm::SmallPtrSet< llvm::Type *, 8 > seen;
+                if (!typeContainsPointer(ET, seen)) {
+                    uint64_t size = DL.getTypeAllocSize(T);
+                    if (size == 0)
+                        return;
+                    auto make_sym = getKleeMakeSymbolic(M);
+                    llvm::Value *size_val = llvm::ConstantInt::get(sizeTy, size);
+                    llvm::Value *name_str = B.CreateGlobalString(name.str());
+                    B.CreateCall(make_sym, { addr, size_val, name_str });
+                    return;
+                }
+            }
+
+            if (N <= klee_init_array_expand_limit) {
+                for (uint64_t j = 0; j < N; ++j) {
+                    llvm::Value *idxs[] = {
+                        llvm::ConstantInt::get(
+                            llvm::Type::getInt64Ty(Ctx), 0),
+                        llvm::ConstantInt::get(
+                            llvm::Type::getInt64Ty(Ctx), j),
+                    };
+                    llvm::Value *elt_ptr = B.CreateInBoundsGEP(AT, addr, idxs);
+                    buildTypeInitBody(
+                        B, elt_ptr, depth, ET, im, cache,
+                        name + "[" + llvm::Twine(j) + "]", M
+                    );
+                }
+                return;
+            }
+
+            // Large array fallback — flat symbolic bytes. Any pointer
+            // fields inside the element type become unconstrained bytes
+            // for elements in this array; documented limitation.
+            if (verbose) {
+                llvm::outs() << "  Large array fallback: " << name.str()
+                             << " (" << N << " elems of aggregate type)\n";
+            }
+            uint64_t size = DL.getTypeAllocSize(T);
+            auto make_sym = getKleeMakeSymbolic(M);
+            llvm::Value *size_val = llvm::ConstantInt::get(sizeTy, size);
+            llvm::Value *name_str = B.CreateGlobalString(name.str());
+            B.CreateCall(make_sym, { addr, size_val, name_str });
+            return;
+        }
+
+        // Top-level pointer (rare for globals): there is no enclosing
+        // StructType to key into the inference map, so we fall back to
+        // the flat malloc'd buffer unconditionally. A future patch can
+        // extend inference to cover top-level-pointer globals directly.
+        if (T->isPointerTy()) {
+            auto make_sym = getKleeMakeSymbolic(M);
+            auto malloc_fn = getMalloc(M);
+            llvm::Value *size_val =
+                llvm::ConstantInt::get(sizeTy, symbolic_ptr_size);
+            llvm::Value *buf      = B.CreateCall(malloc_fn, { size_val });
+            llvm::Value *name_str = B.CreateGlobalString(name.str());
+            B.CreateCall(make_sym, { buf, size_val, name_str });
+            B.CreateStore(buf, addr);
+            return;
+        }
+
+        // Any other kind (vector, scalable vector, etc.): treat as a flat
+        // leaf, matching the fast path.
+        uint64_t size = DL.getTypeAllocSize(T);
+        if (size == 0)
+            return;
+        auto make_sym = getKleeMakeSymbolic(M);
+        llvm::Value *size_val = llvm::ConstantInt::get(sizeTy, size);
+        llvm::Value *name_str = B.CreateGlobalString(name.str());
+        B.CreateCall(make_sym, { addr, size_val, name_str });
+    }
+
+    // Entry point for the per-type init machinery. Creates (or returns a
+    // cached) internal `void __klee_init_type_<T>(ptr p, i32 depth)`
+    // function and, on first creation, populates its body with the
+    // structural walk rooted at `T`.
+    //
+    // The cache insert happens BEFORE body construction so any recursive
+    // lookup for the same type during body construction returns the
+    // in-progress Function* — closing self-reference and mutual recursion
+    // at codegen time.
+    static llvm::Function *getOrCreatePerTypeInit(
+        llvm::Module &M, llvm::Type *T,
+        const PointerFieldInferenceMap &im, TypeInitCache &cache
+    ) {
+        if (auto it = cache.find(T); it != cache.end())
+            return it->second;
+
+        auto &Ctx    = M.getContext();
+        auto *voidTy = llvm::Type::getVoidTy(Ctx);
+        auto *ptrTy  = llvm::PointerType::getUnqual(Ctx);
+        auto *i32Ty  = llvm::Type::getInt32Ty(Ctx);
+
+        auto *FT = llvm::FunctionType::get(voidTy, { ptrTy, i32Ty }, false);
+        std::string fn_name = "__klee_init_type_" + mangleTypeName(T);
+
+        auto *F = llvm::Function::Create(
+            FT, llvm::GlobalValue::InternalLinkage, fn_name, &M
+        );
+        F->arg_begin()->setName("p");
+        std::next(F->arg_begin())->setName("depth");
+
+        // Cache first — body construction may recursively ask for F.
+        cache[T] = F;
+
+        auto *entry_bb = llvm::BasicBlock::Create(Ctx, "entry", F);
+        llvm::IRBuilder<> B(entry_bb);
+
+        llvm::Value *arg_p     = F->getArg(0);
+        llvm::Value *arg_depth = F->getArg(1);
+
+        buildTypeInitBody(
+            B, arg_p, arg_depth, T, im, cache, mangleTypeName(T), M
+        );
+        B.CreateRetVoid();
+
+        return F;
+    }
+
+    // Create (or return a cached) internal `void @__klee_init_g_<name>()`
+    // wrapper that calls `@__klee_init_type_<T>(@g, 0)`. Wrappers keep
+    // the descriptor table's signature uniform regardless of the global's
+    // LLVM type.
+    static llvm::Function *getOrCreatePerGlobalInit(
+        llvm::Module &M, llvm::GlobalVariable *GV,
+        const PointerFieldInferenceMap &im, TypeInitCache &cache
+    ) {
+        auto &Ctx    = M.getContext();
+        auto *voidTy = llvm::Type::getVoidTy(Ctx);
+        auto *i32Ty  = llvm::Type::getInt32Ty(Ctx);
+
+        std::string wrapper_name = ("__klee_init_g_" + GV->getName()).str();
+        // Sanitize the global's name the same way as types.
+        for (char &c : wrapper_name) {
+            if (!std::isalnum(static_cast< unsigned char >(c)) && c != '_')
+                c = '_';
+        }
+
+        if (auto *existing = M.getFunction(wrapper_name))
+            return existing;
+
+        auto *FT = llvm::FunctionType::get(voidTy, {}, false);
+        auto *F  = llvm::Function::Create(
+            FT, llvm::GlobalValue::InternalLinkage, wrapper_name, &M
+        );
+
+        auto *entry_bb = llvm::BasicBlock::Create(Ctx, "entry", F);
+        llvm::IRBuilder<> B(entry_bb);
+
+        llvm::Function *type_init =
+            getOrCreatePerTypeInit(M, GV->getValueType(), im, cache);
+        B.CreateCall(type_init, { GV, llvm::ConstantInt::get(i32Ty, 0) });
+        B.CreateRetVoid();
+
+        return F;
+    }
+
+    // Build the internal-constant descriptor table used by the dispatcher.
+    //
+    // Layout: `[N x { ptr, ptr }]` where each entry is `{ name_str, init_fn }`.
+    // The `name` field is unused in the initial implementation but exists
+    // so future runtime hooks (skip lists, logging, constraint injection)
+    // can filter by string match without touching the generator. We use
+    // an anonymous literal struct type rather than adding a named type to
+    // the module, to avoid clashing with user types on repeat runs.
+    static std::pair< llvm::GlobalVariable *, uint64_t >
+    emitGlobalsDescriptorTable(
+        llvm::Module &M,
+        const std::vector< llvm::GlobalVariable * > &gvs,
+        const std::unordered_map< llvm::GlobalVariable *, llvm::Function * >
+            &wrappers
+    ) {
+        auto &Ctx   = M.getContext();
+        auto *ptrTy = llvm::PointerType::getUnqual(Ctx);
+
+        auto *entry_ty = llvm::StructType::get(Ctx, { ptrTy, ptrTy });
+
+        std::vector< llvm::Constant * > entries;
+        entries.reserve(gvs.size());
+
+        for (auto *GV : gvs) {
+            auto wit = wrappers.find(GV);
+            if (wit == wrappers.end())
+                continue;
+
+            // Use a dedicated .str.klee_ prefix so collectModuleGlobals
+            // re-runs will filter these back out (isToolSynthesizedGlobal).
+            std::string name_str = GV->getName().str();
+            auto *name_const = llvm::ConstantDataArray::getString(
+                Ctx, name_str, /*AddNull=*/true
+            );
+            auto *name_gv = new llvm::GlobalVariable(
+                M, name_const->getType(), /*isConstant=*/true,
+                llvm::GlobalValue::PrivateLinkage, name_const,
+                ".str.klee_globals_desc_name"
+            );
+            name_gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+
+            auto *entry = llvm::ConstantStruct::get(
+                entry_ty, { name_gv, wit->second }
+            );
+            entries.push_back(entry);
+        }
+
+        if (entries.empty())
+            return { nullptr, 0 };
+
+        auto *arr_ty = llvm::ArrayType::get(entry_ty, entries.size());
+        auto *arr    = llvm::ConstantArray::get(arr_ty, entries);
+
+        auto *desc = new llvm::GlobalVariable(
+            M, arr_ty, /*isConstant=*/true,
+            llvm::GlobalValue::InternalLinkage, arr,
+            "__klee_globals_desc"
+        );
+        desc->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+
+        return { desc, entries.size() };
+    }
+
+    // Synthesize the dispatcher: a counted loop over the descriptor table
+    // that loads each entry's init_fn pointer and calls it with no args.
+    // This is the single designated hook point — future features (skip
+    // lists, logging, constraint injection) slot into the loop body.
+    static llvm::Function *getOrCreateInitGlobalsDispatcher(
+        llvm::Module &M, llvm::GlobalVariable *desc_table, uint64_t count
+    ) {
+        auto &Ctx    = M.getContext();
+        auto *voidTy = llvm::Type::getVoidTy(Ctx);
+        auto *ptrTy  = llvm::PointerType::getUnqual(Ctx);
+        auto *i64Ty  = llvm::Type::getInt64Ty(Ctx);
+
+        if (auto *existing = M.getFunction("__klee_init_globals"))
+            return existing;
+
+        auto *FT = llvm::FunctionType::get(voidTy, {}, false);
+        auto *F  = llvm::Function::Create(
+            FT, llvm::GlobalValue::InternalLinkage,
+            "__klee_init_globals", &M
+        );
+
+        auto *entry_bb  = llvm::BasicBlock::Create(Ctx, "entry", F);
+        llvm::IRBuilder<> B(entry_bb);
+
+        // Nothing to initialize — single ret.
+        if (!desc_table || count == 0) {
+            B.CreateRetVoid();
+            return F;
+        }
+
+        auto *header_bb = llvm::BasicBlock::Create(Ctx, "header", F);
+        auto *body_bb   = llvm::BasicBlock::Create(Ctx, "body", F);
+        auto *latch_bb  = llvm::BasicBlock::Create(Ctx, "latch", F);
+        auto *exit_bb   = llvm::BasicBlock::Create(Ctx, "exit", F);
+
+        B.CreateBr(header_bb);
+
+        B.SetInsertPoint(header_bb);
+        auto *phi = B.CreatePHI(i64Ty, 2, "i");
+        phi->addIncoming(llvm::ConstantInt::get(i64Ty, 0), entry_bb);
+        llvm::Value *done = B.CreateICmpUGE(
+            phi, llvm::ConstantInt::get(i64Ty, count)
+        );
+        B.CreateCondBr(done, exit_bb, body_bb);
+
+        B.SetInsertPoint(body_bb);
+        // Entry type matches emitGlobalsDescriptorTable above.
+        auto *entry_ty = llvm::StructType::get(Ctx, { ptrTy, ptrTy });
+        llvm::Value *ep = B.CreateInBoundsGEP(
+            llvm::ArrayType::get(entry_ty, count), desc_table,
+            { llvm::ConstantInt::get(i64Ty, 0), phi }
+        );
+        // Load the init_fn field (index 1).
+        llvm::Value *fnp = B.CreateStructGEP(entry_ty, ep, 1);
+        llvm::Value *fn  = B.CreateLoad(ptrTy, fnp);
+        auto *wrapper_fty = llvm::FunctionType::get(voidTy, {}, false);
+        B.CreateCall(wrapper_fty, fn, {});
+        B.CreateBr(latch_bb);
+
+        B.SetInsertPoint(latch_bb);
+        llvm::Value *next = B.CreateAdd(
+            phi, llvm::ConstantInt::get(i64Ty, 1)
+        );
+        phi->addIncoming(next, latch_bb);
+        B.CreateBr(header_bb);
+
+        B.SetInsertPoint(exit_bb);
+        B.CreateRetVoid();
+
+        return F;
+    }
+
     // Generate the main() harness function
     static bool generateHarness(llvm::Module &M, llvm::Function *target_fn) {
         auto &Ctx   = M.getContext();
@@ -937,26 +1867,52 @@ namespace {
                          << all_preds.size() << " predicate(s)\n";
         }
 
-        // 2. Make referenced globals symbolic
-        std::set< llvm::GlobalVariable * > globals;
-        std::set< llvm::Function * > visited;
-        collectGlobals(target_fn, globals, visited);
+        // 2. Symbolically initialize module-wide globals via the per-type
+        //    init machinery. Flow:
+        //
+        //      a. One linear inference pass over the module recovers
+        //         pointee types for every struct field of type `ptr`.
+        //      b. Collect the set of module-wide symbolizable globals.
+        //      c. For each global, build (or look up) its per-global
+        //         wrapper, which transitively builds per-type init
+        //         functions with codegen-time cycle closure.
+        //      d. Build the descriptor table and the dispatcher.
+        //      e. Emit a single call to the dispatcher at the top of
+        //         main(), before argument symbolization so the target
+        //         sees initialized globals when it runs.
+        //
+        //    The old per-global inline `klee_make_symbolic` emission at
+        //    this site has been deleted — everything now lives in
+        //    internally-linked helper functions that can be augmented
+        //    with runtime hooks (skip lists, logging, constraints)
+        //    without touching the harness generator.
+        auto inference_map = inferPointerFieldTypes(M);
 
-        for (auto *GV : globals) {
-            uint64_t size = DL.getTypeAllocSize(GV->getValueType());
-            if (size == 0)
-                continue;
+        std::vector< llvm::GlobalVariable * > module_globals;
+        collectModuleGlobals(M, module_globals);
 
-            std::string sym_name = GV->getName().str();
-            llvm::Value *cast_ptr = B.CreateBitCast(GV, ptrTy);
-            llvm::Value *size_val = llvm::ConstantInt::get(sizeTy, size);
-            llvm::Value *name_str = B.CreateGlobalString(sym_name);
-            B.CreateCall(make_sym, { cast_ptr, size_val, name_str });
+        TypeInitCache type_init_cache;
+        std::unordered_map< llvm::GlobalVariable *, llvm::Function * > wrappers;
+        for (auto *GV : module_globals) {
+            llvm::Function *wrapper = getOrCreatePerGlobalInit(
+                M, GV, inference_map, type_init_cache
+            );
+            wrappers[GV] = wrapper;
+        }
 
-            if (verbose) {
-                llvm::outs() << "  Global symbolic: " << GV->getName()
-                             << " (" << size << " bytes)\n";
-            }
+        auto [desc_table, desc_count] =
+            emitGlobalsDescriptorTable(M, module_globals, wrappers);
+        llvm::Function *dispatcher =
+            getOrCreateInitGlobalsDispatcher(M, desc_table, desc_count);
+
+        B.CreateCall(dispatcher, {});
+
+        if (verbose) {
+            llvm::outs() << "Globals init: " << module_globals.size()
+                         << " global(s), " << type_init_cache.size()
+                         << " per-type init function(s), "
+                         << inference_map.size()
+                         << " pointer field(s) inferred\n";
         }
 
         // 3. Create symbolic arguments for the target function

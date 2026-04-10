@@ -37,8 +37,10 @@ entry:
 ; --- Harness main() ---
 ; CHECK:       define i32 @main()
 
-; Global made symbolic
-; CHECK:       call void @klee_make_symbolic(ptr @sensor_state,
+; Globals are initialized via the @__klee_init_globals dispatcher, which
+; calls one per-global wrapper (@__klee_init_g_sensor_state) that delegates
+; to the per-type init function for the global's type.
+; CHECK:       call void @__klee_init_globals()
 
 ; Float arg made symbolic
 ; CHECK:       call void @klee_make_symbolic(
@@ -51,3 +53,9 @@ entry:
 ; CHECK:       call void @measurement_update(
 
 ; CHECK:       ret i32 0
+
+; --- Per-global wrapper + per-type init for @sensor_state ---
+; CHECK:       define internal void @__klee_init_g_sensor_state()
+; CHECK:       call void @__klee_init_type_i32(ptr @sensor_state, i32 0)
+; CHECK:       define internal void @__klee_init_type_i32(ptr %p, i32 %depth)
+; CHECK:       call void @klee_make_symbolic(ptr %p, i64 4,
