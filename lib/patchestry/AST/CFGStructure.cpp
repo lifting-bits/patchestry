@@ -393,24 +393,22 @@ namespace patchestry::ast {
     void CFGStructure::StructureAll() {
         if (graph_.nodes.empty()) return;
 
-        // Pre-pass 1: identify back-edges so subsequent phases
-        // can distinguish loop-back predecessors from forward predecessors.
-        MarkBackEdges(graph_);
-
-        // Pre-pass 2: merge conditional forwarders into predecessors.
+        // Pre-pass 1: merge conditional forwarders into predecessors.
         MergeConditionalForwarders(graph_);
 
-        // Pre-pass 3: compute immediate dominators.
+        // Pre-pass 2: compute immediate dominators.
         // RPO positions are derived from node indices (already RPO-ordered
         // by BuildCGraph).  MergeConditionalForwarders preserves this
         // ordering, so no separate RPO recomputation is needed.
         ComputeDominatorTree();
 
-        // Pre-pass 4: compute immediate post-dominators.
+        // Pre-pass 3: compute immediate post-dominators.
         ComputePostDominatorTree();
 
-        // Re-mark back-edges after topology changes, then discover loops.
-        // Loop detection must use original P-Code polarity (stable).
+        // Pre-pass 4: identify back-edges and discover loops.
+        // Runs after dominator computation so loop body membership
+        // uses final topology.  MergeConditionalForwarders does not
+        // read back-edge flags, so no earlier MarkBackEdges is needed.
         MarkBackEdges(graph_);
         OrderLoops();
 
