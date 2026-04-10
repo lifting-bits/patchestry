@@ -38,6 +38,11 @@ namespace patchestry::ast {
         std::vector< LoopBody * > loop_order_;
         std::list< FloatingEdge > likely_goto_;
 
+        // Node IDs that appear as successors of collapsed nodes.
+        // Precomputed per StructureInternal round so RuleBlockCat can
+        // check label reachability in O(1) instead of scanning all nodes.
+        std::unordered_set< size_t > collapsed_succ_targets_;
+
         // RPO position: rpo_pos_[n] = position of node n in RPO.
         // Lower value = earlier in RPO.  kNone if collapsed/unreachable.
         std::vector< size_t > rpo_pos_;

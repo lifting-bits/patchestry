@@ -19,6 +19,62 @@
 
 namespace patchestry::ast {
 
+    // Count how many SGoto nodes and clang::GotoStmt nodes reference
+    // each label name anywhere in the SNode tree.  Shared by
+    // InlineResidualGotos, AbsorbFallthroughIntoElse, and ScopeifyIfGotos.
+    static void CountGotoRefs(SNode *node,
+                              std::unordered_map<std::string_view, int> &refs) {
+        if (!node) return;
+
+        if (auto *g = node->dyn_cast<SGoto>()) {
+            refs[g->Target()]++;
+            return;
+        }
+        if (auto *blk = node->dyn_cast<SBlock>()) {
+            std::function< void(clang::Stmt *) > walk =
+                [&](clang::Stmt *s) {
+                if (!s) return;
+                if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                    refs[gs->getLabel()->getName()]++;
+                    return;
+                }
+                for (auto *child : s->children()) walk(child);
+            };
+            for (auto *s : blk->Stmts()) walk(s);
+            return;
+        }
+        if (auto *seq = node->dyn_cast<SSeq>()) {
+            for (auto *c : seq->Children()) CountGotoRefs(c, refs);
+            return;
+        }
+        if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+            CountGotoRefs(ite->ThenBranch(), refs);
+            CountGotoRefs(ite->ElseBranch(), refs);
+            return;
+        }
+        if (auto *w = node->dyn_cast<SWhile>()) {
+            CountGotoRefs(w->Body(), refs);
+            return;
+        }
+        if (auto *dw = node->dyn_cast<SDoWhile>()) {
+            CountGotoRefs(dw->Body(), refs);
+            return;
+        }
+        if (auto *f = node->dyn_cast<SFor>()) {
+            CountGotoRefs(f->Body(), refs);
+            return;
+        }
+        if (auto *sw = node->dyn_cast<SSwitch>()) {
+            for (auto &c : sw->Cases()) CountGotoRefs(c.body, refs);
+            CountGotoRefs(sw->DefaultBody(), refs);
+            return;
+        }
+        if (auto *lbl = node->dyn_cast<SLabel>()) {
+            CountGotoRefs(lbl->Body(), refs);
+            return;
+        }
+    }
+
     CFGStructure::CFGStructure(CGraph &g, SNodeFactory &factory,
                                          clang::ASTContext &ctx)
         : graph_(g), factory_(factory), ctx_(ctx) {}
@@ -146,8 +202,16 @@ namespace patchestry::ast {
         // Intersect: walk up the dominator tree using RPO positions.
         auto intersect = [this](size_t a, size_t b) -> size_t {
             while (a != b) {
-                while (rpo_pos_[a] > rpo_pos_[b]) a = idom_[a];
-                while (rpo_pos_[b] > rpo_pos_[a]) b = idom_[b];
+                while (rpo_pos_[a] > rpo_pos_[b]) {
+                    size_t up = idom_[a];
+                    if (up == kNone || up == a) return a;
+                    a = up;
+                }
+                while (rpo_pos_[b] > rpo_pos_[a]) {
+                    size_t up = idom_[b];
+                    if (up == kNone || up == b) return b;
+                    b = up;
+                }
             }
             return a;
         };
@@ -293,8 +357,16 @@ namespace patchestry::ast {
 
         auto intersect = [&rev_rpo_pos, &rev_idom](size_t a, size_t b) -> size_t {
             while (a != b) {
-                while (rev_rpo_pos[a] > rev_rpo_pos[b]) a = rev_idom[a];
-                while (rev_rpo_pos[b] > rev_rpo_pos[a]) b = rev_idom[b];
+                while (rev_rpo_pos[a] > rev_rpo_pos[b]) {
+                    size_t up = rev_idom[a];
+                    if (up == kNone || up == a) return a;
+                    a = up;
+                }
+                while (rev_rpo_pos[b] > rev_rpo_pos[a]) {
+                    size_t up = rev_idom[b];
+                    if (up == kNone || up == b) return b;
+                    b = up;
+                }
             }
             return a;
         };
@@ -549,6 +621,15 @@ namespace patchestry::ast {
     bool CFGStructure::StructureInternal() {
         auto active = graph_.ActiveIds();
 
+        // Build set of node IDs referenced as successors of collapsed
+        // nodes.  Used by RuleBlockCat to avoid O(N) label scans.
+        collapsed_succ_targets_.clear();
+        for (auto &n : graph_.nodes) {
+            if (!n.IsCollapsed()) continue;
+            for (size_t s : n.succs)
+                collapsed_succ_targets_.insert(s);
+        }
+
         // Switch rules must fire before ANY other rule modifies the
         // graph.  RuleBlockCat on predecessor chains can dedup the
         // switch node's succs, invalidating succ_index values in
@@ -611,25 +692,28 @@ namespace patchestry::ast {
         if (a.IsGotoOut(0)) return false;
 
         // Don't merge if B has a label that may still be referenced
-        // by collapsed nodes.  After predecessor collapse, b.preds
-        // may show 1 active pred, but collapsed nodes' SNode trees
-        // can still hold clang::GotoStmt to B's label.  Merging B
-        // would consume the label, creating dangling goto references.
+        // by collapsed nodes or active goto edges.  After collapse,
+        // b.preds may show 1 active pred, but collapsed nodes' SNode
+        // trees can still hold clang::GotoStmt to B's label.
+        // Merging B would consume the label, creating dangling goto
+        // references.
+        //
+        // collapsed_succ_targets_ (precomputed per StructureInternal
+        // round) gives O(1) lookup for the collapsed-node check.
+        // Active goto edges are checked via B's pred list.
         if (!b.original_label.empty()) {
-            for (const auto &n : graph_.nodes) {
-                if (n.id == id || n.id == b_id) continue;
-                if (!n.IsCollapsed()) {
-                    // Active node with goto edge to B — label needed.
-                    for (size_t i = 0; i < n.succs.size(); ++i) {
-                        if (n.succs[i] == b_id && n.IsGotoOut(i))
-                            return false;
-                    }
-                } else {
-                    // Collapsed node might still hold clang::GotoStmt
-                    // to B's label.
-                    for (size_t s : n.succs) {
-                        if (s == b_id) return false;
-                    }
+            // Collapsed node references B — label needed.
+            if (collapsed_succ_targets_.count(b_id))
+                return false;
+
+            // Active node with goto edge to B — label needed.
+            for (size_t p : b.preds) {
+                if (p == id) continue;
+                auto &pn = graph_.Node(p);
+                if (pn.IsCollapsed()) continue;
+                for (size_t i = 0; i < pn.succs.size(); ++i) {
+                    if (pn.succs[i] == b_id && pn.IsGotoOut(i))
+                        return false;
                 }
             }
         }
@@ -1101,12 +1185,15 @@ namespace patchestry::ast {
                 return true;
             }
 
-            // Relaxed: one arm shared
+            // Relaxed: one arm has sole pred, the other is shared.
+            // Only safe when the shared arm has NO stmts (pure routing
+            // node) — otherwise its side effects would execute on both
+            // branches instead of only the original one.
             size_t sole_id;
             bool sole_is_taken;
-            if (t_sole && !f_sole && f.stmts.size() <= 2) {
+            if (t_sole && !f_sole && f.stmts.empty() && !f.structured) {
                 sole_id = t_id; sole_is_taken = true;
-            } else if (f_sole && !t_sole && t.stmts.size() <= 2) {
+            } else if (f_sole && !t_sole && t.stmts.empty() && !t.structured) {
                 sole_id = f_id; sole_is_taken = false;
             } else {
                 return false;
@@ -2237,64 +2324,6 @@ namespace patchestry::ast {
 
     namespace {
 
-        // Count how many SGoto nodes reference a given label name
-        // anywhere in the SNode tree.
-        void CountGotoRefs(SNode *node,
-                           std::unordered_map<std::string_view, int> &refs) {
-            if (!node) return;
-
-            if (auto *g = node->dyn_cast<SGoto>()) {
-                refs[g->Target()]++;
-                return;
-            }
-            if (auto *blk = node->dyn_cast<SBlock>()) {
-                // Also count clang::GotoStmt inside SBlock stmts.
-                // These are raw gotos from CGraph terminals that were
-                // not converted to SGoto by the structuring pass.
-                std::function< void(clang::Stmt *) > walk =
-                    [&](clang::Stmt *s) {
-                    if (!s) return;
-                    if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
-                        refs[gs->getLabel()->getName()]++;
-                        return;
-                    }
-                    for (auto *child : s->children()) walk(child);
-                };
-                for (auto *s : blk->Stmts()) walk(s);
-                return;
-            }
-            if (auto *seq = node->dyn_cast<SSeq>()) {
-                for (auto *c : seq->Children()) CountGotoRefs(c, refs);
-                return;
-            }
-            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
-                CountGotoRefs(ite->ThenBranch(), refs);
-                CountGotoRefs(ite->ElseBranch(), refs);
-                return;
-            }
-            if (auto *w = node->dyn_cast<SWhile>()) {
-                CountGotoRefs(w->Body(), refs);
-                return;
-            }
-            if (auto *dw = node->dyn_cast<SDoWhile>()) {
-                CountGotoRefs(dw->Body(), refs);
-                return;
-            }
-            if (auto *f = node->dyn_cast<SFor>()) {
-                CountGotoRefs(f->Body(), refs);
-                return;
-            }
-            if (auto *sw = node->dyn_cast<SSwitch>()) {
-                for (auto &c : sw->Cases()) CountGotoRefs(c.body, refs);
-                CountGotoRefs(sw->DefaultBody(), refs);
-                return;
-            }
-            if (auto *lbl = node->dyn_cast<SLabel>()) {
-                CountGotoRefs(lbl->Body(), refs);
-                return;
-            }
-        }
-
         // Try to inline gotos in a single SSeq.  Returns true if changed.
         bool InlineGotosInSeq(
             SSeq *seq, SNodeFactory &factory,
@@ -3088,52 +3117,6 @@ namespace patchestry::ast {
 
     namespace {
 
-        void AbsorbCountRefs(SNode *node,
-                             std::unordered_map<std::string_view, int> &refs) {
-            if (!node) return;
-            if (auto *g = node->dyn_cast<SGoto>()) {
-                refs[g->Target()]++; return;
-            }
-            if (auto *blk = node->dyn_cast<SBlock>()) {
-                std::function< void(clang::Stmt *) > walk =
-                    [&](clang::Stmt *s) {
-                    if (!s) return;
-                    if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
-                        refs[gs->getLabel()->getName()]++; return;
-                    }
-                    for (auto *child : s->children()) walk(child);
-                };
-                for (auto *s : blk->Stmts()) walk(s);
-                return;
-            }
-            if (auto *seq = node->dyn_cast<SSeq>()) {
-                for (auto *c : seq->Children()) AbsorbCountRefs(c, refs);
-                return;
-            }
-            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
-                AbsorbCountRefs(ite->ThenBranch(), refs);
-                AbsorbCountRefs(ite->ElseBranch(), refs);
-                return;
-            }
-            if (auto *w = node->dyn_cast<SWhile>()) {
-                AbsorbCountRefs(w->Body(), refs); return;
-            }
-            if (auto *dw = node->dyn_cast<SDoWhile>()) {
-                AbsorbCountRefs(dw->Body(), refs); return;
-            }
-            if (auto *f = node->dyn_cast<SFor>()) {
-                AbsorbCountRefs(f->Body(), refs); return;
-            }
-            if (auto *sw = node->dyn_cast<SSwitch>()) {
-                for (auto &c : sw->Cases()) AbsorbCountRefs(c.body, refs);
-                AbsorbCountRefs(sw->DefaultBody(), refs);
-                return;
-            }
-            if (auto *lbl = node->dyn_cast<SLabel>()) {
-                AbsorbCountRefs(lbl->Body(), refs); return;
-            }
-        }
-
         /// Chase through SLabel/SSeq nesting to find the deepest
         /// trailing SIfThenElse that has no else branch.
         SIfThenElse *DeepTrailingIfThen(SNode *node) {
@@ -3239,7 +3222,7 @@ namespace patchestry::ast {
     bool AbsorbFallthroughIntoElse(SNode *root, SNodeFactory & /*factory*/) {
         if (!root) return false;
         std::unordered_map<std::string_view, int> refs;
-        AbsorbCountRefs(root, refs);
+        CountGotoRefs(root, refs);
         return AbsorbRecursive(root, refs);
     }
 
@@ -3281,57 +3264,7 @@ namespace patchestry::ast {
             return false;
         }
 
-        // Count SGoto + clang::GotoStmt references (local copy — the
-        // same logic lives in the InlineResidualGotos namespace but is
-        // not visible here).
-        void ScopeifyCountRefs(SNode *node,
-                               std::unordered_map<std::string_view, int> &refs) {
-            if (!node) return;
-            if (auto *g = node->dyn_cast<SGoto>()) {
-                refs[g->Target()]++;
-                return;
-            }
-            if (auto *blk = node->dyn_cast<SBlock>()) {
-                std::function< void(clang::Stmt *) > walk =
-                    [&](clang::Stmt *s) {
-                    if (!s) return;
-                    if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
-                        refs[gs->getLabel()->getName()]++;
-                        return;
-                    }
-                    for (auto *child : s->children()) walk(child);
-                };
-                for (auto *s : blk->Stmts()) walk(s);
-                return;
-            }
-            if (auto *seq = node->dyn_cast<SSeq>()) {
-                for (auto *c : seq->Children()) ScopeifyCountRefs(c, refs);
-                return;
-            }
-            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
-                ScopeifyCountRefs(ite->ThenBranch(), refs);
-                ScopeifyCountRefs(ite->ElseBranch(), refs);
-                return;
-            }
-            if (auto *w = node->dyn_cast<SWhile>()) {
-                ScopeifyCountRefs(w->Body(), refs); return;
-            }
-            if (auto *dw = node->dyn_cast<SDoWhile>()) {
-                ScopeifyCountRefs(dw->Body(), refs); return;
-            }
-            if (auto *f = node->dyn_cast<SFor>()) {
-                ScopeifyCountRefs(f->Body(), refs); return;
-            }
-            if (auto *sw = node->dyn_cast<SSwitch>()) {
-                for (auto &c : sw->Cases()) ScopeifyCountRefs(c.body, refs);
-                ScopeifyCountRefs(sw->DefaultBody(), refs);
-                return;
-            }
-            if (auto *lbl = node->dyn_cast<SLabel>()) {
-                ScopeifyCountRefs(lbl->Body(), refs);
-                return;
-            }
-        }
+
 
         bool ScopeifyInSSeq(SSeq *seq, SNodeFactory &factory,
                             clang::ASTContext &ctx,
@@ -3456,9 +3389,17 @@ namespace patchestry::ast {
     bool ScopeifyIfGotos(SNode *root, SNodeFactory &factory,
                          clang::ASTContext &ctx) {
         if (!root) return false;
-        std::unordered_map<std::string_view, int> refs;
-        ScopeifyCountRefs(root, refs);
-        return ScopeifyRecursive(root, factory, ctx, refs);
+        bool any_changed = false;
+        // Recount refs after each pass — ScopeifyInSSeq removes gotos,
+        // which can make previously multi-ref labels single-ref.
+        for (int pass = 0; pass < 8; ++pass) {
+            std::unordered_map<std::string_view, int> refs;
+            CountGotoRefs(root, refs);
+            if (!ScopeifyRecursive(root, factory, ctx, refs))
+                break;
+            any_changed = true;
+        }
+        return any_changed;
     }
 
     // ---------------------------------------------------------------
@@ -4144,17 +4085,11 @@ namespace patchestry::ast {
                             lb->Stmts().back());
                         if (!gs2 || !gs2->getLabel()) return false;
                         next_target = gs2->getLabel()->getName();
-                        // Collect non-goto stmts from this trailing block.
-                        for (size_t i = 0; i + 1 < lb->Size(); ++i) {
-                            if (llvm::isa<clang::LabelStmt>(lb->Stmts()[i]))
-                                return false;
-                            out.push_back(lb->Stmts()[i]);
-                            if (out.size() > max_stmts) return false;
-                        }
                     } else {
                         return false;
                     }
-                    // Collect stmts from earlier SSeq children (SBlocks).
+                    // Collect stmts from earlier SSeq children (SBlocks)
+                    // before the trailing block to preserve execution order.
                     for (size_t ci = 0; ci + 1 < seq->Size(); ++ci) {
                         auto *child_blk = (*seq)[ci]->dyn_cast<SBlock>();
                         if (!child_blk) return false;
@@ -4162,6 +4097,15 @@ namespace patchestry::ast {
                             if (llvm::isa<clang::LabelStmt>(s))
                                 return false;
                             out.push_back(s);
+                            if (out.size() > max_stmts) return false;
+                        }
+                    }
+                    // Collect non-goto stmts from the trailing block.
+                    if (auto *lb = last_child->dyn_cast<SBlock>()) {
+                        for (size_t i = 0; i + 1 < lb->Size(); ++i) {
+                            if (llvm::isa<clang::LabelStmt>(lb->Stmts()[i]))
+                                return false;
+                            out.push_back(lb->Stmts()[i]);
                             if (out.size() > max_stmts) return false;
                         }
                     }
