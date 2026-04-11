@@ -158,13 +158,21 @@ namespace patchestry::ast {
             // Floating / complex / record → fall through.
         }
 
-        // 7. Array. Only the canonical decay-equivalent source is meaningful.
-        if (to_type->isArrayType()) {
-            if (from_type->canDecayToPointerType()) {
-                return clang::CK_ArrayToPointerDecay;
-            }
-            // All other to-array paths fall through.
-        }
+        // 7. Array destination intentionally not handled.
+        //
+        // Returning CK_ArrayToPointerDecay with `to_type` set to an array
+        // is internally inconsistent: the cast kind produces a pointer
+        // type but the ImplicitCastExpr's stated type would remain the
+        // array, tripping downstream consumers (CIR lowering, pretty
+        // printers).  More importantly, this section is effectively
+        // unreachable: OpBuilder::make_cast pre-decays `from=array ->
+        // to=pointer` before calling GetCastKind, and ShouldReinterpretCast
+        // routes `arithmetic|pointer -> array` through reinterpret casts
+        // upstream.  You cannot cast to an array type in C at the source
+        // level, and Ghidra P-Code for C input never produces one as a
+        // CAST destination.  Any exotic combination that does reach this
+        // point (e.g. complex -> array) falls through to the CK_BitCast
+        // guard below with a diagnostic log.
 
         // 8. Complex.
         if (to_type->isAnyComplexType()) {
