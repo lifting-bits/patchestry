@@ -148,12 +148,139 @@ import java.util.TreeSet;
 import java.util.TreeMap;
 
 public class PatchestryDecompileFunctions extends GhidraScript {
+    // --- Extraout sanitizer flags ---
+    //
+    // --sanitize-extraout (default true; pass --no-sanitize-extraout to disable)
+    //     Master switch for the extraout/unaff/in_ register-alias sanitizer
+    //     pass in PcodeSerializer. When off, the serializer emits its
+    //     legacy JSON shape unchanged. Tier 1 (declarative via
+    //     PrototypeModel.getUnaffectedList) is active on every architecture
+    //     when the flag is on; Tier 2 (analytical callee walk) runs only
+    //     when the current program's processor is in the allowlist
+    //     util.PcodeSerializer.TIER2_DEFAULT_ARCHITECTURES.
+    //
+    // --sanitize-extraout-analytical={auto|on|off} (default auto)
+    //     Controls Tier 2 (analytical callee-walk) preservation analysis.
+    //     `auto` defers to the architecture allowlist
+    //     (util.PcodeSerializer.TIER2_DEFAULT_ARCHITECTURES). `on` forces
+    //     Tier 2 regardless of architecture; `off` disables Tier 2 even on
+    //     allowlisted architectures.
+    private boolean sanitizeExtraout = true;
+    private util.PcodeSerializer.AnalyticalTierMode analyticalMode =
+        util.PcodeSerializer.AnalyticalTierMode.AUTO;
+
+    // Script args with all recognized flags stripped out. The positional
+    // command processors (decompileSingleFunction / decompileAllFunctions)
+    // index into this rather than getScriptArgs() so flags and positional
+    // arguments can be intermixed on the command line.
+    private String[] positionalArgs = new String[0];
+
     /* For test setup purposes, we don't want to control this script from the command line. */
     protected void setProgram(Program program) throws RuntimeException {
         if (program != null && getCurrentProgram() == null) {
             currentProgram = program;
         } else {
             currentProgram = getCurrentProgram();
+        }
+    }
+
+    // Parse --sanitize-extraout and --sanitize-extraout-analytical from
+    // the raw getScriptArgs() list, storing the result on instance fields
+    // and producing a positional-args-only view in `positionalArgs`.
+    //
+    // Both `--flag value` and `--flag=value` forms are accepted so the
+    // Ghidra headless driver (which passes script args as a plain list)
+    // and wrapper shell scripts can use whichever is convenient.
+    //
+    // Idempotent: callers (including ensureFlagsParsed) may invoke this
+    // repeatedly. Flag-controlled fields reset to their defaults at the
+    // top so that successive calls reflect only the current raw args.
+    private void parseScriptFlags() {
+        // Reset to defaults so that repeat calls do not carry state from
+        // a previous argument list. This matters for tests that reuse a
+        // PatchestryDecompileFunctions instance across methods under
+        // @TestInstance(PER_CLASS). Defaults match the field initializers
+        // at the top of the class.
+        sanitizeExtraout = true;
+        analyticalMode = util.PcodeSerializer.AnalyticalTierMode.AUTO;
+        positionalArgs = new String[0];
+
+        String[] raw = getScriptArgs();
+        List<String> positional = new ArrayList<>(raw.length);
+        for (int i = 0; i < raw.length; ++i) {
+            String arg = raw[i];
+            if (arg == null) {
+                continue;
+            }
+            if (arg.equals("--sanitize-extraout")) {
+                sanitizeExtraout = true;
+                continue;
+            }
+            if (arg.equals("--no-sanitize-extraout")) {
+                sanitizeExtraout = false;
+                continue;
+            }
+            if (arg.startsWith("--sanitize-extraout=")) {
+                String value = arg.substring("--sanitize-extraout=".length());
+                sanitizeExtraout = parseBoolFlag(arg, value);
+                continue;
+            }
+            if (arg.equals("--sanitize-extraout-analytical")) {
+                if (i + 1 >= raw.length) {
+                    throw new IllegalArgumentException(
+                        "--sanitize-extraout-analytical requires a value (auto|on|off)");
+                }
+                analyticalMode = parseAnalyticalMode(raw[++i]);
+                continue;
+            }
+            if (arg.startsWith("--sanitize-extraout-analytical=")) {
+                String value = arg.substring(
+                    "--sanitize-extraout-analytical=".length());
+                analyticalMode = parseAnalyticalMode(value);
+                continue;
+            }
+            positional.add(arg);
+        }
+        positionalArgs = positional.toArray(new String[0]);
+    }
+
+    private static boolean parseBoolFlag(String flagName, String value) {
+        if (value == null) {
+            throw new IllegalArgumentException(flagName + " requires a value");
+        }
+        String v = value.toLowerCase();
+        if (v.equals("true") || v.equals("on") || v.equals("1") || v.equals("yes")) {
+            return true;
+        }
+        if (v.equals("false") || v.equals("off") || v.equals("0") || v.equals("no")) {
+            return false;
+        }
+        throw new IllegalArgumentException(
+            flagName + ": unrecognized boolean value '" + value + "'");
+    }
+
+    private static util.PcodeSerializer.AnalyticalTierMode parseAnalyticalMode(String value) {
+        if (value == null) {
+            throw new IllegalArgumentException(
+                "--sanitize-extraout-analytical requires a value (auto|on|off)");
+        }
+        switch (value.toLowerCase()) {
+            case "auto":
+                return util.PcodeSerializer.AnalyticalTierMode.AUTO;
+            case "on":
+            case "true":
+            case "1":
+            case "yes":
+                return util.PcodeSerializer.AnalyticalTierMode.ON;
+            case "off":
+            case "false":
+            case "0":
+            case "no":
+                return util.PcodeSerializer.AnalyticalTierMode.OFF;
+            default:
+                throw new IllegalArgumentException(
+                    "--sanitize-extraout-analytical: unrecognized value '"
+                        + value + "' (expected auto, on, or off)");
         }
     }
 
@@ -196,12 +323,14 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
 
         final var serializer = new PcodeSerializer(
-            writer, 
-            functions, 
+            writer,
+            functions,
             getLanguageID(),
             monitor,
             currentProgram,
-            getDecompilerInterface()
+            getDecompilerInterface(),
+            sanitizeExtraout,
+            analyticalMode
         );
         serializer.serialize();
     }
@@ -308,19 +437,30 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         );
     }
 
+    // Ensure positionalArgs reflects the current getScriptArgs(). Always
+    // re-parses so that test instances which reuse a PatchestryDecompileFunctions
+    // across multiple method invocations (@TestInstance(PER_CLASS)) see the
+    // freshly-set script args. Safe to call multiple times; parseScriptFlags()
+    // is pure w.r.t. the current raw args array.
+    private void ensureFlagsParsed() {
+        parseScriptFlags();
+    }
+
     void decompileSingleFunction() throws Exception {
-        if (getScriptArgs().length < 3) {
+        ensureFlagsParsed();
+        if (positionalArgs.length < 3) {
             throw new IllegalArgumentException("Insufficient arguments. Expected: <function_name> <output_file> as argument");
         }
-        JsonWriter writer = new JsonWriter(Files.newBufferedWriter(Path.of(getScriptArgs()[2])));
-        serializeToFile(writer, resolveFunction(getScriptArgs()[1]));
+        JsonWriter writer = new JsonWriter(Files.newBufferedWriter(Path.of(positionalArgs[2])));
+        serializeToFile(writer, resolveFunction(positionalArgs[1]));
     }
 
     void decompileAllFunctions() throws Exception {
-        if (getScriptArgs().length < 2) {
+        ensureFlagsParsed();
+        if (positionalArgs.length < 2) {
             throw new IllegalArgumentException("Insufficient arguments. Expected: <output_file> as argument");
         }
-        JsonWriter writer = new JsonWriter(Files.newBufferedWriter(Path.of(getScriptArgs()[1])));
+        JsonWriter writer = new JsonWriter(Files.newBufferedWriter(Path.of(positionalArgs[1])));
         serializeToFile(writer, getAllFunctions());
     }
 
@@ -357,7 +497,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     }
 
     void runHeadless() throws Exception {
-        if (getScriptArgs().length < 1) {
+        parseScriptFlags();
+        if (positionalArgs.length < 1) {
             throw new IllegalArgumentException("mode is not specified for headless execution");
         }
 
@@ -365,8 +506,11 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         runAutoAnalysis();
 
         // Execution mode
-        String mode = getScriptArgs()[0];
+        String mode = positionalArgs[0];
         println("Running in mode: " + mode);
+        if (sanitizeExtraout) {
+            println("[extraout] sanitizer flag enabled (analytical=" + analyticalMode + ")");
+        }
         switch (mode.toLowerCase()) {
             case "single":
                 decompileSingleFunction();

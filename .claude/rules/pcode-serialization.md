@@ -94,3 +94,14 @@ JUnit tests in `test/scripts/ghidra/` run inside the Ghidra Docker container aga
   "types": { ... }
 }
 ```
+
+## Extraout Sanitizer
+
+Rewrites Ghidra's `extraout_rN` / `unaff_*` / `in_*` register aliases to
+the pre-call variable they shadow. On by default.
+
+Flags: `--sanitize-extraout` (master, default on),
+`--sanitize-extraout-analytical={auto|on|off}` (Tier 2 gate, default auto).
+
+Tier 2 allowlist: `util.PcodeSerializer.TIER2_DEFAULT_ARCHITECTURES`
+= `{ARM, AARCH64}`.
