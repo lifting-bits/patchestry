@@ -901,10 +901,14 @@ namespace patchestry::ast {
                     // A.cond FALSE -> F directly, so outer = !a.cond.
                     // If T.succs[1] (taken) is F, t.cond TRUE -> F, so
                     // inner = t.cond; else inner = !t.cond.
-                    clang::Expr *outer_cond = NegateExpr(ctx_, a.branch_cond);
+                    // Clone the raw branch_cond pointers so this merged
+                    // condition owns an independent Expr tree — the same
+                    // a.branch_cond / t.branch_cond pointers may already
+                    // be referenced by other SNode constructions.
+                    clang::Expr *outer_cond = NegateExpr(ctx_, CloneExpr(ctx_, a.branch_cond));
                     clang::Expr *inner_cond = t_s1_is_merge
-                        ? t.branch_cond
-                        : NegateExpr(ctx_, t.branch_cond);
+                        ? CloneExpr(ctx_, t.branch_cond)
+                        : NegateExpr(ctx_, CloneExpr(ctx_, t.branch_cond));
                     auto *merged_cond = clang::BinaryOperator::Create(
                         ctx_,
                         EnsureRValue(ctx_, outer_cond),
@@ -928,13 +932,16 @@ namespace patchestry::ast {
                 auto &target_node = graph_.Node(goto_target);
                 if (!target_node.original_label.empty()) {
                     // succs[1] = taken (cond true).  If taken goes to merge,
-                    // the goto fires when cond is false — negate.
+                    // the goto fires when cond is false — negate.  Clone
+                    // the raw branch_cond pointers so this merged condition
+                    // owns an independent Expr tree.
+                    clang::Expr *outer_cond = CloneExpr(ctx_, a.branch_cond);
                     clang::Expr *inner_cond = t_s1_is_merge
-                        ? NegateExpr(ctx_, t.branch_cond)
-                        : t.branch_cond;
+                        ? NegateExpr(ctx_, CloneExpr(ctx_, t.branch_cond))
+                        : CloneExpr(ctx_, t.branch_cond);
                     auto *merged_cond = clang::BinaryOperator::Create(
                         ctx_,
-                        EnsureRValue(ctx_, a.branch_cond),
+                        EnsureRValue(ctx_, outer_cond),
                         EnsureRValue(ctx_, inner_cond),
                         clang::BO_LAnd, ctx_.BoolTy, clang::VK_PRValue,
                         clang::OK_Ordinary, clang::SourceLocation(),
@@ -1003,10 +1010,11 @@ namespace patchestry::ast {
                     // A.cond TRUE -> T directly, no negation on outer.
                     // If F.succs[1] (taken) is T, f.cond TRUE -> T, so
                     // inner = f.cond; else inner = !f.cond.
-                    clang::Expr *outer_cond = a.branch_cond;
+                    // Clone raw branch_cond pointers — see Case 1b.
+                    clang::Expr *outer_cond = CloneExpr(ctx_, a.branch_cond);
                     clang::Expr *inner_cond = f_s1_is_merge
-                        ? f.branch_cond
-                        : NegateExpr(ctx_, f.branch_cond);
+                        ? CloneExpr(ctx_, f.branch_cond)
+                        : NegateExpr(ctx_, CloneExpr(ctx_, f.branch_cond));
                     auto *merged_cond = clang::BinaryOperator::Create(
                         ctx_,
                         EnsureRValue(ctx_, outer_cond),
@@ -1030,11 +1038,12 @@ namespace patchestry::ast {
                 auto &target_node = graph_.Node(goto_target);
                 if (!target_node.original_label.empty()) {
                     // Outer condition: F is the not-taken arm, so body
-                    // executes when c1 is false — negate outer.
-                    clang::Expr *outer_cond = NegateExpr(ctx_, a.branch_cond);
+                    // executes when c1 is false — negate outer.  Clone
+                    // raw branch_cond pointers — see Case 1b.
+                    clang::Expr *outer_cond = NegateExpr(ctx_, CloneExpr(ctx_, a.branch_cond));
                     clang::Expr *inner_cond = f_s1_is_merge
-                        ? NegateExpr(ctx_, f.branch_cond)
-                        : f.branch_cond;
+                        ? NegateExpr(ctx_, CloneExpr(ctx_, f.branch_cond))
+                        : CloneExpr(ctx_, f.branch_cond);
                     auto *merged_cond = clang::BinaryOperator::Create(
                         ctx_,
                         EnsureRValue(ctx_, outer_cond),

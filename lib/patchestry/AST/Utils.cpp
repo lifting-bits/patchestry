@@ -247,4 +247,99 @@ namespace patchestry::ast {
         );
     }
 
+    clang::Expr *CloneExpr(clang::ASTContext &ctx, clang::Expr *expr) {
+        if (!expr) return nullptr;
+
+        auto loc = expr->getExprLoc();
+
+        if (auto *il = llvm::dyn_cast< clang::IntegerLiteral >(expr)) {
+            return clang::IntegerLiteral::Create(
+                ctx, il->getValue(), il->getType(), loc
+            );
+        }
+        if (auto *dre = llvm::dyn_cast< clang::DeclRefExpr >(expr)) {
+            return clang::DeclRefExpr::Create(
+                ctx, dre->getQualifierLoc(), dre->getTemplateKeywordLoc(),
+                dre->getDecl(), dre->refersToEnclosingVariableOrCapture(),
+                loc, dre->getType(), dre->getValueKind()
+            );
+        }
+        if (auto *bo = llvm::dyn_cast< clang::BinaryOperator >(expr)) {
+            return clang::BinaryOperator::Create(
+                ctx, CloneExpr(ctx, bo->getLHS()), CloneExpr(ctx, bo->getRHS()),
+                bo->getOpcode(), bo->getType(), bo->getValueKind(),
+                bo->getObjectKind(), loc, clang::FPOptionsOverride()
+            );
+        }
+        if (auto *uo = llvm::dyn_cast< clang::UnaryOperator >(expr)) {
+            return clang::UnaryOperator::Create(
+                ctx, CloneExpr(ctx, uo->getSubExpr()), uo->getOpcode(),
+                uo->getType(), uo->getValueKind(), uo->getObjectKind(),
+                loc, false, clang::FPOptionsOverride()
+            );
+        }
+        if (auto *ice = llvm::dyn_cast< clang::ImplicitCastExpr >(expr)) {
+            return clang::ImplicitCastExpr::Create(
+                ctx, ice->getType(), ice->getCastKind(),
+                CloneExpr(ctx, ice->getSubExpr()), nullptr,
+                ice->getValueKind(), clang::FPOptionsOverride()
+            );
+        }
+        if (auto *pe = llvm::dyn_cast< clang::ParenExpr >(expr)) {
+            return new (ctx) clang::ParenExpr(
+                loc, loc, CloneExpr(ctx, pe->getSubExpr())
+            );
+        }
+        if (auto *cse = llvm::dyn_cast< clang::CStyleCastExpr >(expr)) {
+            auto *cloned_sub = CloneExpr(ctx, cse->getSubExpr());
+            return clang::CStyleCastExpr::Create(
+                ctx, cse->getType(), cse->getValueKind(), cse->getCastKind(),
+                cloned_sub, nullptr, clang::FPOptionsOverride(),
+                ctx.getTrivialTypeSourceInfo(cse->getType()),
+                cse->getLParenLoc(), cse->getRParenLoc()
+            );
+        }
+        if (auto *ase = llvm::dyn_cast< clang::ArraySubscriptExpr >(expr)) {
+            return new (ctx) clang::ArraySubscriptExpr(
+                CloneExpr(ctx, ase->getLHS()),
+                CloneExpr(ctx, ase->getRHS()),
+                ase->getType(), ase->getValueKind(),
+                ase->getObjectKind(), loc
+            );
+        }
+        if (auto *me = llvm::dyn_cast< clang::MemberExpr >(expr)) {
+            return clang::MemberExpr::CreateImplicit(
+                ctx, CloneExpr(ctx, me->getBase()),
+                me->isArrow(), me->getMemberDecl(),
+                me->getType(), me->getValueKind(),
+                me->getObjectKind()
+            );
+        }
+        if (auto *ce = llvm::dyn_cast< clang::CallExpr >(expr)) {
+            llvm::SmallVector< clang::Expr *, 4 > args;
+            for (auto *a : ce->arguments())
+                args.push_back(CloneExpr(ctx, a));
+            return clang::CallExpr::Create(
+                ctx, CloneExpr(ctx, ce->getCallee()), args,
+                ce->getType(), ce->getValueKind(), loc,
+                clang::FPOptionsOverride()
+            );
+        }
+        if (auto *co = llvm::dyn_cast< clang::ConditionalOperator >(expr)) {
+            return new (ctx) clang::ConditionalOperator(
+                CloneExpr(ctx, co->getCond()),
+                loc, CloneExpr(ctx, co->getTrueExpr()),
+                loc, CloneExpr(ctx, co->getFalseExpr()),
+                co->getType(), co->getValueKind(),
+                co->getObjectKind()
+            );
+        }
+        // Fallback: wrap in a ParenExpr to force a unique AST node.
+        // This prevents shared Expr* pointers from causing CIR lowering
+        // assertions when the same condition is used in multiple places.
+        LOG(WARNING) << "CloneExpr: unhandled expression type "
+                     << expr->getStmtClassName() << ", wrapping in ParenExpr\n";
+        return new (ctx) clang::ParenExpr(loc, loc, expr);
+    }
+
 } // namespace patchestry::ast
