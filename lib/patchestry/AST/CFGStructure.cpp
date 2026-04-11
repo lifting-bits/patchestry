@@ -853,9 +853,21 @@ namespace patchestry::ast {
         }
 
         // Case 1b: T is a conditional forwarder (no stmts, just a branch)
-        // with one arm going to F (merge).  Merge conditions:
-        //   if (c1 && inner_cond) goto other_succ;
-        // Guard: must not have a structured SNode — collapsed nodes have
+        // with one arm going to F (merge).  Two emission forms:
+        //   (a) Disjunctive targeting merge (F):
+        //         if (!a.cond || inner_cond) goto F.label;
+        //       Used when F's label is "independently referenced" -- either
+        //       a collapsed SNode tree already emits a goto to it, or some
+        //       other live graph node will also reach it.  Guarantees the
+        //       label survives cleanup so the guard isn't dropped.
+        //   (b) Conjunctive targeting non-merge (goto_target):
+        //         if (a.cond && inner_cond) goto goto_target.label;
+        //       Used when the merge is only referenced by this collapse
+        //       path.  Relies on ClangEmitterCleanup::ScopeifyIfGotos to
+        //       scope the body; fails if the target becomes adjacent but
+        //       safe for the majority of short-range skip patterns (see
+        //       cwe22_init_logger pre-fix state).
+        // Guard: must not have a structured SNode -- collapsed nodes have
         // stmts cleared by IdentifyInternal but carry content in structured.
         if (!skip_case1
             && HasSoleRealPredecessor(t_id, id) && t.is_conditional
@@ -865,19 +877,71 @@ namespace patchestry::ast {
             bool t_s0_is_merge = (t.succs[0] == f_id);
             bool t_s1_is_merge = (t.succs[1] == f_id);
             if (t_s0_is_merge || t_s1_is_merge) {
-                size_t goto_target = t_s0_is_merge ? t.succs[1] : t.succs[0];
-                auto &target_node = graph_.Node(goto_target);
+                // Is the merge (F) independently labeled?  Any pred
+                // other than A (this node) and T (the forwarder we are
+                // collapsing) implies at least one other route to F,
+                // which will keep F's label live through cleanup.
+                // Count collapsed preds too: their edges still existed
+                // in the original graph, and the structured SNode trees
+                // that replaced them typically emit gotos to F.  A
+                // previous version of this check used the snapshot
+                // `collapsed_succ_targets_` + filtered live preds, but
+                // that snapshot is populated once per StructureInternal
+                // round and goes stale as rules fire within the round.
+                auto merge_is_safe_goto_target = [&]() {
+                    for (size_t p : f.preds) {
+                        if (p == id || p == t_id) continue;
+                        return true;
+                    }
+                    return false;
+                };
 
-                // Refuse if target has no label — would produce dangling goto.
-                if (!target_node.original_label.empty()) {
-                    // succs[1] = taken (cond true).  If taken goes to merge,
-                    // the goto fires when cond is false — negate.
+                if (!f.original_label.empty() && merge_is_safe_goto_target()) {
+                    // Form (a): disjunctive, goto F (merge).
+                    // A.cond FALSE -> F directly, so outer = !a.cond.
+                    // If T.succs[1] (taken) is F, t.cond TRUE -> F, so
+                    // inner = t.cond; else inner = !t.cond.
+                    // Clone the raw branch_cond pointers so this merged
+                    // condition owns an independent Expr tree — the same
+                    // a.branch_cond / t.branch_cond pointers may already
+                    // be referenced by other SNode constructions.
+                    clang::Expr *outer_cond = NegateExpr(ctx_, CloneExpr(ctx_, a.branch_cond));
                     clang::Expr *inner_cond = t_s1_is_merge
-                        ? NegateExpr(ctx_, t.branch_cond)
-                        : t.branch_cond;
+                        ? CloneExpr(ctx_, t.branch_cond)
+                        : NegateExpr(ctx_, CloneExpr(ctx_, t.branch_cond));
                     auto *merged_cond = clang::BinaryOperator::Create(
                         ctx_,
-                        EnsureRValue(ctx_, a.branch_cond),
+                        EnsureRValue(ctx_, outer_cond),
+                        EnsureRValue(ctx_, inner_cond),
+                        clang::BO_LOr, ctx_.BoolTy, clang::VK_PRValue,
+                        clang::OK_Ordinary, clang::SourceLocation(),
+                        clang::FPOptionsOverride());
+
+                    auto *if_goto = factory_.Make<SIfThenElse>(
+                        merged_cond,
+                        factory_.Make<SGoto>(factory_.Intern(f.original_label)),
+                        nullptr);
+
+                    SNode *result = WrapWithPriorContent(id, if_goto);
+                    graph_.IdentifyInternal({id, t_id}, CNode::BlockType::kIf, result);
+                    return true;
+                }
+
+                // Form (b): original conjunctive, goto non-merge.
+                size_t goto_target = t_s0_is_merge ? t.succs[1] : t.succs[0];
+                auto &target_node = graph_.Node(goto_target);
+                if (!target_node.original_label.empty()) {
+                    // succs[1] = taken (cond true).  If taken goes to merge,
+                    // the goto fires when cond is false — negate.  Clone
+                    // the raw branch_cond pointers so this merged condition
+                    // owns an independent Expr tree.
+                    clang::Expr *outer_cond = CloneExpr(ctx_, a.branch_cond);
+                    clang::Expr *inner_cond = t_s1_is_merge
+                        ? NegateExpr(ctx_, CloneExpr(ctx_, t.branch_cond))
+                        : CloneExpr(ctx_, t.branch_cond);
+                    auto *merged_cond = clang::BinaryOperator::Create(
+                        ctx_,
+                        EnsureRValue(ctx_, outer_cond),
                         EnsureRValue(ctx_, inner_cond),
                         clang::BO_LAnd, ctx_.BoolTy, clang::VK_PRValue,
                         clang::OK_Ordinary, clang::SourceLocation(),
@@ -889,7 +953,6 @@ namespace patchestry::ast {
                         nullptr);
 
                     SNode *result = WrapWithPriorContent(id, if_goto);
-
                     graph_.IdentifyInternal({id, t_id}, CNode::BlockType::kIf, result);
                     return true;
                 }
@@ -916,9 +979,14 @@ namespace patchestry::ast {
         }
 
         // Case 2b: F is a conditional forwarder (no stmts, just a branch)
-        // with one arm going to T (merge).  Outer condition negated, then
-        // merged with inner:  if (!c1 && inner_cond) goto other_succ;
-        // Guard: must not have a structured SNode (same as Case 1b).
+        // with one arm going to T (merge).  Mirror of Case 1b with T as
+        // the merge.  Two emission forms:
+        //   (a) Disjunctive targeting merge (T):
+        //         if (a.cond || inner_cond) goto T.label;
+        //       (A.cond TRUE -> T directly, so outer = a.cond, no negate.)
+        //   (b) Conjunctive targeting non-merge (goto_target):
+        //         if (!a.cond && inner_cond) goto goto_target.label;
+        // See Case 1b for rationale.  Guard: must not have structured SNode.
         if (!skip_case2
             && HasSoleRealPredecessor(f_id, id) && f.is_conditional
             && f.stmts.empty() && !f.structured
@@ -927,16 +995,55 @@ namespace patchestry::ast {
             bool f_s0_is_merge = (f.succs[0] == t_id);
             bool f_s1_is_merge = (f.succs[1] == t_id);
             if (f_s0_is_merge || f_s1_is_merge) {
+                // Is the merge (T) independently labeled?  See Case 1b
+                // for rationale on counting collapsed preds too.
+                auto merge_is_safe_goto_target = [&]() {
+                    for (size_t p : t.preds) {
+                        if (p == id || p == f_id) continue;
+                        return true;
+                    }
+                    return false;
+                };
+
+                if (!t.original_label.empty() && merge_is_safe_goto_target()) {
+                    // Form (a): disjunctive, goto T (merge).
+                    // A.cond TRUE -> T directly, no negation on outer.
+                    // If F.succs[1] (taken) is T, f.cond TRUE -> T, so
+                    // inner = f.cond; else inner = !f.cond.
+                    // Clone raw branch_cond pointers — see Case 1b.
+                    clang::Expr *outer_cond = CloneExpr(ctx_, a.branch_cond);
+                    clang::Expr *inner_cond = f_s1_is_merge
+                        ? CloneExpr(ctx_, f.branch_cond)
+                        : NegateExpr(ctx_, CloneExpr(ctx_, f.branch_cond));
+                    auto *merged_cond = clang::BinaryOperator::Create(
+                        ctx_,
+                        EnsureRValue(ctx_, outer_cond),
+                        EnsureRValue(ctx_, inner_cond),
+                        clang::BO_LOr, ctx_.BoolTy, clang::VK_PRValue,
+                        clang::OK_Ordinary, clang::SourceLocation(),
+                        clang::FPOptionsOverride());
+
+                    auto *if_goto = factory_.Make<SIfThenElse>(
+                        merged_cond,
+                        factory_.Make<SGoto>(factory_.Intern(t.original_label)),
+                        nullptr);
+
+                    SNode *result = WrapWithPriorContent(id, if_goto);
+                    graph_.IdentifyInternal({id, f_id}, CNode::BlockType::kIf, result);
+                    return true;
+                }
+
+                // Form (b): original conjunctive, goto non-merge.
                 size_t goto_target = f_s0_is_merge ? f.succs[1] : f.succs[0];
                 auto &target_node = graph_.Node(goto_target);
-
                 if (!target_node.original_label.empty()) {
                     // Outer condition: F is the not-taken arm, so body
-                    // executes when c1 is false — negate outer.
-                    clang::Expr *outer_cond = NegateExpr(ctx_, a.branch_cond);
+                    // executes when c1 is false — negate outer.  Clone
+                    // raw branch_cond pointers — see Case 1b.
+                    clang::Expr *outer_cond = NegateExpr(ctx_, CloneExpr(ctx_, a.branch_cond));
                     clang::Expr *inner_cond = f_s1_is_merge
-                        ? NegateExpr(ctx_, f.branch_cond)
-                        : f.branch_cond;
+                        ? NegateExpr(ctx_, CloneExpr(ctx_, f.branch_cond))
+                        : CloneExpr(ctx_, f.branch_cond);
                     auto *merged_cond = clang::BinaryOperator::Create(
                         ctx_,
                         EnsureRValue(ctx_, outer_cond),
@@ -951,7 +1058,6 @@ namespace patchestry::ast {
                         nullptr);
 
                     SNode *result = WrapWithPriorContent(id, if_goto);
-
                     graph_.IdentifyInternal({id, f_id}, CNode::BlockType::kIf, result);
                     return true;
                 }
@@ -3443,13 +3549,64 @@ namespace patchestry::ast {
             return false;
         }
 
+        /// Strict terminator check for dead-code removal purposes.
+        ///
+        /// `SNodeAlwaysTerminates` marks any SSeq whose last child
+        /// terminates as a "terminator" — but after AbsorbFallthroughIntoElse
+        /// or similar post-passes move content between siblings, an SSeq
+        /// that "always terminates" by that forward-flow check may still
+        /// be part of a larger flow where subsequent siblings are reached
+        /// via fall-through from an earlier if-then-else arm that was
+        /// modified in-place.  To avoid dropping live code we only treat
+        /// these as strong terminators:
+        ///   - primitive terminators (SReturn/SBreak/SContinue/SGoto)
+        ///   - SBlock whose last clang::Stmt is itself terminal
+        ///   - SLabel wrapping any of the above
+        ///   - SIfThenElse where BOTH branches are strong terminators
+        ///     (safe: AbsorbFallthroughIntoElse only fires on if-then
+        ///     with NO else, so an if-then-else with both arms
+        ///     terminating is structurally stable under post-passes).
+        /// SSeq / loops / switch are still excluded because their
+        /// internal flow can be mutated in ways the forward "tail
+        /// terminates" check doesn't capture.  The SIfThenElse case
+        /// recovers the legitimate `if(c) return x; else return y;`
+        /// dead-code-after pattern without reintroducing the fragility
+        /// that caused the pb_decode_inner CALL_LOST regression.
+        bool IsStrongTerminator(SNode *node) {
+            if (!node) return false;
+            if (node->dyn_cast<SReturn>()) return true;
+            if (node->dyn_cast<SBreak>()) return true;
+            if (node->dyn_cast<SContinue>()) return true;
+            if (node->dyn_cast<SGoto>()) return true;
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                if (blk->Empty()) return false;
+                return ClangStmtIsTerminator(blk->Stmts().back());
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>())
+                return IsStrongTerminator(lbl->Body());
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                // Both arms must be strong terminators.  Absorb only
+                // targets if-then-without-else, so this shape is stable.
+                return ite->ThenBranch() && ite->ElseBranch()
+                    && IsStrongTerminator(ite->ThenBranch())
+                    && IsStrongTerminator(ite->ElseBranch());
+            }
+            // SSeq / SWhile / SDoWhile / SFor / SSwitch:
+            // DO NOT treat as terminators here, even if their tail
+            // terminates.  AbsorbFallthroughIntoElse et al. can mutate
+            // their internals in ways that invalidate the simple
+            // "last child terminates" heuristic for parent-level
+            // dead-code analysis.
+            return false;
+        }
+
         bool RemoveDeadInSSeq(SSeq *seq) {
             auto &children = seq->Children();
             bool changed = false;
             for (size_t i = 0; i + 1 < children.size(); ++i) {
-                if (!SNodeAlwaysTerminates(children[i])) continue;
-                // children[i] terminates — everything after it that
-                // contains no labels is dead code.
+                if (!IsStrongTerminator(children[i])) continue;
+                // children[i] is a direct primitive terminator —
+                // everything after it that contains no labels is dead.
                 size_t j = i + 1;
                 while (j < children.size()) {
                     if (ContainsLabel(children[j])) {

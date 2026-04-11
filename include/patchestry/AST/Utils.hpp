@@ -29,6 +29,19 @@ namespace patchestry::ast {
     /// Create !(expr) using clang::UnaryOperator (logical not).
     /// Wraps in ParenExpr so the pretty-printer emits !(a == b).
     clang::Expr *NegateExpr(clang::ASTContext &ctx, clang::Expr *expr);
+
+    /// Deep-clone a Clang Expr tree to produce an independent copy.
+    /// Used to break Expr* aliasing when the same condition needs to
+    /// appear in multiple places in the AST — CIR lowering and some
+    /// emitter paths require tree-unique Expr* nodes.  Supports the
+    /// expression kinds the structuring pipeline builds (integer/bool
+    /// literals, DeclRef, Binary/Unary operator, ImplicitCast,
+    /// CStyleCast, ParenExpr, ArraySubscript, MemberExpr, CallExpr,
+    /// ConditionalOperator).  For unknown kinds, falls back to wrapping
+    /// the original in a ParenExpr (still forces a fresh node while
+    /// leaving the subtree shared — acceptable because subtree sharing
+    /// is then handled by downstream ClangEmitter cloning).
+    clang::Expr *CloneExpr(clang::ASTContext &ctx, clang::Expr *expr);
     
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key);
 

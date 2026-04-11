@@ -72,76 +72,78 @@ namespace patchestry::ast {
     clang::CastKind GetCastKind(
         clang::ASTContext &ctx, const clang::QualType &from_type, const clang::QualType &to_type
     ) {
-        assert(!to_type.isNull() && "to_type is null");
-        assert(!from_type.isNull() && "from_type is null");
+        // Release-safe null guards.  Previously these were asserts, but
+        // asserts compile out in Release builds and the very next line
+        // (to_type->isVoidType()) would then segfault on a null QualType.
+        if (to_type.isNull() || from_type.isNull()) {
+            LOG(ERROR) << "GetCastKind called with null QualType: from_null="
+                       << from_type.isNull() << " to_null=" << to_type.isNull()
+                       << " -- returning CK_NoOp.";
+            return clang::CK_NoOp;
+        }
 
-        // Identity cast
+        // 1. Identity.
         if (ctx.hasSameUnqualifiedType(from_type, to_type)) {
-            return clang::CastKind::CK_NoOp;
+            return clang::CK_NoOp;
         }
 
-        // Void cast
+        // 2. Void.
         if (to_type->isVoidType()) {
-            return clang::CastKind::CK_ToVoid;
+            return clang::CK_ToVoid;
         }
 
-        // Boolean conversion
+        // 3. Boolean.
         if (to_type->isBooleanType()) {
-            if (from_type->isIntegerType()) {
+            if (from_type->isIntegralOrEnumerationType()) {
                 return clang::CK_IntegralToBoolean;
             }
             if (from_type->isFloatingType()) {
                 return clang::CK_FloatingToBoolean;
             }
-            if (from_type->isPointerType()) {
+            if (from_type->isAnyPointerType() || from_type->isArrayType()
+                || from_type->isFunctionType() || from_type->isNullPtrType())
+            {
                 return clang::CK_PointerToBoolean;
             }
             if (from_type->isMemberPointerType()) {
                 return clang::CK_MemberPointerToBoolean;
             }
+            // Complex / record → fall through to CK_BitCast guard.
         }
 
-        if (from_type->isIntegerType() && to_type->isCharType()) {
-            return clang::CK_IntegralCast;
-        }
-
-        if (from_type->isIntegerType() && to_type->isArrayType()) {
-            return clang::CK_IntegralToPointer;
-        }
-
-        if (from_type->isIntegerType() && to_type->isRecordType()) {
-            return clang::CK_BitCast;
-        }
-
-        // Integer conversion
-        if (to_type->isIntegerType()) {
-            if (from_type->isBooleanType()) {
-                return clang::CK_BooleanToSignedIntegral;
+        // 4. Integral (includes char and unscoped enum).
+        if (to_type->isIntegralOrEnumerationType()) {
+            if (from_type->isIntegralOrEnumerationType()) {
+                return clang::CK_IntegralCast;
             }
             if (from_type->isFloatingType()) {
                 return clang::CK_FloatingToIntegral;
             }
-            if (from_type->isPointerType()) {
+            if (from_type->isAnyPointerType() || from_type->isArrayType()
+                || from_type->isFunctionType() || from_type->isNullPtrType())
+            {
                 return clang::CK_PointerToIntegral;
             }
-            if (from_type->isEnumeralType() || from_type->isIntegerType()) {
-                return clang::CK_IntegralCast;
-            }
+            // Complex / record → fall through.
         }
 
-        // Floating conversion
+        // 5. Floating.
         if (to_type->isFloatingType()) {
-            if (from_type->isIntegerType()) {
+            if (from_type->isIntegralOrEnumerationType()) {
                 return clang::CK_IntegralToFloating;
             }
             if (from_type->isFloatingType()) {
                 return clang::CK_FloatingCast;
             }
+            // Pointer / array / complex → fall through.
         }
 
-        // Handle pointer target type
+        // 6. Pointer.
         if (to_type->isAnyPointerType()) {
-            if (from_type->isIntegerType()) {
+            if (from_type->isNullPtrType()) {
+                return clang::CK_NullToPointer;
+            }
+            if (from_type->isIntegralOrEnumerationType()) {
                 return clang::CK_IntegralToPointer;
             }
             if (from_type->isArrayType()) {
@@ -153,32 +155,88 @@ namespace patchestry::ast {
             if (from_type->isAnyPointerType()) {
                 return clang::CK_BitCast;
             }
-        }
-        // Array conversions
-        if (to_type->isArrayType()) {
-            if (from_type->canDecayToPointerType()) {
-                return clang::CK_ArrayToPointerDecay;
-            }
+            // Floating / complex / record → fall through.
         }
 
-        // Complex numbers
-        if (to_type->isComplexType()) {
-            if (from_type->isIntegerType()) {
-                return clang::CK_IntegralComplexCast;
+        // 7. Array destination intentionally not handled.
+        //
+        // Returning CK_ArrayToPointerDecay with `to_type` set to an array
+        // is internally inconsistent: the cast kind produces a pointer
+        // type but the ImplicitCastExpr's stated type would remain the
+        // array, tripping downstream consumers (CIR lowering, pretty
+        // printers).  More importantly, this section is effectively
+        // unreachable: OpBuilder::make_cast pre-decays `from=array ->
+        // to=pointer` before calling GetCastKind, and ShouldReinterpretCast
+        // routes `arithmetic|pointer -> array` through reinterpret casts
+        // upstream.  You cannot cast to an array type in C at the source
+        // level, and Ghidra P-Code for C input never produces one as a
+        // CAST destination.  Any exotic combination that does reach this
+        // point (e.g. complex -> array) falls through to the CK_BitCast
+        // guard below with a diagnostic log.
+
+        // 8. Complex.
+        if (to_type->isAnyComplexType()) {
+            if (from_type->isIntegralOrEnumerationType()) {
+                return clang::CK_IntegralRealToComplex;
             }
             if (from_type->isFloatingType()) {
-                return clang::CK_FloatingComplexCast;
+                return clang::CK_FloatingRealToComplex;
+            }
+            if (from_type->isAnyComplexType()) {
+                const bool from_is_int_complex = from_type->isComplexIntegerType();
+                const bool to_is_int_complex   = to_type->isComplexIntegerType();
+                if (from_is_int_complex && to_is_int_complex) {
+                    return clang::CK_IntegralComplexCast;
+                }
+                if (!from_is_int_complex && !to_is_int_complex) {
+                    return clang::CK_FloatingComplexCast;
+                }
+                return from_is_int_complex
+                    ? clang::CK_IntegralComplexToFloatingComplex
+                    : clang::CK_FloatingComplexToIntegralComplex;
             }
         }
 
-        // Member pointer conversions
+        // 9. Member pointer.
+        //
+        // Member-pointer handling is intentionally minimal: Patchestry
+        // decompiles C binaries via Ghidra P-Code, and the P-Code
+        // serializer never emits `MemberPointerType` for C inputs, so
+        // this branch is effectively dead for every current fixture.
+        // When/if C++ decomp support is added, this section needs a
+        // broader rewrite to distinguish:
+        //   - nullptr -> T::*          (CK_NullToMemberPointer)
+        //   - Base::* -> Derived::*    (CK_BaseToDerivedMemberPointer)
+        //   - Derived::* -> Base::*    (CK_DerivedToBaseMemberPointer)
+        //   - reinterpret_cast casts   (CK_ReinterpretMemberPointer)
+        // which requires walking the class hierarchy, not just type
+        // predicates.  For now, treat any memberptr-to-memberptr as
+        // the base-to-derived form — this is better than the earlier
+        // incorrect CK_BaseToDerived (for classes, not member pointers)
+        // it replaced, and matches the only shape P-Code could ever
+        // produce.  Other memberptr combinations fall through to the
+        // CK_BitCast guard.
+        //
+        // Note on Clang's type predicates: isAnyPointerType() is
+        // isPointerType() || isObjCObjectPointerType() — it does NOT
+        // include MemberPointerType, so this branch is reachable
+        // (the earlier to=AnyPointer dispatch does not shadow it).
         if (to_type->isMemberPointerType() && from_type->isMemberPointerType()) {
-            return clang::CK_BaseToDerived;
+            return clang::CK_BaseToDerivedMemberPointer;
         }
 
-        assert(false && "Failed to find implicit cast kind");
-
-        return clang::CastKind::CK_NoOp;
+        // 10. Ultimate fallback. Reached only by genuinely exotic pairs:
+        //     float ↔ pointer, pointer ↔ complex, record-involved pairs
+        //     that slipped past ShouldReinterpretCast, etc. Log so the
+        //     specific pair is visible in stderr, then emit CK_BitCast so
+        //     the decomp does not abort. OpBuilder::make_cast has a
+        //     reinterpret-cast final fallback that can still rescue the
+        //     result upstream if BitCast is wrong.
+        LOG(ERROR) << "GetCastKind: no specific handler for cast: from='"
+                   << from_type.getAsString() << "' to='"
+                   << to_type.getAsString()
+                   << "' -- falling back to CK_BitCast.";
+        return clang::CK_BitCast;
     }
 
     bool
@@ -218,6 +276,101 @@ namespace patchestry::ast {
             ctx, paren, clang::UO_LNot, ctx.BoolTy, clang::VK_PRValue, clang::OK_Ordinary, loc,
             false, clang::FPOptionsOverride()
         );
+    }
+
+    clang::Expr *CloneExpr(clang::ASTContext &ctx, clang::Expr *expr) {
+        if (!expr) return nullptr;
+
+        auto loc = expr->getExprLoc();
+
+        if (auto *il = llvm::dyn_cast< clang::IntegerLiteral >(expr)) {
+            return clang::IntegerLiteral::Create(
+                ctx, il->getValue(), il->getType(), loc
+            );
+        }
+        if (auto *dre = llvm::dyn_cast< clang::DeclRefExpr >(expr)) {
+            return clang::DeclRefExpr::Create(
+                ctx, dre->getQualifierLoc(), dre->getTemplateKeywordLoc(),
+                dre->getDecl(), dre->refersToEnclosingVariableOrCapture(),
+                loc, dre->getType(), dre->getValueKind()
+            );
+        }
+        if (auto *bo = llvm::dyn_cast< clang::BinaryOperator >(expr)) {
+            return clang::BinaryOperator::Create(
+                ctx, CloneExpr(ctx, bo->getLHS()), CloneExpr(ctx, bo->getRHS()),
+                bo->getOpcode(), bo->getType(), bo->getValueKind(),
+                bo->getObjectKind(), loc, clang::FPOptionsOverride()
+            );
+        }
+        if (auto *uo = llvm::dyn_cast< clang::UnaryOperator >(expr)) {
+            return clang::UnaryOperator::Create(
+                ctx, CloneExpr(ctx, uo->getSubExpr()), uo->getOpcode(),
+                uo->getType(), uo->getValueKind(), uo->getObjectKind(),
+                loc, false, clang::FPOptionsOverride()
+            );
+        }
+        if (auto *ice = llvm::dyn_cast< clang::ImplicitCastExpr >(expr)) {
+            return clang::ImplicitCastExpr::Create(
+                ctx, ice->getType(), ice->getCastKind(),
+                CloneExpr(ctx, ice->getSubExpr()), nullptr,
+                ice->getValueKind(), clang::FPOptionsOverride()
+            );
+        }
+        if (auto *pe = llvm::dyn_cast< clang::ParenExpr >(expr)) {
+            return new (ctx) clang::ParenExpr(
+                loc, loc, CloneExpr(ctx, pe->getSubExpr())
+            );
+        }
+        if (auto *cse = llvm::dyn_cast< clang::CStyleCastExpr >(expr)) {
+            auto *cloned_sub = CloneExpr(ctx, cse->getSubExpr());
+            return clang::CStyleCastExpr::Create(
+                ctx, cse->getType(), cse->getValueKind(), cse->getCastKind(),
+                cloned_sub, nullptr, clang::FPOptionsOverride(),
+                ctx.getTrivialTypeSourceInfo(cse->getType()),
+                cse->getLParenLoc(), cse->getRParenLoc()
+            );
+        }
+        if (auto *ase = llvm::dyn_cast< clang::ArraySubscriptExpr >(expr)) {
+            return new (ctx) clang::ArraySubscriptExpr(
+                CloneExpr(ctx, ase->getLHS()),
+                CloneExpr(ctx, ase->getRHS()),
+                ase->getType(), ase->getValueKind(),
+                ase->getObjectKind(), loc
+            );
+        }
+        if (auto *me = llvm::dyn_cast< clang::MemberExpr >(expr)) {
+            return clang::MemberExpr::CreateImplicit(
+                ctx, CloneExpr(ctx, me->getBase()),
+                me->isArrow(), me->getMemberDecl(),
+                me->getType(), me->getValueKind(),
+                me->getObjectKind()
+            );
+        }
+        if (auto *ce = llvm::dyn_cast< clang::CallExpr >(expr)) {
+            llvm::SmallVector< clang::Expr *, 4 > args;
+            for (auto *a : ce->arguments())
+                args.push_back(CloneExpr(ctx, a));
+            return clang::CallExpr::Create(
+                ctx, CloneExpr(ctx, ce->getCallee()), args,
+                ce->getType(), ce->getValueKind(), loc,
+                clang::FPOptionsOverride()
+            );
+        }
+        if (auto *co = llvm::dyn_cast< clang::ConditionalOperator >(expr)) {
+            return new (ctx) clang::ConditionalOperator(
+                CloneExpr(ctx, co->getCond()),
+                loc, CloneExpr(ctx, co->getTrueExpr()),
+                loc, CloneExpr(ctx, co->getFalseExpr()),
+                co->getType(), co->getValueKind(),
+                co->getObjectKind()
+            );
+        }
+        // Fallback: wrap in a ParenExpr to force a unique AST node.
+        // This prevents shared Expr* pointers from causing CIR lowering
+        // assertions when the same condition is used in multiple places.
+        LOG(WARNING) << "CloneExpr: unhandled expression type "
+                     << expr->getStmtClassName() << ", wrapping in ParenExpr\n";
+        return new (ctx) clang::ParenExpr(loc, loc, expr);
     }
 
 } // namespace patchestry::ast
