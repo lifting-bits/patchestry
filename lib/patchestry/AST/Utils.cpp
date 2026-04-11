@@ -72,8 +72,15 @@ namespace patchestry::ast {
     clang::CastKind GetCastKind(
         clang::ASTContext &ctx, const clang::QualType &from_type, const clang::QualType &to_type
     ) {
-        assert(!to_type.isNull() && "to_type is null");
-        assert(!from_type.isNull() && "from_type is null");
+        // Release-safe null guards.  Previously these were asserts, but
+        // asserts compile out in Release builds and the very next line
+        // (to_type->isVoidType()) would then segfault on a null QualType.
+        if (to_type.isNull() || from_type.isNull()) {
+            LOG(ERROR) << "GetCastKind called with null QualType: from_null="
+                       << from_type.isNull() << " to_null=" << to_type.isNull()
+                       << " -- returning CK_NoOp.";
+            return clang::CK_NoOp;
+        }
 
         // 1. Identity.
         if (ctx.hasSameUnqualifiedType(from_type, to_type)) {
@@ -197,7 +204,7 @@ namespace patchestry::ast {
         LOG(ERROR) << "GetCastKind: no specific handler for cast: from='"
                    << from_type.getAsString() << "' to='"
                    << to_type.getAsString()
-                   << "' -- falling back to CK_BitCast.\n";
+                   << "' -- falling back to CK_BitCast.";
         return clang::CK_BitCast;
     }
 
