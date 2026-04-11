@@ -877,13 +877,20 @@ namespace patchestry::ast {
             bool t_s0_is_merge = (t.succs[0] == f_id);
             bool t_s1_is_merge = (t.succs[1] == f_id);
             if (t_s0_is_merge || t_s1_is_merge) {
-                // Is the merge (F) independently labeled in live graph
-                // state?  If yes, form (a) is safe; else fall back to (b).
+                // Is the merge (F) independently labeled?  Any pred
+                // other than A (this node) and T (the forwarder we are
+                // collapsing) implies at least one other route to F,
+                // which will keep F's label live through cleanup.
+                // Count collapsed preds too: their edges still existed
+                // in the original graph, and the structured SNode trees
+                // that replaced them typically emit gotos to F.  A
+                // previous version of this check used the snapshot
+                // `collapsed_succ_targets_` + filtered live preds, but
+                // that snapshot is populated once per StructureInternal
+                // round and goes stale as rules fire within the round.
                 auto merge_is_safe_goto_target = [&]() {
-                    if (collapsed_succ_targets_.count(f_id)) return true;
                     for (size_t p : f.preds) {
                         if (p == id || p == t_id) continue;
-                        if (graph_.Node(p).IsCollapsed()) continue;
                         return true;
                     }
                     return false;
@@ -981,12 +988,11 @@ namespace patchestry::ast {
             bool f_s0_is_merge = (f.succs[0] == t_id);
             bool f_s1_is_merge = (f.succs[1] == t_id);
             if (f_s0_is_merge || f_s1_is_merge) {
-                // Is the merge (T) independently labeled?
+                // Is the merge (T) independently labeled?  See Case 1b
+                // for rationale on counting collapsed preds too.
                 auto merge_is_safe_goto_target = [&]() {
-                    if (collapsed_succ_targets_.count(t_id)) return true;
                     for (size_t p : t.preds) {
                         if (p == id || p == f_id) continue;
-                        if (graph_.Node(p).IsCollapsed()) continue;
                         return true;
                     }
                     return false;
@@ -3542,12 +3548,21 @@ namespace patchestry::ast {
         /// that "always terminates" by that forward-flow check may still
         /// be part of a larger flow where subsequent siblings are reached
         /// via fall-through from an earlier if-then-else arm that was
-        /// modified in-place.  To avoid dropping live code, only treat
-        /// primitive terminators (SReturn/SBreak/SContinue/SGoto, or an
-        /// SBlock whose last clang::Stmt is itself terminal) as strong
-        /// terminators here.  Dropping extra dead code via composite
-        /// termination is a nice-to-have optimisation, preserving live
-        /// code is correctness.
+        /// modified in-place.  To avoid dropping live code we only treat
+        /// these as strong terminators:
+        ///   - primitive terminators (SReturn/SBreak/SContinue/SGoto)
+        ///   - SBlock whose last clang::Stmt is itself terminal
+        ///   - SLabel wrapping any of the above
+        ///   - SIfThenElse where BOTH branches are strong terminators
+        ///     (safe: AbsorbFallthroughIntoElse only fires on if-then
+        ///     with NO else, so an if-then-else with both arms
+        ///     terminating is structurally stable under post-passes).
+        /// SSeq / loops / switch are still excluded because their
+        /// internal flow can be mutated in ways the forward "tail
+        /// terminates" check doesn't capture.  The SIfThenElse case
+        /// recovers the legitimate `if(c) return x; else return y;`
+        /// dead-code-after pattern without reintroducing the fragility
+        /// that caused the pb_decode_inner CALL_LOST regression.
         bool IsStrongTerminator(SNode *node) {
             if (!node) return false;
             if (node->dyn_cast<SReturn>()) return true;
@@ -3560,7 +3575,14 @@ namespace patchestry::ast {
             }
             if (auto *lbl = node->dyn_cast<SLabel>())
                 return IsStrongTerminator(lbl->Body());
-            // SSeq / SIfThenElse / SWhile / SDoWhile / SFor / SSwitch:
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                // Both arms must be strong terminators.  Absorb only
+                // targets if-then-without-else, so this shape is stable.
+                return ite->ThenBranch() && ite->ElseBranch()
+                    && IsStrongTerminator(ite->ThenBranch())
+                    && IsStrongTerminator(ite->ElseBranch());
+            }
+            // SSeq / SWhile / SDoWhile / SFor / SSwitch:
             // DO NOT treat as terminators here, even if their tail
             // terminates.  AbsorbFallthroughIntoElse et al. can mutate
             // their internals in ways that invalidate the simple
