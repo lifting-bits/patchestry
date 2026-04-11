@@ -190,6 +190,29 @@ namespace patchestry::ast {
         }
 
         // 9. Member pointer.
+        //
+        // Member-pointer handling is intentionally minimal: Patchestry
+        // decompiles C binaries via Ghidra P-Code, and the P-Code
+        // serializer never emits `MemberPointerType` for C inputs, so
+        // this branch is effectively dead for every current fixture.
+        // When/if C++ decomp support is added, this section needs a
+        // broader rewrite to distinguish:
+        //   - nullptr -> T::*          (CK_NullToMemberPointer)
+        //   - Base::* -> Derived::*    (CK_BaseToDerivedMemberPointer)
+        //   - Derived::* -> Base::*    (CK_DerivedToBaseMemberPointer)
+        //   - reinterpret_cast casts   (CK_ReinterpretMemberPointer)
+        // which requires walking the class hierarchy, not just type
+        // predicates.  For now, treat any memberptr-to-memberptr as
+        // the base-to-derived form — this is better than the earlier
+        // incorrect CK_BaseToDerived (for classes, not member pointers)
+        // it replaced, and matches the only shape P-Code could ever
+        // produce.  Other memberptr combinations fall through to the
+        // CK_BitCast guard.
+        //
+        // Note on Clang's type predicates: isAnyPointerType() is
+        // isPointerType() || isObjCObjectPointerType() — it does NOT
+        // include MemberPointerType, so this branch is reachable
+        // (the earlier to=AnyPointer dispatch does not shadow it).
         if (to_type->isMemberPointerType() && from_type->isMemberPointerType()) {
             return clang::CK_BaseToDerivedMemberPointer;
         }
