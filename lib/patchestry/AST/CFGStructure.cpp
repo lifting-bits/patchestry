@@ -3534,13 +3534,48 @@ namespace patchestry::ast {
             return false;
         }
 
+        /// Strict terminator check for dead-code removal purposes.
+        ///
+        /// `SNodeAlwaysTerminates` marks any SSeq whose last child
+        /// terminates as a "terminator" — but after AbsorbFallthroughIntoElse
+        /// or similar post-passes move content between siblings, an SSeq
+        /// that "always terminates" by that forward-flow check may still
+        /// be part of a larger flow where subsequent siblings are reached
+        /// via fall-through from an earlier if-then-else arm that was
+        /// modified in-place.  To avoid dropping live code, only treat
+        /// primitive terminators (SReturn/SBreak/SContinue/SGoto, or an
+        /// SBlock whose last clang::Stmt is itself terminal) as strong
+        /// terminators here.  Dropping extra dead code via composite
+        /// termination is a nice-to-have optimisation, preserving live
+        /// code is correctness.
+        bool IsStrongTerminator(SNode *node) {
+            if (!node) return false;
+            if (node->dyn_cast<SReturn>()) return true;
+            if (node->dyn_cast<SBreak>()) return true;
+            if (node->dyn_cast<SContinue>()) return true;
+            if (node->dyn_cast<SGoto>()) return true;
+            if (auto *blk = node->dyn_cast<SBlock>()) {
+                if (blk->Empty()) return false;
+                return ClangStmtIsTerminator(blk->Stmts().back());
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>())
+                return IsStrongTerminator(lbl->Body());
+            // SSeq / SIfThenElse / SWhile / SDoWhile / SFor / SSwitch:
+            // DO NOT treat as terminators here, even if their tail
+            // terminates.  AbsorbFallthroughIntoElse et al. can mutate
+            // their internals in ways that invalidate the simple
+            // "last child terminates" heuristic for parent-level
+            // dead-code analysis.
+            return false;
+        }
+
         bool RemoveDeadInSSeq(SSeq *seq) {
             auto &children = seq->Children();
             bool changed = false;
             for (size_t i = 0; i + 1 < children.size(); ++i) {
-                if (!SNodeAlwaysTerminates(children[i])) continue;
-                // children[i] terminates — everything after it that
-                // contains no labels is dead code.
+                if (!IsStrongTerminator(children[i])) continue;
+                // children[i] is a direct primitive terminator —
+                // everything after it that contains no labels is dead.
                 size_t j = i + 1;
                 while (j < children.size()) {
                     if (ContainsLabel(children[j])) {
