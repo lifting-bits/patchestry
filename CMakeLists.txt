@@ -279,8 +279,27 @@ if (PATCHESTRY_INSTALL)
 
   message(STATUS CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX})
 
-  # Executables are handled in the respective tools/CMakeLists.txt files.
-  # TODO: Should we be moving over html docs and other files?
+  # Install vendored library artifacts alongside the patchestry tools so
+  # that a consumer pointed at CMAKE_INSTALL_PREFIX gets a self-contained
+  # tree. Tools under bin/ use RUNPATH `$ORIGIN/../lib`, so they resolve
+  # vendored shared libraries from the sibling lib/ directory without
+  # LD_LIBRARY_PATH.
+  #
+  # Patterns cover:
+  #   - headers (*.h, *.hpp, and Tablegen *.inc outputs)
+  #   - static/import archives (*.a, *.lib)
+  #   - shared libraries on every platform, INCLUDING versioned variants:
+  #       *.so           bare Linux/ELF name or symlink
+  #       *.so.*         Linux/ELF versioned target (e.g. libz3.so.4.15)
+  #       *.dylib        bare macOS name or symlink
+  #       *.*.dylib      macOS versioned target (e.g. libfoo.4.dylib)
+  #       *.dll          Windows runtime
+  #   - pkg-config files (*.pc) so downstream builds can --cflags/--libs
+  #   - CMake package configs (*.cmake) for find_package integration
+  #
+  # Without the versioned .so.* pattern the unversioned symlink survives
+  # but dangles, and every tool in bin/ fails at load time with
+  # "cannot open shared object file: No such file or directory".
   install(DIRECTORY ${PE_VENDOR_INSTALL_DIR}/
     DESTINATION .
     USE_SOURCE_PERMISSIONS
@@ -291,10 +310,12 @@ if (PATCHESTRY_INSTALL)
     PATTERN "*.hpp.inc"
     PATTERN "*.a"
     PATTERN "*.so"
+    PATTERN "*.so.*"
     PATTERN "*.dylib"
+    PATTERN "*.*.dylib"
     PATTERN "*.dll"
     PATTERN "*.lib"
     PATTERN "*.cmake"
+    PATTERN "*.pc"
   )
-
 endif()
