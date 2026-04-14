@@ -1250,6 +1250,49 @@ namespace {
         return name.starts_with("__klee_") || name.starts_with(".str.klee_");
     }
 
+    // Decompiled firmware exports frequently emit `@foo = external global
+    // T` for module-scope storage whose name and size are known but whose
+    // initializer was not in the captured translation unit. Left as a
+    // plain declaration, the global has no storage, so the harness cannot
+    // make it symbolic and any reference from the target function (e.g.
+    // passing `@usb_g` as a call argument) produces an unlinked symbol at
+    // KLEE time.
+    //
+    // Materialize every such external by attaching a zero initializer and
+    // switching to internal linkage, so the subsequent collectModuleGlobals
+    // walk treats it as first-class storage and the per-global init
+    // dispatcher can hand it to klee_make_symbolic. Safe: the value about
+    // to be injected is symbolic, so any concrete seed (including zero) is
+    // immediately overwritten before the target runs.
+    //
+    // Only touch externals that appear sized and non-constant; skip any
+    // LLVM-internal or tool-synthesized names to keep the pass idempotent
+    // across re-runs on an already-processed module.
+    static unsigned materializeExternalGlobals(llvm::Module &M) {
+        unsigned materialized = 0;
+        for (auto &GV : M.globals()) {
+            if (!GV.isDeclaration())
+                continue;
+            if (GV.isConstant())
+                continue;
+            if (GV.getName().starts_with("llvm."))
+                continue;
+            if (isToolSynthesizedGlobal(&GV))
+                continue;
+            llvm::Type *VT = GV.getValueType();
+            if (!VT->isSized())
+                continue;
+            GV.setInitializer(llvm::Constant::getNullValue(VT));
+            GV.setLinkage(llvm::GlobalValue::InternalLinkage);
+            ++materialized;
+            if (verbose) {
+                llvm::outs() << "[globals] materialized external "
+                             << GV.getName().str() << " : " << *VT << "\n";
+            }
+        }
+        return materialized;
+    }
+
     static void collectModuleGlobals(
         llvm::Module &M, std::vector< llvm::GlobalVariable * > &out
     ) {
@@ -1269,6 +1312,34 @@ namespace {
             if (DL.getTypeAllocSize(VT) == 0)
                 continue;
             out.push_back(&GV);
+        }
+    }
+
+    // Emit a single-line, stable-ordered inventory of the globals the
+    // harness has picked up. Sorted by name so diffs across runs are
+    // readable; each line shows the mangled name, the allocation size
+    // in bytes, and the original linkage/declaration flavour.
+    //
+    // Callers should gate on `verbose` before calling; the log is intended
+    // for humans (patch authors, CI log readers) rather than a consumer.
+    static void logCollectedGlobals(
+        const std::vector< llvm::GlobalVariable * > &module_globals,
+        const llvm::Module &M
+    ) {
+        auto &DL = M.getDataLayout();
+        std::vector< llvm::GlobalVariable * > sorted(
+            module_globals.begin(), module_globals.end());
+        std::sort(sorted.begin(), sorted.end(),
+            [](llvm::GlobalVariable *a, llvm::GlobalVariable *b) {
+                return a->getName() < b->getName();
+            });
+        llvm::outs() << "[globals] " << sorted.size()
+                     << " collected for initialization:\n";
+        for (auto *GV : sorted) {
+            uint64_t size = DL.getTypeAllocSize(GV->getValueType());
+            llvm::outs() << "[globals]   " << GV->getName().str()
+                         << "  size=" << size << "B  type=" << *GV->getValueType()
+                         << "\n";
         }
     }
 
@@ -1888,8 +1959,22 @@ namespace {
         //    without touching the harness generator.
         auto inference_map = inferPointerFieldTypes(M);
 
+        // Pre-pass: promote `external global` declarations referenced by
+        // the code under analysis into internally-linked definitions with
+        // zero initializers. Without this, decompiled-firmware globals
+        // that the JSON exporter left as externs (common when the source
+        // binary had no initializer in its own translation unit) are
+        // skipped by collectModuleGlobals and the target function then
+        // references an unlinked symbol at KLEE time — the exact failure
+        // shape seen on `@usb_g` in bl_usb__send_message.
+        unsigned materialized = materializeExternalGlobals(M);
+
         std::vector< llvm::GlobalVariable * > module_globals;
         collectModuleGlobals(M, module_globals);
+
+        if (verbose) {
+            logCollectedGlobals(module_globals, M);
+        }
 
         TypeInitCache type_init_cache;
         std::unordered_map< llvm::GlobalVariable *, llvm::Function * > wrappers;
@@ -1909,7 +1994,9 @@ namespace {
 
         if (verbose) {
             llvm::outs() << "Globals init: " << module_globals.size()
-                         << " global(s), " << type_init_cache.size()
+                         << " global(s) ("
+                         << materialized << " materialized from external), "
+                         << type_init_cache.size()
                          << " per-type init function(s), "
                          << inference_map.size()
                          << " pointer field(s) inferred\n";
