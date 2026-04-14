@@ -11,14 +11,22 @@ show_help() {
 Usage: $0 [OPTIONS]
 
 Options:
-  -h, --help            Show this help message and exit
-  -i, --input           Path to the input file
-  -f, --function        Name of the function to decompile
-  -l, --list-functions  List all functions from input file
-  -o, --output          Path to the output file where results will be saved
-  -v, --verbose         Enable verbose output
-  -t, --interactive     Start Docker container in interactive mode
-  -c, --ci              Run in CI mode
+  -h, --help                           Show this help message and exit
+  -i, --input                          Path to the input file
+  -f, --function                       Name of the function to decompile
+  -l, --list-functions                 List all functions from input file
+  -o, --output                         Path to the output file where results will be saved
+  -v, --verbose                        Enable verbose output
+  -t, --interactive                    Start Docker container in interactive mode
+  -c, --ci                             Run in CI mode
+      --sanitize-extraout[=on|off]     Control the extraout/unaff/in_
+                                       register-alias sanitizer in PcodeSerializer.
+                                       Default: on. Use --no-sanitize-extraout
+                                       to disable.
+      --sanitize-extraout-analytical <auto|on|off>
+                                       Control Tier 2 (analytical callee-walk)
+                                       preservation analysis. Default: auto
+                                       (architecture allowlist).
 
 Environment:
   HOST_WORKSPACE        When running in Docker-in-Docker, set this to the host
@@ -28,8 +36,13 @@ Examples:
   ./decompile-headless.sh --input /path/to/file --output /path/to/output.json  // Decompile all functions
   ./decompile-headless.sh --input /path/to/file --function main --output /path/to/output.json // Decompile single function
   ./decompile-headless.sh --input /path/to/file --list-functions --output /path/to/output.json // List all functions from binary
+  ./decompile-headless.sh --input /path/to/file --function bl_usb__send_message \\
+      --output /tmp/out.json --sanitize-extraout
 EOF
 }
+
+# Forwarded to the inner entrypoint / Java script.
+SANITIZER_ARGS=()
 
 # Translate container path to host path for Docker-in-Docker scenarios.
 # When HOST_WORKSPACE is set, replaces /workspace prefix with the host path.
@@ -80,6 +93,30 @@ parse_args() {
                     exit 1
                 fi
                 shift 2
+                ;;
+            --sanitize-extraout)
+                SANITIZER_ARGS+=("--sanitize-extraout")
+                shift
+                ;;
+            --sanitize-extraout=*)
+                SANITIZER_ARGS+=("$1")
+                shift
+                ;;
+            --no-sanitize-extraout)
+                SANITIZER_ARGS+=("--no-sanitize-extraout")
+                shift
+                ;;
+            --sanitize-extraout-analytical)
+                if [ -z "$2" ]; then
+                    echo "Error: --sanitize-extraout-analytical requires a value (auto|on|off)"
+                    exit 1
+                fi
+                SANITIZER_ARGS+=("--sanitize-extraout-analytical" "$2")
+                shift 2
+                ;;
+            --sanitize-extraout-analytical=*)
+                SANITIZER_ARGS+=("$1")
+                shift
                 ;;
             *)
                 echo "Unknown option: $1"
@@ -167,10 +204,15 @@ build_docker_command() {
         if file "$INPUT_PATH" | grep -q "Mach-O"; then
             FUNCTION_NAME="_$FUNCTION_NAME"
         fi
-        ARGS="--command decompile --function \"$FUNCTION_NAME\" $ARGS" 
+        ARGS="--command decompile --function \"$FUNCTION_NAME\" $ARGS"
     else
         ARGS="--command decompile-all $ARGS"
     fi
+
+    # Append sanitizer flags (quoted individually so values survive eval).
+    for extra in "${SANITIZER_ARGS[@]}"; do
+        ARGS="$ARGS \"$extra\""
+    done
 
     if [ -n "$CI_OUTPUT_FOLDER" ]; then
         INPUT_PATH=$(basename "$INPUT_PATH")

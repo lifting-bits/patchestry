@@ -12,6 +12,12 @@ FUNCTION_NAME=""
 OUTPUT_FILE=""
 HIGH_PCODE=""
 
+# Optional flags forwarded verbatim to PatchestryDecompileFunctions after the
+# positional args (mode / function / output file). Populated from
+# `--sanitize-extraout[={on|off}]` and
+# `--sanitize-extraout-analytical={auto|on|off}` below.
+SCRIPT_EXTRA_ARGS=()
+
 function help {
     cat << EOF
 Usage: ./decompile-entrypoint.sh [OPTIONS]
@@ -36,10 +42,24 @@ Options:
   --output <OUTPUT_FILE>
       Specify the output file to write the results.
 
+  --sanitize-extraout[=<on|off>]
+      Enable (or explicitly disable) the extraout/unaff/in_ register-alias
+      sanitizer in PcodeSerializer. Default: on. Pass --no-sanitize-extraout
+      (or --sanitize-extraout=off) to disable. Forwarded to
+      PatchestryDecompileFunctions.
+
+  --sanitize-extraout-analytical <auto|on|off>
+      Control Tier 2 (analytical callee-walk) preservation analysis.
+      'auto' uses the architecture allowlist ({ARM, AARCH64}); 'on' forces
+      Tier 2 on any architecture; 'off' disables Tier 2 even on allowlisted
+      architectures. Default: auto.
+
 Examples:
   ./decompile-entrypoint.sh --input /path/to/file --command list-functions --output /path/to/output.json
   ./decompile-entrypoint.sh --input /path/to/file --command decompile --function main --output /path/to/output.json
   ./decompile-entrypoint.sh --input /path/to/file --command decompile-all --output /path/to/output.json
+  ./decompile-entrypoint.sh --input ./fw.elf --command decompile --function bl_usb__send_message \
+      --output /tmp/out.json --sanitize-extraout
 EOF
 }
 
@@ -87,6 +107,26 @@ function parse_args {
                 else
                     die "--output requires an argument."
                 fi
+                ;;
+            --sanitize-extraout)
+                SCRIPT_EXTRA_ARGS+=("--sanitize-extraout")
+                ;;
+            --sanitize-extraout=*)
+                SCRIPT_EXTRA_ARGS+=("$1")
+                ;;
+            --no-sanitize-extraout)
+                SCRIPT_EXTRA_ARGS+=("--no-sanitize-extraout")
+                ;;
+            --sanitize-extraout-analytical)
+                if [[ -n "$2" ]]; then
+                    SCRIPT_EXTRA_ARGS+=("--sanitize-extraout-analytical" "$2")
+                    shift
+                else
+                    die "--sanitize-extraout-analytical requires an argument (auto|on|off)."
+                fi
+                ;;
+            --sanitize-extraout-analytical=*)
+                SCRIPT_EXTRA_ARGS+=("$1")
                 ;;
             *)
                 die "Invalid option '$1'."
@@ -284,7 +324,8 @@ function run_decompile_single {
         -postScript "PatchestryDecompileFunctions" \
         single \
         ${FUNCTION_NAME} \
-        ${OUTPUT_FILE}
+        ${OUTPUT_FILE} \
+        "${SCRIPT_EXTRA_ARGS[@]}"
 
     if [ $? -ne 0 ]; then
         die "Decompilation failed"
@@ -307,7 +348,8 @@ function run_decompile_all {
         -scriptPath ${GHIDRA_SCRIPTS} \
         -postScript "PatchestryDecompileFunctions" \
         all \
-        ${OUTPUT_FILE}
+        ${OUTPUT_FILE} \
+        "${SCRIPT_EXTRA_ARGS[@]}"
 
     if [ $? -ne 0 ]; then
         die "Decompilation failed"

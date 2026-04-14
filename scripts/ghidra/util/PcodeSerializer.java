@@ -43,6 +43,7 @@ import ghidra.program.model.data.CharDataType;
 
 import ghidra.program.model.lang.CompilerSpec;
 import ghidra.program.model.lang.Language;
+import ghidra.program.model.lang.PrototypeModel;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.lang.RegisterManager;
 
@@ -156,6 +157,21 @@ public class PcodeSerializer {
     	public static final int DECLARE_LOCAL_VAR = MIN_CALLOTHER + 1;
     	public static final int DECLARE_TEMP_VAR = MIN_CALLOTHER + 2;
     	public static final int ADDRESS_OF = MIN_CALLOTHER + 3;
+
+    	// Architecture allowlist for Tier 2 (analytical callee-walk) preservation
+    	// analysis in the extraout sanitizer. Tier 1 (declarative, via
+    	// PrototypeModel.getUnaffectedList) always runs when --sanitize-extraout
+    	// is on. Tier 2 is ABI-agnostic in implementation but gated to this
+    	// allowlist by default so unvetted decompiler behavior on other ISAs
+    	// cannot silently change output. Users can override with the CLI flag
+    	// --sanitize-extraout-analytical={on,off,auto}. Matched against
+    	// Program.getLanguage().getProcessor().toString().
+    	public static final Set<String> TIER2_DEFAULT_ARCHITECTURES =
+    		Set.of("ARM", "AARCH64");
+
+    	// Tri-state for --sanitize-extraout-analytical. AUTO defers to the
+    	// architecture allowlist above; ON and OFF override it.
+    	public enum AnalyticalTierMode { AUTO, ON, OFF }
 
 		// Ghidra decompiler built-in userop indices (from userop.cc)
 		public static final int BUILTIN_STRINGDATA = 0x10000000;
@@ -291,13 +307,52 @@ public class PcodeSerializer {
 		// Consumed by serializeFunction when emitting the external's "name" field.
 		private Map<String, String> externalMangledNames = new HashMap<>();
 
+		// ------------------------------------------------------------------
+		// Extraout sanitizer state.
+		// ------------------------------------------------------------------
+		// Master switch. When false, sanitizeExtraoutArtifacts is a no-op and
+		// the downstream serialization hooks fall through to the legacy path.
+		private boolean sanitizeExtraout;
+
+		// Tier 2 (analytical callee walk) resolution. Computed once in the
+		// constructor from the CLI flag and the architecture allowlist.
+		private boolean tier2Enabled;
+
+		// Per-callee "written registers" cache used by Tier 2.
+		private RegisterKillAnalysis registerKillAnalysis;
+
+		// Maps an extraout/unaff/in_ HighVariable to the pre-call HighVariable
+		// it should alias during serialization.
+		private Map<HighVariable, HighVariable> extraoutAliasMap = new HashMap<>();
+
+		// Legacy constructor — defaults the extraout sanitizer ON to match
+		// the production default in PatchestryDecompileFunctions. Existing
+		// callers that do not need the new behavior can continue using this
+		// signature unchanged; callers that want to force the legacy shape
+		// should use the 8-arg constructor with sanitizeExtraout=false.
 		public PcodeSerializer(
 			JsonWriter writer,
 			List<Function> functions,
-			String languageId, 
+			String languageId,
 			TaskMonitor monitor,
-			Program currentProgram, 
+			Program currentProgram,
 			DecompInterface decompInterface
+		) {
+			this(writer, functions, languageId, monitor, currentProgram,
+				decompInterface, /*sanitizeExtraout=*/true, AnalyticalTierMode.AUTO);
+		}
+
+		// Full constructor — wires the extraout sanitizer flags. See the CLI
+		// documentation in PatchestryDecompileFunctions for flag semantics.
+		public PcodeSerializer(
+			JsonWriter writer,
+			List<Function> functions,
+			String languageId,
+			TaskMonitor monitor,
+			Program currentProgram,
+			DecompInterface decompInterface,
+			boolean sanitizeExtraout,
+			AnalyticalTierMode analyticalMode
 		) {
 			this.writer = writer;
 
@@ -306,12 +361,12 @@ public class PcodeSerializer {
 
 			this.languageID = languageId;
 			this.monitor = monitor;
-			
+
 			this.currentProgram = currentProgram;
 			this.stackPointer = currentProgram.getCompilerSpec().getStackPointer();
-			
+
 			this.decompInterface = decompInterface;
-			
+
 			this.architecture = currentProgram.getLanguage().getProcessor().toString();
 			this.language = (SleighLanguage) currentProgram.getLanguage();
 			this.nextUnique = language.getUniqueBase();
@@ -344,6 +399,45 @@ public class PcodeSerializer {
 			this.addressOfGlobalMap = new HashMap<>();
 			this.callotherUsePcodeOps = new ArrayList<>();
 			this.seenDataMap = new HashMap<>();
+
+			// Extraout sanitizer wiring.
+			this.sanitizeExtraout = sanitizeExtraout;
+			this.tier2Enabled = resolveTier2Enabled(analyticalMode, currentProgram);
+			this.registerKillAnalysis = new RegisterKillAnalysis(
+				decompInterface, monitor, DECOMPILATION_TIMEOUT);
+
+			if (sanitizeExtraout) {
+				System.out.println("[extraout] sanitizer enabled; architecture="
+					+ architecture
+					+ ", analytical_mode=" + analyticalMode
+					+ ", tier2_enabled=" + tier2Enabled);
+			}
+		}
+
+		// Resolve the effective Tier 2 enablement from the CLI mode and the
+		// architecture allowlist. Kept as a static helper so it can be unit
+		// tested without constructing a full serializer.
+		public static boolean resolveTier2Enabled(
+				AnalyticalTierMode mode, Program program) {
+			if (mode == AnalyticalTierMode.OFF) {
+				return false;
+			}
+			if (mode == AnalyticalTierMode.ON) {
+				return true;
+			}
+			// AUTO: consult the architecture allowlist.
+			return shouldRunTier2ByDefault(program);
+		}
+
+		// Returns true when the program's architecture is in the default
+		// Tier 2 allowlist. See TIER2_DEFAULT_ARCHITECTURES above. Extending
+		// coverage to a new ISA is a one-line change to that set.
+		public static boolean shouldRunTier2ByDefault(Program program) {
+			if (program == null || program.getLanguage() == null) {
+				return false;
+			}
+			String proc = program.getLanguage().getProcessor().toString();
+			return TIER2_DEFAULT_ARCHITECTURES.contains(proc);
 		}
 
 		// Check if a symbol name looks like a C++ mangled name.
@@ -1807,6 +1901,552 @@ public class PcodeSerializer {
 			}
 		}
 
+		// Test/observer hook: when non-null, each sanitizer candidate name
+		// detected by sanitizeExtraoutArtifacts is appended here. JUnit tests
+		// set this before calling the serializer to inspect what was found
+		// without having to capture stdout.
+		List<String> sanitizerCandidateLog;
+
+		// Pre-pass that detects and unifies Ghidra's extraout_rN / unaff_* /
+		// in_* register-alias HighVariables with the pre-call SSA values
+		// they shadow.
+		//
+		// Flow:
+		//   1. Detect candidates via the local symbol map + the in-body
+		//      HighVariable walk and record them in sanitizerCandidateLog
+		//      (tests read the observer without capturing stdout).
+		//   2. For each extraout_* candidate, compute an alias target via
+		//      Tier 1 (PrototypeModel.getUnaffectedList), Tier 2
+		//      (RegisterKillAnalysis), or Tier 3 fallback (skip).
+		//   3. Populate extraoutAliasMap; the serialization hooks
+		//      (serializeEntryBlock, variableOf, canElideCopy) consume
+		//      the map and rewrite references to the alias target.
+		//
+		// A no-op on extraoutAliasMap is safe: the downstream serialization
+		// path uses the existing logic when the alias map is empty.
+		void sanitizeExtraoutArtifacts(HighFunction highFunction) {
+			if (!sanitizeExtraout || highFunction == null) {
+				return;
+			}
+			extraoutAliasMap.clear();
+
+			String funcName = highFunction.getFunction() != null
+				? highFunction.getFunction().getName()
+				: "<unknown>";
+
+			// Deduplicate candidates: a single HighVariable may surface via
+			// both the symbol map and the body walk. Reference-identity is
+			// what we want — Ghidra hands out the same HighVariable instance
+			// for every SSA-level reference to a given high-level variable,
+			// so identity dedupe is correct and avoids depending on
+			// HighVariable's equals/hashCode behavior.
+			Set<HighVariable> seen = new HashSet<>();
+
+			// Pass A: walk the local symbol map. This catches HighLocals that
+			// Ghidra has formally bound to a symbol (the typical case for
+			// extraout_rN after the decompiler has assigned types).
+			LocalSymbolMap symbolMap = highFunction.getLocalSymbolMap();
+			if (symbolMap != null) {
+				Iterator<HighSymbol> symIter = symbolMap.getSymbols();
+				while (symIter != null && symIter.hasNext()) {
+					HighSymbol sym = symIter.next();
+					if (sym == null) continue;
+					HighVariable hv = sym.getHighVariable();
+					if (hv == null) continue;
+					if (!isExtraoutArtifactName(sym.getName())
+							&& !isExtraoutArtifactName(hv.getName())) {
+						continue;
+					}
+					if (!seen.add(hv)) continue;
+					logSanitizerCandidate(funcName, sym.getName(), hv, "symbol_map");
+				}
+			}
+
+			// Pass B: walk the function body. A HighVariable might only be
+			// referenced as a varnode operand of a pcode op (not bound to a
+			// HighSymbol entry). Collect any matching HighVariables via the
+			// varnodes so they surface even if Pass A missed them. This
+			// duplicates a subset of what Pass A finds; the `seen` set
+			// dedupes.
+			for (PcodeBlockBasic block : highFunction.getBasicBlocks()) {
+				Iterator<PcodeOp> opIt = block.getIterator();
+				while (opIt.hasNext()) {
+					PcodeOp op = opIt.next();
+					scanVarnodeForCandidate(op.getOutput(), funcName, seen);
+					for (Varnode in : op.getInputs()) {
+						scanVarnodeForCandidate(in, funcName, seen);
+					}
+				}
+			}
+
+			if (!seen.isEmpty()) {
+				System.out.println("[extraout] " + funcName
+					+ ": " + seen.size() + " candidate(s) detected");
+			}
+
+			// For each extraout_* candidate (in_* / unaff_* are currently
+			// detection-only), run preservation analysis and populate
+			// extraoutAliasMap so the serialization hooks can rewrite
+			// references to the alias target.
+			int aliasResolved = 0;
+			for (HighVariable hv : seen) {
+				if (!resolveAliasForCandidate(highFunction, hv, funcName)) {
+					continue;
+				}
+				aliasResolved++;
+			}
+			if (aliasResolved > 0) {
+				System.out.println("[extraout] " + funcName
+					+ ": " + aliasResolved + " alias(es) resolved");
+			}
+		}
+
+		// Attempt to compute and record an alias target for a single
+		// candidate HighVariable. Returns true if an entry was added to
+		// extraoutAliasMap. All decision points are logged so the CI log
+		// explains why a candidate was kept or dropped.
+		private boolean resolveAliasForCandidate(
+				HighFunction highFunction, HighVariable hv, String funcName) {
+			String name = hv.getName();
+			if (!name.startsWith("extraout_")) {
+				// in_* / unaff_* are currently detection-only. Extending
+				// the alias logic to handle them is a future enhancement.
+				return false;
+			}
+
+			// Resolve the storage register for the candidate.
+			Register reg = registerOf(hv);
+			if (reg == null) {
+				System.out.println("[extraout] " + funcName
+					+ ": alias skipped for " + name
+					+ " (no storage register)");
+				return false;
+			}
+
+			// Find the defining INDIRECT op.
+			PcodeOp defOp = findDefiningPcodeOp(hv);
+			if (defOp == null || defOp.getOpcode() != PcodeOp.INDIRECT) {
+				System.out.println("[extraout] " + funcName
+					+ ": alias skipped for " + name
+					+ " (def is not INDIRECT: "
+					+ (defOp != null ? defOp.getMnemonic() : "null")
+					+ ")");
+				return false;
+			}
+
+			// Locate the CALL that caused the INDIRECT effect.
+			PcodeOp callOp = findCallCausingIndirect(highFunction, defOp);
+			if (callOp == null) {
+				System.out.println("[extraout] " + funcName
+					+ ": alias skipped for " + name
+					+ " (no preceding CALL in block)");
+				return false;
+			}
+			if (callOp.getOpcode() != PcodeOp.CALL) {
+				// Indirect calls and userops are not handled — we cannot
+				// resolve a callee to run preservation analysis on.
+				System.out.println("[extraout] " + funcName
+					+ ": alias skipped for " + name
+					+ " (causing op is "
+					+ callOp.getMnemonic()
+					+ ", not CALL)");
+				return false;
+			}
+
+			Function callee = resolveDirectCallee(callOp);
+			if (callee == null) {
+				System.out.println("[extraout] " + funcName
+					+ ": alias skipped for " + name
+					+ " (callee unresolved)");
+				return false;
+			}
+
+			// Tiered preservation check.
+			String tier = "none";
+			if (isPreservedByPrototype(callee, reg)) {
+				tier = "1";
+			} else if (tier2Enabled
+					&& registerKillAnalysis.isPreservedAcross(callee, reg)) {
+				tier = "2";
+			}
+			if (tier.equals("none")) {
+				System.out.println("[extraout] " + funcName
+					+ ": alias skipped for " + name
+					+ " (callee=" + callee.getName()
+					+ " does not preserve " + reg.getName()
+					+ "; tier2_enabled=" + tier2Enabled + ")");
+				return false;
+			}
+
+			// Locate the alias target: prefer the COPY-after-call pattern
+			// that Ghidra emits, fall back to the INDIRECT input[0]
+			// "pre-call value" placeholder.
+			HighVariable preCall = findAliasTarget(highFunction, hv, defOp);
+			if (preCall == null) {
+				System.out.println("[extraout] " + funcName
+					+ ": alias skipped for " + name
+					+ " (no alias target found — no COPY consumer and "
+					+ "INDIRECT input[0] is not a variable)");
+				return false;
+			}
+			if (preCall == hv) {
+				System.out.println("[extraout] " + funcName
+					+ ": alias skipped for " + name
+					+ " (target resolves to self — SSA ambiguous)");
+				return false;
+			}
+
+			extraoutAliasMap.put(hv, preCall);
+
+			// Render a descriptive label for the alias target. The raw
+			// HighVariable name may be UNNAMED for an SSA-level varnode;
+			// fall back to the parent HighSymbol's name (for parameters
+			// like `msg`) or to "<class>@reg" so the log line is readable.
+			String preCallLabel = describeAliasTarget(preCall);
+			System.out.println("[extraout] " + funcName
+				+ ": alias " + name
+				+ " -> " + preCallLabel
+				+ " (tier=" + tier
+				+ ", callee=" + callee.getName()
+				+ ", reg=" + reg.getName() + ")");
+			return true;
+		}
+
+		// Produce a readable label for a pre-call HighVariable. Ghidra's
+		// SSA representation does not always bind a user-visible name to
+		// the exact HighVariable we picked up from INDIRECT.input[0], so
+		// we fall back through several sources before emitting a
+		// synthesized marker.
+		private String describeAliasTarget(HighVariable hv) {
+			if (hv == null) return "<null>";
+			String n = hv.getName();
+			if (n != null && !n.isEmpty() && !n.equals("UNNAMED")) {
+				return n;
+			}
+			HighSymbol sym = hv.getSymbol();
+			if (sym != null) {
+				String sn = sym.getName();
+				if (sn != null && !sn.isEmpty() && !sn.equals("UNNAMED")) {
+					return sn + " (via symbol)";
+				}
+			}
+			Register reg = registerOf(hv);
+			String regLabel = (reg != null) ? reg.getName() : "?";
+			return "<" + hv.getClass().getSimpleName() + "@" + regLabel + ">";
+		}
+
+		// Helper for Pass B: if `vn` is backed by a HighVariable whose name
+		// matches the artifact pattern and we have not already reported it,
+		// log and record it.
+		private void scanVarnodeForCandidate(
+				Varnode vn, String funcName, Set<HighVariable> seen) {
+			if (vn == null) return;
+			HighVariable hv = vn.getHigh();
+			if (hv == null) return;
+			if (!isExtraoutArtifactName(hv.getName())) return;
+			if (!seen.add(hv)) return;
+			logSanitizerCandidate(funcName, hv.getName(), hv, "body_walk");
+		}
+
+		// Return the Ghidra Register for the storage address of `hv`'s
+		// representative varnode, or null if the representative is not a
+		// register-backed varnode.
+		private Register registerOf(HighVariable hv) {
+			if (hv == null || language == null) return null;
+			Varnode rep = hv.getRepresentative();
+			if (rep == null || !rep.isRegister()) return null;
+			Register reg = language.getRegister(rep.getAddress(), rep.getSize());
+			if (reg != null) return reg;
+			return language.getRegister(rep.getAddress(), 0);
+		}
+
+		// Return the defining PcodeOp of the HighVariable, iterating its
+		// SSA instances in search of one with a non-null getDef(). In
+		// Ghidra's high pcode, a HighVariable typically has exactly one
+		// instance whose def is non-null (the SSA definition point), plus
+		// zero or more uses. We return the first def we find.
+		private PcodeOp findDefiningPcodeOp(HighVariable hv) {
+			if (hv == null) return null;
+			// Prefer the representative varnode's def — this is the SSA
+			// "canonical" definition for the high variable.
+			Varnode rep = hv.getRepresentative();
+			if (rep != null) {
+				PcodeOp def = rep.getDef();
+				if (def != null) return def;
+			}
+			// Fall back to scanning all instances; some HighVariables
+			// have their def only on a non-representative varnode.
+			Varnode[] instances = hv.getInstances();
+			if (instances != null) {
+				for (Varnode vn : instances) {
+					if (vn == null) continue;
+					PcodeOp def = vn.getDef();
+					if (def != null) return def;
+				}
+			}
+			return null;
+		}
+
+		// Find the CALL / CALLIND / CALLOTHER that caused `indirectOp`'s
+		// indirect effect. INDIRECT's input[1] formally encodes a
+		// reference to the causing op, but decoding it is fragile across
+		// Ghidra versions. Instead we match by address: Ghidra emits the
+		// INDIRECT at the same Address as the call that caused it
+		// (they share the instruction boundary). Scan all pcode ops in
+		// the function for a call-like op at the same address as
+		// `indirectOp`; if there is more than one, prefer direct CALL.
+		//
+		// Falls back to an in-function backward walk by sequence number
+		// when no op shares the INDIRECT's address.
+		private PcodeOp findCallCausingIndirect(HighFunction highFunction, PcodeOp indirectOp) {
+			if (highFunction == null || indirectOp == null) return null;
+			if (indirectOp.getOpcode() != PcodeOp.INDIRECT) return null;
+
+			Address indirectAddr = indirectOp.getSeqnum() != null
+				? indirectOp.getSeqnum().getTarget()
+				: null;
+
+			PcodeOp sameAddressCall = null;
+			PcodeOp fallbackCall = null;
+
+			for (PcodeBlockBasic block : highFunction.getBasicBlocks()) {
+				Iterator<PcodeOp> it = block.getIterator();
+				while (it.hasNext()) {
+					PcodeOp op = it.next();
+					int opcode = op.getOpcode();
+					if (opcode != PcodeOp.CALL
+							&& opcode != PcodeOp.CALLIND
+							&& opcode != PcodeOp.CALLOTHER) {
+						continue;
+					}
+					Address opAddr = op.getSeqnum() != null
+						? op.getSeqnum().getTarget()
+						: null;
+					if (indirectAddr != null
+							&& opAddr != null
+							&& indirectAddr.equals(opAddr)) {
+						// Prefer a direct CALL at the INDIRECT's address.
+						if (sameAddressCall == null
+								|| (opcode == PcodeOp.CALL
+									&& sameAddressCall.getOpcode() != PcodeOp.CALL)) {
+							sameAddressCall = op;
+						}
+					} else if (opAddr != null
+							&& indirectAddr != null
+							&& opAddr.compareTo(indirectAddr) < 0) {
+						// Track the latest call-like op strictly before
+						// the INDIRECT's address, for fallback.
+						if (fallbackCall == null
+								|| op.getSeqnum().getTarget().compareTo(
+									fallbackCall.getSeqnum().getTarget()) > 0) {
+							fallbackCall = op;
+						}
+					}
+				}
+			}
+
+			return sameAddressCall != null ? sameAddressCall : fallbackCall;
+		}
+
+		// Resolve the callee Function of a direct CALL pcode op. Returns
+		// null for CALLIND (indirect through a function pointer), for
+		// CALLOTHER (decompiler userop), or when the call target address
+		// does not land on a known function.
+		private Function resolveDirectCallee(PcodeOp callOp) {
+			if (callOp == null) return null;
+			if (callOp.getOpcode() != PcodeOp.CALL) return null;
+			Varnode target = callOp.getInput(0);
+			if (target == null) return null;
+			Address targetAddr = target.getAddress();
+			if (targetAddr == null) return null;
+			return currentProgram.getFunctionManager().getFunctionAt(targetAddr);
+		}
+
+		// Tier 1: ABI-declarative preservation. Consults the callee's
+		// prototype getUnaffectedList() and checks whether `reg` (or any
+		// register that overlaps / contains it) is declared unaffected.
+		//
+		// Always safe to run on any architecture: the answer comes from
+		// Ghidra's calling-convention database, not from ISA-specific code.
+		//
+		// PrototypeModel.getUnaffectedList() returns a flat Varnode[] in the
+		// Ghidra version we target (12.x). Each varnode whose storage is a
+		// register represents one preserved register.
+		private boolean isPreservedByPrototype(Function callee, Register reg) {
+			if (callee == null || reg == null) return false;
+			PrototypeModel proto = callee.getCallingConvention();
+			if (proto == null) return false;
+			Varnode[] unaffected;
+			try {
+				unaffected = proto.getUnaffectedList();
+			} catch (Exception e) {
+				return false;
+			}
+			if (unaffected == null) return false;
+			for (Varnode vn : unaffected) {
+				if (vn == null || !vn.isRegister()) continue;
+				Register protoReg = language.getRegister(
+					vn.getAddress(), vn.getSize());
+				if (protoReg == null) {
+					protoReg = language.getRegister(vn.getAddress(), 0);
+				}
+				if (protoReg == null) continue;
+				if (registersOverlap(protoReg, reg)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		// Returns true if `a` contains `b`, `b` contains `a`, or they are
+		// the same register. "Contains" walks the parent register chain.
+		private static boolean registersOverlap(Register a, Register b) {
+			if (a == null || b == null) return false;
+			if (a.equals(b)) return true;
+			Register cursor = a;
+			while (cursor != null) {
+				if (cursor.equals(b)) return true;
+				cursor = cursor.getParentRegister();
+			}
+			cursor = b;
+			while (cursor != null) {
+				if (cursor.equals(a)) return true;
+				cursor = cursor.getParentRegister();
+			}
+			return false;
+		}
+
+		// Find the alias target for an extraout HighVariable.
+		//
+		// Strategy 1 (primary): Ghidra almost always emits a COPY right
+		// after the clobbering call that writes the post-call register
+		// value into the user-facing variable. For bl_usb__send_message
+		// we see `msg = extraout_r1` — the COPY's *output* is the
+		// variable the user-level code actually uses after the call, and
+		// that is what we want to rewrite extraout_r1 into. This strategy
+		// runs even when the INDIRECT's input[0] is a constant placeholder
+		// (which is the case on Ghidra 12.x high p-code).
+		//
+		// Strategy 2 (fallback): use the INDIRECT's input[0] directly.
+		// Still useful when Ghidra's SSA did track the pre-call varnode
+		// as a real HighVariable, or when there is no COPY at all.
+		//
+		// Returns null if no usable target is found.
+		private HighVariable findAliasTarget(
+				HighFunction highFunction, HighVariable extraoutHv, PcodeOp indirectOp) {
+			// Strategy 1: COPY-after-call scan.
+			HighVariable fromCopy = findAliasFromCopyConsumer(highFunction, extraoutHv);
+			if (fromCopy != null) {
+				return fromCopy;
+			}
+
+			// Strategy 2: INDIRECT input[0] fallback.
+			if (indirectOp != null && indirectOp.getOpcode() == PcodeOp.INDIRECT) {
+				Varnode preCall = indirectOp.getInput(0);
+				if (preCall != null) {
+					HighVariable hv = preCall.getHigh();
+					if (hv != null
+							&& !(hv instanceof HighConstant)
+							&& hv != extraoutHv) {
+						return hv;
+					}
+				}
+			}
+			return null;
+		}
+
+		// Scan all pcode ops in the function for a COPY whose input[0]
+		// HighVariable is the given candidate. Return the COPY's output
+		// HighVariable as the alias target.
+		//
+		// If multiple COPYs consume the candidate and they resolve to
+		// different target HighVariables, return null (ambiguous — do
+		// not guess).
+		private HighVariable findAliasFromCopyConsumer(
+				HighFunction highFunction, HighVariable extraoutHv) {
+			if (highFunction == null || extraoutHv == null) return null;
+			HighVariable picked = null;
+			for (PcodeBlockBasic block : highFunction.getBasicBlocks()) {
+				Iterator<PcodeOp> it = block.getIterator();
+				while (it.hasNext()) {
+					PcodeOp op = it.next();
+					if (op.getOpcode() != PcodeOp.COPY) continue;
+					Varnode in = op.getInput(0);
+					if (in == null) continue;
+					if (in.getHigh() != extraoutHv) continue;
+					Varnode out = op.getOutput();
+					if (out == null) continue;
+					HighVariable outHv = out.getHigh();
+					if (outHv == null || outHv == extraoutHv) continue;
+					if (picked == null) {
+						picked = outHv;
+					} else if (picked != outHv) {
+						// Ambiguous — two distinct targets. Conservative
+						// choice: bail out.
+						return null;
+					}
+				}
+			}
+			return picked;
+		}
+
+		// Emit a structured candidate line and (if the observer is attached)
+		// append the name to sanitizerCandidateLog. Format:
+		//   [extraout] <func>: candidate=<name> source=<symbol_map|body_walk>
+		//              size=<bytes> reg=<reg_or_none> class=<HighVariable_subclass>
+		private void logSanitizerCandidate(
+				String funcName, String rawName, HighVariable hv, String source) {
+			String name = (rawName != null && !rawName.equals("UNNAMED"))
+				? rawName
+				: (hv.getName() != null ? hv.getName() : "<unnamed>");
+			int size = hv.getSize();
+			String regName = "none";
+			try {
+				Varnode rep = hv.getRepresentative();
+				if (rep != null && rep.isRegister() && language != null) {
+					Register reg = language.getRegister(rep.getAddress(), rep.getSize());
+					if (reg == null) {
+						// Try a zero-size lookup; some register varnodes
+						// don't match by exact size.
+						reg = language.getRegister(rep.getAddress(), 0);
+					}
+					if (reg != null) {
+						regName = reg.getName();
+					} else {
+						regName = "reg@" + rep.getAddress().toString();
+					}
+				}
+			} catch (Exception e) {
+				regName = "error:" + e.getClass().getSimpleName();
+			}
+			String cls = hv.getClass().getSimpleName();
+			System.out.println("[extraout] " + funcName
+				+ ": candidate=" + name
+				+ " source=" + source
+				+ " size=" + size
+				+ " reg=" + regName
+				+ " class=" + cls);
+			if (sanitizerCandidateLog != null) {
+				sanitizerCandidateLog.add(name);
+			}
+		}
+
+		// Returns true if the given name matches the Ghidra decompiler's
+		// convention for register-aliasing artifacts.
+		//
+		// The `extraout_*` prefix is used when a register's post-call value
+		// cannot be attributed to a prior definition; `unaff_*` when a
+		// register is live-in but unaffected; `in_*` when a register holds
+		// a live-in value that wasn't bound to a parameter. All three
+		// prefixes are ISA-agnostic Ghidra conventions — they appear on
+		// ARM, x86, MIPS, PowerPC, etc.
+		static boolean isExtraoutArtifactName(String name) {
+			return name != null
+				&& (name.startsWith("extraout_")
+					|| name.startsWith("unaff_")
+					|| name.startsWith("in_"));
+		}
+
 		// Create missing local variables. High p-code still includes things
 		// like `PTRSUB SP, -offset` instead of treating the unrecognized data
 		// as `local_<hex_offset>`. The decompiler, however, does these
@@ -1823,7 +2463,12 @@ public class PcodeSerializer {
 			FunctionPrototype proto = highFunction.getFunctionPrototype();
 			LocalSymbolMap symbols = highFunction.getLocalSymbolMap();
 			CallDepthChangeInfo cdci = new CallDepthChangeInfo(function);
-			
+
+			// Run the extraout sanitizer pre-pass: detect register-alias
+			// artifacts, compute alias targets, and populate
+			// extraoutAliasMap for the serialization hooks to consume.
+			sanitizeExtraoutArtifacts(highFunction);
+
 			// Fill in the parameters first so that they are the first
 			// things added to `entry_block`.
 			for (int i = 0; i < numberOfParameters; ++i) {
@@ -1912,7 +2557,32 @@ public class PcodeSerializer {
 			if (highVariable == null) {
 				return null;
 			}
-			
+
+			// Extraout sanitizer fixup: when a HighVariable is an
+			// extraout/unaff/in_ alias that we proved can be unified
+			// away, redirect every reference to the alias target so the
+			// emitted JSON stops mentioning the artifact entirely. Loop
+			// with a visited guard in case the target is itself aliased.
+			if (!extraoutAliasMap.isEmpty()) {
+				HighVariable cursor = highVariable;
+				Set<HighVariable> guard = null;
+				while (true) {
+					HighVariable next = extraoutAliasMap.get(cursor);
+					if (next == null || next == cursor) {
+						break;
+					}
+					if (guard == null) {
+						guard = new HashSet<>();
+					}
+					if (!guard.add(cursor)) {
+						// Cycle: fall through without rewriting.
+						break;
+					}
+					cursor = next;
+				}
+				highVariable = cursor;
+			}
+
 			HighLocal fixedHighVariable = oldLocalsMap.get(highVariable);
 			return fixedHighVariable != null ? fixedHighVariable : highVariable;
 		}
@@ -3005,11 +3675,31 @@ public class PcodeSerializer {
 		}
 
 		// Emit a pseudo entry block to represent
+		// Returns true when the extraout sanitizer has proved the entry
+		// block op is a DECLARE_* for an alias *source* HighVariable —
+		// i.e. a HighVariable that will be rewritten away by variableOf().
+		// Emitting the declaration would leave a dangling entry whose
+		// JSON key no other op references, because the varnode-rewrite
+		// in variableOf() redirects consumers to the alias target.
+		//
+		// Compared via identity against the unresolved HighVariable, so a
+		// non-alias DECLARE of the target (e.g. the parameter `msg` in
+		// the bl_usb__send_message case) is kept.
+		private boolean isAliasSourceDeclOp(PcodeOp pseudoPcodeOp) {
+			if (extraoutAliasMap.isEmpty()) return false;
+			if (pseudoPcodeOp == null) return false;
+			Varnode out = pseudoPcodeOp.getOutput();
+			if (out == null) return false;
+			HighVariable raw = out.getHigh();
+			return raw != null && extraoutAliasMap.containsKey(raw);
+		}
+
 		void serializeEntryBlock(
 				String label, PcodeBlockBasic firstPcodeBasicBlock) throws Exception {
 			writer.name(label).beginObject();
 			writer.name("operations").beginObject();
 			for (PcodeOp pseudoPcodeOp : entryBlock) {
+				if (isAliasSourceDeclOp(pseudoPcodeOp)) continue;
 				writer.name(label(pseudoPcodeOp));
 				serializePcodeOp(pseudoPcodeOp);
 			}
@@ -3026,6 +3716,7 @@ public class PcodeSerializer {
 
 			writer.name("ordered_operations").beginArray();
 			for (PcodeOp pseudoPcodeOp : entryBlock) {
+				if (isAliasSourceDeclOp(pseudoPcodeOp)) continue;
 				writer.value(label(pseudoPcodeOp));
 			}
 			writer.value("entry.exit");
