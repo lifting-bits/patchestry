@@ -1618,11 +1618,38 @@ namespace patchestry::ast {
             // For multi-input RETURN, input[0] is the address-space constant; use input[1].
             // For single-input RETURN, use input[0] directly.
             size_t idx     = op.inputs.size() > 1 ? 1 : 0;
-            auto *ret_expr = create_varnode(ctx, function, op.inputs[idx]);
+            auto *ret_stmt = create_varnode(ctx, function, op.inputs[idx]);
+            auto *ret_expr = llvm::dyn_cast_or_null< clang::Expr >(ret_stmt);
+
+            // Match the return expression's type to the function's declared
+            // return type. Ghidra high-pcode operators like INT_EQUAL emit a
+            // varnode whose width (e.g. 4 bytes from a promoted int result)
+            // can exceed the function's narrower return type (e.g. `_Bool`
+            // / i8). Without an implicit narrowing cast here, Clang's CIR
+            // lowering stores the wider value into the narrower retval slot,
+            // producing a `store i32 ..., ptr alloca_i8` that KLEE flags as
+            // an out-of-bound access. `create_assign_operation` already does
+            // the equivalent for ordinary assignments; return is the one
+            // lift path that bypasses it.
+            if (ret_expr != nullptr) {
+                const auto &types = type_builder().GetSerializedTypes();
+                auto ret_type_it  = types.find(function.prototype.rttype_key);
+                if (ret_type_it != types.end()
+                    && !ret_type_it->second.isNull()
+                    && !ret_type_it->second->isVoidType()
+                    && !ctx.hasSameUnqualifiedType(
+                        ret_expr->getType(), ret_type_it->second))
+                {
+                    auto *cast_expr =
+                        make_cast(ctx, ret_expr, ret_type_it->second, location);
+                    if (cast_expr != nullptr) {
+                        ret_expr = cast_expr;
+                    }
+                }
+            }
+
             return std::make_pair(
-                clang::ReturnStmt::Create(
-                    ctx, location, llvm::dyn_cast< clang::Expr >(ret_expr), nullptr
-                ),
+                clang::ReturnStmt::Create(ctx, location, ret_expr, nullptr),
                 false
             );
         }
