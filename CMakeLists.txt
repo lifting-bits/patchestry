@@ -118,6 +118,9 @@ include_directories(SYSTEM "${PE_VENDOR_INSTALL_DIR}/include")
 find_package(Z3 4.8 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using Z3Config.cmake in ${Z3_DIR} and Z3 headers in ${PE_VENDOR_INSTALL_DIR}/include")
 
+find_package(gflags CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+find_package(glog CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+
 if(PE_USE_RELLIC)
   find_package(rellic REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
   message(STATUS "Using RellicConfig.cmake in: ${rellic_DIR}")
