@@ -40,7 +40,9 @@
 #include <mlir/Target/LLVMIR/Export.h>
 
 #include <clang/CodeGen/ModuleBuilder.h>
+#ifdef PATCHESTRY_ENABLE_RELLIC
 #include <rellic/Decompiler.h>
+#endif
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
@@ -80,6 +82,12 @@ namespace patchestry::codegen {
 
     void
     CodeGenerator::lower_to_ir(clang::ASTContext &actx, const patchestry::Options &options) {
+        // Check if diagnostic error is set. If yes, ignore it.
+        if (actx.getDiagnostics().hasErrorOccurred()) {
+            actx.getDiagnostics().Reset();
+        }
+
+#ifdef PATCHESTRY_ENABLE_RELLIC
         // NOTE: We use rellic to improve the generated AST. There are issues running rellic AST
         // passes directly on AST. Temporarily we lower the AST to llvm IR and regenerate AST
 
@@ -110,11 +118,6 @@ namespace patchestry::codegen {
             return results.TakeValue();
         };
 
-        // Check if diagnostic error is set. If yes, ignore it.
-        if (actx.getDiagnostics().hasErrorOccurred()) {
-            actx.getDiagnostics().Reset();
-        }
-
         if (options.use_rellic_transform) {
             auto results = transform_ast(actx);
             if (results && results->ast) {
@@ -124,6 +127,13 @@ namespace patchestry::codegen {
             LOG(WARNING
             ) << "Failed to transform AST using remill; Fallback to default generation";
         }
+#else
+        if (options.use_rellic_transform) {
+            LOG(WARNING
+            ) << "use_rellic_transform requested but RELLIC support was disabled at build "
+                 "time (PE_USE_RELLIC=OFF); using default generation";
+        }
+#endif
 
         emit_cir(actx, options);
     }
