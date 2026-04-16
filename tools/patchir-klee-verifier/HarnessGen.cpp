@@ -302,9 +302,17 @@ namespace patchestry::klee_verifier {
         auto klee_abort = getKleeAbort(M);
         unsigned count = 0;
 
-        // Explicit list: libc abort family + patchestry intrinsics that
-        // terminate execution. Augmented by the noreturn attribute check
-        // below so newly added intrinsics are caught automatically.
+        // Explicit list of names that semantically represent "property
+        // failure" — calling any of them under KLEE should surface as an
+        // error path, not as a successful termination. Libc abort family
+        // and patchestry's assert intrinsic.
+        //
+        // We do NOT match on the generic `noreturn` attribute: longjmp,
+        // __cxa_throw, __cxa_rethrow, pthread_exit, thrd_exit, and
+        // siglongjmp are all noreturn but represent legitimate non-local
+        // control flow (stack unwinding, thread-scoped exit). Rewriting
+        // them to klee_abort would convert those flows into false bug
+        // reports. Add new abort-like functions to this list explicitly.
         static const llvm::StringRef kAbortLikeNames[] = {
             "abort", "_abort", "__abort",
             "exit", "_exit", "_Exit",
@@ -312,9 +320,8 @@ namespace patchestry::klee_verifier {
             "__patchestry_assert_fail",
         };
 
-        // Names we must never redirect even if they are noreturn
-        // declarations — KLEE intercepts these natively, or they are our
-        // own synthesized hooks.
+        // Names we must never redirect — KLEE intercepts these natively,
+        // or they are our own synthesized hooks.
         auto isExcluded = [](llvm::StringRef name) {
             return name.starts_with("klee_")
                 || name.starts_with("llvm.")
@@ -325,23 +332,17 @@ namespace patchestry::klee_verifier {
         // All existing call sites (direct and indirect through function
         // pointers) route through the new body automatically — no per-
         // call-site IR surgery needed.
-        //
-        // A declaration qualifies if it is in the explicit name list OR
-        // carries the noreturn attribute (catches project-specific abort
-        // variants and third-party noreturn functions the list misses).
         for (auto &F : M) {
             if (!F.isDeclaration())
                 continue;
             if (isExcluded(F.getName()))
                 continue;
 
-            bool is_abort_like = F.doesNotReturn();
-            if (!is_abort_like) {
-                for (auto name : kAbortLikeNames) {
-                    if (F.getName() == name) {
-                        is_abort_like = true;
-                        break;
-                    }
+            bool is_abort_like = false;
+            for (auto name : kAbortLikeNames) {
+                if (F.getName() == name) {
+                    is_abort_like = true;
+                    break;
                 }
             }
             if (!is_abort_like)

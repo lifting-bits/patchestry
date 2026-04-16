@@ -63,6 +63,7 @@ entry:
 ; CHECK:       assert.cont:
 ; CHECK:       ret i32 0
 
-; --- Per-global wrapper + per-type init for @usb_g ---
+; --- Per-global wrapper for @usb_g: zero-init scalar → inline flat
+; klee_make_symbolic, no per-type init. ---
 ; CHECK:       define internal void @__klee_init_g_usb_g()
-; CHECK:       call void @__klee_init_type_i32(ptr @usb_g, i32 0)
+; CHECK:       call void @klee_make_symbolic(ptr @usb_g, i64 4,

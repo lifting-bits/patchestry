@@ -37,22 +37,15 @@ entry:
 ; CHECK:       define i32 @main()
 ; CHECK:       call void @__klee_init_globals()
 
-; --- Per-global wrapper for @dev ---
+; --- Per-global wrapper for @dev: zero initializer routes to the
+; trivial-init fast path in buildTypeInitBody. The walker emits
+; klee_make_symbolic for fields 0 and 2 (i32), and for field 1 (ptr)
+; emits the runtime depth gate + malloc + call to the cached per-type
+; init for the pointee (i32). Because depth is a compile-time 0 at the
+; top level, the depth-check constant-folds to `br i1 false`, but the
+; CFG (init.recurse/init.null/init.cont) is still emitted. ---
 ; CHECK:       define internal void @__klee_init_g_dev()
-; CHECK:       call void @__klee_init_type_struct_Device(ptr @dev, i32 0)
-
-; --- Per-type init for %struct.Device ---
-; Expected body: klee_make_symbolic on field 0 (i32), the runtime depth
-; gate + malloc + nested init call for field 1 (ptr -> i32), and
-; klee_make_symbolic on field 2 (i32). We check the structural
-; ingredients rather than exact SSA numbering.
-;
-; The IR-builder creates recurse_bb before null_bb, so the `init.recurse`
-; block appears first in the function text even though the CFG branches
-; to `init.null` on the too-deep path.
-; CHECK:       define internal void @__klee_init_type_struct_Device(ptr %p, i32 %depth)
 ; CHECK:       call void @klee_make_symbolic(
-; CHECK:       icmp sge i32
 ; CHECK:       init.recurse:
 ; CHECK:       call ptr @malloc(
 ; CHECK:       call void @__klee_init_type_i32(

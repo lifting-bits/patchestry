@@ -54,8 +54,10 @@ entry:
 
 ; CHECK:       ret i32 0
 
-; --- Per-global wrapper + per-type init for @sensor_state ---
+; --- Per-global wrapper for @sensor_state: zero initializer routes to
+; the trivial-init fast path which inlines a flat klee_make_symbolic
+; over the 4-byte i32 storage. No per-type init is created for scalar
+; globals under the new design. ---
 ; CHECK:       define internal void @__klee_init_g_sensor_state()
-; CHECK:       call void @__klee_init_type_i32(ptr @sensor_state, i32 0)
-; CHECK:       define internal void @__klee_init_type_i32(ptr %p, i32 %depth)
-; CHECK:       call void @klee_make_symbolic(ptr %p, i64 4,
+; CHECK:       call void @klee_make_symbolic(ptr @sensor_state, i64 4,
+; CHECK-NOT:   define internal void @__klee_init_type_i32

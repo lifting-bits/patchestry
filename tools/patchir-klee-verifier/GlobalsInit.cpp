@@ -487,9 +487,11 @@ namespace patchestry::klee_verifier {
         // recursive types.
         using TypeInitCache = llvm::DenseMap< llvm::Type *, llvm::Function * >;
 
-        // Forward declarations — these four functions form a tight recursive
+        // Forward declarations — these functions form a tight recursive
         // cluster (per-type init bodies invoke emitPointerField, which calls
         // getOrCreatePerTypeInit, which calls back into buildTypeInitBody).
+        // emitInitWithInitializer is the initializer-aware top-level walker
+        // that delegates to buildTypeInitBody for trivial-init subregions.
         llvm::Function *getOrCreatePerTypeInit(
             llvm::Module &M, llvm::Type *T,
             const PointerFieldInferenceMap &im, TypeInitCache &cache
@@ -497,6 +499,11 @@ namespace patchestry::klee_verifier {
         void buildTypeInitBody(
             llvm::IRBuilder<> &B, llvm::Value *addr, llvm::Value *depth,
             llvm::Type *T, const PointerFieldInferenceMap &im,
+            TypeInitCache &cache, const llvm::Twine &name, llvm::Module &M
+        );
+        void emitInitWithInitializer(
+            llvm::IRBuilder<> &B, llvm::Value *addr, llvm::Type *T,
+            llvm::Constant *init, const PointerFieldInferenceMap &im,
             TypeInitCache &cache, const llvm::Twine &name, llvm::Module &M
         );
 
@@ -785,6 +792,114 @@ namespace patchestry::klee_verifier {
             B.CreateCall(make_sym, { addr, size_val, name_str });
         }
 
+        // Return true when the initializer carries no meaningful bytes that
+        // need to be preserved. Treats null pointer, undef, zero-aggregate,
+        // and zero-valued scalar constants as trivial — symbolizing over them
+        // has no observable effect since any concrete seed (including zero)
+        // is overwritten by klee_make_symbolic anyway.
+        bool isTrivialInit(llvm::Constant *c) {
+            if (!c)
+                return true;
+            if (llvm::isa< llvm::UndefValue >(c))
+                return true;
+            if (c->isNullValue())
+                return true;
+            return false;
+        }
+
+        // Walk a global's type and initializer in lockstep, emitting
+        // symbolization only for sub-regions that are trivially initialized
+        // (null / undef / zero). Concrete non-trivial pointer values
+        // (function pointers, cross-global references, ConstantExpr ptrs)
+        // and concrete non-trivial scalar values are left untouched so the
+        // global's declared starting state survives into the symbolic run.
+        //
+        // This is the top-level entry for per-global init. Recursive pointee
+        // allocation (pointer fields whose inferred kind is PointeeType)
+        // still goes through emitPointerField → getOrCreatePerTypeInit,
+        // because the malloc'd pointee has no initializer to preserve and
+        // the per-type cache is needed to close type cycles.
+        void emitInitWithInitializer(
+            llvm::IRBuilder<> &B, llvm::Value *addr, llvm::Type *T,
+            llvm::Constant *init, const PointerFieldInferenceMap &im,
+            TypeInitCache &cache, const llvm::Twine &name, llvm::Module &M
+        ) {
+            auto &Ctx = M.getContext();
+
+            // Trivial init — fall through to the full symbolization path
+            // (flat fast-path for pointer-free types, recursive for the
+            // rest). Matches the pre-fix behavior for zero-initialized
+            // globals.
+            if (isTrivialInit(init)) {
+                llvm::Value *zero =
+                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(Ctx), 0);
+                buildTypeInitBody(B, addr, zero, T, im, cache, name, M);
+                return;
+            }
+
+            if (auto *ST = llvm::dyn_cast< llvm::StructType >(T)) {
+                for (unsigned i = 0, e = ST->getNumElements(); i != e; ++i) {
+                    llvm::Type *field_ty = ST->getElementType(i);
+                    llvm::Constant *field_init = init->getAggregateElement(i);
+                    llvm::Value *field_ptr = B.CreateStructGEP(ST, addr, i);
+                    std::string child_name = (name + ".f" + llvm::Twine(i)).str();
+
+                    if (field_ty->isPointerTy()) {
+                        // Concrete pointer (Function, GlobalVariable,
+                        // ConstantExpr) → preserve the initializer's value;
+                        // do nothing. Null/undef pointer → symbolize through
+                        // the existing path.
+                        if (isTrivialInit(field_init)) {
+                            llvm::Value *depth_zero =
+                                llvm::ConstantInt::get(llvm::Type::getInt32Ty(Ctx), 0);
+                            emitPointerField(
+                                B, field_ptr, depth_zero,
+                                std::make_pair(ST, i),
+                                im, cache, child_name, M
+                            );
+                        }
+                    } else {
+                        emitInitWithInitializer(
+                            B, field_ptr, field_ty, field_init, im, cache,
+                            child_name, M
+                        );
+                    }
+                }
+                return;
+            }
+
+            if (auto *AT = llvm::dyn_cast< llvm::ArrayType >(T)) {
+                uint64_t N = AT->getNumElements();
+                llvm::Type *ET = AT->getElementType();
+                // Non-trivial array init: walk each element so per-element
+                // concrete values survive. We intentionally ignore
+                // klee_init_array_expand_limit here — that limit guards the
+                // trivial-init fast path (flat symbolic over N elements);
+                // for a non-trivial init there is no safe flat path, so
+                // correctness wins over IR bound.
+                for (uint64_t j = 0; j < N; ++j) {
+                    llvm::Value *idxs[] = {
+                        llvm::ConstantInt::get(llvm::Type::getInt64Ty(Ctx), 0),
+                        llvm::ConstantInt::get(llvm::Type::getInt64Ty(Ctx), j),
+                    };
+                    llvm::Value *elt_ptr = B.CreateInBoundsGEP(AT, addr, idxs);
+                    llvm::Constant *elt_init =
+                        init->getAggregateElement(static_cast< unsigned >(j));
+                    std::string elt_name =
+                        (name + "[" + llvm::Twine(j) + "]").str();
+                    emitInitWithInitializer(
+                        B, elt_ptr, ET, elt_init, im, cache, elt_name, M
+                    );
+                }
+                return;
+            }
+
+            // Top-level scalar (integer/float/pointer/vector) with a
+            // non-trivial constant initializer — preserve as-is. The
+            // declared value lives in the global's storage already; no
+            // store/symbolize needed.
+        }
+
         // Entry point for the per-type init machinery. Creates (or returns a
         // cached) internal `void __klee_init_type_<T>(ptr p, i32 depth)`
         // function and, on first creation, populates its body with the
@@ -832,17 +947,32 @@ namespace patchestry::klee_verifier {
             return F;
         }
 
-        // Create (or return a cached) internal `void @__klee_init_g_<name>()`
-        // wrapper that calls `@__klee_init_type_<T>(@g, 0)`. Wrappers keep
-        // the descriptor table's signature uniform regardless of the global's
-        // LLVM type.
+        // Create an internal `void @__klee_init_g_<name>()` wrapper per
+        // global. Unlike the earlier design that always called the cached
+        // per-type init (which unconditionally symbolized every sub-field),
+        // the wrapper now walks the global's concrete initializer so that
+        // preinitialized pointer fields — function-pointer dispatch tables,
+        // cross-global references, vtables — survive into the symbolic run.
+        // Sub-regions that are trivially initialized (null/undef/zero) still
+        // delegate to the cached per-type init, so the fast path and cycle-
+        // breaking machinery is preserved for self-referential types.
+        //
+        // Caller owns the per-GV cache (the `wrappers` map in
+        // `installGlobalsInit`), keyed by GlobalVariable* identity. We do
+        // NOT do a name-based `M.getFunction` lookup here: the sanitizer
+        // collapses `.` / `$` / other non-identifier characters to `_`, so
+        // two distinct globals like `@foo.bar` and `@foo_bar` would both
+        // map to `__klee_init_g_foo_bar`. A name-based cache would hand
+        // the second caller the first caller's wrapper, and the descriptor
+        // table would double-initialize one global while skipping the
+        // other. `Function::Create` auto-suffixes duplicate base names
+        // (`.1`, `.2`, ...) so each global gets a uniquely-named wrapper.
         llvm::Function *getOrCreatePerGlobalInit(
             llvm::Module &M, llvm::GlobalVariable *GV,
             const PointerFieldInferenceMap &im, TypeInitCache &cache
         ) {
             auto &Ctx    = M.getContext();
             auto *voidTy = llvm::Type::getVoidTy(Ctx);
-            auto *i32Ty  = llvm::Type::getInt32Ty(Ctx);
 
             std::string wrapper_name = ("__klee_init_g_" + GV->getName()).str();
             // Sanitize the global's name the same way as types.
@@ -850,9 +980,6 @@ namespace patchestry::klee_verifier {
                 if (!std::isalnum(static_cast< unsigned char >(c)) && c != '_')
                     c = '_';
             }
-
-            if (auto *existing = M.getFunction(wrapper_name))
-                return existing;
 
             auto *FT = llvm::FunctionType::get(voidTy, {}, false);
             auto *F  = llvm::Function::Create(
@@ -862,9 +989,15 @@ namespace patchestry::klee_verifier {
             auto *entry_bb = llvm::BasicBlock::Create(Ctx, "entry", F);
             llvm::IRBuilder<> B(entry_bb);
 
-            llvm::Function *type_init =
-                getOrCreatePerTypeInit(M, GV->getValueType(), im, cache);
-            B.CreateCall(type_init, { GV, llvm::ConstantInt::get(i32Ty, 0) });
+            // `materializeExternalGlobals` stamps a zero initializer on
+            // previously-external globals, so `getInitializer()` is safe.
+            // A defensive nullptr check still matters in case a future
+            // pass adds a global without materializing an initializer.
+            llvm::Constant *init =
+                GV->hasInitializer() ? GV->getInitializer() : nullptr;
+            emitInitWithInitializer(
+                B, GV, GV->getValueType(), init, im, cache, GV->getName(), M
+            );
             B.CreateRetVoid();
 
             return F;

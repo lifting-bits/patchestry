@@ -32,15 +32,16 @@ entry:
 ; CHECK:       define i32 @main()
 ; CHECK:       call void @__klee_init_globals()
 
-; --- Per-type init for %struct.Ops stores null into the fn field ---
-; and does NOT malloc or symbolize the pointer field. The scalar leaf
-; (field 0) still gets a flat klee_make_symbolic.
-; CHECK:       define internal void @__klee_init_type_struct_Ops(ptr %p, i32 %depth)
+; --- Per-global wrapper for @ops: zero initializer routes to the
+; trivial-init fast path in buildTypeInitBody. The walker symbolizes
+; field 0 (i32) inline and stores null into field 1 (fn pointer inferred
+; as FunctionPointer). No malloc, no flat symbolic over field 1. ---
+; CHECK:       define internal void @__klee_init_g_ops()
 ; CHECK:       call void @klee_make_symbolic(
 ; CHECK:       store ptr null,
-
-; --- Field 1 must NOT be allocated via malloc or passed to klee_make_symbolic ---
-; This is the behavioral difference from the old flat-bytes path: field
-; 1 is never put through a symbolic buffer.
-; CHECK-NOT:   call void @__klee_init_type_struct_Ops
 ; CHECK:       ret void
+
+; --- No per-type init should be emitted for %struct.Ops — the walk is
+; inlined into the per-global wrapper and the only pointer field is
+; FunctionPointer (stored as null, no recursive pointee allocation). ---
+; CHECK-NOT:   define internal void @__klee_init_type_struct_Ops

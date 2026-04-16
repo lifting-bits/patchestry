@@ -31,16 +31,17 @@ entry:
 ; CHECK:       define i32 @main()
 ; CHECK:       call void @__klee_init_globals()
 
-; --- Per-type init for the large array ---
-; Since the element type %struct.Entry contains no pointers, the fast
-; path inside buildTypeInitBody kicks in and emits a single flat
-; klee_make_symbolic over the entire [16 x Entry] storage. We do NOT
-; create 16 element-wise inits.
-; CHECK:       define internal void @__klee_init_type_arr16_struct_Entry(ptr %p, i32 %depth)
-; CHECK:       call void @klee_make_symbolic(ptr %p, i64 128,
+; --- Per-global wrapper for @table: zero initializer routes to the
+; trivial-init fast path in buildTypeInitBody. Since %struct.Entry
+; contains no pointers, the fast path emits a single flat
+; klee_make_symbolic over the entire [16 x Entry] storage (128 bytes).
+; No 16 element-wise inits, no per-element walk. ---
+; CHECK:       define internal void @__klee_init_g_table()
+; CHECK:       call void @klee_make_symbolic(ptr @table, i64 128,
 ; CHECK:       ret void
 
-; --- No per-element init function for Entry should be created ---
-; (the element type is pointer-free so it takes the flat path from
-; the array-level init, not a recursive per-element walk).
+; --- No per-type init functions for arr16 or Entry — both are pointer-
+; free so the walk is inlined/flat, not dispatched through a cached
+; per-type init. ---
+; CHECK-NOT:   define internal void @__klee_init_type_arr16_struct_Entry
 ; CHECK-NOT:   define internal void @__klee_init_type_struct_Entry

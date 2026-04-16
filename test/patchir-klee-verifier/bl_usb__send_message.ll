@@ -73,14 +73,12 @@ entry:
 ; HARNESS:       assert.cont:
 ; HARNESS:       ret i32 0
 
-; --- FileCheck: per-global wrapper and per-type init for @usb_g ---
-; The wrapper is a trivial forwarder into the per-type init function;
-; the per-type init hits the pointer-free fast path (i32 leaf) and emits
-; a single klee_make_symbolic of the global's bytes.
+; --- FileCheck: per-global wrapper for @usb_g. The zero initializer
+; routes to the trivial-init fast path; since the value type is i32
+; (pointer-free), the walker emits a single flat klee_make_symbolic
+; inline. No per-type init is created for scalar globals. ---
 ; HARNESS:       define internal void @__klee_init_g_usb_g()
-; HARNESS:       call void @__klee_init_type_i32(ptr @usb_g, i32 0)
-; HARNESS:       define internal void @__klee_init_type_i32(ptr %p, i32 %depth)
-; HARNESS:       call void @klee_make_symbolic(ptr %p, i64 4,
+; HARNESS:       call void @klee_make_symbolic(ptr @usb_g, i64 4,
 
 ; --- FileCheck: the dispatcher is a counted loop over the descriptor table ---
 ; HARNESS:       define internal void @__klee_init_globals()

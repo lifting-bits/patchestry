@@ -39,9 +39,16 @@ entry:
 ; CHECK:       define i32 @main()
 ; CHECK:       call void @__klee_init_globals()
 
-; --- Per-global wrapper for @head ---
+; --- Per-global wrapper for @head: the zero initializer makes this a
+; trivial-init case, so the walk is delegated to buildTypeInitBody.
+; The walker symbolizes field 0 (i32) inline and emits the recurse/null
+; branching for field 1 (pointer) directly in the per-global body. For
+; the recursive pointee allocated via malloc, it calls the cached
+; per-type init @__klee_init_type_struct_Node. ---
 ; CHECK:       define internal void @__klee_init_g_head()
-; CHECK:       call void @__klee_init_type_struct_Node(ptr @head, i32 0)
+; CHECK:       call void @klee_make_symbolic(ptr @head,
+; CHECK:       call ptr @malloc(
+; CHECK:       call void @__klee_init_type_struct_Node(
 
 ; --- Per-type init for %struct.Node: must recursively call itself ---
 ; The presence of `call void @__klee_init_type_struct_Node(...)` inside

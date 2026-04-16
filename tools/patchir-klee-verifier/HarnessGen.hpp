@@ -19,9 +19,11 @@ namespace patchestry::klee_verifier {
     void retargetModuleToX86_64(llvm::Module &M, bool verbose);
 
     // Replace abort-like declarations with a body that calls klee_abort.
-    // Matches an explicit name list (libc abort family, patchestry
-    // intrinsics) plus any declaration carrying the noreturn attribute.
-    // Returns the number of redirected declarations.
+    // Matches an explicit name list of property-failure functions (libc
+    // abort family, patchestry assert intrinsic). Does NOT match on the
+    // generic noreturn attribute — longjmp, __cxa_throw, pthread_exit,
+    // etc. are noreturn but represent legitimate non-local control flow,
+    // not property failure. Returns the number of redirected declarations.
     unsigned rewriteAbortCalls(llvm::Module &M);
 
     // Stub undefined external functions with symbolic return values. Returns
