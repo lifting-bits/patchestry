@@ -1,39 +1,21 @@
 # PatchDSL
 
 A Semgrep-style pattern language for Patchestry, replacing the YAML
-`meta_patches` / `match` / `action` spec. Patterns and fixes are written in
+`meta_patches` / `match` / `action` spec. Patterns and rewrites are written in
 C-shaped syntax, matched and rewritten at the ClangIR (CIR) layer.
 
 Companion documents:
 - `docs/GettingStarted/patch_specifications.md` — legacy YAML (still supported
   during migration).
-- `docs/SPEC_MIGRATION.md` — status of the YAML → PatchDSL cutover.
 
 ---
 
-## 1. Philosophy
+## 1. File structure
 
-1. **Patterns look like real C.** No positional operand indexes, no
-   `kind: "operation"` strings. You write the code you want to find.
-2. **Metavariables unify by name.** `$P` captured once must be the same SSA
-   value everywhere it appears.
-3. **One file per rule set.** Match, fix body, inline helpers, and metadata
-   live together. External C patches remain available via `import`.
-4. **The DSL is a codegen layer.** It lowers to the same
-   `InstrumentationPass` backend used today — nothing in the rewrite
-   infrastructure changes.
+A `.patch` file is a sequence of top-level items — metadata, imports,
+inline patch functions, rules (patches), and contracts (full grammar in §2).
 
----
-
-## 2. File structure
-
-A `.patch` file is a sequence of top-level items:
-
-```
-<file>            ::= { <metadata> | <import> | <patch_fn> | <rule> }
-```
-
-### 2.1 File-level metadata
+### 1.1 File-level metadata
 
 ```
 metadata {
@@ -42,16 +24,65 @@ metadata {
   version:     "1.0.0"
   author:      "Security Team"
   created:     "2026-04-15"
+
+  target {
+    binary: "bloodview.bin"
+    arch:   "ARM:LE:32:v7"
+  }
 }
 ```
 
-Optional. Matches the fields present in legacy YAML. Not required for the
-DSL to function.
+Optional except for `target`, which is **required** when the rule set is
+applied to a concrete CIR module. The `target` block mirrors the
+`target:` section in legacy YAML (`docs/GettingStarted/patch_specifications.md`)
+and pins the rule set to the binary / architecture it was authored against.
 
-### 2.2 Imports
+`target` fields:
+
+| Field     | Required | Semantics                                                     |
+|-----------|----------|---------------------------------------------------------------|
+| `binary`  | yes      | Expected source binary name, matched against the CIR module's `patchir.source_binary` attribute. |
+| `arch`    | yes      | Ghidra-style `PROCESSOR:ENDIAN:BITWIDTH:VARIANT` triple, matched against `patchir.target_arch`. |
+| `variant` | no       | Free-form compatibility tag (e.g. `"debug"`, `"release"`). Advisory; logged but not enforced. |
+
+### 1.1.1 Target verification
+
+At rule load time, `patchir-transform` refuses to run a `.patchmod` whose
+`metadata.target` is incompatible with the input CIR module. The check is:
+
+1. **Binary name.** `metadata.target.binary` must equal the module's
+   `patchir.source_binary` attribute (case-sensitive exact match). A
+   mismatch is a hard error — the patcher exits non-zero and applies
+   nothing.
+2. **Architecture.** `metadata.target.arch` must equal the module's
+   `patchir.target_arch`. `arch` is compared component-wise; a `*`
+   in any position of the rule-side triple is a wildcard for that
+   component (e.g. `"ARM:LE:32:*"` accepts any ARM32 little-endian
+   variant).
+3. **Override.** `patchir-transform --ignore-target-mismatch` downgrades
+   both checks to warnings. Intended for cross-binary experimentation;
+   never the default.
+
+When `metadata` is omitted entirely, or when the `target` block is
+absent, the patcher emits a warning (`rule set has no target pin —
+applying blind`) and proceeds. Authors are encouraged to always pin
+`target` so an accidentally mis-routed rule set fails loudly instead of
+silently corrupting unrelated code.
+
+Verification happens *before* any pattern match is attempted, so the
+error points at the rule file, not at a downstream rewrite failure:
+
+```
+rules/cwe190.patchmod: error: target mismatch
+  rule set target: binary="bloodview.bin", arch="ARM:LE:32:v7"
+  module target:   binary="device_query.bin", arch="ARM:LE:32:v7"
+  (pass --ignore-target-mismatch to override)
+```
+
+### 1.2 Imports
 
 Bring in an external C patch module whose functions can be invoked from
-`fix:` bodies.
+`rewrite:` bodies.
 
 ```
 import "patches/patch_checked_mul16.c" as mul16
@@ -59,7 +90,7 @@ import "patches/patch_checked_mul16.c" as mul16
 
 Symbols from the imported file are reachable as `mul16::<function>`.
 
-### 2.3 Inline patch functions
+### 1.3 Inline patch functions
 
 For small helpers, skip the separate C file:
 
@@ -71,36 +102,48 @@ patch clamp_u16(x: uint32_t) -> uint16_t {
 
 Inline patches are compiled and linked exactly like `import`ed ones.
 
-### 2.4 Rules
+### 1.4 Rules and contracts
+
+Two top-level block kinds carry the DSL's executable intent:
 
 ```
-rule <name> [@<severity>] {
-  <clause>+
-  <action>+
-}
+rule <name> { <clause>+ <action>+ }        // patches: rewrite / call / insert / remove
+contract <name> { <clause>+ <contract-clause>+ }   // contracts: requires / ensures / invariant / attributes
 ```
 
-`<severity>` ∈ `low | med | high | crit`. Drives report formatting only; it
-does not affect matching.
+A `rule` *changes* program behavior. A `contract` *declares* a property
+(attached as an MLIR attribute for static tooling, or emitted as a
+runtime check). See §5 for the contract surface in full.
 
 ---
 
-## 3. Grammar (EBNF)
+## 2. Grammar (EBNF)
 
 ```ebnf
-file          = { metadata | import | patch_fn | rule } ;
+file          = { metadata | import | patch_fn | rule | contract } ;
 
-metadata      = "metadata" "{" { kv } "}" ;
+metadata      = "metadata" "{" { kv | target_block } "}" ;
+target_block  = "target" "{" { kv } "}" ;
 import        = "import" string [ "as" ident ] ;
 patch_fn      = "patch" ident "(" [ params ] ")" [ "->" type ] block ;
 params        = param { "," param } ;
 param         = ident ":" type ;
 
-rule          = "rule" ident [ "@" severity ] "{"
+rule          = "rule" ident "{"
                     { clause }
                     action
                     { action }
                 "}" ;
+
+contract      = "contract" ident "{"
+                    { clause | contract_clause }
+                "}" ;
+
+contract_clause
+              = "requires"   ":" predicate
+              | "ensures"    ":" predicate
+              | "invariant"  ":" predicate
+              | "attributes" ":" "[" ident { "," ident } "]" ;
 
 clause        = pattern_clause
               | scope_clause
@@ -110,21 +153,17 @@ clause        = pattern_clause
 
 pattern_clause
               = "pattern"                ":" code_block
-              | "pattern-not"            ":" code_block
               | "pattern-either"         ":" "[" code_block
                                               { "," code_block } "]" ;
 
-scope_clause  = "pattern-inside"        ":" code_block
-              | "pattern-not-inside"    ":" code_block ;
+scope_clause  = "pattern-inside"        ":" code_block ;
 
 constraint_clause
-              = "metavariable-type"      ":" "{" "var" ":" metavar ","
-                                              "type" ":" type "}"
-              | "metavariable-pattern"   ":" "{" "var" ":" metavar ","
+              = "capture-pattern"        ":" "{" "var" ":" capture ","
                                               "pattern" ":" code_block "}"
-              | "metavariable-comparison":" "{" "var" ":" metavar ","
+              | "capture-comparison"     ":" "{" "var" ":" capture ","
                                               "cmp" ":" predicate "}"
-              | "metavariable-taint"     ":" "{" "var" ":" metavar ","
+              | "capture-taint"          ":" "{" "var" ":" capture ","
                                               "from" ":" source "}" ;
 
 predicate_clause
@@ -136,8 +175,7 @@ description_clause
 
 action        = rewrite_action | insert_action ;
 rewrite_action
-              = "fix"             ":" code_block
-              | "replace"         ":" code_block
+              = "rewrite"         ":" code_block
               | "call"            ":" call_expr
               | "remove"
               | "assert"          ":" predicate ;
@@ -149,7 +187,7 @@ insert_body   = code_block
 position      = "before" | "after" | "at_entry" | "at_exit" ;
 call_expr     = ident { "::" ident } "(" [ arg_list ] ")" ;
 arg_list      = arg_expr { "," arg_expr } ;
-arg_expr      = metavar | literal | call_expr ;
+arg_expr      = capture | literal | call_expr ;
 
 code_block    = "|" raw_c_with_metavars               (* YAML-style block *)
               | string ;                              (* short form *)
@@ -159,12 +197,11 @@ predicate     = pred_atom
               | predicate "||" predicate
               | "!" predicate
               | "(" predicate ")"
-              | "forall" metavar "in" expr ":" predicate
-              | "exists" metavar "in" expr ":" predicate ;
+              | "forall" capture "in" expr ":" predicate
+              | "exists" capture "in" expr ":" predicate ;
 
 pred_atom     = "nonnull"    "(" expr ")"
               | "may_be_null" "(" expr ")"
-              | "bounded"    "(" expr [ "," "by" expr ] ")"
               | "tainted"    "(" expr "from" source ")"
               | "reaches"    "(" expr "," expr ")"
               | "dominates"  "(" expr "," expr ")"
@@ -178,22 +215,20 @@ pred_atom     = "nonnull"    "(" expr ")"
 source        = "user_input" | "network" | "file"
               | ident ;                               (* user source *)
 
-severity      = "low" | "med" | "high" | "crit" ;
-
-metavar       = "$" ident | "$..." ident ;            (* $X or $...XS *)
+capture       = "$" ident | "$..." ident ;            (* $X or $...XS *)
 ellipsis      = "..." ;                               (* in code_block only *)
 ```
 
-### 3.1 Pattern vocabulary
+### 2.1 Pattern vocabulary
 
 Inside `code_block` you may use everything C accepts, plus:
 
 | Token            | Meaning                                                 |
 |------------------|---------------------------------------------------------|
-| `$X`             | Metavariable. First use binds, later uses unify.        |
-| `$...XS`         | Variadic metavariable. Captures an argument list.       |
+| `$X`             | Capture. First use binds, later uses unify.             |
+| `$...XS`         | Variadic capture. Captures an argument list.            |
 | `...`            | Wildcard. Statement sequence, arg list, or expression.  |
-| `$X: T`          | Inline type annotation on a metavariable.               |
+| `$X: T`          | Inline type annotation on a capture.                    |
 
 Positions where `...` makes sense:
 
@@ -206,41 +241,40 @@ $OBJ.$F                   // any field access on $OBJ
 
 ---
 
-## 4. Clause reference
+## 3. Clause reference
 
-### 4.1 Matching clauses
+### 3.1 Matching clauses
 
 | Clause                  | Semantics                                             |
 |-------------------------|-------------------------------------------------------|
 | `pattern:`              | Required. The shape the rule searches for.            |
-| `pattern-not:`          | Excludes matches that *also* match this pattern.      |
 | `pattern-either:`       | Disjunction; rule fires if any branch matches.        |
 
-Multiple `pattern-not:` clauses may appear; all must fail to match for the
-rule to fire. Multiple `pattern:` clauses are ANDed (the same AST region
-must match each).
+Multiple `pattern:` clauses are ANDed (the same AST region must match
+each). Negative constraints belong in `where:` — see §3.4.
 
-### 4.2 Scope clauses
+### 3.2 Scope clauses
 
 | Clause                  | Semantics                                             |
 |-------------------------|-------------------------------------------------------|
 | `pattern-inside:`       | Match must lie textually/structurally inside this.    |
-| `pattern-not-inside:`   | Match must *not* lie inside this.                     |
 
 Scope clauses lower to `Op::getParentOfType` walks (for structural scopes
 like `cir.func`, `cir.loop`, `cir.if`) and CFG-region checks for ordered
 scopes (`between X and Y`).
 
-### 4.3 Constraint clauses
+### 3.3 Constraint clauses
 
 | Clause                       | Purpose                                          |
 |------------------------------|--------------------------------------------------|
-| `metavariable-type:`         | Refine a metavar by static type.                 |
-| `metavariable-pattern:`      | Require a metavar to itself match a sub-pattern. |
-| `metavariable-comparison:`   | Require a numeric/ordering predicate on a var.   |
-| `metavariable-taint:`        | Require a metavar to be tainted from a source.   |
+| `capture-pattern:`           | Require a capture to itself match a sub-pattern. |
+| `capture-comparison:`        | Require a numeric/ordering predicate on a var.   |
+| `capture-taint:`             | Require a capture to be tainted from a source.   |
 
-### 4.4 `where:` clauses
+Static type refinements use the inline `$X: T` annotation in the
+pattern itself (see §2.1) rather than a separate clause.
+
+### 3.4 `where:` clauses
 
 `where:` is the escape hatch for semantic predicates the pattern language
 cannot express syntactically. Each predicate is backed by a CIR analysis:
@@ -249,56 +283,42 @@ cannot express syntactically. Each predicate is backed by a CIR analysis:
 |----------------------|--------------------------------------------------|
 | `nonnull(e)`         | Nullness lattice                                 |
 | `may_be_null(e)`     | Nullness lattice (top / maybe)                   |
-| `bounded(e)`         | IntegerRangeAnalysis                             |
-| `bounded(e, by=s)`   | IntegerRangeAnalysis vs `s`                      |
+| `e relop n`          | IntegerRangeAnalysis (e.g. `$A * $B <= 0xFFFF`)  |
+| `sizeof(e) relop n`  | Type introspection (e.g. `$N <= sizeof($D)`)     |
+| `type(e) relop T`    | Type introspection                               |
 | `tainted(e from src)`| Taint dataflow                                   |
 | `reaches(a, b)`      | Forward dataflow                                 |
 | `dominates(a, b)`    | `DominanceInfo` on enclosing region              |
 | `aliases(a, b)`      | MLIR alias analysis over CIR                     |
 | `escapes(e)`         | Escape analysis                                  |
-| `sizeof(e) relop n`  | Type introspection                               |
-| `type(e) relop T`    | Type introspection                               |
 
 User-defined predicates are registered C++ callbacks; they receive the
 capture environment and return `bool`.
 
 ---
 
-## 5. Actions
+## 4. Actions
 
 Each rule has one or more actions. A rule may include any number of
 `insert ...` actions, and at most one rewrite-style action
-(`fix`, `replace`, `call`, `remove`, or `assert`).
+(`rewrite`, `call`, `remove`, or `assert`).
 
-### 5.1 `fix:` — inline pattern-to-pattern rewrite
+### 4.1 `rewrite:` — inline pattern-to-pattern rewrite
 
-The matched region is replaced by the fix pattern, with captured
-metavariables substituted. The fix uses the same pattern grammar as
-`pattern:`.
+The matched region is replaced by the rewrite pattern, with captures
+substituted. The rewrite uses the same pattern grammar as `pattern:`.
 
 ```
 rule flip_strict_lt {
   pattern: for (...; $I < $N; ...) { ... $ARR[$I + 1] ... }
-  fix:     for (...; $I < $N - 1; ...) { ... $ARR[$I + 1] ... }
+  rewrite: for (...; $I < $N - 1; ...) { ... $ARR[$I + 1] ... }
 }
 ```
 
 Ellipses on both sides are preserved literally — captured statements
 between anchors keep their original position.
 
-### 5.2 `replace:` — alias for `fix:`
-
-Identical semantics; use it when "replace" reads more naturally than "fix"
-(e.g. style choice for refactorings rather than security patches).
-
-```
-rule use_safer_copy {
-  pattern: strcpy($D, $S)
-  replace: safe_strcpy($D, sizeof($D), $S)
-}
-```
-
-### 5.3 `insert before:` / `insert after:`
+### 4.2 `insert before:` / `insert after:`
 
 Adds new statements immediately before or after the match, without
 touching the match itself.
@@ -320,7 +340,7 @@ rule guard_before_write {
 }
 ```
 
-### 5.4 `insert at_entry:` / `insert at_exit:`
+### 4.3 `insert at_entry:` / `insert at_exit:`
 
 Inserts at the function-level entry or every exit point of the enclosing
 `cir.func`. Useful for contracts-as-code or resource tracking.
@@ -336,35 +356,30 @@ rule log_entry_exit {
 }
 ```
 
-`#FN` is a stringified metavariable — a compile-time literal, not an SSA
+`#FN` is a stringified capture — a compile-time literal, not an SSA
 value.
 
-### 5.5 `call:` — invoke an external/inline patch function
+### 4.4 `call:` — invoke an external/inline patch function
 
-Equivalent to `fix: $R = <callee>($ARGS...)` when the entire match result
-is replaced by a call. This is the DSL spelling of today's YAML `replace`
-with `patch_id`.
+Equivalent to `rewrite: $R = <callee>($ARGS...)` when the entire match
+result is replaced by a call.
 
 ```
 import "patches/patch_checked_mul16.c" as mul16
 
-rule cwe190_int_overflow_fix @high {
+rule cwe190_int_overflow_fix {
   pattern-inside: $RET peek_process(...) { ... }
-  pattern:        $R = $A * $B
-  metavariable-type: { var: $R, type: uint16_t }
-  where:          !bounded($A) || !bounded($B)
+  pattern:        ($R: uint16_t) = $A * $B
+  where:          !($A * $B <= 0xFFFF)
   call:           mul16::patch__replace__int_mul16($A, $B)
 }
 ```
 
 `call:` replaces the matched expression with the call's result, inserting
 casts on operands and return value when the callee signature differs from
-the capture types. This is exactly what
-`InstrumentationPass::prepare_patch_call_arguments` does today, just
-driven by named captures instead of `operand: { index: N }`.
+the capture types.
 
-For `insert before` / `insert after` style call patches (the
-`apply_before` / `apply_after` modes in legacy YAML), use:
+For `insert before` / `insert after` style call patches, use:
 
 ```
 rule audit_sprintf {
@@ -376,7 +391,7 @@ rule audit_sprintf {
 
 i.e. insert a normal call statement before/after the match.
 
-### 5.6 `remove:` — delete the match
+### 4.5 `remove:` — delete the match
 
 No body. Erases the matched op(s). Combine with `insert` if you need to add
 new behavior at the same site.
@@ -396,16 +411,11 @@ rule drop_redundant_flush {
 The second occurrence is the one deleted; the ellipsis marks the anchor
 pair.
 
-The second occurrence is the one deleted; the ellipsis marks the anchor
-pair.
-
-The second occurrence is the one deleted; the ellipsis marks the anchor
-pair.
-
-### 5.7 `assert:` — contract mode
+### 4.6 `assert:` — site-local check
 
 Emits a `cir.call @__patchestry_assume` (or runtime assertion, per build
-config) at the insertion point implied by the scope:
+config) at the matched site — useful for preconditions bound to a
+*specific* call or op:
 
 ```
 rule sprintf_precond {
@@ -414,9 +424,95 @@ rule sprintf_precond {
 }
 ```
 
-Contracts share the predicate vocabulary with `where:` but are *emitted*
-rather than *checked at match time*. The same DSL source can thus drive
-both KLEE harness generation and runtime assertions.
+`assert:` shares the predicate vocabulary with `where:` but is *emitted*
+rather than *checked at match time*. For function- or region-level
+properties (pre/post-conditions, invariants, pure-attribute metadata),
+use a `contract` block — see §5.
+
+---
+
+## 5. Contracts
+
+Contracts attach properties to functions or regions *without* rewriting
+their bodies. They live in their own block (sibling of `rule`) and lower
+to either MLIR attributes (static mode — the default, zero runtime
+cost) or `__patchestry_assume` / `assert()` calls (runtime mode),
+selected by `patchir-transform --contracts=static|runtime|both`.
+
+### 5.1 Block shape
+
+```
+contract <name> {
+  pattern-inside: <function-or-region scope>
+
+  requires:   <predicate>          // entry precondition
+  ensures:    <predicate>          // return postcondition
+  invariant:  <predicate>          // loop / region invariant
+  attributes: [ <attr>, ... ]      // raw MLIR attrs (static only)
+}
+```
+
+All clauses are optional; a contract block with only `attributes:` is
+valid and useful for tagging functions as `pure`, `thread_safe`, etc.
+At least one `pattern-inside:` clause is required so the contract has a
+scope to attach to.
+
+### 5.2 Clause reference
+
+| Clause        | Scope target                        | Static lowering                                | Runtime lowering                               |
+|---------------|-------------------------------------|------------------------------------------------|------------------------------------------------|
+| `requires:`   | enclosing `cir.func`                | `patchestry.requires = #pred` on the func      | `__patchestry_assume(pred)` at entry           |
+| `ensures:`    | enclosing `cir.func`                | `patchestry.ensures = #pred` on the func       | `assert(pred)` before every `cir.return`       |
+| `invariant:`  | matched `cir.for` / `cir.while` / region | `patchestry.invariant = #pred` on the region | `__patchestry_assume(pred)` at the loop header |
+| `attributes:` | enclosing `cir.func`                | each attr attached as `patchestry.<attr>`      | (not emitted)                                  |
+
+`requires:` / `ensures:` / `invariant:` use the same predicate
+vocabulary as `where:` (§3.4) and `assert:` (§4.6).
+
+### 5.3 Relationship to `assert:`
+
+| Need                                                    | Use                            |
+|---------------------------------------------------------|--------------------------------|
+| Precondition for a specific call-site                   | `assert:` in a `rule`          |
+| Function-level entry/exit contract                      | `requires:` / `ensures:`       |
+| Loop or region property the verifier must preserve      | `invariant:`                   |
+| Framework tag with no predicate (`pure`, `noreturn`, …) | `attributes:`                  |
+
+### 5.4 Example — `peek_process` safety contract
+
+```
+contract peek_process_safety {
+  pattern-inside: $RET peek_process(($CNT: uint16_t), ($SZ: uint16_t)) { ... }
+
+  requires:   $CNT > 0 && $CNT * $SZ <= 0xFFFF
+  ensures:    @return != NULL
+  invariant:  $IDX <= $SZ
+  attributes: [pure, no_side_effects]
+}
+```
+
+In static mode the function picks up:
+
+```mlir
+cir.func @peek_process(...) attributes {
+  patchestry.requires   = #patchestry<"$CNT > 0 && $CNT * $SZ <= 0xFFFF">,
+  patchestry.ensures    = #patchestry<"@return != NULL">,
+  patchestry.pure       = unit,
+  patchestry.no_side_effects = unit
+} { ... }
+```
+
+A verifier (KLEE, an MLIR dataflow pass, a SARIF exporter) consumes
+those attributes directly. Switch to `--contracts=runtime` and the same
+source lowers to `__patchestry_assume` / `assert()` calls instead, with
+no change to the `.patch` file.
+
+### 5.5 Postcondition pseudo-capture `@return`
+
+Inside `ensures:` only, `@return` stands for the value being returned at
+each `cir.return` site. It is *not* a normal capture (note the `@`
+prefix, not `$`) — it refers to a synthesized SSA value resolved
+per-return-site, not to a match binding from `pattern:`.
 
 ---
 
@@ -448,17 +544,13 @@ action:
 ```
 import "patches/patch_checked_mul16.c" as mul16
 
-rule cwe190_int_overflow_fix @high {
+rule cwe190_int_overflow_fix {
   description: "Replace unchecked u16 multiply in peek_process"
 
   pattern-inside: $RET peek_process(...) { ... }
-  pattern:        $R = $A * $B
+  pattern:        ($R: uint16_t) = ($A: uint16_t) * ($B: uint16_t)
 
-  metavariable-type: { var: $R, type: uint16_t }
-  metavariable-type: { var: $A, type: uint16_t }
-  metavariable-type: { var: $B, type: uint16_t }
-
-  where: !bounded($A) || !bounded($B)
+  where: !($A * $B <= 0xFFFF)
 
   call:  mul16::patch__replace__int_mul16($A, $B)
 }
@@ -469,19 +561,15 @@ rule cwe190_int_overflow_fix @high {
 **PatchDSL:**
 
 ```
-rule cwe476_guard_deref @high {
-  pattern:            $P->$F
-  pattern-not-inside: if ($P) { ... }
-  pattern-not-inside: if ($P != NULL) { ... }
-  where:              may_be_null($P)
+rule cwe476_guard_deref {
+  pattern: $P->$F
+  where:   may_be_null($P)
 
-  fix: ($P ? $P->$F : 0)
+  rewrite: ($P ? $P->$F : 0)
 }
 ```
 
 ### 6.3 Insert before: audit a call-site
-
-Equivalent to the legacy `apply_before` mode.
 
 **Legacy (`measurement_update_before_operation.yaml`):**
 
@@ -509,11 +597,10 @@ import "patches/measurement_update_patch.c" as mu
 rule audit_spo2_lookup {
   pattern-inside: |
     $RET $FN(...) { ... }
-  metavariable-comparison: { var: $FN,
-                             cmp: matches("measurement") && matches("update") }
+  capture-comparison: { var: $FN,
+                        cmp: matches("measurement") && matches("update") }
 
-  pattern: spo2_lookup($X)
-  metavariable-type: { var: $X, type: float }
+  pattern: spo2_lookup(($X: float))
 
   insert before:
     call: mu::measurement_update_before_operation($X)
@@ -525,28 +612,26 @@ rule audit_spo2_lookup {
 **PatchDSL:**
 
 ```
-rule null_after_free @high {
+rule null_after_free {
   pattern-inside: $RET $FN(...) { ... }
   pattern:        free($P)
-  pattern-not-inside: |
-    free($P);
-    ...
-    $P = NULL;
+  where:          !nulled_after($P, free($P))
 
   insert after: |
     $P = NULL;
 }
 ```
 
-The `pattern-not-inside` prevents double-fixing: if the code already
-NULLs the pointer, skip.
+`nulled_after` is a user-defined dataflow predicate that returns true if
+a `$P = NULL` store already post-dominates the `free($P)` site. It
+prevents double-fixing without a pattern-level negation clause.
 
-### 6.5 Fix rewrite: double-free
+### 6.5 Rewrite: double-free
 
 **PatchDSL:**
 
 ```
-rule cwe415_double_free @crit {
+rule cwe415_double_free {
   pattern: |
     free($P);
     ...
@@ -554,16 +639,16 @@ rule cwe415_double_free @crit {
   where: aliases($P, $P)           // trivially true, kept for clarity
       && !reassigned_between($P, free($P), free($P))
 
-  fix: |
+  rewrite: |
     free($P);
     $P = NULL;
     ...
 }
 ```
 
-The fix replaces the *entire* matched region. The ellipsis between the
-two frees is preserved; the second `free($P)` is dropped; `$P = NULL` is
-inserted after the first.
+The rewrite replaces the *entire* matched region. The ellipsis between
+the two frees is preserved; the second `free($P)` is dropped;
+`$P = NULL` is inserted after the first.
 
 ### 6.6 Replace call: CWE-078 command injection
 
@@ -572,9 +657,9 @@ inserted after the first.
 ```
 import "patches/patch_system.c" as patch_sys
 
-rule cwe078_system_taint @crit {
+rule cwe078_system_taint {
   pattern: system($CMD)
-  metavariable-taint: { var: $CMD, from: user_input }
+  capture-taint: { var: $CMD, from: user_input }
 
   call: patch_sys::safe_exec($CMD)
 }
@@ -596,13 +681,13 @@ rule sprintf_precond {
 **PatchDSL:**
 
 ```
-rule unsafe_str_copy @high {
+rule unsafe_str_copy {
   pattern-either: [
     strcpy($D, $S),
     strcat($D, $S),
     sprintf($D, "%s", $S)
   ]
-  where: !bounded($S, by=sizeof($D))
+  where: !(strlen($S) <= sizeof($D))
 
   call: safe::copy($D, sizeof($D), $S)
 }
@@ -628,23 +713,150 @@ rule trace_peek_handlers {
 
 ## 7. Execution model
 
-1. **Parse.** The `.patch` file is parsed by a tree-sitter-C grammar
-   extended with metavariable / ellipsis tokens.
-2. **Lower.** Each pattern becomes a **PatternIR** — a CIR-shaped
-   template with named captures and region anchors.
-3. **Codegen.** PatternIR lowers to either:
-   - PDL bytecode (for rules with no `where:` / taint predicates), or
-   - a generated C++ `OpRewritePattern<T>` (when semantic predicates are
-     present).
-4. **Drive.** Rules are registered into a `RewritePatternSet` and applied
-   by the existing `InstrumentationPass` via
-   `applyPatternsAndFoldGreedily`.
-5. **Emit.** Fix bodies, `call:`, `insert …` actions, and `assert:` emit
-   CIR ops directly with the `PatternRewriter`. External patches are
-   linked as today.
+A `.patch` file travels through five phases before the patched `.cir`
+is written. Each phase has a well-defined input, output, and failure
+mode.
 
-Analyses (`DominanceInfo`, nullness, taint, alias, integer range) are
-requested via MLIR's analysis manager and cached per function.
+```
+  [.patch source] → (1) Load → (2) Compile → (3) Match → (4) Rewrite → (5) Emit → [patched .cir]
+                                   │                           │
+                             external .c files          contract attrs / asserts
+                             compiled to CIR            attached / inserted
+                             (cached as .patchmod)
+```
+
+### 7.1 Load
+
+1. **Parse.** The `.patch` file is tokenized with capture (`$X`),
+   variadic-capture (`$...XS`), and ellipsis (`...`) extensions to a
+   C-shaped grammar; the rest is ordinary C syntax.
+2. **Verify target.** `metadata.target.binary` / `metadata.target.arch`
+   are matched against the input module's `patchir.source_binary` /
+   `patchir.target_arch` attributes (see §1.1.1). Mismatches abort the
+   pass; no rewrite is attempted.
+3. **Classify.** Each top-level block is sorted into one of three
+   buckets: **imports**, **rules** (patches), and **contracts**.
+4. **Type-check.** Every capture used in an action or predicate must be
+   bound by some `pattern:` or `pattern-inside:` clause; every
+   predicate must use an atom in §3.4's vocabulary (or a registered
+   user predicate); every inline `$X: T` must resolve `T` in the CIR
+   type system.
+
+**Failure mode:** parse / target / type errors are hard — the pass
+exits non-zero and writes no output.
+
+### 7.2 Compile
+
+1. **External C patches.** Each `import "patches/foo.c" as ns` is
+   compiled once (via the project's vendored `clang`) to a CIR module
+   and merged into a hidden pattern-library namespace. The DSL does not
+   invoke a full C toolchain per call-site — the compiled object is
+   cached under `build/<hash>.patchmod`.
+2. **Inline `patch fn(...)` helpers** are lowered through the same
+   path as external C files, as if they were written to a temporary
+   `.c` file and imported.
+3. **Rule / contract codegen.** Patterns and action bodies are lowered
+   to MLIR rewrite patterns — the precise representation is an
+   implementation detail; as an author, assume the DSL compiles
+   patterns to "something MLIR's rewrite driver can execute."
+
+**Failure mode:** a C compile error in an imported file is reported
+with the original C source span, not the `.patch` site. Pattern codegen
+errors point at the offending clause.
+
+### 7.3 Match
+
+For every `cir.func` in the module, the rewrite driver walks each rule
+and contract in the order:
+
+1. `pattern-inside:` clauses are evaluated first (cheaply — structural
+   ancestor check) and prune most candidates.
+2. `pattern:` / `pattern-either:` then walk the remaining operations;
+   captures are bound on first use and unified (SSA equality) on later
+   uses.
+3. `capture-pattern:` / `capture-comparison:` / `capture-taint:`
+   refine the candidate set.
+4. `where:` predicates are evaluated **last** and **lazily**,
+   short-circuiting on `&&` / `||`. This is where the analyses are
+   consulted — nullness, taint, integer range, alias, escape,
+   dominance, etc. Analyses are requested via the MLIR analysis
+   manager and cached per function, so a predicate used across many
+   rules pays the analysis cost once.
+
+**Failure mode:** a rule that fails to match is silent — matching is
+not an error. Rules that never match across the whole module produce
+a *warning* at the end of the pass (`warning: rule foo matched 0
+sites`) so unused rules are easy to spot.
+
+### 7.4 Rewrite (rules)
+
+Once a rule's clauses all pass, its single rewrite-style action
+(`rewrite:` / `call:` / `remove:`) and any number of `insert …` actions
+are applied to the match.
+
+Ordering:
+
+- **Within one rule:** actions apply in source order. `insert` actions
+  run before the rewrite-style action, so an inserted before-call can
+  read values that the rewrite will later erase.
+- **Within one `.patch` file:** rules are considered in declaration
+  order. Two rules matching the same operation are applied first-wins;
+  the second rule's match is re-evaluated after the first rewrite and
+  may simply no longer apply.
+- **Across files** (`-dsl a.patchmod -dsl b.patchmod`): files are
+  processed in command-line order.
+- **Fixed point.** The whole pattern set is driven by
+  `applyPatternsAndFoldGreedily`, so a rewrite that exposes a new
+  match for another rule gets picked up in a later iteration. Rules
+  must be idempotent or rely on `where:` / capture constraints to
+  avoid rematching their own output.
+
+**Failure mode:** an emit-time failure (e.g., the rewrite references a
+capture that doesn't dominate the insertion point — see §8
+Invariants) *rolls back* that rule's changes for the site and emits a
+warning. Other rules continue.
+
+### 7.5 Emit (contracts)
+
+Contracts are processed *after* all rules reach a fixed point, so
+contracts attach to the final, patched symbols rather than their
+pre-patch forms.
+
+The mode is picked by `patchir-transform --contracts=<mode>` (default
+`static`):
+
+| Mode      | `requires:` / `ensures:` / `invariant:`                 | `attributes:`              |
+|-----------|---------------------------------------------------------|----------------------------|
+| `static`  | attached as `patchestry.requires` / `.ensures` / `.invariant` dialect attrs on the enclosing `cir.func` / region | attached as raw MLIR attrs on the func |
+| `runtime` | lowered to `__patchestry_assume(pred)` at entry / every return / loop head | **skipped** (no runtime effect) |
+| `both`    | both of the above                                       | attributes only            |
+
+`assert:` actions inside rules are always emitted as site-local
+`__patchestry_assume` calls regardless of mode, because they are
+bound to a specific rewrite site rather than a function or region.
+
+**Failure mode:** an emit-time failure inside a contract (e.g.,
+`@return` referenced from `requires:`, which has no return value) is
+rejected at type-check (§7.1) rather than at emit, so this phase never
+fails at runtime.
+
+### 7.6 Analyses
+
+Predicates in `where:` / `requires:` / `ensures:` / `invariant:` are
+backed by the following MLIR analyses, each requested via the analysis
+manager and cached per function:
+
+- `DominanceInfo` — `dominates(a, b)`, dominance of rewrite insertion
+  points.
+- `patchestry.NullnessLattice` — `nonnull(e)`, `may_be_null(e)`.
+- `mlir::IntegerRangeAnalysis` — `e relop n`, `sizeof(e) relop n`.
+- `patchestry.TaintAnalysis` — `tainted(e from src)`, `capture-taint:`.
+- `mlir::AliasAnalysis` — `aliases(a, b)`.
+- `patchestry.EscapeAnalysis` — `escapes(e)`.
+
+A predicate whose analysis cannot prove or refute the property
+conservatively returns `⊤` (unknown) — the surrounding `!` or `||`
+determines whether unknown counts as fire-the-rule or skip-it.
 
 ---
 
@@ -652,14 +864,14 @@ requested via MLIR's analysis manager and cached per function.
 
 Carried over from `docs/GettingStarted/patch_specifications.md`:
 
-- **SSA dominance.** A captured value referenced in a fix body must be
+- **SSA dominance.** A captured value referenced in a rewrite body must be
   defined in a block that dominates every insertion point. The compiler
   rejects rules where `insert at_entry:` references a capture from the
   call site.
 - **`at_entry` captures (legacy `APPLY_AT_ENTRYPOINT`).** Same rule as legacy:
   `$return_value`-like captures are not visible at function entry; referencing
   them there is a compile-time error.
-- **Metavariable unification is SSA equality.** Two uses of `$P` match
+- **Capture unification is SSA equality.** Two uses of `$P` match
   iff both resolve to the same `Value`. For textual equality across
   separate SSA values (e.g. two `cir.load`s of the same global), use an
   explicit predicate: `aliases($P1, $P2)`.
@@ -697,22 +909,11 @@ Every pattern token carries a source span. Diagnostics point at the
 offending column:
 
 ```
-rules/cwe190.patch:12:21: error: metavariable $R is used in fix: but not
+rules/cwe190.patch:12:21: error: capture $R is used in rewrite: but not
                                   bound by any pattern
-  fix:  $R = mul16::patch__replace__int_mul16($A, $B)
-        ^
+  rewrite:  $R = mul16::patch__replace__int_mul16($A, $B)
+            ^
 ```
 
 Semantic errors from analyses (e.g. unreachable `pattern-inside`) surface
 at rule-compile time, not silently at match time.
-
----
-
-## 11. Migration notes
-
-The legacy YAML surface continues to parse during the transition. A
-`patchir-spec-convert` tool ships alongside `patchir-dslc` and emits a
-first-cut `.patch` file from any existing `meta_patches` spec. Hand-edit
-the output to add scope constraints, `where:` predicates, and type
-refinements — these are the clauses the YAML could not express, and the
-main reason to migrate.

@@ -1,0 +1,22 @@
+// PatchDSL port of replace_binop.yaml
+// library: patches/replace_binop_patches.yaml
+
+metadata {
+  name:        "replace-binop"
+  description: "Replace unchecked INT_MULT in compute_alloc_size"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2026-03-23"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_checked_mul.c" as mul
+
+rule binop_mul_fix {
+  description: "Replace unchecked multiply with overflow-checked version"
+
+  pattern-inside: $RET compute_alloc_size(...) { ... }
+  pattern:        $R = $A * $B
+
+  call: mul::patch__replace__checked_mul($A, $B)
+}

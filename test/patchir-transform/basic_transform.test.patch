@@ -1,0 +1,21 @@
+// PatchDSL port of basic_transform.test.yaml
+
+metadata {
+  name:        "basic-transform-test"
+  description: "Basic transform test for unit testing"
+  version:     "1.0.0"
+  author:      "Test Suite"
+  created:     "2024-01-01"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/test_patches.c" as t
+
+rule test_meta_patches {
+  description: "Basic test patch"
+
+  pattern: test_function(...)
+
+  insert before:
+    call: t::patch__before__test_function()
+}

@@ -1,0 +1,24 @@
+// PatchDSL port of cwe415_after.yaml
+// library: patches/cwe415_patches.yaml
+
+metadata {
+  name:        "cwe415-after"
+  description: "Null pointer after free in ProcessCommand to prevent double free"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2026-03-23"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_null_after_free.c" as nullify
+
+rule cwe415_null_after_free {
+  description: "Apply null-after-free guard after first free() call"
+
+  pattern-inside: $RET process_command(...) { ... }
+  pattern:        free($P)
+
+  // legacy is_reference: true -> pass the address of the capture
+  insert after:
+    call: nullify::patch__after__free__null_out(&$P)
+}

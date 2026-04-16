@@ -1,0 +1,58 @@
+// PatchDSL port of bl_usb__send_message_before_patch.yaml
+// library: patches/usb_security_patches.yaml
+//
+// Carries three meta-actions: the pre-op patch, a runtime contract, and
+// a static contract attached to usbd_ep_write_packet.
+
+metadata {
+  name:        "usb-security-monitoring-deployment"
+  description: "Deploy USB security monitoring for medical device firmware"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2025-06-31"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_usbd_ep_write_packet.c" as usb
+
+// --- patch: pre-validation before usbd_ep_write_packet ---
+rule usb_security_before_packet_write {
+  description: "Pre-validation security check before USB endpoint write"
+
+  pattern-inside: $RET bl_usb__send_message(...) { ... }
+  pattern:        usbd_ep_write_packet(
+                     ($USB_G: struct _usbd_device*),
+                     $EP,
+                     ($BUF: void*),
+                     $LEN)
+
+  insert before:
+    call: usb::patch__before__usbd_ep_write_packet($USB_G, $BUF)
+}
+
+// --- runtime contract: precondition check on the same site ---
+rule usb_security_runtime_precontract {
+  description: "Runtime contract: assert operands before usbd_ep_write_packet"
+
+  pattern-inside: $RET bl_usb__send_message(...) { ... }
+  pattern:        usbd_ep_write_packet(($USB_G: struct _usbd_device*),
+                                       $EP, $BUF, $LEN)
+
+  insert before:
+    call: usb::contract__before__test_contract($USB_G, $BUF)
+}
+
+// --- static contract on usbd_ep_write_packet ---
+contract usb_endpoint_write_static {
+  description: "Static pre/post-conditions on usbd_ep_write_packet"
+
+  pattern-inside: $RET usbd_ep_write_packet(($ARG0: void*),
+                                            ($ARG1: void*),
+                                            ($ARG2: size_t),
+                                            $...REST) { ... }
+
+  requires: $ARG0 != 0 &&
+            $ARG1 != 0 &&
+            $ARG2 >= 0 && $ARG2 <= 512
+  ensures:  @return >= 0 && @return <= 512
+}

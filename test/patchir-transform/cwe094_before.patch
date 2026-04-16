@@ -1,0 +1,23 @@
+// PatchDSL port of cwe094_before.yaml
+// library: patches/cwe094_patches.yaml
+
+metadata {
+  name:        "cwe094-apply_before"
+  description: "Block arbitrary code execution via popen() allowlist"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2026-03-17"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_popen.c" as popenguard
+
+rule cwe094_popen_fix {
+  description: "Inject allowlist check before popen()"
+
+  pattern-inside: $RET run_diagnostic(...) { ... }
+  pattern:        popen($CMD, $...REST)
+
+  insert before:
+    call: popenguard::patch__before__popen__allowlist($CMD)
+}

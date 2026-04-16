@@ -1,0 +1,40 @@
+// PatchDSL port of entrypoint_contract.yaml
+// library: patches/entrypoint_contract_library.yaml
+//
+// Legacy apply_at_entrypoint matches an inner call inside an outer
+// function but inserts at the *outer* function's entrypoint. In
+// PatchDSL this is expressed with pattern-inside: on the outer function
+// plus insert at_entry:.
+
+metadata {
+  name:        "entrypoint-contract-test"
+  description: "APPLY_AT_ENTRYPOINT contract mode on bl_usb__send_message"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2025-07-28"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32:Cortex" }
+}
+
+import "contracts/entrypoint_contract.c" as entry
+
+// --- runtime contract at outer entrypoint, gated on inner call presence ---
+rule entrypoint_meta_contract_runtime {
+  description: "Runtime null-check on message pointer at function entrypoint"
+
+  pattern-inside: $RET bl_usb__send_message(..., $MSG, ...) { ... }
+  pattern:        usbd_ep_write_packet(...)
+
+  insert at_entry:
+    call: entry::contract__entrypoint__message_entry_check($MSG)
+}
+
+// --- static nonnull precondition on the emitted contract call ---
+contract entrypoint_meta_contract_static {
+  description: "Static nonnull precondition on message pointer"
+
+  pattern-inside: $RET bl_usb__send_message(...) { ... }
+  pattern-inside: |
+    $RET0 contract__entrypoint__message_entry_check(($ARG0: void*)) { ... }
+
+  requires: $ARG0 != 0
+}

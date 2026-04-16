@@ -1,0 +1,21 @@
+// PatchDSL port of measurement_update_replace_patch.yaml
+// library: patches/measurement_update_patch.yaml
+
+metadata {
+  name:        "measurement-update-replace-patch"
+  description: "Replace spo2_lookup body"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2025-07-28"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_spo2_lookup.c" as spo2
+
+rule measurement_update_replace_patch {
+  description: "Replace spo2_lookup with patched variant"
+
+  pattern: spo2_lookup($X)
+
+  call: spo2::patch__replace__spo2_lookup($X)
+}

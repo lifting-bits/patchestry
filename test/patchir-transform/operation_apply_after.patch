@@ -1,0 +1,27 @@
+// PatchDSL port of operation_apply_after.yaml
+// library: patches/measurement_update_patch.yaml
+
+metadata {
+  name:        "operation-apply-after"
+  description: "Patch spo2_lookup call (operation match) with apply_after mode"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2025-07-28"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_spo2_lookup.c" as spo2
+
+rule operation_after_spo2 {
+  description: "Post-operation validation via return value"
+
+  pattern-inside: |
+    $RET $FN(...) { ... }
+  capture-comparison: { var: $FN,
+                        cmp: matches("measurement") && matches("update") }
+
+  pattern: $RV = spo2_lookup($X)
+
+  insert after:
+    call: spo2::patch__after__spo2_lookup($RV)
+}

@@ -1,0 +1,22 @@
+// PatchDSL port of cwe121_complex_replace.yaml
+// library: patches/cwe121_complex_patches.yaml
+
+metadata {
+  name:        "cwe121-complex-replace"
+  description: "Fix loop-based strcat overflow in eeprom_write"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2026-03-17"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_strcat.c" as strguard
+
+rule cwe121_strcat_fix {
+  description: "Replace strcat with bounded strncat in eeprom_write"
+
+  pattern-inside: $RET eeprom_write(...) { ... }
+  pattern:        strcat($DEST, $SRC)
+
+  call: strguard::patch__replace__strcat__bounded($DEST, $SRC, 64)
+}

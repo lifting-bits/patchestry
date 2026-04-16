@@ -1,0 +1,23 @@
+// PatchDSL port of cwe022_before.yaml
+// library: patches/cwe022_patches.yaml
+
+metadata {
+  name:        "cwe022-apply_before"
+  description: "Reject directory traversal sequences before mkdir"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2026-03-17"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_mkdir.c" as mkdirguard
+
+rule cwe022_mkdir_fix {
+  description: "Validate path against directory traversal before mkdir"
+
+  pattern-inside: $RET init_logger(...) { ... }
+  pattern:        mkdir($PATH, $...REST)
+
+  insert before:
+    call: mkdirguard::patch__before__mkdir__path_validation($PATH)
+}

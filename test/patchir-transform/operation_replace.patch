@@ -1,0 +1,26 @@
+// PatchDSL port of operation_replace.yaml
+// library: patches/measurement_update_patch.yaml
+
+metadata {
+  name:        "operation-replace"
+  description: "Replace spo2_lookup call (operation match) with replace mode"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2025-07-28"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_spo2_lookup.c" as spo2
+
+rule operation_replace_spo2 {
+  description: "Replace spo2_lookup call operation entirely"
+
+  pattern-inside: |
+    $RET $FN(...) { ... }
+  capture-comparison: { var: $FN,
+                        cmp: matches("measurement") && matches("update") }
+
+  pattern: spo2_lookup(($X: float))
+
+  call: spo2::patch__replace__spo2_lookup($X)
+}

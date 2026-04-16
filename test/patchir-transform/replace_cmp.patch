@@ -1,0 +1,22 @@
+// PatchDSL port of replace_cmp.yaml
+// library: patches/replace_cmp_patches.yaml
+
+metadata {
+  name:        "replace-cmp"
+  description: "Replace off-by-one bounds comparison with correct check"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2026-03-23"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_fixed_bounds_check.c" as bounds
+
+rule cmp_bounds_fix {
+  description: "Fix off-by-one in circular buffer put"
+
+  pattern-inside: $RET circular_buffer_put(...) { ... }
+  pattern:        $IDX >= $SIZE
+
+  call: bounds::patch__replace__fixed_bounds_check($IDX, $SIZE)
+}

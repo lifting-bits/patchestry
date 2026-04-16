@@ -1,0 +1,22 @@
+// PatchDSL port of cwe190_replace.yaml
+// library: patches/cwe190_patches.yaml
+
+metadata {
+  name:        "cwe190-replace"
+  description: "Fix integer overflow: unchecked 16-bit multiply -> overflow-checked version"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2026-03-23"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_checked_mul16.c" as mul16
+
+rule cwe190_int_overflow_fix {
+  description: "Replace unchecked u16 multiply in peek_process"
+
+  pattern-inside: $RET peek_process(...) { ... }
+  pattern:        ($R: uint16_t) = ($CNT: uint16_t) * ($SZ: uint16_t)
+
+  call: mul16::patch__replace__int_mul16($CNT, $SZ)
+}

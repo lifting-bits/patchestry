@@ -1,0 +1,43 @@
+// PatchDSL port of all_predicates.yaml
+// library: patches/all_predicates_library.yaml
+//
+// Original exercises every static-contract predicate kind: nonnull,
+// alignment, relation, range, expr. PatchDSL re-expresses them all as
+// ordinary predicate atoms.
+
+metadata {
+  name:        "all-predicates-test"
+  description: "Static contract exercising every predicate kind"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2025-07-28"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/bloodview_patch.c" as bv
+
+// --- patch that produces the symbol the contract attaches to ---
+rule all_predicates_sprintf_replace {
+  description: "Replace sprintf in bl_device__process_entry with safe variant"
+
+  pattern-inside: $RET bl_device__process_entry(...) { ... }
+  pattern:        sprintf($DEST, $FMT, $...REST)
+
+  call: bv::patch__replace__sprintf($DEST, 32, $FMT)
+}
+
+// --- static contract on the patched symbol ---
+contract all_predicates_static {
+  description: "Static contract with nonnull, alignment, relation, range, and expr"
+
+  pattern-inside: $RET patch__replace__sprintf(($DEST: void*),
+                                                ($DSZ: size_t),
+                                                ($FMT: void*),
+                                                $...REST) { ... }
+
+  requires: $DEST != 0                          // nonnull
+         && alignof($DEST) >= 1                 // alignment
+         && $DSZ != 0                           // relation: ne
+  ensures:  @return >= 0 && @return <= 32       // range
+         && @return >= 0                        // expr
+}

@@ -1,0 +1,50 @@
+// PatchDSL port of device_process_entry.yaml
+// library: patches/bloodview_device_entry_patches.yaml
+//
+// Original file drives three meta-actions: replace sprintf, runtime
+// post-contract on the patched symbol, and static contract on the same.
+
+metadata {
+  name:        "bl-device-process-entry"
+  description: "Fix usage of sprintf while processing device entries"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2025-10-10"
+  target { binary: "bloodview"  arch: "ARM:LE:32" }
+}
+
+import "patches/bloodview_patch.c" as bv
+
+// --- patch: replace sprintf ---
+rule bloodview_device_entry_replace_sprintf {
+  description: "Replace sprintf in bl_device__process_entry"
+
+  pattern-inside: $RET bl_device__process_entry(...) { ... }
+  pattern:        sprintf($DEST, $FMT, $...REST)
+
+  call: bv::patch__replace__sprintf($DEST, 32, $FMT, $...REST)
+}
+
+// --- runtime contract on the patched symbol (apply_after) ---
+rule bloodview_device_entry_runtime_postcheck {
+  description: "Post-execution verification of patched sprintf"
+
+  pattern-inside: $RET bl_device__process_entry(...) { ... }
+  pattern:        $RV = patch__replace__sprintf($D, $DSZ, $FMT, $...REST)
+
+  insert after:
+    call: bv::contract__sprintf($RV, 32)
+}
+
+// --- static contract on the patched symbol ---
+contract bloodview_device_entry_sprintf_static {
+  description: "Static contract to verify the patched sprintf"
+
+  pattern-inside: $RET patch__replace__sprintf(($D: void*),
+                                                ($DSZ: size_t),
+                                                ($FMT: void*),
+                                                $...REST) { ... }
+
+  requires: $DSZ != 0
+  ensures:  @return >= 0 && @return <= 32
+}

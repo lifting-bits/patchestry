@@ -1,0 +1,22 @@
+// PatchDSL port of cwe078_replace.yaml
+// library: patches/cwe078_patches.yaml
+
+metadata {
+  name:        "cwe078-replace"
+  description: "Sanitize shell metacharacters before system() calls"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2026-03-17"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_system.c" as sys
+
+rule cwe078_system_sanitize {
+  description: "Replace system() in create_port with metacharacter-filtered version"
+
+  pattern-inside: $RET create_port(...) { ... }
+  pattern:        system($CMD)
+
+  call: sys::patch__replace__system__sanitized($CMD, 512)
+}

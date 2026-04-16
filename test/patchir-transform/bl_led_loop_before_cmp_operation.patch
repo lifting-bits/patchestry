@@ -1,0 +1,27 @@
+// PatchDSL port of bl_led_loop_before_cmp_operation.yaml
+// library: patches/led_loop_before_cmp_operation.yaml
+//
+// Legacy symbol_matches against a module-level global becomes an
+// unprefixed identifier in the pattern — bare names unify against the
+// module symbol of the same name.
+
+metadata {
+  name:        "led-loop-before-cmp-operation"
+  description: "Apply before cmp operation"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2025-07-28"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_cmp_operation.c" as ledpatch
+
+rule led_loop_before_cmp_operation {
+  description: "Apply before cmp operation against global bl_spi_mode"
+
+  pattern: bl_spi_mode $CMP_OP $RHS
+  where:   type(bl_spi_mode) == "int8_t"
+
+  insert before:
+    call: ledpatch::patch__before__cmp_operation(&bl_spi_mode)
+}

@@ -1,0 +1,22 @@
+// PatchDSL port of cwe122_replace.yaml
+// library: patches/cwe122_patches.yaml
+
+metadata {
+  name:        "cwe122-replace"
+  description: "Fix heap buffer overflow by bounding memcpy to allocation size"
+  version:     "1.0.0"
+  author:      "Security Team"
+  created:     "2026-03-17"
+  target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
+}
+
+import "patches/patch_memcpy.c" as memguard
+
+rule cwe122_memcpy_fix {
+  description: "Replace unbounded memcpy in process_rx"
+
+  pattern-inside: $RET process_rx(...) { ... }
+  pattern:        memcpy($DEST, $SRC, $N)
+
+  call: memguard::patch__replace__memcpy__bounded($DEST, $SRC, $N, 256)
+}
