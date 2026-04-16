@@ -118,9 +118,17 @@ include_directories(SYSTEM "${PE_VENDOR_INSTALL_DIR}/include")
 find_package(Z3 4.8 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using Z3Config.cmake in ${Z3_DIR} and Z3 headers in ${PE_VENDOR_INSTALL_DIR}/include")
 
-find_package(rellic REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
-message(STATUS "Using RellicConfig.cmake in: ${rellic_DIR}")
-get_target_property(RELLIC_INCLUDE_DIRS rellic::rellic INTERFACE_INCLUDE_DIRECTORIES)
+find_package(gflags CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+find_package(glog CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+
+if(PE_USE_RELLIC)
+  find_package(rellic REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+  message(STATUS "Using RellicConfig.cmake in: ${rellic_DIR}")
+  get_target_property(RELLIC_INCLUDE_DIRS rellic::rellic INTERFACE_INCLUDE_DIRECTORIES)
+else()
+  set(RELLIC_INCLUDE_DIRS "")
+  message(STATUS "RELLIC disabled (PE_USE_RELLIC=OFF)")
+endif()
 
 include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
 include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})
@@ -175,6 +183,10 @@ target_include_directories(patchestry_settings INTERFACE
   $<BUILD_INTERFACE:${PATCHESTRY_BINARY_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+
+if(PE_USE_RELLIC)
+  target_compile_definitions(patchestry_settings INTERFACE PATCHESTRY_ENABLE_RELLIC=1)
+endif()
 
 include(compiler_warnings)
 set_project_warnings(patchestry_settings)

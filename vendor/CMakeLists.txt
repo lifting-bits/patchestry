@@ -26,4 +26,6 @@ if(PE_USE_VENDORED_CLANG)
     add_subdirectory(clangir)
 endif()
 
-add_subdirectory(rellic)  # Depends on glog and clangir (if vendored)
+if(PE_USE_RELLIC)
+    add_subdirectory(rellic)  # Depends on glog and clangir (if vendored)
+endif()
