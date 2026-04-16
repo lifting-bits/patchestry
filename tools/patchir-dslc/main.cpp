@@ -50,33 +50,42 @@ int main(int argc, char **argv) {
     patchestry::patchdsl::CompilerOptions opts;
     opts.import_paths.assign(import_paths.begin(), import_paths.end());
 
-    auto ast_or = patchestry::patchdsl::ParseFile(input_filename, opts);
-    if (!ast_or) {
-        llvm::errs() << "patchir-dslc: " << llvm::toString(ast_or.takeError()) << "\n";
-        return 1;
-    }
-
+    // `--check` only needs parsing, no lowering.
     if (check_only) {
+        auto ast_or = patchestry::patchdsl::ParseFile(input_filename, opts);
+        if (!ast_or) {
+            llvm::errs() << "patchir-dslc: " << llvm::toString(ast_or.takeError())
+                         << "\n";
+            return 1;
+        }
         llvm::outs() << "parsed OK: " << input_filename << "\n";
         return 0;
     }
 
-    if (dump_config) {
-        llvm::errs() << "patchir-dslc: --dump-config not implemented until Phase 3\n";
+    // Everything else (--dump-config, -o, summary) requires the lowered
+    // Configuration.
+    auto cfg_or = patchestry::patchdsl::CompileFile(input_filename, opts);
+    if (!cfg_or) {
+        llvm::errs() << "patchir-dslc: " << llvm::toString(cfg_or.takeError()) << "\n";
         return 1;
+    }
+    auto const &cfg = *cfg_or;
+
+    if (dump_config) {
+        llvm::outs() << patchestry::patchdsl::ConfigurationToYAML(cfg);
+        return 0;
     }
 
     if (!output_filename.empty()) {
         llvm::errs() << "patchir-dslc: -o not implemented until Phase 4 "
-                        "(use --check to validate parsing)\n";
+                        "(use --check or --dump-config for now)\n";
         return 1;
     }
 
-    // No flag selected — print a short summary of what was parsed.
-    auto const &ast = *ast_or.get();
-    llvm::outs() << "parsed `" << input_filename << "`: "
-                 << ast.imports.size() << " import(s), "
-                 << ast.rules.size() << " rule(s), "
-                 << ast.contracts.size() << " contract(s)\n";
+    // No explicit flag — print a short summary of the lowered Configuration.
+    llvm::outs() << "compiled `" << input_filename << "`: "
+                 << cfg.libraries.patches.size() << " library patch(es), "
+                 << cfg.meta_patches.size() << " meta-patch(es), "
+                 << cfg.meta_contracts.size() << " meta-contract(s)\n";
     return 0;
 }

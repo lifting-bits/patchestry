@@ -15,6 +15,7 @@
 #include <llvm/Support/Error.h>
 
 #include <patchestry/PatchDSL/AST.hpp>
+#include <patchestry/YAML/ConfigurationFile.hpp>
 
 namespace patchestry::patchdsl {
 
@@ -27,5 +28,16 @@ namespace patchestry::patchdsl {
     /// parse or type-check failure.
     llvm::Expected< std::unique_ptr< AST > >
     ParseFile(llvm::StringRef path, const CompilerOptions &opts = {});
+
+    /// Parses AND lowers a `.patch` file to the downstream Configuration
+    /// consumed by InstrumentationPass. Returns an error on any parse,
+    /// type-check, or lowering failure.
+    llvm::Expected< patchestry::passes::Configuration >
+    CompileFile(llvm::StringRef path, const CompilerOptions &opts = {});
+
+    /// Serializes a Configuration to YAML text (suitable for
+    /// `--dump-config`). Round-trippable through the existing
+    /// `yaml::utils::LoadConfiguration` reader.
+    std::string ConfigurationToYAML(const patchestry::passes::Configuration &cfg);
 
 } // namespace patchestry::patchdsl

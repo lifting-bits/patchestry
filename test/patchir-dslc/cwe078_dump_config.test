@@ -1,0 +1,40 @@
+# Phase 3 positive gate: --dump-config for cwe078 reproduces the match
+# criteria and argument binding of the legacy YAML. This is a semantic
+# (not byte-identical) comparison — the DSL-derived patch_id and
+# function_name follow a different naming convention.
+
+# RUN: %patchir-dslc --dump-config %S/../patchir-transform/cwe078_replace.patch | %file-check %s
+
+# CHECK:      apiVersion: patchestry.io/v1
+# CHECK:      metadata:
+# CHECK:        name: cwe078-replace
+# CHECK:      target:
+# CHECK:        binary: test_binary.bin
+# CHECK:        arch: "ARM:LE:32"
+# CHECK:      libraries:
+# CHECK:        patches:
+# CHECK:          - name: patch__replace__system__sanitized
+# CHECK:            code_file: patches/patch_system.c
+# CHECK:            function_name: "patch::replace::system::sanitized"
+# CHECK:            parameters:
+# CHECK:              - name: command
+# CHECK:              - name: max_len
+# CHECK:      meta_patches:
+# CHECK:        - name: cwe078_system_sanitize
+# CHECK:          patch_actions:
+# CHECK:            - id: cwe078_system_sanitize/0
+# CHECK:              match:
+# CHECK:                - name: system
+# CHECK:                  kind: function
+# CHECK:                  function_context:
+# CHECK:                    - name: create_port
+# CHECK:              action:
+# CHECK:                - mode: replace
+# CHECK:                  patch_id: patch__replace__system__sanitized
+# CHECK:                  arguments:
+# CHECK:                    - name: command
+# CHECK:                      source: operand
+# CHECK:                      index: 0
+# CHECK:                    - name: max_len
+# CHECK:                      source: constant
+# CHECK:                      value: 512

@@ -6,6 +6,7 @@
 add_library(patchestry_patchdsl STATIC
     Compiler.cpp
     Lexer.cpp
+    Lowering.cpp
     Parser.cpp
 )
 
@@ -14,6 +15,7 @@ add_library(patchestry::patchdsl ALIAS patchestry_patchdsl)
 target_link_libraries(patchestry_patchdsl
     PUBLIC
         LLVMSupport
+        patchestry::yaml
     PRIVATE
         patchestry_settings
 )
