@@ -1,0 +1,12 @@
+# Phase 4 gate: Configuration round-trips through WritePatchmod + ReadPatchmod
+# bit-identically. We compare the YAML dump of the source-compiled path
+# against the YAML dump of the bytecode-round-tripped path.
+
+# RUN: %patchir-dslc --dump-config %S/../patchir-transform/cwe078_replace.patch > %t.src.yaml
+# RUN: %patchir-dslc %S/../patchir-transform/cwe078_replace.patch -o %t.patchmod
+# RUN: %patchir-dslc --dump-config %t.patchmod > %t.rt.yaml
+# RUN: diff -u %t.src.yaml %t.rt.yaml
+
+# Also verify the bytecode file has the MLIR bytecode magic.
+# RUN: %file-check %s --input-file=%t.patchmod --check-prefix=MAGIC
+# MAGIC: MLIR{{.+}}

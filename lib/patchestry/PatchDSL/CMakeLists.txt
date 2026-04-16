@@ -8,6 +8,7 @@ add_library(patchestry_patchdsl STATIC
     Lexer.cpp
     Lowering.cpp
     Parser.cpp
+    Serialize.cpp
 )
 
 add_library(patchestry::patchdsl ALIAS patchestry_patchdsl)
@@ -15,6 +16,10 @@ add_library(patchestry::patchdsl ALIAS patchestry_patchdsl)
 target_link_libraries(patchestry_patchdsl
     PUBLIC
         LLVMSupport
+        MLIRIR
+        MLIRBytecodeReader
+        MLIRBytecodeWriter
+        MLIRParser
         patchestry::yaml
     PRIVATE
         patchestry_settings

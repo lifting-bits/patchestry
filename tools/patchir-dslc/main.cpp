@@ -9,8 +9,10 @@
 #include <llvm/Support/Error.h>
 #include <llvm/Support/InitLLVM.h>
 #include <llvm/Support/raw_ostream.h>
+#include <mlir/IR/MLIRContext.h>
 
 #include <patchestry/PatchDSL/Compiler.hpp>
+#include <patchestry/PatchDSL/Serialize.hpp>
 
 namespace {
     const llvm::cl::opt< std::string > input_filename(
@@ -62,14 +64,29 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // Everything else (--dump-config, -o, summary) requires the lowered
-    // Configuration.
-    auto cfg_or = patchestry::patchdsl::CompileFile(input_filename, opts);
-    if (!cfg_or) {
-        llvm::errs() << "patchir-dslc: " << llvm::toString(cfg_or.takeError()) << "\n";
-        return 1;
+    // Everything else (--dump-config, -o, summary) requires a Configuration.
+    // The input may be a `.patch` source (compile it) or a `.patchmod`
+    // bytecode file (read it back via ReadPatchmod).
+    const llvm::StringRef input_ref(input_filename);
+    patchestry::passes::Configuration cfg;
+    if (input_ref.ends_with(".patchmod")) {
+        mlir::MLIRContext context;
+        auto cfg_or = patchestry::patchdsl::ReadPatchmod(input_filename, context);
+        if (!cfg_or) {
+            llvm::errs() << "patchir-dslc: " << llvm::toString(cfg_or.takeError())
+                         << "\n";
+            return 1;
+        }
+        cfg = std::move(*cfg_or);
+    } else {
+        auto cfg_or = patchestry::patchdsl::CompileFile(input_filename, opts);
+        if (!cfg_or) {
+            llvm::errs() << "patchir-dslc: " << llvm::toString(cfg_or.takeError())
+                         << "\n";
+            return 1;
+        }
+        cfg = std::move(*cfg_or);
     }
-    auto const &cfg = *cfg_or;
 
     if (dump_config) {
         llvm::outs() << patchestry::patchdsl::ConfigurationToYAML(cfg);
@@ -77,9 +94,14 @@ int main(int argc, char **argv) {
     }
 
     if (!output_filename.empty()) {
-        llvm::errs() << "patchir-dslc: -o not implemented until Phase 4 "
-                        "(use --check or --dump-config for now)\n";
-        return 1;
+        mlir::MLIRContext context;
+        if (auto err = patchestry::patchdsl::WritePatchmod(
+                cfg, output_filename, context
+            )) {
+            llvm::errs() << "patchir-dslc: " << llvm::toString(std::move(err)) << "\n";
+            return 1;
+        }
+        return 0;
     }
 
     // No explicit flag — print a short summary of the lowered Configuration.

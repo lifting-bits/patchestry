@@ -10,6 +10,8 @@ add_executable(patchir-dslc
 target_link_libraries(patchir-dslc
     PRIVATE
         LLVMSupport
+        MLIRIR
+        MLIRParser
         patchestry::patchdsl
         patchestry_settings
 )
