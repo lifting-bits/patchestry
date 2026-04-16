@@ -74,6 +74,8 @@ config.patchir_decomp_tool = patchestry_tool_path('patchir-decomp')
 
 config.patchir_transform_tool = patchestry_tool_path('patchir-transform')
 
+config.patchir_dslc_tool = patchestry_tool_path('patchir-dslc')
+
 config.patchir_cir2llvm_tool = patchestry_tool_path('patchir-cir2llvm')
 
 config.patchir_yaml_parser_tool = patchestry_tool_path('patchir-yaml-parser')
@@ -134,6 +136,7 @@ tools = [
 
     ToolSubst('%patchir-decomp', command=config.patchir_decomp_tool),
     ToolSubst('%patchir-transform', command=config.patchir_transform_tool),
+    ToolSubst('%patchir-dslc', command=config.patchir_dslc_tool),
     ToolSubst('%patchir-cir2llvm', command=config.patchir_cir2llvm_tool),
     ToolSubst('%patchir-yaml-parser', command=config.patchir_yaml_parser_tool),
     ToolSubst('%patchir-klee-verifier', command=config.patchir_klee_verifier_tool),

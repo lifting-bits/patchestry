@@ -1,0 +1,13 @@
+# Smoke test: patchir-dslc binary is built, substitution is wired, and
+# --help lists every Phase 1 flag.
+
+# RUN: %patchir-dslc --help 2>&1 | %file-check %s
+# RUN: %patchir-dslc /tmp/nonexistent.patch -o /tmp/out.patchmod 2>&1 | %file-check %s --check-prefix=STUB
+
+# CHECK:      patchir-dslc: compile PatchDSL to .patchmod
+# CHECK:      -I <dir>
+# CHECK-NEXT: --check
+# CHECK-NEXT: --dump-config
+# CHECK-NEXT: -o <filename>
+
+# STUB: patchir-dslc v1 stub: input=/tmp/nonexistent.patch output=/tmp/out.patchmod

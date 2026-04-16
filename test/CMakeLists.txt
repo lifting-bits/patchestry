@@ -30,6 +30,11 @@ add_lit_testsuite(patchir-transform-tests
   ${CMAKE_CURRENT_SOURCE_DIR}/patchir-transform
 )
 
+add_lit_testsuite(patchir-dslc-tests
+  "Running patchir-dslc tests"
+  ${CMAKE_CURRENT_SOURCE_DIR}/patchir-dslc
+)
+
 add_lit_testsuite(patchir-klee-verifier-tests
   "Running patchir-klee-verifier tests"
   ${CMAKE_CURRENT_SOURCE_DIR}/patchir-klee-verifier
@@ -48,6 +53,11 @@ add_test(NAME patchir-decomp-tests
 
 add_test(NAME patchir-transform-tests
   COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/patchir-transform"
+  --param BUILD_TYPE=$<CONFIG>
+)
+
+add_test(NAME patchir-dslc-tests
+  COMMAND lit -v -j 4 "${CMAKE_CURRENT_BINARY_DIR}/patchir-dslc"
   --param BUILD_TYPE=$<CONFIG>
 )
 
