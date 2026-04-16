@@ -1,0 +1,7 @@
+// RUN: not %patchir-dslc --check %s 2>&1 | %file-check %s
+
+// CHECK: unterminated metadata block
+
+metadata {
+  name: "no-closing-brace"
+  target { binary: "t.bin"  arch: "ARM:LE:32" }

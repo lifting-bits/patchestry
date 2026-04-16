@@ -1,0 +1,10 @@
+// RUN: not %patchir-dslc --check %s 2>&1 | %file-check %s
+
+// CHECK: unexpected top-level token `xxx_unknown_kw_xxx`
+
+metadata {
+  name: "bad-top-level"
+  target { binary: "t.bin"  arch: "ARM:LE:32" }
+}
+
+xxx_unknown_kw_xxx foo { }

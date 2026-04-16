@@ -1,8 +1,9 @@
 # Smoke test: patchir-dslc binary is built, substitution is wired, and
-# --help lists every Phase 1 flag.
+# --help lists every Phase 1 flag. The stub input-handling is also
+# exercised here (missing file produces a clean diagnostic).
 
 # RUN: %patchir-dslc --help 2>&1 | %file-check %s
-# RUN: %patchir-dslc /tmp/nonexistent.patch -o /tmp/out.patchmod 2>&1 | %file-check %s --check-prefix=STUB
+# RUN: not %patchir-dslc --check /tmp/nonexistent-for-lit-smoke.patch 2>&1 | %file-check %s --check-prefix=MISSING
 
 # CHECK:      patchir-dslc: compile PatchDSL to .patchmod
 # CHECK:      -I <dir>
@@ -10,4 +11,4 @@
 # CHECK-NEXT: --dump-config
 # CHECK-NEXT: -o <filename>
 
-# STUB: patchir-dslc v1 stub: input=/tmp/nonexistent.patch output=/tmp/out.patchmod
+# MISSING: patchir-dslc: failed to read `/tmp/nonexistent-for-lit-smoke.patch`

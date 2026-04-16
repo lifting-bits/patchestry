@@ -1,0 +1,8 @@
+// RUN: not %patchir-dslc --check %s 2>&1 | %file-check %s
+
+// CHECK: metadata block must contain a `target { ... }` sub-block
+
+metadata {
+  name: "no-target"
+  description: "metadata without a target block"
+}

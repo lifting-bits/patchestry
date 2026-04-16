@@ -6,8 +6,11 @@
  */
 
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/Error.h>
 #include <llvm/Support/InitLLVM.h>
 #include <llvm/Support/raw_ostream.h>
+
+#include <patchestry/PatchDSL/Compiler.hpp>
 
 namespace {
     const llvm::cl::opt< std::string > input_filename(
@@ -39,19 +42,41 @@ int main(int argc, char **argv) {
     llvm::InitLLVM init(argc, argv);
     llvm::cl::ParseCommandLineOptions(argc, argv, "patchir-dslc: compile PatchDSL to .patchmod\n");
 
-    llvm::errs() << "patchir-dslc v1 stub: input=" << input_filename;
-    if (!output_filename.empty()) {
-        llvm::errs() << " output=" << output_filename;
+    if (input_filename == "-") {
+        llvm::errs() << "patchir-dslc: error: input .patch file required (use: patchir-dslc <file.patch>)\n";
+        return 2;
     }
+
+    patchestry::patchdsl::CompilerOptions opts;
+    opts.import_paths.assign(import_paths.begin(), import_paths.end());
+
+    auto ast_or = patchestry::patchdsl::ParseFile(input_filename, opts);
+    if (!ast_or) {
+        llvm::errs() << "patchir-dslc: " << llvm::toString(ast_or.takeError()) << "\n";
+        return 1;
+    }
+
     if (check_only) {
-        llvm::errs() << " (--check)";
+        llvm::outs() << "parsed OK: " << input_filename << "\n";
+        return 0;
     }
+
     if (dump_config) {
-        llvm::errs() << " (--dump-config)";
+        llvm::errs() << "patchir-dslc: --dump-config not implemented until Phase 3\n";
+        return 1;
     }
-    for (auto const &dir : import_paths) {
-        llvm::errs() << " -I " << dir;
+
+    if (!output_filename.empty()) {
+        llvm::errs() << "patchir-dslc: -o not implemented until Phase 4 "
+                        "(use --check to validate parsing)\n";
+        return 1;
     }
-    llvm::errs() << "\n";
+
+    // No flag selected — print a short summary of what was parsed.
+    auto const &ast = *ast_or.get();
+    llvm::outs() << "parsed `" << input_filename << "`: "
+                 << ast.imports.size() << " import(s), "
+                 << ast.rules.size() << " rule(s), "
+                 << ast.contracts.size() << " contract(s)\n";
     return 0;
 }

@@ -1,0 +1,5 @@
+# Phase 2 positive gate: --check parses the cwe078 fixture cleanly.
+
+# RUN: %patchir-dslc --check %S/../patchir-transform/cwe078_replace.patch | %file-check %s
+
+# CHECK: parsed OK

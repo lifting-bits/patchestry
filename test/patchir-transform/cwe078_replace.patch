@@ -10,7 +10,9 @@ metadata {
   target { binary: "test_binary.bin"  arch: "ARM:LE:32" }
 }
 
-import "patches/patch_system.c" as sys
+import "patches/patch_system.c" as sys {
+  patch patch__replace__system__sanitized(command: *char, max_len: size_t) -> i32;
+}
 
 rule cwe078_system_sanitize {
   description: "Replace system() in create_port with metacharacter-filtered version"
