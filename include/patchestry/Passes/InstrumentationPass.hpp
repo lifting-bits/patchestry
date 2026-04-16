@@ -68,6 +68,12 @@ namespace patchestry::passes { // NOLINT
         const std::string &configuration_file, const InstrumentationOptions &options
     );
 
+    /// Factory overload accepting a pre-loaded Configuration (from the DSL
+    /// compiler's ReadPatchmod path). Code-file paths must be absolute.
+    std::unique_ptr< mlir::Pass > CreateInstrumentationPass(
+        Configuration cfg, const InstrumentationOptions &options
+    );
+
     /**
      * @brief Configuration options for controlling instrumentation behavior.
      */
@@ -132,6 +138,11 @@ namespace patchestry::passes { // NOLINT
          */
         explicit InstrumentationPass(
             std::string configuration_file, const InstrumentationOptions &options
+        );
+
+        /// Construct from a pre-loaded Configuration (DSL path).
+        explicit InstrumentationPass(
+            Configuration cfg, const InstrumentationOptions &options
         );
 
         /**

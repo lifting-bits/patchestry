@@ -1,0 +1,19 @@
+# Phase 5 parity gate: the DSL-driven pipeline produces byte-identical
+# CIR to the legacy YAML-driven pipeline for cwe078.
+#
+# 1. Decomp the fixture JSON to CIR.
+# 2. Compile the .patch to .patchmod via patchir-dslc.
+# 3. Apply via -dsl.
+# 4. Apply via -spec (baseline).
+# 5. diff the two — must be empty.
+
+# RUN: bash %strip-json-comments %S/../patchir-transform/ventilator_cwe078.json > %t.json
+# RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -output %t_base >> /dev/null 2>&1
+# RUN: %patchir-dslc %S/../patchir-transform/cwe078_replace.patch -o %t.patchmod
+# RUN: %patchir-transform %t_base.cir --dsl %t.patchmod -o %t_dsl.cir
+# RUN: %patchir-transform %t_base.cir --spec %S/../patchir-transform/cwe078_replace.yaml -o %t_yaml.cir
+# RUN: diff -u %t_yaml.cir %t_dsl.cir
+
+# Also verify the patched output contains the expected call.
+# RUN: %file-check %s --input-file %t_dsl.cir
+# CHECK: cir.call @patch__replace__system({{.*}}) {patchestry_operation = "cir.call"}

@@ -366,6 +366,36 @@ namespace patchestry::passes {
         }
     }
 
+    InstrumentationPass::InstrumentationPass(
+        Configuration cfg, const InstrumentationOptions &options_
+    )
+        : options(options_) {
+        config = std::move(cfg);
+        for (auto &spec : config->libraries.patches) {
+            auto patches_file_path = spec.code_file;
+            spec.patch_module = emitModuleAsString(patches_file_path, config->target.arch);
+            if (!spec.patch_module) {
+                LOG(ERROR) << "Failed to load patch file: " << patches_file_path << "\n";
+                continue;
+            }
+        }
+        for (auto &spec : config->libraries.contracts) {
+            if (spec.code_file.empty()) continue;
+            auto contract_module = emitModuleAsString(spec.code_file, config->target.arch);
+            if (!contract_module) {
+                LOG(ERROR) << "Failed to emit contract module for " << spec.name << "\n";
+                continue;
+            }
+            spec.contract_module = contract_module;
+        }
+    }
+
+    std::unique_ptr< mlir::Pass > CreateInstrumentationPass(
+        Configuration cfg, const InstrumentationOptions &options
+    ) {
+        return std::make_unique< InstrumentationPass >(std::move(cfg), options);
+    }
+
     /**
      * @brief Applies instrumentation to the MLIR module based on provided specifications.
      *        The function follows the execution order and applies meta patches and contracts.

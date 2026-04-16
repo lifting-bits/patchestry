@@ -13,9 +13,9 @@
 # CHECK:        arch: "ARM:LE:32"
 # CHECK:      libraries:
 # CHECK:        patches:
-# CHECK:          - name: patch__replace__system__sanitized
-# CHECK:            code_file: patches/patch_system.c
-# CHECK:            function_name: "patch::replace::system::sanitized"
+# CHECK:          - name: patch__replace__system
+# CHECK:            code_file: {{.*}}patches/patch_system.c
+# CHECK:            function_name: "patch::replace::system"
 # CHECK:            parameters:
 # CHECK:              - name: command
 # CHECK:              - name: max_len
@@ -30,7 +30,7 @@
 # CHECK:                    - name: create_port
 # CHECK:              action:
 # CHECK:                - mode: replace
-# CHECK:                  patch_id: patch__replace__system__sanitized
+# CHECK:                  patch_id: patch__replace__system
 # CHECK:                  arguments:
 # CHECK:                    - name: command
 # CHECK:                      source: operand

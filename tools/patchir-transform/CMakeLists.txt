@@ -19,6 +19,7 @@ target_link_libraries(patchir-transform
         patchestry::codegen
         clangFrontend
         patchestry::passes
+        patchestry::patchdsl
         patchestry::yaml
         MLIROptLib
         MLIRContracts

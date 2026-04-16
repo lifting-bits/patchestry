@@ -11,7 +11,7 @@ metadata {
 }
 
 import "patches/patch_system.c" as sys {
-  patch patch__replace__system__sanitized(command: *char, max_len: size_t) -> i32;
+  patch patch__replace__system(command: *char, max_len: size_t) -> i32;
 }
 
 rule cwe078_system_sanitize {
@@ -20,5 +20,5 @@ rule cwe078_system_sanitize {
   pattern-inside: $RET create_port(...) { ... }
   pattern:        system($CMD)
 
-  call: sys::patch__replace__system__sanitized($CMD, 512)
+  call: sys::patch__replace__system($CMD, 512)
 }

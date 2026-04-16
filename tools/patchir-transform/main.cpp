@@ -23,6 +23,7 @@
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
+#include <patchestry/PatchDSL/Serialize.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/Util/Options.hpp>
 
@@ -44,6 +45,11 @@ namespace patchestry::cl {
 
     const cl::opt< std::string > spec_filename( // NOLINT(cert-err58-cpp)
         "spec", llvm::cl::desc("Specification file for patch placement (in YAML)"),
+        llvm::cl::value_desc("filename"), llvm::cl::cat(category)
+    );
+
+    const cl::opt< std::string > dsl_filename( // NOLINT(cert-err58-cpp)
+        "dsl", llvm::cl::desc("Compiled PatchDSL module (.patchmod) for instrumentation"),
         llvm::cl::value_desc("filename"), llvm::cl::cat(category)
     );
 
@@ -81,9 +87,23 @@ namespace patchestry::instrumentation {
         if (enable_instrumentation.getValue()) {
             patchestry::passes::InstrumentationOptions inline_options = { enable_inlining.getValue() };
             mlir::PassManager pm(&context);
-            pm.addPass(patchestry::passes::CreateInstrumentationPass(
-                spec_filename.getValue(), inline_options
-            ));
+            if (!dsl_filename.getValue().empty()) {
+                auto cfg_or = patchestry::patchdsl::ReadPatchmod(
+                    dsl_filename.getValue(), context
+                );
+                if (!cfg_or) {
+                    LOG(ERROR) << "Failed to read .patchmod: "
+                               << llvm::toString(cfg_or.takeError()) << "\n";
+                    return mlir::failure();
+                }
+                pm.addPass(patchestry::passes::CreateInstrumentationPass(
+                    std::move(*cfg_or), inline_options
+                ));
+            } else {
+                pm.addPass(patchestry::passes::CreateInstrumentationPass(
+                    spec_filename.getValue(), inline_options
+                ));
+            }
             if (mlir::failed(pm.run(*module))) {
                 LOG(ERROR) << "Failed to run instrumentation passes\n";
                 return mlir::failure();
@@ -113,8 +133,13 @@ int main(int argc, char **argv) {
     llvm::cl::HideUnrelatedOptions(patchestry::cl::category);
     llvm::cl::ParseCommandLineOptions(argc, argv, "Patch IR Instrumentation Driver");
 
-    if (enable_instrumentation.getValue() && spec_filename.getValue().empty()) {
-        LOG(ERROR) << "--spec is required when --enable-instrumentation is set\n";
+    if (enable_instrumentation.getValue()
+        && spec_filename.getValue().empty() && dsl_filename.getValue().empty()) {
+        LOG(ERROR) << "--spec or --dsl is required when --enable-instrumentation is set\n";
+        return EXIT_FAILURE;
+    }
+    if (!spec_filename.getValue().empty() && !dsl_filename.getValue().empty()) {
+        LOG(ERROR) << "--spec and --dsl are mutually exclusive (v1)\n";
         return EXIT_FAILURE;
     }
 

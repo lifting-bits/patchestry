@@ -15,6 +15,7 @@
 
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FormatVariadic.h>
+#include <llvm/Support/Path.h>
 
 namespace patchestry::patchdsl {
 
@@ -486,10 +487,22 @@ namespace patchestry::patchdsl {
             }
         }
 
+        // Resolve import paths relative to the .patch source file's
+        // directory so the .patchmod carries absolute code_file paths.
+        std::string base_dir = llvm::sys::path::parent_path(source_path).str();
+
         // Lower imports into the flat Library.patches list.
         for (auto const &imp : ast.imports) {
+            std::string resolved_path = imp.path;
+            if (!llvm::sys::path::is_absolute(imp.path) && !base_dir.empty()) {
+                llvm::SmallVector< char > abs;
+                abs.assign(base_dir.begin(), base_dir.end());
+                llvm::sys::path::append(abs, imp.path);
+                llvm::sys::path::remove_dots(abs);
+                resolved_path = std::string(abs.data(), abs.size());
+            }
             for (auto const &sig : imp.signatures) {
-                auto ps_or = lowerSignature(sig, imp.path);
+                auto ps_or = lowerSignature(sig, resolved_path);
                 if (!ps_or) {
                     return ps_or.takeError();
                 }
