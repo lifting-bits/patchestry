@@ -49,6 +49,10 @@ entry:
 ; --- FileCheck: target function preserved ---
 ; HARNESS:       define i32 @bl_usb__send_message(ptr %msg)
 
+; --- FileCheck: klee_abort declaration is emitted early during abort
+; redirection (rewriteAbortCalls runs before harness codegen) ---
+; HARNESS:       declare void @klee_abort()
+
 ; --- FileCheck: harness main() ---
 ; Globals are now initialized via an internally-linked dispatcher function
 ; (@__klee_init_globals) that main() calls once before argument symbolization
@@ -82,6 +86,6 @@ entry:
 ; HARNESS:       define internal void @__klee_init_globals()
 ; HARNESS:       phi i64
 
-; --- FileCheck: declarations (after main) ---
+; --- FileCheck: klee_assume declaration is emitted at the end during
+; harness codegen ---
 ; HARNESS:       declare void @klee_assume(
-; HARNESS:       declare void @klee_abort()

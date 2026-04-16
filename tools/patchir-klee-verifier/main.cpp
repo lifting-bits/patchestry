@@ -18,6 +18,7 @@
 #include <llvm/Support/InitLLVM.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/TargetParser/Triple.h>
 
 #include <patchestry/Util/Log.hpp>
 
@@ -147,26 +148,36 @@ int main(int argc, char **argv) {
             return EXIT_FAILURE;
         }
 
-        // The model must have been compiled against the same (retargeted)
-        // datalayout as the input module — mismatched pointer widths or
-        // struct alignments would produce miscompiled code after linking.
-        // Accept an empty triple/DL (older bitcode) and stamp it with the
-        // module's values; otherwise require an exact match and reject
-        // anything else loudly rather than silently rewriting it.
-        const std::string &model_triple = model_mod->getTargetTriple();
-        const std::string &model_dl     = model_mod->getDataLayoutStr();
-        const std::string &host_triple  = module->getTargetTriple();
-        const std::string &host_dl      = module->getDataLayoutStr();
+        // The model must be compatible with the retargeted datalayout —
+        // mismatched pointer widths or struct alignments would produce
+        // miscompiled code after linking. For the triple, we only require
+        // matching arch+vendor+OS; the environment (libc) field differs
+        // between musl/gnu but does not affect IR-level layout, and
+        // rejecting on it would force model authors to rebuild for every
+        // libc variant. Empty triple/DL (older bitcode) is stamped with
+        // the host values.
+        const std::string &model_triple_str = model_mod->getTargetTriple();
+        const std::string &model_dl         = model_mod->getDataLayoutStr();
+        const std::string &host_triple_str  = module->getTargetTriple();
+        const std::string &host_dl          = module->getDataLayoutStr();
 
-        if (model_triple.empty() && model_dl.empty()) {
-            model_mod->setTargetTriple(host_triple);
+        if (model_triple_str.empty() && model_dl.empty()) {
+            model_mod->setTargetTriple(host_triple_str);
             model_mod->setDataLayout(module->getDataLayout());
-        } else if (model_triple != host_triple || model_dl != host_dl) {
-            LOG(ERROR) << "model library '" << model_library
-                       << "' targets '" << model_triple << "' / '" << model_dl
-                       << "', expected '" << host_triple << "' / '"
-                       << host_dl << "'; rebuild the model for the host layout\n";
-            return EXIT_FAILURE;
+        } else {
+            llvm::Triple model_triple(model_triple_str);
+            llvm::Triple host_triple(host_triple_str);
+            bool triple_compatible =
+                model_triple.getArch()   == host_triple.getArch()   &&
+                model_triple.getVendor() == host_triple.getVendor() &&
+                model_triple.getOS()     == host_triple.getOS();
+            if (!triple_compatible || model_dl != host_dl) {
+                LOG(ERROR) << "model library '" << model_library
+                           << "' targets '" << model_triple_str << "' / '" << model_dl
+                           << "', expected arch+OS of '" << host_triple_str << "' / DL '"
+                           << host_dl << "'; rebuild the model for the host layout\n";
+                return EXIT_FAILURE;
+            }
         }
 
         if (llvm::Linker::linkModules(*module, std::move(model_mod),
