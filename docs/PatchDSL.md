@@ -102,7 +102,7 @@ Inline patches are compiled and linked exactly like `import`ed ones.
 Two top-level block kinds carry the DSL's executable intent:
 
 ```
-rule <name> { <clause>+ <action>+ }        // patches: rewrite / call / insert / remove
+rule <name> { <clause>+ <action>+ }        // patches: rewrite / insert / remove / assert
 contract <name> { <clause>+ <contract-clause>+ }   // static contracts: requires / ensures / invariant / attributes
 ```
 
@@ -411,7 +411,7 @@ rule drop_redundant_flush {
 The second occurrence is the one deleted; the ellipsis marks the anchor
 pair.
 
-### 4.6 `assert:` — site-local check
+### 4.5 `assert:` — site-local check
 
 Emits a `cir.call @__patchestry_assume` (or runtime assertion, per build
 config) at the matched site — useful for preconditions bound to a
@@ -442,8 +442,9 @@ exporters, MLIR dataflow passes).
 > **Note.** Runtime validation calls — null checks, bounds guards,
 > assertion calls inserted at a call site — are **rules**, not
 > contracts. Inserting executable code that hardens the binary at
-> runtime is what `rule` with `insert before:` / `insert after:` does. A `contract` block never emits runtime code; it only
-> attaches metadata for static analysis.
+> runtime is what `rule` with `insert before:` / `insert after:`
+> does. A `contract` block never emits runtime code; it only attaches
+> metadata for static analysis.
 
 ### 5.1 Block shape
 
@@ -664,16 +665,31 @@ rule cwe078_system_sanitize {
 
 ### 6.6 CWE-022: Path traversal
 
-Inject a directory-traversal check before `mkdir()`.
+Guard `mkdir()` against directory-traversal sequences with an inline
+check. The `strstr` call scans for `../` at runtime; if found, the
+function returns early before the filesystem operation.
+
+```
+rule cwe022_mkdir_path_traversal {
+  description: "Reject ../ sequences before mkdir"
+
+  pattern-inside: $RET init_logger(...) { ... }
+  pattern:        mkdir($PATH, $...REST)
+
+  insert before: |
+    if (strstr((const char *)$PATH, "..") != NULL) return;
+}
+```
+
+For more thorough validation (canonicalization, symlink resolution),
+delegate to an external function:
 
 ```
 import "patches/patch_mkdir.c" as mkdirguard {
   patch patch__before__mkdir(path: *void) -> void;
 }
 
-rule cwe022_mkdir_path_validation {
-  description: "Reject ../ sequences before mkdir"
-
+rule cwe022_mkdir_external_validation {
   pattern-inside: $RET init_logger(...) { ... }
   pattern:        mkdir($PATH, $...REST)
 
