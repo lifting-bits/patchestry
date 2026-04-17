@@ -43,7 +43,6 @@ and pins the rule set to the binary / architecture it was authored against.
 |-----------|----------|---------------------------------------------------------------|
 | `binary`  | yes      | Expected source binary name, matched against the CIR module's `patchir.source_binary` attribute. |
 | `arch`    | yes      | Ghidra-style `PROCESSOR:ENDIAN:BITWIDTH:VARIANT` triple, matched against `patchir.target_arch`. |
-| `variant` | no       | Free-form compatibility tag (e.g. `"debug"`, `"release"`). Advisory; logged but not enforced. |
 
 ### 1.1.1 Target verification
 
@@ -58,7 +57,7 @@ At rule load time, `patchir-transform` refuses to run a `.patchmod` whose
    `patchir.target_arch`. `arch` is compared component-wise; a `*`
    in any position of the rule-side triple is a wildcard for that
    component (e.g. `"ARM:LE:32:*"` accepts any ARM32 little-endian
-   variant).
+   target).
 3. **Override.** `patchir-transform --ignore-target-mismatch` downgrades
    both checks to warnings. Intended for cross-binary experimentation;
    never the default.
@@ -108,12 +107,21 @@ Two top-level block kinds carry the DSL's executable intent:
 
 ```
 rule <name> { <clause>+ <action>+ }        // patches: rewrite / call / insert / remove
-contract <name> { <clause>+ <contract-clause>+ }   // contracts: requires / ensures / invariant / attributes
+contract <name> { <clause>+ <contract-clause>+ }   // static contracts: requires / ensures / invariant / attributes
 ```
 
-A `rule` *changes* program behavior. A `contract` *declares* a property
-(attached as an MLIR attribute for static tooling, or emitted as a
-runtime check). See §5 for the contract surface in full.
+A `rule` *changes* program behavior — patching, hardening, or
+instrumenting the binary by inserting, replacing, or removing code.
+A `contract` *declares* a static property attached as an MLIR
+attribute for verification tooling (KLEE, SARIF exporters, etc.) —
+it emits no runtime code. See §5 for the contract surface in full.
+
+> **Note.** Runtime validation calls (null checks, bounds guards,
+> assertions inserted before or after a call site) are **rules**, not
+> contracts. They insert executable code that hardens the binary at
+> runtime, which is exactly what a `rule` with `insert before: call:`
+> does. The `contract` block is reserved for *static* metadata that
+> verification tools consume without touching the emitted binary.
 
 ---
 
@@ -201,7 +209,6 @@ predicate     = pred_atom
               | "exists" capture "in" expr ":" predicate ;
 
 pred_atom     = "nonnull"    "(" expr ")"
-              | "may_be_null" "(" expr ")"
               | "tainted"    "(" expr "from" source ")"
               | "reaches"    "(" expr "," expr ")"
               | "dominates"  "(" expr "," expr ")"
@@ -282,7 +289,6 @@ cannot express syntactically. Each predicate is backed by a CIR analysis:
 | Predicate            | Backing analysis                                |
 |----------------------|--------------------------------------------------|
 | `nonnull(e)`         | Nullness lattice                                 |
-| `may_be_null(e)`     | Nullness lattice (top / maybe)                   |
 | `e relop n`          | IntegerRangeAnalysis (e.g. `$A * $B <= 0xFFFF`)  |
 | `sizeof(e) relop n`  | Type introspection (e.g. `$N <= sizeof($D)`)     |
 | `type(e) relop T`    | Type introspection                               |
@@ -334,7 +340,7 @@ rule null_after_free {
 ```
 rule guard_before_write {
   pattern: *$P = $V
-  where:   may_be_null($P)
+  where:   !nonnull($P)
   insert before: |
     if ($P == NULL) return;
 }
@@ -425,19 +431,26 @@ rule sprintf_precond {
 ```
 
 `assert:` shares the predicate vocabulary with `where:` but is *emitted*
-rather than *checked at match time*. For function- or region-level
-properties (pre/post-conditions, invariants, pure-attribute metadata),
-use a `contract` block — see §5.
+rather than *checked at match time*. It is a runtime action — it
+inserts executable code at the matched site, just like `insert before:
+call:`. For *static* properties (pre/post-conditions, invariants,
+attribute tags consumed by verifiers), use a `contract` block — see §5.
 
 ---
 
-## 5. Contracts
+## 5. Contracts (static only)
 
-Contracts attach properties to functions or regions *without* rewriting
-their bodies. They live in their own block (sibling of `rule`) and lower
-to either MLIR attributes (static mode — the default, zero runtime
-cost) or `__patchestry_assume` / `assert()` calls (runtime mode),
-selected by `patchir-transform --contracts=static|runtime|both`.
+Contracts attach *static* properties to functions or regions without
+rewriting their bodies. They lower exclusively to MLIR attributes —
+zero runtime cost, consumed by verification tools (KLEE, SARIF
+exporters, MLIR dataflow passes).
+
+> **Note.** Runtime validation calls — null checks, bounds guards,
+> assertion calls inserted at a call site — are **rules**, not
+> contracts. Inserting executable code that hardens the binary at
+> runtime is what `rule` with `insert before: call:` / `insert after:
+> call:` does. A `contract` block never emits runtime code; it only
+> attaches metadata for static analysis.
 
 ### 5.1 Block shape
 
@@ -448,7 +461,7 @@ contract <name> {
   requires:   <predicate>          // entry precondition
   ensures:    <predicate>          // return postcondition
   invariant:  <predicate>          // loop / region invariant
-  attributes: [ <attr>, ... ]      // raw MLIR attrs (static only)
+  attributes: [ <attr>, ... ]      // raw MLIR attrs
 }
 ```
 
@@ -459,24 +472,25 @@ scope to attach to.
 
 ### 5.2 Clause reference
 
-| Clause        | Scope target                        | Static lowering                                | Runtime lowering                               |
-|---------------|-------------------------------------|------------------------------------------------|------------------------------------------------|
-| `requires:`   | enclosing `cir.func`                | `patchestry.requires = #pred` on the func      | `__patchestry_assume(pred)` at entry           |
-| `ensures:`    | enclosing `cir.func`                | `patchestry.ensures = #pred` on the func       | `assert(pred)` before every `cir.return`       |
-| `invariant:`  | matched `cir.for` / `cir.while` / region | `patchestry.invariant = #pred` on the region | `__patchestry_assume(pred)` at the loop header |
-| `attributes:` | enclosing `cir.func`                | each attr attached as `patchestry.<attr>`      | (not emitted)                                  |
+| Clause        | Scope target                              | Lowering                                          |
+|---------------|-------------------------------------------|---------------------------------------------------|
+| `requires:`   | enclosing `cir.func`                      | `patchestry.requires = #pred` on the func         |
+| `ensures:`    | enclosing `cir.func`                      | `patchestry.ensures = #pred` on the func          |
+| `invariant:`  | matched `cir.for` / `cir.while` / region  | `patchestry.invariant = #pred` on the region      |
+| `attributes:` | enclosing `cir.func`                      | each attr attached as `patchestry.<attr>`         |
 
 `requires:` / `ensures:` / `invariant:` use the same predicate
 vocabulary as `where:` (§3.4) and `assert:` (§4.6).
 
-### 5.3 Relationship to `assert:`
+### 5.3 Rules vs. contracts
 
 | Need                                                    | Use                            |
 |---------------------------------------------------------|--------------------------------|
-| Precondition for a specific call-site                   | `assert:` in a `rule`          |
-| Function-level entry/exit contract                      | `requires:` / `ensures:`       |
-| Loop or region property the verifier must preserve      | `invariant:`                   |
-| Framework tag with no predicate (`pure`, `noreturn`, …) | `attributes:`                  |
+| Runtime null check, bounds guard, or hardening call     | `rule` with `insert before/after: call:` |
+| Precondition for a specific call-site (runtime check)   | `assert:` in a `rule`          |
+| Function-level entry/exit property (static metadata)    | `requires:` / `ensures:` in a `contract` |
+| Loop or region invariant (static metadata)              | `invariant:` in a `contract`   |
+| Framework tag (`pure`, `noreturn`, …)                   | `attributes:` in a `contract`  |
 
 ### 5.4 Example — `peek_process` safety contract
 
@@ -491,7 +505,7 @@ contract peek_process_safety {
 }
 ```
 
-In static mode the function picks up:
+The function picks up:
 
 ```mlir
 cir.func @peek_process(...) attributes {
@@ -503,9 +517,7 @@ cir.func @peek_process(...) attributes {
 ```
 
 A verifier (KLEE, an MLIR dataflow pass, a SARIF exporter) consumes
-those attributes directly. Switch to `--contracts=runtime` and the same
-source lowers to `__patchestry_assume` / `assert()` calls instead, with
-no change to the `.patch` file.
+those attributes directly. No runtime code is emitted.
 
 ### 5.5 Postcondition pseudo-capture `@return`
 
@@ -563,7 +575,7 @@ rule cwe190_int_overflow_fix {
 ```
 rule cwe476_guard_deref {
   pattern: $P->$F
-  where:   may_be_null($P)
+  where:   !nonnull($P)
 
   rewrite: ($P ? $P->$F : 0)
 }
@@ -816,24 +828,25 @@ capture that doesn't dominate the insertion point — see §8
 Invariants) *rolls back* that rule's changes for the site and emits a
 warning. Other rules continue.
 
-### 7.5 Emit (contracts)
+### 7.5 Emit (contracts — static only)
 
 Contracts are processed *after* all rules reach a fixed point, so
 contracts attach to the final, patched symbols rather than their
 pre-patch forms.
 
-The mode is picked by `patchir-transform --contracts=<mode>` (default
-`static`):
+Each contract clause lowers to an MLIR attribute on the matched
+function or region:
 
-| Mode      | `requires:` / `ensures:` / `invariant:`                 | `attributes:`              |
-|-----------|---------------------------------------------------------|----------------------------|
-| `static`  | attached as `patchestry.requires` / `.ensures` / `.invariant` dialect attrs on the enclosing `cir.func` / region | attached as raw MLIR attrs on the func |
-| `runtime` | lowered to `__patchestry_assume(pred)` at entry / every return / loop head | **skipped** (no runtime effect) |
-| `both`    | both of the above                                       | attributes only            |
+| Clause        | Lowering                                                            |
+|---------------|---------------------------------------------------------------------|
+| `requires:`   | `patchestry.requires = #pred` on the enclosing `cir.func`          |
+| `ensures:`    | `patchestry.ensures = #pred` on the enclosing `cir.func`           |
+| `invariant:`  | `patchestry.invariant = #pred` on the `cir.for`/`cir.while`/region |
+| `attributes:` | each attr attached as `patchestry.<attr>` on the func              |
 
-`assert:` actions inside rules are always emitted as site-local
-`__patchestry_assume` calls regardless of mode, because they are
-bound to a specific rewrite site rather than a function or region.
+No runtime code is emitted by a `contract` block. Runtime hardening
+(null checks, bounds guards, assertion calls) belongs in `rule`
+blocks with `insert before/after: call:` or `assert:`.
 
 **Failure mode:** an emit-time failure inside a contract (e.g.,
 `@return` referenced from `requires:`, which has no return value) is
@@ -848,7 +861,7 @@ manager and cached per function:
 
 - `DominanceInfo` — `dominates(a, b)`, dominance of rewrite insertion
   points.
-- `patchestry.NullnessLattice` — `nonnull(e)`, `may_be_null(e)`.
+- `patchestry.NullnessLattice` — `nonnull(e)` (use `!nonnull(e)` for may-be-null).
 - `mlir::IntegerRangeAnalysis` — `e relop n`, `sizeof(e) relop n`.
 - `patchestry.TaintAnalysis` — `tainted(e from src)`, `capture-taint:`.
 - `mlir::AliasAnalysis` — `aliases(a, b)`.
