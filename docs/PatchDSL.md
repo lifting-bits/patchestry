@@ -125,28 +125,28 @@ it emits no runtime code. See §5 for the contract surface in full.
 ## 2. Grammar
 
 ```ebnf
-(* ── top-level ────────────────────────────────────────────── *)
+// top-level
 
 file          = { metadata | import | patch_fn | rule | contract } ;
 
-(* ── metadata ─────────────────────────────────────────────── *)
+// metadata
 
 metadata      = "metadata" "{" { kv | target_block } "}" ;
 target_block  = "target" "{" { kv } "}" ;
 kv            = ident ":" ( string | number ) ;
 
-(* ── imports ──────────────────────────────────────────────── *)
+// imports
 
 import        = "import" string "as" ident ;
 
-(* ── inline patch helpers ─────────────────────────────────── *)
+// inline patch helpers
 
 patch_fn      = "patch" ident "(" [ params ] ")" "->" type
                 "{" raw_c "}" ;
 params        = param { "," param } ;
 param         = ident ":" type ;
 
-(* ── rules ────────────────────────────────────────────────── *)
+// rules (patches and runtime contracts)
 
 rule          = "rule" ident "{"
                     { clause }
@@ -154,7 +154,7 @@ rule          = "rule" ident "{"
                     { action }
                 "}" ;
 
-(* ── contracts (static only) ──────────────────────────────── *)
+// contracts (static only)
 
 contract      = "contract" ident "{"
                     { clause | contract_clause }
@@ -165,7 +165,7 @@ contract_clause
               | "ensures"    ":" predicate
               | "invariant"  ":" predicate ;
 
-(* ── clauses (shared by rules and contracts) ──────────────── *)
+// clauses (shared by rules and contracts)
 
 clause        = pattern_clause
               | scope_clause
@@ -195,7 +195,7 @@ description_clause
               = "description" ":" string
               | "id"          ":" string ;
 
-(* ── actions ──────────────────────────────────────────────── *)
+// actions
 
 action        = rewrite_action | insert_action ;
 
@@ -207,26 +207,26 @@ rewrite_action
 insert_action = "insert" position ":" action_body ;
 
 action_body   = code_block
-              | "call" ":" call_expr ;       (* explicit function call *)
+              | "call" ":" call_expr ;       // explicit function call
 
 position      = "before" | "after" | "at_entry" | "at_exit" ;
 
-(* ── call expressions ─────────────────────────────────────── *)
+// call expressions
 
 call_expr     = ident { "::" ident } "(" [ arg_list ] ")" ;
 arg_list      = arg_expr { "," arg_expr } ;
-arg_expr      = "&" arg_expr                 (* address-of / is_reference *)
+arg_expr      = "&" arg_expr                 // address-of / is_reference
               | capture
               | literal
-              | ident ;                      (* bare identifier / global symbol *)
+              | ident ;                      // bare identifier / global symbol
 
-(* ── code blocks ──────────────────────────────────────────── *)
+// code blocks
 
-code_block    = "|" raw_c_with_metavars      (* indented block after | *)
-              | inline_c ;                   (* rest-of-line C fragment *)
+code_block    = "|" raw_c_with_metavars      // indented block after |
+              | inline_c ;                   // rest-of-line C fragment
 
-(* ── predicates ───────────────────────────────────────────── *)
-(* Precedence (tightest first): !, &&, ||                      *)
+// predicates
+// Precedence (tightest first): !, &&, ||                     
 
 predicate     = or_pred ;
 or_pred       = and_pred { "||" and_pred } ;
@@ -246,36 +246,35 @@ pred_atom     = "nonnull"    "(" expr ")"
               | "sizeof"     "(" expr ")"  relop expr
               | "type"       "(" expr ")"  relop type
               | expr relop expr
-              | ident "(" [ arg_list ] ")" ; (* user-defined predicate *)
+              | ident "(" [ arg_list ] ")" ; // user-defined predicate
 
-(* ── expressions ──────────────────────────────────────────── *)
+// expressions
 
 expr          = capture
-              | "@return"                    (* postcondition pseudo-capture *)
-              | "#" ident                    (* stringified capture *)
+              | "@return"                    // postcondition pseudo-capture
+              | "#" ident                    // stringified capture
               | literal
               | ident
               | expr binop expr
               | "(" expr ")" ;
 
-(* ── terminals ────────────────────────────────────────────── *)
+// terminals
 
-capture       = "$" ident                    (* $X *)
-              | "$..." ident ;               (* $...XS — variadic *)
+capture       = "$" ident                    // $X
+              | "$..." ident ;               // $...XS — variadic
 
 literal       = number | string ;
 number        = digit { digit }
               | "0x" hex_digit { hex_digit } ;
 
-type          = { "*" } ident ;              (* e.g. *char, uint16_t, *void *)
+type          = { "*" } ident ;              // e.g. *char, uint16_t, *void
 
 relop         = "<" | "<=" | ">" | ">=" | "==" | "!=" ;
 binop         = "+" | "-" | "*" | "/" | "%" ;
 
-source        = "user_input" | "network" | "file"
-              | ident ;                      (* user-defined taint source *)
+source        = ident ;                      // taint source — user-defined
 
-ellipsis      = "..." ;                      (* wildcard inside code_block *)
+ellipsis      = "..." ;                      // wildcard inside code_block
 ```
 
 ### 2.1 Pattern vocabulary
