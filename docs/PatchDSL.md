@@ -2,7 +2,7 @@
 
 Pattern-matching and rewriting language for patching decompiled
 binaries at the ClangIR (CIR) level. File extension: `.pdsl`.
-Compiled artifact: `.patchmod`. Replaces the YAML patch specification
+Replaces the YAML patch specification
 (`docs/GettingStarted/patch_specifications.md`).
 
 ---
@@ -592,7 +592,7 @@ contract usb_endpoint_write_static {
 ## 7. Execution model
 
 1. **Load** — parse `.pdsl`, verify `target` against CIR module, type-check captures.
-2. **Compile** — imported `.c` files and inline patches compiled to CIR, cached as `.patchmod`.
+2. **Compile** — imported `.c` files and inline patches compiled to CIR.
 3. **Match** — walk each `cir.func`. Evaluate `pattern-inside:` first, then `pattern:`, then `where:` (short-circuit).
 4. **Rewrite** — apply actions in declaration order within a file, command-line order across files.
 5. **Emit** — contracts attach MLIR attributes after rules reach a fixed point.
@@ -607,11 +607,8 @@ roll back that rule and continue.
 PatchDSL compiles to the same targets as the YAML front-end:
 
 ```sh
-# Compile a .pdsl file to a shared pattern module
-patchir-dslc rules/cwe190.pdsl -o rules/cwe190.patchmod
-
-# Apply (drop-in replacement for -spec)
-patchir-transform input.cir -dsl rules/cwe190.patchmod -o patched.cir
+# Apply a .pdsl rule set (drop-in replacement for -spec)
+patchir-transform input.cir -dsl rules/cwe190.pdsl -o patched.cir
 patchir-cir2llvm -S patched.cir -o patched.ll
 ```
 
