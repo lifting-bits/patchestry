@@ -1,9 +1,10 @@
 # PatchDSL
 
 Pattern-matching and rewriting language for patching decompiled
-binaries at the ClangIR (CIR) level. File extension: `.pdsl`.
-Replaces the YAML patch specification
-(`docs/GettingStarted/patch_specifications.md`).
+binaries at the ClangIR (CIR) level. Replaces the YAML patch
+specification (`docs/GettingStarted/patch_specifications.md`).
+
+File extension: `.pdsl`
 
 ---
 
