@@ -8,10 +8,12 @@
 #pragma once
 
 #include <functional>
+#include <string>
 
 #include <clang/AST/ASTContext.h>
 
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
+#include <patchestry/Util/Log.hpp>
 
 namespace patchestry::ast {
     using namespace patchestry::ghidra;
@@ -51,6 +53,28 @@ namespace patchestry::ast {
          */
 
         SerializedTypeMap &GetSerializedTypes(void) { return serialized_types; }
+
+        /**
+         * @brief Safely retrieves a serialized `clang::QualType` for the given key.
+         *
+         * Performs a lookup in the internal `serialized_types` map without throwing
+         * `std::out_of_range` when the key is not present. When the key is missing,
+         * a warning is logged and an empty `clang::QualType` is returned so that
+         * callers can propagate the failure via `QualType::isNull()`.
+         *
+         * @param key The type key to look up in the serialized type map.
+         *
+         * @return The `clang::QualType` associated with `key`, or an empty
+         *         `clang::QualType{}` if the key is not present in the map.
+         */
+        clang::QualType GetSerializedType(const std::string &key) const {
+            auto it = serialized_types.find(key);
+            if (it == serialized_types.end()) {
+                LOG(WARNING) << "Type key not found in serialized types: " << key;
+                return clang::QualType{};
+            }
+            return it->second;
+        }
 
         /**
          * @brief Creates and serializes all types defined in the `lifted_types`.
