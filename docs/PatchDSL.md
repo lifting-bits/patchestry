@@ -1,12 +1,13 @@
 # PatchDSL
 
-A Semgrep-style pattern language for Patchestry, replacing the YAML
-`meta_patches` / `match` / `action` spec. Patterns and rewrites are written in
-C-shaped syntax, matched and rewritten at the ClangIR (CIR) layer.
+A pattern-matching and rewriting language for Patchestry. Authors write
+patterns and rewrites in C-shaped syntax; the compiler matches them
+against the ClangIR (CIR) representation of a decompiled binary and
+applies patches, runtime hardening, and static contracts — all without
+modifying the original source or re-decompiling.
 
-Companion documents:
-- `docs/GettingStarted/patch_specifications.md` — legacy YAML (still supported
-  during migration).
+Replaces the legacy YAML `meta_patches` / `match` / `action` spec
+(`docs/GettingStarted/patch_specifications.md`).
 
 ---
 
