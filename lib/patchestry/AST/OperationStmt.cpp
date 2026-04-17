@@ -1462,7 +1462,7 @@ namespace patchestry::ast {
             std::vector< clang::QualType > param_types;
             for (const auto &input : op.inputs) {
                 if (type_builder().GetSerializedTypes().contains(input.type_key)) {
-                    param_types.push_back(type_builder().GetSerializedTypes().at(input.type_key));
+                    param_types.push_back(type_builder().GetSerializedType(input.type_key));
                 } else {
                     param_types.push_back(ctx.IntTy); // Fallback
                 }
@@ -1471,7 +1471,7 @@ namespace patchestry::ast {
             // Infer return type from op.type
             clang::QualType return_type = ctx.VoidTy;
             if (op.type && type_builder().GetSerializedTypes().contains(*op.type)) {
-                return_type = type_builder().GetSerializedTypes().at(*op.type);
+                return_type = type_builder().GetSerializedType(*op.type);
             }
 
             // Build function type and pointer type
@@ -2494,12 +2494,12 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
+        auto op_type = type_builder().GetSerializedType(*op.type);
+        if (op_type.isNull()) {
             LOG(ERROR) << "INT2FLOAT operation type is not serialized. key: " << op.key << "\n";
             return {};
         }
 
-        const auto &op_type = type_builder().GetSerializedTypes().at(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2569,13 +2569,13 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
+        auto op_type = type_builder().GetSerializedType(*op.type);
+        if (op_type.isNull()) {
             LOG(ERROR) << "FLOAT2FLOAT operation type is not serialized. key: " << op.key
                        << "\n";
             return {};
         }
 
-        const auto &op_type = type_builder().GetSerializedTypes().at(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2607,14 +2607,14 @@ namespace patchestry::ast {
             return { nullptr, false };
         }
 
-        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
+        auto op_type = type_builder().GetSerializedType(*op.type);
+        if (op_type.isNull()) {
             LOG(ERROR) << "TRUNC operation type is not serialized. key: " << op.key << "\n";
             return { nullptr, false };
         }
 
         auto merge_to_next = !op.output.has_value();
 
-        const auto &op_type = type_builder().GetSerializedTypes().at(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2724,14 +2724,14 @@ namespace patchestry::ast {
             return { nullptr, false };
         }
 
-        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
+        auto op_type = type_builder().GetSerializedType(*op.type);
+        if (op_type.isNull()) {
             LOG(ERROR) << "PTRSUB operation type is not serialized. key: " << op.key << "\n";
             return { nullptr, false };
         }
 
         auto merge_to_next = !op.output.has_value();
 
-        const auto &op_type = type_builder().GetSerializedTypes().at(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
@@ -2865,13 +2865,13 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
+        auto op_type = type_builder().GetSerializedType(*op.type);
+        if (op_type.isNull()) {
             LOG(ERROR) << "Operation type does not exist in serialized list. key: " << op.key
                        << "\n";
             return {};
         }
 
-        const auto &op_type = type_builder().GetSerializedTypes().at(*op.type);
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
@@ -2911,13 +2911,12 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().GetSerializedTypes().contains(*op.type)) {
+        auto var_type = type_builder().GetSerializedType(*op.type);
+        if (var_type.isNull()) {
             LOG(ERROR) << "Skipping, local/temporary variable type is not serialized. key: "
                        << op.key << "\n";
             return {};
         }
-
-        const auto &var_type = type_builder().GetSerializedTypes()[*op.type];
         auto op_loc          = SourceLocation(ctx.getSourceManager(), op.key);
 
         std::string var_name = *op.name;

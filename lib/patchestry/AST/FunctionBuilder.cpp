@@ -255,20 +255,21 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder.get().GetSerializedTypes().contains(proto.rttype_key)) {
+        auto rttype = type_builder.get().GetSerializedType(proto.rttype_key);
+        if (rttype.isNull()) {
             LOG(ERROR) << "Function return type is not serialized.\n";
             return {};
         }
 
         std::vector< clang::QualType > args_vector;
-        const auto &rttype = type_builder.get().GetSerializedTypes().at(proto.rttype_key);
         for (const auto &param : proto.parameters) {
-            if (!type_builder.get().GetSerializedTypes().contains(param)) {
+            auto param_type = type_builder.get().GetSerializedType(param);
+            if (param_type.isNull()) {
                 LOG(ERROR) << "Skipping, invalid parameter key in function.\n";
                 continue;
             }
 
-            args_vector.emplace_back(type_builder.get().GetSerializedTypes().at(param));
+            args_vector.emplace_back(param_type);
         }
 
         clang::FunctionProtoType::ExtProtoInfo ext_proto_info;
@@ -316,12 +317,12 @@ namespace patchestry::ast {
         uint index = 0;
         std::vector< clang::ParmVarDecl * > parameter_vec;
         for (const auto &param_key : proto.parameters) {
-            if (!type_builder.get().GetSerializedTypes().contains(param_key)) {
+            auto param_type = type_builder.get().GetSerializedType(param_key);
+            if (param_type.isNull()) {
                 LOG(ERROR) << "Skipping, invalid paramater type key in function prototype.\n";
                 continue;
             }
 
-            auto param_type  = type_builder.get().GetSerializedTypes().at(param_key);
             auto *param_decl = clang::ParmVarDecl::Create(
                 ctx, func_decl, SourceLocation(ctx.getSourceManager(), param_key),
                 SourceLocation(ctx.getSourceManager(), param_key),

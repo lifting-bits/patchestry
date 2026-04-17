@@ -342,7 +342,10 @@ namespace patchestry::ast {
                 continue;
             }
 
-            auto var_type       = type_builder->GetSerializedTypes().at(variable.type);
+            auto var_type       = type_builder->GetSerializedType(variable.type);
+            if (var_type.isNull()) {
+                continue;
+            }
             auto location       = SourceLocation(ctx.getSourceManager(), key);
             auto sanitized_name = SanitizeKeyToIdent(variable.name);
             auto *var_decl      = clang::VarDecl::Create(
