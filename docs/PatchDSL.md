@@ -13,7 +13,7 @@ Replaces the legacy YAML `meta_patches` / `match` / `action` spec
 
 ## 1. File structure
 
-A `.patch` file is a sequence of top-level items — metadata, imports,
+A `.pdsl` file is a sequence of top-level items — metadata, imports,
 inline patch functions, rules (patches), and contracts (full grammar in §2).
 
 ### 1.1 File-level metadata
@@ -104,7 +104,7 @@ Two top-level block kinds carry the DSL's executable intent:
 
 ```
 rule <name> { <clause>+ <action>+ }        // patches: rewrite / insert / remove / assert
-contract <name> { <clause>+ <contract-clause>+ }   // static contracts: requires / ensures / invariant / attributes
+contract <name> { <clause>+ <contract-clause>+ }   // static contracts: requires / ensures / invariant
 ```
 
 A `rule` *changes* program behavior — patching, hardening, or
@@ -122,23 +122,39 @@ it emits no runtime code. See §5 for the contract surface in full.
 
 ---
 
-## 2. Grammar (EBNF)
+## 2. Grammar
 
 ```ebnf
+(* ── top-level ────────────────────────────────────────────── *)
+
 file          = { metadata | import | patch_fn | rule | contract } ;
+
+(* ── metadata ─────────────────────────────────────────────── *)
 
 metadata      = "metadata" "{" { kv | target_block } "}" ;
 target_block  = "target" "{" { kv } "}" ;
-import        = "import" string [ "as" ident ] ;
-patch_fn      = "patch" ident "(" [ params ] ")" [ "->" type ] block ;
+kv            = ident ":" ( string | number ) ;
+
+(* ── imports ──────────────────────────────────────────────── *)
+
+import        = "import" string "as" ident ;
+
+(* ── inline patch helpers ─────────────────────────────────── *)
+
+patch_fn      = "patch" ident "(" [ params ] ")" "->" type
+                "{" raw_c "}" ;
 params        = param { "," param } ;
 param         = ident ":" type ;
+
+(* ── rules ────────────────────────────────────────────────── *)
 
 rule          = "rule" ident "{"
                     { clause }
                     action
                     { action }
                 "}" ;
+
+(* ── contracts (static only) ──────────────────────────────── *)
 
 contract      = "contract" ident "{"
                     { clause | contract_clause }
@@ -147,8 +163,9 @@ contract      = "contract" ident "{"
 contract_clause
               = "requires"   ":" predicate
               | "ensures"    ":" predicate
-              | "invariant"  ":" predicate
-              | "attributes" ":" "[" ident { "," ident } "]" ;
+              | "invariant"  ":" predicate ;
+
+(* ── clauses (shared by rules and contracts) ──────────────── *)
 
 clause        = pattern_clause
               | scope_clause
@@ -178,10 +195,13 @@ description_clause
               = "description" ":" string
               | "id"          ":" string ;
 
+(* ── actions ──────────────────────────────────────────────── *)
+
 action        = rewrite_action | insert_action ;
+
 rewrite_action
               = "rewrite"         ":" action_body
-              | "remove"
+              | "remove"          [ ":" code_block ]
               | "assert"          ":" predicate ;
 
 insert_action = "insert" position ":" action_body ;
@@ -190,20 +210,32 @@ action_body   = code_block
               | "call" ":" call_expr ;       (* explicit function call *)
 
 position      = "before" | "after" | "at_entry" | "at_exit" ;
+
+(* ── call expressions ─────────────────────────────────────── *)
+
 call_expr     = ident { "::" ident } "(" [ arg_list ] ")" ;
 arg_list      = arg_expr { "," arg_expr } ;
-arg_expr      = capture | literal | call_expr ;
+arg_expr      = "&" arg_expr                 (* address-of / is_reference *)
+              | capture
+              | literal
+              | ident ;                      (* bare identifier / global symbol *)
 
-code_block    = "|" raw_c_with_metavars               (* YAML-style block *)
-              | string ;                              (* short form *)
+(* ── code blocks ──────────────────────────────────────────── *)
 
-predicate     = pred_atom
-              | predicate "&&" predicate
-              | predicate "||" predicate
-              | "!" predicate
+code_block    = "|" raw_c_with_metavars      (* indented block after | *)
+              | inline_c ;                   (* rest-of-line C fragment *)
+
+(* ── predicates ───────────────────────────────────────────── *)
+(* Precedence (tightest first): !, &&, ||                      *)
+
+predicate     = or_pred ;
+or_pred       = and_pred { "||" and_pred } ;
+and_pred      = unary_pred { "&&" unary_pred } ;
+unary_pred    = "!" unary_pred
               | "(" predicate ")"
               | "forall" capture "in" expr ":" predicate
-              | "exists" capture "in" expr ":" predicate ;
+              | "exists" capture "in" expr ":" predicate
+              | pred_atom ;
 
 pred_atom     = "nonnull"    "(" expr ")"
               | "tainted"    "(" expr "from" source ")"
@@ -214,13 +246,36 @@ pred_atom     = "nonnull"    "(" expr ")"
               | "sizeof"     "(" expr ")"  relop expr
               | "type"       "(" expr ")"  relop type
               | expr relop expr
-              | ident "(" [ args ] ")" ;              (* user predicate *)
+              | ident "(" [ arg_list ] ")" ; (* user-defined predicate *)
+
+(* ── expressions ──────────────────────────────────────────── *)
+
+expr          = capture
+              | "@return"                    (* postcondition pseudo-capture *)
+              | "#" ident                    (* stringified capture *)
+              | literal
+              | ident
+              | expr binop expr
+              | "(" expr ")" ;
+
+(* ── terminals ────────────────────────────────────────────── *)
+
+capture       = "$" ident                    (* $X *)
+              | "$..." ident ;               (* $...XS — variadic *)
+
+literal       = number | string ;
+number        = digit { digit }
+              | "0x" hex_digit { hex_digit } ;
+
+type          = { "*" } ident ;              (* e.g. *char, uint16_t, *void *)
+
+relop         = "<" | "<=" | ">" | ">=" | "==" | "!=" ;
+binop         = "+" | "-" | "*" | "/" | "%" ;
 
 source        = "user_input" | "network" | "file"
-              | ident ;                               (* user source *)
+              | ident ;                      (* user-defined taint source *)
 
-capture       = "$" ident | "$..." ident ;            (* $X or $...XS *)
-ellipsis      = "..." ;                               (* in code_block only *)
+ellipsis      = "..." ;                      (* wildcard inside code_block *)
 ```
 
 ### 2.1 Pattern vocabulary
@@ -456,14 +511,12 @@ contract <name> {
   requires:   <predicate>          // entry precondition
   ensures:    <predicate>          // return postcondition
   invariant:  <predicate>          // loop / region invariant
-  attributes: [ <attr>, ... ]      // raw MLIR attrs
 }
 ```
 
-All clauses are optional; a contract block with only `attributes:` is
-valid and useful for tagging functions as `pure`, `thread_safe`, etc.
-At least one `pattern-inside:` clause is required so the contract has a
-scope to attach to.
+All clauses are optional but at least one `requires:` / `ensures:` /
+`invariant:` must be present. At least one `pattern-inside:` clause is
+required so the contract has a scope to attach to.
 
 ### 5.2 Clause reference
 
@@ -472,7 +525,6 @@ scope to attach to.
 | `requires:`   | enclosing `cir.func`                      | `patchestry.requires = #pred` on the func         |
 | `ensures:`    | enclosing `cir.func`                      | `patchestry.ensures = #pred` on the func          |
 | `invariant:`  | matched `cir.for` / `cir.while` / region  | `patchestry.invariant = #pred` on the region      |
-| `attributes:` | enclosing `cir.func`                      | each attr attached as `patchestry.<attr>`         |
 
 `requires:` / `ensures:` / `invariant:` use the same predicate
 vocabulary as `where:` (§3.4) and `assert:` (§4.6).
@@ -485,7 +537,6 @@ vocabulary as `where:` (§3.4) and `assert:` (§4.6).
 | Precondition for a specific call-site (runtime check)   | `assert:` in a `rule`          |
 | Function-level entry/exit property (static metadata)    | `requires:` / `ensures:` in a `contract` |
 | Loop or region invariant (static metadata)              | `invariant:` in a `contract`   |
-| Framework tag (`pure`, `noreturn`, …)                   | `attributes:` in a `contract`  |
 
 ### 5.4 Example — `peek_process` safety contract
 
@@ -496,7 +547,6 @@ contract peek_process_safety {
   requires:   $CNT > 0 && $CNT * $SZ <= 0xFFFF
   ensures:    @return != NULL
   invariant:  $IDX <= $SZ
-  attributes: [pure, no_side_effects]
 }
 ```
 
@@ -505,9 +555,7 @@ The function picks up:
 ```mlir
 cir.func @peek_process(...) attributes {
   patchestry.requires   = #patchestry<"$CNT > 0 && $CNT * $SZ <= 0xFFFF">,
-  patchestry.ensures    = #patchestry<"@return != NULL">,
-  patchestry.pure       = unit,
-  patchestry.no_side_effects = unit
+  patchestry.ensures    = #patchestry<"@return != NULL">
 } { ... }
 ```
 
@@ -841,13 +889,12 @@ contract usb_endpoint_write_safety {
 
   requires: nonnull($DEV) && nonnull($BUF) && $LEN >= 0 && $LEN <= 512
   ensures:  @return >= 0 && @return <= 512
-  attributes: [no_side_effects]
 }
 ```
 
 ### 6.13 Patch + runtime hardening + static contract in one file
 
-A single `.patch` file can carry all three: the patch rule, a runtime
+A single `.pdsl` file can carry all three: the patch rule, a runtime
 hardening rule, and a static contract. Rules apply in file order;
 the contract attaches metadata after rules reach a fixed point.
 
@@ -913,12 +960,12 @@ rule trace_peek_handlers {
 
 ## 7. Execution model
 
-A `.patch` file travels through five phases before the patched `.cir`
+A `.pdsl` file travels through five phases before the patched `.cir`
 is written. Each phase has a well-defined input, output, and failure
 mode.
 
 ```
-  [.patch source] → (1) Load → (2) Compile → (3) Match → (4) Rewrite → (5) Emit → [patched .cir]
+  [.pdsl source] → (1) Load → (2) Compile → (3) Match → (4) Rewrite → (5) Emit → [patched .cir]
                                    │                           │
                              external .c files          contract attrs / asserts
                              compiled to CIR            attached / inserted
@@ -927,7 +974,7 @@ mode.
 
 ### 7.1 Load
 
-1. **Parse.** The `.patch` file is tokenized with capture (`$X`),
+1. **Parse.** The `.pdsl` file is tokenized with capture (`$X`),
    variadic-capture (`$...XS`), and ellipsis (`...`) extensions to a
    C-shaped grammar; the rest is ordinary C syntax.
 2. **Verify target.** `metadata.target.binary` / `metadata.target.arch`
@@ -961,7 +1008,7 @@ exits non-zero and writes no output.
    patterns to "something MLIR's rewrite driver can execute."
 
 **Failure mode:** a C compile error in an imported file is reported
-with the original C source span, not the `.patch` site. Pattern codegen
+with the original C source span, not the `.pdsl` site. Pattern codegen
 errors point at the offending clause.
 
 ### 7.3 Match
@@ -999,7 +1046,7 @@ Ordering:
 - **Within one rule:** actions apply in source order. `insert` actions
   run before the rewrite-style action, so an inserted before-call can
   read values that the rewrite will later erase.
-- **Within one `.patch` file:** rules are considered in declaration
+- **Within one `.pdsl` file:** rules are considered in declaration
   order. Two rules matching the same operation are applied first-wins;
   the second rule's match is re-evaluated after the first rewrite and
   may simply no longer apply.
@@ -1030,7 +1077,6 @@ function or region:
 | `requires:`   | `patchestry.requires = #pred` on the enclosing `cir.func`          |
 | `ensures:`    | `patchestry.ensures = #pred` on the enclosing `cir.func`           |
 | `invariant:`  | `patchestry.invariant = #pred` on the `cir.for`/`cir.while`/region |
-| `attributes:` | each attr attached as `patchestry.<attr>` on the func              |
 
 No runtime code is emitted by a `contract` block. Runtime hardening
 (null checks, bounds guards, assertion calls) belongs in `rule`
@@ -1084,8 +1130,8 @@ Carried over from `docs/GettingStarted/patch_specifications.md`:
 PatchDSL compiles to the same targets as the YAML front-end:
 
 ```sh
-# Compile a .patch file to a shared pattern module
-patchir-dslc rules/cwe190.patch -o rules/cwe190.patchmod
+# Compile a .pdsl file to a shared pattern module
+patchir-dslc rules/cwe190.pdsl -o rules/cwe190.patchmod
 
 # Apply (drop-in replacement for -spec)
 patchir-transform input.cir -dsl rules/cwe190.patchmod -o patched.cir
@@ -1098,8 +1144,8 @@ from both sources load into the same `RewritePatternSet`.
 Validate without running:
 
 ```sh
-patchir-dslc rules/cwe190.patch --check      # parse + type-check only
-patchir-dslc rules/cwe190.patch --dump-ir    # dump PatternIR
+patchir-dslc rules/cwe190.pdsl --check      # parse + type-check only
+patchir-dslc rules/cwe190.pdsl --dump-ir    # dump PatternIR
 ```
 
 ---
@@ -1110,7 +1156,7 @@ Every pattern token carries a source span. Diagnostics point at the
 offending column:
 
 ```
-rules/cwe190.patch:12:21: error: capture $R is used in rewrite: but not
+rules/cwe190.pdsl:12:21: error: capture $R is used in rewrite: but not
                                   bound by any pattern
   rewrite:  $R = mul16::patch__replace__int_mul16($A, $B)
             ^
