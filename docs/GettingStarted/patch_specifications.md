@@ -29,7 +29,54 @@ Patchestry supports two types of matching:
 | **Required Fields** | `match.name` + `match.kind` | `match.name` + `match.kind` |
 | **Context** | Caller context | Function containing the operation |
 
-## Specification Format
+## Simplified Format
+
+The `patches:` key provides a flat alternative to the nested `meta_patches` structure. Both produce identical behavior — `patches:` is syntactic sugar that inflates to the same internal representation.
+
+```yaml
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe078-fix"
+target:
+  binary: "firmware.bin"
+  arch: "ARM:LE:32:v7"
+
+libraries:
+  - "patches/cwe078_patches.yaml"
+
+patches:
+  - name: "sanitize_system"
+    id: "CWE-078-001"
+    description: "Replace system() with sanitized wrapper"
+    match:
+      name: "system"
+      kind: "function"
+      context: ["create_port"]
+    mode: "replace"
+    patch: "cwe078_sanitized_system"
+    arguments:
+      - source: "operand"
+        index: 0
+      - source: "constant"
+        value: 512
+    optimization: ["inline-patches"]
+```
+
+Key differences from the nested format:
+
+| Simplified (`patches:`) | Nested (`meta_patches:`) |
+|---|---|
+| `match:` is a single object | `match:` is an array (only first used) |
+| `mode:` at top level | `action: [{mode: ...}]` nested |
+| `patch:` field | `patch_id:` inside `action:` |
+| `context: ["fn"]` shorthand | `function_context: [{name: "fn"}]` |
+
+`patches:` and `meta_patches:` are mutually exclusive in one file.
+
+---
+
+## Specification Format (legacy)
 
 The patch specification is a YAML file with the following structure:
 

@@ -95,6 +95,62 @@ namespace patchestry::passes {
             }
             return "UNKNOWN";
         }
+
+        // Flat patch entry: simplified YAML surface that inflates to MetaPatchConfig.
+        struct PatchEntry
+        {
+            std::string name;
+            std::string id;
+            std::string description;
+            // match (single object, not array)
+            std::string match_name;
+            MatchKind match_kind = MatchKind::FUNCTION;
+            std::vector< std::string > context; // function_context names
+            std::vector< ArgumentMatch > argument_matches;
+            std::vector< OperandMatch > operand_matches;
+            std::vector< SymbolMatch > symbol_matches;
+            // action (inlined)
+            PatchInfoMode mode = PatchInfoMode::NONE;
+            std::string patch_id;
+            std::vector< ArgumentSource > arguments;
+            // optimization
+            std::set< std::string > optimization;
+        };
+
+        // Convert a PatchEntry to the canonical MetaPatchConfig representation.
+        [[maybe_unused]] inline MetaPatchConfig inflatePatchEntry(const PatchEntry &flat) {
+            MetaPatchConfig meta;
+            meta.name         = flat.name;
+            meta.description  = flat.description;
+            meta.optimization = flat.optimization;
+
+            PatchAction pa;
+            pa.action_id   = flat.id.empty() ? flat.name + "/0" : flat.id;
+            pa.description = flat.description;
+
+            MatchConfig mc;
+            mc.name             = flat.match_name;
+            mc.kind             = flat.match_kind;
+            mc.argument_matches = flat.argument_matches;
+            mc.operand_matches  = flat.operand_matches;
+            mc.symbol_matches   = flat.symbol_matches;
+            for (const auto &ctx_name : flat.context) {
+                FunctionContext fc;
+                fc.name = ctx_name;
+                mc.function_context.push_back(fc);
+            }
+            pa.match.push_back(std::move(mc));
+
+            Action act;
+            act.mode      = flat.mode;
+            act.patch_id  = flat.patch_id;
+            act.arguments = flat.arguments;
+            pa.action.push_back(std::move(act));
+
+            meta.patch_actions.push_back(std::move(pa));
+            return meta;
+        }
+
     } // namespace patch
 } // namespace patchestry::passes
 
@@ -104,6 +160,7 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::MatchConfig)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::Action)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::PatchAction)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::MetaPatchConfig)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::PatchEntry)
 
 namespace llvm::yaml {
     using namespace patchestry::passes;
@@ -246,11 +303,87 @@ namespace llvm::yaml {
                 return;
             }
 
-            io.mapRequired("name", arg.name);
+            io.mapOptional("name", arg.name);
             io.mapOptional("index", arg.index);
             io.mapOptional("symbol", arg.symbol);
             io.mapOptional("value", arg.value);
             io.mapOptional("is_reference", arg.is_reference);
+        }
+    };
+
+    // Helper struct for parsing the flat `match:` object inside PatchEntry.
+    struct PatchMatchObject
+    {
+        std::string name;
+        MatchKind kind = MatchKind::FUNCTION;
+        std::vector< std::string > context;
+        std::vector< ArgumentMatch > argument_matches;
+        std::vector< OperandMatch > operand_matches;
+        std::vector< SymbolMatch > symbol_matches;
+    };
+
+    template<>
+    struct MappingTraits< PatchMatchObject >
+    {
+        static void mapping(IO &io, PatchMatchObject &m) {
+            io.mapRequired("name", m.name);
+
+            std::string kind_str;
+            io.mapOptional("kind", kind_str);
+            if (kind_str == "operation") {
+                m.kind = MatchKind::OPERATION;
+            } else {
+                m.kind = MatchKind::FUNCTION;
+            }
+
+            io.mapOptional("context", m.context);
+            io.mapOptional("argument_matches", m.argument_matches);
+            io.mapOptional("operand_matches", m.operand_matches);
+            io.mapOptional("symbol_matches", m.symbol_matches);
+        }
+    };
+
+    // Parse PatchEntry — simplified flat YAML surface for patches.
+    template<>
+    struct MappingTraits< patch::PatchEntry >
+    {
+        static void mapping(IO &io, patch::PatchEntry &entry) {
+            io.mapRequired("name", entry.name);
+            io.mapOptional("id", entry.id);
+            io.mapOptional("description", entry.description);
+
+            // Parse nested match object
+            PatchMatchObject match_obj;
+            io.mapRequired("match", match_obj);
+            entry.match_name       = match_obj.name;
+            entry.match_kind       = match_obj.kind;
+            entry.context          = match_obj.context;
+            entry.argument_matches = match_obj.argument_matches;
+            entry.operand_matches  = match_obj.operand_matches;
+            entry.symbol_matches   = match_obj.symbol_matches;
+
+            // Mode
+            std::string mode_str;
+            io.mapRequired("mode", mode_str);
+            if (mode_str == "ApplyBefore" || mode_str == "apply_before") {
+                entry.mode = PatchInfoMode::APPLY_BEFORE;
+            } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
+                entry.mode = PatchInfoMode::APPLY_AFTER;
+            } else if (mode_str == "Replace" || mode_str == "replace") {
+                entry.mode = PatchInfoMode::REPLACE;
+            } else {
+                io.setError("Unknown patch mode: '" + mode_str + "'");
+                entry.mode = PatchInfoMode::NONE;
+            }
+
+            io.mapRequired("patch", entry.patch_id);
+            io.mapOptional("arguments", entry.arguments);
+
+            std::vector< std::string > optimization;
+            io.mapOptional("optimization", optimization);
+            for (const auto &opt : optimization) {
+                entry.optimization.insert(opt);
+            }
         }
     };
 

@@ -241,6 +241,21 @@ namespace llvm::yaml {
             io.mapOptional("execution_order", config.execution_order);
             io.mapOptional("meta_patches", config.meta_patches);
             io.mapOptional("meta_contracts", config.meta_contracts);
+
+            // Flat patch surface: `patches:` key (mutually exclusive with meta_patches)
+            std::vector< patch::PatchEntry > flat_patches;
+            io.mapOptional("patches", flat_patches);
+
+            if (!flat_patches.empty() && !config.meta_patches.empty()) {
+                io.setError(
+                    "'patches' and 'meta_patches' are mutually exclusive in one file"
+                );
+                return;
+            }
+
+            for (const auto &flat : flat_patches) {
+                config.meta_patches.push_back(patch::inflatePatchEntry(flat));
+            }
         }
     };
 } // namespace llvm::yaml
