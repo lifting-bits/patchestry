@@ -74,6 +74,37 @@ Key differences from the nested format:
 
 `patches:` and `meta_patches:` are mutually exclusive in one file.
 
+### Matching multiple callees
+
+Use `names:` (list) instead of `name:` (scalar) to match any of several
+callees with the same action (OR semantics, equivalent to PatchDSL's
+`pattern-either:`):
+
+```yaml
+patches:
+  - name: "bounded_copy"
+    match:
+      names: ["strcpy", "strcat", "sprintf"]
+      kind: "function"
+      context: ["eeprom_write"]
+    mode: "replace"
+    patch: "safe_copy"
+    arguments:
+      - source: "operand"
+        index: 0
+```
+
+Each name fires independently — if both `strcpy` and `strcat` appear
+in the matched context, both are replaced.
+
+For ad-hoc patterns, `name:` also accepts regex with `/pattern/` syntax:
+
+```yaml
+    match:
+      name: "/str(cpy|cat)|sprintf/"
+      kind: "function"
+```
+
 ### Simplified contracts
 
 The same simplification applies to contracts via the `contracts:` key:
@@ -97,76 +128,11 @@ contracts:
 
 ---
 
-## Specification Format (legacy)
+> **Deprecation notice:** The nested `meta_patches:` / `meta_contracts:` format is deprecated.
+> Use the simplified `patches:` / `contracts:` keys shown above for new specifications.
+> Existing files using `meta_patches:` / `meta_contracts:` continue to work unchanged.
 
-The patch specification is a YAML file with the following structure:
-
-```yaml
-apiVersion: patchestry.io/v1             # API version
-
-metadata:                                # Deployment metadata
-  name: "deployment-name"
-  description: "Deployment description"
-  version: "1.0.0"
-  author: "Author Name"
-  created: "YYYY-MM-DD"
-  organization: "organization-name"
-
-target:                                  # Target binary configuration
-  binary: "target_binary.bin"
-  arch: "ARCHITECTURE:ENDIANNESS:BITWIDTH:VARIANT"
-
-libraries:                               # External patch and contract libraries
-  - "path/to/library.yaml"             # Each file may contain patches, contracts, or both
-
-execution_order:                         # Order of patch/contract execution
-  - "meta_patches::meta_patch_name"
-  - "meta_contracts::meta_contract_name"
-
-meta_patches:                            # Meta-patch configurations
-  - name: ...
-    description: "..."
-    optimization:                        # Optimization settings
-      - "inline-patches"
-      - "inline-contracts"
-    patch_actions:                       # Individual patch actions
-      - id: "PATCH-001"
-        description: "..."
-        match:                           # Match criteria
-          - name: "..."
-            kind: "..."
-            # Additional match criteria...
-        action:                          # Patch actions
-          - mode: "..."
-            patch_id: "..."
-            description: "..."
-            arguments:                   # Patch arguments
-              - name: "..."
-                source: "..."
-                index: "0"
-                is_reference: true
-
-meta_contracts:                          # Meta-contract configurations
-  - name: ...
-    description: "..."
-    contract_actions:                    # Individual contract actions
-      - name: "..."
-        id: "CONTRACT-001"
-        description: "..."
-        match:                          # Contract match criteria
-          - name: "..."
-            kind: "..."
-          # Additional match criteria...
-        action:                         # Contract actions
-          - mode: "..."
-            contract_id: "..."
-            description: "..."
-            arguments:                  # Contract arguments
-              - name: "..."
-                source: "..."
-                index: 0
-
-```
+---
 
 ## Contract Types
 

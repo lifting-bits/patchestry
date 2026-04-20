@@ -1,0 +1,27 @@
+# Test: `names:` list form matching multiple callees (OR semantics)
+# Matches both system() and sprintf() in create_port, replaces both.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe078-multi-match"
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/cwe078_patches.yaml"
+
+patches:
+  - name: "sanitize_calls"
+    id: "CWE-078-MULTI"
+    match:
+      names: ["system", "sprintf"]
+      kind: "function"
+      context: ["create_port"]
+    mode: "replace"
+    patch: "cwe078_sanitized_system"
+    arguments:
+      - source: "operand"
+        index: 0
+      - source: "constant"
+        value: 512

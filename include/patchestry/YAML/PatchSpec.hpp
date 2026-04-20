@@ -103,7 +103,7 @@ namespace patchestry::passes {
             std::string id;
             std::string description;
             // match (single object, not array)
-            std::string match_name;
+            std::vector< std::string > match_names; // one or more callee names (OR)
             MatchKind match_kind = MatchKind::FUNCTION;
             std::vector< std::string > context; // function_context names
             std::vector< ArgumentMatch > argument_matches;
@@ -118,36 +118,41 @@ namespace patchestry::passes {
         };
 
         // Convert a PatchEntry to the canonical MetaPatchConfig representation.
+        // Multiple match_names produce one PatchAction per name (OR semantics).
         [[maybe_unused]] inline MetaPatchConfig inflatePatchEntry(const PatchEntry &entry) {
             MetaPatchConfig meta;
             meta.name         = entry.name;
             meta.description  = entry.description;
             meta.optimization = entry.optimization;
 
-            PatchAction pa;
-            pa.action_id   = entry.id.empty() ? entry.name + "/0" : entry.id;
-            pa.description = entry.description;
+            for (std::size_t i = 0; i < entry.match_names.size(); ++i) {
+                PatchAction pa;
+                pa.action_id = entry.id.empty()
+                    ? entry.name + "/" + std::to_string(i)
+                    : entry.id + "/" + std::to_string(i);
+                pa.description = entry.description;
 
-            MatchConfig mc;
-            mc.name             = entry.match_name;
-            mc.kind             = entry.match_kind;
-            mc.argument_matches = entry.argument_matches;
-            mc.operand_matches  = entry.operand_matches;
-            mc.symbol_matches   = entry.symbol_matches;
-            for (const auto &ctx_name : entry.context) {
-                FunctionContext fc;
-                fc.name = ctx_name;
-                mc.function_context.push_back(fc);
+                MatchConfig mc;
+                mc.name             = entry.match_names[i];
+                mc.kind             = entry.match_kind;
+                mc.argument_matches = entry.argument_matches;
+                mc.operand_matches  = entry.operand_matches;
+                mc.symbol_matches   = entry.symbol_matches;
+                for (const auto &ctx_name : entry.context) {
+                    FunctionContext fc;
+                    fc.name = ctx_name;
+                    mc.function_context.push_back(fc);
+                }
+                pa.match.push_back(std::move(mc));
+
+                Action act;
+                act.mode      = entry.mode;
+                act.patch_id  = entry.patch_id;
+                act.arguments = entry.arguments;
+                pa.action.push_back(std::move(act));
+
+                meta.patch_actions.push_back(std::move(pa));
             }
-            pa.match.push_back(std::move(mc));
-
-            Action act;
-            act.mode      = entry.mode;
-            act.patch_id  = entry.patch_id;
-            act.arguments = entry.arguments;
-            pa.action.push_back(std::move(act));
-
-            meta.patch_actions.push_back(std::move(pa));
             return meta;
         }
 
@@ -312,9 +317,10 @@ namespace llvm::yaml {
     };
 
     // Helper struct for parsing the `match:` object inside PatchEntry.
+    // Supports `name:` (single callee) or `names:` (list, OR semantics).
     struct PatchMatchObject
     {
-        std::string name;
+        std::vector< std::string > names;
         MatchKind kind = MatchKind::FUNCTION;
         std::vector< std::string > context;
         std::vector< ArgumentMatch > argument_matches;
@@ -326,7 +332,23 @@ namespace llvm::yaml {
     struct MappingTraits< PatchMatchObject >
     {
         static void mapping(IO &io, PatchMatchObject &m) {
-            io.mapRequired("name", m.name);
+            // `name:` for single callee, `names:` for list (OR).
+            // Mutually exclusive.
+            std::string single_name;
+            io.mapOptional("name", single_name);
+            io.mapOptional("names", m.names);
+
+            if (!single_name.empty() && !m.names.empty()) {
+                io.setError("'name' and 'names' are mutually exclusive in match");
+                return;
+            }
+            if (!single_name.empty()) {
+                m.names.push_back(single_name);
+            }
+            if (m.names.empty()) {
+                io.setError("match must include 'name' or 'names'");
+                return;
+            }
 
             std::string kind_str;
             io.mapOptional("kind", kind_str);
@@ -355,7 +377,7 @@ namespace llvm::yaml {
             // Parse nested match object
             PatchMatchObject match_obj;
             io.mapRequired("match", match_obj);
-            entry.match_name       = match_obj.name;
+            entry.match_names      = match_obj.names;
             entry.match_kind       = match_obj.kind;
             entry.context          = match_obj.context;
             entry.argument_matches = match_obj.argument_matches;

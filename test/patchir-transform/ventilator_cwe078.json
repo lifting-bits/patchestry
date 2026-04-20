@@ -9,6 +9,12 @@
 // RUN: %patchir-transform %t1.cir --spec %S/cwe078_replace_simplified.yaml -o %t3.cir
 // RUN: diff %t2.cir %t3.cir
 //
+// Test `names:` list form matches multiple callees (OR semantics)
+// RUN: %patchir-transform %t1.cir --spec %S/cwe078_replace_multi.yaml -o %t4.cir
+// RUN: %file-check -vv -check-prefix=MULTI %s --input-file %t4.cir
+// MULTI: cir.call @patch__replace__system({{.*}}) {patchestry_operation = "cir.call"}
+// MULTI: cir.call @patch__replace__system({{.*}}) {patchestry_operation = "cir.call"}
+//
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",
