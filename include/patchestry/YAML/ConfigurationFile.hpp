@@ -242,19 +242,34 @@ namespace llvm::yaml {
             io.mapOptional("meta_patches", config.meta_patches);
             io.mapOptional("meta_contracts", config.meta_contracts);
 
-            // Flat patch surface: `patches:` key (mutually exclusive with meta_patches)
-            std::vector< patch::PatchEntry > flat_patches;
-            io.mapOptional("patches", flat_patches);
+            // Simplified `patches:` key (mutually exclusive with meta_patches)
+            std::vector< patch::PatchEntry > patch_entries;
+            io.mapOptional("patches", patch_entries);
 
-            if (!flat_patches.empty() && !config.meta_patches.empty()) {
+            if (!patch_entries.empty() && !config.meta_patches.empty()) {
                 io.setError(
                     "'patches' and 'meta_patches' are mutually exclusive in one file"
                 );
                 return;
             }
 
-            for (const auto &flat : flat_patches) {
-                config.meta_patches.push_back(patch::inflatePatchEntry(flat));
+            for (const auto &entry : patch_entries) {
+                config.meta_patches.push_back(patch::inflatePatchEntry(entry));
+            }
+
+            // Simplified `contracts:` key (mutually exclusive with meta_contracts)
+            std::vector< contract::ContractEntry > contract_entries;
+            io.mapOptional("contracts", contract_entries);
+
+            if (!contract_entries.empty() && !config.meta_contracts.empty()) {
+                io.setError(
+                    "'contracts' and 'meta_contracts' are mutually exclusive in one file"
+                );
+                return;
+            }
+
+            for (const auto &entry : contract_entries) {
+                config.meta_contracts.push_back(contract::inflateContractEntry(entry));
             }
         }
     };

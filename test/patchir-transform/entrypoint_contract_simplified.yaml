@@ -1,0 +1,30 @@
+# Test: flat YAML syntax for contract specification (apply_at_entrypoint mode)
+# Equivalent to entrypoint_contract.yaml (first meta_contract only) using simplified `contracts:` key.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "entrypoint-contract-flat"
+  description: "Test APPLY_AT_ENTRYPOINT contract mode — flat syntax"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-04-20"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  - "patches/entrypoint_contract_library.yaml"
+
+contracts:
+  - name: "entrypoint_meta_contract"
+    id: "ENTRY-CONTRACT-001"
+    description: "Validate message pointer is non-null before the function body executes"
+    match:
+      name: "usbd_ep_write_packet"
+      context: ["bl_usb__send_message"]
+    mode: "apply_at_entrypoint"
+    contract: "message_entry_check_contract"
+    arguments:
+      - source: "variable"
+        symbol: "msg"

@@ -96,7 +96,7 @@ namespace patchestry::passes {
             return "UNKNOWN";
         }
 
-        // Flat patch entry: simplified YAML surface that inflates to MetaPatchConfig.
+        // Simplified YAML surface that inflates to MetaPatchConfig.
         struct PatchEntry
         {
             std::string name;
@@ -118,23 +118,23 @@ namespace patchestry::passes {
         };
 
         // Convert a PatchEntry to the canonical MetaPatchConfig representation.
-        [[maybe_unused]] inline MetaPatchConfig inflatePatchEntry(const PatchEntry &flat) {
+        [[maybe_unused]] inline MetaPatchConfig inflatePatchEntry(const PatchEntry &entry) {
             MetaPatchConfig meta;
-            meta.name         = flat.name;
-            meta.description  = flat.description;
-            meta.optimization = flat.optimization;
+            meta.name         = entry.name;
+            meta.description  = entry.description;
+            meta.optimization = entry.optimization;
 
             PatchAction pa;
-            pa.action_id   = flat.id.empty() ? flat.name + "/0" : flat.id;
-            pa.description = flat.description;
+            pa.action_id   = entry.id.empty() ? entry.name + "/0" : entry.id;
+            pa.description = entry.description;
 
             MatchConfig mc;
-            mc.name             = flat.match_name;
-            mc.kind             = flat.match_kind;
-            mc.argument_matches = flat.argument_matches;
-            mc.operand_matches  = flat.operand_matches;
-            mc.symbol_matches   = flat.symbol_matches;
-            for (const auto &ctx_name : flat.context) {
+            mc.name             = entry.match_name;
+            mc.kind             = entry.match_kind;
+            mc.argument_matches = entry.argument_matches;
+            mc.operand_matches  = entry.operand_matches;
+            mc.symbol_matches   = entry.symbol_matches;
+            for (const auto &ctx_name : entry.context) {
                 FunctionContext fc;
                 fc.name = ctx_name;
                 mc.function_context.push_back(fc);
@@ -142,9 +142,9 @@ namespace patchestry::passes {
             pa.match.push_back(std::move(mc));
 
             Action act;
-            act.mode      = flat.mode;
-            act.patch_id  = flat.patch_id;
-            act.arguments = flat.arguments;
+            act.mode      = entry.mode;
+            act.patch_id  = entry.patch_id;
+            act.arguments = entry.arguments;
             pa.action.push_back(std::move(act));
 
             meta.patch_actions.push_back(std::move(pa));
@@ -311,7 +311,7 @@ namespace llvm::yaml {
         }
     };
 
-    // Helper struct for parsing the flat `match:` object inside PatchEntry.
+    // Helper struct for parsing the `match:` object inside PatchEntry.
     struct PatchMatchObject
     {
         std::string name;
@@ -343,7 +343,7 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse PatchEntry — simplified flat YAML surface for patches.
+    // Parse PatchEntry — simplified YAML surface for patches.
     template<>
     struct MappingTraits< patch::PatchEntry >
     {

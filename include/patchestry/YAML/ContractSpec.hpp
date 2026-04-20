@@ -171,6 +171,55 @@ namespace patchestry::passes {
             }
             return "UNKNOWN";
         }
+
+        // Simplified contract entry that inflates to MetaContractConfig.
+        struct ContractEntry
+        {
+            std::string name;
+            std::string id;
+            std::string description;
+            // match (single object)
+            std::string match_name;
+            std::vector< std::string > context; // function_context names
+            // action (inlined)
+            InfoMode mode = InfoMode::NONE;
+            std::string contract_id;
+            std::vector< ArgumentSource > arguments;
+            // optimization
+            std::set< std::string > optimization;
+        };
+
+        // Convert a ContractEntry to the canonical MetaContractConfig representation.
+        [[maybe_unused]] inline MetaContractConfig inflateContractEntry(const ContractEntry &entry) {
+            MetaContractConfig meta;
+            meta.name         = entry.name;
+            meta.description  = entry.description;
+            meta.optimization = entry.optimization;
+
+            ContractAction ca;
+            ca.action_id   = entry.id.empty() ? entry.name + "/0" : entry.id;
+            ca.description = entry.description;
+
+            MatchConfig mc;
+            mc.name = entry.match_name;
+            mc.kind = MatchKind::FUNCTION;
+            for (const auto &ctx_name : entry.context) {
+                FunctionContext fc;
+                fc.name = ctx_name;
+                mc.function_context.push_back(fc);
+            }
+            ca.match.push_back(std::move(mc));
+
+            Action act;
+            act.mode        = entry.mode;
+            act.contract_id = entry.contract_id;
+            act.arguments   = entry.arguments;
+            ca.action.push_back(std::move(act));
+
+            meta.contract_actions.push_back(std::move(ca));
+            return meta;
+        }
+
     } // namespace contract
 } // namespace patchestry::passes
 
@@ -184,6 +233,7 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::MetaContractConfig)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::Range)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::Value)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::Predicate)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::ContractEntry)
 
 namespace llvm::yaml {
     using namespace patchestry::passes;
@@ -457,10 +507,68 @@ namespace llvm::yaml {
                 return;
             }
 
-            io.mapRequired("name", arg.name);
+            io.mapOptional("name", arg.name);
             io.mapOptional("index", arg.index);
             io.mapOptional("symbol", arg.symbol);
             io.mapOptional("value", arg.value);
         }
     };
+
+    // Helper struct for parsing the `match:` object inside ContractEntry.
+    struct ContractMatchObject
+    {
+        std::string name;
+        std::vector< std::string > context;
+    };
+
+    template<>
+    struct MappingTraits< ContractMatchObject >
+    {
+        static void mapping(IO &io, ContractMatchObject &m) {
+            io.mapRequired("name", m.name);
+            io.mapOptional("context", m.context);
+        }
+    };
+
+    // Parse ContractEntry — simplified YAML surface for contracts.
+    template<>
+    struct MappingTraits< contract::ContractEntry >
+    {
+        static void mapping(IO &io, contract::ContractEntry &entry) {
+            io.mapRequired("name", entry.name);
+            io.mapOptional("id", entry.id);
+            io.mapOptional("description", entry.description);
+
+            // Parse nested match object
+            ContractMatchObject match_obj;
+            io.mapRequired("match", match_obj);
+            entry.match_name = match_obj.name;
+            entry.context    = match_obj.context;
+
+            // Mode
+            std::string mode_str;
+            io.mapRequired("mode", mode_str);
+            if (mode_str == "ApplyBefore" || mode_str == "apply_before") {
+                entry.mode = contract::InfoMode::APPLY_BEFORE;
+            } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
+                entry.mode = contract::InfoMode::APPLY_AFTER;
+            } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint"
+                       || mode_str == "apply_at_entry") {
+                entry.mode = contract::InfoMode::APPLY_AT_ENTRYPOINT;
+            } else {
+                io.setError("Unknown contract mode: '" + mode_str + "'");
+                entry.mode = contract::InfoMode::NONE;
+            }
+
+            io.mapRequired("contract", entry.contract_id);
+            io.mapOptional("arguments", entry.arguments);
+
+            std::vector< std::string > optimization;
+            io.mapOptional("optimization", optimization);
+            for (const auto &opt : optimization) {
+                entry.optimization.insert(opt);
+            }
+        }
+    };
+
 } // namespace llvm::yaml

@@ -31,7 +31,7 @@ Patchestry supports two types of matching:
 
 ## Simplified Format
 
-The `patches:` key provides a flat alternative to the nested `meta_patches` structure. Both produce identical behavior — `patches:` is syntactic sugar that inflates to the same internal representation.
+The `patches:` key provides a simplified alternative to the nested `meta_patches` structure. Both produce identical behavior — `patches:` is syntactic sugar that inflates to the same internal representation.
 
 ```yaml
 apiVersion: patchestry.io/v1
@@ -73,6 +73,27 @@ Key differences from the nested format:
 | `context: ["fn"]` shorthand | `function_context: [{name: "fn"}]` |
 
 `patches:` and `meta_patches:` are mutually exclusive in one file.
+
+### Simplified contracts
+
+The same simplification applies to contracts via the `contracts:` key:
+
+```yaml
+contracts:
+  - name: "usb_entry_check"
+    id: "ENTRY-CONTRACT-001"
+    description: "Null-check message pointer at function entry"
+    match:
+      name: "usbd_ep_write_packet"
+      context: ["bl_usb__send_message"]
+    mode: "apply_at_entrypoint"
+    contract: "message_entry_check_contract"
+    arguments:
+      - source: "variable"
+        symbol: "msg"
+```
+
+`contracts:` and `meta_contracts:` are mutually exclusive in one file.
 
 ---
 
