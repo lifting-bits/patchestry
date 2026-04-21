@@ -67,9 +67,9 @@ jobs:
     runs-on: ${{ matrix.arch == 'arm64' && format('ubuntu-{0}-arm', matrix.image-version) || format('ubuntu-{0}', matrix.image-version) }}
     timeout-minutes: 30
     env:
-      # amd64 uses the legacy `-dev:latest` tag; arm64 uses `-dev-arm64:latest`.
-      # See .github/workflows/devcontainer.yml for how these tags are produced.
-      DEV_IMAGE: ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev${{ matrix.arch == 'arm64' && '-arm64' || '' }}:latest
+      # `-dev:latest` is a multi-arch manifest published by devcontainer.yml;
+      # Docker resolves the correct platform on pull.
+      DEV_IMAGE: ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
       CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
       LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
       ENABLE_SANITIZER_UNDEFINED_BEHAVIOR: ${{ matrix.sanitizers }}
