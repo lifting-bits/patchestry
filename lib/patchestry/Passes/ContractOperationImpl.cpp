@@ -274,21 +274,4 @@ namespace patchestry::passes {
         );
     }
 
-    // Dead helper retained only to keep the legacy header stable while callers
-    // migrate. Static contracts never needed an entrypoint-insertion path, and
-    // runtime contracts have been merged into patches (see
-    // PatchOperationImpl::applyPatchAtEntrypoint).
-    void ContractOperationImpl::applyContractAtEntrypoint(
-        InstrumentationPass &pass, cir::CallOp call_op, const ContractInformation &contract,
-        bool should_inline
-    ) {
-        (void) pass;
-        (void) call_op;
-        (void) contract;
-        (void) should_inline;
-        LOG(ERROR) << "APPLY_AT_ENTRYPOINT is not supported for contracts — "
-                      "contracts are static only. Use a patch with "
-                      "mode: apply_at_entrypoint instead.";
-    }
-
 } // namespace patchestry::passes

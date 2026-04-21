@@ -1668,11 +1668,6 @@ namespace patchestry::passes {
                                     || meta_contract.optimization.contains("inline-contracts")
                             );
                             break;
-                        case contract::InfoMode::APPLY_AT_ENTRYPOINT:
-                            LOG(ERROR) << "APPLY_AT_ENTRYPOINT is not supported for "
-                                          "contracts — contracts are static only. Use a "
-                                          "patch with mode: apply_at_entrypoint instead.\n";
-                            break;
                         default:
                             LOG(ERROR) << "Unsupported contract mode (see ContractSpec for "
                                           "details on support)\n";

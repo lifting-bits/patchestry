@@ -53,11 +53,15 @@ namespace patchestry::passes {
             using RelationKind  = ::contracts::RelationKind;
         } // namespace attr_types
 
+        // Contracts attach as MLIR attributes on the matched op; the mode
+        // only controls whether the attribute lands on the op or an
+        // adjacent one. There is no runtime-call insertion (that path
+        // lives under patches: now), so apply_at_entrypoint is not a
+        // valid contract mode.
         enum class InfoMode : uint8_t {
             NONE = 0, // No contract
             APPLY_BEFORE,
-            APPLY_AFTER,
-            APPLY_AT_ENTRYPOINT
+            APPLY_AFTER
         };
 
         // Contracts can only match at the function level.
@@ -163,8 +167,6 @@ namespace patchestry::passes {
                     return "APPLY_BEFORE";
                 case InfoMode::APPLY_AFTER:
                     return "APPLY_AFTER";
-                case InfoMode::APPLY_AT_ENTRYPOINT:
-                    return "APPLY_AT_ENTRYPOINT";
             }
             return "UNKNOWN";
         }
@@ -301,11 +303,16 @@ namespace llvm::yaml {
                 action.mode = contract::InfoMode::APPLY_BEFORE;
             } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
                 action.mode = contract::InfoMode::APPLY_AFTER;
-            } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
-                action.mode = contract::InfoMode::APPLY_AT_ENTRYPOINT;
+            } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint"
+                       || mode_str == "apply_at_entry") {
+                io.setError(
+                    "apply_at_entrypoint is not supported for contracts — "
+                    "contracts are static only. Move the entry under patches: "
+                    "and use mode: apply_at_entrypoint there."
+                );
             } else {
                 io.setError("Unsupported contract mode: '" + mode_str
-                            + "'. Valid modes: ApplyBefore, ApplyAfter, ApplyAtEntrypoint");
+                            + "'. Valid modes: ApplyBefore, ApplyAfter");
             }
         }
     };
@@ -572,7 +579,12 @@ namespace llvm::yaml {
                 entry.mode = contract::InfoMode::APPLY_AFTER;
             } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint"
                        || mode_str == "apply_at_entry") {
-                entry.mode = contract::InfoMode::APPLY_AT_ENTRYPOINT;
+                io.setError(
+                    "apply_at_entrypoint is not supported for contracts — "
+                    "contracts are static only. Move the entry under patches: "
+                    "and use mode: apply_at_entrypoint there."
+                );
+                entry.mode = contract::InfoMode::NONE;
             } else {
                 io.setError("Unknown contract mode: '" + mode_str + "'");
                 entry.mode = contract::InfoMode::NONE;

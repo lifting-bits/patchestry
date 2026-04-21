@@ -46,11 +46,6 @@ namespace patchestry::passes {
             InstrumentationPass &pass, mlir::Operation *targetOp,
             const ContractInformation &contract, bool shouldInline
         );
-
-        static void applyContractAtEntrypoint(
-            InstrumentationPass &pass, cir::CallOp callOp, const ContractInformation &contract,
-            bool shouldInline
-        );
     };
 
 } // namespace patchestry::passes

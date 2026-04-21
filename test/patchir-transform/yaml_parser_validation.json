@@ -63,4 +63,11 @@
 // RUN: not %patchir-yaml-parser %T/nonexistent_spec.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=MISSING_FILE %s
 // MISSING_FILE: {{[Ee]rror|[Ff]ailed|[Nn]ot found|[Dd]oes not exist}}
+//
+// apply_at_entrypoint is patch-only — a contract entry with that
+// mode must fail parsing so a spec author can't silently request
+// instrumentation the pass will drop.
+// RUN: not %patchir-yaml-parser %S/contract_apply_at_entrypoint_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=CONTRACT_ENTRYPOINT_ERR %s
+// CONTRACT_ENTRYPOINT_ERR: apply_at_entrypoint is not supported for contracts
 {}
