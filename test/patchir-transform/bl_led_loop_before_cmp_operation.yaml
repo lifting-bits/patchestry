@@ -15,10 +15,6 @@ target:
 libraries:
   - "patches/led_loop_before_cmp_operation.yaml"
 
-execution_order:
-  - "meta_patches::led_loop_before_cmp_operation"
-
-
 meta_patches:
   - name: "led_loop_before_cmp_operation"
     description: "Apply before cmp operation"

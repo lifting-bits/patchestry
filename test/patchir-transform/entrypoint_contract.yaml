@@ -16,10 +16,6 @@ libraries:
   # these references are in relation to the location of this file
   - "patches/entrypoint_contract_library.yaml"
 
-execution_order:
-  - "meta_contracts::entrypoint_meta_contract"
-  - "meta_contracts::entrypoint_meta_contract_static"
-
 meta_contracts:
   - name: entrypoint_meta_contract
     description: "Runtime contract inserted at the entrypoint of bl_usb__send_message"

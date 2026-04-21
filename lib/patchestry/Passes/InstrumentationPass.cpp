@@ -397,85 +397,14 @@ namespace patchestry::passes {
             }
         });
 
-        // if the execution order is empty, apply meta patches and contracts in order
-        if (config->execution_order.empty()) {
-            for (const auto &meta_patch : config->meta_patches) {
-                LOG(INFO) << "Applying patch: " << meta_patch.name << "\n";
-                apply_meta_patches(function_worklist, operation_worklist, meta_patch.name);
-            }
-            for (const auto &meta_contract : config->meta_contracts) {
-                LOG(INFO) << "Applying contract: " << meta_contract.name << "\n";
-                apply_meta_contracts(function_worklist, meta_contract.name);
-            }
-        } else {
-            // Each execution_order entry is either:
-            //   "<name>"                  — looked up in patches, then contracts
-            //   "patches::<name>"         — restrict lookup to patches
-            //   "contracts::<name>"       — restrict lookup to contracts
-            //   "meta_patches::<name>"    — alias of patches (legacy)
-            //   "meta_contracts::<name>"  — alias of contracts (legacy)
-            auto trim = [](std::string &s) {
-                s.erase(0, s.find_first_not_of(" \t"));
-                if (!s.empty()) {
-                    s.erase(s.find_last_not_of(" \t") + 1);
-                }
-            };
-            auto has_name = [](const auto &vec, const std::string &n) {
-                for (const auto &item : vec) {
-                    if (item.name == n) return true;
-                }
-                return false;
-            };
-
-            for (const auto &execution_item : config->execution_order) {
-                std::string type;
-                std::string name;
-                auto colon_pos = execution_item.find("::");
-                if (colon_pos == std::string::npos) {
-                    name = execution_item;
-                } else {
-                    type = execution_item.substr(0, colon_pos);
-                    name = execution_item.substr(colon_pos + 2);
-                }
-                trim(name);
-
-                bool is_patches = (type == "patches" || type == "meta_patches");
-                bool is_contracts = (type == "contracts" || type == "meta_contracts");
-                bool is_bare = type.empty();
-
-                if (!is_patches && !is_contracts && !is_bare) {
-                    LOG(ERROR) << "Unknown execution type '" << type
-                               << "' in '" << execution_item
-                               << "'. Valid prefixes: patches, contracts.\n";
-                    continue;
-                }
-
-                if (is_bare) {
-                    bool in_patches = has_name(config->meta_patches, name);
-                    bool in_contracts = has_name(config->meta_contracts, name);
-                    if (in_patches && in_contracts) {
-                        LOG(ERROR) << "execution_order name '" << name
-                                   << "' is ambiguous (appears in both patches and "
-                                      "contracts); use a 'patches::' or 'contracts::' prefix\n";
-                        continue;
-                    }
-                    is_patches = in_patches;
-                    is_contracts = in_contracts;
-                    if (!is_patches && !is_contracts) {
-                        LOG(ERROR) << "execution_order name '" << name
-                                   << "' not found in patches or contracts\n";
-                        continue;
-                    }
-                }
-
-                if (is_patches) {
-                    LOG(INFO) << "Applying patch: " << name << "\n";
-                    apply_meta_patches(function_worklist, operation_worklist, name);
-                } else {
-                    LOG(INFO) << "Applying contract: " << name << "\n";
-                    apply_meta_contracts(function_worklist, name);
-                }
-            }
+        // Apply patches first, then contracts, each in YAML declaration order.
+        for (const auto &meta_patch : config->meta_patches) {
+            LOG(INFO) << "Applying patch: " << meta_patch.name << "\n";
+            apply_meta_patches(function_worklist, operation_worklist, meta_patch.name);
+        }
+        for (const auto &meta_contract : config->meta_contracts) {
+            LOG(INFO) << "Applying contract: " << meta_contract.name << "\n";
+            apply_meta_contracts(function_worklist, meta_contract.name);
         }
 
         // Inline inserted patch/contract call operations if requested

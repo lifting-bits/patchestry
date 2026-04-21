@@ -74,7 +74,6 @@ namespace patchestry::passes {
         Metadata metadata;
         Target target;
         Library libraries;
-        std::vector< std::string > execution_order;
         std::vector< patch::MetaPatchConfig > meta_patches;
         std::vector< contract::MetaContractConfig > meta_contracts;
     };
@@ -238,7 +237,6 @@ namespace llvm::yaml {
                 );
             }
 
-            io.mapOptional("execution_order", config.execution_order);
             io.mapOptional("meta_patches", config.meta_patches);
             io.mapOptional("meta_contracts", config.meta_contracts);
 

@@ -16,10 +16,6 @@ libraries:
   - "patches/usb_security_patches.yaml"
   - "contracts/usb_security_contracts.yaml"
 
-execution_order:
-  - "meta_patches::usb_security_meta_patches"
-  - "meta_contracts::usb_security_meta_contracts"
-
 meta_patches:
   - name: usb_security_meta_patches
     id: "usb_security_meta_patches"

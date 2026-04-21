@@ -15,9 +15,6 @@ target:
 libraries:
   - "patches/usb_security_patches.yaml"
 
-execution_order:
-  - "meta_patches::usb_security_meta_patches"
-
 meta_patches:
   - name: usb_security_meta_patches
     description: "Meta patches for USB security"

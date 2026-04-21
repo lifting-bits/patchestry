@@ -16,10 +16,6 @@ libraries:
  # these references are in relation to the location of this file
   - "patches/usb_security_patches.yaml"
 
-execution_order:
-  - "meta_patches::usb_security_meta_patches"
-#  - "meta_contracts::usb_security_meta_contracts"
-
 meta_patches:
   - name: usb_security_meta_patches
     description: "Meta patches for USB security"

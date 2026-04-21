@@ -16,10 +16,6 @@ target:
   binary: "test_binary.bin"
   arch: "ARM:LE:32"
 
-execution_order:
-  - "meta_patches::all_predicates_meta_patches"
-  - "meta_contracts::all_predicates_meta_contracts"
-
 meta_patches:
   - name: "all_predicates_meta_patches"
     description: "Replace sprintf with bounds-checked variant"

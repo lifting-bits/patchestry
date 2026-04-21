@@ -16,11 +16,6 @@ libraries:
   # these references are in relation to the location of this file
   - "patches/bloodview_device_entry_patches.yaml"
 
-execution_order:
-  - "meta_patches::bloodview_device_entry_meta_patch"
-  - "meta_contracts::bloodview_device_entry_meta_contract"
-  - "meta_contracts::bloodview_device_entry_meta_contract_static"
-
 meta_patches:
   - name: bloodview_device_entry_meta_patch
     description: "Meta patches for fixing get device list in bloodview"
