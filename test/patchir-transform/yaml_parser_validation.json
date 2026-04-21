@@ -70,4 +70,13 @@
 // RUN: not %patchir-yaml-parser %S/contract_apply_at_entrypoint_reject.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=CONTRACT_ENTRYPOINT_ERR %s
 // CONTRACT_ENTRYPOINT_ERR: apply_at_entrypoint is not supported for contracts
+//
+// A capture must specify exactly one of `operand:` / `result:`. Both
+// set, or neither set, must fail the parser.
+// RUN: not %patchir-yaml-parser %S/capture_mutual_exclusion_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=CAP_BOTH_ERR %s
+// CAP_BOTH_ERR: cannot specify both 'operand' and 'result'
+// RUN: not %patchir-yaml-parser %S/capture_missing_source_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=CAP_NEITHER_ERR %s
+// CAP_NEITHER_ERR: must specify either 'operand' or 'result'
 {}

@@ -1,7 +1,3 @@
-// op_kind discriminator tests. The fixture has 5 functions, each with one
-// cir.binop of a distinct kind: add, sub, mul, div, rem. We verify that
-// `op_kind:` filters match to a specific kind.
-//
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -output %t1 >> /dev/null 2>&1
 //
@@ -27,6 +23,16 @@
 // RUN: %file-check -vv -check-prefix=ADD_FN %s --input-file %t4.cir
 // ADD_FN-LABEL: cir.func @int_add_test
 // ADD_FN: cir.call @patch__replace__int_mul({{.*}}) {patchestry_operation = "cir.binop"}
+//
+// `captures: - result: 0` on the Mul binop, apply_after a probe that
+// receives the capture as its only argument. The probe's argument must
+// be the same SSA value the binop produced — FileCheck pins the binop's
+// result via %[[R]] and asserts the patch call receives it.
+// RUN: %patchir-transform %t1.cir --spec %S/capture_binop_result.yaml -o %t5.cir
+// RUN: %file-check -vv -check-prefix=CAP_RESULT %s --input-file %t5.cir
+// CAP_RESULT-LABEL: cir.func @int_mult_test
+// CAP_RESULT: %[[R:[0-9]+]] = cir.binop(mul
+// CAP_RESULT-NEXT: cir.call @patch__after__int_probe(%[[R]]) {patchestry_operation = "cir.binop"}
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

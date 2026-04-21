@@ -1,0 +1,18 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "region-op-library"
+  version: "1.0.0"
+  description: "Probe used to verify name-based matching of region-carrying ops"
+  author: "Test Suite"
+  created: "2026-04-21"
+
+patches:
+  - name: "if_probe_before"
+    description: "apply_before probe matched against cir.if"
+    category: "test"
+    code_file: "patches/patch_if_probe.c"
+    function_name: "patch::before::if_probe"
+    parameters:
+      - name: "cond"
+        type: "_Bool"

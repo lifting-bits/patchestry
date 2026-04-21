@@ -45,6 +45,16 @@
 // IND_CAP: cir.call @patch__before__indirect_capture_probe(%[[V:[0-9]+]]) {patchestry_operation = "cir.call"}
 // IND_CAP-NEXT: cir.call %{{[0-9]+}}(%[[V]])
 
+// Region-carrying op: cir.if can be matched by name. The probe call is
+// inserted immediately before the cir.if and receives the condition
+// operand (operand 0). FileCheck pins the condition SSA value through
+// %[[COND]] so the probe's arg matches the cir.if's.
+// RUN: %patchir-transform %t1.cir --spec %S/region_op_match.yaml -o %t11.cir
+// RUN: %file-check -vv -check-prefix=REGION_IF %s --input-file %t11.cir
+// REGION_IF-LABEL: cir.func @measurement_update
+// REGION_IF: cir.call @patch__before__if_probe(%[[COND:[0-9]+]]) {patchestry_operation = "cir.if"}
+// REGION_IF-NEXT: cir.if %[[COND]]
+
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:v8",
