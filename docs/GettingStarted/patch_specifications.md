@@ -434,12 +434,22 @@ Supported values per op type:
 
 | Op | `op_kind` values |
 |---|---|
-| `cir.binop` | `mul`, `div`, `rem`, `add`, `sub`, `shl`, `shr`, `and`, `xor`, `or`, `max` |
-| `cir.cmp` | `lt`, `gt`, `le`, `ge`, `eq`, `ne` |
+| `cir.binop` | `mul`, `div`, `rem`, `add`, `sub`, `and`, `xor`, `or`, `max` |
+| `cir.cmp` | `lt`, `le`, `gt`, `ge`, `eq`, `ne` |
 
-Omitting `op_kind:` matches every instance of the named op (pre-existing
-behavior). Setting it on an op type without a `kind` attribute (e.g.
-`cir.load`) causes the match to fail.
+Only `cir.binop` and `cir.cmp` participate in `op_kind:` filtering —
+the matcher stringifies their `BinOpKind` / `CmpOpKind` attribute and
+compares it to the YAML value. Omitting `op_kind:` matches every
+instance of the named op. Setting it on any other op (including
+`cir.load`, `cir.cast`, or `cir.shift`) causes the match to fail.
+
+> **Shift ops live on `cir.shift`, not `cir.binop`.** Left/right
+> shifts are a separate op whose direction is a unit attribute
+> (`isShiftleft`), not a `BinOpKind` enumerator, so `op_kind: "shl"`
+> / `op_kind: "shr"` on `cir.binop` matches nothing. To target a
+> shift, match `name: "cir.shift"` without an `op_kind:` and
+> (optionally in the future) filter by direction via a dedicated
+> attribute check.
 
 ### Argument Examples
 
