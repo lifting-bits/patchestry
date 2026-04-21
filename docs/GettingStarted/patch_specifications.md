@@ -401,6 +401,41 @@ Capture fields:
 
 `operand:` and `result:` are mutually exclusive — exactly one must be set.
 
+### Op-kind discriminators
+
+For operation-kind matching (`kind: "operation"`), the `op_kind:` field
+filters by the MLIR enum attribute carried on the op. This allows
+targeting a specific arithmetic or comparison kind instead of every
+`cir.binop` / `cir.cmp` instance.
+
+```yaml
+patches:
+  - name: "widen_multiply"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+      op_kind: "mul"       # only match Mul binops, not Add/Sub/Div/Rem/...
+      context: ["compute_alloc_size"]
+    mode: "replace"
+    patch: "checked_mul"
+    arguments:
+      - source: "operand"
+        index: 0
+      - source: "operand"
+        index: 1
+```
+
+Supported values per op type:
+
+| Op | `op_kind` values |
+|---|---|
+| `cir.binop` | `mul`, `div`, `rem`, `add`, `sub`, `shl`, `shr`, `and`, `xor`, `or`, `max` |
+| `cir.cmp` | `lt`, `gt`, `le`, `ge`, `eq`, `ne` |
+
+Omitting `op_kind:` matches every instance of the named op (pre-existing
+behavior). Setting it on an op type without a `kind` attribute (e.g.
+`cir.load`) causes the match to fail.
+
 ### Argument Examples
 
 #### Function Call Arguments

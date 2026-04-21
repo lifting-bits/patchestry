@@ -1,0 +1,26 @@
+# Baseline: no op_kind filter — match every cir.binop regardless of kind.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "op-kind-baseline-all"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/replace_binop_patches.yaml"
+
+patches:
+  - name: "replace_any_binop"
+    id: "BINOP-ALL"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+    mode: "replace"
+    patch: "checked_mul"
+    arguments:
+      - source: "operand"
+        index: 0
+      - source: "operand"
+        index: 1

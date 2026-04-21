@@ -96,6 +96,25 @@ namespace patchestry::passes {
             return false;
         }
 
+        // op_kind discriminator: for cir.binop / cir.cmp, filter by the
+        // specific arithmetic or comparison kind attribute.
+        if (match.op_kind.has_value()) {
+            if (auto binop = mlir::dyn_cast< cir::BinOp >(op)) {
+                auto kind_str = cir::stringifyBinOpKind(binop.getKind());
+                if (kind_str != llvm::StringRef(*match.op_kind)) {
+                    return false;
+                }
+            } else if (auto cmpop = mlir::dyn_cast< cir::CmpOp >(op)) {
+                auto kind_str = cir::stringifyCmpOpKind(cmpop.getKind());
+                if (kind_str != llvm::StringRef(*match.op_kind)) {
+                    return false;
+                }
+            } else {
+                // op_kind is only meaningful for ops with a kind attr.
+                return false;
+            }
+        }
+
         // Check function context match and return false if it doesn't match
         if (!matches_function_context(func, match.function_context)) {
             return false;

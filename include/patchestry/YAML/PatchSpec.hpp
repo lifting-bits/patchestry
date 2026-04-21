@@ -47,6 +47,7 @@ namespace patchestry::passes {
         {
             std::string name;
             MatchKind kind;
+            std::optional< std::string > op_kind; // e.g. "mul" for cir.binop
             std::vector< FunctionContext > function_context;
             std::vector< ArgumentMatch > argument_matches;
             std::vector< VariableMatch > variable_matches;
@@ -116,6 +117,7 @@ namespace patchestry::passes {
             // match (single object, not array)
             std::vector< std::string > match_names; // one or more callee names (OR)
             MatchKind match_kind = MatchKind::FUNCTION;
+            std::optional< std::string > op_kind; // e.g. "mul" for cir.binop
             std::vector< std::string > context; // function_context names
             std::vector< ArgumentMatch > argument_matches;
             std::vector< OperandMatch > operand_matches;
@@ -147,6 +149,7 @@ namespace patchestry::passes {
                 MatchConfig mc;
                 mc.name             = entry.match_names[i];
                 mc.kind             = entry.match_kind;
+                mc.op_kind          = entry.op_kind;
                 mc.argument_matches = entry.argument_matches;
                 mc.operand_matches  = entry.operand_matches;
                 mc.symbol_matches   = entry.symbol_matches;
@@ -267,6 +270,7 @@ namespace llvm::yaml {
             io.mapOptional("symbol_matches", match.symbol_matches);
             io.mapOptional("operand_matches", match.operand_matches);
             io.mapOptional("captures", match.captures);
+            io.mapOptional("op_kind", match.op_kind);
 
             std::string kind_str;
             io.mapRequired("kind", kind_str);
@@ -370,6 +374,7 @@ namespace llvm::yaml {
     {
         std::vector< std::string > names;
         MatchKind kind = MatchKind::FUNCTION;
+        std::optional< std::string > op_kind;
         std::vector< std::string > context;
         std::vector< ArgumentMatch > argument_matches;
         std::vector< OperandMatch > operand_matches;
@@ -412,6 +417,7 @@ namespace llvm::yaml {
             io.mapOptional("operand_matches", m.operand_matches);
             io.mapOptional("symbol_matches", m.symbol_matches);
             io.mapOptional("captures", m.captures);
+            io.mapOptional("op_kind", m.op_kind);
         }
     };
 
@@ -429,6 +435,7 @@ namespace llvm::yaml {
             io.mapRequired("match", match_obj);
             entry.match_names      = match_obj.names;
             entry.match_kind       = match_obj.kind;
+            entry.op_kind          = match_obj.op_kind;
             entry.context          = match_obj.context;
             entry.argument_matches = match_obj.argument_matches;
             entry.operand_matches  = match_obj.operand_matches;

@@ -1,0 +1,27 @@
+# op_kind: "add" — only cir.binop with Add kind is replaced.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "op-kind-add-only"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/replace_binop_patches.yaml"
+
+patches:
+  - name: "replace_add_only"
+    id: "BINOP-ADD"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+      op_kind: "add"
+    mode: "replace"
+    patch: "checked_mul"
+    arguments:
+      - source: "operand"
+        index: 0
+      - source: "operand"
+        index: 1
