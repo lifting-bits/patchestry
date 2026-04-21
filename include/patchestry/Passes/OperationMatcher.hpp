@@ -47,7 +47,7 @@ namespace patchestry::passes {
         /**
          * @brief Checks if an operation matches the given contract specification.
          *
-         * This is the main entry point for operation matching. It evaluates all
+         * This is the main entry point for contract matching. It evaluates all
          * matching criteria in the contract specification against the given operation.
          *
          * @param op The operation to evaluate
@@ -61,25 +61,29 @@ namespace patchestry::passes {
         );
 
         /**
-         * @brief Checks if an operation matches the given specification.
+         * @brief Checks if an operation matches the given patch specification and, on
+         *        success, binds named captures.
          *
-         * This is the main entry point for operation matching. It evaluates all
-         * matching criteria in the specification against the given operation.
+         * This is the main entry point for patch matching. It evaluates the full
+         * match criteria (name / kind / context / operand / symbol / capture index
+         * bounds). Captures declared under `match.captures:` are resolved against
+         * the matched op and stored in `captures_out` keyed by capture name; the
+         * resulting map is read later by `handle_capture_argument` when a
+         * `source: capture` argument is built.
          *
-         * @param op The operation to evaluate
-         * @param func The function containing the operation
-         * @param spec The specification to match against
-         * @return true if the operation matches the specification
-         */
-        static bool patch_action_matches(
-            mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &spec, Mode mode
-        );
-
-        /**
-         * @brief Capture-populating overload of patch_action_matches.
-         *
-         * If the match succeeds, populates `captures_out` with the bound
-         * `mlir::Value`s named by `match.captures`.
+         * @param op The operation to evaluate.
+         * @param func The function containing `op`.
+         * @param spec The patch-action specification to match against.
+         * @param mode OPERATION or FUNCTION — chooses the sub-matcher.
+         * @param captures_out Output map populated on successful match. The caller
+         *        is responsible for clearing `captures_out` before reuse across
+         *        call sites; this function only *inserts/overwrites* entries for
+         *        names declared in `match.captures`. On `false` return the
+         *        contents of `captures_out` are unspecified: a capture index may
+         *        have been out of range *after* the base match already succeeded,
+         *        leaving partial bindings behind — treat the map as invalid.
+         * @return true if the operation matches the specification and all
+         *         declared captures resolve.
          */
         static bool patch_action_matches(
             mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &spec, Mode mode,
@@ -87,11 +91,30 @@ namespace patchestry::passes {
         );
 
         /**
-         * @brief Checks if an operation name matches the specified operation pattern.
+         * @brief Extracts the called function name from a call operation.
          *
-         * @param op The operation to check
-         * @param operation_pattern The operation name pattern to match
-         * @return true if the operation name matches
+         * Used by patch / contract dispatch code to report which callee a match
+         * fired on. Returns an empty string if the callee can't be resolved
+         * (e.g. indirect calls whose callee SSA value has no source name).
+         *
+         * @param call_op The call operation
+         * @return The name of the called function, or empty string on failure.
+         */
+        static std::string extract_callee_name(cir::CallOp call_op); // NOLINT
+
+      private:
+        /**
+         * @brief Match-only primitive. Internal helper for the capture-populating
+         *        overload above. Does **not** bind captures — external callers
+         *        should always use the five-argument overload so that
+         *        `source: capture` arguments resolve correctly.
+         */
+        static bool patch_action_matches(
+            mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &spec, Mode mode
+        );
+
+        /**
+         * @brief Checks if an operation name matches the specified operation pattern.
          */
         static bool matches_operation_name( // NOLINT
             mlir::Operation *op, const std::string &operation_pattern
@@ -99,10 +122,6 @@ namespace patchestry::passes {
 
         /**
          * @brief Checks if a function matches the specified function context criteria.
-         *
-         * @param func The function to evaluate
-         * @param function_context The function context criteria to match against
-         * @return true if the function matches the criteria
          */
         static bool matches_function_context( // NOLINT
             cir::FuncOp func, const std::vector< FunctionContext > &function_context
@@ -110,10 +129,6 @@ namespace patchestry::passes {
 
         /**
          * @brief Checks if operation arguments match the specified argument patterns.
-         *
-         * @param op The operation whose arguments to check
-         * @param argument_matches The argument match criteria
-         * @return true if the arguments match the criteria
          */
         static bool matches_arguments( // NOLINT
             mlir::Operation *op, const std::vector< ArgumentMatch > &argument_matches
@@ -121,10 +136,6 @@ namespace patchestry::passes {
 
         /**
          * @brief Checks if operation operands match the specified operand patterns.
-         *
-         * @param op The operation whose operands to check
-         * @param operand_matches The operand match criteria
-         * @return true if the operands match the criteria
          */
         static bool matches_operands( // NOLINT
             mlir::Operation *op, const std::vector< OperandMatch > &operand_matches
@@ -132,13 +143,6 @@ namespace patchestry::passes {
 
         /**
          * @brief Checks if operation variables match the specified variable patterns.
-         *
-         * This checks variables used or defined by the operation against the
-         * variable match criteria.
-         *
-         * @param op The operation to check
-         * @param variable_matches The variable match criteria
-         * @return true if the variables match the criteria
          */
         static bool matches_variables( // NOLINT
             mlir::Operation *op, const std::vector< VariableMatch > &variable_matches
@@ -146,48 +150,28 @@ namespace patchestry::passes {
 
         /**
          * @brief Checks if symbols match the specified symbol patterns.
-         *
-         * @param op The operation to check
-         * @param symbol_matches The symbol match criteria
-         * @return true if the symbols match the criteria
          */
         static bool matches_symbols( // NOLINT
             mlir::Operation *op, const std::vector< SymbolMatch > &symbol_matches
         );
 
         /**
-         * @brief Matches operation-based criteria.
-         *
-         * @param op The operation to check
-         * @param func The function containing the operation
-         * @param match The operation match criteria
-         * @return true if the operation matches the criteria
+         * @brief Operation-kind sub-matcher (used by the capture-populating overload
+         *        when `mode == OPERATION`).
          */
         static bool patch_action_matches_operation( // NOLINT
             mlir::Operation *op, cir::FuncOp func, const patch::MatchConfig &match
         );
 
         /**
-         * @brief Matches function call-based criteria.
-         *
-         * @param op The operation to check (should be a call operation)
-         * @param func The function containing the call
-         * @param match The function match criteria
-         * @return true if the function call matches the criteria
+         * @brief Function-call sub-matcher (used by the capture-populating overload
+         *        when `mode == FUNCTION`).
          */
         static bool patch_action_matches_function_call( // NOLINT
             mlir::Operation *op, cir::FuncOp func, const patch::MatchConfig &match
         );
 
-        /**
-         * @brief Extracts the called function name from a call operation.
-         *
-         * @param call_op The call operation
-         * @return The name of the called function
-         */
-        static std::string extract_callee_name(cir::CallOp call_op); // NOLINT
 
-      private:
         /**
          * @brief Performs pattern matching with support for regex.
          *
