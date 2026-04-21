@@ -120,6 +120,38 @@ contracts:
         symbol: "msg"
 ```
 
+### Execution Order
+
+By default patches run in declaration order, then contracts in
+declaration order. To interleave them or restrict which entries
+run, use an optional `execution_order:` list. Each item names one
+patch or contract by its `name:` field.
+
+```yaml
+patches:
+  - name: "sanitize_system"
+  - name: "bounded_strcat"
+contracts:
+  - name: "usb_invariants"
+
+execution_order:
+  - "bounded_strcat"                    # bare name — looked up in both lists
+  - "contracts::usb_invariants"         # explicit lookup in contracts
+  - "patches::sanitize_system"          # explicit lookup in patches
+```
+
+Accepted entry forms:
+
+| Form | Meaning |
+|------|---------|
+| `<name>` | Search patches first, then contracts. Error if ambiguous or missing. |
+| `patches::<name>` | Look up only in patches. |
+| `contracts::<name>` | Look up only in contracts. |
+| `meta_patches::<name>` / `meta_contracts::<name>` | Legacy aliases, still accepted. |
+
+When `execution_order:` is present, entries **not** listed are skipped —
+this lets you trim the applied set without deleting definitions.
+
 ---
 
 ## Contract Types
@@ -150,9 +182,9 @@ Patchestry supports two types of contracts:
 | `metadata` | Deployment metadata container | See metadata fields below |
 | `target` | Target binary configuration | See target fields below |
 | `libraries` | External patch and contract library references | See library fields below |
-| `execution_order` | Order of patch/contract group execution | `- "meta_patches::group_name"` |
-| `meta_patches` | Meta-patch group configurations | List of patch groups |
-| `meta_contracts` | Meta-contract group configurations | List of contract groups |
+| `patches` | Patch entries to apply | List of patch entries |
+| `contracts` | Contract entries to apply | List of contract entries |
+| `execution_order` | Explicit ordering (optional) | See [Execution Order](#execution-order) |
 
 ### Metadata Fields
 

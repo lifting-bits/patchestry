@@ -408,30 +408,72 @@ namespace patchestry::passes {
                 apply_meta_contracts(function_worklist, meta_contract.name);
             }
         } else {
-            // process execution order if specified
+            // Each execution_order entry is either:
+            //   "<name>"                  — looked up in patches, then contracts
+            //   "patches::<name>"         — restrict lookup to patches
+            //   "contracts::<name>"       — restrict lookup to contracts
+            //   "meta_patches::<name>"    — alias of patches (legacy)
+            //   "meta_contracts::<name>"  — alias of contracts (legacy)
+            auto trim = [](std::string &s) {
+                s.erase(0, s.find_first_not_of(" \t"));
+                if (!s.empty()) {
+                    s.erase(s.find_last_not_of(" \t") + 1);
+                }
+            };
+            auto has_name = [](const auto &vec, const std::string &n) {
+                for (const auto &item : vec) {
+                    if (item.name == n) return true;
+                }
+                return false;
+            };
+
             for (const auto &execution_item : config->execution_order) {
-                // Parse execution item format: "meta_patches: name" or "meta_contracts: name"
+                std::string type;
+                std::string name;
                 auto colon_pos = execution_item.find("::");
                 if (colon_pos == std::string::npos) {
-                    LOG(ERROR) << "Invalid execution order format: " << execution_item << "\n";
+                    name = execution_item;
+                } else {
+                    type = execution_item.substr(0, colon_pos);
+                    name = execution_item.substr(colon_pos + 2);
+                }
+                trim(name);
+
+                bool is_patches = (type == "patches" || type == "meta_patches");
+                bool is_contracts = (type == "contracts" || type == "meta_contracts");
+                bool is_bare = type.empty();
+
+                if (!is_patches && !is_contracts && !is_bare) {
+                    LOG(ERROR) << "Unknown execution type '" << type
+                               << "' in '" << execution_item
+                               << "'. Valid prefixes: patches, contracts.\n";
                     continue;
                 }
 
-                std::string type = execution_item.substr(0, colon_pos);
-                std::string name = execution_item.substr(colon_pos + 2);
+                if (is_bare) {
+                    bool in_patches = has_name(config->meta_patches, name);
+                    bool in_contracts = has_name(config->meta_contracts, name);
+                    if (in_patches && in_contracts) {
+                        LOG(ERROR) << "execution_order name '" << name
+                                   << "' is ambiguous (appears in both patches and "
+                                      "contracts); use a 'patches::' or 'contracts::' prefix\n";
+                        continue;
+                    }
+                    is_patches = in_patches;
+                    is_contracts = in_contracts;
+                    if (!is_patches && !is_contracts) {
+                        LOG(ERROR) << "execution_order name '" << name
+                                   << "' not found in patches or contracts\n";
+                        continue;
+                    }
+                }
 
-                // Trim whitespace
-                name.erase(0, name.find_first_not_of(" \t"));
-                name.erase(name.find_last_not_of(" \t") + 1);
-
-                if (type == "meta_patches") {
+                if (is_patches) {
                     LOG(INFO) << "Applying patch: " << name << "\n";
                     apply_meta_patches(function_worklist, operation_worklist, name);
-                } else if (type == "meta_contracts") {
+                } else {
                     LOG(INFO) << "Applying contract: " << name << "\n";
                     apply_meta_contracts(function_worklist, name);
-                } else {
-                    LOG(ERROR) << "Unknown execution type: " << type << "\n";
                 }
             }
         }
