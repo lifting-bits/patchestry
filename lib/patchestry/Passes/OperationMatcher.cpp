@@ -57,13 +57,34 @@ namespace patchestry::passes {
             mlir::Value value;
             if (cap.operand.has_value()) {
                 unsigned idx = *cap.operand;
-                if (idx >= op->getNumOperands()) {
-                    LOG(ERROR) << "Capture '" << cap.name << "': operand index "
-                               << idx << " out of range (op has "
-                               << op->getNumOperands() << " operands)\n";
-                    return false;
+                // For CallOp, index into the user-visible arg list so that
+                // `operand: 0` means "caller's arg 0" on both direct and
+                // indirect calls (for indirect calls, op->getOperand(0) is
+                // the callee function pointer — not what the spec author
+                // is referring to). Non-call ops (cir.binop, cir.cmp, ...)
+                // have no callee operand, so raw indexing is fine there.
+                // Keep this in lock-step with handle_operand_argument in
+                // InstrumentationPass.cpp.
+                if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+                    auto args = call_op.getArgOperands();
+                    if (idx >= args.size()) {
+                        LOG(ERROR) << "Capture '" << cap.name
+                                   << "': operand index " << idx
+                                   << " out of range (call has " << args.size()
+                                   << " argument(s))\n";
+                        return false;
+                    }
+                    value = args[idx];
+                } else {
+                    if (idx >= op->getNumOperands()) {
+                        LOG(ERROR) << "Capture '" << cap.name
+                                   << "': operand index " << idx
+                                   << " out of range (op has "
+                                   << op->getNumOperands() << " operands)\n";
+                        return false;
+                    }
+                    value = op->getOperand(idx);
                 }
-                value = op->getOperand(idx);
             } else if (cap.result.has_value()) {
                 unsigned idx = *cap.result;
                 if (idx >= op->getNumResults()) {

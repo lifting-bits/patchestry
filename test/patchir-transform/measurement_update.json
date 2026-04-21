@@ -35,6 +35,16 @@
 // INLINED-NOT: cir.call @patch__before__spo2_lookup(
 // INLINED: cir.call @spo2_lookup(
 
+// Regression: `captures: operand: 0` on an indirect cir.call must bind
+// the user argument, not the callee function pointer. The probe takes
+// the captured value as its first arg; the patch call is inserted
+// immediately before the indirect call, and both must reference the
+// same SSA value (@current_measurement's get_global result).
+// RUN: %patchir-transform %t1.cir --spec %S/indirect_capture.yaml -o %t10.cir
+// RUN: %file-check -vv -check-prefix=IND_CAP %s --input-file %t10.cir
+// IND_CAP: cir.call @patch__before__indirect_capture_probe(%[[V:[0-9]+]]) {patchestry_operation = "cir.call"}
+// IND_CAP-NEXT: cir.call %{{[0-9]+}}(%[[V]])
+
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:v8",
