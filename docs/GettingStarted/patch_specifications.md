@@ -684,7 +684,19 @@ action:
 
 ### Replace Mode
 
-In `replace` mode, the matched function call is completely replaced by the patch function. The original code is not executed. **When used with operation-based matching, the target operation must be a `cir.call`** — attempting to replace other operation types (e.g., `cir.store`) will log an error and leave the operation unchanged.
+In `replace` mode, the matched operation is completely replaced by a
+call to the patch function. For function-kind matches the target is
+always a `cir.call`. For operation-kind matches, **any op with at
+least one result** may be replaced — including `cir.binop`, `cir.cmp`,
+`cir.cast`, `cir.load`, `cir.get_member`, `cir.ptr_stride`, and
+`cir.unary`. Result-less ops such as `cir.store` cannot be replaced
+(there's no value to rewire); use `erase` or `apply_before`/`apply_after`
+instead.
+
+The patch function's result types must match (or be castable to) the
+matched op's result types — the pass inserts casts where needed. If the
+patch returns void but the original op had results, the pass logs an
+error and leaves the op unchanged.
 
 ```yaml
 action:
@@ -1125,3 +1137,88 @@ The meta-patch architecture allows for:
 3. **Execution Ordering**: Control the order of patch application
 4. **Optimization Control**: Fine-tune performance characteristics
 5. **Exclusion Patterns**: Exclude specific functions from patching
+
+## Limitations
+
+The current matcher handles single-op C expressions at the CIR level.
+The following patterns are **not yet supported**:
+
+### Control-flow and region-carrying ops
+
+Ops that carry regions (bodies or branches) can be matched by name
+(`name: "cir.if"`, etc.) but cannot be meaningfully used with REPLACE,
+and captures cannot reach into their regions.
+
+| C pattern | CIR representation |
+|---|---|
+| `if (cond) { … } else { … }` | `cir.if` (two regions) |
+| `for`, `while`, `do-while` | `cir.for`, `cir.while`, `cir.do` |
+| `switch (x) { cases… }` | `cir.switch` |
+| Scoped blocks `{ … }` | `cir.scope` |
+| `a ? b : c` | `cir.ternary` |
+| `a && b`, `a \|\| b` (short-circuit) | `cir.ternary` / region ops |
+
+### Statement-level and multi-op patterns
+
+Patterns that match more than one op in sequence require dataflow
+reachability analysis and are not expressible today:
+
+- `free(p); p = NULL;` — paired-op patterns
+- `p = malloc(n); … use(p) …` — resource-tracking patterns
+- Patterns anchored by preceding/following ops
+
+### Variadic captures
+
+PatchDSL's variadic metavar (`$...ARGS`) is not implemented. For example,
+matching `printf(fmt, $...ARGS)` to capture an arbitrary number of
+arguments is not possible. Workaround: match by callee name and use
+`apply_before`/`apply_after` without forwarding variadic args.
+
+### Result-less ops with REPLACE
+
+`cir.store`, `cir.return`, and other ops without results cannot be
+replaced — there is no value to rewire. Use `erase` together with
+`apply_before`/`apply_after` to achieve equivalent rewrites.
+
+### Semantic predicates
+
+PatchDSL-style `where:` predicates (`nonnull(x)`, `tainted(x from src)`,
+`bounded(x)`, `aliases(a, b)`, `reaches(a, b)`) require dedicated
+analysis passes and are not part of the YAML surface today.
+
+## Future work
+
+These capabilities are planned but deliberately out of scope for the
+current surface:
+
+1. **Region-aware matching.** Match the structure of `cir.if` /
+   `cir.for` / `cir.while` and bind captures from their condition
+   and body regions. Enables rewrites like "wrap the then-branch of
+   this if with a pre-check".
+
+2. **Multi-op pattern anchors.** Sequences like
+   `free($P); …; free($P)` with reachability between the anchors.
+   Requires a dataflow pass that tracks capture identity across
+   intervening ops.
+
+3. **Variadic operand capture.** `$...ARGS` binding to the trailing
+   operands of a call or the remaining operands of a variadic op.
+   Needed for patches that forward an arbitrary number of arguments.
+
+4. **Semantic predicates.** `where:` clauses backed by MLIR
+   analyses — nullness, integer range, taint, alias, escape. Each
+   predicate needs its own analysis pass; these land independently.
+
+5. **Inline rewrites.** Pattern-to-pattern substitution without
+   going through a C patch function, e.g.
+   `rewrite: ($R: uint16_t) = (uint16_t)((uint32_t)$A * (uint32_t)$B)`.
+   Requires a mini CIR codegen from C fragments.
+
+6. **Cross-scope capture references.** A capture bound at a call
+   site used by a patch inserted at the enclosing function's entry
+   (currently SSA dominance rejects this). Would require rewriting
+   captures to block-argument projections.
+
+Contributions on any of these items are welcome; each is designed to
+plug into the existing `MatchConfig` / capture plumbing rather than
+requiring a full rewrite of the matcher.

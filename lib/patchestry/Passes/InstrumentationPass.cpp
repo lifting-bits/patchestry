@@ -655,15 +655,19 @@ namespace patchestry::passes {
                                 options.enable_inlining
                                     || meta_patch.optimization.contains("inline-patches")
                             );
-                        } else if (mlir::isa< cir::BinOp, cir::CmpOp >(op)) {
+                        } else if (op->getNumResults() > 0) {
+                            // Any op with at least one result can be replaced
+                            // (cir.binop, cir.cmp, cir.load, cir.cast,
+                            // cir.get_member, cir.unary, cir.ptr_stride, ...).
                             PatchOperationImpl::replaceOperationWithPatch(
                                 *this, op, patch_site, patch_module.get(),
                                 options.enable_inlining
                                     || meta_patch.optimization.contains("inline-patches")
                             );
                         } else {
-                            LOG(ERROR) << "REPLACE mode is not supported for: "
-                                       << op->getName().getStringRef().str() << "\n";
+                            LOG(ERROR) << "REPLACE mode requires an op with results; "
+                                       << op->getName().getStringRef().str()
+                                       << " has none. Use erase or apply_before/after.\n";
                         }
                         break;
                     default:
