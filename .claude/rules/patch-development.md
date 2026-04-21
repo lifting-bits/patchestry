@@ -33,7 +33,7 @@ To add a new source:
 
 1. Add enumerator to `ArgumentSourceType` in `include/patchestry/YAML/BaseSpec.hpp`
 2. Add `source_str == "my_source"` branch in `MappingTraits<patch::ArgumentSource>::mapping` in `include/patchestry/YAML/PatchSpec.hpp`
-3. Add a `case ArgumentSourceType::MY_SOURCE:` in `prepare_patch_call_arguments` (~line 720) in `lib/patchestry/Passes/InstrumentationPass.cpp`; if the source requires call-site context, reject it when `entrypoint_func` is set (like `return_value` and `capture` do). `prepare_patch_call_arguments` takes an `std::optional<cir::FuncOp> entrypoint_func` — thread it through to your handler.
+3. Add a `case ArgumentSourceType::MY_SOURCE:` in the `switch (arg_spec.source)` inside `InstrumentationPass::prepare_patch_call_arguments` (`lib/patchestry/Passes/InstrumentationPass.cpp`); if the source requires call-site context, reject it when `entrypoint_func` is set (like `return_value` and `capture` do). `prepare_patch_call_arguments` takes an `std::optional<cir::FuncOp> entrypoint_func` — thread it through to your handler.
 4. Add a row to the Argument Source Types table in `docs/GettingStarted/patch_specifications.md`
 
 ## Invariants
