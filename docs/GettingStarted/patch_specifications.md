@@ -109,21 +109,24 @@ For ad-hoc patterns, `name:` also accepts regex with `/pattern/` syntax:
 
 ### Contracts
 
-Contracts use the `contracts:` top-level key with the same shape:
+Contracts use the `contracts:` top-level key. They are **static only** —
+declarative pre/postcondition predicates that attach to the matched op
+as MLIR attributes (`contract.static`). They emit no runtime code.
+Valid modes: `apply_before` and `apply_after` (both attach the same
+attribute; the mode just controls which op the attribute lands on
+relative to the match). `apply_at_entrypoint`, `replace`, and `erase`
+are patch-only.
 
 ```yaml
 contracts:
-  - name: "usb_entry_check"
-    id: "ENTRY-CONTRACT-001"
-    description: "Null-check message pointer at function entry"
+  - name: "usb_msg_nonnull"
+    id: "USB-CONTRACT-001"
+    description: "Message pointer must be non-null"
     match:
       name: "usbd_ep_write_packet"
       context: ["bl_usb__send_message"]
-    mode: "apply_at_entrypoint"
-    contract: "message_entry_check_contract"
-    arguments:
-      - source: "variable"
-        symbol: "msg"
+    mode: "apply_before"
+    contract: "message_nonnull_contract"
 ```
 
 ### Ordering
@@ -308,7 +311,7 @@ Common operand patterns:
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `mode` | Patching or contract mode to apply. Shared modes: `apply_before`, `apply_after`, `apply_at_entrypoint`. Patch-only modes: `replace`, `erase` | `"apply_before"` |
+| `mode` | Patching or contract mode to apply. Shared modes: `apply_before`, `apply_after`. Patch-only modes: `apply_at_entrypoint`, `replace`, `erase` | `"apply_before"` |
 | `patch_id` | Reference to the patch implementation | `"USB-PATCH-001"` |
 | `description` | Description of the action being applied | `"Pre-validation security check"` |
 | `arguments` | List of arguments to pass to patch function | See [Argument Specification](#argument-specification) |
@@ -644,7 +647,7 @@ The specification supports five modes:
 
 - `apply_before`: Apply patch or contract before the matched function or operation
 - `apply_after`: Apply patch or contract after the matched function or operation completes
-- `apply_at_entrypoint`: Insert a patch or contract at the entry point of the **caller** function (see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
+- `apply_at_entrypoint`: Insert a patch at the entry point of the **caller** function (patches only — see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
 - `replace`: Completely replace the matched function call or operation (patches only)
 - `erase`: Delete the matched op without inserting any patch code (patches only — see [Erase Mode](#erase-mode))
 
@@ -739,7 +742,9 @@ a different function, use `replace` instead.
 
 ### Apply At Entrypoint Mode
 
-`apply_at_entrypoint` inserts the patch or contract call at the beginning of the **caller** function — the function that *contains* the matched call — rather than at the matched call site itself. Both `patches:` and `contracts:` support this mode.
+`apply_at_entrypoint` is a **patch-only** mode. It inserts the patch call at the beginning of the **caller** function — the function that *contains* the matched call — rather than at the matched call site itself.
+
+> Contracts do not support this mode. Static contracts attach as MLIR attributes on the matched op; there is no call to place, so "entrypoint" has no meaning for them. The earlier runtime-contract flavor that used `apply_at_entrypoint` has been merged into `patches:` — write the entry-block check as a patch.
 
 > **Important**: The name can be misleading. The call is **not** inserted at the beginning of the matched function (the callee). It is inserted at the beginning of the *enclosing* function (the caller) named via `context` (flat form) or `function_context` (legacy form). Insertion happens after all `cir.alloca` ops and parameter-initialization stores so that all of the caller's parameters are in scope.
 
@@ -773,26 +778,6 @@ patches:
       # source: variable — load a named local/parameter alloca at entry
       - source: "variable"
         symbol: "msg"
-```
-
-**Contract example** (flat syntax):
-```yaml
-contracts:
-  - name: "entrypoint_message_check"
-    id: "ENTRY-CONTRACT-001"
-    description: "Null-check message pointer at function entry"
-    match:
-      name: "usbd_ep_write_packet"
-      context: ["bl_usb__send_message"]
-    mode: "apply_at_entrypoint"
-    contract: "message_entry_check_contract"
-    arguments:
-      - source: "variable"
-        symbol: "msg"
-      # source: operand — index 0 maps to the 0th argument of bl_usb__send_message,
-      # not the 0th operand of the usbd_ep_write_packet call
-      - source: "operand"
-        index: 0
 ```
 
 > **Note**: The call is inserted at the beginning of the **caller** (`bl_usb__send_message` — the function containing the matched call), not at the beginning of the matched function itself (`usbd_ep_write_packet`).
