@@ -42,7 +42,7 @@ To add a new source:
 ## Invariants
 
 - **SSA Dominance**: A value must be defined in a block that dominates every use. Never reference a value defined at a call site from an earlier insertion point (e.g., the function entry block).
-- **Contracts are static-only**: `contracts:` carries declarative predicates (`preconditions` / `postconditions`) that attach as MLIR attributes. There is no runtime-contract path — runtime validators live under `patches:`. The YAML parser rejects, with a migration message pointing at `patches:`, any `contracts:` entry that (a) sets `type: "RUNTIME"`, (b) carries `code_file` / `function_name`, or (c) uses `mode: "apply_at_entrypoint"`. Valid contract modes are `apply_before` and `apply_after`; both attach the same `contract.static` attribute and only differ in which op the attribute lands on.
+- **Contracts are static-only**: the YAML parser rejects, with a migration message pointing at `patches:`, any `contracts:` entry that carries `code_file` / `function_name` or sets `mode: "apply_at_entrypoint"`. Valid contract modes are `apply_before` and `apply_after`; both attach the same `contract.static` attribute and only differ in which op it lands on. (The legacy `type: "RUNTIME"` spelling is rejected the same way; `type:` is no longer a schema field.)
 - **APPLY_AT_ENTRYPOINT is patch-only**: dispatch in `PatchOperationImpl::applyPatchAtEntrypoint`; argument resolution in `prepare_patch_call_arguments` (which takes `std::optional<cir::FuncOp> entrypoint_func`). See the source list above for per-source behavior at entrypoint.
 
 ## Build & Test
