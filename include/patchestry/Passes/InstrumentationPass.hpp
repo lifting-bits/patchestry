@@ -232,32 +232,6 @@ namespace patchestry::passes { // NOLINT
         );
 
         /**
-         * @brief Prepares arguments for a contract function call.
-         *
-         * This method handles argument preparation for contract function calls, including
-         * type casting when necessary. It supports special argument handling such as
-         * passing return values and ensures type compatibility between original and patch
-         * functions.
-         *
-         * @param builder MLIR operation builder for creating new operations
-         * @param op The original operation being patched
-         * @param contract_func The contract function to be called
-         * @param contract Contract information containing argument specifications
-         * @param args Output vector to store the prepared arguments
-         */
-        // When entrypoint_func is set (APPLY_AT_ENTRYPOINT mode):
-        //   - OPERAND sources are remapped to the enclosing function's block arguments
-        //     (index N → enclosing_func.getArguments()[N]) so that no call-site value
-        //     leaks into the entry block and violates SSA dominance.
-        //   - RETURN_VALUE is rejected: the call result is only defined at the matched
-        //     call site, not at the function entrypoint.
-        void prepare_contract_call_arguments(
-            mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp contract_func,
-            const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args,
-            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
-        );
-
-        /**
          * @brief Applies a patch before the target operation.
          *
          * This method inserts a call to the patch function immediately before the target
@@ -304,57 +278,6 @@ namespace patchestry::passes { // NOLINT
         void replace_call(
             cir::CallOp op, const PatchInformation &patch, mlir::ModuleOp patch_module,
             bool inline_patches
-        );
-
-        /**
-         * @brief Applies a contract before the target function.
-         *
-         * This method inserts a call to the contract function immediately before the target
-         * operation. It handles module symbol merging, argument preparation, and call creation.
-         * The inserted call is added to the inline worklist if inlining is enabled.
-         *
-         * @param target_op The target function to be instrumented
-         * @param contract The contract information containing the contract function details
-         * @param contract_module The module containing the contract function
-         * @param should_inline Whether or not to inline at application.
-         */
-        void apply_contract_before(
-            mlir::Operation *target_op, const ContractInformation &contract,
-            mlir::ModuleOp contract_module, bool should_inline
-        );
-
-        /**
-         * @brief Applies a contract after the target function.
-         *
-         * This method inserts a call to the contract function immediately after the target
-         * operation. It handles module symbol merging, argument preparation, and call creation.
-         * The inserted call is added to the inline worklist if inlining is enabled.
-         *
-         * @param op The target function to be instrumented
-         * @param contract The contract information containing the contract function details
-         * @param contract_module The module containing the contract function
-         * @param should_inline Whether or not to inline at application.
-         */
-        void apply_contract_after(
-            mlir::Operation *target_op, const ContractInformation &contract,
-            mlir::ModuleOp contract_module, bool should_inline
-        );
-
-        /** todo (kaoudis) still thinking about whether this makes sense
-         * @brief Applies a contract directly after the target function entrypoint,
-         * just "inside" the entrypoint, before the rest of the original function.
-         *
-         * This method handles module symbol merging, argument preparation, and call creation.
-         * The inserted call is added to the inline worklist if inlining is enabled.
-         *
-         * @param op The target function to be instrumented
-         * @param contract The contract information containing the contract function details
-         * @param contract_module The module containing the contract function
-         * @param should_inline Whether or not to inline at application.
-         */
-        void apply_contract_at_entrypoint(
-            cir::CallOp call_op, const ContractInformation &contract,
-            mlir::ModuleOp contract_module, bool should_inline
         );
 
         /**

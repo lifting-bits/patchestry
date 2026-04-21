@@ -24,27 +24,25 @@ patches:
         type: "string"
         description: "Argument 2"
 
-
-contracts:
-  - name: "device_list_replace_sprintf_contract"
-    description: "Device list replace sprintf patch"
+  # Bounds check on the replaced sprintf's return value. Migrated from
+  # the runtime-contract version (was device_list_replace_sprintf_contract
+  # / contract__sprintf) when runtime contracts were merged into patches.
+  - name: "sprintf_bounds_check_after"
+    description: "Assert sprintf return value is within destination bounds"
     category: "device"
-    severity: "high"
-    type: "RUNTIME"
     code_file: "patches/bloodview_patch.c"
-    function_name: "contract::sprintf"
-    parameters: # Parameters are optional and is for reference only
+    function_name: "patch::after::sprintf_bounds"
+    parameters:
       - name: "return_value"
         type: "int"
         description: "Return value"
       - name: "dest_size"
         type: "unsigned int"
         description: "Destination size"
-
+contracts:
   - name: "sprintf_contract_static"
     description: "Static contract for sprintf"
     category: "device"
-    type: "STATIC"
 
     preconditions:
       - id: "dest_size_nonzero"

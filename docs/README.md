@@ -116,9 +116,10 @@ meta-programming layer for describing _where_ and _how_ patches and contracts
 are applied is specified declaratively in YAML. This separates patch logic
 (familiar C code) from patch orchestration (structured YAML configuration),
 keeping both accessible to developers without requiring expertise in compiler
-internals or custom DSLs. Contracts follow the same pattern: runtime contracts
-are written in C, static contracts are expressed as YAML predicates, and
-meta-contracts define where they are applied.
+internals or custom DSLs. Contracts are declarative predicates expressed as
+YAML and attached as MLIR attributes for static verification — runtime
+validators that used to be called "runtime contracts" live under `patches:`
+now, since mechanically they were just patches.
 
 ## Why This Approach
 
@@ -354,25 +355,15 @@ program state. There are two types of contracts:
 
 ### Contract Specification
 
-Contracts are defined in YAML and can be either runtime or static:
+Contracts are declarative, static-only predicates expressed as YAML and
+attached to the matched op as MLIR attributes for the verifier to consume.
+If you need runtime validation (a C function called at the match site),
+write it as a patch with `apply_before` / `apply_after` /
+`apply_at_entrypoint`.
 
 ```yaml
 contracts:
-  # Runtime contract: C code that executes at runtime
-  - name: "buffer_size_check"
-    type: RUNTIME
-    severity: high
-    code_file: "contracts/buffer_check.c"
-    function_name: "check_buffer_bounds"
-    parameters:
-      - name: buffer
-        type: "const void*"
-      - name: size
-        type: "size_t"
-
-  # Static contract: formal predicate checked by verifier
   - name: "nonnull_pointer"
-    type: STATIC
     severity: critical
     preconditions:
       - id: "pre-001"
@@ -514,28 +505,23 @@ meta_patches:
                 index: 0
 ```
 
-Similarly, a contract can be defined to verify the property holds. A runtime
-contract is written in C:
-
-```c
-// contracts/cve_2021_22156_contract.c
-void check_calloc_bounds(size_t num_elements) {
-    assert(num_elements <= SIZE_MAX/sizeof(long));
-}
-```
-
-And its meta-contract specifies where to apply it:
+To express the same property declaratively for the verifier, attach a
+static contract. The predicate is carried as an MLIR attribute and
+produces no runtime overhead:
 
 ```yaml
 contracts:
   - name: calloc_bounds_contract
-    type: RUNTIME
     severity: high
-    code_file: "contracts/cve_2021_22156_contract.c"
-    function_name: "check_calloc_bounds"
-    parameters:
-      - name: num_elements
-        type: "size_t"
+    preconditions:
+      - id: "num_elements_bounded"
+        description: "calloc count must not overflow when multiplied by elem size"
+        pred:
+          kind: range
+          target: arg0
+          range:
+            min: "0"
+            max: "SIZE_MAX/sizeof(long)"
 
 meta_contracts:
   - name: cve_2021_22156_contract_meta
@@ -549,11 +535,11 @@ meta_contracts:
         action:
           - mode: "apply_before"
             contract_id: "calloc_bounds_contract"
-            arguments:
-              - name: "num_elements"
-                source: "operand"
-                index: 0
 ```
+
+If you want a runtime check that traps on violation, write it as a
+patch (the old "runtime contract" shape) — same `code_file` /
+`function_name` fields, just under `patches:` instead.
 
 A contract is similar to a regression test or a behavioral assertion that an
 analysis tool like KLEE or SeaHorn would check.

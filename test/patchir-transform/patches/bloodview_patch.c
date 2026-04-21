@@ -57,11 +57,14 @@ int patch__replace__sprintf(char *dest, size_t dest_size, const char *format, ..
 }
 
 
-
-void contract__sprintf(int return_value, size_t dest_size)
+// Bounds check for the replaced sprintf's return value, invoked
+// apply_after. Migrated from the runtime-contract version
+// (was contract__sprintf) when runtime contracts were merged into
+// patches.
+void patch__after__sprintf_bounds(int return_value, size_t dest_size)
 {
-    // assert if return value is less than 0 or more than dest size
-    if(return_value < 0 || (size_t)return_value > dest_size) {
+    if (return_value < 0 || (size_t) return_value > dest_size) {
         PATCHESTRY_ASSERT(0, "sprintf returned invalid value");
     }
 }
+

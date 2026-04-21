@@ -27,11 +27,6 @@ namespace patchestry::passes {
         ERASE // Delete matched op, no patch function
     };
 
-    enum class ContractType : uint8_t {
-        RUNTIME = 0, // Runtime contract validation
-        STATIC,      // Static contract verification
-    };
-
     enum class ArgumentSourceType : uint8_t {
         OPERAND = 0, // Reference to operation operand by index
         VARIABLE,    // Reference to variable by name

@@ -133,21 +133,18 @@ namespace patchestry::passes {
             std::optional< Predicate > pred;
         };
 
+        // Contracts are static only. Runtime contracts have been merged into
+        // patches — see patches: in PatchSpec.hpp for C-function-based
+        // instrumentation. A ContractSpec carries the declarative
+        // pre/postconditions attached as MLIR attributes by the pass.
         struct ContractSpec
         {
             std::string name;
             std::string description;
             std::string category;
             std::string severity;
-            ContractType type; // ContractType::STATIC or ContractType::RUNTIME
-            std::string code_file;
-            std::string function_name;
-            std::vector< Parameter > parameters;
-            std::optional< std::vector< StaticContractRequirement > >
-                preconditions; // For static contracts
-            std::optional< std::vector< StaticContractRequirement > >
-                postconditions; // For static contracts
-            std::optional< std::string > contract_module;
+            std::optional< std::vector< StaticContractRequirement > > preconditions;
+            std::optional< std::vector< StaticContractRequirement > > postconditions;
         };
 
         struct MetaContractConfig
@@ -238,7 +235,11 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::ContractEntry)
 namespace llvm::yaml {
     using namespace patchestry::passes;
 
-    // Parse ContractSpec
+    // Parse ContractSpec. Contracts are static-only; the legacy
+    // type: "RUNTIME" encoding has been merged into patches, and
+    // type: is quietly ignored if still present so older YAMLs keep
+    // parsing. Any contract carrying code_file / function_name is
+    // rejected with a pointer to patches:.
     template<>
     struct MappingTraits< contract::ContractSpec >
     {
@@ -249,24 +250,39 @@ namespace llvm::yaml {
             io.mapOptional("severity", spec.severity);
 
             std::string type_str;
-            io.mapRequired("type", type_str);
-            if (type_str == "STATIC") {
-                spec.type = ContractType::STATIC;
-            } else if (type_str == "RUNTIME") {
-                spec.type = ContractType::RUNTIME;
-            } else {
-                io.setError("Unknown contract type: '" + type_str
-                            + "'. Valid types: STATIC, RUNTIME");
+            io.mapOptional("type", type_str);
+            if (type_str == "RUNTIME") {
+                io.setError(
+                    "Runtime contracts are no longer supported — migrate '"
+                    + spec.name + "' to a patch entry under patches: (same "
+                    "code_file / function_name, applied via apply_before / "
+                    "apply_after / apply_at_entrypoint)."
+                );
                 return;
             }
-            if (spec.type == ContractType::STATIC) {
-                io.mapOptional("preconditions", spec.preconditions);
-                io.mapOptional("postconditions", spec.postconditions);
-            } else if (spec.type == ContractType::RUNTIME) {
-                io.mapRequired("code_file", spec.code_file);
-                io.mapRequired("function_name", spec.function_name);
-                io.mapOptional("parameters", spec.parameters);
+
+            // Reject the runtime-only fields so stale YAMLs produce a clear
+            // error rather than being silently dropped.
+            std::string code_file;
+            std::string function_name;
+            io.mapOptional("code_file", code_file);
+            io.mapOptional("function_name", function_name);
+            if (!code_file.empty() || !function_name.empty()) {
+                io.setError(
+                    "Contract '" + spec.name + "' carries a code_file / "
+                    "function_name — runtime contracts have been merged "
+                    "into patches. Move the entry under patches:."
+                );
+                return;
             }
+
+            // Consume parameters: if present to keep older library YAMLs
+            // parsing cleanly — it's reference-only metadata.
+            std::vector< Parameter > unused_parameters;
+            io.mapOptional("parameters", unused_parameters);
+
+            io.mapOptional("preconditions", spec.preconditions);
+            io.mapOptional("postconditions", spec.postconditions);
         }
     };
 

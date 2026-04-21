@@ -134,23 +134,26 @@ field is needed — reorder the entries in the file to reorder execution.
 
 ---
 
-## Contract Types
+## Contracts: Static Only
 
-Patchestry supports two types of contracts:
+`contracts:` describes **static** contracts — declarative
+pre/postcondition predicates that the pass attaches to the matched op
+as MLIR attributes (`contract.static`). They carry no executable code
+and produce no runtime overhead; they're consumed by downstream
+analyzers and verifiers (e.g. `patchir-klee-verifier`).
 
-1. **Runtime Contracts**: Implemented as C/C++ functions that are called at runtime to validate conditions
-2. **Static Contracts**: Declarative specifications attached as MLIR attributes for static analysis and verification
+What used to be called a "runtime contract" — a C/C++ function called
+at the matched site to validate a condition — was mechanically the
+same as an `apply_before` / `apply_after` / `apply_at_entrypoint`
+patch. Those cases have been merged into `patches:`; write the
+validator as a patch whose body does the check and asserts (or
+traps) on failure.
 
-### Runtime vs Static Contracts
-
-| Aspect | Runtime Contracts | Static Contracts |
-|--------|------------------|------------------|
-| **Implementation** | C/C++ function code | Declarative predicates in YAML |
-| **Verification** | Runtime checks during execution | Static analysis at compile time |
-| **Performance** | Runtime overhead | No runtime overhead |
-| **Expressiveness** | Full programming language | Limited to supported predicates |
-| **Use Cases** | Complex validations, security checks | null checks, range checks, type constraints |
-
+**Migration**: if you have an older YAML with `type: "RUNTIME"` or a
+`code_file` under `contracts:`, move the entry into `patches:` with
+the same `code_file` / `function_name` and pick an appropriate patch
+mode. The parser rejects runtime contracts with a pointer to this
+section.
 
 ## Field Descriptions
 
@@ -815,15 +818,8 @@ contracts:
     description: "Contract description"
     category: "validation_category"
     severity: "critical|high|medium|low"
-    type: "STATIC|RUNTIME"
-
-    # For STATIC contracts
     preconditions: [...]
     postconditions: [...]
-
-    # For RUNTIME contracts
-    function_name: ...
-    code_file: ...
 ```
 
 ### Contract Library Fields
@@ -836,17 +832,16 @@ contracts:
 
 ### Contract Specification Fields
 
-| Field | Description | Required | Type | Example |
-|-------|-------------|----------|------|---------|
-| `name` | Contract identifier | Yes | All | `"usb_validation_contract"` |
-| `description` | Contract description | No | All | `"Validates USB parameters"` |
-| `category` | Contract category | No | All | `"validation"`, `"security"` |
-| `severity` | Severity level | No | All | `"critical"`, `"high"`, `"medium"`, `"low"` |
-| `type` | Contract type | Yes | All | `"STATIC"` or `"RUNTIME"` |
-| `preconditions` | Static preconditions | STATIC only | STATIC | List of precondition specs |
-| `postconditions` | Static postconditions | STATIC only | STATIC | List of postcondition specs |
-| `function_name` | Runtime contract function name | RUNTIME only | RUNTIME | Implementation details |
-| `code_file` | Runtime contract implementation file | RUNTIME only | RUNTIME | Implementation details |
+Contracts are static-only. Runtime validators live under `patches:`.
+
+| Field | Description | Required | Example |
+|-------|-------------|----------|---------|
+| `name` | Contract identifier | Yes | `"usb_validation_contract"` |
+| `description` | Contract description | No | `"Validates USB parameters"` |
+| `category` | Contract category | No | `"validation"`, `"security"` |
+| `severity` | Severity level | No | `"critical"`, `"high"`, `"medium"`, `"low"` |
+| `preconditions` | Static preconditions (list of predicate specs) | No | See predicate structure |
+| `postconditions` | Static postconditions (list of predicate specs) | No | See predicate structure |
 
 ### Static Contract Predicates
 
@@ -1071,7 +1066,6 @@ contracts:
   - name: "usb_endpoint_write_validation"
     description: "Validate USB endpoint write parameters"
     category: "write_validation"
-    type: "STATIC"
 
     preconditions:
       # Example 1: range predicate
@@ -1118,29 +1112,35 @@ contracts:
 - **expr**: `kind` + `expr`
 - **range**: `kind` + `target` + `range` (with `min`/`max`) (`arg<N>`, `return_value`, or `symbol`)
 
-### Runtime Contract Implementation
+### Runtime Validators — use `patches:`
 
-For runtime contracts, specify the implementation details:
+What was previously called a "runtime contract" (a C/C++ function
+called at the match site to validate a condition) is now expressed
+as a plain patch. Write the validator like any other patch
+implementation and dispatch it with `apply_before`, `apply_after`,
+or `apply_at_entrypoint`:
 
 ```yaml
-contracts:
-  - name: "usb_endpoint_write_contract"
+# Patch library entry — same code_file/function_name shape as the old
+# runtime-contract entry had.
+patches:
+  - name: "usb_endpoint_write_validation"
     description: "Runtime validation for USB endpoint write"
-    type: "RUNTIME"
-
-    code_file: "contracts/usb_validation.c"
-    function_name: "contract::usb_endpoint_write_validation"
+    code_file: "patches/patch_usb_validation.c"
+    function_name: "patch::before::usb_endpoint_write"
     parameters:
       - name: "usb_device"
         type: "usb_device_t*"
-        description: "USB device context"
       - name: "buffer"
         type: "const void*"
-        description: "Data buffer"
       - name: "size"
         type: "uint32_t"
-        description: "Buffer size"
 ```
+
+Use a `contracts:` entry for the *static* predicate you want the
+verifier to check (pre/post on the same call site) — the two are
+complementary: the patch does the runtime check, the contract
+encodes the invariant for static analysis.
 
 ## Deployment Architecture
 

@@ -20,12 +20,10 @@ meta_patches:
   - name: usb_security_meta_patches
     description: "Meta patches for USB security"
 
-    # Patch Action Configuration
     patch_actions:
        - id: "USB-PATCH-001"
-         description: "Patch to add USB security"
+         description: "Endpoint-write pre-instrumentation"
 
-         # Match Configuration
          match:
           - name: "usbd_ep_write_packet"
             kind: "function"
@@ -36,7 +34,6 @@ meta_patches:
                 name: "usb_g"
                 type: "struct _usbd_device*"
 
-         # Actions to Apply
          action:
           - mode: "apply_before"
             patch_id: "usb_endpoint_write_validation_before"
@@ -49,31 +46,29 @@ meta_patches:
                 source: "operand"
                 index: "2"
 
+       # Second apply_before action, migrated from the removed
+       # test_contract runtime-contract dispatch. It asserts the USB
+       # device state is CONFIGURED before the packet write.
+       - id: "USB-PATCH-002"
+         description: "USB state assertion"
 
-meta_contracts:
-  - name: usb_security_meta_contracts
-    description: "Meta contracts for USB security"
+         match:
+          - name: "usbd_ep_write_packet"
+            kind: "function"
+            function_context:
+              - name: "bl_usb__send_message"
+            argument_matches:
+              - index: 0
+                name: "usb_g"
 
-    contract_actions:
-      - id: "USB-CONTRACT-001"
-        description: "Asserts message to send is less than maximum size"
-
-        match:
-        - name: "usbd_ep_write_packet"
-          kind: "function"
-          function_context:
-            - name: "bl_usb__send_message"
-          argument_matches:
-            - index: 0
-              name: "usb_g"
-
-        action:
-        - mode: "apply_before"
-          contract_id: "usb_endpoint_write_validation_contract_before"
-          arguments:
-            - name: usb_device
-              source: "argument"
-              index: "0"
-            - name: buffer
-              source: "argument"
-              index: "1"
+         action:
+          - mode: "apply_before"
+            patch_id: "usb_state_check_before"
+            description: "Assert USB state before the packet write"
+            arguments:
+              - name: usb_device
+                source: "argument"
+                index: "0"
+              - name: buffer
+                source: "argument"
+                index: "1"

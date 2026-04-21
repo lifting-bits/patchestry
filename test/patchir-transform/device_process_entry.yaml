@@ -20,23 +20,20 @@ meta_patches:
   - name: bloodview_device_entry_meta_patch
     description: "Meta patches for fixing get device list in bloodview"
 
-    # Patch Action Configuration
     patch_actions:
       - id: "REPLACE-SPRINTF-001"
-        description: "Patch to add USB security"
+        description: "Replace sprintf with a bounds-aware version"
 
-         # Match Configuration
         match:
           - name: "sprintf"
             kind: "function"
             function_context:
               - name: "bl_device__process_entry"
 
-         # Actions to Apply
         action:
           - mode: "replace"
             patch_id: "device_list_replace_sprintf_patch"
-            description: "Pre-validation security check"
+            description: "Bounds-aware sprintf replacement"
             arguments:
               - name: "argument0"
                 source: "operand"
@@ -51,37 +48,34 @@ meta_patches:
                 source: "operand"
                 index: 2
 
-meta_contracts:
-  - name: bloodview_device_entry_meta_contract
-    description: "Meta contracts for verifying the get device list in bloodview"
-
-    # Contract Configuration
-    contract_actions:
-      - id: "SPRINTF-CONTRACT-001"
-        description: "Contract to verify the get device list in bloodview"
+      # Post-replacement bounds check, migrated from the old
+      # device_list_replace_sprintf_contract runtime contract. Runs
+      # apply_after against the patch-emitted @patch__replace__sprintf
+      # call site.
+      - id: "SPRINTF-BOUNDS-AFTER-001"
+        description: "Assert sprintf return value stays within dest_size"
 
         match:
-        - name: "patch__replace__sprintf"
-          kind: "function"
-          function_context:
-            - name: "bl_device__process_entry"
+          - name: "patch__replace__sprintf"
+            kind: "function"
+            function_context:
+              - name: "bl_device__process_entry"
 
         action:
-        - mode: "apply_after"
-          contract_id: "device_list_replace_sprintf_contract"
-          description: "Post-execution verification"
-          arguments:
-            - name: "return_value"
-              source: "return_value"
-            - name: "dest_size"
-              source: "constant"
-              value: 32
+          - mode: "apply_after"
+            patch_id: "sprintf_bounds_check_after"
+            description: "Post-execution bounds check"
+            arguments:
+              - name: "return_value"
+                source: "return_value"
+              - name: "dest_size"
+                source: "constant"
+                value: 32
 
-
+meta_contracts:
   - name: bloodview_device_entry_meta_contract_static
-    description: "Meta contracts for verifying the get device list in bloodview"
+    description: "Static contract verifying the replaced sprintf"
 
-    # Contract Configuration
     contract_actions:
       - id: "sprintf_contract_static"
         match:
@@ -93,4 +87,4 @@ meta_contracts:
         action:
         - contract_id: "sprintf_contract_static"
           mode: "apply_before"
-          description: "Static contract to verify the get device list in bloodview"
+          description: "Static contract for sprintf bounds"

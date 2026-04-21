@@ -32,11 +32,6 @@ namespace patchestry::passes {
       public:
         ContractOperationImpl() = default;
 
-        static void emitRuntimeContract(
-            InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-            const ContractInformation &contract, ContractMode mode, bool shouldInline
-        );
-
         static void emitStaticContract(
             InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
             const ContractInformation &contract, ContractMode mode, bool shouldInline

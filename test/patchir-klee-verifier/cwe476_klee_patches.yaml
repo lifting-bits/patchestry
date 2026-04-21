@@ -23,7 +23,6 @@ contracts:
   - name: "cwe476_static_contract"
     description: "Static contract: arg0 must be non-null"
     category: "memory_safety"
-    type: "STATIC"
 
     preconditions:
       - id: "ptr_nonnull"

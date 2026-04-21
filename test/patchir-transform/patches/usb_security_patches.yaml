@@ -46,27 +46,15 @@ patches:
         type: "void**"
         description: "Data buffer to write"
 
-contracts:
-  - name: "usb_endpoint_write_validation_contract_before"
-    description: "Validate USB endpoint write"
-    category: "write_validation"
-    type: "RUNTIME"
-    code_file: "contracts/usb_endpoint_write_validation.c"
-    function_name: "contract::before::test_contract"
-    parameters: # Parameters are optional and is for reference only
-      - name: usb_device
-        type: "usb_device*"
-        description: "USB device context"
-      - name: buffer
-        type: "const void*"
-        description: "Data buffer to write"
-  
-  - name: "test_entrypoint_insertion"
-    description: "Validate USB endpoint write at function entrypoint"
-    category: "write_validation"
-    type: "RUNTIME"
-    code_file: "contracts/usb_endpoint_write_validation.c"
-    function_name: "contract::before::message_check_contract"
+  # USB device-state assertion invoked before usbd_ep_write_packet.
+  # Migrated from the runtime-contract version (was test_contract /
+  # contract__before__test_contract) when runtime contracts were merged
+  # into patches.
+  - name: usb_state_check_before
+    description: "Assert USB device state is CONFIGURED before a packet write"
+    category: usb_security
+    code_file: "patches/patch_usb_state_check.c"
+    function_name: "patch::before::usb_state_check"
     parameters:
       - name: usb_device
         type: "usb_device*"
@@ -75,11 +63,10 @@ contracts:
         type: "const void*"
         description: "Data buffer to write"
 
-
+contracts:
   - name: "usb_endpoint_write_validation_contract_static"
     description: "Validate USB endpoint write"
     category: "write_validation"
-    type: "STATIC"
 
     preconditions:
       - id: "precondition_1"
@@ -117,7 +104,6 @@ contracts:
   - name: "test_entrypoint_insertion_contract_static"
     description: "Validate USB endpoint write at function entrypoint"
     category: "write_validation"
-    type: "STATIC"
 
     preconditions:
       - id: "precondition_1"
