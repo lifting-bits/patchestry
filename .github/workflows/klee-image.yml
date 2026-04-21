@@ -7,6 +7,11 @@
 
 name: Build KLEE Image
 
+# KLEE's POSIX runtime depends on klee-uclibc, which supports x86/x86_64 only.
+# The image is therefore amd64-only; the CI `llvm-build-and-test` job gates
+# the KLEE test step off on arm64 runners. If klee-uclibc ever gains aarch64
+# support (or we migrate to a different runtime), add an arm64 matrix here.
+
 on:
   workflow_dispatch:
     inputs:

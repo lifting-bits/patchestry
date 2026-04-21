@@ -15,14 +15,17 @@ jobs:
       matrix:
         llvm-version: [20]
         image-version: [22.04]
-    runs-on: ubuntu-22.04
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && format('ubuntu-{0}-arm', matrix.image-version) || format('ubuntu-{0}', matrix.image-version) }}
 
     permissions:
         packages: write
         contents: read
 
+    # amd64 publishes the legacy `-dev:latest` tag so existing references keep
+    # working. arm64 publishes alongside under `-dev-arm64:latest`.
     env:
-      IMAGE_NAME: "ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest"
+      IMAGE_NAME: "ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev${{ matrix.arch == 'arm64' && '-arm64' || '' }}:latest"
 
     steps:
       - name: Cleanup working directory with container root

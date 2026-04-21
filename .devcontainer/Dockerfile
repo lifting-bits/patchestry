@@ -42,6 +42,12 @@ COPY ./install-clangir.sh /tmp/
 RUN chmod +x /tmp/install-clangir.sh && \
     /tmp/install-clangir.sh
 
+# Install non-native glibc headers for LIT cross-compile tests. No-op on amd64
+# hosts (which ship x86_64 headers natively and pull aarch64 from multiarch).
+COPY ./install-cross-headers.sh /tmp/
+RUN chmod +x /tmp/install-cross-headers.sh && \
+    /tmp/install-cross-headers.sh
+
 # Remove old versions of LLVM and Clang
 RUN apt-get -y purge llvm-14 clang-14
 
