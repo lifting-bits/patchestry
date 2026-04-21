@@ -33,8 +33,10 @@ To add a new source:
 
 1. Add enumerator to `ArgumentSourceType` in `include/patchestry/YAML/BaseSpec.hpp`
 2. Add `source_str == "my_source"` branch in `MappingTraits<patch::ArgumentSource>::mapping` in `include/patchestry/YAML/PatchSpec.hpp`
-3. Add a `case ArgumentSourceType::MY_SOURCE:` in the `switch (arg_spec.source)` inside `InstrumentationPass::prepare_patch_call_arguments` (`lib/patchestry/Passes/InstrumentationPass.cpp`); if the source requires call-site context, reject it when `entrypoint_func` is set (like `return_value` and `capture` do). `prepare_patch_call_arguments` takes an `std::optional<cir::FuncOp> entrypoint_func` — thread it through to your handler.
-4. Add a row to the Argument Source Types table in `docs/GettingStarted/patch_specifications.md`
+3. Add a `handle_<my>_argument` helper on `InstrumentationPass` — declare it in `include/patchestry/Passes/InstrumentationPass.hpp` alongside the existing `handle_operand_argument` / `handle_variable_argument` / `handle_symbol_argument` / `handle_return_value_argument` / `handle_constant_argument` / `handle_capture_argument` helpers, and implement it in `lib/patchestry/Passes/InstrumentationPass.cpp`. The helper does the per-source work (resolve the value, create a cast if needed, write into `arg_map`). Inlining the logic into the switch instead of adding a helper diverges from the house style — always follow the `handle_*` pattern.
+4. Add a `case ArgumentSourceType::MY_SOURCE:` in the `switch (arg_spec.source)` inside `InstrumentationPass::prepare_patch_call_arguments` (`lib/patchestry/Passes/InstrumentationPass.cpp`) that calls your new helper.
+5. If the source is only meaningful at the matched call site (like `return_value` and `capture`), have the helper reject it when `entrypoint_func` is set — add `std::optional<cir::FuncOp> entrypoint_func = std::nullopt` to both the declaration and definition, thread it from the switch (mirror how OPERAND / RETURN_VALUE / CAPTURE do it), and early-return with a descriptive `LOG(ERROR)` message pointing to the allowed sources. Sources whose value lives in function or module scope (like `variable`, `symbol`, `constant`) don't need to take `entrypoint_func`.
+6. Add a row to the Argument Source Types table in `docs/GettingStarted/patch_specifications.md`.
 
 ## Invariants
 
