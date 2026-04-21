@@ -81,6 +81,9 @@ namespace patchestry::passes { // NOLINT
     {
         std::optional< patch::PatchSpec > spec;
         std::optional< patch::PatchAction > patch_action;
+        // Named captures bound by the matcher (operand/result by name).
+        // Populated per-match-site in apply_patch_action_to_targets.
+        llvm::StringMap< mlir::Value > captures;
     };
 
     /**
@@ -464,6 +467,17 @@ namespace patchestry::passes { // NOLINT
         void handle_constant_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        );
+
+        /**
+         * @brief Handles CAPTURE argument source type — looks up the named
+         *        capture in `patch.captures` and uses the bound `mlir::Value`.
+         */
+        void handle_capture_argument(
+            mlir::OpBuilder &builder, mlir::Operation *call_op,
+            const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+            const PatchInformation &patch,
             llvm::MapVector< mlir::Value, mlir::Value > &arg_map
         );
 

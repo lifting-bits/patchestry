@@ -1,0 +1,34 @@
+# Capture the two operands of cir.binop inside data__allocate_filter and
+# pass them to checked_mul (overflow-checked multiply).
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "allocate-filter-mul-captured"
+
+target:
+  binary: "bloodview.bin"
+  arch: "ARM:LE:32:v7"
+
+libraries:
+  - "patches/replace_binop_patches.yaml"
+
+patches:
+  - name: "capture_mul_filter"
+    id: "ALLOC-MUL-001"
+    description: "Overflow-check allocation size multiply"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+      context: ["data__allocate_filter"]
+      captures:
+        - name: "SIZE_LHS"
+          operand: 0
+        - name: "SIZE_RHS"
+          operand: 1
+    mode: "replace"
+    patch: "checked_mul"
+    arguments:
+      - source: "capture"
+        name: "SIZE_LHS"
+      - source: "capture"
+        name: "SIZE_RHS"

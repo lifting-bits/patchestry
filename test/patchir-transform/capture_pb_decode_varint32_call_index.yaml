@@ -1,0 +1,29 @@
+# Index-based counterpart to capture_pb_decode_varint32_call.yaml.
+# Must produce byte-identical CIR when diffed.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "pb-varint-call-index"
+
+target:
+  binary: "bloodview.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  - "patches/replace_binop_patches.yaml"
+
+patches:
+  - name: "capture_pb_readbyte"
+    id: "PB-CALL-002"
+    description: "Index-based pb_readbyte replacement"
+    match:
+      name: "pb_readbyte"
+      kind: "function"
+      context: ["pb_decode_varint32_eof"]
+    mode: "replace"
+    patch: "checked_mul"
+    arguments:
+      - source: "operand"
+        index: 0
+      - source: "operand"
+        index: 1

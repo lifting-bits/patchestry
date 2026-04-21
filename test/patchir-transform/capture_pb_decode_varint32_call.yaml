@@ -1,0 +1,34 @@
+# Capture arguments of a cir.call to pb_readbyte inside pb_decode_varint32_eof.
+# FUNCTION-kind match with captures — the bound values flow to checked_mul.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "pb-varint-call-captured"
+
+target:
+  binary: "bloodview.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  - "patches/replace_binop_patches.yaml"
+
+patches:
+  - name: "capture_pb_readbyte"
+    id: "PB-CALL-001"
+    description: "Capture pb_readbyte args"
+    match:
+      name: "pb_readbyte"
+      kind: "function"
+      context: ["pb_decode_varint32_eof"]
+      captures:
+        - name: "BUF"
+          operand: 0
+        - name: "OFFSET"
+          operand: 1
+    mode: "replace"
+    patch: "checked_mul"
+    arguments:
+      - source: "capture"
+        name: "BUF"
+      - source: "capture"
+        name: "OFFSET"

@@ -502,6 +502,8 @@ namespace llvm::yaml {
                 arg.source = ArgumentSourceType::CONSTANT;
             } else if (source_str == "return_value") {
                 arg.source = ArgumentSourceType::RETURN_VALUE;
+            } else if (source_str == "capture") {
+                arg.source = ArgumentSourceType::CAPTURE;
             } else {
                 io.setError("Unknown argument source type: '" + source_str + "'");
                 return;

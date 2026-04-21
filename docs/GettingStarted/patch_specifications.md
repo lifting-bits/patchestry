@@ -359,6 +359,47 @@ arguments:
 | `symbol` | Module-level global variable or function pointer, located in the module symbol table | `symbol` | Pass a global variable or function pointer to the patch |
 | `constant` | Literal constant value | `value` | Pass fixed values to patch functions |
 | `return_value` | Return value of function or operation | None | Access return value (`apply_before` / `apply_after` modes only — **not valid for `apply_at_entrypoint`**) |
+| `capture` | Named capture bound by `match.captures` — looks up an `mlir::Value` by name from the match site | `name` | Reference the same operand/result in multiple patch arguments, or rebind by name for readability |
+
+### Named captures
+
+The `match:` block can include a `captures:` list that binds an op's
+operands and results to names. Patch arguments can then reference those
+names via `source: "capture"` — equivalent to PatchDSL's `$A`, `$B` metavars.
+
+```yaml
+patches:
+  - name: "widen_mul"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+      context: ["compute_alloc_size"]
+      captures:
+        - name: "A"
+          operand: 0
+        - name: "B"
+          operand: 1
+        - name: "R"
+          result: 0
+    mode: "replace"
+    patch: "checked_mul"
+    arguments:
+      - source: "capture"
+        name: "A"
+      - source: "capture"
+        name: "B"
+```
+
+Capture fields:
+
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `name` | yes | The capture's name, referenced later via `source: "capture"` |
+| `operand` | one of | Zero-based operand index to bind |
+| `result` | one of | Zero-based result index to bind |
+| `type` | no | Optional type constraint (advisory, not yet enforced) |
+
+`operand:` and `result:` are mutually exclusive — exactly one must be set.
 
 ### Argument Examples
 
@@ -564,11 +605,12 @@ Examples:
 
 ## Patch Modes
 
-The specification supports three patch modes and one contract-only mode:
+The specification supports four patch modes and one contract-only mode:
 
 - `apply_before`: Apply patch or contract before the matched function or operation
 - `apply_after`: Apply patch or contract after the matched function or operation completes
 - `replace`: Completely replace the matched function call or operation (patches only)
+- `erase`: Delete the matched op without inserting any patch code (patches only — see [Erase Mode](#erase-mode))
 - `apply_at_entrypoint`: Insert a contract at the entry point of the **caller** function (contracts only — see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
 
 ### Apply Before Mode
@@ -622,6 +664,31 @@ action:
         source: "operand"
         index: "1"
 ```
+
+### Erase Mode
+
+In `erase` mode, the matched op is deleted. No patch function is called, so
+`patch_id` (nested form) or `patch:` (simplified form) is not required.
+
+When the deleted op has results that are used by other ops, each live result
+is replaced with a default (zero for integers / null for pointers / false for
+bools) so dependent ops remain well-formed. Unsupported result types
+abort the erase for that op and log an error.
+
+```yaml
+patches:
+  - name: "strip_debug_call"
+    id: "ERASE-001"
+    match:
+      name: "debug_log"
+      kind: "function"
+      context: ["process_request"]
+    mode: "erase"
+```
+
+Use ERASE for removing debug/logging calls, stripping unused cleanup
+paths, or deleting obsolete instrumentation. For replacing a call with
+a different function, use `replace` instead.
 
 ### Apply At Entrypoint Mode
 

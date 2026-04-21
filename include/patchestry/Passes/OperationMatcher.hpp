@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include <llvm/ADT/StringMap.h>
+
 #include <patchestry/YAML/BaseSpec.hpp>
 #include <patchestry/YAML/ContractSpec.hpp>
 #include <patchestry/YAML/PatchSpec.hpp>
@@ -71,6 +73,17 @@ namespace patchestry::passes {
          */
         static bool patch_action_matches(
             mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &spec, Mode mode
+        );
+
+        /**
+         * @brief Capture-populating overload of patch_action_matches.
+         *
+         * If the match succeeds, populates `captures_out` with the bound
+         * `mlir::Value`s named by `match.captures`.
+         */
+        static bool patch_action_matches(
+            mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &spec, Mode mode,
+            llvm::StringMap< mlir::Value > &captures_out
         );
 
         /**

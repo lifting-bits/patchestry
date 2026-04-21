@@ -477,22 +477,24 @@ namespace patchestry::passes {
             }
             auto &action = patch_action.action[0];
 
-            // Find the corresponding patch specification by patch_id
-            auto patch_spec = lookup(config->libraries.patches, action.patch_id);
-            if (!patch_spec || patch_spec == std::nullopt) {
-                LOG(ERROR) << "Patch specification for ID '" << action.patch_id
-                           << "' not found\n";
-                signalPassFailure();
-                return;
-            } else {
-                // Create a modified patch info with the action's mode and arguments
-                PatchInformation patch_to_apply = { .spec         = patch_spec,
-                                                    .patch_action = patch_action };
-                // Apply the patch to matching functions and operations
-                apply_patch_action_to_targets(
-                    function_worklist, operation_worklist, *target_meta_patch, patch_to_apply
-                );
+            // ERASE mode has no patch function — skip spec lookup.
+            std::optional< patch::PatchSpec > patch_spec;
+            if (action.mode != PatchInfoMode::ERASE) {
+                patch_spec = lookup(config->libraries.patches, action.patch_id);
+                if (!patch_spec) {
+                    LOG(ERROR) << "Patch specification for ID '" << action.patch_id
+                               << "' not found\n";
+                    signalPassFailure();
+                    return;
+                }
             }
+
+            PatchInformation patch_to_apply = { .spec         = patch_spec,
+                                                .patch_action = patch_action,
+                                                .captures     = {} };
+            apply_patch_action_to_targets(
+                function_worklist, operation_worklist, *target_meta_patch, patch_to_apply
+            );
         }
     }
 
@@ -523,118 +525,156 @@ namespace patchestry::passes {
         if (match.kind == MatchKind::FUNCTION) {
             // Apply to function calls
             for (auto func : function_worklist) {
-                func.walk([&](cir::CallOp call_op) {
-                    // Create a temporary spec with the patch action match
+                // ERASE collects matched ops first, then erases after walk
+                // to avoid invalidating walk iterators.
+                llvm::SmallVector< mlir::Operation *, 8 > to_erase;
 
-                    if (OperationMatcher::patch_action_matches(
-                            call_op, func, patch_action, OperationMatcher::Mode::FUNCTION
+                func.walk([&](cir::CallOp call_op) {
+                    llvm::StringMap< mlir::Value > match_captures;
+                    if (!OperationMatcher::patch_action_matches(
+                            call_op, func, patch_action, OperationMatcher::Mode::FUNCTION,
+                            match_captures
                         ))
                     {
-                        auto patch_module = load_code_module(
-                            *call_op->getContext(), *patch_to_apply.spec->patch_module
-                        );
-                        if (!patch_module) {
-                            LOG(ERROR) << "Failed to load patch module for function: "
-                                       << call_op.getCallee()->str() << "\n";
-                            return;
-                        }
-
-                        LOG(INFO)
-                            << "Applying patch '" << patch_to_apply.spec->name << "' in mode '"
-                            << patchestry::passes::patch::infoModeToString(action.mode)
-                            << "' \n";
-                        switch (action.mode) {
-                            case PatchInfoMode::APPLY_BEFORE:
-                                PatchOperationImpl::applyBeforePatch(
-                                    *this, call_op, patch_to_apply, patch_module.get(),
-                                    options.enable_inlining
-                                        || meta_patch.optimization.contains("inline-patches")
-                                );
-                                break;
-                            case PatchInfoMode::APPLY_AFTER:
-                                PatchOperationImpl::applyAfterPatch(
-                                    *this, call_op, patch_to_apply, patch_module.get(),
-                                    options.enable_inlining
-                                        || meta_patch.optimization.contains("inline-patches")
-                                );
-                                break;
-                            case PatchInfoMode::REPLACE:
-                                PatchOperationImpl::replaceCallWithPatch(
-                                    *this, call_op, patch_to_apply, patch_module.get(),
-                                    options.enable_inlining
-                                        || meta_patch.optimization.contains("inline-patches")
-                                );
-                                break;
-                            default:
-                                LOG(ERROR) << "Unsupported patch mode for function call\n";
-                                break;
-                        }
-                    } else {
-                        LOG(INFO) << "function worklist entry '"
-                                  << func.getSymName().str()
-                                  << "' did not match the patch action; continuing\n";
+                        return;
                     }
-                });
-            }
-        } else if (match.kind == MatchKind::OPERATION) {
-            // Apply to operations
-            for (auto *op : operation_worklist) {
-                auto func = op->getParentOfType< cir::FuncOp >();
-                if (!func) {
-                    continue;
-                }
 
-                if (OperationMatcher::patch_action_matches(
-                        op, func, patch_action, OperationMatcher::Mode::OPERATION
-                    ))
-                {
-                    auto patch_module =
-                        load_code_module(*op->getContext(), *patch_to_apply.spec->patch_module);
+                    if (action.mode == PatchInfoMode::ERASE) {
+                        LOG(INFO) << "Erasing call '" << call_op.getCallee()->str()
+                                  << "' (patch action '" << patch_action.action_id << "')\n";
+                        to_erase.push_back(call_op.getOperation());
+                        return;
+                    }
+
+                    auto patch_module = load_code_module(
+                        *call_op->getContext(), *patch_to_apply.spec->patch_module
+                    );
                     if (!patch_module) {
-                        LOG(ERROR) << "Failed to load patch module for operation: "
-                                   << op->getName().getStringRef().str() << "\n";
-                        continue;
+                        LOG(ERROR) << "Failed to load patch module for function: "
+                                   << call_op.getCallee()->str() << "\n";
+                        return;
                     }
 
+                    // Per-match PatchInformation with captures bound
+                    PatchInformation patch_site = patch_to_apply;
+                    patch_site.captures        = std::move(match_captures);
+
+                    LOG(INFO)
+                        << "Applying patch '" << patch_to_apply.spec->name << "' in mode '"
+                        << patchestry::passes::patch::infoModeToString(action.mode)
+                        << "' \n";
                     switch (action.mode) {
                         case PatchInfoMode::APPLY_BEFORE:
                             PatchOperationImpl::applyBeforePatch(
-                                *this, op, patch_to_apply, patch_module.get(),
+                                *this, call_op, patch_site, patch_module.get(),
                                 options.enable_inlining
                                     || meta_patch.optimization.contains("inline-patches")
                             );
                             break;
                         case PatchInfoMode::APPLY_AFTER:
                             PatchOperationImpl::applyAfterPatch(
-                                *this, op, patch_to_apply, patch_module.get(),
+                                *this, call_op, patch_site, patch_module.get(),
                                 options.enable_inlining
                                     || meta_patch.optimization.contains("inline-patches")
                             );
                             break;
                         case PatchInfoMode::REPLACE:
-                            if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
-                                PatchOperationImpl::replaceCallWithPatch(
-                                    *this, call_op, patch_to_apply, patch_module.get(),
-                                    options.enable_inlining
-                                        || meta_patch.optimization.contains("inline-patches")
-                                );
-                            } else if (mlir::isa< cir::BinOp, cir::CmpOp >(op)) {
-                                PatchOperationImpl::replaceOperationWithPatch(
-                                    *this, op, patch_to_apply, patch_module.get(),
-                                    options.enable_inlining
-                                        || meta_patch.optimization.contains("inline-patches")
-                                );
-                            } else {
-                                LOG(ERROR) << "REPLACE mode is not supported for: "
-                                           << op->getName().getStringRef().str() << "\n";
-                            }
+                            PatchOperationImpl::replaceCallWithPatch(
+                                *this, call_op, patch_site, patch_module.get(),
+                                options.enable_inlining
+                                    || meta_patch.optimization.contains("inline-patches")
+                            );
                             break;
                         default:
-                            LOG(ERROR) << "Unsupported patch mode for operation: "
-                                       << op->getName().getStringRef().str() << "\n";
+                            LOG(ERROR) << "Unsupported patch mode for function call\n";
                             break;
                     }
+                });
+
+                for (auto *op : to_erase) {
+                    PatchOperationImpl::eraseOperation(*this, op);
                 }
+            }
+        } else if (match.kind == MatchKind::OPERATION) {
+            // Apply to operations
+            llvm::SmallVector< mlir::Operation *, 8 > to_erase;
+            for (auto *op : operation_worklist) {
+                auto func = op->getParentOfType< cir::FuncOp >();
+                if (!func) {
+                    continue;
+                }
+
+                llvm::StringMap< mlir::Value > match_captures;
+                if (!OperationMatcher::patch_action_matches(
+                        op, func, patch_action, OperationMatcher::Mode::OPERATION,
+                        match_captures
+                    ))
+                {
+                    continue;
+                }
+
+                if (action.mode == PatchInfoMode::ERASE) {
+                    LOG(INFO) << "Erasing operation '"
+                              << op->getName().getStringRef().str()
+                              << "' (patch action '" << patch_action.action_id << "')\n";
+                    to_erase.push_back(op);
+                    continue;
+                }
+
+                auto patch_module =
+                    load_code_module(*op->getContext(), *patch_to_apply.spec->patch_module);
+                if (!patch_module) {
+                    LOG(ERROR) << "Failed to load patch module for operation: "
+                               << op->getName().getStringRef().str() << "\n";
+                    continue;
+                }
+
+                // Per-match PatchInformation with captures bound
+                PatchInformation patch_site = patch_to_apply;
+                patch_site.captures        = std::move(match_captures);
+
+                switch (action.mode) {
+                    case PatchInfoMode::APPLY_BEFORE:
+                        PatchOperationImpl::applyBeforePatch(
+                            *this, op, patch_site, patch_module.get(),
+                            options.enable_inlining
+                                || meta_patch.optimization.contains("inline-patches")
+                        );
+                        break;
+                    case PatchInfoMode::APPLY_AFTER:
+                        PatchOperationImpl::applyAfterPatch(
+                            *this, op, patch_site, patch_module.get(),
+                            options.enable_inlining
+                                || meta_patch.optimization.contains("inline-patches")
+                        );
+                        break;
+                    case PatchInfoMode::REPLACE:
+                        if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+                            PatchOperationImpl::replaceCallWithPatch(
+                                *this, call_op, patch_site, patch_module.get(),
+                                options.enable_inlining
+                                    || meta_patch.optimization.contains("inline-patches")
+                            );
+                        } else if (mlir::isa< cir::BinOp, cir::CmpOp >(op)) {
+                            PatchOperationImpl::replaceOperationWithPatch(
+                                *this, op, patch_site, patch_module.get(),
+                                options.enable_inlining
+                                    || meta_patch.optimization.contains("inline-patches")
+                            );
+                        } else {
+                            LOG(ERROR) << "REPLACE mode is not supported for: "
+                                       << op->getName().getStringRef().str() << "\n";
+                        }
+                        break;
+                    default:
+                        LOG(ERROR) << "Unsupported patch mode for operation: "
+                                   << op->getName().getStringRef().str() << "\n";
+                        break;
+                }
+            }
+
+            for (auto *op : to_erase) {
+                PatchOperationImpl::eraseOperation(*this, op);
             }
         }
     }
@@ -747,6 +787,11 @@ namespace patchestry::passes {
                 case ArgumentSourceType::CONSTANT:
                     handle_constant_argument(
                         builder, call_op, arg_spec, patch_arg_type, arg_map
+                    );
+                    break;
+                case ArgumentSourceType::CAPTURE:
+                    handle_capture_argument(
+                        builder, call_op, arg_spec, patch_arg_type, patch, arg_map
                     );
                     break;
             }
@@ -957,6 +1002,39 @@ namespace patchestry::passes {
         }
 
         arg_map[arg_value] = create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
+    }
+
+    void InstrumentationPass::handle_capture_argument(
+        mlir::OpBuilder &builder, mlir::Operation *call_op,
+        const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+        const PatchInformation &patch,
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+    ) {
+        if (arg_spec.name.empty()) {
+            LOG(ERROR) << "CAPTURE source requires 'name' field\n";
+            return;
+        }
+        auto it = patch.captures.find(arg_spec.name);
+        if (it == patch.captures.end()) {
+            LOG(ERROR) << "Capture '" << arg_spec.name
+                       << "' not bound at this match site\n";
+            return;
+        }
+        mlir::Value captured = it->second;
+        if (!captured) {
+            LOG(ERROR) << "Capture '" << arg_spec.name << "' resolved to null\n";
+            return;
+        }
+
+        if (arg_spec.is_reference) {
+            arg_map[captured] = create_cast_if_needed(
+                builder, call_op, create_reference(builder, call_op, captured),
+                patch_arg_type
+            );
+        } else {
+            arg_map[captured] =
+                create_cast_if_needed(builder, call_op, captured, patch_arg_type);
+        }
     }
 
     mlir::Value InstrumentationPass::parse_constant_operand(
@@ -1300,6 +1378,11 @@ namespace patchestry::passes {
                         continue;
                     }
                     break;
+                }
+                case ArgumentSourceType::CAPTURE: {
+                    LOG(ERROR) << "CAPTURE argument source is not yet supported "
+                                  "for contracts\n";
+                    continue;
                 }
             }
 

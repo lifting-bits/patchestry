@@ -5,6 +5,11 @@
 // RUN: %file-check -vv -check-prefix=REPLACE %s --input-file %t2.cir
 // REPLACE: cir.call @patch__replace__int_mul({{.*}}) {patchestry_operation = "cir.binop"}
 //
+// Captured form: match with named captures + source: "capture" produces
+// byte-identical CIR to the index-based form above.
+// RUN: %patchir-transform %t1.cir --spec %S/replace_binop_captured.yaml -o %t3.cir
+// RUN: diff %t2.cir %t3.cir
+//
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

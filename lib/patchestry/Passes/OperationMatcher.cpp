@@ -43,6 +43,46 @@ namespace patchestry::passes {
         return false;
     }
 
+    bool OperationMatcher::patch_action_matches(
+        mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &action,
+        OperationMatcher::Mode mode,
+        llvm::StringMap< mlir::Value > &captures_out
+    ) {
+        if (!patch_action_matches(op, func, action, mode)) {
+            return false;
+        }
+
+        const auto &match = action.match[0];
+        for (const auto &cap : match.captures) {
+            mlir::Value value;
+            if (cap.operand.has_value()) {
+                unsigned idx = *cap.operand;
+                if (idx >= op->getNumOperands()) {
+                    LOG(ERROR) << "Capture '" << cap.name << "': operand index "
+                               << idx << " out of range (op has "
+                               << op->getNumOperands() << " operands)\n";
+                    return false;
+                }
+                value = op->getOperand(idx);
+            } else if (cap.result.has_value()) {
+                unsigned idx = *cap.result;
+                if (idx >= op->getNumResults()) {
+                    LOG(ERROR) << "Capture '" << cap.name << "': result index "
+                               << idx << " out of range (op has "
+                               << op->getNumResults() << " results)\n";
+                    return false;
+                }
+                value = op->getResult(idx);
+            } else {
+                LOG(ERROR) << "Capture '" << cap.name
+                           << "' missing operand/result index\n";
+                return false;
+            }
+            captures_out[cap.name] = value;
+        }
+        return true;
+    }
+
     bool OperationMatcher::patch_action_matches_operation(
         mlir::Operation *op, cir::FuncOp func, const patch::MatchConfig &match
     ) {

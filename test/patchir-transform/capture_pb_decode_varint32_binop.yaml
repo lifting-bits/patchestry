@@ -1,0 +1,35 @@
+# Capture operands of cir.binop inside pb_decode_varint32_eof and replace
+# via the checked_mul patch. Exercises captures on OPERATION-kind match
+# across multiple binop kinds (add, and, etc.) in a real firmware function.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "pb-varint-binop-captured"
+
+target:
+  binary: "bloodview.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  - "patches/replace_binop_patches.yaml"
+
+patches:
+  - name: "capture_pb_binop"
+    id: "PB-BINOP-001"
+    description: "Capture binop operands in varint decoder"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+      context: ["pb_decode_varint32_eof"]
+      captures:
+        - name: "LHS"
+          operand: 0
+        - name: "RHS"
+          operand: 1
+    mode: "replace"
+    patch: "checked_mul"
+    arguments:
+      - source: "capture"
+        name: "LHS"
+      - source: "capture"
+        name: "RHS"

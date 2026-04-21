@@ -35,6 +35,14 @@ namespace patchestry::passes {
             std::optional< bool > is_reference; // Whether the argument is a reference
         };
 
+        struct CaptureSpec
+        {
+            std::string name;
+            std::optional< unsigned > operand; // operand index to bind
+            std::optional< unsigned > result;  // result index to bind
+            std::string type;                  // optional type constraint
+        };
+
         struct MatchConfig
         {
             std::string name;
@@ -44,6 +52,7 @@ namespace patchestry::passes {
             std::vector< VariableMatch > variable_matches;
             std::vector< SymbolMatch > symbol_matches;
             std::vector< OperandMatch > operand_matches;
+            std::vector< CaptureSpec > captures;
         };
 
         struct Action
@@ -92,6 +101,8 @@ namespace patchestry::passes {
                     return "APPLY_AFTER";
                 case PatchInfoMode::REPLACE:
                     return "REPLACE";
+                case PatchInfoMode::ERASE:
+                    return "ERASE";
             }
             return "UNKNOWN";
         }
@@ -109,6 +120,7 @@ namespace patchestry::passes {
             std::vector< ArgumentMatch > argument_matches;
             std::vector< OperandMatch > operand_matches;
             std::vector< SymbolMatch > symbol_matches;
+            std::vector< CaptureSpec > captures;
             // action (inlined)
             PatchInfoMode mode = PatchInfoMode::NONE;
             std::string patch_id;
@@ -138,6 +150,7 @@ namespace patchestry::passes {
                 mc.argument_matches = entry.argument_matches;
                 mc.operand_matches  = entry.operand_matches;
                 mc.symbol_matches   = entry.symbol_matches;
+                mc.captures         = entry.captures;
                 for (const auto &ctx_name : entry.context) {
                     FunctionContext fc;
                     fc.name = ctx_name;
@@ -166,6 +179,7 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::Action)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::PatchAction)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::MetaPatchConfig)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::PatchEntry)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::patch::CaptureSpec)
 
 namespace llvm::yaml {
     using namespace patchestry::passes;
@@ -190,7 +204,7 @@ namespace llvm::yaml {
     struct MappingTraits< patch::Action >
     {
         static void mapping(IO &io, patch::Action &action) {
-            io.mapRequired("patch_id", action.patch_id);
+            io.mapOptional("patch_id", action.patch_id);
             io.mapOptional("description", action.description);
             io.mapOptional("arguments", action.arguments);
 
@@ -202,10 +216,41 @@ namespace llvm::yaml {
                 action.mode = PatchInfoMode::APPLY_AFTER;
             } else if (mode_str == "Replace" || mode_str == "replace") {
                 action.mode = PatchInfoMode::REPLACE;
+            } else if (mode_str == "Erase" || mode_str == "erase") {
+                action.mode = PatchInfoMode::ERASE;
             } else {
                 LOG(ERROR) << "Unknown patch mode: '" << mode_str
-                           << "'. Valid modes: ApplyBefore, ApplyAfter, Replace";
+                           << "'. Valid modes: ApplyBefore, ApplyAfter, Replace, Erase";
                 action.mode = PatchInfoMode::NONE;
+            }
+
+            if (action.mode != PatchInfoMode::ERASE && action.patch_id.empty()) {
+                io.setError("'patch_id' is required for mode '" + mode_str + "'");
+            }
+        }
+    };
+
+    // Parse CaptureSpec
+    template<>
+    struct MappingTraits< patch::CaptureSpec >
+    {
+        static void mapping(IO &io, patch::CaptureSpec &cap) {
+            io.mapRequired("name", cap.name);
+            io.mapOptional("operand", cap.operand);
+            io.mapOptional("result", cap.result);
+            io.mapOptional("type", cap.type);
+
+            if (!cap.operand.has_value() && !cap.result.has_value()) {
+                io.setError(
+                    "capture '" + cap.name
+                    + "' must specify either 'operand' or 'result'"
+                );
+            }
+            if (cap.operand.has_value() && cap.result.has_value()) {
+                io.setError(
+                    "capture '" + cap.name
+                    + "' cannot specify both 'operand' and 'result'"
+                );
             }
         }
     };
@@ -221,6 +266,7 @@ namespace llvm::yaml {
             io.mapOptional("variable_matches", match.variable_matches);
             io.mapOptional("symbol_matches", match.symbol_matches);
             io.mapOptional("operand_matches", match.operand_matches);
+            io.mapOptional("captures", match.captures);
 
             std::string kind_str;
             io.mapRequired("kind", kind_str);
@@ -303,6 +349,8 @@ namespace llvm::yaml {
                 arg.source = ArgumentSourceType::CONSTANT;
             } else if (source_str == "return_value") {
                 arg.source = ArgumentSourceType::RETURN_VALUE;
+            } else if (source_str == "capture") {
+                arg.source = ArgumentSourceType::CAPTURE;
             } else {
                 io.setError("Unknown argument source type: '" + source_str + "'");
                 return;
@@ -326,6 +374,7 @@ namespace llvm::yaml {
         std::vector< ArgumentMatch > argument_matches;
         std::vector< OperandMatch > operand_matches;
         std::vector< SymbolMatch > symbol_matches;
+        std::vector< patch::CaptureSpec > captures;
     };
 
     template<>
@@ -362,6 +411,7 @@ namespace llvm::yaml {
             io.mapOptional("argument_matches", m.argument_matches);
             io.mapOptional("operand_matches", m.operand_matches);
             io.mapOptional("symbol_matches", m.symbol_matches);
+            io.mapOptional("captures", m.captures);
         }
     };
 
@@ -383,6 +433,7 @@ namespace llvm::yaml {
             entry.argument_matches = match_obj.argument_matches;
             entry.operand_matches  = match_obj.operand_matches;
             entry.symbol_matches   = match_obj.symbol_matches;
+            entry.captures         = match_obj.captures;
 
             // Mode
             std::string mode_str;
@@ -393,13 +444,19 @@ namespace llvm::yaml {
                 entry.mode = PatchInfoMode::APPLY_AFTER;
             } else if (mode_str == "Replace" || mode_str == "replace") {
                 entry.mode = PatchInfoMode::REPLACE;
+            } else if (mode_str == "Erase" || mode_str == "erase") {
+                entry.mode = PatchInfoMode::ERASE;
             } else {
                 io.setError("Unknown patch mode: '" + mode_str + "'");
                 entry.mode = PatchInfoMode::NONE;
             }
 
-            io.mapRequired("patch", entry.patch_id);
+            io.mapOptional("patch", entry.patch_id);
             io.mapOptional("arguments", entry.arguments);
+
+            if (entry.mode != PatchInfoMode::ERASE && entry.patch_id.empty()) {
+                io.setError("'patch' field is required for mode '" + mode_str + "'");
+            }
 
             std::vector< std::string > optimization;
             io.mapOptional("optimization", optimization);

@@ -1,0 +1,22 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "capture_test_patches"
+  version: "1.0.0"
+  description: "Test patches for capture feature verification"
+  author: "Security Team"
+  created: "2026-04-20"
+
+patches:
+  - name: "ptr_log"
+    description: "Log a pointer and size, used by capture tests"
+    category: "test"
+    code_file: "patches/patch_ptr_logger.c"
+    function_name: "patch::before::ptr_log"
+    parameters:
+      - name: "ptr"
+        type: "void*"
+        description: "Pointer argument"
+      - name: "n"
+        type: "unsigned long"
+        description: "Size argument"

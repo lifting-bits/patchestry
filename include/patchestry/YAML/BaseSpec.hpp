@@ -22,7 +22,8 @@ namespace patchestry::passes {
         NONE = 0, // No patch
         APPLY_BEFORE,
         APPLY_AFTER,
-        REPLACE
+        REPLACE,
+        ERASE // Delete matched op, no patch function
     };
 
     enum class ContractType : uint8_t {
@@ -35,7 +36,8 @@ namespace patchestry::passes {
         VARIABLE,    // Reference to variable by name
         SYMBOL,      // Reference to symbol by name
         CONSTANT,    // Literal constant value
-        RETURN_VALUE // Return value of function or operation
+        RETURN_VALUE, // Return value of function or operation
+        CAPTURE      // Named capture bound from match.captures
     };
 
     struct Metadata

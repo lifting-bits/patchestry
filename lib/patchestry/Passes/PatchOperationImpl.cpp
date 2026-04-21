@@ -380,5 +380,77 @@ namespace patchestry {
             }
         }
 
+        namespace {
+            // Build a zero/default value for the given CIR type. Used by
+            // ERASE mode to replace uses of a deleted op's results.
+            // Returns nullptr if the type is not handled.
+            mlir::Value buildDefaultValue(
+                mlir::OpBuilder &builder, mlir::Location loc, mlir::Type type
+            ) {
+                if (auto int_type = mlir::dyn_cast< cir::IntType >(type)) {
+                    auto attr = cir::IntAttr::get(
+                        int_type,
+                        llvm::APSInt(
+                            llvm::APInt(int_type.getWidth(), 0), !int_type.isSigned()
+                        )
+                    );
+                    return builder.create< cir::ConstantOp >(loc, int_type, attr);
+                }
+                if (auto ptr_type = mlir::dyn_cast< cir::PointerType >(type)) {
+                    auto zero_int_type =
+                        cir::IntType::get(builder.getContext(), 64, false);
+                    auto zero_attr = cir::IntAttr::get(
+                        zero_int_type,
+                        llvm::APSInt(llvm::APInt(64, 0), true)
+                    );
+                    auto zero_int =
+                        builder.create< cir::ConstantOp >(loc, zero_int_type, zero_attr);
+                    return builder.create< cir::CastOp >(
+                        loc, ptr_type, cir::CastKind::int_to_ptr, zero_int
+                    );
+                }
+                if (auto bool_type = mlir::dyn_cast< cir::BoolType >(type)) {
+                    auto attr = cir::BoolAttr::get(builder.getContext(), bool_type, false);
+                    return builder.create< cir::ConstantOp >(loc, bool_type, attr);
+                }
+                return nullptr;
+            }
+        } // namespace
+
+        void PatchOperationImpl::eraseOperation(
+            InstrumentationPass &pass, mlir::Operation *op
+        ) {
+            (void) pass;
+            if (op == nullptr) {
+                LOG(ERROR) << "Erase: operation is null\n";
+                return;
+            }
+
+            // If the op has live uses, replace each result with a default
+            // value (zero / null) of the matching type so dependent ops
+            // remain well-formed.
+            if (!op->use_empty()) {
+                mlir::OpBuilder builder(op);
+                builder.setInsertionPoint(op);
+                for (auto result : op->getResults()) {
+                    if (result.use_empty()) {
+                        continue;
+                    }
+                    auto default_val =
+                        buildDefaultValue(builder, op->getLoc(), result.getType());
+                    if (!default_val) {
+                        LOG(ERROR) << "Erase: cannot build default value for result "
+                                      "type of '"
+                                   << op->getName().getStringRef().str()
+                                   << "', skipping\n";
+                        return;
+                    }
+                    result.replaceAllUsesWith(default_val);
+                }
+            }
+
+            op->erase();
+        }
+
     } // namespace passes
 } // namespace patchestry
