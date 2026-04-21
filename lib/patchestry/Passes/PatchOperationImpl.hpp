@@ -83,6 +83,26 @@ namespace patchestry::passes {
          );
 
         /**
+         * @brief Applies a patch at the entry block of the enclosing (caller) function.
+         *
+         * The matched call identifies which enclosing function to instrument; the patch
+         * call is inserted right after the caller's alloca prologue so that all parameter
+         * allocas and their initialization stores are in scope. OPERAND argument sources
+         * are remapped to the enclosing function's block arguments; RETURN_VALUE and
+         * CAPTURE sources are rejected because they are only defined at the call site.
+         *
+         * @param pass The instrumentation pass instance
+         * @param call_op The matched call operation
+         * @param patch The patch information containing the patch function details
+         * @param patch_module The module containing the patch function
+         * @param inline_patches Whether or not to inline at application
+         */
+        static void applyPatchAtEntrypoint(
+            InstrumentationPass &pass, cir::CallOp call_op,
+            const PatchInformation &patch, mlir::ModuleOp patch_module, bool inline_patches
+        );
+
+        /**
          * @brief Replaces a generic operation with a patch function call.
          *
          * This method replaces non-call operations (e.g., cir.binop, cir.cmp)

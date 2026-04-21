@@ -549,6 +549,13 @@ namespace patchestry::passes {
                                     || meta_patch.optimization.contains("inline-patches")
                             );
                             break;
+                        case PatchInfoMode::APPLY_AT_ENTRYPOINT:
+                            PatchOperationImpl::applyPatchAtEntrypoint(
+                                *this, call_op, patch_site, patch_module.get(),
+                                options.enable_inlining
+                                    || meta_patch.optimization.contains("inline-patches")
+                            );
+                            break;
                         case PatchInfoMode::REPLACE:
                             PatchOperationImpl::replaceCallWithPatch(
                                 *this, call_op, patch_site, patch_module.get(),
@@ -713,7 +720,9 @@ namespace patchestry::passes {
 
     void InstrumentationPass::prepare_patch_call_arguments(
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
-        const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        const PatchInformation &patch,
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
         if (!patch.patch_action.has_value()) {
             LOG(ERROR) << "Patch action is missing\n";
@@ -743,7 +752,7 @@ namespace patchestry::passes {
             switch (arg_spec.source) {
                 case ArgumentSourceType::OPERAND:
                     handle_operand_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                        builder, call_op, arg_spec, patch_arg_type, arg_map, entrypoint_func
                     );
                     break;
                 case ArgumentSourceType::VARIABLE:
@@ -756,7 +765,7 @@ namespace patchestry::passes {
                     break;
                 case ArgumentSourceType::RETURN_VALUE:
                     handle_return_value_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                        builder, call_op, arg_spec, patch_arg_type, arg_map, entrypoint_func
                     );
                     break;
                 case ArgumentSourceType::CONSTANT:
@@ -766,7 +775,8 @@ namespace patchestry::passes {
                     break;
                 case ArgumentSourceType::CAPTURE:
                     handle_capture_argument(
-                        builder, call_op, arg_spec, patch_arg_type, patch, arg_map
+                        builder, call_op, arg_spec, patch_arg_type, patch, arg_map,
+                        entrypoint_func
                     );
                     break;
             }
@@ -825,7 +835,8 @@ namespace patchestry::passes {
     void InstrumentationPass::handle_operand_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
         if (!arg_spec.index.has_value()) {
             LOG(ERROR) << "OPERAND source requires index field\n";
@@ -834,7 +845,19 @@ namespace patchestry::passes {
         unsigned idx = arg_spec.index.value();
         mlir::Value operand_value;
 
-        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
+        if (entrypoint_func.has_value()) {
+            // APPLY_AT_ENTRYPOINT: remap index N to the enclosing function's Nth block
+            // argument so no call-site value leaks into the entry block (which would
+            // violate SSA dominance).
+            auto func_args = entrypoint_func->getArguments();
+            if (idx >= func_args.size()) {
+                LOG(ERROR) << "OPERAND index " << idx
+                           << " out of range for enclosing function (has "
+                           << func_args.size() << " argument(s))\n";
+                return;
+            }
+            operand_value = func_args[idx];
+        } else if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
             if (idx >= orig_call_op.getArgOperands().size()) {
                 LOG(ERROR) << "Operand index " << idx << " out of range\n";
                 return;
@@ -937,8 +960,20 @@ namespace patchestry::passes {
     void InstrumentationPass::handle_return_value_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
+        // APPLY_AT_ENTRYPOINT: the call result is only defined at the matched call
+        // site, which dominates neither the entry block nor any insertion point
+        // before the call. Using it here would produce invalid SSA IR.
+        if (entrypoint_func.has_value()) {
+            LOG(ERROR) << "RETURN_VALUE source is not valid for APPLY_AT_ENTRYPOINT: "
+                          "the call result is only defined at the matched call site, "
+                          "not at the function entrypoint. Use 'variable', 'symbol', "
+                          "or 'constant' instead.\n";
+            return;
+        }
+
         if (call_op->getNumResults() == 0) {
             LOG(ERROR) << "Operation/function does not have a return value\n";
             return;
@@ -983,8 +1018,19 @@ namespace patchestry::passes {
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
         const PatchInformation &patch,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
+        // APPLY_AT_ENTRYPOINT: captures are SSA values bound at the matched call
+        // site and do not dominate the enclosing function's entry block.
+        if (entrypoint_func.has_value()) {
+            LOG(ERROR) << "CAPTURE source is not valid for APPLY_AT_ENTRYPOINT: "
+                          "captures are only bound at the matched call site, not at "
+                          "the function entrypoint. Use 'variable', 'symbol', or "
+                          "'constant' instead.\n";
+            return;
+        }
+
         if (arg_spec.name.empty()) {
             LOG(ERROR) << "CAPTURE source requires 'name' field\n";
             return;

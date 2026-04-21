@@ -22,6 +22,7 @@ namespace patchestry::passes {
         NONE = 0, // No patch
         APPLY_BEFORE,
         APPLY_AFTER,
+        APPLY_AT_ENTRYPOINT, // Insert patch call at caller's entry block
         REPLACE,
         ERASE // Delete matched op, no patch function
     };

@@ -27,19 +27,19 @@ paths:
 
 ## Adding a New Argument Source
 
-`ArgumentSourceType` controls where a value comes from when building the argument list for a patch/contract call. Each `arguments:` entry in a YAML `action:` block has a `source:` field mapping to one of: `operand` (Nth operand by index), `variable` (named local alloca), `symbol` (module-level global), `constant` (inline literal), `return_value` (call result — invalid with `apply_at_entrypoint`).
+`ArgumentSourceType` controls where a value comes from when building the argument list for a patch/contract call. Each `arguments:` entry in a YAML `action:` block has a `source:` field mapping to one of: `operand` (Nth operand by index — at `apply_at_entrypoint`, index N maps to the enclosing function's Nth block arg), `variable` (named local alloca), `symbol` (module-level global), `constant` (inline literal), `return_value` (call result — invalid with `apply_at_entrypoint`), `capture` (named match binding — invalid with `apply_at_entrypoint`).
 
 To add a new source:
 
 1. Add enumerator to `ArgumentSourceType` in `include/patchestry/YAML/BaseSpec.hpp`
 2. Add `source_str == "my_source"` branch in `MappingTraits<patch::ArgumentSource>::mapping` in `include/patchestry/YAML/PatchSpec.hpp`; mirror in `ContractSpec.hpp` if contracts also use it
-3. Add a `case ArgumentSourceType::MY_SOURCE:` in both `prepare_patch_call_arguments` (~line 720) and `prepare_contract_call_arguments` (~line 1102) in `lib/patchestry/Passes/InstrumentationPass.cpp`; if the source requires call-site context, reject it when `entrypoint_func` is set (like `return_value` does)
+3. Add a `case ArgumentSourceType::MY_SOURCE:` in both `prepare_patch_call_arguments` (~line 720) and `prepare_contract_call_arguments` (~line 1102) in `lib/patchestry/Passes/InstrumentationPass.cpp`; if the source requires call-site context, reject it when `entrypoint_func` is set (like `return_value` and `capture` do). Both `prepare_patch_call_arguments` and `prepare_contract_call_arguments` take an `std::optional<cir::FuncOp> entrypoint_func` — thread it through to your handler.
 4. Add a row to the Argument Source Types table in `docs/GettingStarted/patch_specifications.md`
 
 ## Invariants
 
 - **SSA Dominance**: A value must be defined in a block that dominates every use. Never reference a value defined at a call site from an earlier insertion point (e.g., the function entry block).
-- **APPLY_AT_ENTRYPOINT sources**: `operand` → remapped to enclosing function args; `variable`/`symbol`/`constant` → valid; `return_value` → **rejected** (only exists at call site). Implementation: `prepare_contract_call_arguments` in `InstrumentationPass.cpp`.
+- **APPLY_AT_ENTRYPOINT sources**: `operand` → remapped to enclosing function args; `variable`/`symbol`/`constant` → valid; `return_value` and `capture` → **rejected** (only exist at call site). Supported by both `patches:` and `contracts:`. Implementation: `prepare_patch_call_arguments` / `prepare_contract_call_arguments` in `InstrumentationPass.cpp` (both take `std::optional<cir::FuncOp> entrypoint_func`); dispatch lives in `PatchOperationImpl::applyPatchAtEntrypoint` and `ContractOperationImpl::applyContractAtEntrypoint`.
 
 ## Build & Test
 

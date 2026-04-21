@@ -213,9 +213,17 @@ namespace patchestry::passes { // NOLINT
          * @param patch Patch information containing argument specifications
          * @param args Output vector to store the prepared arguments
          */
+        // When entrypoint_func is set (APPLY_AT_ENTRYPOINT mode):
+        //   - OPERAND sources are remapped to the enclosing function's block arguments
+        //     (index N → enclosing_func.getArguments()[N]) so that no call-site value
+        //     leaks into the entry block and violates SSA dominance.
+        //   - RETURN_VALUE and CAPTURE are rejected: both are only defined at the matched
+        //     call site, not at the function entrypoint.
         void prepare_patch_call_arguments(
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
-            const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &args_map
+            const PatchInformation &patch,
+            llvm::MapVector< mlir::Value, mlir::Value > &args_map,
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
         );
 
         void update_state_after_patch(
@@ -431,7 +439,8 @@ namespace patchestry::passes { // NOLINT
         void handle_operand_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
         );
 
         /**
@@ -458,7 +467,8 @@ namespace patchestry::passes { // NOLINT
         void handle_return_value_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
         );
 
         /**
@@ -478,7 +488,8 @@ namespace patchestry::passes { // NOLINT
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
             const PatchInformation &patch,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
         );
 
         /**

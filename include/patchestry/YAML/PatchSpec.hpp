@@ -100,6 +100,8 @@ namespace patchestry::passes {
                     return "APPLY_BEFORE";
                 case PatchInfoMode::APPLY_AFTER:
                     return "APPLY_AFTER";
+                case PatchInfoMode::APPLY_AT_ENTRYPOINT:
+                    return "APPLY_AT_ENTRYPOINT";
                 case PatchInfoMode::REPLACE:
                     return "REPLACE";
                 case PatchInfoMode::ERASE:
@@ -217,13 +219,16 @@ namespace llvm::yaml {
                 action.mode = PatchInfoMode::APPLY_BEFORE;
             } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
                 action.mode = PatchInfoMode::APPLY_AFTER;
+            } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
+                action.mode = PatchInfoMode::APPLY_AT_ENTRYPOINT;
             } else if (mode_str == "Replace" || mode_str == "replace") {
                 action.mode = PatchInfoMode::REPLACE;
             } else if (mode_str == "Erase" || mode_str == "erase") {
                 action.mode = PatchInfoMode::ERASE;
             } else {
                 LOG(ERROR) << "Unknown patch mode: '" << mode_str
-                           << "'. Valid modes: ApplyBefore, ApplyAfter, Replace, Erase";
+                           << "'. Valid modes: ApplyBefore, ApplyAfter, "
+                              "ApplyAtEntrypoint, Replace, Erase";
                 action.mode = PatchInfoMode::NONE;
             }
 
@@ -449,6 +454,8 @@ namespace llvm::yaml {
                 entry.mode = PatchInfoMode::APPLY_BEFORE;
             } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
                 entry.mode = PatchInfoMode::APPLY_AFTER;
+            } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
+                entry.mode = PatchInfoMode::APPLY_AT_ENTRYPOINT;
             } else if (mode_str == "Replace" || mode_str == "replace") {
                 entry.mode = PatchInfoMode::REPLACE;
             } else if (mode_str == "Erase" || mode_str == "erase") {

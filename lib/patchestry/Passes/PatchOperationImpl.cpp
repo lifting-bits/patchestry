@@ -452,5 +452,98 @@ namespace patchestry {
             op->erase();
         }
 
+        void PatchOperationImpl::applyPatchAtEntrypoint(
+            InstrumentationPass &pass, cir::CallOp call_op,
+            const PatchInformation &patch, mlir::ModuleOp patch_module, bool should_inline
+        ) {
+            if (call_op == nullptr) {
+                LOG(ERROR) << "applyPatchAtEntrypoint: the matched call was null";
+                return;
+            }
+
+            const auto &patch_spec = patch.spec.value();
+            std::string patch_function_name = namifyFunction(patch_spec.function_name);
+
+            // APPLY_AT_ENTRYPOINT inserts the patch at the beginning of the enclosing
+            // function (i.e. the function that contains the matched call), not the
+            // callee. The matched call identifies which enclosing function to
+            // instrument. Argument sources are resolved against the entry block:
+            //   - OPERAND index N  → Nth block argument of the enclosing function
+            //   - VARIABLE/SYMBOL  → alloca/global already live at the entry block
+            //   - CONSTANT         → created inline, always valid
+            //   - RETURN_VALUE     → rejected (only defined at the call site)
+            //   - CAPTURE          → rejected (only bound at the match site)
+            auto enclosing_func = call_op->getParentOfType< cir::FuncOp >();
+            if (!enclosing_func) {
+                LOG(ERROR) << "applyPatchAtEntrypoint: cannot find enclosing function\n";
+                return;
+            }
+            if (enclosing_func.getBody().empty()) {
+                LOG(ERROR) << "applyPatchAtEntrypoint: enclosing function has no body\n";
+                return;
+            }
+
+            auto module = call_op->getParentOfType< mlir::ModuleOp >();
+            assert(module && "applyPatchAtEntrypoint: no module found");
+
+            auto patch_func = ensurePatchFunctionAvailable(
+                pass, module, patch_module, patch_function_name, "Patch at entrypoint"
+            );
+            if (!patch_func) {
+                return;
+            }
+
+            // Find the insertion point just after all alloca ops and any stores that
+            // initialize parameters (i.e. stores whose value is a block argument).
+            // This mirrors applyContractAtEntrypoint so that "source: variable" can
+            // load a parameter value written by the prologue.
+            mlir::Block &entry_block = enclosing_func.getBody().front();
+            auto insert_pos          = entry_block.begin();
+            while (insert_pos != entry_block.end()
+                   && mlir::isa< cir::AllocaOp >(*insert_pos))
+            {
+                ++insert_pos;
+            }
+            while (insert_pos != entry_block.end()) {
+                if (auto store_op = mlir::dyn_cast< cir::StoreOp >(&*insert_pos)) {
+                    if (mlir::isa< mlir::BlockArgument >(store_op->getOperand(0))) {
+                        ++insert_pos;
+                        continue;
+                    }
+                }
+                break;
+            }
+            mlir::OpBuilder builder(&entry_block, insert_pos);
+
+            auto symbol_ref = mlir::FlatSymbolRefAttr::get(
+                call_op->getContext(), patch_function_name
+            );
+            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            // Pass enclosing_func so that OPERAND sources remap to block arguments and
+            // RETURN_VALUE / CAPTURE are rejected — both prevent call-site SSA values
+            // from leaking into the entry block (which would violate dominance).
+            pass.prepare_patch_call_arguments(
+                builder, call_op, patch_func, patch, function_args_map, enclosing_func
+            );
+            llvm::SmallVector< mlir::Value > call_args;
+            for (auto &[old_arg, new_arg] : function_args_map) {
+                call_args.push_back(new_arg);
+            }
+
+            auto patch_call_op = builder.create< cir::CallOp >(
+                enclosing_func->getLoc(), symbol_ref,
+                patch_func->getResultTypes().size() != 0
+                    ? patch_func->getResultTypes().front()
+                    : mlir::Type(),
+                call_args
+            );
+
+            pass.set_instrumentation_call_attributes(patch_call_op, call_op);
+
+            if (should_inline) {
+                pass.inline_worklists.insert(patch_call_op);
+            }
+        }
+
     } // namespace passes
 } // namespace patchestry

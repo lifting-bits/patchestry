@@ -305,7 +305,7 @@ Common operand patterns:
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `mode` | Patching or contract mode to apply. Patch modes: `apply_before`, `apply_after`, `replace`. Contract-only mode: `apply_at_entrypoint` | `"apply_before"` |
+| `mode` | Patching or contract mode to apply. Shared modes: `apply_before`, `apply_after`, `apply_at_entrypoint`. Patch-only modes: `replace`, `erase` | `"apply_before"` |
 | `patch_id` | Reference to the patch implementation | `"USB-PATCH-001"` |
 | `description` | Description of the action being applied | `"Pre-validation security check"` |
 | `arguments` | List of arguments to pass to patch function | See [Argument Specification](#argument-specification) |
@@ -358,7 +358,7 @@ arguments:
 | `symbol` | Module-level global variable or function pointer, located in the module symbol table | `symbol` | Pass a global variable or function pointer to the patch |
 | `constant` | Literal constant value | `value` | Pass fixed values to patch functions |
 | `return_value` | Return value of function or operation | None | Access return value (`apply_before` / `apply_after` modes only — **not valid for `apply_at_entrypoint`**) |
-| `capture` | Named capture bound by `match.captures` — looks up an `mlir::Value` by name from the match site | `name` | Reference the same operand/result in multiple patch arguments, or rebind by name for readability |
+| `capture` | Named capture bound by `match.captures` — looks up an `mlir::Value` by name from the match site | `name` | Reference the same operand/result in multiple patch arguments, or rebind by name for readability (**not valid for `apply_at_entrypoint`** — captures are bound at the match site, not at function entry) |
 
 ### Named captures
 
@@ -480,10 +480,12 @@ arguments:
 
 #### Return Value Handling
 ```yaml
-# Access function return value (apply_before / apply_after mode only)
+# Access function return value (apply_before / apply_after modes only —
+# both patches and contracts support it there).
 # NOTE: return_value is NOT valid for apply_at_entrypoint — the call
 # result is only defined at the matched call site, not at the function
-# entrypoint.  Use variable, symbol, or constant instead.
+# entrypoint. Use variable, symbol, or constant instead. capture is
+# also rejected at entrypoint for the same reason.
 arguments:
   - name: "result"
     source: "return_value"
@@ -635,13 +637,13 @@ Examples:
 
 ## Patch Modes
 
-The specification supports four patch modes and one contract-only mode:
+The specification supports five modes:
 
 - `apply_before`: Apply patch or contract before the matched function or operation
 - `apply_after`: Apply patch or contract after the matched function or operation completes
+- `apply_at_entrypoint`: Insert a patch or contract at the entry point of the **caller** function (see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
 - `replace`: Completely replace the matched function call or operation (patches only)
 - `erase`: Delete the matched op without inserting any patch code (patches only — see [Erase Mode](#erase-mode))
-- `apply_at_entrypoint`: Insert a contract at the entry point of the **caller** function (contracts only — see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
 
 ### Apply Before Mode
 
@@ -734,46 +736,63 @@ a different function, use `replace` instead.
 
 ### Apply At Entrypoint Mode
 
-`apply_at_entrypoint` is a **contract-only** mode that inserts the contract call at the beginning of the **caller** function — the function that *contains* the matched call — rather than at the matched call site itself.
+`apply_at_entrypoint` inserts the patch or contract call at the beginning of the **caller** function — the function that *contains* the matched call — rather than at the matched call site itself. Both `patches:` and `contracts:` support this mode.
 
-> **Important**: The name can be misleading. The contract is **not** inserted at the beginning of the matched function (the callee). It is inserted at the beginning of the *enclosing* function (the caller) that was specified in `function_context`. Insertion happens after all `cir.alloca` ops and parameter-initialization stores so that all of the caller's parameters are in scope.
+> **Important**: The name can be misleading. The call is **not** inserted at the beginning of the matched function (the callee). It is inserted at the beginning of the *enclosing* function (the caller) named via `context` (flat form) or `function_context` (legacy form). Insertion happens after all `cir.alloca` ops and parameter-initialization stores so that all of the caller's parameters are in scope.
 
 **When to use it**: When you want to validate invariants at function entry using the caller's local parameters, before any call inside the function executes.
 
 **How it works** (example):
 - `match.name` = `"usbd_ep_write_packet"` — the call to find inside the caller
-- `match.function_context.name` = `"bl_usb__send_message"` — the caller whose entry point receives the contract
-- The contract call is inserted at the start of `bl_usb__send_message`, not at the `usbd_ep_write_packet` call site
+- `match.context` = `["bl_usb__send_message"]` — the caller whose entry point receives the instrumentation
+- The call is inserted at the start of `bl_usb__send_message`, not at the `usbd_ep_write_packet` call site
 - Arguments (e.g., `source: "variable"`) are resolved from `bl_usb__send_message`'s local scope
 
+**Argument-source restrictions**: because the inserted call runs at the function entry, SSA values bound at the matched call site are not in scope. The pass rejects:
+- `source: "return_value"` — the call result is only defined at the match site
+- `source: "capture"` — captures are bound at the match site, not at entry
+
+Use `variable`, `symbol`, `constant`, or `operand` (which maps index N to the caller's Nth block argument) instead.
+
+**Patch example** (flat syntax):
 ```yaml
-contract_actions:
-  - id: "ENTRY-CONTRACT-001"
+patches:
+  - name: "entrypoint_message_check"
+    id: "ENTRY-PATCH-001"
     description: "Null-check message pointer at function entry"
-
     match:
-      - name: "usbd_ep_write_packet"   # call to find inside the caller
-        kind: "function"
-        function_context:
-          - name: "bl_usb__send_message"  # contract inserts HERE, at this function's entry
-
-    action:
-      - mode: "apply_at_entrypoint"
-        contract_id: "message_entry_check_contract"
-        description: "Runtime null-check on message pointer at bl_usb__send_message entry"
-        arguments:
-          # source: variable — load a named local/parameter alloca at entry
-          - name: "msg"
-            source: "variable"
-            symbol: "msg"
-          # source: operand — index 0 maps to the 0th argument of bl_usb__send_message,
-          # not the 0th operand of the usbd_ep_write_packet call
-          - name: "usb_handle"
-            source: "operand"
-            index: 0
+      name: "usbd_ep_write_packet"       # call to find inside the caller
+      kind: "function"
+      context: ["bl_usb__send_message"]  # patch inserts HERE, at this function's entry
+    mode: "apply_at_entrypoint"
+    patch: "message_entry_check_patch"
+    arguments:
+      # source: variable — load a named local/parameter alloca at entry
+      - source: "variable"
+        symbol: "msg"
 ```
 
-> **Note**: The contract is inserted at the beginning of the **caller** (`bl_usb__send_message` — the function containing the matched call), not at the beginning of the matched function itself (`usbd_ep_write_packet`).
+**Contract example** (flat syntax):
+```yaml
+contracts:
+  - name: "entrypoint_message_check"
+    id: "ENTRY-CONTRACT-001"
+    description: "Null-check message pointer at function entry"
+    match:
+      name: "usbd_ep_write_packet"
+      context: ["bl_usb__send_message"]
+    mode: "apply_at_entrypoint"
+    contract: "message_entry_check_contract"
+    arguments:
+      - source: "variable"
+        symbol: "msg"
+      # source: operand — index 0 maps to the 0th argument of bl_usb__send_message,
+      # not the 0th operand of the usbd_ep_write_packet call
+      - source: "operand"
+        index: 0
+```
+
+> **Note**: The call is inserted at the beginning of the **caller** (`bl_usb__send_message` — the function containing the matched call), not at the beginning of the matched function itself (`usbd_ep_write_packet`).
 
 # Contract Library Specification
 
