@@ -65,12 +65,6 @@ void prettyPrint(const passes::Configuration &config) {
     llvm::outs() << "  Architecture: " << config.target.arch << "\n";
     llvm::outs() << "\n";
 
-    llvm::outs() << "Execution Order:\n";
-    for (const auto &order : config.execution_order) {
-        llvm::outs() << "  " << order << "\n";
-    }
-    llvm::outs() << "\n";
-
     // Print meta patches
     llvm::outs() << "Meta Patches:\n";
     for (const auto &meta_patch : config.meta_patches) {
