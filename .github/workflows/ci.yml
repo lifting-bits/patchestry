@@ -21,8 +21,11 @@ jobs:
     strategy:
       matrix:
         image-version: [22.04]
-    runs-on: ubuntu-${{ matrix.image-version }}
-    timeout-minutes: 30
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && format('ubuntu-{0}-arm', matrix.image-version) || format('ubuntu-{0}', matrix.image-version) }}
+    # Ghidra-from-source build (gradle buildGhidra + IntegrationTest) dominates
+    # wall time; 60 min covers both arches with headroom.
+    timeout-minutes: 60
     env:
       CI: true
     steps:
