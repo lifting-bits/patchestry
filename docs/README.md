@@ -343,15 +343,17 @@ meta_contracts:
 
 Patchestry provides contracts as a mechanism for specifying and verifying
 correctness properties of patched code. Unlike patches, contracts do not alter
-program state. There are two types of contracts:
+program state. Contracts are **static-only**: they are declarative predicates
+(preconditions / postconditions) that the instrumentation pass attaches to the
+matched op as MLIR attributes. They emit no runtime code and produce no runtime
+overhead; downstream verifiers such as KLEE or SeaHorn consume the attributes
+to check that the predicates hold.
 
-- __Runtime contracts__: Checks that persist in the compiled binary and execute
-  at runtime. These address unexpected states during execution and are written
-  as C functions referencing a `code_file`, similar to patches.
-- __Static contracts__: Constraints used exclusively for formal verification.
-  These are checked by tools such as KLEE or SeaHorn and do not persist in the
-  compiled binary. Static contracts can specify preconditions and postconditions
-  using predicates.
+The "runtime contract" concept that previously lived here — a C function called
+at the matched site to validate a condition — was mechanically the same as a
+patch, so those cases have been merged into `patches:`. Write the runtime check
+as a patch whose body asserts (or traps) on failure; attach a `contracts:` entry
+alongside it to encode the same property for the verifier.
 
 ### Contract Specification
 
@@ -384,13 +386,17 @@ Static contract predicates support:
 ### Meta-Contract Configuration
 
 Meta-contracts define where contracts are applied, similar to meta-patches.
-Contracts can be applied at three points:
+Contracts support two modes; both attach the same `contract.static` attribute
+and differ only in which op the attribute lands on:
 
-- __`apply_before`__: Check the contract before the matched function or
-  operation.
-- __`apply_after`__: Check the contract after the matched function or operation.
-- __`apply_at_entrypoint`__: Check the contract at the entry of the enclosing
-  function.
+- __`apply_before`__: Attach the predicate to the matched op (or the op
+  immediately preceding the match site).
+- __`apply_after`__: Attach the predicate to the op immediately following the
+  match site.
+
+`apply_at_entrypoint`, `replace`, and `erase` are patch-only. For a check that
+needs to run at the caller's entry block, write a patch with
+`mode: apply_at_entrypoint`.
 
 ## Architecture
 
@@ -507,21 +513,36 @@ meta_patches:
 
 To express the same property declaratively for the verifier, attach a
 static contract. The predicate is carried as an MLIR attribute and
-produces no runtime overhead:
+produces no runtime overhead. The contract definition lives in a library
+file that the deployment spec references via `libraries:`, and the
+meta-contract in the deployment spec dispatches it at the match site:
 
 ```yaml
+# contracts/cve_2021_22156_library.yaml
 contracts:
   - name: calloc_bounds_contract
     severity: high
     preconditions:
       - id: "num_elements_bounded"
-        description: "calloc count must not overflow when multiplied by elem size"
+        description: "calloc count must not overflow a 32-bit size_t"
         pred:
           kind: range
           target: arg0
+          # min/max are string-encoded integer literals parsed with
+          # std::stoll — C macros and expressions like
+          # "SIZE_MAX/sizeof(long)" are not supported. Compute the
+          # bound in the spec author's environment and inline the
+          # integer.
           range:
             min: "0"
-            max: "SIZE_MAX/sizeof(long)"
+            max: "1073741823"   # (2^32 - 1) / 4, i.e. SIZE_MAX/sizeof(long)
+                                # on a 32-bit target with 4-byte long
+```
+
+```yaml
+# deployment.yaml
+libraries:
+  - "contracts/cve_2021_22156_library.yaml"
 
 meta_contracts:
   - name: cve_2021_22156_contract_meta
@@ -536,6 +557,11 @@ meta_contracts:
           - mode: "apply_before"
             contract_id: "calloc_bounds_contract"
 ```
+
+> Top-level `contracts:` and `meta_contracts:` are mutually exclusive
+> within a single deployment file (see `ConfigurationFile.hpp`), so
+> the flat library definition belongs in its own `libraries:` file
+> rather than alongside the `meta_contracts:` dispatch above.
 
 If you want a runtime check that traps on violation, write it as a
 patch (the old "runtime contract" shape) — same `code_file` /
