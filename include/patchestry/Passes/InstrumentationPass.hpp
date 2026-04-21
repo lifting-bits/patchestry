@@ -81,8 +81,11 @@ namespace patchestry::passes { // NOLINT
     {
         std::optional< patch::PatchSpec > spec;
         std::optional< patch::PatchAction > patch_action;
-        // Named captures bound by the matcher (operand/result by name).
-        // Populated per-match-site in apply_patch_action_to_targets.
+        // Named captures bound by `OperationMatcher::patch_action_matches`
+        // (operand/result index by name). Assigned onto a per-match-site copy
+        // of `PatchInformation` in `apply_patch_action_to_targets`; read by
+        // `handle_capture_argument` when a `source: capture` argument is
+        // resolved.
         llvm::StringMap< mlir::Value > captures;
     };
 
@@ -92,12 +95,22 @@ namespace patchestry::passes { // NOLINT
      * The InstrumentationPass is an MLIR transformation pass that modifies MLIR modules
      * by instrumenting according to specifications defined in a YAML configuration file.
      * It can instrument function calls and operations by inserting patch or contract code
-     * before or after, or by replacing an original operation entirely with a patch.
+     * before or after, redirecting the matched call to a patch, deleting an op entirely,
+     * or hoisting a patch call to the caller's entry block.
      *
-     * The pass supports three main instrumentation modes:
-     * - APPLY_BEFORE: Insert patch code before the matched operation
-     * - APPLY_AFTER: Insert patch code after the matched operation
-     * - REPLACE: Replace the matched operation with patch code
+     * The pass supports five instrumentation modes; the first three are shared between
+     * patches and contracts, the last two are patch-only:
+     * - APPLY_BEFORE: Insert the patch call / attach the contract attribute before the
+     *   matched op.
+     * - APPLY_AFTER: Insert the patch call / attach the contract attribute after the
+     *   matched op.
+     * - APPLY_AT_ENTRYPOINT: Insert the patch call at the enclosing (caller) function's
+     *   entry block, after the alloca + parameter-store prologue. Patch-only — contracts
+     *   are static and attach predicates as MLIR attributes, so "entrypoint" has no
+     *   meaning for them.
+     * - REPLACE: Replace the matched op with a call to the patch function (patch-only).
+     * - ERASE: Delete the matched op, replacing live results with default values
+     *   (patch-only; no patch function invoked).
      *
      * The pass operates on CIR (Clang IR) dialect operations within MLIR modules and can
      * optionally inline patch functions for performance.
@@ -202,23 +215,27 @@ namespace patchestry::passes { // NOLINT
         /**
          * @brief Prepares arguments for a patch function call.
          *
-         * This method handles argument preparation for patch function calls, including
-         * type casting when necessary. It supports special argument handling such as
-         * passing return values and ensures type compatibility between original and patch
-         * functions.
+         * Dispatches each `arguments:` entry to the matching `handle_*_argument` helper,
+         * which resolves the value, inserts casts as needed, and writes the result into
+         * `args_map` keyed by the original SSA value (so reference-type writeback in
+         * `update_state_after_patch` can find the source).
          *
-         * @param builder MLIR operation builder for creating new operations
-         * @param op The original operation being patched
-         * @param patch_func The patch function to be called
-         * @param patch Patch information containing argument specifications
-         * @param args Output vector to store the prepared arguments
+         * @param builder MLIR operation builder for creating new operations.
+         * @param op The matched operation the patch is being wrapped around.
+         * @param patch_func The patch function whose arguments are being assembled.
+         * @param patch Patch information (spec + action + per-match capture bindings).
+         * @param args_map Output map from the original SSA value to the patch-arg value
+         *                 (possibly cast). Ordering follows YAML declaration order.
+         * @param entrypoint_func When set, the patch call is being emitted at this
+         *                        function's entry block (APPLY_AT_ENTRYPOINT mode).
+         *                        Semantics:
+         *                        - OPERAND index N is remapped to
+         *                          `entrypoint_func.getArguments()[N]` so no call-site
+         *                          value leaks into the entry block (SSA dominance).
+         *                        - RETURN_VALUE and CAPTURE are rejected: both are only
+         *                          defined at the matched call site.
+         *                        - VARIABLE / SYMBOL / CONSTANT resolve normally.
          */
-        // When entrypoint_func is set (APPLY_AT_ENTRYPOINT mode):
-        //   - OPERAND sources are remapped to the enclosing function's block arguments
-        //     (index N → enclosing_func.getArguments()[N]) so that no call-site value
-        //     leaks into the entry block and violates SSA dominance.
-        //   - RETURN_VALUE and CAPTURE are rejected: both are only defined at the matched
-        //     call site, not at the function entrypoint.
         void prepare_patch_call_arguments(
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
             const PatchInformation &patch,
@@ -229,55 +246,6 @@ namespace patchestry::passes { // NOLINT
         void update_state_after_patch(
             mlir::OpBuilder &builder, cir::CallOp patch_call_op, mlir::Operation *target_op,
             const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
-        );
-
-        /**
-         * @brief Applies a patch before the target operation.
-         *
-         * This method inserts a call to the patch function immediately before the target
-         * operation. It handles module symbol merging, argument preparation, and call creation.
-         * The inserted call is added to the inline worklist if inlining is enabled.
-         *
-         * @param op The target operation to be instrumented
-         * @param patch The patch information containing the patch function details
-         * @param patch_module The module containing the patch function
-         * @param inline_patches Whether or not to inline at application.
-         */
-        void apply_before_patch(
-            mlir::Operation *op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-            bool inline_patches
-        );
-
-        /**
-         * @brief Applies a patch after the target operation.
-         *
-         * This method inserts a call to the patch function immediately after the target
-         * operation. It handles module symbol merging, argument preparation, and call creation.
-         * The inserted call is added to the inline worklist if inlining is enabled.
-         *
-         * @param op The target operation to be instrumented
-         * @param patch The patch information containing the patch function details
-         * @param patch_module The module containing the patch function
-         */
-        void apply_after_patch(
-            mlir::Operation *op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-            bool inline_patches
-        );
-
-        /**
-         * @brief Replaces a function call with a patch function call.
-         *
-         * This method completely replaces the original function call with a call to the
-         * patch function. It preserves the original call's arguments and return types
-         * while redirecting the call to the patch function.
-         *
-         * @param call_op The original call operation to be replaced
-         * @param patch The patch information containing the replacement function details
-         * @param patch_module The module containing the patch function
-         */
-        void replace_call(
-            cir::CallOp op, const PatchInformation &patch, mlir::ModuleOp patch_module,
-            bool inline_patches
         );
 
         /**
@@ -328,18 +296,6 @@ namespace patchestry::passes { // NOLINT
         mlir::LogicalResult merge_module_symbol(
             mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
         );
-
-        /**
-         * @brief Sets appropriate attributes for the instrumentation call operation.
-         * This can be a call to a patch or a contract.
-         *
-         * This function handles setting attributes on the call based on the
-         * type of the original operation being instrumented.
-         *
-         * @param patch_call_op The patch call operation to set attributes on
-         * @param target_op The original operation being instrumented
-         */
-        void set_patch_call_attributes(cir::CallOp patch_call_op, mlir::Operation *target_op);
 
         /**
          * @brief Creates a cast operation if types differ, otherwise returns the original
