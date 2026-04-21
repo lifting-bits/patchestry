@@ -29,9 +29,11 @@ Patchestry supports two types of matching:
 | **Required Fields** | `match.name` + `match.kind` | `match.name` + `match.kind` |
 | **Context** | Caller context | Function containing the operation |
 
-## Simplified Format
+## Specification Format
 
-The `patches:` key provides a simplified alternative to the nested `meta_patches` structure. Both produce identical behavior — `patches:` is syntactic sugar that inflates to the same internal representation.
+A patchestry YAML file has a top-level `patches:` key listing the
+patches to apply. Each entry names a target match, a mode, and the
+patch function to invoke.
 
 ```yaml
 apiVersion: patchestry.io/v1
@@ -63,16 +65,10 @@ patches:
     optimization: ["inline-patches"]
 ```
 
-Key differences from the nested format:
-
-| Simplified (`patches:`) | Nested (`meta_patches:`) |
-|---|---|
-| `match:` is a single object | `match:` is an array (only first used) |
-| `mode:` at top level | `action: [{mode: ...}]` nested |
-| `patch:` field | `patch_id:` inside `action:` |
-| `context: ["fn"]` shorthand | `function_context: [{name: "fn"}]` |
-
-`patches:` and `meta_patches:` are mutually exclusive in one file.
+> **Note:** A legacy nested format rooted at `meta_patches:` /
+> `meta_contracts:` is still accepted for backward compatibility with
+> existing specifications. All new patches should use `patches:` /
+> `contracts:`. The two keys are mutually exclusive within one file.
 
 ### Matching multiple callees
 
@@ -105,9 +101,9 @@ For ad-hoc patterns, `name:` also accepts regex with `/pattern/` syntax:
       kind: "function"
 ```
 
-### Simplified contracts
+### Contracts
 
-The same simplification applies to contracts via the `contracts:` key:
+Contracts use the `contracts:` top-level key with the same shape:
 
 ```yaml
 contracts:
@@ -123,14 +119,6 @@ contracts:
       - source: "variable"
         symbol: "msg"
 ```
-
-`contracts:` and `meta_contracts:` are mutually exclusive in one file.
-
----
-
-> **Deprecation notice:** The nested `meta_patches:` / `meta_contracts:` format is deprecated.
-> Use the simplified `patches:` / `contracts:` keys shown above for new specifications.
-> Existing files using `meta_patches:` / `meta_contracts:` continue to work unchanged.
 
 ---
 
