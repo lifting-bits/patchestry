@@ -36,33 +36,39 @@ patches to apply. Each entry names a target match, a mode, and the
 patch function to invoke.
 
 ```yaml
-apiVersion: patchestry.io/v1
+apiVersion: patchestry.io/v1           # API version
 
 metadata:
-  name: "cwe078-fix"
-target:
-  binary: "firmware.bin"
-  arch: "ARM:LE:32:v7"
+  name: "deployment-name"              # Deployment metadata
+  description: "Deployment description"
+  version: "1.0.0"
+  author: "Author Name"
+  created: "YYYY-MM-DD"
+  organization: "organization-name"
 
-libraries:
-  - "patches/cwe078_patches.yaml"
+target:                                # Target binary configuration
+  binary: "target_binary.bin"
+  arch: "ARCHITECTURE:ENDIANNESS:BITWIDTH:VARIANT"
 
-patches:
-  - name: "sanitize_system"
-    id: "CWE-078-001"
-    description: "Replace system() with sanitized wrapper"
+libraries:                             # External patch and contract libraries
+  - "path/to/library.yaml"             # Each file may contain patches, contracts, or both
+
+patches:                               # Patch configurations
+  - name: "..."
+    id: "..."
+    description: "..."
     match:
-      name: "system"
-      kind: "function"
-      context: ["create_port"]
-    mode: "replace"
-    patch: "cwe078_sanitized_system"
+      name: "..."
+      kind: "..."
+      context: ["..."]
+    mode: "..."
+    patch: "..."
     arguments:
-      - source: "operand"
-        index: 0
-      - source: "constant"
-        value: 512
-    optimization: ["inline-patches"]
+      - source: "..."
+        index: ...
+      - source: "..."
+        value: ...
+    optimization: ["..."]
 ```
 
 > **Note:** A legacy nested format rooted at `meta_patches:` /
