@@ -16,6 +16,8 @@ on:
     branches:
       - '*'
 
+permissions: read-all
+
 jobs:
   ghidra-script-tests:
     strategy:
@@ -27,7 +29,7 @@ jobs:
       CI: true
     steps:
       - name: Free up disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
         with:
           tool-cache: false
           android: true
@@ -71,7 +73,7 @@ jobs:
       CI: true
     steps:
       - name: Free up disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
         with:
           tool-cache: false
           android: true
