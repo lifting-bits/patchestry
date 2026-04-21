@@ -9,6 +9,8 @@ name: Build Dev Container
 
 on: workflow_dispatch
 
+permissions: read-all
+
 jobs:
   build:
     strategy:

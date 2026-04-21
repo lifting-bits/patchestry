@@ -24,6 +24,8 @@ on:
         type: boolean
         default: false
 
+permissions: read-all
+
 jobs:
   build:
     runs-on: ubuntu-22.04
