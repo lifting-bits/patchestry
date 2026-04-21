@@ -120,37 +120,11 @@ contracts:
         symbol: "msg"
 ```
 
-### Execution Order
+### Ordering
 
-By default patches run in declaration order, then contracts in
-declaration order. To interleave them or restrict which entries
-run, use an optional `execution_order:` list. Each item names one
-patch or contract by its `name:` field.
-
-```yaml
-patches:
-  - name: "sanitize_system"
-  - name: "bounded_strcat"
-contracts:
-  - name: "usb_invariants"
-
-execution_order:
-  - "bounded_strcat"                    # bare name — looked up in both lists
-  - "contracts::usb_invariants"         # explicit lookup in contracts
-  - "patches::sanitize_system"          # explicit lookup in patches
-```
-
-Accepted entry forms:
-
-| Form | Meaning |
-|------|---------|
-| `<name>` | Search patches first, then contracts. Error if ambiguous or missing. |
-| `patches::<name>` | Look up only in patches. |
-| `contracts::<name>` | Look up only in contracts. |
-| `meta_patches::<name>` / `meta_contracts::<name>` | Legacy aliases, still accepted. |
-
-When `execution_order:` is present, entries **not** listed are skipped —
-this lets you trim the applied set without deleting definitions.
+Entries apply in YAML declaration order: all `patches:` first (top to
+bottom), then all `contracts:` (top to bottom). No separate ordering
+field is needed — reorder the entries in the file to reorder execution.
 
 ---
 
@@ -182,9 +156,8 @@ Patchestry supports two types of contracts:
 | `metadata` | Deployment metadata container | See metadata fields below |
 | `target` | Target binary configuration | See target fields below |
 | `libraries` | External patch and contract library references | See library fields below |
-| `patches` | Patch entries to apply | List of patch entries |
-| `contracts` | Contract entries to apply | List of contract entries |
-| `execution_order` | Explicit ordering (optional) | See [Execution Order](#execution-order) |
+| `patches` | Patch entries to apply (in declaration order) | List of patch entries |
+| `contracts` | Contract entries to apply (in declaration order) | List of contract entries |
 
 ### Metadata Fields
 
@@ -553,10 +526,6 @@ target:
 
 libraries:
   - "patches/usb_security_patches.yaml"
-
-execution_order:
-  - "meta_patches::usb_security_meta_patches"
-  - "meta_contracts::usb_security_meta_contracts"
 
 meta_patches:
   - name: usb_security_meta_patches
