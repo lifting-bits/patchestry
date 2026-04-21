@@ -1,14 +1,13 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -output %t1 >> /dev/null 2>&1
 //
-// DSL path only — the legacy YAML for this test is broken (missing
-// library file), so we verify via FileCheck instead of parity diff.
+// Verify apply_before inserts a marker call immediately ahead of the
+// matched test_function invocation.
 //
-// RUN: %patchir-dslc %S/basic_transform.test.patch -o %t.patchmod
-// RUN: %patchir-transform %t1.cir --dsl %t.patchmod -o %t2.cir
-// RUN: %file-check -check-prefix=DSL %s --input-file %t2.cir
-// DSL: cir.call @patch__before__test_function() {patchestry_operation = "cir.call"}
-// DSL: cir.call @test_function(
+// RUN: %patchir-transform %t1.cir --spec %S/basic_transform.test.yaml -o %t2.cir
+// RUN: %file-check -check-prefix=YAML %s --input-file %t2.cir
+// YAML: cir.call @patch__before__test_function() {patchestry_operation = "cir.call"}
+// YAML: cir.call @test_function(
 //
 {
   "architecture": "ARM",
