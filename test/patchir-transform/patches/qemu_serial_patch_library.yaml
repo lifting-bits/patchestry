@@ -1,0 +1,35 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "qemu-serial-patch-library"
+  version: "1.0.0"
+  description: "Patch and contract library for the in-repo QEMU serial firmware fixture"
+  created: "2026-04-22"
+  author: "Codex"
+
+patches:
+  - name: "qemu_serial_before_patch"
+    description: "Emit a line before qemu_target_before runs"
+    category: "qemu-serial"
+    code_file: "qemu_serial_patch.c"
+    function_name: "patch::before::qemu_target_before"
+
+  - name: "qemu_serial_after_patch"
+    description: "Emit a line after qemu_target_after runs"
+    category: "qemu-serial"
+    code_file: "qemu_serial_patch.c"
+    function_name: "patch::after::qemu_target_after"
+
+  - name: "qemu_serial_replace_patch"
+    description: "Replace qemu_target_replace with a patched variant"
+    category: "qemu-serial"
+    code_file: "qemu_serial_patch.c"
+    function_name: "patch::replace::qemu_target_replace"
+
+contracts:
+  - name: "qemu_serial_entry_contract"
+    description: "Emit a visible runtime contract line at function entry"
+    category: "qemu-serial"
+    type: "runtime"
+    code_file: "qemu_serial_patch.c"
+    function_name: "contract::entrypoint::qemu_target_contract"
