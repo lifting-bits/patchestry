@@ -48,6 +48,12 @@ namespace patchestry::passes {
         OperationMatcher::Mode mode,
         llvm::StringMap< mlir::Value > &captures_out
     ) {
+        // Always start from an empty binding set so the "return false → empty
+        // captures_out" invariant holds regardless of the caller's input map
+        // state. `handle_capture_argument` in InstrumentationPass.cpp relies
+        // on "not present" == "not bound at this site".
+        captures_out.clear();
+
         if (!patch_action_matches(op, func, action, mode)) {
             return false;
         }
@@ -68,19 +74,21 @@ namespace patchestry::passes {
                 if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
                     auto args = call_op.getArgOperands();
                     if (idx >= args.size()) {
-                        LOG(ERROR) << "Capture '" << cap.name
+                        LOG(DEBUG) << "Capture '" << cap.name
                                    << "': operand index " << idx
                                    << " out of range (call has " << args.size()
                                    << " argument(s))\n";
+                        captures_out.clear();
                         return false;
                     }
                     value = args[idx];
                 } else {
                     if (idx >= op->getNumOperands()) {
-                        LOG(ERROR) << "Capture '" << cap.name
+                        LOG(DEBUG) << "Capture '" << cap.name
                                    << "': operand index " << idx
                                    << " out of range (op has "
                                    << op->getNumOperands() << " operands)\n";
+                        captures_out.clear();
                         return false;
                     }
                     value = op->getOperand(idx);
@@ -88,18 +96,32 @@ namespace patchestry::passes {
             } else if (cap.result.has_value()) {
                 unsigned idx = *cap.result;
                 if (idx >= op->getNumResults()) {
-                    LOG(ERROR) << "Capture '" << cap.name << "': result index "
+                    LOG(DEBUG) << "Capture '" << cap.name << "': result index "
                                << idx << " out of range (op has "
                                << op->getNumResults() << " results)\n";
+                    captures_out.clear();
                     return false;
                 }
                 value = op->getResult(idx);
             } else {
+                // The YAML parser already rejects this shape (XOR of
+                // operand/result is enforced in MappingTraits<CaptureSpec>),
+                // so this branch is defensive only.
                 LOG(ERROR) << "Capture '" << cap.name
                            << "' missing operand/result index\n";
+                captures_out.clear();
                 return false;
             }
-            captures_out[cap.name] = value;
+
+            auto [it, inserted] = captures_out.try_emplace(cap.name, value);
+            if (!inserted) {
+                LOG(ERROR) << "Duplicate capture name '" << cap.name
+                           << "' in patch action '" << action.action_id
+                           << "' — capture names must be unique within a "
+                              "single match.\n";
+                captures_out.clear();
+                return false;
+            }
         }
         return true;
     }
@@ -118,20 +140,32 @@ namespace patchestry::passes {
         }
 
         // op_kind discriminator: for cir.binop / cir.cmp, filter by the
-        // specific arithmetic or comparison kind attribute.
+        // specific arithmetic or comparison kind attribute. Any other op
+        // type is a no-match when op_kind is requested; log at DEBUG so
+        // spec authors can see why their match didn't fire.
         if (match.op_kind.has_value()) {
+            const llvm::StringRef want(*match.op_kind);
             if (auto binop = mlir::dyn_cast< cir::BinOp >(op)) {
                 auto kind_str = cir::stringifyBinOpKind(binop.getKind());
-                if (kind_str != llvm::StringRef(*match.op_kind)) {
+                if (kind_str != want) {
+                    LOG(DEBUG) << "op_kind mismatch on cir.binop: spec='"
+                               << want.str() << "' actual='" << kind_str.str()
+                               << "'\n";
                     return false;
                 }
             } else if (auto cmpop = mlir::dyn_cast< cir::CmpOp >(op)) {
                 auto kind_str = cir::stringifyCmpOpKind(cmpop.getKind());
-                if (kind_str != llvm::StringRef(*match.op_kind)) {
+                if (kind_str != want) {
+                    LOG(DEBUG) << "op_kind mismatch on cir.cmp: spec='"
+                               << want.str() << "' actual='" << kind_str.str()
+                               << "'\n";
                     return false;
                 }
             } else {
-                // op_kind is only meaningful for ops with a kind attr.
+                LOG(DEBUG) << "op_kind filter set to '" << want.str()
+                           << "' but op '"
+                           << op->getName().getStringRef().str()
+                           << "' has no supported kind attribute; skipping\n";
                 return false;
             }
         }
@@ -157,9 +191,11 @@ namespace patchestry::passes {
     bool OperationMatcher::patch_action_matches_function_call(
         mlir::Operation *op, cir::FuncOp func, const patch::MatchConfig &match
     ) {
-        // If the match kind is not function, return false
+        // Spec-shape errors (empty name, wrong kind) fire once per walked op
+        // and aren't actionable per-op; DEBUG keeps the log clean while
+        // preserving the information for `--v` runs.
         if (match.name.empty() || match.kind != MatchKind::FUNCTION) {
-            LOG(WARNING) << "Patch match name was empty or kind was not FUNCTION\n";
+            LOG(DEBUG) << "Patch match name was empty or kind was not FUNCTION\n";
             return false;
         }
 
@@ -179,23 +215,21 @@ namespace patchestry::passes {
 
         // Check function context match (the function containing the call)
         if (!matches_function_context(func, match.function_context)) {
-            LOG(WARNING) << "Patch action: function context did not match\n";
+            LOG(DEBUG) << "Patch action: function context did not match\n";
             return false;
         }
 
         // Check argument matches for function calls
         if (!matches_arguments(op, match.argument_matches)) {
-            LOG(WARNING) << "Patch action: argument_matches did not match for callee '"
-                         << extract_callee_name(mlir::dyn_cast< cir::CallOp >(op))
-                         << "'\n";
+            LOG(DEBUG) << "Patch action: argument_matches did not match for callee '"
+                       << extract_callee_name(call_op) << "'\n";
             return false;
         }
 
         // Check variable matches as one of the arguments
         if (!matches_variables(op, match.variable_matches)) {
-            LOG(WARNING) << "Patch action: variable_matches did not match for callee '"
-                         << extract_callee_name(mlir::dyn_cast< cir::CallOp >(op))
-                         << "'\n";
+            LOG(DEBUG) << "Patch action: variable_matches did not match for callee '"
+                       << extract_callee_name(call_op) << "'\n";
             return false;
         }
 

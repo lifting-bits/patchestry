@@ -41,7 +41,6 @@ namespace patchestry::passes {
             std::string name;
             std::optional< unsigned > operand; // operand index to bind
             std::optional< unsigned > result;  // result index to bind
-            std::string type;                  // optional type constraint
         };
 
         struct MatchConfig
@@ -285,7 +284,6 @@ namespace llvm::yaml {
             io.mapRequired("name", cap.name);
             io.mapOptional("operand", cap.operand);
             io.mapOptional("result", cap.result);
-            io.mapOptional("type", cap.type);
 
             if (!cap.operand.has_value() && !cap.result.has_value()) {
                 io.setError(

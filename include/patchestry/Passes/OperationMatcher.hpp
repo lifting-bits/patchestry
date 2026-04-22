@@ -75,13 +75,12 @@ namespace patchestry::passes {
          * @param func The function containing `op`.
          * @param spec The patch-action specification to match against.
          * @param mode OPERATION or FUNCTION — chooses the sub-matcher.
-         * @param captures_out Output map populated on successful match. The caller
-         *        is responsible for clearing `captures_out` before reuse across
-         *        call sites; this function only *inserts/overwrites* entries for
-         *        names declared in `match.captures`. On `false` return the
-         *        contents of `captures_out` are unspecified: a capture index may
-         *        have been out of range *after* the base match already succeeded,
-         *        leaving partial bindings behind — treat the map as invalid.
+         * @param captures_out Output map, cleared on entry and populated on
+         *        successful match with one entry per name in `match.captures`.
+         *        On `false` return the map is guaranteed empty. Duplicate
+         *        capture names inside a single match are rejected (false
+         *        return); callers can treat `captures_out.find(name)` as a
+         *        reliable "bound at this site?" check.
          * @return true if the operation matches the specification and all
          *         declared captures resolve.
          */
