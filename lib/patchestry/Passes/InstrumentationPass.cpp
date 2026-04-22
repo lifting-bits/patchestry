@@ -939,7 +939,15 @@ namespace patchestry::passes {
                 if (block_arg) {
                     // Walk the enclosing function's entry block for
                     // `cir.store block_arg, alloca` — the canonical
-                    // parameter-init pattern from ClangEmitter.
+                    // parameter-init pattern from ClangEmitter. Continue
+                    // past the first hit so a stray second matching store
+                    // to a different alloca surfaces as a warning; the
+                    // patch would mutate only the first slot and any
+                    // downstream load of the second slot would silently
+                    // see pre-patch state. ClangEmitter doesn't emit this
+                    // shape, so the warning is purely a guard against
+                    // non-standard prologues (hand-authored CIR, future
+                    // lowering modes).
                     mlir::Block &entry = entrypoint_func->getBody().front();
                     for (mlir::Operation &op : entry) {
                         auto store = mlir::dyn_cast< cir::StoreOp >(&op);
@@ -949,10 +957,21 @@ namespace patchestry::passes {
                         if (store.getValue() != block_arg) {
                             continue;
                         }
-                        if (mlir::isa_and_nonnull< cir::AllocaOp >(
+                        if (!mlir::isa_and_nonnull< cir::AllocaOp >(
                                 store.getAddr().getDefiningOp()))
                         {
+                            continue;
+                        }
+                        if (!ref_value) {
                             ref_value = store.getAddr();
+                            continue;
+                        }
+                        if (store.getAddr() != ref_value) {
+                            LOG(WARNING)
+                                << "entry block stores block arg " << idx
+                                << " into more than one alloca; using the first. "
+                                   "Later loads from the other slot(s) will miss "
+                                   "the patch mutation.\n";
                             break;
                         }
                     }
@@ -1135,6 +1154,32 @@ namespace patchestry::passes {
         if (!captured) {
             LOG(ERROR) << "Capture '" << arg_spec.name << "' resolved to null\n";
             return;
+        }
+
+        // Dominance guard for `result:` captures. A capture bound via
+        // `result: N` is `call_op->getResult(N)` — only defined once
+        // `call_op` has executed. In `apply_before` and `replace` the
+        // patch call is inserted at `call_op`'s position (before it in
+        // block order), so using the match-site's result as a patch
+        // argument produces invalid SSA. `apply_after` is the only safe
+        // mode; operand captures are always safe since SSA operands
+        // dominate their using op by construction.
+        if (captured.getDefiningOp() == call_op && patch.patch_action.has_value()
+            && !patch.patch_action->action.empty())
+        {
+            auto mode = patch.patch_action->action[0].mode;
+            if (mode == InstrumentationMode::APPLY_BEFORE
+                || mode == InstrumentationMode::REPLACE)
+            {
+                LOG(ERROR)
+                    << "capture '" << arg_spec.name
+                    << "' is bound to the match-site op's result, which is not yet "
+                       "defined at the '"
+                    << patch::infoModeToString(mode)
+                    << "' insertion point. Use 'mode: apply_after', or capture an "
+                       "operand (which always dominates the match site).\n";
+                return;
+            }
         }
 
         if (arg_spec.is_reference) {
@@ -1714,6 +1759,10 @@ namespace patchestry::passes {
         mlir::SmallVector< cir::ReturnOp > cloned_returns;
         for (mlir::Block &orig_block : callee_region) {
             auto *cloned_block = mapper.lookupOrNull(&orig_block);
+            if (!cloned_block) {
+                LOG(ERROR) << "Cloned block missing from mapper during return collection\n";
+                return mlir::failure();
+            }
             cloned_block->walk([&](cir::ReturnOp ret) {
                 cloned_returns.push_back(ret);
             });
@@ -1800,6 +1849,19 @@ namespace patchestry::passes {
         // in the inline worklist, and erasing it here would turn the next
         // `lookupSymbol` into a null (and previously, a crash). Dead patch
         // functions are swept post-inline in `runOnOperation`.
+        //
+        // Sanity: a callee with no `cir.return` and a caller using the
+        // call's result leaves us with unreplaced uses of `call_op`, and
+        // `Operation::erase()` asserts on a still-used op. This is the
+        // noreturn-with-used-result edge case. Bail rather than assert;
+        // the caller logs and moves on (the unmodified IR stays valid).
+        if (!call_op->use_empty()) {
+            LOG(ERROR) << "Cannot erase inlined call '" << call_op.getCallee()->str()
+                       << "': its result still has uses (callee produced no "
+                          "cir.return to supply a replacement). Leaving the "
+                          "original call in place.\n";
+            return mlir::failure();
+        }
         call_op.erase();
         return mlir::success();
     }
