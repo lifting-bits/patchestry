@@ -1465,6 +1465,19 @@ namespace patchestry::passes {
      * body of the called function. It handles control flow, argument mapping, and
      * block management to properly integrate the inlined code.
      *
+     * Known limitation: only `cir::ReturnOp` at the callee's top-level
+     * block iteration is rewritten into a branch to `split_block`.
+     * Early returns that lower into nested `cir::ReturnOp` (e.g. the
+     * `return` branch of a C `if (oob) return v;` pattern, which sits
+     * inside `cir.scope { cir.if { cir.return } }`) are cloned verbatim
+     * via `builder.clone`. If the caller function's return type
+     * differs from the callee's, the cloned return fails the verifier
+     * on inline. Fix requires a post-clone walk that rewrites every
+     * nested return into a branch + RAUW (single-return case) or an
+     * alloca-unified continuation (multi-return case). Meanwhile:
+     * patch bodies intended for `replace`/`rewrite`/etc. with
+     * inlining enabled must be single-return at function scope.
+     *
      * @param module The module containing both caller and callee
      * @param call_op The call operation to be inlined
      * @return mlir::LogicalResult Success or failure of the inlining operation

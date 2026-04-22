@@ -65,6 +65,16 @@
 // INLINE_MULTI-NOT: patch__before__spo2_lookup
 // INLINE_MULTI-COUNT-3: cir.call @isfinite_float
 
+// inline-patches on apply_after mode: PatchOperationImpl:193
+// inserts the patch call into the worklist. Covers a different path
+// than the apply_before multi-site check above. spo2_lookup is called
+// once; after inline, the patch__after call + func are gone, the
+// original spo2_lookup call remains (apply_after doesn't replace it).
+// RUN: %patchir-transform %t1.cir --spec %S/inline_patches_apply_after.yaml -o %t13.cir
+// RUN: %file-check -vv -check-prefix=INLINE_AFTER %s --input-file %t13.cir
+// INLINE_AFTER-NOT: patch__after__spo2_lookup
+// INLINE_AFTER: cir.call @spo2_lookup
+
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:v8",
