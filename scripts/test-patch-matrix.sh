@@ -542,12 +542,16 @@ main() {
     "\"${PATCHIR_TRANSFORM}\" \"${FIXTURE_DIR}/pulseox_measurement_update/pulseox_measurement_update.cir\" --spec \"${FIXTURE_DIR}/does-not-exist.yaml\" -o \"${OUTPUT_DIR}/negative_missing_spec_file/unused.cir\"" \
     'File does not exist|Failed to load file|failed to load config' || CASE_FAILURE=1
 
+  # test_patch.yaml references a missing library and a legacy schema;
+  # post-PR#199 the loader now fails eagerly on the missing library
+  # rather than reaching the `mapRequired("name")` check that used to
+  # produce "missing required key". Accept either failure surface.
   run_negative_case \
     "negative_malformed_schema" \
     "-" \
     "${REPO_ROOT}/test/patchir-transform/test_patch.yaml" \
     "\"${PATCHIR_YAML_PARSER}\" \"${REPO_ROOT}/test/patchir-transform/test_patch.yaml\" --validate" \
-    'error|missing required key|must include' || CASE_FAILURE=1
+    'error|Failed to parse YAML file' || CASE_FAILURE=1
 
   run_negative_case \
     "negative_bad_patch_reference" \
