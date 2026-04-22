@@ -390,11 +390,34 @@ namespace patchestry::passes {
             apply_meta_contracts(function_worklist, meta_contract.name);
         }
 
-        // Inline inserted patch/contract call operations if requested
+        // Inline inserted patch/contract call operations if requested.
+        // Capture callee names up-front so we can sweep dead patch funcs
+        // after all inlines complete — `inline_call` itself no longer
+        // erases the callee, since the same symbol may be called by
+        // additional entries still in the worklist.
+        llvm::SmallVector< std::string, 4 > inlined_callee_names;
         for (auto *op : inline_worklists) {
-            std::ignore = inline_call(mod, mlir::cast< cir::CallOp >(op));
+            auto call = mlir::cast< cir::CallOp >(op);
+            if (auto name = call.getCallee()) {
+                inlined_callee_names.push_back(name->str());
+            }
+            std::ignore = inline_call(mod, call);
         }
         inline_worklists.clear();
+
+        // Sweep patch callees that are now unreferenced anywhere in the
+        // module. A name appearing multiple times in `inlined_callee_names`
+        // (same patch inlined at N match sites) hits this loop once per
+        // entry; after the first erase the subsequent `lookupSymbol`
+        // returns null and we skip. `symbolKnownUseEmpty` also guards
+        // against erasing a patch that's still referenced elsewhere —
+        // e.g. another meta_patch entry that didn't request inlining.
+        for (const auto &name : inlined_callee_names) {
+            auto fn = mod.lookupSymbol< cir::FuncOp >(name);
+            if (fn && mlir::SymbolTable::symbolKnownUseEmpty(fn, mod)) {
+                fn.erase();
+            }
+        }
     }
 
     /**
@@ -1451,11 +1474,16 @@ namespace patchestry::passes {
         mlir::OpBuilder builder(call_op);
         mlir::Location loc = call_op.getLoc();
 
-        auto callee = mlir::dyn_cast< cir::FuncOp >(
-            module.lookupSymbol< cir::FuncOp >(call_op.getCallee()->str())
-        );
+        // `lookupSymbol<cir::FuncOp>` already returns a typed `cir::FuncOp`
+        // (or a null/default-constructed one when the symbol is absent).
+        // Wrapping in a second `dyn_cast` dereferences the null `Operation*`
+        // inside LLVM's casting machinery before our null check can run —
+        // the exact crash path hit when a patch had already been erased
+        // by a prior inline of a sibling call site.
+        auto callee = module.lookupSymbol< cir::FuncOp >(call_op.getCallee()->str());
         if (!callee) {
-            LOG(ERROR) << "Callee not found in module\n";
+            LOG(ERROR) << "Callee '" << call_op.getCallee()->str()
+                       << "' not found in module (already inlined and erased?)\n";
             return mlir::failure();
         }
 
@@ -1587,9 +1615,12 @@ namespace patchestry::passes {
         }
         builder.create< cir::BrOp >(loc, callee_entry_block, entry_args);
 
-        // Remove the original call
+        // Remove the original call. The callee itself is left in place —
+        // the same patch symbol may be referenced by other call ops still
+        // in the inline worklist, and erasing it here would turn the next
+        // `lookupSymbol` into a null (and previously, a crash). Dead patch
+        // functions are swept post-inline in `runOnOperation`.
         call_op.erase();
-        callee.erase();
         return mlir::success();
     }
 

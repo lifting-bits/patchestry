@@ -55,6 +55,16 @@
 // REGION_IF: cir.call @patch__before__if_probe(%[[COND:[0-9]+]]) {patchestry_operation = "cir.if"}
 // REGION_IF-NEXT: cir.if %[[COND]]
 
+// Regression: inline-patches must handle multiple match sites sharing one
+// patch. measurement_update calls __aeabi_fdiv three times; with
+// inline-patches set, every call site gets an inlined body and the
+// patch function is erased (no remaining uses). Pre-fix this crashed
+// patchir-transform on the second inline via a dyn_cast-on-null path.
+// RUN: %patchir-transform %t1.cir --spec %S/inline_patches_multisite.yaml -o %t12.cir
+// RUN: %file-check -vv -check-prefix=INLINE_MULTI %s --input-file %t12.cir
+// INLINE_MULTI-NOT: patch__before__spo2_lookup
+// INLINE_MULTI-COUNT-3: cir.call @isfinite_float
+
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:v8",
