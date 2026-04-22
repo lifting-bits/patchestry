@@ -339,7 +339,8 @@ namespace patchestry::passes { // NOLINT
         void handle_variable_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
         );
 
         /**
@@ -393,8 +394,10 @@ namespace patchestry::passes { // NOLINT
         /**
          * @brief Finds a local variable by name in the current function scope.
          */
-        std::optional< mlir::Value >
-        find_local_variable(mlir::Operation *call_op, const std::string &var_name);
+        std::optional< mlir::Value > find_local_variable(
+            mlir::Operation *call_op, const std::string &var_name,
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
+        );
 
         /**
          * @brief Finds a global symbol (variable or function) by name.

@@ -800,7 +800,7 @@ namespace patchestry::passes {
                     break;
                 case ArgumentSourceType::VARIABLE:
                     handle_variable_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                        builder, call_op, arg_spec, patch_arg_type, arg_map, entrypoint_func
                     );
                     break;
                 case ArgumentSourceType::SYMBOL:
@@ -936,7 +936,8 @@ namespace patchestry::passes {
     void InstrumentationPass::handle_variable_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
         if (!arg_spec.symbol.has_value()) {
             LOG(ERROR) << "VARIABLE source requires symbol field\n";
@@ -944,9 +945,16 @@ namespace patchestry::passes {
         }
 
         const std::string &var_name = arg_spec.symbol.value();
-        auto variable_ref           = find_local_variable(call_op, var_name);
+        auto variable_ref = find_local_variable(call_op, var_name, entrypoint_func);
         if (!variable_ref.has_value()) {
-            LOG(WARNING) << "Local variable '" << var_name << "' not found\n";
+            LOG(WARNING) << "Local variable '" << var_name << "' not found"
+                         << (entrypoint_func.has_value()
+                                 ? " in the caller's entry block (APPLY_AT_ENTRYPOINT"
+                                   " only sees entry-block allocas; variables declared"
+                                   " inside cir.scope / after control flow aren't live"
+                                   " at the insertion point)"
+                                 : "")
+                         << "\n";
             return;
         }
 
@@ -1149,11 +1157,39 @@ namespace patchestry::passes {
     }
 
     std::optional< mlir::Value > InstrumentationPass::find_local_variable(
-        mlir::Operation *call_op, const std::string &var_name
+        mlir::Operation *call_op, const std::string &var_name,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
         auto func = call_op->getParentOfType< cir::FuncOp >();
         if (!func) {
             LOG(ERROR) << "Cannot find parent function for local variable lookup\n";
+            return std::nullopt;
+        }
+
+        // For APPLY_AT_ENTRYPOINT, restrict the search to the enclosing
+        // function's entry-block allocas. A whole-function walk could
+        // return an alloca nested inside `cir.scope` / declared after
+        // control flow, which would not yet dominate the patch call
+        // inserted at the entry block's prologue — producing invalid
+        // SSA. Other insertion points (apply_before / apply_after /
+        // replace) emit at the match site, where any visible alloca
+        // already dominates, so the whole-function walk is safe there.
+        if (entrypoint_func.has_value()) {
+            auto enclosing = entrypoint_func.value();
+            if (enclosing.getBody().empty()) {
+                return std::nullopt;
+            }
+            for (mlir::Operation &op : enclosing.getBody().front()) {
+                auto alloca_op = mlir::dyn_cast< cir::AllocaOp >(&op);
+                if (!alloca_op) {
+                    continue;
+                }
+                if (auto name_attr = op.getAttrOfType< mlir::StringAttr >("name")) {
+                    if (name_attr.getValue() == var_name) {
+                        return alloca_op.getResult();
+                    }
+                }
+            }
             return std::nullopt;
         }
 

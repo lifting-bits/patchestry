@@ -580,6 +580,19 @@ namespace patchestry {
                 call_args
             );
 
+            // Writeback for `is_reference: true` operand args. The normal
+            // before/after/replace paths run this after their patch call
+            // so that a patch mutating a caller operand propagates back
+            // into the original SSA value; without it, the mutation stays
+            // in the temporary alloca materialized by
+            // `handle_operand_argument` at the entry block and later uses
+            // of the caller's block arg continue seeing the pre-patch
+            // value. `update_state_after_patch` is a no-op unless at least
+            // one argument spec has is_reference + source: operand.
+            pass.update_state_after_patch(
+                builder, patch_call_op, call_op, patch, function_args_map
+            );
+
             pass.set_instrumentation_call_attributes(patch_call_op, call_op);
 
             if (should_inline) {
