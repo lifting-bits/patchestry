@@ -115,8 +115,10 @@ namespace patchestry {
             auto symbol_ref =
                 mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
             llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             pass.prepare_patch_call_arguments(
-                builder, target_op, patch_func, patch, function_args_map
+                builder, target_op, patch_func, patch, function_args_map,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
             llvm::SmallVector< mlir::Value > new_function_args;
             for (auto &[old_arg, new_arg] : function_args_map) {
@@ -130,7 +132,8 @@ namespace patchestry {
             );
 
             pass.update_state_after_patch(
-                builder, patch_call_op, target_op, patch, function_args_map
+                builder, patch_call_op, target_op, patch, function_args_map,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
 
             // Set appropriate attributes based on operation type
@@ -169,8 +172,10 @@ namespace patchestry {
             auto symbol_ref =
                 mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
             llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             pass.prepare_patch_call_arguments(
-                builder, target_op, patch_func, patch, function_args_map
+                builder, target_op, patch_func, patch, function_args_map,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
             llvm::SmallVector< mlir::Value > function_args;
             for (auto &[old_arg, new_arg] : function_args_map) {
@@ -183,7 +188,8 @@ namespace patchestry {
             );
 
             pass.update_state_after_patch(
-                builder, patch_call_op, target_op, patch, function_args_map
+                builder, patch_call_op, target_op, patch, function_args_map,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
 
             // Set appropriate attributes based on operation type
@@ -280,6 +286,16 @@ namespace patchestry {
                 LOG(ERROR) << "Cannot erase call_op, it still has uses. "
                            << "Original results: " << call_num_results
                            << ", Patch results: " << wrap_num_results << "\n";
+                // The wrapper call has been emitted but the original still
+                // carries its uses — leaving both in place would silently
+                // execute both the original and the patch (and, if
+                // should_inline was set, the orphaned wrapper would never
+                // reach `inline_worklists.insert` below). Erase the dead
+                // wrapper via `pass.erase_op` so the module stays well-
+                // formed, and signal pass failure so the user sees the
+                // shape mismatch instead of a silent no-op patch.
+                pass.erase_op(wrap_call_op.getOperation());
+                pass.signal_failure();
                 return;
             }
 
@@ -459,9 +475,15 @@ namespace patchestry {
                                    << op->getName().getStringRef().str()
                                    << "', leaving op in place\n";
                         // Roll back the constants we already inserted so we
-                        // don't leak dead ops into the IR.
+                        // don't leak dead ops into the IR. Route through
+                        // `pass.erase_op` for parity with every other erase
+                        // in this file — the inline worklist can't contain a
+                        // just-created constant today, but keeping the
+                        // invariant "all op erases go through `pass.erase_op`"
+                        // means a future refactor that queues constants into
+                        // the worklist won't silently regress.
                         for (auto *c : llvm::reverse(new_constants)) {
-                            c->erase();
+                            pass.erase_op(c);
                         }
                         return;
                     }
@@ -553,11 +575,13 @@ namespace patchestry {
                 call_op->getContext(), patch_function_name
             );
             llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             // Pass enclosing_func so that OPERAND sources remap to block arguments and
             // RETURN_VALUE / CAPTURE are rejected — both prevent call-site SSA values
             // from leaking into the entry block (which would violate dominance).
             pass.prepare_patch_call_arguments(
-                builder, call_op, patch_func, patch, function_args_map, enclosing_func
+                builder, call_op, patch_func, patch, function_args_map, enclosing_func,
+                &writeback_slots
             );
             llvm::SmallVector< mlir::Value > call_args;
             for (auto &[old_arg, new_arg] : function_args_map) {
@@ -587,10 +611,16 @@ namespace patchestry {
             // in the temporary alloca materialized by
             // `handle_operand_argument` at the entry block and later uses
             // of the caller's block arg continue seeing the pre-patch
-            // value. `update_state_after_patch` is a no-op unless at least
-            // one argument spec has is_reference + source: operand.
+            // value. Threading `enclosing_func` mirrors the entrypoint
+            // path in `prepare_patch_call_arguments` so the writeback
+            // rebuilds keys against the function's block arguments rather
+            // than the matched call site's operands. `writeback_slots`
+            // carries the pre-cast reference (the caller's parameter
+            // alloca) so the load reads the actual slot instead of a
+            // pointer-cast of it.
             pass.update_state_after_patch(
-                builder, patch_call_op, call_op, patch, function_args_map
+                builder, patch_call_op, call_op, patch, function_args_map, enclosing_func,
+                &writeback_slots
             );
 
             pass.set_instrumentation_call_attributes(patch_call_op, call_op);

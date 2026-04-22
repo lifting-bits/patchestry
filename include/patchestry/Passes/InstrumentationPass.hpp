@@ -173,6 +173,13 @@ namespace patchestry::passes { // NOLINT
          */
         void erase_op(mlir::Operation *op);
 
+        // Thin public wrapper for `mlir::Pass::signalPassFailure` so friend
+        // helpers (PatchOperationImpl, ContractOperationImpl) can report a
+        // pass-level failure without re-declaring the protected inherited
+        // member for every caller. Equivalent to calling `signalPassFailure`
+        // directly from within the pass.
+        void signal_failure() { signalPassFailure(); }
+
         /**
          * @brief Applies meta patches in execution order.
          *
@@ -251,12 +258,23 @@ namespace patchestry::passes { // NOLINT
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
             const PatchInformation &patch,
             llvm::MapVector< mlir::Value, mlir::Value > &args_map,
-            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt,
+            llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots = nullptr
         );
 
+        // `writeback_slots` carries the pre-cast address the patch call should
+        // load from on writeback (populated by `handle_operand_argument` for
+        // `is_reference` OPERAND sources). `arg_map` stores the *post-cast*
+        // call-site value, so using it as the load source would dereference a
+        // cast to the patch parameter's pointee type rather than the caller's
+        // actual slot, tripping the CIR verifier. When `writeback_slots` is
+        // null or empty, this function is a no-op.
         void update_state_after_patch(
             mlir::OpBuilder &builder, cir::CallOp patch_call_op, mlir::Operation *target_op,
-            const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+            const PatchInformation &patch,
+            llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt,
+            const llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots = nullptr
         );
 
         /**
@@ -330,7 +348,8 @@ namespace patchestry::passes { // NOLINT
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
             llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
-            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt,
+            llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots = nullptr
         );
 
         /**

@@ -580,8 +580,17 @@ namespace patchestry::passes {
                             );
                             break;
                         default:
-                            LOG(ERROR) << "Unsupported patch mode for function call\n";
-                            break;
+                            // Mirror the OPERATION-mode default (see below):
+                            // unknown modes should not silently succeed. The
+                            // YAML parser rejects every mode that isn't in
+                            // this switch, so reaching here means a new enum
+                            // variant was added without a dispatch case.
+                            LOG(ERROR) << "Unsupported patch mode '"
+                                       << patch::infoModeToString(action.mode)
+                                       << "' for function-kind match on '"
+                                       << callee_name << "'\n";
+                            signalPassFailure();
+                            return;
                     }
                 });
 
@@ -751,7 +760,8 @@ namespace patchestry::passes {
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
         const PatchInformation &patch,
         llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
-        std::optional< cir::FuncOp > entrypoint_func
+        std::optional< cir::FuncOp > entrypoint_func,
+        llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots
     ) {
         if (!patch.patch_action.has_value()) {
             LOG(ERROR) << "Patch action is missing\n";
@@ -795,7 +805,8 @@ namespace patchestry::passes {
             switch (arg_spec.source) {
                 case ArgumentSourceType::OPERAND:
                     handle_operand_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map, entrypoint_func
+                        builder, call_op, arg_spec, patch_arg_type, arg_map, entrypoint_func,
+                        writeback_slots
                     );
                     break;
                 case ArgumentSourceType::VARIABLE:
@@ -828,8 +839,15 @@ namespace patchestry::passes {
 
     void InstrumentationPass::update_state_after_patch(
         mlir::OpBuilder &builder, cir::CallOp patch_call_op, mlir::Operation *target_op,
-        const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        std::optional< cir::FuncOp > entrypoint_func,
+        const llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots
     ) {
+        (void) arg_map;
+        if (!writeback_slots || writeback_slots->empty()) {
+            return;
+        }
+
         mlir::OpBuilder::InsertionGuard guard(builder);
         builder.setInsertionPointAfter(patch_call_op);
 
@@ -848,17 +866,54 @@ namespace patchestry::passes {
             return;
         }
 
-        for (auto &&[index, mapping] : llvm::enumerate(arg_map)) {
-            auto &arg_spec = patch_action.action[0].arguments[index];
+        // Iterate the spec in declared order. The writeback is only meaningful
+        // for OPERAND sources flagged `is_reference`; for each, rebuild the
+        // same key `handle_operand_argument` used when populating the sidecar
+        // and look it up. Missing entry = the handler bailed soft (index out
+        // of range, resolved to null, dominance-guard reject, etc.) — skip
+        // and move on. Enumerating `arg_map` directly would misalign with
+        // the spec whenever a handler early-returned or two specs collapsed
+        // onto the same SSA key, silently writing back to the wrong slot
+        // (or skipping the writeback entirely). `writeback_slots` carries
+        // the pre-cast reference so the load reads the actual alloca, not a
+        // pointer-cast of it.
+        const auto &arg_specs = patch_action.action[0].arguments;
+        for (const auto &arg_spec : arg_specs) {
             if (!(arg_spec.is_reference && arg_spec.source == ArgumentSourceType::OPERAND)) {
                 continue;
             }
+            if (!arg_spec.index.has_value()) {
+                continue;
+            }
+            unsigned idx = arg_spec.index.value();
 
-            mlir::Value old_arg = mapping.first;
-            mlir::Value new_arg = mapping.second;
+            mlir::Value old_arg;
+            if (entrypoint_func.has_value()) {
+                auto func_args = entrypoint_func->getArguments();
+                if (idx >= func_args.size()) {
+                    continue;
+                }
+                old_arg = func_args[idx];
+            } else if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(target_op)) {
+                if (idx >= orig_call_op.getArgOperands().size()) {
+                    continue;
+                }
+                old_arg = orig_call_op.getArgOperands()[idx];
+            } else {
+                if (idx >= target_op->getNumOperands()) {
+                    continue;
+                }
+                old_arg = target_op->getOperand(idx);
+            }
+
+            auto it = writeback_slots->find(old_arg);
+            if (it == writeback_slots->end()) {
+                continue;
+            }
+            mlir::Value slot = it->second;
 
             auto load_op = builder.create< cir::LoadOp >(
-                old_arg.getLoc(), new_arg, /*isDeref=*/true, /*isVolatile=*/false,
+                old_arg.getLoc(), slot, /*isDeref=*/true, /*isVolatile=*/false,
                 /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
                 /*tbaa=*/mlir::ArrayAttr{}
             );
@@ -879,7 +934,8 @@ namespace patchestry::passes {
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
         llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
-        std::optional< cir::FuncOp > entrypoint_func
+        std::optional< cir::FuncOp > entrypoint_func,
+        llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots
     ) {
         if (!arg_spec.index.has_value()) {
             LOG(ERROR) << "OPERAND source requires index field\n";
@@ -979,6 +1035,15 @@ namespace patchestry::passes {
             }
             if (!ref_value) {
                 ref_value = create_reference(builder, call_op, operand_value);
+            }
+            // Record the pre-cast address so `update_state_after_patch` can
+            // load through the actual alloca rather than a pointer-cast of
+            // it. Loading from the post-cast `Value` would dereference a
+            // pointer whose pointee type matches `patch_arg_type`, not
+            // `old_arg.getType()` — the CIR verifier rejects that typed
+            // mismatch, and lowering would miscompile the load otherwise.
+            if (writeback_slots) {
+                (*writeback_slots)[operand_value] = ref_value;
             }
             arg_map[operand_value] =
                 create_cast_if_needed(builder, call_op, ref_value, patch_arg_type);
@@ -1629,15 +1694,27 @@ namespace patchestry::passes {
         mlir::OpBuilder builder(call_op);
         mlir::Location loc = call_op.getLoc();
 
+        // `cir::CallOp::getCallee()` is `std::optional<StringRef>` — `nullopt`
+        // for indirect calls. The inliner only operates on direct calls to
+        // module-level symbols, so reject anything else up front instead of
+        // dereferencing the optional. Today the inline worklist only holds
+        // patch-emitted direct calls, but a stray indirect call pointer would
+        // otherwise fault inside the existing `->str()` uses below.
+        if (!call_op.getCallee().has_value()) {
+            LOG(ERROR) << "Cannot inline indirect call: no callee symbol\n";
+            return mlir::failure();
+        }
+        const std::string callee_name = call_op.getCallee()->str();
+
         // `lookupSymbol<cir::FuncOp>` already returns a typed `cir::FuncOp`
         // (or a null/default-constructed one when the symbol is absent).
         // Wrapping in a second `dyn_cast` dereferences the null `Operation*`
         // inside LLVM's casting machinery before our null check can run —
         // the exact crash path hit when a patch had already been erased
         // by a prior inline of a sibling call site.
-        auto callee = module.lookupSymbol< cir::FuncOp >(call_op.getCallee()->str());
+        auto callee = module.lookupSymbol< cir::FuncOp >(callee_name);
         if (!callee) {
-            LOG(ERROR) << "Callee '" << call_op.getCallee()->str()
+            LOG(ERROR) << "Callee '" << callee_name
                        << "' not found in module (already inlined and erased?)\n";
             return mlir::failure();
         }
@@ -1662,29 +1739,42 @@ namespace patchestry::passes {
             mapper.map(arg, operand);
         }
 
-        // Pre-inline guard: detect early returns nested inside a structured
-        // region (cir.scope / cir.if / cir.for / cir.while). C→CIR lowering
-        // emits this pattern for `if (cond) return X; return Y;`. Rewriting
-        // a nested `cir::ReturnOp` to a `cir::BrOp` targeting the caller's
-        // continuation would cross region boundaries, which MLIR's verifier
-        // rejects with "reference to block defined in another region".
-        // Detect up-front so no partial IR modification happens on the
-        // caller side. Common single-top-level-return patches (the majority
-        // of real inlinable patch bodies) are unaffected.
+        // Pre-inline guards (both must be done before any IR mutation on the
+        // caller side, otherwise `failure()` leaves a half-spliced caller
+        // block with a dead branch and an unreachable suffix):
+        //
+        //   1. Nested returns inside structured regions (cir.scope / cir.if /
+        //      cir.for / cir.while) — C→CIR lowering emits this for early
+        //      returns like `if (cond) return X; return Y;`. Rewriting such a
+        //      `cir::ReturnOp` into a `cir::BrOp` targeting the caller's
+        //      continuation would cross region boundaries, which MLIR's
+        //      verifier rejects with "reference to block defined in another
+        //      region".
+        //   2. Noreturn callee + used call result — if the callee has zero
+        //      top-level `cir::ReturnOp`s and the caller still uses the call's
+        //      result, the downstream `call_op->erase()` asserts on a used op.
+        //
+        // One pass over the callee body captures both signals so the second
+        // check doesn't require a second walk.
         {
-            bool has_nested_return = false;
+            bool has_nested_return    = false;
+            bool has_top_level_return = false;
             for (mlir::Block &block : callee.getBody()) {
                 for (mlir::Operation &op : block) {
                     if (isa< cir::ReturnOp >(&op)) {
-                        continue; // top-level return — safe to rewrite post-clone
+                        has_top_level_return = true; // safe to rewrite post-clone
+                        continue;
                     }
-                    op.walk([&](cir::ReturnOp) { has_nested_return = true; });
+                    op.walk([&](cir::ReturnOp) {
+                        has_nested_return = true;
+                        return mlir::WalkResult::interrupt();
+                    });
                     if (has_nested_return) break;
                 }
                 if (has_nested_return) break;
             }
             if (has_nested_return) {
-                LOG(ERROR) << "Cannot inline '" << call_op.getCallee()->str()
+                LOG(ERROR) << "Cannot inline '" << callee_name
                            << "': patch body has an early return nested inside "
                               "a structured region (cir.scope / cir.if). "
                               "Cross-region branches to the caller's "
@@ -1692,6 +1782,13 @@ namespace patchestry::passes {
                               "Restructure the patch to a single cir.return at "
                               "function scope, or remove 'inline-patches' from "
                               "the action.\n";
+                return mlir::failure();
+            }
+            if (!has_top_level_return && !call_op->use_empty()) {
+                LOG(ERROR) << "Cannot inline '" << callee_name
+                           << "': callee produced no cir.return to supply a "
+                              "replacement and the call's result is still used. "
+                              "Leaving the original call in place.\n";
                 return mlir::failure();
             }
         }
@@ -1851,16 +1948,16 @@ namespace patchestry::passes {
         // `lookupSymbol` into a null (and previously, a crash). Dead patch
         // functions are swept post-inline in `runOnOperation`.
         //
-        // Sanity: a callee with no `cir.return` and a caller using the
-        // call's result leaves us with unreplaced uses of `call_op`, and
-        // `Operation::erase()` asserts on a still-used op. This is the
-        // noreturn-with-used-result edge case. Bail rather than assert;
-        // the caller logs and moves on (the unmodified IR stays valid).
+        // The noreturn-with-used-result edge case was rejected up front by
+        // the pre-split guard above, so reaching this point with uses still
+        // present would indicate a logic error (e.g. a return-count mismatch
+        // that should have been caught earlier). Keep the assertion-style
+        // guard as defense in depth; any failure here is a bug, not a user
+        // error, so the prior caller-side mutations are already committed.
         if (!call_op->use_empty()) {
-            LOG(ERROR) << "Cannot erase inlined call '" << call_op.getCallee()->str()
-                       << "': its result still has uses (callee produced no "
-                          "cir.return to supply a replacement). Leaving the "
-                          "original call in place.\n";
+            LOG(ERROR) << "Internal: inlined call '" << callee_name
+                       << "' still has uses after return rewriting; refusing to "
+                          "erase. This indicates a missed return-shape check.\n";
             return mlir::failure();
         }
         call_op.erase();

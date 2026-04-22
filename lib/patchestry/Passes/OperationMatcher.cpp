@@ -507,9 +507,9 @@ namespace patchestry::passes {
             if (!arg_match.name.empty()) {
                 std::string var_name = extract_ssa_value_name(operand);
                 if (!matches_pattern(var_name, arg_match.name)) {
-                    LOG(WARNING) << "argument_matches: operand " << arg_match.index
-                                 << " name '" << var_name << "' does not match expected '"
-                                 << arg_match.name << "'\n";
+                    LOG(DEBUG) << "argument_matches: operand " << arg_match.index
+                               << " name '" << var_name << "' does not match expected '"
+                               << arg_match.name << "'\n";
                     return false;
                 }
             }
@@ -523,9 +523,9 @@ namespace patchestry::passes {
                 if (!matches_type(variable_type, arg_match.type)
                     && !matches_type(operand.getType(), arg_match.type))
                 {
-                    LOG(WARNING) << "argument_matches: operand " << arg_match.index
-                                 << " type does not match expected '" << arg_match.type
-                                 << "'\n";
+                    LOG(DEBUG) << "argument_matches: operand " << arg_match.index
+                               << " type does not match expected '" << arg_match.type
+                               << "'\n";
                     return false;
                 }
             }
