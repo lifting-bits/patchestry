@@ -7,7 +7,6 @@
 
 #include <memory>
 #include <optional>
-#include <regex>
 #include <set>
 #include <string_view>
 #include <unordered_map>
@@ -456,6 +455,13 @@ namespace patchestry::passes {
     /**
      * @brief Applies a specific patch action to target functions and operations.
      *
+     * OPERATION-mode safety: `operation_worklist` holds raw `Operation *` captured
+     * once in `runOnOperation()`. ERASE and REPLACE both free the matched op
+     * (`Operation::erase()` invalidates the pointer), so before iterating we
+     * rebuild the worklist from the current module state. This drops pointers
+     * freed by earlier patch actions and avoids a use-after-free when multiple
+     * actions target overlapping ops.
+     *
      * @param function_worklist List of functions to process
      * @param operation_worklist List of operations to process
      * @param patch_action The patch action containing match criteria
@@ -477,6 +483,9 @@ namespace patchestry::passes {
         const auto &match  = patch_action.match[0];
         const auto &action = patch_action.action[0];
 
+        const bool should_inline = options.enable_inlining
+            || meta_patch.optimization.contains("inline-patches");
+
         if (match.kind == MatchKind::FUNCTION) {
             // Apply to function calls
             for (auto func : function_worklist) {
@@ -485,6 +494,11 @@ namespace patchestry::passes {
                 llvm::SmallVector< mlir::Operation *, 8 > to_erase;
 
                 func.walk([&](cir::CallOp call_op) {
+                    // Note: intentionally no skip-guard on `patchestry_operation`.
+                    // Some specs chain patches by matching a prior action's
+                    // emitted patch call by name (e.g. APPLY_AFTER on
+                    // `patch__replace__sprintf`). `match.name` is the only
+                    // hook the user has for that targeting.
                     llvm::StringMap< mlir::Value > match_captures;
                     if (!OperationMatcher::patch_action_matches(
                             call_op, func, patch_action, OperationMatcher::Mode::FUNCTION,
@@ -494,8 +508,11 @@ namespace patchestry::passes {
                         return;
                     }
 
+                    const std::string callee_name =
+                        OperationMatcher::extract_callee_name(call_op);
+
                     if (action.mode == InstrumentationMode::ERASE) {
-                        LOG(INFO) << "Erasing call '" << call_op.getCallee()->str()
+                        LOG(INFO) << "Erasing call '" << callee_name
                                   << "' (patch action '" << patch_action.action_id << "')\n";
                         to_erase.push_back(call_op.getOperation());
                         return;
@@ -506,7 +523,7 @@ namespace patchestry::passes {
                     );
                     if (!patch_module) {
                         LOG(ERROR) << "Failed to load patch module for function: "
-                                   << call_op.getCallee()->str() << "\n";
+                                   << callee_name << "\n";
                         return;
                     }
 
@@ -521,30 +538,22 @@ namespace patchestry::passes {
                     switch (action.mode) {
                         case InstrumentationMode::APPLY_BEFORE:
                             PatchOperationImpl::applyBeforePatch(
-                                *this, call_op, patch_site, patch_module.get(),
-                                options.enable_inlining
-                                    || meta_patch.optimization.contains("inline-patches")
+                                *this, call_op, patch_site, patch_module.get(), should_inline
                             );
                             break;
                         case InstrumentationMode::APPLY_AFTER:
                             PatchOperationImpl::applyAfterPatch(
-                                *this, call_op, patch_site, patch_module.get(),
-                                options.enable_inlining
-                                    || meta_patch.optimization.contains("inline-patches")
+                                *this, call_op, patch_site, patch_module.get(), should_inline
                             );
                             break;
                         case InstrumentationMode::APPLY_AT_ENTRYPOINT:
                             PatchOperationImpl::applyPatchAtEntrypoint(
-                                *this, call_op, patch_site, patch_module.get(),
-                                options.enable_inlining
-                                    || meta_patch.optimization.contains("inline-patches")
+                                *this, call_op, patch_site, patch_module.get(), should_inline
                             );
                             break;
                         case InstrumentationMode::REPLACE:
                             PatchOperationImpl::replaceCallWithPatch(
-                                *this, call_op, patch_site, patch_module.get(),
-                                options.enable_inlining
-                                    || meta_patch.optimization.contains("inline-patches")
+                                *this, call_op, patch_site, patch_module.get(), should_inline
                             );
                             break;
                         default:
@@ -558,6 +567,19 @@ namespace patchestry::passes {
                 }
             }
         } else if (match.kind == MatchKind::OPERATION) {
+            // Rebuild the worklist from the current module state so we skip
+            // any ops freed by earlier patch actions (see function comment).
+            if (!function_worklist.empty()) {
+                auto mod = function_worklist.front()
+                               ->getParentOfType< mlir::ModuleOp >();
+                operation_worklist.clear();
+                mod.walk([&](mlir::Operation *op) {
+                    if (!mlir::isa< cir::FuncOp, mlir::ModuleOp, cir::GlobalOp >(op)) {
+                        operation_worklist.push_back(op);
+                    }
+                });
+            }
+
             // Apply to operations
             llvm::SmallVector< mlir::Operation *, 8 > to_erase;
             for (auto *op : operation_worklist) {
@@ -598,33 +620,25 @@ namespace patchestry::passes {
                 switch (action.mode) {
                     case InstrumentationMode::APPLY_BEFORE:
                         PatchOperationImpl::applyBeforePatch(
-                            *this, op, patch_site, patch_module.get(),
-                            options.enable_inlining
-                                || meta_patch.optimization.contains("inline-patches")
+                            *this, op, patch_site, patch_module.get(), should_inline
                         );
                         break;
                     case InstrumentationMode::APPLY_AFTER:
                         PatchOperationImpl::applyAfterPatch(
-                            *this, op, patch_site, patch_module.get(),
-                            options.enable_inlining
-                                || meta_patch.optimization.contains("inline-patches")
+                            *this, op, patch_site, patch_module.get(), should_inline
                         );
                         break;
                     case InstrumentationMode::REPLACE:
                         if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
                             PatchOperationImpl::replaceCallWithPatch(
-                                *this, call_op, patch_site, patch_module.get(),
-                                options.enable_inlining
-                                    || meta_patch.optimization.contains("inline-patches")
+                                *this, call_op, patch_site, patch_module.get(), should_inline
                             );
                         } else if (op->getNumResults() > 0) {
                             // Any op with at least one result can be replaced
                             // (cir.binop, cir.cmp, cir.load, cir.cast,
                             // cir.get_member, cir.unary, cir.ptr_stride, ...).
                             PatchOperationImpl::replaceOperationWithPatch(
-                                *this, op, patch_site, patch_module.get(),
-                                options.enable_inlining
-                                    || meta_patch.optimization.contains("inline-patches")
+                                *this, op, patch_site, patch_module.get(), should_inline
                             );
                         } else {
                             LOG(ERROR) << "REPLACE mode requires an op with results; "
@@ -729,9 +743,23 @@ namespace patchestry::passes {
              ++i)
         {
             const auto &arg_spec = patch_action.action[0].arguments[i];
-            auto patch_arg_type  = is_variadic && (i > patch_func.getNumArguments() - 1)
-                 ? patch_func.getArgumentTypes().back()
-                 : patch_func.getArgumentTypes()[i];
+            auto arg_types       = patch_func.getArgumentTypes();
+            mlir::Type patch_arg_type;
+            if (i < arg_types.size()) {
+                patch_arg_type = arg_types[i];
+            } else if (is_variadic && !arg_types.empty()) {
+                // Reuse the last fixed parameter's type for trailing variadic slots.
+                patch_arg_type = arg_types.back();
+            } else {
+                // Variadic patch with zero fixed parameters — no declared type
+                // to use for coercion. Skip this argument rather than reading
+                // past the empty type vector.
+                LOG(ERROR) << "Patch function '" << patch_func.getName().str()
+                           << "' has no fixed parameters; cannot determine argument "
+                              "type for index "
+                           << i << " — declare at least one fixed parameter.\n";
+                continue;
+            }
 
             switch (arg_spec.source) {
                 case ArgumentSourceType::OPERAND:
@@ -1667,8 +1695,8 @@ namespace patchestry::passes {
                             break;
                     }
                 } else {
-                    LOG(INFO) << "function worklist entry '" << func.getSymName().str()
-                              << "' did not match the contract action; continuing\n";
+                    LOG(DEBUG) << "call in function '" << func.getSymName().str()
+                               << "' did not match the contract action; continuing\n";
                 }
             });
         }
