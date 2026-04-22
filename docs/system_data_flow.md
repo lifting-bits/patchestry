@@ -131,3 +131,5 @@ The flow is layered:
   script entrypoint, or interface handoff, update this document in the same PR.
 - If a PR changes an affected interface and does not update this diagram, treat
   that as documentation debt to fix before merge.
+
+Current runtime validation is intentionally scoped to whole-function replacement of affected functions in the original ELF, even when the original Patchestry patch semantics are sub-function (`apply_before`, `apply_after`, `replace`, runtime contract insertion).

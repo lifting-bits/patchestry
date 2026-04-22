@@ -24,7 +24,10 @@ to the executable, and MLIR can support LLVM-based contract validation through a
 symbolic executor such as KLEE. Moreover, MLIR provides flexibility to
 devise our own dialects for representing contracts in specialized logic, such as
 SMT. Our compiler stacks empower us to compile C into any of the previously mentioned
-representations, promoting seamless interconnection between them.
+representations, promoting seamless interconnection between them.  The repository also 
+includes an opt-in QEMU firmware runtime validation flow that lowers patched functions to ARM32 code,
+rewrites the original ELF with `Patcherex2`, and validates execution under
+QEMU.
 
 ## Technical Rationale
 

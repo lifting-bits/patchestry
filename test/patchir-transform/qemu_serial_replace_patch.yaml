@@ -21,10 +21,10 @@ meta_patches:
 
     patch_actions:
       - id: "QEMU-SERIAL-REPLACE-001"
-        description: "Replace qemu_target_replace"
+        description: "Replace emit_replace_base inside qemu_target_replace"
 
         match:
-          - name: "emit_base_prefix"
+          - name: "emit_replace_base"
             kind: "function"
             function_context:
               - name: "qemu_target_replace"
