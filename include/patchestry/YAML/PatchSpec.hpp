@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -110,6 +111,23 @@ namespace patchestry::passes {
             return "UNKNOWN";
         }
 
+        // Helper for parsing the nested `match:` object inside PatchEntry.
+        // Kept in the patch namespace (not llvm::yaml) so the struct lives
+        // with the types it serves; only its MappingTraits specialization is
+        // in llvm::yaml. Supports `name:` (single callee) or `names:` (list,
+        // OR semantics).
+        struct PatchMatchObject
+        {
+            std::vector< std::string > names;
+            MatchKind kind = MatchKind::FUNCTION;
+            std::optional< std::string > op_kind;
+            std::vector< std::string > context;
+            std::vector< ArgumentMatch > argument_matches;
+            std::vector< OperandMatch > operand_matches;
+            std::vector< SymbolMatch > symbol_matches;
+            std::vector< CaptureSpec > captures;
+        };
+
         // Simplified YAML surface that inflates to MetaPatchConfig.
         struct PatchEntry
         {
@@ -136,6 +154,12 @@ namespace patchestry::passes {
         // Convert a PatchEntry to the canonical MetaPatchConfig representation.
         // Multiple match_names produce one PatchAction per name (OR semantics).
         [[maybe_unused]] inline MetaPatchConfig inflatePatchEntry(const PatchEntry &entry) {
+            // Parser enforces non-empty match_names; guard direct callers
+            // (PatchDSL codegen, future unit tests) from accidentally
+            // constructing a MetaPatchConfig with zero actions.
+            assert(!entry.match_names.empty()
+                   && "inflatePatchEntry: match_names must be non-empty");
+
             MetaPatchConfig meta;
             meta.name         = entry.name;
             meta.description  = entry.description;
@@ -204,6 +228,36 @@ namespace llvm::yaml {
         }
     };
 
+    // Helper: parse a YAML mode string into InstrumentationMode, reporting
+    // the right error via `io`. Shared between the legacy `meta_patches:`
+    // action parser and the flat `patches:` entry parser so the allowed
+    // spellings and error messages stay in sync.
+    inline InstrumentationMode parsePatchInfoMode(
+        IO &io, const std::string &mode_str
+    ) {
+        if (mode_str == "ApplyBefore" || mode_str == "apply_before") {
+            return InstrumentationMode::APPLY_BEFORE;
+        }
+        if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
+            return InstrumentationMode::APPLY_AFTER;
+        }
+        if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
+            return InstrumentationMode::APPLY_AT_ENTRYPOINT;
+        }
+        if (mode_str == "Replace" || mode_str == "replace") {
+            return InstrumentationMode::REPLACE;
+        }
+        if (mode_str == "Erase" || mode_str == "erase") {
+            return InstrumentationMode::ERASE;
+        }
+        io.setError(
+            "Unknown patch mode: '" + mode_str
+            + "'. Valid modes: ApplyBefore, ApplyAfter, "
+              "ApplyAtEntrypoint, Replace, Erase"
+        );
+        return InstrumentationMode::NONE;
+    }
+
     // Parse Action
     template<>
     struct MappingTraits< patch::Action >
@@ -215,22 +269,7 @@ namespace llvm::yaml {
 
             std::string mode_str;
             io.mapRequired("mode", mode_str);
-            if (mode_str == "ApplyBefore" || mode_str == "apply_before") {
-                action.mode = InstrumentationMode::APPLY_BEFORE;
-            } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
-                action.mode = InstrumentationMode::APPLY_AFTER;
-            } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
-                action.mode = InstrumentationMode::APPLY_AT_ENTRYPOINT;
-            } else if (mode_str == "Replace" || mode_str == "replace") {
-                action.mode = InstrumentationMode::REPLACE;
-            } else if (mode_str == "Erase" || mode_str == "erase") {
-                action.mode = InstrumentationMode::ERASE;
-            } else {
-                LOG(ERROR) << "Unknown patch mode: '" << mode_str
-                           << "'. Valid modes: ApplyBefore, ApplyAfter, "
-                              "ApplyAtEntrypoint, Replace, Erase";
-                action.mode = InstrumentationMode::NONE;
-            }
+            action.mode = parsePatchInfoMode(io, mode_str);
 
             if (action.mode != InstrumentationMode::ERASE && action.patch_id.empty()) {
                 io.setError("'patch_id' is required for mode '" + mode_str + "'");
@@ -365,6 +404,11 @@ namespace llvm::yaml {
                 return;
             }
 
+            // `name:` is optional: an ArgumentSource is identified by
+            // `source:` plus whichever of `index:` / `symbol:` / `value:`
+            // the chosen kind requires. `name:` is descriptive metadata
+            // used for logs, which is why it isn't required. For
+            // `source: capture`, `name:` names the capture to look up.
             io.mapOptional("name", arg.name);
             io.mapOptional("index", arg.index);
             io.mapOptional("symbol", arg.symbol);
@@ -373,24 +417,10 @@ namespace llvm::yaml {
         }
     };
 
-    // Helper struct for parsing the `match:` object inside PatchEntry.
-    // Supports `name:` (single callee) or `names:` (list, OR semantics).
-    struct PatchMatchObject
-    {
-        std::vector< std::string > names;
-        MatchKind kind = MatchKind::FUNCTION;
-        std::optional< std::string > op_kind;
-        std::vector< std::string > context;
-        std::vector< ArgumentMatch > argument_matches;
-        std::vector< OperandMatch > operand_matches;
-        std::vector< SymbolMatch > symbol_matches;
-        std::vector< patch::CaptureSpec > captures;
-    };
-
     template<>
-    struct MappingTraits< PatchMatchObject >
+    struct MappingTraits< patch::PatchMatchObject >
     {
-        static void mapping(IO &io, PatchMatchObject &m) {
+        static void mapping(IO &io, patch::PatchMatchObject &m) {
             // `name:` for single callee, `names:` for list (OR).
             // Mutually exclusive.
             std::string single_name;
@@ -409,12 +439,21 @@ namespace llvm::yaml {
                 return;
             }
 
+            // `kind:` must be one of "operation" / "function" (default). A
+            // typo like "funciton" previously fell through to FUNCTION
+            // silently, masking the spec error.
             std::string kind_str;
             io.mapOptional("kind", kind_str);
-            if (kind_str == "operation") {
+            if (kind_str.empty() || kind_str == "function") {
+                m.kind = MatchKind::FUNCTION;
+            } else if (kind_str == "operation") {
                 m.kind = MatchKind::OPERATION;
             } else {
-                m.kind = MatchKind::FUNCTION;
+                io.setError(
+                    "Unknown match kind: '" + kind_str
+                    + "'. Valid kinds: \"function\" (default), \"operation\"."
+                );
+                return;
             }
 
             io.mapOptional("context", m.context);
@@ -436,7 +475,7 @@ namespace llvm::yaml {
             io.mapOptional("description", entry.description);
 
             // Parse nested match object
-            PatchMatchObject match_obj;
+            patch::PatchMatchObject match_obj;
             io.mapRequired("match", match_obj);
             entry.match_names      = match_obj.names;
             entry.match_kind       = match_obj.kind;
@@ -447,23 +486,10 @@ namespace llvm::yaml {
             entry.symbol_matches   = match_obj.symbol_matches;
             entry.captures         = match_obj.captures;
 
-            // Mode
+            // Mode (shared with the legacy meta_patches parser).
             std::string mode_str;
             io.mapRequired("mode", mode_str);
-            if (mode_str == "ApplyBefore" || mode_str == "apply_before") {
-                entry.mode = InstrumentationMode::APPLY_BEFORE;
-            } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
-                entry.mode = InstrumentationMode::APPLY_AFTER;
-            } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
-                entry.mode = InstrumentationMode::APPLY_AT_ENTRYPOINT;
-            } else if (mode_str == "Replace" || mode_str == "replace") {
-                entry.mode = InstrumentationMode::REPLACE;
-            } else if (mode_str == "Erase" || mode_str == "erase") {
-                entry.mode = InstrumentationMode::ERASE;
-            } else {
-                io.setError("Unknown patch mode: '" + mode_str + "'");
-                entry.mode = InstrumentationMode::NONE;
-            }
+            entry.mode = parsePatchInfoMode(io, mode_str);
 
             io.mapOptional("patch", entry.patch_id);
             io.mapOptional("arguments", entry.arguments);
