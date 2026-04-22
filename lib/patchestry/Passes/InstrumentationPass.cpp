@@ -1465,18 +1465,21 @@ namespace patchestry::passes {
      * body of the called function. It handles control flow, argument mapping, and
      * block management to properly integrate the inlined code.
      *
-     * Known limitation: only `cir::ReturnOp` at the callee's top-level
-     * block iteration is rewritten into a branch to `split_block`.
-     * Early returns that lower into nested `cir::ReturnOp` (e.g. the
-     * `return` branch of a C `if (oob) return v;` pattern, which sits
-     * inside `cir.scope { cir.if { cir.return } }`) are cloned verbatim
-     * via `builder.clone`. If the caller function's return type
-     * differs from the callee's, the cloned return fails the verifier
-     * on inline. Fix requires a post-clone walk that rewrites every
-     * nested return into a branch + RAUW (single-return case) or an
-     * alloca-unified continuation (multi-return case). Meanwhile:
-     * patch bodies intended for `replace`/`rewrite`/etc. with
-     * inlining enabled must be single-return at function scope.
+     * Return handling: `cir::ReturnOp`s at the callee's top-level block
+     * iteration are rewritten post-clone into a branch to the caller's
+     * continuation block (`split_block`). Multi-return top-level cases
+     * unify result values through allocas in the caller's entry block;
+     * the continuation block loads once and RAUWs the original call's
+     * result uses. Single-return skips the alloca round-trip and RAUWs
+     * directly at the return site.
+     *
+     * Known limitation: patch bodies with `cir::ReturnOp` nested inside
+     * a structured region (`cir.scope`, `cir.if`, etc. — emitted by C
+     * early-return patterns like `if (cond) return X; return Y;`) are
+     * rejected up-front with a clear error. A correct fix requires
+     * either (a) flattening the callee's structured control flow to a
+     * raw CFG before inlining, or (b) wiring up MLIR's stock
+     * `InlinerInterface` (which CIR does not currently implement).
      *
      * @param module The module containing both caller and callee
      * @param call_op The call operation to be inlined
@@ -1520,6 +1523,40 @@ namespace patchestry::passes {
             mapper.map(arg, operand);
         }
 
+        // Pre-inline guard: detect early returns nested inside a structured
+        // region (cir.scope / cir.if / cir.for / cir.while). C→CIR lowering
+        // emits this pattern for `if (cond) return X; return Y;`. Rewriting
+        // a nested `cir::ReturnOp` to a `cir::BrOp` targeting the caller's
+        // continuation would cross region boundaries, which MLIR's verifier
+        // rejects with "reference to block defined in another region".
+        // Detect up-front so no partial IR modification happens on the
+        // caller side. Common single-top-level-return patches (the majority
+        // of real inlinable patch bodies) are unaffected.
+        {
+            bool has_nested_return = false;
+            for (mlir::Block &block : callee.getBody()) {
+                for (mlir::Operation &op : block) {
+                    if (isa< cir::ReturnOp >(&op)) {
+                        continue; // top-level return — safe to rewrite post-clone
+                    }
+                    op.walk([&](cir::ReturnOp) { has_nested_return = true; });
+                    if (has_nested_return) break;
+                }
+                if (has_nested_return) break;
+            }
+            if (has_nested_return) {
+                LOG(ERROR) << "Cannot inline '" << call_op.getCallee()->str()
+                           << "': patch body has an early return nested inside "
+                              "a structured region (cir.scope / cir.if). "
+                              "Cross-region branches to the caller's "
+                              "continuation block fail MLIR verification. "
+                              "Restructure the patch to a single cir.return at "
+                              "function scope, or remove 'inline-patches' from "
+                              "the action.\n";
+                return mlir::failure();
+            }
+        }
+
         // get caller block and split it at call site
         mlir::Block *caller_block = call_op->getBlock();
         mlir::Block *split_block  = caller_block->splitBlock(call_op->getIterator());
@@ -1552,12 +1589,11 @@ namespace patchestry::passes {
             mapper.map(&block, cloned_block);
         }
 
-        // Second pass: clone ops into cloned blocks. `cir::ReturnOp` is
-        // the only terminator with bespoke handling — it routes return
-        // values into the call's RAUW set, then branches to split_block.
-        // Every other op — including branch terminators like `cir::BrOp`
-        // and `cir::BrCondOp`, as well as region-carrying ops — goes
-        // through `builder.clone(op, mapper)`, which remaps operands,
+        // Second pass: clone ops into cloned blocks uniformly — including
+        // `cir::ReturnOp`s. All returns are rewritten post-clone so we
+        // handle nested ones (inside cloned region-carrying ops like
+        // `cir.scope` / `cir.if` / `cir.for`) with the same logic as
+        // top-level ones. `builder.clone(op, mapper)` remaps operands,
         // successors, and nested block refs in one shot.
         for (mlir::Block &orig_block : callee_region) {
             auto *cloned_block = mapper.lookupOrNull(&orig_block);
@@ -1568,31 +1604,87 @@ namespace patchestry::passes {
             builder.setInsertionPointToEnd(cloned_block);
 
             for (mlir::Operation &op : orig_block) {
-                if (auto return_op = dyn_cast< cir::ReturnOp >(&op)) {
-                    mlir::SmallVector< mlir::Value > results;
-                    for (mlir::Value result : return_op.getOperands()) {
-                        auto mapped_result = mapper.lookupOrDefault(result);
-                        if (!mapped_result) {
-                            LOG(ERROR) << "Failed to map return value during inlining\n";
-                            return mlir::failure();
-                        }
-                        results.push_back(mapped_result);
-                    }
+                builder.clone(op, mapper);
+            }
+        }
 
-                    auto call_results = call_op.getResults();
-                    if (call_results.size() != results.size()) {
-                        LOG(ERROR) << "Result count mismatch during inlining\n";
-                        return mlir::failure();
-                    }
+        // Post-clone: collect every `cir::ReturnOp` in the cloned region
+        // tree — both top-level (terminating a cloned block) and nested
+        // (inside cloned `cir.scope` / `cir.if` / `cir.for` regions,
+        // which C→CIR lowering emits for early-return patterns like
+        // `if (oob) return X; return Y;`). Each represents a function-
+        // exit from the callee's body and must be rewritten to exit the
+        // inlined region via a branch to `split_block`. Multi-return
+        // callees unify their result values through allocas in the
+        // caller's function entry block; single-return uses direct RAUW.
+        mlir::SmallVector< cir::ReturnOp > cloned_returns;
+        for (mlir::Block &orig_block : callee_region) {
+            auto *cloned_block = mapper.lookupOrNull(&orig_block);
+            cloned_block->walk([&](cir::ReturnOp ret) {
+                cloned_returns.push_back(ret);
+            });
+        }
 
-                    for (auto [callResult, returnValue] : llvm::zip(call_results, results)) {
-                        callResult.replaceAllUsesWith(returnValue);
-                    }
+        auto call_results = call_op.getResults();
+        for (cir::ReturnOp ret : cloned_returns) {
+            if (ret.getNumOperands() != call_results.size()) {
+                LOG(ERROR) << "Return value count mismatch during inlining (callee "
+                           << "returns " << ret.getNumOperands() << " value(s), call "
+                           << "expects " << call_results.size() << ")\n";
+                return mlir::failure();
+            }
+        }
 
-                    builder.create< cir::BrOp >(loc, split_block);
-                } else {
-                    builder.clone(op, mapper);
+        // Multi-return + non-void inlines go through an alloca per call
+        // result: each return site stores into the slot and branches;
+        // `split_block` loads once at its head and RAUWs the original
+        // call's result uses. For single-return we skip the alloca round-
+        // trip and RAUW directly at the return site.
+        mlir::SmallVector< mlir::Value > result_slots;
+        const bool unify_via_alloca =
+            cloned_returns.size() > 1 && !call_results.empty();
+
+        if (unify_via_alloca) {
+            mlir::Block *fn_entry = &caller_block->getParent()->front();
+            mlir::OpBuilder alloca_builder(fn_entry, fn_entry->begin());
+            auto layout = mlir::DataLayout::closest(call_op);
+            for (mlir::Value cr : call_results) {
+                auto align = mlir::IntegerAttr::get(
+                    mlir::IntegerType::get(builder.getContext(), 64),
+                    static_cast< int64_t >(layout.getTypeABIAlignment(cr.getType()))
+                );
+                auto addr_type = cir::PointerType::get(builder.getContext(), cr.getType());
+                auto slot = alloca_builder.create< cir::AllocaOp >(
+                    loc, addr_type, cr.getType(), "inline_ret", align
+                );
+                result_slots.push_back(slot.getResult());
+            }
+        }
+
+        for (cir::ReturnOp ret : cloned_returns) {
+            mlir::OpBuilder rb(ret);
+            mlir::Location ret_loc = ret.getLoc();
+
+            if (unify_via_alloca) {
+                for (auto [slot, val] : llvm::zip(result_slots, ret.getOperands())) {
+                    rb.create< cir::StoreOp >(ret_loc, val, slot);
                 }
+            } else if (!call_results.empty()) {
+                // Single-return + non-void: RAUW directly with the
+                // return's operands (already remapped by `builder.clone`).
+                for (auto [cr, val] : llvm::zip(call_results, ret.getOperands())) {
+                    cr.replaceAllUsesWith(val);
+                }
+            }
+            rb.create< cir::BrOp >(ret_loc, split_block);
+            ret.erase();
+        }
+
+        if (unify_via_alloca) {
+            mlir::OpBuilder load_builder(split_block, split_block->begin());
+            for (auto [cr, slot] : llvm::zip(call_results, result_slots)) {
+                auto loaded = load_builder.create< cir::LoadOp >(loc, cr.getType(), slot);
+                cr.replaceAllUsesWith(loaded.getResult());
             }
         }
 

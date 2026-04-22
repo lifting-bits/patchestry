@@ -75,6 +75,19 @@
 // INLINE_AFTER-NOT: patch__after__spo2_lookup
 // INLINE_AFTER: cir.call @spo2_lookup
 
+// Graceful rejection: replace + inline on a patch body with a nested
+// cir.return (from C early-return) is detected up-front and skipped
+// with a clear stderr diagnostic. The pass still succeeds (so other
+// patches in the same run aren't lost); the output CIR contains the
+// un-inlined patch call (replace happened, inline didn't).
+// RUN: %patchir-transform %t1.cir --spec %S/inline_patches_replace.yaml -o %t14.cir 2>&1 | \
+// RUN:   %file-check -check-prefix=INLINE_REJECT_NESTED %s
+// RUN: %file-check -vv -check-prefix=INLINE_REJECT_NESTED_OUT %s --input-file %t14.cir
+// INLINE_REJECT_NESTED: Cannot inline
+// INLINE_REJECT_NESTED-SAME: patch__replace__spo2_lookup
+// INLINE_REJECT_NESTED-SAME: nested inside a structured region
+// INLINE_REJECT_NESTED_OUT: cir.call @patch__replace__spo2_lookup
+
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:v8",
