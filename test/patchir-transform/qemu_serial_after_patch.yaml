@@ -3,7 +3,7 @@ apiVersion: patchestry.io/v1
 
 metadata:
   name: "qemu-serial-after-patch"
-  description: "Insert behavior after qemu_target_after calls emit_base_prefix"
+  description: "Insert behavior after qemu_target_after calls emit_after_base"
   version: "1.0.0"
   author: "Codex"
   created: "2026-04-22"
@@ -21,10 +21,10 @@ meta_patches:
 
     patch_actions:
       - id: "QEMU-SERIAL-AFTER-001"
-        description: "Insert output after emit_base_prefix in qemu_target_after"
+        description: "Insert output after emit_after_base in qemu_target_after"
 
         match:
-          - name: "emit_base_prefix"
+          - name: "emit_after_base"
             kind: "function"
             function_context:
               - name: "qemu_target_after"

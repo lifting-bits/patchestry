@@ -21,7 +21,10 @@ one can create an MLIR dialect specifically for P-Code (a program representation
 utilized by Ghidra) to optimize integration with the Ghidra decompiler.
 Alternatively, an LLVM IR dialect can be employed to compile back to the
 executable, and MLIR can support LLVM-based contract validation through a
-symbolic executor such as KLEE. Moreover, MLIR provides flexibility to
+symbolic executor such as KLEE. The repository also includes an opt-in QEMU
+firmware runtime validation flow that lowers patched functions to ARM32 code,
+rewrites the original ELF with `patcherex2`, and validates execution under
+QEMU. Moreover, MLIR provides flexibility to
 devise our own dialects for representing contracts in specialized logic, such as
 SMT. Finally, our [high-level dialect](https://trailofbits.github.io/vast/),
 developed under DARPA V-SPELLS, captures the intricacies of full-featured C. Our

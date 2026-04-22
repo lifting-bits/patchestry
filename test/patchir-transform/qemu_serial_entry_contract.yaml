@@ -24,7 +24,7 @@ meta_contracts:
         description: "Insert a visible entry contract"
 
         match:
-          - name: "emit_base_prefix"
+          - name: "emit_contract_base"
             kind: "function"
             function_context:
               - name: "qemu_target_contract"

@@ -2,23 +2,34 @@
 
 #include "uart.h"
 
-static void emit_base_prefix(const char *name) {
-    uart_write_string("BASE:");
-    uart_write_line(name);
+static void emit_before_base(void) {
+    uart_write_line("BASE:before");
+}
+
+static void emit_after_base(void) {
+    uart_write_line("BASE:after");
+}
+
+static void emit_replace_base(void) {
+    uart_write_line("BASE:replace");
+}
+
+static void emit_contract_base(void) {
+    uart_write_line("BASE:contract");
 }
 
 void qemu_target_before(void) {
-    emit_base_prefix("before");
+    emit_before_base();
 }
 
 void qemu_target_after(void) {
-    emit_base_prefix("after");
+    emit_after_base();
 }
 
 void qemu_target_replace(void) {
-    emit_base_prefix("replace");
+    emit_replace_base();
 }
 
 void qemu_target_contract(void) {
-    emit_base_prefix("contract");
+    emit_contract_base();
 }

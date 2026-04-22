@@ -3,7 +3,7 @@ apiVersion: patchestry.io/v1
 
 metadata:
   name: "qemu-serial-before-patch"
-  description: "Insert behavior before qemu_target_before calls emit_base_prefix"
+  description: "Insert behavior before qemu_target_before calls emit_before_base"
   version: "1.0.0"
   author: "Codex"
   created: "2026-04-22"
@@ -21,10 +21,10 @@ meta_patches:
 
     patch_actions:
       - id: "QEMU-SERIAL-BEFORE-001"
-        description: "Insert output before emit_base_prefix in qemu_target_before"
+        description: "Insert output before emit_before_base in qemu_target_before"
 
         match:
-          - name: "emit_base_prefix"
+          - name: "emit_before_base"
             kind: "function"
             function_context:
               - name: "qemu_target_before"
