@@ -53,11 +53,14 @@ namespace patchestry::passes {
             using RelationKind  = ::contracts::RelationKind;
         } // namespace attr_types
 
-        // Contracts attach as MLIR attributes on the matched op; the mode
-        // only controls whether the attribute lands on the op or an
-        // adjacent one. There is no runtime-call insertion (that path
-        // lives under patches: now), so apply_at_entrypoint is not a
-        // valid contract mode.
+        // Contracts attach as MLIR attributes on the matched op. APPLY_BEFORE
+        // and APPLY_AFTER currently produce the same attribute placement
+        // (both set `contract.static` on the matched op); the distinction is
+        // retained on the enum so the YAML surface and the dispatch in
+        // `ContractOperationImpl` stay aligned with patches and leave room
+        // for later differentiation. There is no runtime-call insertion
+        // (that path lives under patches: now), so apply_at_entrypoint is
+        // not a valid contract mode.
         enum class InfoMode : uint8_t {
             NONE = 0, // No contract
             APPLY_BEFORE,
@@ -164,7 +167,6 @@ namespace patchestry::passes {
             std::string name;
             std::string description;
             std::vector< ContractAction > contract_actions;
-            std::set< std::string > optimization;
         };
 
         [[maybe_unused]] inline std::string_view infoModeToString(InfoMode mode) {
@@ -202,8 +204,6 @@ namespace patchestry::passes {
             InfoMode mode = InfoMode::NONE;
             std::string contract_id;
             std::vector< ArgumentSource > arguments;
-            // optimization
-            std::set< std::string > optimization;
         };
 
         // Convert a ContractEntry to the canonical MetaContractConfig representation.
@@ -211,7 +211,6 @@ namespace patchestry::passes {
             MetaContractConfig meta;
             meta.name         = entry.name;
             meta.description  = entry.description;
-            meta.optimization = entry.optimization;
 
             ContractAction ca;
             ca.action_id   = entry.id.empty() ? entry.name + "/0" : entry.id;
@@ -420,7 +419,9 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse MetaContractConfig
+    // Parse MetaContractConfig. Contracts are static-only, so `optimization:`
+    // (e.g. `inline-contracts`) is accepted-but-ignored for backward compat
+    // with older YAMLs; a warning is emitted when flags are present.
     template<>
     struct MappingTraits< contract::MetaContractConfig >
     {
@@ -431,8 +432,11 @@ namespace llvm::yaml {
 
             std::vector< std::string > optimization;
             io.mapOptional("optimization", optimization);
-            for (const auto &opt : optimization) {
-                meta_contract.optimization.insert(opt);
+            if (!optimization.empty()) {
+                LOG(WARNING)
+                    << "meta_contract '" << meta_contract.name
+                    << "': 'optimization:' is deprecated for contracts "
+                       "(contracts are static-only, nothing to inline) — ignoring.\n";
             }
         }
     };
@@ -615,10 +619,14 @@ namespace llvm::yaml {
             io.mapRequired("contract", entry.contract_id);
             io.mapOptional("arguments", entry.arguments);
 
+            // Accept-and-warn for backward compat (see MetaContractConfig).
             std::vector< std::string > optimization;
             io.mapOptional("optimization", optimization);
-            for (const auto &opt : optimization) {
-                entry.optimization.insert(opt);
+            if (!optimization.empty()) {
+                LOG(WARNING)
+                    << "contract '" << entry.name
+                    << "': 'optimization:' is deprecated for contracts "
+                       "(contracts are static-only, nothing to inline) — ignoring.\n";
             }
         }
     };

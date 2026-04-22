@@ -208,7 +208,7 @@ libraries:
 |-------|-------------|---------|
 | `name` | Unique identifier for the patch group | `"usb_security_patches"` |
 | `description` | Description of the patch group purpose | `"USB security monitoring patches"` |
-| `optimization` | List of optimization flags | `["inline-patches", "inline-contracts"]` |
+| `optimization` | List of optimization flags | `["inline-patches"]` |
 | `patch_actions` | List of individual patch actions | See [patch action fields](#patch-action-fields) below |
 
 ### Meta-Contract Entry Fields
@@ -323,7 +323,11 @@ The `optimization` field accepts a list of optimization settings:
 | Flag | Applies to | Description | Effect |
 |------|------------|-------------|--------|
 | `"inline-patches"` | `meta_patches` | Inline patch function calls after insertion | Reduces function call overhead |
-| `"inline-contracts"` | `meta_contracts` | Inline contract function calls after insertion | Reduces contract validation overhead |
+
+> **Note:** `inline-contracts` is deprecated. Contracts are static-only —
+> they attach `contract.static` MLIR attributes rather than emitting calls,
+> so there is nothing to inline. The flag is still parsed for backward
+> compatibility but produces a warning and has no effect.
 
 ## Argument Specification
 
@@ -556,7 +560,6 @@ meta_patches:
     description: "Meta patches for USB security"
     optimization:
       - "inline-patches"
-      - "inline-contracts"
 
     patch_actions:
       - id: "USB-PATCH-001"

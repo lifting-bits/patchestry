@@ -22,7 +22,6 @@ meta_patches:
     description: "Meta patches for USB security"
     optimization:
       - "inline-patches"
-      - "inline-contracts"
 
     # Patch Action Configuration
     patch_actions:

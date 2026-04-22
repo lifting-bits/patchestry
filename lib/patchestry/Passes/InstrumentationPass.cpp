@@ -1612,16 +1612,13 @@ namespace patchestry::passes {
                                                           .action = contract_action };
 
                 // Apply the contract to matching functions
-                apply_contract_action_to_targets(
-                    function_worklist, *target_meta_contract, contract_to_apply
-                );
+                apply_contract_action_to_targets(function_worklist, contract_to_apply);
             }
         }
     }
 
     void InstrumentationPass::apply_contract_action_to_targets(
         llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
-        const contract::MetaContractConfig &meta_contract,
         const ContractInformation &contract_to_apply
     ) {
         if (!contract_to_apply.action.has_value()) {
@@ -1656,16 +1653,12 @@ namespace patchestry::passes {
                     switch (action.mode) {
                         case contract::InfoMode::APPLY_BEFORE:
                             ContractOperationImpl::applyContractBefore(
-                                *this, call_op, contract_to_apply,
-                                options.enable_inlining
-                                    || meta_contract.optimization.contains("inline-contracts")
+                                call_op, contract_to_apply
                             );
                             break;
                         case contract::InfoMode::APPLY_AFTER:
                             ContractOperationImpl::applyContractAfter(
-                                *this, call_op, contract_to_apply,
-                                options.enable_inlining
-                                    || meta_contract.optimization.contains("inline-contracts")
+                                call_op, contract_to_apply
                             );
                             break;
                         default:

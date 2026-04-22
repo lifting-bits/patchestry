@@ -236,11 +236,8 @@ namespace patchestry::passes {
     }
 
     void ContractOperationImpl::applyContractBefore(
-        InstrumentationPass &pass, mlir::Operation *target_op,
-        const ContractInformation &contract, bool should_inline
+        mlir::Operation *target_op, const ContractInformation &contract
     ) {
-        (void) pass;
-        (void) should_inline;
         if (target_op == nullptr) {
             LOG(ERROR
             ) << "applyContractBefore: the passed function to be instrumented was null";
@@ -251,11 +248,8 @@ namespace patchestry::passes {
     }
 
     void ContractOperationImpl::applyContractAfter(
-        InstrumentationPass &pass, mlir::Operation *target_op,
-        const ContractInformation &contract, bool should_inline
+        mlir::Operation *target_op, const ContractInformation &contract
     ) {
-        (void) pass;
-        (void) should_inline;
         if (target_op == nullptr) {
             LOG(ERROR) << "applyContractAfter: the passed function to be instrumented was null";
             return;

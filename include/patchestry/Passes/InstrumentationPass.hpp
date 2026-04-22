@@ -119,7 +119,6 @@ namespace patchestry::passes { // NOLINT
         : public mlir::PassWrapper< InstrumentationPass, mlir::OperationPass< mlir::ModuleOp > >
 
     {
-        friend class ContractOperationImpl;
         friend class PatchOperationImpl;
 
         /** @brief Path to the YAML Patchestry configuration file */
@@ -202,12 +201,10 @@ namespace patchestry::passes { // NOLINT
          * @brief Applies a specific contract action to target functions.
          *
          * @param function_worklist List of functions to process
-         * @param meta_contract
          * @param modified_contract
          */
         void apply_contract_action_to_targets(
             llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
-            const contract::MetaContractConfig &meta_contract,
             const ContractInformation &modified_contract
         );
 
