@@ -920,10 +920,49 @@ namespace patchestry::passes {
         }
 
         if (arg_spec.is_reference) {
-            arg_map[operand_value] = create_cast_if_needed(
-                builder, call_op, create_reference(builder, call_op, operand_value),
-                patch_arg_type
-            );
+            // For APPLY_AT_ENTRYPOINT, pass the caller's own parameter
+            // alloca slot as the reference — NOT a fresh temporary. In
+            // C-lowered CIR the entry prologue stores `%argN` into an
+            // alloca `%0 = cir.alloca T, "argname"` + `cir.store %argN, %0`,
+            // and downstream code reads from `%0` rather than `%argN`
+            // directly. The entrypoint call is inserted AFTER that
+            // parameter-init store, so a patch writing to a temporary
+            // slot leaves `%0` holding the pre-patch value — later
+            // loads continue to see it. Passing `%0` as the reference
+            // means the patch mutates the slot the function actually
+            // uses. `update_state_after_patch` still rewires direct
+            // block-arg uses (rare but possible) via replaceUsesWithIf
+            // under the normal dominance check.
+            mlir::Value ref_value;
+            if (entrypoint_func.has_value()) {
+                auto block_arg = mlir::dyn_cast< mlir::BlockArgument >(operand_value);
+                if (block_arg) {
+                    // Walk the enclosing function's entry block for
+                    // `cir.store block_arg, alloca` — the canonical
+                    // parameter-init pattern from ClangEmitter.
+                    mlir::Block &entry = entrypoint_func->getBody().front();
+                    for (mlir::Operation &op : entry) {
+                        auto store = mlir::dyn_cast< cir::StoreOp >(&op);
+                        if (!store) {
+                            continue;
+                        }
+                        if (store.getValue() != block_arg) {
+                            continue;
+                        }
+                        if (mlir::isa_and_nonnull< cir::AllocaOp >(
+                                store.getAddr().getDefiningOp()))
+                        {
+                            ref_value = store.getAddr();
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!ref_value) {
+                ref_value = create_reference(builder, call_op, operand_value);
+            }
+            arg_map[operand_value] =
+                create_cast_if_needed(builder, call_op, ref_value, patch_arg_type);
         } else {
             arg_map[operand_value] =
                 create_cast_if_needed(builder, call_op, operand_value, patch_arg_type);
