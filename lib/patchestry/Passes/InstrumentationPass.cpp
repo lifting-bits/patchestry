@@ -563,7 +563,7 @@ namespace patchestry::passes {
                 });
 
                 for (auto *op : to_erase) {
-                    PatchOperationImpl::eraseOperation(*this, op);
+                    PatchOperationImpl::eraseOperation(op);
                 }
             }
         } else if (match.kind == MatchKind::OPERATION) {
@@ -654,7 +654,7 @@ namespace patchestry::passes {
             }
 
             for (auto *op : to_erase) {
-                PatchOperationImpl::eraseOperation(*this, op);
+                PatchOperationImpl::eraseOperation(op);
             }
         }
     }

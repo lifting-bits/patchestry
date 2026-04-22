@@ -387,6 +387,8 @@ namespace patchestry {
             mlir::Value buildDefaultValue(
                 mlir::OpBuilder &builder, mlir::Location loc, mlir::Type type
             ) {
+                auto *ctx = builder.getContext();
+
                 if (auto int_type = mlir::dyn_cast< cir::IntType >(type)) {
                     auto attr = cir::IntAttr::get(
                         int_type,
@@ -397,38 +399,46 @@ namespace patchestry {
                     return builder.create< cir::ConstantOp >(loc, int_type, attr);
                 }
                 if (auto ptr_type = mlir::dyn_cast< cir::PointerType >(type)) {
-                    auto zero_int_type =
-                        cir::IntType::get(builder.getContext(), 64, false);
-                    auto zero_attr = cir::IntAttr::get(
-                        zero_int_type,
-                        llvm::APSInt(llvm::APInt(64, 0), true)
-                    );
-                    auto zero_int =
-                        builder.create< cir::ConstantOp >(loc, zero_int_type, zero_attr);
-                    return builder.create< cir::CastOp >(
-                        loc, ptr_type, cir::CastKind::int_to_ptr, zero_int
-                    );
+                    // Canonical null pointer — `ConstPtrAttr` with an empty
+                    // IntegerAttr is the target-width-independent way to
+                    // express null (avoids the 64-bit int_to_ptr dance that
+                    // mis-sizes on 32-bit targets).
+                    auto null_attr =
+                        cir::ConstPtrAttr::get(ctx, ptr_type, mlir::IntegerAttr{});
+                    return builder.create< cir::ConstantOp >(loc, ptr_type, null_attr);
                 }
                 if (auto bool_type = mlir::dyn_cast< cir::BoolType >(type)) {
-                    auto attr = cir::BoolAttr::get(builder.getContext(), bool_type, false);
+                    auto attr = cir::BoolAttr::get(ctx, bool_type, false);
                     return builder.create< cir::ConstantOp >(loc, bool_type, attr);
+                }
+                if (mlir::isa< cir::CIRFPTypeInterface >(type)) {
+                    // Covers cir::SingleType, cir::DoubleType, and any other
+                    // floating-point type that implements the CIR FP interface.
+                    auto attr = cir::FPAttr::getZero(type);
+                    return builder.create< cir::ConstantOp >(loc, type, attr);
+                }
+                if (mlir::isa< cir::StructType, cir::ArrayType >(type)) {
+                    // Aggregate zero (`#cir.zero<…>`) for struct/array results.
+                    auto attr = cir::ZeroAttr::get(ctx, type);
+                    return builder.create< cir::ConstantOp >(loc, type, attr);
                 }
                 return nullptr;
             }
         } // namespace
 
-        void PatchOperationImpl::eraseOperation(
-            InstrumentationPass &pass, mlir::Operation *op
-        ) {
-            (void) pass;
+        void PatchOperationImpl::eraseOperation(mlir::Operation *op) {
             if (op == nullptr) {
                 LOG(ERROR) << "Erase: operation is null\n";
                 return;
             }
 
-            // If the op has live uses, replace each result with a default
-            // value (zero / null) of the matching type so dependent ops
-            // remain well-formed.
+            // Two-phase substitution: build every default value first, then
+            // commit the substitutions + erase only if every live result
+            // resolved. Bailing out partway through `replaceAllUsesWith`
+            // would leave the IR in a mixed state (some users rewired, the
+            // op itself still present), which later passes could miscompile.
+            llvm::SmallVector< std::pair< mlir::Value, mlir::Value >, 4 > substitutions;
+            llvm::SmallVector< mlir::Operation *, 4 > new_constants;
             if (!op->use_empty()) {
                 mlir::OpBuilder builder(op);
                 builder.setInsertionPoint(op);
@@ -442,13 +452,22 @@ namespace patchestry {
                         LOG(ERROR) << "Erase: cannot build default value for result "
                                       "type of '"
                                    << op->getName().getStringRef().str()
-                                   << "', skipping\n";
+                                   << "', leaving op in place\n";
+                        // Roll back the constants we already inserted so we
+                        // don't leak dead ops into the IR.
+                        for (auto *c : llvm::reverse(new_constants)) {
+                            c->erase();
+                        }
                         return;
                     }
-                    result.replaceAllUsesWith(default_val);
+                    substitutions.emplace_back(result, default_val);
+                    new_constants.push_back(default_val.getDefiningOp());
                 }
             }
 
+            for (auto &[result, default_val] : substitutions) {
+                result.replaceAllUsesWith(default_val);
+            }
             op->erase();
         }
 
@@ -461,6 +480,13 @@ namespace patchestry {
                 return;
             }
 
+            // Defensive: callers in InstrumentationPass::apply_patch_action_to_targets
+            // check spec presence before dispatch for every non-ERASE mode, but a
+            // future caller could skip that check. `.value()` throws bad_optional_access.
+            if (!patch.spec.has_value()) {
+                LOG(ERROR) << "applyPatchAtEntrypoint: patch.spec is empty\n";
+                return;
+            }
             const auto &patch_spec = patch.spec.value();
             std::string patch_function_name = namifyFunction(patch_spec.function_name);
 
@@ -493,23 +519,26 @@ namespace patchestry {
                 return;
             }
 
-            // Find the insertion point just after all alloca ops and any stores that
-            // initialize parameters (i.e. stores whose value is a block argument).
-            // This mirrors applyContractAtEntrypoint so that "source: variable" can
-            // load a parameter value written by the prologue.
+            // Skip the entry-block prologue (allocas + stores-of-block-args) so
+            // `source: variable` can load a parameter value after the prologue
+            // has initialized it. Single-pass form handles any interleaving of
+            // alloca/store in the prologue — a sequence like
+            // `alloca, store-arg, alloca, store-arg` stops the old two-phase
+            // walk at the second alloca, which would insert the patch call
+            // before that alloca's initializer.
             mlir::Block &entry_block = enclosing_func.getBody().front();
             auto insert_pos          = entry_block.begin();
-            while (insert_pos != entry_block.end()
-                   && mlir::isa< cir::AllocaOp >(*insert_pos))
-            {
-                ++insert_pos;
-            }
             while (insert_pos != entry_block.end()) {
-                if (auto store_op = mlir::dyn_cast< cir::StoreOp >(&*insert_pos)) {
-                    if (mlir::isa< mlir::BlockArgument >(store_op->getOperand(0))) {
-                        ++insert_pos;
-                        continue;
-                    }
+                mlir::Operation &prologue_op = *insert_pos;
+                if (mlir::isa< cir::AllocaOp >(prologue_op)) {
+                    ++insert_pos;
+                    continue;
+                }
+                if (auto store = mlir::dyn_cast< cir::StoreOp >(prologue_op);
+                    store && mlir::isa< mlir::BlockArgument >(store.getOperand(0)))
+                {
+                    ++insert_pos;
+                    continue;
                 }
                 break;
             }
@@ -530,11 +559,19 @@ namespace patchestry {
                 call_args.push_back(new_arg);
             }
 
+            // Patches are effectively single-result (void or one value); warn
+            // on multi-result declarations so the silent truncation is visible.
+            auto result_types = patch_func->getResultTypes();
+            if (result_types.size() > 1) {
+                LOG(WARNING) << "Patch function '" << patch_function_name
+                             << "' declares " << result_types.size()
+                             << " result types; only the first will be wired "
+                                "into the emitted call.\n";
+            }
+
             auto patch_call_op = builder.create< cir::CallOp >(
                 enclosing_func->getLoc(), symbol_ref,
-                patch_func->getResultTypes().size() != 0
-                    ? patch_func->getResultTypes().front()
-                    : mlir::Type(),
+                result_types.empty() ? mlir::Type() : result_types.front(),
                 call_args
             );
 

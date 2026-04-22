@@ -125,13 +125,14 @@ namespace patchestry::passes {
         /**
          * @brief Erases the target operation without inserting any patch.
          *
-         * Used by ERASE mode. The operation must have no live uses —
-         * if its result is consumed, the erase is skipped with an error.
+         * Used by ERASE mode. If the op has live result uses, each used
+         * result is first replaced with a typed default value (zero / null)
+         * so dependent ops remain well-formed; if any result type has no
+         * supported default, the op is left in place with an error.
          *
-         * @param pass The instrumentation pass instance
          * @param op The operation to erase
          */
-        static void eraseOperation(InstrumentationPass &pass, mlir::Operation *op);
+        static void eraseOperation(mlir::Operation *op);
 
          /**
           * @brief Ensures that the patch function is available in the target module.
