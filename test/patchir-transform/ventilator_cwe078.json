@@ -5,7 +5,7 @@
 // RUN: %file-check -vv -check-prefix=REPLACE %s --input-file %t2.cir
 // REPLACE: cir.call @patch__replace__system({{.*}}) {patchestry_operation = "cir.call"}
 //
-// Test simplified YAML syntax produces identical output
+// Test YAML syntax produces identical output
 // RUN: %patchir-transform %t1.cir --spec %S/cwe078_replace_simplified.yaml -o %t3.cir
 // RUN: diff %t2.cir %t3.cir
 //

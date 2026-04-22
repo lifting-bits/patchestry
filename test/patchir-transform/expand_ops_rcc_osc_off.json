@@ -1,7 +1,3 @@
-// Phase C: REPLACE and APPLY_BEFORE on non-call, non-binop CIR ops.
-// Fixture `rcc_osc_off` is an STM32 firmware function reading/writing
-// memory-mapped peripherals; its CIR has cir.load and cir.cast ops.
-//
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -output %t1 >> /dev/null 2>&1
 //
