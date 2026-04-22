@@ -586,7 +586,7 @@ namespace patchestry::passes {
                 });
 
                 for (auto *op : to_erase) {
-                    PatchOperationImpl::eraseOperation(op);
+                    PatchOperationImpl::eraseOperation(*this, op);
                 }
             }
         } else if (match.kind == MatchKind::OPERATION) {
@@ -677,7 +677,7 @@ namespace patchestry::passes {
             }
 
             for (auto *op : to_erase) {
-                PatchOperationImpl::eraseOperation(op);
+                PatchOperationImpl::eraseOperation(*this, op);
             }
         }
     }
@@ -1485,6 +1485,17 @@ namespace patchestry::passes {
      * @param call_op The call operation to be inlined
      * @return mlir::LogicalResult Success or failure of the inlining operation
      */
+    void InstrumentationPass::erase_op(mlir::Operation *op) {
+        if (!op) {
+            return;
+        }
+        // Drop any pending inline entry pointing at this op before the
+        // pointer goes stale. std::set::erase is a no-op if absent, so
+        // callers that erase non-patch-call ops are unaffected.
+        inline_worklists.erase(op);
+        op->erase();
+    }
+
     mlir::LogicalResult
     InstrumentationPass::inline_call(mlir::ModuleOp module, cir::CallOp call_op) {
         mlir::OpBuilder builder(call_op);

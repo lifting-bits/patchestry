@@ -283,7 +283,11 @@ namespace patchestry {
                 return;
             }
 
-            call_op.erase();
+            // Route through pass.erase_op so `inline_worklists` drops the
+            // pointer too — otherwise chaining a later replace/erase on an
+            // already-worklist-queued call site leaves a dangling pointer
+            // that the post-pass inline loop dereferences.
+            pass.erase_op(call_op.getOperation());
 
             if (should_inline) {
                 pass.inline_worklists.insert(wrap_call_op);
@@ -373,7 +377,8 @@ namespace patchestry {
                 return;
             }
 
-            op->erase();
+            // See pass.erase_op contract above.
+            pass.erase_op(op);
 
             if (should_inline) {
                 pass.inline_worklists.insert(patch_call_op);
@@ -426,7 +431,7 @@ namespace patchestry {
             }
         } // namespace
 
-        void PatchOperationImpl::eraseOperation(mlir::Operation *op) {
+        void PatchOperationImpl::eraseOperation(InstrumentationPass &pass, mlir::Operation *op) {
             if (op == nullptr) {
                 LOG(ERROR) << "Erase: operation is null\n";
                 return;
@@ -468,7 +473,7 @@ namespace patchestry {
             for (auto &[result, default_val] : substitutions) {
                 result.replaceAllUsesWith(default_val);
             }
-            op->erase();
+            pass.erase_op(op);
         }
 
         void PatchOperationImpl::applyPatchAtEntrypoint(

@@ -98,6 +98,14 @@
 // INLINE_REPLACE_POS-NOT: patch__replace__saturate_spo2
 // INLINE_REPLACE_POS-NOT: cir.call @spo2_lookup
 
+// UAF regression: a later `mode: erase` on a previously-inline-queued
+// patch call used to crash the post-pass inline loop (dangling raw
+// Operation* in `inline_worklists`). Post-fix the pass runs cleanly,
+// no patch call survives (P2's erase removed it), no inline happens.
+// RUN: %patchir-transform %t1.cir --spec %S/inline_chain_erase_uaf.yaml -o %t16.cir
+// RUN: %file-check -vv -check-prefix=INLINE_CHAIN_UAF %s --input-file %t16.cir
+// INLINE_CHAIN_UAF-NOT: cir.call @patch__before__spo2_lookup
+
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:v8",

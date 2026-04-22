@@ -160,6 +160,20 @@ namespace patchestry::passes { // NOLINT
         void runOnOperation() final;
 
         /**
+         * @brief Erase an operation while keeping `inline_worklists` consistent.
+         *
+         * The inline worklist stores raw `Operation *` pointers pending
+         * post-pass inlining. A later patch action with `mode: replace` or
+         * `mode: erase` may target a previously-emitted patch call by name
+         * (see the intentional no-skip comment in `apply_patch_action_to_targets`).
+         * If such an action erases an op that's still in `inline_worklists`,
+         * the post-pass loop dereferences a dangling pointer — crashing
+         * `patchir-transform`. Route every patch-level op erase through
+         * this helper so the worklist stays in sync.
+         */
+        void erase_op(mlir::Operation *op);
+
+        /**
          * @brief Applies meta patches in execution order.
          *
          * @param function_worklist List of functions to process

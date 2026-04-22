@@ -139,9 +139,13 @@ namespace patchestry::passes {
          * so dependent ops remain well-formed; if any result type has no
          * supported default, the op is left in place with an error.
          *
+         * @param pass The InstrumentationPass driving the erase; needed so
+         *             `inline_worklists` stays in sync when the op being
+         *             erased was a previously-emitted patch call that a
+         *             later action chained against.
          * @param op The operation to erase
          */
-        static void eraseOperation(mlir::Operation *op);
+        static void eraseOperation(InstrumentationPass &pass, mlir::Operation *op);
 
       private:
         /**
