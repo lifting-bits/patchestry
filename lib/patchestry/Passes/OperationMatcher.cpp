@@ -455,7 +455,19 @@ namespace patchestry::passes {
             return true;
         }
 
-        auto operands = op->getOperands();
+        // For `cir::CallOp`, index into the user-visible arg list: indirect
+        // calls carry the callee function pointer as `op->getOperand(0)`,
+        // which shifts every user arg by +1 under the raw `getOperands()`
+        // view. Keeping this consistent with the capture binding at the
+        // top of patch_action_matches and with `handle_operand_argument`
+        // in InstrumentationPass ensures `argument_matches: [{ index: 0, … }]`
+        // means the same thing ("caller's first argument") across the
+        // whole match/bind/resolve pipeline. Non-call ops index their raw
+        // operands as before.
+        mlir::ValueRange operands = op->getOperands();
+        if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+            operands = call_op.getArgOperands();
+        }
 
         for (const auto &arg_match : argument_matches) {
             // Check if the argument index is valid
@@ -465,9 +477,12 @@ namespace patchestry::passes {
 
             auto operand = operands[arg_match.index];
 
-            // Check argument name if specified
+            // Check argument name if specified. Derive the name from the
+            // operand `Value` directly — `extract_variable_name(op, idx)`
+            // would re-index raw `op->getOperands()` and put us back on
+            // the indirect-call skew we just escaped above.
             if (!arg_match.name.empty()) {
-                std::string var_name = extract_variable_name(op, arg_match.index);
+                std::string var_name = extract_ssa_value_name(operand);
                 if (!matches_pattern(var_name, arg_match.name)) {
                     LOG(WARNING) << "argument_matches: operand " << arg_match.index
                                  << " name '" << var_name << "' does not match expected '"
