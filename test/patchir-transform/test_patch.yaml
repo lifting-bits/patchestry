@@ -13,8 +13,10 @@ target:
   arch: "ARM:LE:32"
 
 libraries:
+  # Reference only real libraries so loading succeeds; the schema error
+  # below (match.symbol: instead of match.name:) is what this fixture
+  # is meant to exercise for negative_malformed_schema.
   - "patches/usb_security_patches.yaml"
-  - "contracts/usb_security_contracts.yaml"
 
 meta_patches:
   - name: usb_security_meta_patches
