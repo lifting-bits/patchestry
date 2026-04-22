@@ -25,10 +25,11 @@ patches:
           operand: 0
         - name: "OFFSET"
           operand: 1
-    mode: "replace"
-    patch: "checked_mul"
-    arguments:
-      - source: "capture"
-        name: "BUF"
-      - source: "capture"
-        name: "OFFSET"
+    action:
+      mode: "replace"
+      patch: "checked_mul"
+      arguments:
+        - source: "capture"
+          name: "BUF"
+        - source: "capture"
+          name: "OFFSET"

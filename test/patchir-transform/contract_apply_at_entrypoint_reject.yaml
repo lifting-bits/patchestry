@@ -23,5 +23,6 @@ contracts:
     match:
       name: "usbd_ep_write_packet"
       context: ["bl_usb__send_message"]
-    mode: "apply_at_entrypoint"
-    contract: "message_entry_check_contract_static"
+    action:
+      mode: "apply_at_entrypoint"
+      contract: "message_entry_check_contract_static"

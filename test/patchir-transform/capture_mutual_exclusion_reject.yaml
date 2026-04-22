@@ -24,8 +24,9 @@ patches:
         - name: "BAD"
           operand: 0   # mutually exclusive with
           result: 0    # — these cannot both be set.
-    mode: "replace"
-    patch: "ptr_only"
-    arguments:
-      - source: "capture"
-        name: "BAD"
+    action:
+      mode: "replace"
+      patch: "ptr_only"
+      arguments:
+        - source: "capture"
+          name: "BAD"

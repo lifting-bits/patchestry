@@ -27,14 +27,15 @@ patches:
         - index: 0
           name: "usb_g"
           type: "struct _usbd_device*"
-    mode: "apply_before"
-    patch: "usb_endpoint_write_validation_before_update_state"
-    arguments:
-      - name: "operand_0"
-        source: "operand"
-        index: "0"
-        is_reference: true
-      - name: "operand_2"
-        source: "operand"
-        index: "2"
-        is_reference: true
+    action:
+      mode: "apply_before"
+      patch: "usb_endpoint_write_validation_before_update_state"
+      arguments:
+        - name: "operand_0"
+          source: "operand"
+          index: "0"
+          is_reference: true
+        - name: "operand_2"
+          source: "operand"
+          index: "2"
+          is_reference: true

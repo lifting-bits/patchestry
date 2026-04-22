@@ -25,10 +25,11 @@ patches:
           operand: 0
         - name: "SIZE"
           operand: 1
-    mode: "replace"
-    patch: "checked_mul"
-    arguments:
-      - source: "capture"
-        name: "PTR"
-      - source: "capture"
-        name: "SIZE"
+    action:
+      mode: "replace"
+      patch: "checked_mul"
+      arguments:
+        - source: "capture"
+          name: "PTR"
+        - source: "capture"
+          name: "SIZE"

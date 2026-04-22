@@ -22,8 +22,9 @@ patches:
       captures:
         - name: "NOTHING"
           # deliberately omits both operand: and result:
-    mode: "replace"
-    patch: "ptr_only"
-    arguments:
-      - source: "capture"
-        name: "NOTHING"
+    action:
+      mode: "replace"
+      patch: "ptr_only"
+      arguments:
+        - source: "capture"
+          name: "NOTHING"

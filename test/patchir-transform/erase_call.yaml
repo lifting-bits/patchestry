@@ -17,4 +17,5 @@ patches:
       name: "bl_spi_send"
       kind: "function"
       context: ["bl_led_loop"]
-    mode: "erase"
+    action:
+      mode: "erase"

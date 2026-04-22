@@ -22,9 +22,10 @@ patches:
     match:
       name: "spo2_lookup"
       kind: "function"
-    mode: "replace"
-    patch: "measurement_update_replace_patch"
-    arguments:
-      - name: "function_argument"
-        source: "operand"
-        index: 0
+    action:
+      mode: "replace"
+      patch: "measurement_update_replace_patch"
+      arguments:
+        - name: "function_argument"
+          source: "operand"
+          index: 0

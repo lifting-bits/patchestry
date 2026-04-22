@@ -24,10 +24,11 @@ patches:
       name: "system"
       kind: "function"
       context: ["create_port"]
-    mode: "replace"
-    patch: "cwe078_sanitized_system"
-    arguments:
-      - source: "operand"
-        index: 0
-      - source: "constant"
-        value: 512
+    action:
+      mode: "replace"
+      patch: "cwe078_sanitized_system"
+      arguments:
+        - source: "operand"
+          index: 0
+        - source: "constant"
+          value: 512

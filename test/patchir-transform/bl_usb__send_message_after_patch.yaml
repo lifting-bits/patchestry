@@ -27,8 +27,9 @@ patches:
         - index: 0
           name: "usb_g"
           type: "struct _usbd_device*"
-    mode: "apply_after"
-    patch: "usb_endpoint_write_validation_after"
-    arguments:
-      - name: "function_return_value"
-        source: "return_value"
+    action:
+      mode: "apply_after"
+      patch: "usb_endpoint_write_validation_after"
+      arguments:
+        - name: "function_return_value"
+          source: "return_value"

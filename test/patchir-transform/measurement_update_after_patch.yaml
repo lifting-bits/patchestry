@@ -22,8 +22,9 @@ patches:
     match:
       name: "spo2_lookup"
       kind: "function"
-    mode: "apply_after"
-    patch: "measurement_update_after_patch"
-    arguments:
-      - name: "function_return_value"
-        source: "return_value"
+    action:
+      mode: "apply_after"
+      patch: "measurement_update_after_patch"
+      arguments:
+        - name: "function_return_value"
+          source: "return_value"

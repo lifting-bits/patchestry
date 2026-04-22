@@ -30,9 +30,10 @@ patches:
           type: "float"
       symbol_matches:
         - name: "spo2_lookup"  # The function being called
-    mode: "apply_before"
-    patch: "measurement_update_before_operation"
-    arguments:
-      - name: "function_argument"
-        source: "operand"
-        index: 0
+    action:
+      mode: "apply_before"
+      patch: "measurement_update_before_operation"
+      arguments:
+        - name: "function_argument"
+          source: "operand"
+          index: 0

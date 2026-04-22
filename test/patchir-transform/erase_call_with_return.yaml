@@ -18,4 +18,5 @@ patches:
       name: "sprintf"
       kind: "function"
       context: ["create_port"]
-    mode: "erase"
+    action:
+      mode: "erase"

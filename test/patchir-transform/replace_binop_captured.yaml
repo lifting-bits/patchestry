@@ -30,10 +30,11 @@ patches:
           operand: 0
         - name: "B"
           operand: 1
-    mode: "replace"
-    patch: "checked_mul"
-    arguments:
-      - source: "capture"
-        name: "A"
-      - source: "capture"
-        name: "B"
+    action:
+      mode: "replace"
+      patch: "checked_mul"
+      arguments:
+        - source: "capture"
+          name: "A"
+        - source: "capture"
+          name: "B"

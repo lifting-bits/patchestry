@@ -22,8 +22,9 @@ patches:
       captures:
         - name: "PTR"
           operand: 0
-    mode: "apply_before"
-    patch: "ptr_only"
-    arguments:
-      - source: "capture"
-        name: "PTR"
+    action:
+      mode: "apply_before"
+      patch: "ptr_only"
+      arguments:
+        - source: "capture"
+          name: "PTR"

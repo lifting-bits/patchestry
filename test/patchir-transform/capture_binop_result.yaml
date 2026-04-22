@@ -26,8 +26,9 @@ patches:
       captures:
         - name: "R"
           result: 0
-    mode: "apply_after"
-    patch: "int_probe_after"
-    arguments:
-      - source: "capture"
-        name: "R"
+    action:
+      mode: "apply_after"
+      patch: "int_probe_after"
+      arguments:
+        - source: "capture"
+          name: "R"

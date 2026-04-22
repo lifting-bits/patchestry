@@ -26,10 +26,11 @@ patches:
           operand: 0
         - name: "RHS"
           operand: 1
-    mode: "replace"
-    patch: "checked_mul"
-    arguments:
-      - source: "capture"
-        name: "LHS"
-      - source: "capture"
-        name: "RHS"
+    action:
+      mode: "replace"
+      patch: "checked_mul"
+      arguments:
+        - source: "capture"
+          name: "LHS"
+        - source: "capture"
+          name: "RHS"

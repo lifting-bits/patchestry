@@ -25,10 +25,11 @@ patches:
           operand: 0
         - name: "LEN"
           operand: 2
-    mode: "apply_before"
-    patch: "ptr_log"
-    arguments:
-      - source: "capture"
-        name: "DEST"
-      - source: "capture"
-        name: "LEN"
+    action:
+      mode: "apply_before"
+      patch: "ptr_log"
+      arguments:
+        - source: "capture"
+          name: "DEST"
+        - source: "capture"
+          name: "LEN"

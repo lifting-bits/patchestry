@@ -27,15 +27,16 @@ patches:
         - index: 0
           name: "usb_g"
           type: "struct _usbd_device*"
-    mode: "apply_before"
-    patch: "usb_endpoint_write_validation_before"
-    arguments:
-      - name: "operand_0"
-        source: "operand"
-        index: "0"
-      - name: "operand_2"
-        source: "operand"
-        index: "2"
+    action:
+      mode: "apply_before"
+      patch: "usb_endpoint_write_validation_before"
+      arguments:
+        - name: "operand_0"
+          source: "operand"
+          index: "0"
+        - name: "operand_2"
+          source: "operand"
+          index: "2"
 
   # Second apply_before action, migrated from the removed test_contract
   # runtime-contract dispatch. It asserts the USB device state is
@@ -50,12 +51,13 @@ patches:
       argument_matches:
         - index: 0
           name: "usb_g"
-    mode: "apply_before"
-    patch: "usb_state_check_before"
-    arguments:
-      - name: "usb_device"
-        source: "argument"
-        index: "0"
-      - name: "buffer"
-        source: "argument"
-        index: "1"
+    action:
+      mode: "apply_before"
+      patch: "usb_state_check_before"
+      arguments:
+        - name: "usb_device"
+          source: "argument"
+          index: "0"
+        - name: "buffer"
+          source: "argument"
+          index: "1"

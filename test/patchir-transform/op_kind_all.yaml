@@ -17,10 +17,11 @@ patches:
     match:
       name: "cir.binop"
       kind: "operation"
-    mode: "replace"
-    patch: "checked_mul"
-    arguments:
-      - source: "operand"
-        index: 0
-      - source: "operand"
-        index: 1
+    action:
+      mode: "replace"
+      patch: "checked_mul"
+      arguments:
+        - source: "operand"
+          index: 0
+        - source: "operand"
+          index: 1

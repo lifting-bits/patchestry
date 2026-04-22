@@ -25,8 +25,9 @@ patches:
       captures:
         - name: "IN"
           operand: 0
-    mode: "replace"
-    patch: "replace_load_u32"
-    arguments:
-      - source: "capture"
-        name: "IN"
+    action:
+      mode: "replace"
+      patch: "replace_load_u32"
+      arguments:
+        - source: "capture"
+          name: "IN"

@@ -20,10 +20,11 @@ patches:
       name: "pb_readbyte"
       kind: "function"
       context: ["pb_decode_varint32_eof"]
-    mode: "replace"
-    patch: "checked_mul"
-    arguments:
-      - source: "operand"
-        index: 0
-      - source: "operand"
-        index: 1
+    action:
+      mode: "replace"
+      patch: "checked_mul"
+      arguments:
+        - source: "operand"
+          index: 0
+        - source: "operand"
+          index: 1

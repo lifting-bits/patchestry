@@ -21,5 +21,6 @@ patches:
     match:
       name: "test_function"
       kind: "function"
-    mode: "apply_before"
-    patch: "test_function_before"
+    action:
+      mode: "apply_before"
+      patch: "test_function_before"

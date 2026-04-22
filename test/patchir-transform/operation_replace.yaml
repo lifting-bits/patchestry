@@ -30,9 +30,10 @@ patches:
           type: "float"
       symbol_matches:
         - name: "spo2_lookup"
-    mode: "replace"
-    patch: "measurement_update_replace_patch"
-    arguments:
-      - name: "function_argument"
-        source: "operand"
-        index: 0
+    action:
+      mode: "replace"
+      patch: "measurement_update_replace_patch"
+      arguments:
+        - name: "function_argument"
+          source: "operand"
+          index: 0

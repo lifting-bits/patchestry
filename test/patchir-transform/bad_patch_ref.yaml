@@ -23,9 +23,10 @@ patches:
     match:
       name: "spo2_lookup"
       kind: "function"
-    mode: "apply_before"
-    patch: "patch_that_does_not_exist_anywhere"
-    arguments:
-      - name: "function_argument"
-        source: "variable"
-        symbol: "var6"
+    action:
+      mode: "apply_before"
+      patch: "patch_that_does_not_exist_anywhere"
+      arguments:
+        - name: "function_argument"
+          source: "variable"
+          symbol: "var6"

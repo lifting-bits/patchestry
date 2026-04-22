@@ -33,8 +33,9 @@ patches:
       captures:
         - name: "USER_ARG0"
           operand: 0
-    mode: "apply_before"
-    patch: "indirect_capture_probe"
-    arguments:
-      - source: "capture"
-        name: "USER_ARG0"
+    action:
+      mode: "apply_before"
+      patch: "indirect_capture_probe"
+      arguments:
+        - source: "capture"
+          name: "USER_ARG0"

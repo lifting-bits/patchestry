@@ -128,6 +128,17 @@ namespace patchestry::passes {
             std::vector< CaptureSpec > captures;
         };
 
+        // Sibling to PatchMatchObject for parsing the nested `action:` block.
+        // Carries the "what to do when a match fires" fields that used to sit
+        // flat at the top level of a PatchEntry.
+        struct PatchActionObject
+        {
+            InstrumentationMode mode = InstrumentationMode::NONE;
+            std::string patch_id;
+            std::vector< ArgumentSource > arguments;
+            std::set< std::string > optimization;
+        };
+
         // Simplified YAML surface that inflates to MetaPatchConfig.
         struct PatchEntry
         {
@@ -481,6 +492,29 @@ namespace llvm::yaml {
         }
     };
 
+    template<>
+    struct MappingTraits< patch::PatchActionObject >
+    {
+        static void mapping(IO &io, patch::PatchActionObject &a) {
+            std::string mode_str;
+            io.mapRequired("mode", mode_str);
+            a.mode = parsePatchInfoMode(io, mode_str);
+
+            io.mapOptional("patch", a.patch_id);
+            io.mapOptional("arguments", a.arguments);
+
+            if (a.mode != InstrumentationMode::ERASE && a.patch_id.empty()) {
+                io.setError("'patch' field is required for mode '" + mode_str + "'");
+            }
+
+            std::vector< std::string > optimization;
+            io.mapOptional("optimization", optimization);
+            for (const auto &opt : optimization) {
+                a.optimization.insert(opt);
+            }
+        }
+    };
+
     // Parse PatchEntry — simplified YAML surface for patches.
     template<>
     struct MappingTraits< patch::PatchEntry >
@@ -503,23 +537,14 @@ namespace llvm::yaml {
             entry.variable_matches = match_obj.variable_matches;
             entry.captures         = match_obj.captures;
 
-            // Mode (shared with the legacy meta_patches parser).
-            std::string mode_str;
-            io.mapRequired("mode", mode_str);
-            entry.mode = parsePatchInfoMode(io, mode_str);
-
-            io.mapOptional("patch", entry.patch_id);
-            io.mapOptional("arguments", entry.arguments);
-
-            if (entry.mode != InstrumentationMode::ERASE && entry.patch_id.empty()) {
-                io.setError("'patch' field is required for mode '" + mode_str + "'");
-            }
-
-            std::vector< std::string > optimization;
-            io.mapOptional("optimization", optimization);
-            for (const auto &opt : optimization) {
-                entry.optimization.insert(opt);
-            }
+            // Parse nested action object — projected back onto the flat
+            // PatchEntry fields so inflatePatchEntry keeps working unchanged.
+            patch::PatchActionObject action_obj;
+            io.mapRequired("action", action_obj);
+            entry.mode         = action_obj.mode;
+            entry.patch_id     = action_obj.patch_id;
+            entry.arguments    = action_obj.arguments;
+            entry.optimization = action_obj.optimization;
         }
     };
 

@@ -25,9 +25,10 @@ patches:
       argument_matches:
         - index: 0
           type: "float"
-    mode: "apply_before"
-    patch: "measurement_update_before_patch"
-    arguments:
-      - name: "function_argument"
-        source: "operand"
-        index: 0
+    action:
+      mode: "apply_before"
+      patch: "measurement_update_before_patch"
+      arguments:
+        - name: "function_argument"
+          source: "operand"
+          index: 0

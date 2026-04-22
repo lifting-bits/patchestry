@@ -24,18 +24,19 @@ patches:
       name: "sprintf"
       kind: "function"
       context: ["bl_device__process_entry"]
-    mode: "replace"
-    patch: "sprintf_replace_patch"
-    arguments:
-      - name: "dest"
-        source: "operand"
-        index: "0"
-      - name: "dest_size"
-        source: "constant"
-        value: "32"
-      - name: "format"
-        source: "operand"
-        index: "1"
+    action:
+      mode: "replace"
+      patch: "sprintf_replace_patch"
+      arguments:
+        - name: "dest"
+          source: "operand"
+          index: "0"
+        - name: "dest_size"
+          source: "constant"
+          value: "32"
+        - name: "format"
+          source: "operand"
+          index: "1"
 
 contracts:
   - name: "all_predicates_static_contract"
@@ -44,5 +45,6 @@ contracts:
     match:
       name: "patch__replace__sprintf"
       context: ["bl_device__process_entry"]
-    mode: "apply_before"
-    contract: "all_predicates_static_contract"
+    action:
+      mode: "apply_before"
+      contract: "all_predicates_static_contract"

@@ -25,9 +25,10 @@ patches:
       symbol_matches:
         - name: "bl_spi_mode"
           type: "!cir.int<s, 8>"
-    mode: "apply_before"
-    patch: "led_loop_before_cmp_operation"
-    arguments:
-      - name: "global_var"
-        source: "symbol"
-        symbol: "bl_spi_mode"
+    action:
+      mode: "apply_before"
+      patch: "led_loop_before_cmp_operation"
+      arguments:
+        - name: "global_var"
+          source: "symbol"
+          symbol: "bl_spi_mode"

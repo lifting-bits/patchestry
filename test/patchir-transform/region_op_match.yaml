@@ -21,10 +21,11 @@ patches:
       name: "cir.if"
       kind: "operation"
       context: ["measurement_update"]
-    mode: "apply_before"
-    patch: "if_probe_before"
-    arguments:
+    action:
+      mode: "apply_before"
+      patch: "if_probe_before"
+      arguments:
       # operand: 0 is the cir.if condition — apply_before inserts just
       # ahead of the cir.if so the condition SSA value already dominates.
-      - source: "operand"
-        index: 0
+        - source: "operand"
+          index: 0

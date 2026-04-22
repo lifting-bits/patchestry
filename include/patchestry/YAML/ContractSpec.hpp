@@ -191,6 +191,18 @@ namespace patchestry::passes {
             std::vector< std::string > context;
         };
 
+        // Sibling to ContractMatchObject for parsing the nested `action:`
+        // block on a contract entry. Arguments are accepted for schema
+        // symmetry with patches but warned-and-ignored at parse time
+        // (static contracts attach MLIR attributes, not runtime calls).
+        struct ContractActionObject
+        {
+            InfoMode mode = InfoMode::NONE;
+            std::string contract_id;
+            std::vector< ArgumentSource > arguments;
+            bool optimization_warned = false;
+        };
+
         // Simplified contract entry that inflates to MetaContractConfig.
         struct ContractEntry
         {
@@ -620,6 +632,26 @@ namespace llvm::yaml {
         }
     };
 
+    template<>
+    struct MappingTraits< contract::ContractActionObject >
+    {
+        static void mapping(IO &io, contract::ContractActionObject &a) {
+            std::string mode_str;
+            io.mapRequired("mode", mode_str);
+            a.mode = parseContractInfoMode(io, mode_str);
+
+            io.mapRequired("contract", a.contract_id);
+            io.mapOptional("arguments", a.arguments);
+
+            // Accept-and-warn for backward compat (see MetaContractConfig).
+            // The PatchEntry-facing trait doesn't have access to the entry
+            // name here, so the warning is emitted there after projection.
+            std::vector< std::string > optimization;
+            io.mapOptional("optimization", optimization);
+            a.optimization_warned = !optimization.empty();
+        }
+    };
+
     // Parse ContractEntry — simplified YAML surface for contracts.
     template<>
     struct MappingTraits< contract::ContractEntry >
@@ -635,13 +667,14 @@ namespace llvm::yaml {
             entry.match_name = match_obj.name;
             entry.context    = match_obj.context;
 
-            // Mode
-            std::string mode_str;
-            io.mapRequired("mode", mode_str);
-            entry.mode = parseContractInfoMode(io, mode_str);
-
-            io.mapRequired("contract", entry.contract_id);
-            io.mapOptional("arguments", entry.arguments);
+            // Parse nested action object — projected onto the flat
+            // ContractEntry fields so inflateContractEntry keeps working
+            // unchanged.
+            contract::ContractActionObject action_obj;
+            io.mapRequired("action", action_obj);
+            entry.mode        = action_obj.mode;
+            entry.contract_id = action_obj.contract_id;
+            entry.arguments   = action_obj.arguments;
 
             // Static-only contracts don't consume `arguments:` at emit time;
             // warn so migrating authors realize the list is being dropped.
@@ -655,10 +688,7 @@ namespace llvm::yaml {
                        "patches: instead.\n";
             }
 
-            // Accept-and-warn for backward compat (see MetaContractConfig).
-            std::vector< std::string > optimization;
-            io.mapOptional("optimization", optimization);
-            if (!optimization.empty()) {
+            if (action_obj.optimization_warned) {
                 LOG(WARNING)
                     << "contract '" << entry.name
                     << "': 'optimization:' is deprecated for contracts "

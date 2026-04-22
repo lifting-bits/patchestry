@@ -25,12 +25,13 @@ patches:
     match:
       name: "usbd_ep_write_packet"
       kind: "function"
-    mode: "apply_before"
-    patch: "usb_endpoint_write_validation_before"
-
+    action:
+      mode: "apply_before"
+      patch: "usb_endpoint_write_validation_before"
   - name: "match_missing_name"
     description: "match: block has neither 'name:' nor 'names:' → must include"
     match:
       kind: "function"
-    mode: "apply_before"
-    patch: "usb_endpoint_write_validation_before"
+    action:
+      mode: "apply_before"
+      patch: "usb_endpoint_write_validation_before"
