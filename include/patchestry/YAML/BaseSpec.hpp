@@ -36,6 +36,25 @@ namespace patchestry::passes {
         CAPTURE      // Named capture bound from match.captures
     };
 
+    // Pin enum ordinals. These values are user-visible (attribute ordinals in
+    // MLIR serialization, .patchmod bytecode, future forks that parse the
+    // binary form) — reordering or inserting silently breaks round-trips.
+    // Adding new enumerators is fine as long as they go at the end; these
+    // asserts fail if anyone reorders the existing ones.
+    static_assert(static_cast< uint8_t >(PatchInfoMode::NONE) == 0);
+    static_assert(static_cast< uint8_t >(PatchInfoMode::APPLY_BEFORE) == 1);
+    static_assert(static_cast< uint8_t >(PatchInfoMode::APPLY_AFTER) == 2);
+    static_assert(static_cast< uint8_t >(PatchInfoMode::APPLY_AT_ENTRYPOINT) == 3);
+    static_assert(static_cast< uint8_t >(PatchInfoMode::REPLACE) == 4);
+    static_assert(static_cast< uint8_t >(PatchInfoMode::ERASE) == 5);
+
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::OPERAND) == 0);
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::VARIABLE) == 1);
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::SYMBOL) == 2);
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::CONSTANT) == 3);
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::RETURN_VALUE) == 4);
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::CAPTURE) == 5);
+
     struct Metadata
     {
         std::string name;
