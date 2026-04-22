@@ -357,6 +357,18 @@ namespace llvm::yaml {
             std::string mode_str;
             io.mapRequired("mode", mode_str);
             action.mode = parseContractInfoMode(io, mode_str);
+
+            // Static contracts materialize MLIR attributes; they do not emit
+            // a call, so `arguments:` never reaches a consumer. Warn so
+            // spec authors migrating from the old runtime-contract shape
+            // realize the list is being dropped.
+            if (!action.arguments.empty()) {
+                LOG(WARNING)
+                    << "contract action '" << action.contract_id
+                    << "': 'arguments:' is ignored for static contracts. "
+                       "Express runtime-style invocation as a patch under "
+                       "patches: instead.\n";
+            }
         }
     };
 
@@ -574,7 +586,19 @@ namespace llvm::yaml {
             } else if (source_str == "return_value") {
                 arg.source = ArgumentSourceType::RETURN_VALUE;
             } else if (source_str == "capture") {
-                arg.source = ArgumentSourceType::CAPTURE;
+                // Captures are bound at match time and consumed by patch calls.
+                // Contracts materialize MLIR attributes and don't run at match
+                // time, so nothing ever binds a capture for them — parsing
+                // this source used to succeed and then silently drop at emit
+                // time. Reject up front with a pointer to patches:.
+                io.setError(
+                    "'source: capture' is not supported for contracts "
+                    "(contracts attach MLIR attributes and have no bound "
+                    "match-site values). Use source: operand/variable/"
+                    "symbol/constant/return_value, or move the entry "
+                    "under patches: if you need capture-driven arguments."
+                );
+                return;
             } else {
                 io.setError("Unknown argument source type: '" + source_str + "'");
                 return;
@@ -618,6 +642,18 @@ namespace llvm::yaml {
 
             io.mapRequired("contract", entry.contract_id);
             io.mapOptional("arguments", entry.arguments);
+
+            // Static-only contracts don't consume `arguments:` at emit time;
+            // warn so migrating authors realize the list is being dropped.
+            // (inflateContractEntry copies these straight to Action.arguments,
+            // bypassing the Action trait that would otherwise warn.)
+            if (!entry.arguments.empty()) {
+                LOG(WARNING)
+                    << "contract '" << entry.name
+                    << "': 'arguments:' is ignored for static contracts. "
+                       "Express runtime-style invocation as a patch under "
+                       "patches: instead.\n";
+            }
 
             // Accept-and-warn for backward compat (see MetaContractConfig).
             std::vector< std::string > optimization;

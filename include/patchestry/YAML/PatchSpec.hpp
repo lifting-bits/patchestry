@@ -124,6 +124,7 @@ namespace patchestry::passes {
             std::vector< ArgumentMatch > argument_matches;
             std::vector< OperandMatch > operand_matches;
             std::vector< SymbolMatch > symbol_matches;
+            std::vector< VariableMatch > variable_matches;
             std::vector< CaptureSpec > captures;
         };
 
@@ -141,6 +142,7 @@ namespace patchestry::passes {
             std::vector< ArgumentMatch > argument_matches;
             std::vector< OperandMatch > operand_matches;
             std::vector< SymbolMatch > symbol_matches;
+            std::vector< VariableMatch > variable_matches;
             std::vector< CaptureSpec > captures;
             // action (inlined)
             InstrumentationMode mode = InstrumentationMode::NONE;
@@ -178,6 +180,7 @@ namespace patchestry::passes {
                 mc.argument_matches = entry.argument_matches;
                 mc.operand_matches  = entry.operand_matches;
                 mc.symbol_matches   = entry.symbol_matches;
+                mc.variable_matches = entry.variable_matches;
                 mc.captures         = entry.captures;
                 for (const auto &ctx_name : entry.context) {
                     FunctionContext fc;
@@ -402,16 +405,25 @@ namespace llvm::yaml {
                 return;
             }
 
-            // `name:` is optional: an ArgumentSource is identified by
-            // `source:` plus whichever of `index:` / `symbol:` / `value:`
-            // the chosen kind requires. `name:` is descriptive metadata
-            // used for logs, which is why it isn't required. For
-            // `source: capture`, `name:` names the capture to look up.
+            // `name:` is optional for most sources: an ArgumentSource is
+            // identified by `source:` plus whichever of `index:` / `symbol:`
+            // / `value:` the chosen kind requires, and `name:` is descriptive
+            // metadata used for logs. For `source: capture`, however, `name:`
+            // is the *only* identifier — it must match an entry in
+            // `match.captures`. Enforce it at parse time so the failure mode
+            // is a clear spec error, not a runtime LOG(ERROR) per call site.
             io.mapOptional("name", arg.name);
             io.mapOptional("index", arg.index);
             io.mapOptional("symbol", arg.symbol);
             io.mapOptional("value", arg.value);
             io.mapOptional("is_reference", arg.is_reference);
+
+            if (arg.source == ArgumentSourceType::CAPTURE && arg.name.empty()) {
+                io.setError(
+                    "argument with 'source: capture' requires 'name:' "
+                    "(it identifies which entry in match.captures to bind)"
+                );
+            }
         }
     };
 
@@ -458,6 +470,7 @@ namespace llvm::yaml {
             io.mapOptional("argument_matches", m.argument_matches);
             io.mapOptional("operand_matches", m.operand_matches);
             io.mapOptional("symbol_matches", m.symbol_matches);
+            io.mapOptional("variable_matches", m.variable_matches);
             io.mapOptional("captures", m.captures);
             io.mapOptional("op_kind", m.op_kind);
         }
@@ -482,6 +495,7 @@ namespace llvm::yaml {
             entry.argument_matches = match_obj.argument_matches;
             entry.operand_matches  = match_obj.operand_matches;
             entry.symbol_matches   = match_obj.symbol_matches;
+            entry.variable_matches = match_obj.variable_matches;
             entry.captures         = match_obj.captures;
 
             // Mode (shared with the legacy meta_patches parser).
