@@ -200,7 +200,7 @@ namespace patchestry::passes {
             InfoMode mode = InfoMode::NONE;
             std::string contract_id;
             std::vector< ArgumentSource > arguments;
-            bool optimization_warned = false;
+            bool has_optimization = false;
         };
 
         // Simplified contract entry that inflates to MetaContractConfig.
@@ -644,11 +644,12 @@ namespace llvm::yaml {
             io.mapOptional("arguments", a.arguments);
 
             // Accept-and-warn for backward compat (see MetaContractConfig).
-            // The PatchEntry-facing trait doesn't have access to the entry
-            // name here, so the warning is emitted there after projection.
+            // The ContractEntry-facing trait doesn't have access to the
+            // entry name here, so the warning is emitted there after
+            // projection.
             std::vector< std::string > optimization;
             io.mapOptional("optimization", optimization);
-            a.optimization_warned = !optimization.empty();
+            a.has_optimization = !optimization.empty();
         }
     };
 
@@ -688,7 +689,7 @@ namespace llvm::yaml {
                        "patches: instead.\n";
             }
 
-            if (action_obj.optimization_warned) {
+            if (action_obj.has_optimization) {
                 LOG(WARNING)
                     << "contract '" << entry.name
                     << "': 'optimization:' is deprecated for contracts "
