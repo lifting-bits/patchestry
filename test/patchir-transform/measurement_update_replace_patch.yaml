@@ -15,27 +15,16 @@ target:
   binary: "test_binary.bin"
   arch: "ARM:LE:32"
 
-meta_patches:
+patches:
   - name: "measurement_update_replace_patch"
+    id: "MEASUREMENT-UPDATE-REPLACE-PATCH-001"
     description: "Patch measurement update replace patch"
-
-    patch_actions:
-      - id: "MEASUREMENT-UPDATE-REPLACE-PATCH-001"
-        description: "Patch measurement update replace patch"
-
-        # Match Configuration
-        match:
-          - name: "spo2_lookup"
-            kind: "function"
-
-        # Actions to Apply
-        action:
-          - mode: "replace"
-            patch_id: "measurement_update_replace_patch"
-            description: "Patch measurement update replace patch"
-
-            # Arguments
-            arguments:
-              - name: "function_argument"
-                source: "operand"
-                index: 0
+    match:
+      name: "spo2_lookup"
+      kind: "function"
+    mode: "replace"
+    patch: "measurement_update_replace_patch"
+    arguments:
+      - name: "function_argument"
+        source: "operand"
+        index: 0

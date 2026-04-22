@@ -13,78 +13,58 @@ target:
   arch: "ARM:LE:32"
 
 libraries:
-  # these references are in relation to the location of this file
   - "patches/bloodview_device_entry_patches.yaml"
 
-meta_patches:
-  - name: bloodview_device_entry_meta_patch
-    description: "Meta patches for fixing get device list in bloodview"
+patches:
+  - name: "device_list_replace_sprintf_patch"
+    id: "REPLACE-SPRINTF-001"
+    description: "Replace sprintf with a bounds-aware version"
+    match:
+      name: "sprintf"
+      kind: "function"
+      context: ["bl_device__process_entry"]
+    mode: "replace"
+    patch: "device_list_replace_sprintf_patch"
+    arguments:
+      - name: "argument0"
+        source: "operand"
+        index: 0
+      - name: "argument1"
+        source: "constant"
+        value: 32
+      - name: "argument2"
+        source: "operand"
+        index: 1
+      - name: "argument3"
+        source: "operand"
+        index: 2
 
-    patch_actions:
-      - id: "REPLACE-SPRINTF-001"
-        description: "Replace sprintf with a bounds-aware version"
+  # Post-replacement bounds check, migrated from the old
+  # device_list_replace_sprintf_contract runtime contract. Runs
+  # apply_after against the patch-emitted @patch__replace__sprintf
+  # call site.
+  - name: "sprintf_bounds_check_after"
+    id: "SPRINTF-BOUNDS-AFTER-001"
+    description: "Assert sprintf return value stays within dest_size"
+    match:
+      name: "patch__replace__sprintf"
+      kind: "function"
+      context: ["bl_device__process_entry"]
+    mode: "apply_after"
+    patch: "sprintf_bounds_check_after"
+    arguments:
+      - name: "return_value"
+        source: "return_value"
+      - name: "dest_size"
+        source: "constant"
+        value: 32
 
-        match:
-          - name: "sprintf"
-            kind: "function"
-            function_context:
-              - name: "bl_device__process_entry"
-
-        action:
-          - mode: "replace"
-            patch_id: "device_list_replace_sprintf_patch"
-            description: "Bounds-aware sprintf replacement"
-            arguments:
-              - name: "argument0"
-                source: "operand"
-                index: 0
-              - name: "argument1"
-                source: "constant"
-                value: 32
-              - name: "argument2"
-                source: "operand"
-                index: 1
-              - name: "argument3"
-                source: "operand"
-                index: 2
-
-      # Post-replacement bounds check, migrated from the old
-      # device_list_replace_sprintf_contract runtime contract. Runs
-      # apply_after against the patch-emitted @patch__replace__sprintf
-      # call site.
-      - id: "SPRINTF-BOUNDS-AFTER-001"
-        description: "Assert sprintf return value stays within dest_size"
-
-        match:
-          - name: "patch__replace__sprintf"
-            kind: "function"
-            function_context:
-              - name: "bl_device__process_entry"
-
-        action:
-          - mode: "apply_after"
-            patch_id: "sprintf_bounds_check_after"
-            description: "Post-execution bounds check"
-            arguments:
-              - name: "return_value"
-                source: "return_value"
-              - name: "dest_size"
-                source: "constant"
-                value: 32
-
-meta_contracts:
-  - name: bloodview_device_entry_meta_contract_static
-    description: "Static contract verifying the replaced sprintf"
-
-    contract_actions:
-      - id: "sprintf_contract_static"
-        match:
-        - name: "patch__replace__sprintf"
-          kind: "function"
-          function_context:
-            - name: "bl_device__process_entry"
-
-        action:
-        - contract_id: "sprintf_contract_static"
-          mode: "apply_before"
-          description: "Static contract for sprintf bounds"
+contracts:
+  - name: "sprintf_contract_static"
+    id: "sprintf_contract_static"
+    description: "Static contract for sprintf bounds"
+    match:
+      name: "patch__replace__sprintf"
+      context: ["bl_device__process_entry"]
+    mode: "apply_before"
+    contract: "sprintf_contract_static"

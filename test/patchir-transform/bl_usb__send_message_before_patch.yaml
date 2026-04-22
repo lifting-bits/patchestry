@@ -13,62 +13,49 @@ target:
   arch: "ARM:LE:32"
 
 libraries:
- # these references are in relation to the location of this file
   - "patches/usb_security_patches.yaml"
 
-meta_patches:
-  - name: usb_security_meta_patches
-    description: "Meta patches for USB security"
+patches:
+  - name: "usb_endpoint_write_validation_before"
+    id: "USB-PATCH-001"
+    description: "Endpoint-write pre-instrumentation"
+    match:
+      name: "usbd_ep_write_packet"
+      kind: "function"
+      context: ["bl_usb__send_message"]
+      argument_matches:
+        - index: 0
+          name: "usb_g"
+          type: "struct _usbd_device*"
+    mode: "apply_before"
+    patch: "usb_endpoint_write_validation_before"
+    arguments:
+      - name: "operand_0"
+        source: "operand"
+        index: "0"
+      - name: "operand_2"
+        source: "operand"
+        index: "2"
 
-    patch_actions:
-       - id: "USB-PATCH-001"
-         description: "Endpoint-write pre-instrumentation"
-
-         match:
-          - name: "usbd_ep_write_packet"
-            kind: "function"
-            function_context:
-              - name: "bl_usb__send_message"
-            argument_matches:
-              - index: 0
-                name: "usb_g"
-                type: "struct _usbd_device*"
-
-         action:
-          - mode: "apply_before"
-            patch_id: "usb_endpoint_write_validation_before"
-            description: "Pre-validation security check"
-            arguments:
-              - name: "operand_0"
-                source: "operand"
-                index: "0"
-              - name: "operand_2"
-                source: "operand"
-                index: "2"
-
-       # Second apply_before action, migrated from the removed
-       # test_contract runtime-contract dispatch. It asserts the USB
-       # device state is CONFIGURED before the packet write.
-       - id: "USB-PATCH-002"
-         description: "USB state assertion"
-
-         match:
-          - name: "usbd_ep_write_packet"
-            kind: "function"
-            function_context:
-              - name: "bl_usb__send_message"
-            argument_matches:
-              - index: 0
-                name: "usb_g"
-
-         action:
-          - mode: "apply_before"
-            patch_id: "usb_state_check_before"
-            description: "Assert USB state before the packet write"
-            arguments:
-              - name: usb_device
-                source: "argument"
-                index: "0"
-              - name: buffer
-                source: "argument"
-                index: "1"
+  # Second apply_before action, migrated from the removed test_contract
+  # runtime-contract dispatch. It asserts the USB device state is
+  # CONFIGURED before the packet write.
+  - name: "usb_state_check_before"
+    id: "USB-PATCH-002"
+    description: "USB state assertion"
+    match:
+      name: "usbd_ep_write_packet"
+      kind: "function"
+      context: ["bl_usb__send_message"]
+      argument_matches:
+        - index: 0
+          name: "usb_g"
+    mode: "apply_before"
+    patch: "usb_state_check_before"
+    arguments:
+      - name: "usb_device"
+        source: "argument"
+        index: "0"
+      - name: "buffer"
+        source: "argument"
+        index: "1"

@@ -542,12 +542,16 @@ main() {
     "\"${PATCHIR_TRANSFORM}\" \"${FIXTURE_DIR}/pulseox_measurement_update/pulseox_measurement_update.cir\" --spec \"${FIXTURE_DIR}/does-not-exist.yaml\" -o \"${OUTPUT_DIR}/negative_missing_spec_file/unused.cir\"" \
     'File does not exist|Failed to load file|failed to load config' || CASE_FAILURE=1
 
+  # llvm::yaml stops processing after the first mapping error, so only
+  # the offending entry's diagnostics reach the log. The negative
+  # fixture is shaped to always trigger a "missing required key" error
+  # on the first (intentionally broken) `patches:` entry.
   run_negative_case \
     "negative_malformed_schema" \
     "-" \
     "${REPO_ROOT}/test/patchir-transform/test_patch.yaml" \
     "\"${PATCHIR_YAML_PARSER}\" \"${REPO_ROOT}/test/patchir-transform/test_patch.yaml\" --validate" \
-    'error|missing required key|must include' || CASE_FAILURE=1
+    'error|missing required key' || CASE_FAILURE=1
 
   run_negative_case \
     "negative_bad_patch_reference" \

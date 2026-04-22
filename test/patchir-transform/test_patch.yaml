@@ -1,61 +1,36 @@
-# Test patching specification 
+# Intentionally malformed spec — used by the patch matrix
+# `negative_malformed_schema` case. Two independent schema errors:
+#   - entry A has a match: block without `name:` or `names:`
+#     → "match must include 'name' or 'names'"
+#   - entry B is missing the required entry-level `name:` field
+#     → "missing required key 'name'"
 apiVersion: patchestry.io/v1
 
 metadata:
-  name: "usb-security-monitoring-deployment"
-  description: "Deploy USB security monitoring for medical device firmware"
+  name: "malformed-schema-test"
+  description: "Deliberately broken spec; should fail YAML validation"
   version: "1.0.0"
   author: "Security Team"
-  created: "2025-06-31"
+  created: "2026-04-21"
 
 target:
   binary: "test_binary.bin"
   arch: "ARM:LE:32"
 
 libraries:
-  # Reference only real libraries so loading succeeds; the schema error
-  # below (match.symbol: instead of match.name:) is what this fixture
-  # is meant to exercise for negative_malformed_schema.
   - "patches/usb_security_patches.yaml"
 
-meta_patches:
-  - name: usb_security_meta_patches
-    id: "usb_security_meta_patches"
-    description: "Meta patches for USB security"
-    optimization:
-      - "inline-patches"
+patches:
+  - description: "entry-level 'name:' is absent → missing required key"
+    match:
+      name: "usbd_ep_write_packet"
+      kind: "function"
+    mode: "apply_before"
+    patch: "usb_endpoint_write_validation_before"
 
-    # Patch Action Configuration
-    patch_actions:
-       - id: "USB-PATCH-001"
-         description: "Patch to add USB security"
-
-         # Match Configuration
-         match:
-          - symbol: "usbd_ep_write_packet"
-            kind: "function"
-            function_context:
-              - name: "bl_usb__send_message"
-            argument_matches:
-              - index: 0
-                name: "usb_g"
-
-         # Actions to Apply
-         action:          
-          - mode: "apply_before"
-            patch_id: "USB-PATCH-001"
-            description: "Pre-validation security check"
-            arguments:
-              - name: "operand_0"
-                source: "operand"
-                index: "0"
-              - name: "variable_2"
-                source: "variable"
-                symbol: "var1"
-            
-    exclude:
-      - ""
-
-meta_contracts:
-  - name: usb_security_meta_contracts
-    description: "Meta contracts for USB security"
+  - name: "match_missing_name"
+    description: "match: block has neither 'name:' nor 'names:' → must include"
+    match:
+      kind: "function"
+    mode: "apply_before"
+    patch: "usb_endpoint_write_validation_before"

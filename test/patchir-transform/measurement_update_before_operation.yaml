@@ -9,42 +9,30 @@ metadata:
   created: "2025-07-28"
 
 libraries:
-  # this reference is in relation to the location of this file
   - "patches/measurement_update_patch.yaml"
 
 target:
   binary: "test_binary.bin"
   arch: "ARM:LE:32"
 
-meta_patches:
+patches:
   - name: "measurement_update_before_operation"
+    id: "MEASUREMENT-UPDATE-BEFORE-OPERATION-001"
     description: "Patch measurement update before operation"
-
-    patch_actions:
-      - id: "MEASUREMENT-UPDATE-BEFORE-OPERATION-001"
-        description: "Patch measurement update before operation"
-
-        # Match Configuration
-        match:
-          - name: "cir.call"
-            kind: "operation"
-            function_context:
-              - name: "/.*measurement.*/"  # Functions containing "measurement"
-              - name: "/.*update.*/"       # Functions containing "update"
-            operand_matches:
-              - index: 0  # First argument to the called function
-                type: "float"
-            symbol_matches:
-              - name: "spo2_lookup"  # The function being called
-
-        # Actions to Apply
-        action:
-          - mode: "apply_before"
-            patch_id: "measurement_update_before_operation"
-            description: "Patch measurement update before operation"
-
-            # Arguments
-            arguments:
-              - name: "function_argument"
-                source: "operand"
-                index: 0
+    match:
+      name: "cir.call"
+      kind: "operation"
+      context:
+        - "/.*measurement.*/"
+        - "/.*update.*/"
+      operand_matches:
+        - index: 0  # First argument to the called function
+          type: "float"
+      symbol_matches:
+        - name: "spo2_lookup"  # The function being called
+    mode: "apply_before"
+    patch: "measurement_update_before_operation"
+    arguments:
+      - name: "function_argument"
+        source: "operand"
+        index: 0

@@ -15,29 +15,19 @@ target:
 libraries:
   - "patches/led_loop_before_cmp_operation.yaml"
 
-meta_patches:
+patches:
   - name: "led_loop_before_cmp_operation"
+    id: "led_loop_before_cmp_operation"
     description: "Apply before cmp operation"
-
-    patch_actions:
-      - id: "led_loop_before_cmp_operation"
-        description: "Apply before cmp operation"
-
-        # Match Configuration
-        match:
-          - name: "cir.cmp"
-            kind: "operation"
-            symbol_matches:
-              - name: "bl_spi_mode"
-                type: "!cir.int<s, 8>"
-
-        # Actions to Apply
-        action:
-          - mode: "apply_before"
-            patch_id: "led_loop_before_cmp_operation"
-            description: "Apply before cmp operation"
-            arguments:
-              - name: "global_var"
-                source: "symbol"
-                symbol: "bl_spi_mode"
-
+    match:
+      name: "cir.cmp"
+      kind: "operation"
+      symbol_matches:
+        - name: "bl_spi_mode"
+          type: "!cir.int<s, 8>"
+    mode: "apply_before"
+    patch: "led_loop_before_cmp_operation"
+    arguments:
+      - name: "global_var"
+        source: "symbol"
+        symbol: "bl_spi_mode"

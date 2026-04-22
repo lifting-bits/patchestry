@@ -9,37 +9,25 @@ metadata:
   created: "2025-07-28"
 
 libraries:
-  # this reference is in relation to the location of this file
   - "patches/measurement_update_patch.yaml"
 
 target:
   binary: "test_binary.bin"
   arch: "ARM:LE:32"
 
-meta_patches:
+patches:
   - name: "measurement_update_before_patch"
+    id: "MEASUREMENT-UPDATE-BEFORE-PATCH-001"
     description: "Patch measurement update before function"
-
-    patch_actions:
-      - id: "MEASUREMENT-UPDATE-BEFORE-PATCH-001"
-        description: "Patch measurement update before function"
-
-        # Match Configuration
-        match:
-          - name: "spo2_lookup"
-            kind: "function"
-            argument_matches:
-              - index: 0
-                type: "float"
-
-        # Actions to Apply
-        action:
-          - mode: "apply_before"
-            patch_id: "measurement_update_before_patch"
-            description: "Patch measurement update before function"
-
-            # Arguments
-            arguments:
-              - name: "function_argument"
-                source: "operand"
-                index: 0
+    match:
+      name: "spo2_lookup"
+      kind: "function"
+      argument_matches:
+        - index: 0
+          type: "float"
+    mode: "apply_before"
+    patch: "measurement_update_before_patch"
+    arguments:
+      - name: "function_argument"
+        source: "operand"
+        index: 0

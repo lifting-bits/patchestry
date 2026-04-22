@@ -155,16 +155,21 @@ namespace patchestry::passes {
         // Convert a PatchEntry to the canonical MetaPatchConfig representation.
         // Multiple match_names produce one PatchAction per name (OR semantics).
         [[maybe_unused]] inline MetaPatchConfig inflatePatchEntry(const PatchEntry &entry) {
-            // Parser enforces non-empty match_names; guard direct callers
-            // (PatchDSL codegen, future unit tests) from accidentally
-            // constructing a MetaPatchConfig with zero actions.
-            assert(!entry.match_names.empty()
-                   && "inflatePatchEntry: match_names must be non-empty");
-
             MetaPatchConfig meta;
             meta.name         = entry.name;
             meta.description  = entry.description;
             meta.optimization = entry.optimization;
+
+            // When the parser hits an error (e.g. schema validation failed
+            // on this entry), match_names may be empty. llvm::yaml::IO
+            // continues calling mapping/inflation after setError so it can
+            // accumulate diagnostics; the resulting Configuration gets
+            // discarded by the caller. Return an empty MetaPatchConfig
+            // here rather than emitting an action with an empty match
+            // name (which the matcher would reject silently later).
+            if (entry.match_names.empty()) {
+                return meta;
+            }
 
             for (std::size_t i = 0; i < entry.match_names.size(); ++i) {
                 PatchAction pa;
