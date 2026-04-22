@@ -582,6 +582,23 @@ EOF
 
   if [[ ${CASE_FAILURE} -ne 0 ]]; then
     echo "Patch matrix validation failed. See ${SUMMARY_MD}" >&2
+    # Dump the summary + any FAIL case's run.log so CI captures the
+    # full failure context in its step log (the summary file itself
+    # isn't uploaded as an artifact).
+    if [[ -f "${SUMMARY_MD}" ]]; then
+      echo "----- ${SUMMARY_MD} -----" >&2
+      cat "${SUMMARY_MD}" >&2
+      echo "-----" >&2
+    fi
+    if [[ -f "${SUMMARY_TSV}" ]]; then
+      while IFS=$'\t' read -r case status case_type fixture spec patched_cir llvm_ir log; do
+        if [[ "${status}" == "FAIL" ]]; then
+          echo "----- FAIL case '${case}' log: ${log} -----" >&2
+          [[ -f "${log}" ]] && cat "${log}" >&2
+          echo "-----" >&2
+        fi
+      done < <(tail -n +2 "${SUMMARY_TSV}")
+    fi
     exit 1
   fi
 
