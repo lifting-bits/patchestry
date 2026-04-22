@@ -476,12 +476,15 @@ main() {
     'patch__replace__spo2_lookup' \
     'patch__replace__spo2_lookup|patchestry_operation' || CASE_FAILURE=1
 
+  # The USB pre-instrumentation spec used to dispatch a runtime contract
+  # `contract__before__test_contract`; post-PR#199 that's migrated to a
+  # second patch_action emitting `patch__before__usb_state_check`.
   run_matrix_case \
     "usb_before_patch" \
     "bloodlight_usb_send_message" \
     "${REPO_ROOT}/test/patchir-transform/bl_usb__send_message_before_patch.yaml" \
-    'patch__before__usbd_ep_write_packet|contract__before__test_contract' \
-    'patch__before__usbd_ep_write_packet|contract__before__test_contract|patchestry_operation' || CASE_FAILURE=1
+    'patch__before__usbd_ep_write_packet|patch__before__usb_state_check' \
+    'patch__before__usbd_ep_write_packet|patch__before__usb_state_check|patchestry_operation' || CASE_FAILURE=1
 
   run_matrix_case \
     "usb_after_patch" \
@@ -497,19 +500,26 @@ main() {
     'patch__before__usbd_cp_write_packet__update_state' \
     'patch__before__usbd_cp_write_packet__update_state|patchestry_operation' || CASE_FAILURE=1
 
+  # APPLY_AT_ENTRYPOINT is patch-only now (contracts are static-only, no
+  # runtime dispatch). Switched from entrypoint_contract.yaml (which
+  # expected a runtime-contract call that never gets emitted) to the
+  # flat-surface entrypoint_patch.yaml replacement.
   run_matrix_case \
-    "usb_entrypoint_contract" \
+    "usb_entrypoint_patch" \
     "bloodlight_usb_send_message" \
-    "${REPO_ROOT}/test/patchir-transform/entrypoint_contract.yaml" \
-    'contract__entrypoint__message_entry_check|contract.static' \
-    'contract__entrypoint__message_entry_check|static_contract|msg_nonnull' || CASE_FAILURE=1
+    "${REPO_ROOT}/test/patchir-transform/entrypoint_patch.yaml" \
+    'patch__entrypoint__message_entry_check|patchestry_operation' \
+    'patch__entrypoint__message_entry_check|patchestry_operation' || CASE_FAILURE=1
 
+  # Contracts are static-only: `contract.static` attribute is attached
+  # directly to the patch__replace__sprintf call; no separate
+  # `contract__sprintf` runtime call is emitted.
   run_matrix_case \
     "bloodview_device_process_entry" \
     "bloodview_device_process_entry" \
     "${REPO_ROOT}/test/patchir-transform/device_process_entry.yaml" \
-    'patch__replace__sprintf|contract__sprintf|contract.static' \
-    'patch__replace__sprintf|contract__sprintf|static_contract' || CASE_FAILURE=1
+    'patch__replace__sprintf|contract.static' \
+    'patch__replace__sprintf|static_contract' || CASE_FAILURE=1
 
   run_matrix_case \
     "bloodview_all_predicates" \
