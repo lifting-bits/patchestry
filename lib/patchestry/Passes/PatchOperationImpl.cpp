@@ -143,7 +143,7 @@ namespace patchestry {
 
         void PatchOperationImpl::applyAfterPatch(
             InstrumentationPass &pass, mlir::Operation *target_op,
-            const PatchInformation &patch, mlir::ModuleOp patch_module, bool inline_patches
+            const PatchInformation &patch, mlir::ModuleOp patch_module, bool should_inline
         ) {
             if (target_op == nullptr) {
                 LOG(ERROR) << "Patch after: Operation is null";
@@ -189,14 +189,14 @@ namespace patchestry {
             // Set appropriate attributes based on operation type
             pass.set_instrumentation_call_attributes(patch_call_op, target_op);
 
-            if (inline_patches) {
+            if (should_inline) {
                 pass.inline_worklists.insert(patch_call_op);
             }
         }
 
         void PatchOperationImpl::replaceCallWithPatch(
             InstrumentationPass &pass, cir::CallOp call_op, const PatchInformation &patch,
-            mlir::ModuleOp patch_module, bool inline_patches
+            mlir::ModuleOp patch_module, bool should_inline
         ) {
             mlir::OpBuilder builder(call_op);
             auto loc    = call_op.getLoc();
@@ -285,7 +285,7 @@ namespace patchestry {
 
             call_op.erase();
 
-            if (inline_patches) {
+            if (should_inline) {
                 pass.inline_worklists.insert(wrap_call_op);
             }
         }
@@ -293,7 +293,7 @@ namespace patchestry {
         void PatchOperationImpl::replaceOperationWithPatch(
             InstrumentationPass &pass, mlir::Operation *op,
             const PatchInformation &patch, mlir::ModuleOp patch_module,
-            bool inline_patches
+            bool should_inline
         ) {
             if (op->getNumResults() == 0) {
                 LOG(ERROR) << "REPLACE mode requires an operation with results, got: "
@@ -375,7 +375,7 @@ namespace patchestry {
 
             op->erase();
 
-            if (inline_patches) {
+            if (should_inline) {
                 pass.inline_worklists.insert(patch_call_op);
             }
         }
