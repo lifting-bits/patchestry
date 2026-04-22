@@ -31,6 +31,16 @@ namespace patchestry::passes {
         mlir::Operation *op, cir::FuncOp func, const patch::PatchAction &action,
         OperationMatcher::Mode mode // NOLINT
     ) {
+        // Callers in `InstrumentationPass::apply_patch_action_to_targets`
+        // guard against an empty match vector up-front, but this is a
+        // public static API. A future direct caller (tests, tooling,
+        // another pass) that forgets the precondition would otherwise
+        // hit UB on `action.match[0]` below.
+        if (action.match.empty()) {
+            LOG(ERROR) << "patch_action_matches: PatchAction '" << action.action_id
+                       << "' has no match entries\n";
+            return false;
+        }
         const auto &match = action.match[0];
 
         // Handle different match kinds
@@ -363,7 +373,17 @@ namespace patchestry::passes {
             return true;
         }
 
-        auto operands = op->getOperands();
+        // Mirror the CallOp carve-out from `matches_arguments` / capture
+        // binding: `operand_matches.index: 0` should mean "caller's first
+        // user arg" on both direct and indirect calls, not the callee
+        // function pointer that raw `op->getOperands()` exposes at index 0
+        // for indirect calls. For non-call ops (cir.store, cir.binop, …)
+        // raw operands are the intended surface and `getArgOperands` is
+        // not applicable.
+        mlir::ValueRange operands = op->getOperands();
+        if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+            operands = call_op.getArgOperands();
+        }
 
         for (const auto &operand_match : operand_matches) {
             // Check if the argument index is valid
@@ -373,9 +393,12 @@ namespace patchestry::passes {
 
             auto operand = operands[operand_match.index];
 
-            // Check argument name if specified
+            // Check argument name if specified. Derive the name from the
+            // operand `Value` directly — `extract_variable_name(op, idx)`
+            // would re-index raw `op->getOperands()` and undo the CallOp
+            // carve-out above.
             if (!operand_match.name.empty()) {
-                std::string var_name = extract_variable_name(op, operand_match.index);
+                std::string var_name = extract_ssa_value_name(operand);
                 if (!matches_pattern(var_name, operand_match.name)) {
                     return false;
                 }
@@ -519,11 +542,19 @@ namespace patchestry::passes {
             return true;
         }
 
-        // Check operands for variable matches
-        auto operands = op->getOperands();
+        // Mirror the CallOp carve-out from `matches_arguments` / capture
+        // binding. Without it, an indirect call's callee pointer (operand
+        // 0) is scanned as if it were a user variable and a spec like
+        // `variable_matches: [{ name: "buf" }]` could spuriously match a
+        // callee function pointer on one call site and miss the actual
+        // "buf" arg on another.
+        mlir::ValueRange operands = op->getOperands();
+        if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+            operands = call_op.getArgOperands();
+        }
         for (unsigned i = 0; i < operands.size(); ++i) {
             auto operand         = operands[i];
-            std::string var_name = extract_variable_name(op, i);
+            std::string var_name = extract_ssa_value_name(operand);
             std::string var_type = typing::ConvertCirTypesToCTypes(operand.getType());
 
             for (const auto &var_match : variable_matches) {

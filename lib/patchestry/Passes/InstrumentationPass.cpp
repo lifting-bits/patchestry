@@ -1747,15 +1747,16 @@ namespace patchestry::passes {
             }
         }
 
-        // Post-clone: collect every `cir::ReturnOp` in the cloned region
-        // tree — both top-level (terminating a cloned block) and nested
-        // (inside cloned `cir.scope` / `cir.if` / `cir.for` regions,
-        // which C→CIR lowering emits for early-return patterns like
-        // `if (oob) return X; return Y;`). Each represents a function-
-        // exit from the callee's body and must be rewritten to exit the
-        // inlined region via a branch to `split_block`. Multi-return
-        // callees unify their result values through allocas in the
-        // caller's function entry block; single-return uses direct RAUW.
+        // Post-clone: collect every top-level `cir::ReturnOp` from the
+        // cloned blocks. Nested returns (inside `cir.scope` / `cir.if` /
+        // `cir.for` regions) are impossible here — the `has_nested_return`
+        // guard above rejects callees that contain any, so only function-
+        // scope returns survive to be walked. Each surviving return
+        // represents an exit from the callee body and must be rewritten
+        // to exit the inlined region via a branch to `split_block`.
+        // Multi-return callees unify their result values through allocas
+        // in the caller's function entry block; single-return uses
+        // direct RAUW.
         mlir::SmallVector< cir::ReturnOp > cloned_returns;
         for (mlir::Block &orig_block : callee_region) {
             auto *cloned_block = mapper.lookupOrNull(&orig_block);
