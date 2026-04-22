@@ -27,8 +27,11 @@ jobs:
     strategy:
       matrix:
         image-version: [22.04]
-    runs-on: ubuntu-${{ matrix.image-version }}
-    timeout-minutes: 30
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && format('ubuntu-{0}-arm', matrix.image-version) || format('ubuntu-{0}', matrix.image-version) }}
+    # Ghidra-from-source build (gradle buildGhidra + IntegrationTest) dominates
+    # wall time; 60 min covers both arches with headroom.
+    timeout-minutes: 60
     env:
       CI: true
     steps:
@@ -66,9 +69,12 @@ jobs:
         image-version: [22.04]
         build-type: [Release, Debug]
         sanitizers: [OFF]
-    runs-on: ubuntu-${{ matrix.image-version }}
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && format('ubuntu-{0}-arm', matrix.image-version) || format('ubuntu-{0}', matrix.image-version) }}
     timeout-minutes: 30
     env:
+      # `-dev:latest` is a multi-arch manifest published by devcontainer.yml;
+      # Docker resolves the correct platform on pull.
       DEV_IMAGE: ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
       CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
       LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
@@ -175,7 +181,9 @@ jobs:
             lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=/workspace/builds/ci/test/ghidra/Output
 
       - name: Run KLEE on generated harnesses
-        if: matrix.build-type == 'Debug' && matrix.sanitizers == 'OFF'
+        # KLEE's POSIX runtime uses klee-uclibc, which is x86/x86_64-only.
+        # Skip on arm64; re-enable if the runtime is ever ported.
+        if: matrix.build-type == 'Debug' && matrix.sanitizers == 'OFF' && matrix.arch != 'arm64'
         continue-on-error: true
         env:
           KLEE_IMAGE: ghcr.io/lifting-bits/patchestry-klee-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}:latest

@@ -23,7 +23,7 @@ docker build \
     "${script_dir}"
 
 echo "Building patchestry inside Docker container..."
-docker run --rm --platform linux/amd64 \
+docker run --rm \
     --memory="${DOCKER_MEMORY_GB}g" \
     --memory-swap="${DOCKER_MEMORY_GB}g" \
     --cpus="${DOCKER_CPUS}" \

@@ -12,19 +12,22 @@ on: workflow_dispatch
 permissions: read-all
 
 jobs:
-  build:
+  # Builds the dev container once per arch on native runners and publishes
+  # per-arch tags (`-dev:amd64`, `-dev:arm64`).
+  build-per-arch:
     strategy:
       matrix:
         llvm-version: [20]
         image-version: [22.04]
-    runs-on: ubuntu-22.04
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && format('ubuntu-{0}-arm', matrix.image-version) || format('ubuntu-{0}', matrix.image-version) }}
 
     permissions:
         packages: write
         contents: read
 
     env:
-      IMAGE_NAME: "ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest"
+      ARCH_IMAGE: "ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:${{ matrix.arch }}"
 
     steps:
       - name: Cleanup working directory with container root
@@ -41,10 +44,39 @@ jobs:
         working-directory: .devcontainer
         run: |
           docker pull ubuntu:${{ matrix.image-version }}
-          docker build . --no-cache -t "${IMAGE_NAME}" --build-arg="IMAGE=ubuntu-${{ matrix.image-version }}" --build-arg="LLVM_VERSION=${{ matrix.llvm-version }}"
+          docker build . --no-cache -t "${ARCH_IMAGE}" --build-arg="IMAGE=ubuntu-${{ matrix.image-version }}" --build-arg="LLVM_VERSION=${{ matrix.llvm-version }}"
 
       - name: Log in to registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Push image
-        run: docker push "${IMAGE_NAME}"
+        run: docker push "${ARCH_IMAGE}"
+
+  # Combines the per-arch tags into a multi-arch manifest under `-dev:latest`.
+  # Consumers (root Dockerfile, scripts/klee/Dockerfile, prerelease.yml, ci.yml)
+  # can keep referencing `-dev:latest` and Docker resolves the correct arch on
+  # pull.
+  merge-manifest:
+    needs: build-per-arch
+    strategy:
+      matrix:
+        llvm-version: [20]
+        image-version: [22.04]
+    runs-on: ubuntu-${{ matrix.image-version }}
+
+    permissions:
+      packages: write
+
+    env:
+      DEV_IMAGE_BASE: "ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev"
+
+    steps:
+      - name: Log in to registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Create and push multi-arch manifest
+        run: |
+          docker manifest create "${DEV_IMAGE_BASE}:latest" \
+            "${DEV_IMAGE_BASE}:amd64" \
+            "${DEV_IMAGE_BASE}:arm64"
+          docker manifest push "${DEV_IMAGE_BASE}:latest"
