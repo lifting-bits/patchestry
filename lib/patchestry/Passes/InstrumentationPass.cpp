@@ -670,9 +670,17 @@ namespace patchestry::passes {
                         }
                         break;
                     default:
-                        LOG(ERROR) << "Unsupported patch mode for operation: "
+                        // Defense in depth: the YAML parser already rejects
+                        // `apply_at_entrypoint` + `kind: operation` (see
+                        // MappingTraits<PatchEntry> in PatchSpec.hpp). If any
+                        // unimplemented mode slips past the parser, signal
+                        // pass failure instead of silently succeeding.
+                        LOG(ERROR) << "Unsupported patch mode '"
+                                   << patch::infoModeToString(action.mode)
+                                   << "' for operation-kind match on "
                                    << op->getName().getStringRef().str() << "\n";
-                        break;
+                        signalPassFailure();
+                        return;
                 }
             }
 

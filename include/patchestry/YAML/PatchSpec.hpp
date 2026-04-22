@@ -545,6 +545,24 @@ namespace llvm::yaml {
             entry.patch_id     = action_obj.patch_id;
             entry.arguments    = action_obj.arguments;
             entry.optimization = action_obj.optimization;
+
+            // Cross-field validation: `apply_at_entrypoint` inserts the
+            // patch call into the enclosing function's entry block. Only
+            // the function-kind dispatch path in InstrumentationPass
+            // implements it; the operation-kind switch has no case and
+            // silently logs an error without signalling pass failure.
+            // Reject the combo up-front so the misconfiguration surfaces
+            // at spec-load with a clear error pointing at the match
+            // rather than disappearing into a "succeeded but did nothing"
+            // transform run.
+            if (action_obj.mode == InstrumentationMode::APPLY_AT_ENTRYPOINT
+                && match_obj.kind != MatchKind::FUNCTION)
+            {
+                io.setError(
+                    "'mode: apply_at_entrypoint' requires 'match.kind: function'; "
+                    "the operation-kind dispatch path does not implement it."
+                );
+            }
         }
     };
 
