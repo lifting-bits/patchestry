@@ -132,7 +132,7 @@ namespace patchestry {
             );
 
             pass.update_state_after_patch(
-                builder, patch_call_op, target_op, patch, function_args_map,
+                builder, patch_call_op, target_op, patch,
                 /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
 
@@ -188,7 +188,7 @@ namespace patchestry {
             );
 
             pass.update_state_after_patch(
-                builder, patch_call_op, target_op, patch, function_args_map,
+                builder, patch_call_op, target_op, patch,
                 /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
 
@@ -227,8 +227,10 @@ namespace patchestry {
 
             auto wrap_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
             llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             pass.prepare_patch_call_arguments(
-                builder, call_op, wrap_func, patch, function_args_map
+                builder, call_op, wrap_func, patch, function_args_map,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
             llvm::SmallVector< mlir::Value > wrap_call_args;
             for (auto &[old_arg, new_arg] : function_args_map) {
@@ -243,8 +245,6 @@ namespace patchestry {
 
             mlir::OpBuilder::InsertionGuard guard(builder);
             builder.setInsertionPointAfter(wrap_call_op);
-            mlir::DominanceInfo DT(wrap_call_op->getParentOfType< mlir::FunctionOpInterface >()
-            );
 
             // Replace all uses of old call results with new call results
             // Handle type mismatches by inserting casts as needed
@@ -277,6 +277,16 @@ namespace patchestry {
                     }
                 }
             }
+
+            // Writeback for `is_reference: true` operand args. The original
+            // call's operands may still be live elsewhere in the function;
+            // rewiring their dominated uses to the patched slot mirrors the
+            // apply_before/after semantics (`update_state_after_patch` is a
+            // no-op when no spec flagged `is_reference`).
+            pass.update_state_after_patch(
+                builder, wrap_call_op, call_op.getOperation(), patch,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
+            );
 
             // Set appropriate attributes based on operation type
             pass.set_instrumentation_call_attributes(wrap_call_op, call_op);
@@ -341,8 +351,10 @@ namespace patchestry {
 
             auto patch_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
             llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             pass.prepare_patch_call_arguments(
-                builder, op, patch_func, patch, function_args_map
+                builder, op, patch_func, patch, function_args_map,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
             llvm::SmallVector< mlir::Value > call_args;
             for (auto &[old_arg, new_arg] : function_args_map) {
@@ -353,6 +365,14 @@ namespace patchestry {
                 loc, patch_func_ref,
                 patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
                 call_args
+            );
+
+            // Writeback for `is_reference: true` operand args; matches the
+            // apply_before/after semantics. No-op when no spec flagged
+            // `is_reference`.
+            pass.update_state_after_patch(
+                builder, patch_call_op, op, patch,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
 
             mlir::OpBuilder::InsertionGuard guard(builder);
@@ -619,8 +639,7 @@ namespace patchestry {
             // alloca) so the load reads the actual slot instead of a
             // pointer-cast of it.
             pass.update_state_after_patch(
-                builder, patch_call_op, call_op, patch, function_args_map, enclosing_func,
-                &writeback_slots
+                builder, patch_call_op, call_op, patch, enclosing_func, &writeback_slots
             );
 
             pass.set_instrumentation_call_attributes(patch_call_op, call_op);

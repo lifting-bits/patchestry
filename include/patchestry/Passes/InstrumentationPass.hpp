@@ -264,15 +264,14 @@ namespace patchestry::passes { // NOLINT
 
         // `writeback_slots` carries the pre-cast address the patch call should
         // load from on writeback (populated by `handle_operand_argument` for
-        // `is_reference` OPERAND sources). `arg_map` stores the *post-cast*
-        // call-site value, so using it as the load source would dereference a
-        // cast to the patch parameter's pointee type rather than the caller's
-        // actual slot, tripping the CIR verifier. When `writeback_slots` is
-        // null or empty, this function is a no-op.
+        // `is_reference` OPERAND sources). Keys are the caller's original
+        // operand `mlir::Value`s, reconstructed here from the spec + target_op
+        // rather than looked up in the call-argument map — so this function
+        // no longer depends on `arg_map`. When `writeback_slots` is null or
+        // empty, this function is a no-op.
         void update_state_after_patch(
             mlir::OpBuilder &builder, cir::CallOp patch_call_op, mlir::Operation *target_op,
             const PatchInformation &patch,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
             std::optional< cir::FuncOp > entrypoint_func = std::nullopt,
             const llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots = nullptr
         );

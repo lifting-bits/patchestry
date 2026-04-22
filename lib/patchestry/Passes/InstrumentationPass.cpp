@@ -839,11 +839,10 @@ namespace patchestry::passes {
 
     void InstrumentationPass::update_state_after_patch(
         mlir::OpBuilder &builder, cir::CallOp patch_call_op, mlir::Operation *target_op,
-        const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        const PatchInformation &patch,
         std::optional< cir::FuncOp > entrypoint_func,
         const llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots
     ) {
-        (void) arg_map;
         if (!writeback_slots || writeback_slots->empty()) {
             return;
         }
@@ -1739,7 +1738,7 @@ namespace patchestry::passes {
             mapper.map(arg, operand);
         }
 
-        // Pre-inline guards (both must be done before any IR mutation on the
+        // Pre-inline guards (all must be done before any IR mutation on the
         // caller side, otherwise `failure()` leaves a half-spliced caller
         // block with a dead branch and an unreachable suffix):
         //
@@ -1753,16 +1752,31 @@ namespace patchestry::passes {
         //   2. Noreturn callee + used call result — if the callee has zero
         //      top-level `cir::ReturnOp`s and the caller still uses the call's
         //      result, the downstream `call_op->erase()` asserts on a used op.
+        //   3. Return-arity mismatch — if any top-level `cir::ReturnOp`'s
+        //      operand count differs from `call_op.getResults().size()`, the
+        //      post-clone return-rewriting loop can't map return values to
+        //      call result slots. The mismatch used to be detected AFTER
+        //      `splitBlock` + full clone, stranding a dead branch and an
+        //      unreachable suffix on the caller side; check it here with
+        //      the other guards so the caller IR stays intact on failure.
         //
-        // One pass over the callee body captures both signals so the second
-        // check doesn't require a second walk.
+        // One pass over the callee body captures all three signals; no second
+        // walk is needed.
         {
+            const size_t expected_results = call_op.getResults().size();
             bool has_nested_return    = false;
             bool has_top_level_return = false;
             for (mlir::Block &block : callee.getBody()) {
                 for (mlir::Operation &op : block) {
-                    if (isa< cir::ReturnOp >(&op)) {
+                    if (auto ret = mlir::dyn_cast< cir::ReturnOp >(&op)) {
                         has_top_level_return = true; // safe to rewrite post-clone
+                        if (ret.getNumOperands() != expected_results) {
+                            LOG(ERROR) << "Cannot inline '" << callee_name
+                                       << "': return arity mismatch (callee returns "
+                                       << ret.getNumOperands() << " value(s), call "
+                                       << "expects " << expected_results << ")\n";
+                            return mlir::failure();
+                        }
                         continue;
                     }
                     op.walk([&](cir::ReturnOp) {
@@ -1866,15 +1880,10 @@ namespace patchestry::passes {
             });
         }
 
+        // Return-arity is already checked pre-split (see guard #3 above);
+        // surviving `cloned_returns` are guaranteed to match the caller's
+        // result count by construction.
         auto call_results = call_op.getResults();
-        for (cir::ReturnOp ret : cloned_returns) {
-            if (ret.getNumOperands() != call_results.size()) {
-                LOG(ERROR) << "Return value count mismatch during inlining (callee "
-                           << "returns " << ret.getNumOperands() << " value(s), call "
-                           << "expects " << call_results.size() << ")\n";
-                return mlir::failure();
-            }
-        }
 
         // Multi-return + non-void inlines go through an alloca per call
         // result: each return site stores into the slot and branches;

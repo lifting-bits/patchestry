@@ -428,11 +428,22 @@ namespace patchestry::passes {
             return true;
         }
 
-        // Check operands for variable matches
-        auto operands = op->getOperands();
+        // Mirror the CallOp carve-out from `matches_arguments` / `matches_operands`
+        // / `matches_variables`. Without it, an indirect call's callee function
+        // pointer (operand 0 under raw `op->getOperands()`) is scanned as if it
+        // were a user symbol, so `symbol_matches: [{ name: "foo" }]` matches an
+        // indirect call to `foo` but misses a direct call `cir.call @foo(...)`
+        // (whose callee is a symbol attribute, not an operand). Using
+        // `getArgOperands()` for CallOps keeps the match surface consistent
+        // across direct and indirect calls; non-call ops continue to index
+        // their raw operands.
+        mlir::ValueRange operands = op->getOperands();
+        if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+            operands = call_op.getArgOperands();
+        }
         for (unsigned i = 0; i < operands.size(); ++i) {
             auto operand         = operands[i];
-            std::string var_name = extract_variable_name(op, i);
+            std::string var_name = extract_ssa_value_name(operand);
             std::string var_type = type_to_string(operand.getType());
 
             for (const auto &var_match : symbol_matches) {
@@ -447,12 +458,19 @@ namespace patchestry::passes {
             }
         }
 
-        // Check results for variable matches
+        // Check results for variable matches. Use `extract_ssa_value_name`
+        // rather than `extract_variable_name(op, operands.size() + i)` — the
+        // latter indexes `op->getOperands()` internally, and after the
+        // CallOp narrowing above `operands.size()` is the user-arg count,
+        // not the raw operand count. On indirect CallOps that gap put the
+        // offset back inside the user-arg range, matching the name of the
+        // last operand instead of falling through to the result-name
+        // fallback. `extract_ssa_value_name(result)` mirrors the operand
+        // loop's idiom and sidesteps the offset entirely.
         auto results = op->getResults();
         for (unsigned i = 0; i < results.size(); ++i) {
             auto result = results[i];
-            std::string var_name =
-                extract_variable_name(op, static_cast< unsigned >(operands.size() + i));
+            std::string var_name = extract_ssa_value_name(result);
             std::string var_type = typing::ConvertCirTypesToCTypes(result.getType());
 
             for (const auto &var_match : symbol_matches) {
