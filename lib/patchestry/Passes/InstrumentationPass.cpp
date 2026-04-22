@@ -1511,109 +1511,90 @@ namespace patchestry::passes {
         mlir::Block *caller_block = call_op->getBlock();
         mlir::Block *split_block  = caller_block->splitBlock(call_op->getIterator());
 
-        // Note: Using of DenseMap is causing null-pointer dereference issue with ci.
-        mlir::DenseMap< mlir::Block *, mlir::Block * > block_map;
-
-        // First pass: clone all blocks (without operations)
+        // First pass: clone blocks (no ops yet). Register each block *and*
+        // its args in `mapper` so the second pass can delegate successor
+        // and block-arg remapping to `builder.clone`. The entry block's
+        // args are the function's parameters, already mapped to call
+        // operands above; skip re-registering them (would overwrite the
+        // call-operand substitution).
         mlir::Region &callee_region = callee.getBody();
+        mlir::Block *entry_block   = &callee_region.front();
+
         for (mlir::Block &block : callee_region) {
-            mlir::Block *cloned_block = new mlir::Block();
-            if (cloned_block == nullptr) {
-                LOG(ERROR) << "Failed to allocate block during inlining\n";
-                return mlir::failure();
-            }
-
-            for (mlir::BlockArgument arg : block.getArguments()) {
-                cloned_block->addArgument(arg.getType(), arg.getLoc());
-            }
-
+            auto *cloned_block = new mlir::Block();
             caller_block->getParent()->getBlocks().insert(
                 split_block->getIterator(), cloned_block
             );
 
-            block_map[&block] = cloned_block;
+            if (&block != entry_block) {
+                // Non-entry block args need cloned siblings and must be
+                // registered in `mapper` so cloned ops / cloned branches
+                // reference the cloned args, not the originals (which
+                // live on the callee and would dangle after inlining).
+                for (mlir::BlockArgument arg : block.getArguments()) {
+                    auto cloned_arg = cloned_block->addArgument(arg.getType(), arg.getLoc());
+                    mapper.map(arg, cloned_arg);
+                }
+            }
+            mapper.map(&block, cloned_block);
         }
 
-        // Second pass: clone operations and fix up block references
+        // Second pass: clone ops into cloned blocks. `cir::ReturnOp` is
+        // the only terminator with bespoke handling — it routes return
+        // values into the call's RAUW set, then branches to split_block.
+        // Every other op — including branch terminators like `cir::BrOp`
+        // and `cir::BrCondOp`, as well as region-carrying ops — goes
+        // through `builder.clone(op, mapper)`, which remaps operands,
+        // successors, and nested block refs in one shot.
         for (mlir::Block &orig_block : callee_region) {
-            mlir::Block *cloned_block = block_map[&orig_block];
+            auto *cloned_block = mapper.lookupOrNull(&orig_block);
+            if (!cloned_block) {
+                LOG(ERROR) << "Cloned block missing from mapper during inlining\n";
+                return mlir::failure();
+            }
             builder.setInsertionPointToEnd(cloned_block);
 
             for (mlir::Operation &op : orig_block) {
-                if (op.hasTrait< mlir::OpTrait::IsTerminator >()) {
-                    if (auto return_op = dyn_cast< cir::ReturnOp >(&op)) {
-                        // Handle return operation - branch to continue block
-                        mlir::SmallVector< mlir::Value > results;
-                        for (mlir::Value result : return_op.getOperands()) {
-                            auto mapped_result = mapper.lookup(result);
-                            if (!mapped_result) {
-                                LOG(ERROR) << "Failed to map return value during inlining\n";
-                                return mlir::failure();
-                            }
-                            results.push_back(mapped_result);
-                        }
-
-                        // Replace call results and branch to continue block
-                        auto call_results = call_op.getResults();
-                        if (call_results.size() != results.size()) {
-                            LOG(ERROR) << "Result count mismatch during inlining\n";
+                if (auto return_op = dyn_cast< cir::ReturnOp >(&op)) {
+                    mlir::SmallVector< mlir::Value > results;
+                    for (mlir::Value result : return_op.getOperands()) {
+                        auto mapped_result = mapper.lookupOrDefault(result);
+                        if (!mapped_result) {
+                            LOG(ERROR) << "Failed to map return value during inlining\n";
                             return mlir::failure();
                         }
-
-                        for (auto [callResult, returnValue] : llvm::zip(call_results, results))
-                        {
-                            if (!callResult || !returnValue) {
-                                LOG(ERROR) << "Null result encountered during inlining\n";
-                                return mlir::failure();
-                            }
-                            callResult.replaceAllUsesWith(returnValue);
-                        }
-
-                        builder.create< cir::BrOp >(loc, split_block);
-                    } else if (auto branch_op = dyn_cast< cir::BrOp >(&op)) {
-                        // Fix branch destinations
-                        mlir::Block *targetBlock = block_map[branch_op.getDest()];
-                        if (!targetBlock) {
-                            LOG(ERROR) << "Failed to find target block during inlining\n";
-                            return mlir::failure();
-                        }
-                        mlir::SmallVector< mlir::Value > operands;
-                        for (mlir::Value operand : branch_op.getDestOperands()) {
-                            auto mapped_operand = mapper.lookup(operand);
-                            if (!mapped_operand) {
-                                LOG(ERROR) << "Failed to map branch operand during inlining\n";
-                                return mlir::failure();
-                            }
-                            operands.push_back(mapped_operand);
-                        }
-                        builder.create< cir::BrOp >(loc, targetBlock, operands);
+                        results.push_back(mapped_result);
                     }
+
+                    auto call_results = call_op.getResults();
+                    if (call_results.size() != results.size()) {
+                        LOG(ERROR) << "Result count mismatch during inlining\n";
+                        return mlir::failure();
+                    }
+
+                    for (auto [callResult, returnValue] : llvm::zip(call_results, results)) {
+                        callResult.replaceAllUsesWith(returnValue);
+                    }
+
+                    builder.create< cir::BrOp >(loc, split_block);
                 } else {
-                    // Clone regular operations
                     builder.clone(op, mapper);
                 }
             }
         }
 
-        auto entry_it = block_map.find(&callee_region.front());
-        if (entry_it == block_map.end()) {
-            LOG(ERROR) << "Entry block not found in block map during inlining\n";
+        auto *callee_entry_block = mapper.lookupOrNull(entry_block);
+        if (!callee_entry_block) {
+            LOG(ERROR) << "Entry block not cloned during inlining\n";
             return mlir::failure();
         }
-        mlir::Block *callee_entry_block = entry_it->second;
         builder.setInsertionPointToEnd(caller_block);
 
-        // If entry block has arguments, pass them from the call operands
-        mlir::SmallVector< mlir::Value > entry_args;
-        for (mlir::Value arg : callee.getArguments()) {
-            auto mapped = mapper.lookupOrNull(arg);
-            if (!mapped) {
-                LOG(ERROR) << "Unmapped callee argument during inlining\n";
-                return mlir::failure();
-            }
-            entry_args.push_back(mapped);
-        }
-        builder.create< cir::BrOp >(loc, callee_entry_block, entry_args);
+        // Branch into the cloned entry block. The entry block itself
+        // takes no args here — callee function params are already
+        // registered in `mapper`, so ops cloned into the cloned entry
+        // reference call operands directly via mapper substitution.
+        builder.create< cir::BrOp >(loc, callee_entry_block);
 
         // Remove the original call. The callee itself is left in place —
         // the same patch symbol may be referenced by other call ops still
