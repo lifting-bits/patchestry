@@ -88,6 +88,16 @@
 // INLINE_REJECT_NESTED-SAME: nested inside a structured region
 // INLINE_REJECT_NESTED_OUT: cir.call @patch__replace__spo2_lookup
 
+// Positive: replace + inline on a single-return patch body. Covers
+// PatchOperationImpl:289 (replaceCallWithPatch) + the inline worklist.
+// After inline the patch func is erased and no @spo2_lookup call
+// survives (replace semantics) — what's left is the inlined body's
+// `mul` + `cast` straight-line ops.
+// RUN: %patchir-transform %t1.cir --spec %S/inline_patches_replace_positive.yaml -o %t15.cir
+// RUN: %file-check -vv -check-prefix=INLINE_REPLACE_POS %s --input-file %t15.cir
+// INLINE_REPLACE_POS-NOT: patch__replace__saturate_spo2
+// INLINE_REPLACE_POS-NOT: cir.call @spo2_lookup
+
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:v8",

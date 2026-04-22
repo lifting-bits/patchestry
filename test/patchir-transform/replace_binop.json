@@ -10,6 +10,14 @@
 // RUN: %patchir-transform %t1.cir --spec %S/replace_binop_captured.yaml -o %t3.cir
 // RUN: diff %t2.cir %t3.cir
 //
+// inline-patches on operation-kind replace: PatchOperationImpl:379
+// inserts the emitted patch call into the worklist. Uses a single-return
+// replacement (patch__replace__passthrough_mul) so we don't trip Bug F.
+// After inlining, neither the patch call nor its func survive.
+// RUN: %patchir-transform %t1.cir --spec %S/inline_patches_replace_binop.yaml -o %t4.cir
+// RUN: %file-check -vv -check-prefix=INLINE_REPLACE_BINOP %s --input-file %t4.cir
+// INLINE_REPLACE_BINOP-NOT: patch__replace__passthrough_mul
+//
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

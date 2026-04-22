@@ -476,6 +476,17 @@ main() {
     'patch__replace__spo2_lookup' \
     'patch__replace__spo2_lookup|patchestry_operation' || CASE_FAILURE=1
 
+  # inline-patches multisite: patch__before__spo2_lookup inlined at three
+  # __aeabi_fdiv sites. Post-inline the patch symbol is gone and the
+  # inlined body's isfinite_float call is spliced into measurement_update
+  # three times. Both CIR and LLVM IR should surface isfinite_float.
+  run_matrix_case \
+    "measurement_inline_multisite" \
+    "pulseox_measurement_update" \
+    "${REPO_ROOT}/test/patchir-transform/inline_patches_multisite.yaml" \
+    'isfinite_float' \
+    'isfinite_float' || CASE_FAILURE=1
+
   # The USB pre-instrumentation spec used to dispatch a runtime contract
   # `contract__before__test_contract`; post-PR#199 that's migrated to a
   # second patch_action emitting `patch__before__usb_state_check`.
