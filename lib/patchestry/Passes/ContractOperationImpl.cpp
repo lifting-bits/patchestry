@@ -14,8 +14,6 @@
 
 namespace patchestry::passes {
 
-    extern std::string namifyFunction(const std::string &str);
-
     // Helper to build PredicateAttr from parsed Predicate struct
     static std::optional< ::contracts::PredicateAttr > buildPredicateAttr(
         mlir::MLIRContext *ctx, mlir::Operation *op, const contract::Predicate &pred
@@ -164,8 +162,7 @@ namespace patchestry::passes {
 
     // apply static contract to the target operation
     void ContractOperationImpl::emitStaticContract(
-        InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-        const ContractInformation &contract, ContractMode mode, bool shouldInline
+        mlir::Operation *targetOp, const ContractInformation &contract
     ) {
         // check if the target operation is null
         if (targetOp == nullptr) {
@@ -236,42 +233,35 @@ namespace patchestry::passes {
                          << spec.name << "\n";
             return;
         }
-
-        (void) shouldInline;
-        (void) pass;
-        (void) builder;
-        (void) mode;
     }
 
     void ContractOperationImpl::applyContractBefore(
         InstrumentationPass &pass, mlir::Operation *target_op,
         const ContractInformation &contract, bool should_inline
     ) {
+        (void) pass;
+        (void) should_inline;
         if (target_op == nullptr) {
             LOG(ERROR
             ) << "applyContractBefore: the passed function to be instrumented was null";
             return;
         }
 
-        mlir::OpBuilder builder(target_op);
-        emitStaticContract(
-            pass, builder, target_op, contract, ContractMode::APPLY_BEFORE, should_inline
-        );
+        emitStaticContract(target_op, contract);
     }
 
     void ContractOperationImpl::applyContractAfter(
         InstrumentationPass &pass, mlir::Operation *target_op,
         const ContractInformation &contract, bool should_inline
     ) {
+        (void) pass;
+        (void) should_inline;
         if (target_op == nullptr) {
             LOG(ERROR) << "applyContractAfter: the passed function to be instrumented was null";
             return;
         }
 
-        mlir::OpBuilder builder(target_op);
-        emitStaticContract(
-            pass, builder, target_op, contract, ContractMode::APPLY_AFTER, should_inline
-        );
+        emitStaticContract(target_op, contract);
     }
 
 } // namespace patchestry::passes

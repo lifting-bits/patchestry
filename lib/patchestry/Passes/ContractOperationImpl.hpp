@@ -32,9 +32,11 @@ namespace patchestry::passes {
       public:
         ContractOperationImpl() = default;
 
+        // Static contracts attach a `contract.static` MLIR attribute on the
+        // matched op — no call is emitted and no insertion point is needed,
+        // so the signature is intentionally narrow.
         static void emitStaticContract(
-            InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-            const ContractInformation &contract, ContractMode mode, bool shouldInline
+            mlir::Operation *targetOp, const ContractInformation &contract
         );
 
         static void applyContractBefore(
