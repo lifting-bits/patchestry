@@ -434,7 +434,7 @@ namespace patchestry::passes {
 
             // ERASE mode has no patch function — skip spec lookup.
             std::optional< patch::PatchSpec > patch_spec;
-            if (action.mode != PatchInfoMode::ERASE) {
+            if (action.mode != InstrumentationMode::ERASE) {
                 patch_spec = lookup(config->libraries.patches, action.patch_id);
                 if (!patch_spec) {
                     LOG(ERROR) << "Patch specification for ID '" << action.patch_id
@@ -494,7 +494,7 @@ namespace patchestry::passes {
                         return;
                     }
 
-                    if (action.mode == PatchInfoMode::ERASE) {
+                    if (action.mode == InstrumentationMode::ERASE) {
                         LOG(INFO) << "Erasing call '" << call_op.getCallee()->str()
                                   << "' (patch action '" << patch_action.action_id << "')\n";
                         to_erase.push_back(call_op.getOperation());
@@ -519,28 +519,28 @@ namespace patchestry::passes {
                         << patchestry::passes::patch::infoModeToString(action.mode)
                         << "' \n";
                     switch (action.mode) {
-                        case PatchInfoMode::APPLY_BEFORE:
+                        case InstrumentationMode::APPLY_BEFORE:
                             PatchOperationImpl::applyBeforePatch(
                                 *this, call_op, patch_site, patch_module.get(),
                                 options.enable_inlining
                                     || meta_patch.optimization.contains("inline-patches")
                             );
                             break;
-                        case PatchInfoMode::APPLY_AFTER:
+                        case InstrumentationMode::APPLY_AFTER:
                             PatchOperationImpl::applyAfterPatch(
                                 *this, call_op, patch_site, patch_module.get(),
                                 options.enable_inlining
                                     || meta_patch.optimization.contains("inline-patches")
                             );
                             break;
-                        case PatchInfoMode::APPLY_AT_ENTRYPOINT:
+                        case InstrumentationMode::APPLY_AT_ENTRYPOINT:
                             PatchOperationImpl::applyPatchAtEntrypoint(
                                 *this, call_op, patch_site, patch_module.get(),
                                 options.enable_inlining
                                     || meta_patch.optimization.contains("inline-patches")
                             );
                             break;
-                        case PatchInfoMode::REPLACE:
+                        case InstrumentationMode::REPLACE:
                             PatchOperationImpl::replaceCallWithPatch(
                                 *this, call_op, patch_site, patch_module.get(),
                                 options.enable_inlining
@@ -575,7 +575,7 @@ namespace patchestry::passes {
                     continue;
                 }
 
-                if (action.mode == PatchInfoMode::ERASE) {
+                if (action.mode == InstrumentationMode::ERASE) {
                     LOG(INFO) << "Erasing operation '"
                               << op->getName().getStringRef().str()
                               << "' (patch action '" << patch_action.action_id << "')\n";
@@ -596,21 +596,21 @@ namespace patchestry::passes {
                 patch_site.captures        = std::move(match_captures);
 
                 switch (action.mode) {
-                    case PatchInfoMode::APPLY_BEFORE:
+                    case InstrumentationMode::APPLY_BEFORE:
                         PatchOperationImpl::applyBeforePatch(
                             *this, op, patch_site, patch_module.get(),
                             options.enable_inlining
                                 || meta_patch.optimization.contains("inline-patches")
                         );
                         break;
-                    case PatchInfoMode::APPLY_AFTER:
+                    case InstrumentationMode::APPLY_AFTER:
                         PatchOperationImpl::applyAfterPatch(
                             *this, op, patch_site, patch_module.get(),
                             options.enable_inlining
                                 || meta_patch.optimization.contains("inline-patches")
                         );
                         break;
-                    case PatchInfoMode::REPLACE:
+                    case InstrumentationMode::REPLACE:
                         if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
                             PatchOperationImpl::replaceCallWithPatch(
                                 *this, call_op, patch_site, patch_module.get(),

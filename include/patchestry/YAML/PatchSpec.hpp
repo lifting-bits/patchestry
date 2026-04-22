@@ -58,7 +58,7 @@ namespace patchestry::passes {
 
         struct Action
         {
-            PatchInfoMode mode = PatchInfoMode::NONE;
+            InstrumentationMode mode = InstrumentationMode::NONE;
             std::string patch_id;
             std::string description;
             std::vector< ArgumentSource > arguments;
@@ -92,19 +92,19 @@ namespace patchestry::passes {
             std::vector< PatchAction > patch_actions;
         };
 
-        [[maybe_unused]] inline std::string_view infoModeToString(PatchInfoMode mode) {
+        [[maybe_unused]] inline std::string_view infoModeToString(InstrumentationMode mode) {
             switch (mode) {
-                case PatchInfoMode::NONE:
+                case InstrumentationMode::NONE:
                     return "NONE";
-                case PatchInfoMode::APPLY_BEFORE:
+                case InstrumentationMode::APPLY_BEFORE:
                     return "APPLY_BEFORE";
-                case PatchInfoMode::APPLY_AFTER:
+                case InstrumentationMode::APPLY_AFTER:
                     return "APPLY_AFTER";
-                case PatchInfoMode::APPLY_AT_ENTRYPOINT:
+                case InstrumentationMode::APPLY_AT_ENTRYPOINT:
                     return "APPLY_AT_ENTRYPOINT";
-                case PatchInfoMode::REPLACE:
+                case InstrumentationMode::REPLACE:
                     return "REPLACE";
-                case PatchInfoMode::ERASE:
+                case InstrumentationMode::ERASE:
                     return "ERASE";
             }
             return "UNKNOWN";
@@ -126,7 +126,7 @@ namespace patchestry::passes {
             std::vector< SymbolMatch > symbol_matches;
             std::vector< CaptureSpec > captures;
             // action (inlined)
-            PatchInfoMode mode = PatchInfoMode::NONE;
+            InstrumentationMode mode = InstrumentationMode::NONE;
             std::string patch_id;
             std::vector< ArgumentSource > arguments;
             // optimization
@@ -216,23 +216,23 @@ namespace llvm::yaml {
             std::string mode_str;
             io.mapRequired("mode", mode_str);
             if (mode_str == "ApplyBefore" || mode_str == "apply_before") {
-                action.mode = PatchInfoMode::APPLY_BEFORE;
+                action.mode = InstrumentationMode::APPLY_BEFORE;
             } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
-                action.mode = PatchInfoMode::APPLY_AFTER;
+                action.mode = InstrumentationMode::APPLY_AFTER;
             } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
-                action.mode = PatchInfoMode::APPLY_AT_ENTRYPOINT;
+                action.mode = InstrumentationMode::APPLY_AT_ENTRYPOINT;
             } else if (mode_str == "Replace" || mode_str == "replace") {
-                action.mode = PatchInfoMode::REPLACE;
+                action.mode = InstrumentationMode::REPLACE;
             } else if (mode_str == "Erase" || mode_str == "erase") {
-                action.mode = PatchInfoMode::ERASE;
+                action.mode = InstrumentationMode::ERASE;
             } else {
                 LOG(ERROR) << "Unknown patch mode: '" << mode_str
                            << "'. Valid modes: ApplyBefore, ApplyAfter, "
                               "ApplyAtEntrypoint, Replace, Erase";
-                action.mode = PatchInfoMode::NONE;
+                action.mode = InstrumentationMode::NONE;
             }
 
-            if (action.mode != PatchInfoMode::ERASE && action.patch_id.empty()) {
+            if (action.mode != InstrumentationMode::ERASE && action.patch_id.empty()) {
                 io.setError("'patch_id' is required for mode '" + mode_str + "'");
             }
         }
@@ -451,24 +451,24 @@ namespace llvm::yaml {
             std::string mode_str;
             io.mapRequired("mode", mode_str);
             if (mode_str == "ApplyBefore" || mode_str == "apply_before") {
-                entry.mode = PatchInfoMode::APPLY_BEFORE;
+                entry.mode = InstrumentationMode::APPLY_BEFORE;
             } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
-                entry.mode = PatchInfoMode::APPLY_AFTER;
+                entry.mode = InstrumentationMode::APPLY_AFTER;
             } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
-                entry.mode = PatchInfoMode::APPLY_AT_ENTRYPOINT;
+                entry.mode = InstrumentationMode::APPLY_AT_ENTRYPOINT;
             } else if (mode_str == "Replace" || mode_str == "replace") {
-                entry.mode = PatchInfoMode::REPLACE;
+                entry.mode = InstrumentationMode::REPLACE;
             } else if (mode_str == "Erase" || mode_str == "erase") {
-                entry.mode = PatchInfoMode::ERASE;
+                entry.mode = InstrumentationMode::ERASE;
             } else {
                 io.setError("Unknown patch mode: '" + mode_str + "'");
-                entry.mode = PatchInfoMode::NONE;
+                entry.mode = InstrumentationMode::NONE;
             }
 
             io.mapOptional("patch", entry.patch_id);
             io.mapOptional("arguments", entry.arguments);
 
-            if (entry.mode != PatchInfoMode::ERASE && entry.patch_id.empty()) {
+            if (entry.mode != InstrumentationMode::ERASE && entry.patch_id.empty()) {
                 io.setError("'patch' field is required for mode '" + mode_str + "'");
             }
 

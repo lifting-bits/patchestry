@@ -18,7 +18,7 @@
  */
 namespace patchestry::passes {
 
-    enum class PatchInfoMode : uint8_t {
+    enum class InstrumentationMode : uint8_t {
         NONE = 0, // No patch
         APPLY_BEFORE,
         APPLY_AFTER,
@@ -41,12 +41,12 @@ namespace patchestry::passes {
     // binary form) — reordering or inserting silently breaks round-trips.
     // Adding new enumerators is fine as long as they go at the end; these
     // asserts fail if anyone reorders the existing ones.
-    static_assert(static_cast< uint8_t >(PatchInfoMode::NONE) == 0);
-    static_assert(static_cast< uint8_t >(PatchInfoMode::APPLY_BEFORE) == 1);
-    static_assert(static_cast< uint8_t >(PatchInfoMode::APPLY_AFTER) == 2);
-    static_assert(static_cast< uint8_t >(PatchInfoMode::APPLY_AT_ENTRYPOINT) == 3);
-    static_assert(static_cast< uint8_t >(PatchInfoMode::REPLACE) == 4);
-    static_assert(static_cast< uint8_t >(PatchInfoMode::ERASE) == 5);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::NONE) == 0);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::APPLY_BEFORE) == 1);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::APPLY_AFTER) == 2);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::APPLY_AT_ENTRYPOINT) == 3);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::REPLACE) == 4);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::ERASE) == 5);
 
     static_assert(static_cast< uint8_t >(ArgumentSourceType::OPERAND) == 0);
     static_assert(static_cast< uint8_t >(ArgumentSourceType::VARIABLE) == 1);
