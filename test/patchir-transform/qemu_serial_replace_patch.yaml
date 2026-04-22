@@ -1,0 +1,35 @@
+# Test patching specification for the QEMU serial firmware fixture
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "qemu-serial-replace-patch"
+  description: "Replace qemu_target_replace inside the QEMU serial firmware fixture"
+  version: "1.0.0"
+  author: "Codex"
+  created: "2026-04-22"
+
+target:
+  binary: "qemu-serial.elf"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/qemu_serial_patch_library.yaml"
+
+meta_patches:
+  - name: "qemu_serial_replace_meta_patch"
+    description: "Runtime replace patch for qemu_target_replace"
+
+    patch_actions:
+      - id: "QEMU-SERIAL-REPLACE-001"
+        description: "Replace qemu_target_replace"
+
+        match:
+          - name: "emit_base_prefix"
+            kind: "function"
+            function_context:
+              - name: "qemu_target_replace"
+
+        action:
+          - mode: "replace"
+            patch_id: "qemu_serial_replace_patch"
+            description: "Replace qemu_target_replace with a visible patched body"
