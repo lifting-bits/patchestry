@@ -84,16 +84,16 @@ jobs:
           df -h
 
       - name: Configure build - sanitizers ${{ matrix.sanitizers }}
-        run: cmake --preset ci -DPE_USE_VENDORED_Z3=OFF -DLLVM_EXTERNAL_LIT=$(which lit) -DLLVM_Z3_INSTALL_DIR=/usr/local
+        run: cmake --preset ci -DPE_USE_VENDORED_Z3=OFF -DLLVM_EXTERNAL_LIT="$(which lit)" -DLLVM_Z3_INSTALL_DIR=/usr/local
 
       - name: Build ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
-        run: cmake --build --preset ci --config ${{ matrix.build-type }} -j$(nproc)
+        run: cmake --build --preset ci --config ${{ matrix.build-type }} -j"$(nproc)"
 
       - name: Build the intrinsic library
         run: |
           cd lib/patchestry/intrinsics
           cmake -B build_standalone -DCMAKE_BUILD_TYPE=Release
-          cmake --build build_standalone -j$(nproc)
+          cmake --build build_standalone -j"$(nproc)"
           cd -
 
       - name: Build the headless decompilation docker image
@@ -103,3 +103,83 @@ jobs:
       - name: Test ${{ matrix.build-type }} with sanitizers set ${{ matrix.sanitizers }}
         run: |
           lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=${{ github.workspace }}/builds/ci/test/ghidra/Output
+
+  qemu-runtime-validation:
+    strategy:
+      matrix:
+        llvm-version: [20]
+        image-version: [22.04]
+    runs-on: ubuntu-${{ matrix.image-version }}
+    timeout-minutes: 45
+    container:
+      image:
+        ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
+    services:
+      docker:
+        image: docker:20.10-dind
+        options: --privileged
+        ports:
+          - 12375:2375
+    env:
+      CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
+      LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
+      CI: true
+    steps:
+      - name: Clone the Patchestry repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: Free up disk space
+        run: |
+          docker volume prune -f || true
+          docker system prune -af --volumes || true
+          apt-get clean || true
+          rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+          rm -rf /gha-runner/usr/local/lib/android || true
+          rm -rf /gha-runner/usr/local/share/boost || true
+          df -h
+
+      - name: Install QEMU and Python runtime prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            python3 \
+            python3-pip \
+            qemu-system-arm
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Configure build
+        run: cmake --preset ci -DPE_USE_VENDORED_Z3=OFF -DLLVM_EXTERNAL_LIT="$(which lit)" -DLLVM_Z3_INSTALL_DIR=/usr/local
+
+      - name: Build Debug
+        run: cmake --build --preset ci --config Debug -j"$(nproc)"
+
+      - name: Build the headless decompilation docker image
+        run: |
+          bash ./scripts/ghidra/build-headless-docker.sh
+
+      - name: Run QEMU firmware runtime validation
+        run: |
+          export PATH="${HOME}/.local/bin:${PATH}"
+          export PATCHESTRY_LLVM_PREFIX="/usr/local/bin"
+          export PATCHESTRY_LD_LLD="/usr/bin/ld.lld"
+          python_bin="$(command -v python3)"
+          qemu_system_arm_bin="$(command -v qemu-system-arm)"
+          export PATCHESTRY_PYTHON="${python_bin}"
+          export QEMU_SYSTEM_ARM="${qemu_system_arm_bin}"
+          scripts/test-qemu-firmware-runtime.sh \
+            --build-type Debug \
+            --output-dir "${{ github.workspace }}/builds/ci/qemu-firmware-runtime"
+
+      - name: Upload QEMU runtime artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-firmware-runtime
+          path: ./builds/ci/qemu-firmware-runtime
+          if-no-files-found: warn
