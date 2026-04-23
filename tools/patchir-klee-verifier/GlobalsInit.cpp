@@ -336,11 +336,23 @@ namespace patchestry::klee_verifier {
                                         // Byte-level pointer arithmetic. Use
                                         // the constant offset (if any) as a
                                         // lower bound on the needed buffer.
+                                        // Negative constants are common in
+                                        // decompiled P-Code (frame-pointer
+                                        // locals, container_of, heap header
+                                        // access) and describe memory *before*
+                                        // the pointer — they are not a size
+                                        // hint, and interpreting them as
+                                        // unsigned would yield a ~2^64 malloc.
+                                        // Fall back to the default lower=1
+                                        // (symbolic_ptr_size) in that case.
                                         uint64_t lower = 1;
                                         if (inner_gep->getNumIndices() == 1) {
                                             if (auto *CI = llvm::dyn_cast< llvm::ConstantInt >(
                                                     inner_gep->getOperand(1))) {
-                                                lower = CI->getZExtValue() + 1;
+                                                int64_t signed_idx = CI->getSExtValue();
+                                                if (signed_idx >= 0) {
+                                                    lower = static_cast< uint64_t >(signed_idx) + 1;
+                                                }
                                             }
                                         }
                                         cand.kind         = PointerFieldInference::ScalarBytes;
@@ -509,8 +521,10 @@ namespace patchestry::klee_verifier {
 
         // Sanitize an LLVM type name so it can be embedded in a function
         // symbol. Non-identifier characters are replaced with '_'. Anonymous
-        // and literal struct types get a "anon_<N>" suffix based on a running
-        // counter so the generated symbols stay unique per type instance.
+        // literal structs and other unnamed types are keyed by Type* identity
+        // in a module-scoped map so repeated calls with the same type return
+        // the same suffix — bodies built per type rely on this determinism
+        // for child-name and global-string stability across calls.
         std::string mangleTypeName(llvm::Type *T) {
             std::string result;
             llvm::raw_string_ostream os(result);
@@ -524,8 +538,9 @@ namespace patchestry::klee_verifier {
                     }
                     return os.str();
                 }
-                static unsigned anon_counter = 0;
-                os << "anon_" << anon_counter++;
+                static llvm::DenseMap< llvm::Type *, unsigned > anon_ids;
+                auto [it, inserted] = anon_ids.try_emplace(T, anon_ids.size());
+                os << "anon_" << it->second;
                 return os.str();
             }
             if (auto *AT = llvm::dyn_cast< llvm::ArrayType >(T)) {
@@ -540,8 +555,9 @@ namespace patchestry::klee_verifier {
             if (T->isFloatTy())   return "f32";
             if (T->isDoubleTy())  return "f64";
             if (T->isPointerTy()) return "ptr";
-            static unsigned unknown_counter = 0;
-            os << "ty" << unknown_counter++;
+            static llvm::DenseMap< llvm::Type *, unsigned > unknown_ids;
+            auto [it, inserted] = unknown_ids.try_emplace(T, unknown_ids.size());
+            os << "ty" << it->second;
             return os.str();
         }
 
@@ -750,9 +766,23 @@ namespace patchestry::klee_verifier {
                     return;
                 }
 
-                // Large array fallback — flat symbolic bytes. Any pointer
-                // fields inside the element type become unconstrained bytes
-                // for elements in this array; documented limitation.
+                // Large array fallback — flat symbolic bytes. We only
+                // reach this branch after the fast-path check confirmed
+                // the element type transitively contains a pointer, so
+                // the fallback silently leaves those pointer fields as
+                // unconstrained symbolic bytes (no typed allocation for
+                // the pointee, no null-deref error under KLEE). Surface
+                // the situation so users can raise
+                // --klee-init-array-expand-limit or split the global if
+                // the unsoundness matters for their contract.
+                LOG(WARNING)
+                    << "array '" << name.str() << "' has " << N
+                    << " elements of pointer-bearing type (limit "
+                    << klee_init_array_expand_limit
+                    << "); flat-symbolic fallback leaves pointer fields as "
+                       "unconstrained bytes — consider raising "
+                       "--klee-init-array-expand-limit or splitting the "
+                       "global\n";
                 if (verbose) {
                     llvm::outs() << "  Large array fallback: " << name.str()
                                  << " (" << N << " elems of aggregate type)\n";
@@ -807,6 +837,46 @@ namespace patchestry::klee_verifier {
             return false;
         }
 
+        // Return true iff `c` is a pointer-typed constant that the loader
+        // will rebind to a valid host address at module load time —
+        // Function, GlobalVariable, GlobalAlias, GlobalIFunc, BlockAddress,
+        // or a ConstantExpr wrapping one of those with bitcast /
+        // addrspacecast / getelementptr. Preserving such initializers
+        // verbatim is safe.
+        //
+        // Absolute pointer constants (`inttoptr <N>` with non-null N —
+        // MMIO registers, firmware physical addresses, embedded-target
+        // peripheral bases) are NOT relocatable. After the mandatory
+        // 32->64 retarget the integer is zero-extended and stored as the
+        // global's initial value, but it no longer names a valid page in
+        // the KLEE execution process: the target dereferences 0x1000
+        // (or similar) and KLEE reports an immediate memory error on
+        // every path. The call site must route such fields through the
+        // symbolization path instead.
+        bool isRelocatablePointerConstant(llvm::Constant *c) {
+            if (!c)
+                return false;
+            if (llvm::isa< llvm::ConstantPointerNull >(c))
+                return true;
+            if (llvm::isa< llvm::GlobalValue >(c))
+                return true;
+            if (llvm::isa< llvm::BlockAddress >(c))
+                return true;
+            if (auto *CE = llvm::dyn_cast< llvm::ConstantExpr >(c)) {
+                switch (CE->getOpcode()) {
+                case llvm::Instruction::BitCast:
+                case llvm::Instruction::AddrSpaceCast:
+                case llvm::Instruction::GetElementPtr:
+                    return isRelocatablePointerConstant(CE->getOperand(0));
+                default:
+                    // inttoptr, arithmetic, etc. — absolute or derived
+                    // from absolute addresses.
+                    return false;
+                }
+            }
+            return false;
+        }
+
         // Walk a global's type and initializer in lockstep, emitting
         // symbolization only for sub-regions that are trivially initialized
         // (null / undef / zero). Concrete non-trivial pointer values
@@ -845,11 +915,26 @@ namespace patchestry::klee_verifier {
                     std::string child_name = (name + ".f" + llvm::Twine(i)).str();
 
                     if (field_ty->isPointerTy()) {
-                        // Concrete pointer (Function, GlobalVariable,
-                        // ConstantExpr) → preserve the initializer's value;
-                        // do nothing. Null/undef pointer → symbolize through
-                        // the existing path.
-                        if (isTrivialInit(field_init)) {
+                        // Preserve the initializer's value only when it is
+                        // a relocatable pointer constant (Function, GV,
+                        // alias, or a ConstantExpr over one). Trivial
+                        // inits (null/undef) and absolute `inttoptr`
+                        // constants — raw MMIO / firmware addresses that
+                        // survive decompilation — must both be symbolized:
+                        // the former carry no meaningful value, the latter
+                        // are not host-valid after retargeting and cause
+                        // immediate memory errors at first deref.
+                        bool trivial   = isTrivialInit(field_init);
+                        bool preserve  = !trivial
+                            && isRelocatablePointerConstant(field_init);
+                        if (!preserve) {
+                            if (verbose && !trivial) {
+                                llvm::outs()
+                                    << "[globals] absolute pointer constant in "
+                                    << child_name
+                                    << "; symbolizing (not a host-valid "
+                                       "address after retargeting)\n";
+                            }
                             llvm::Value *depth_zero =
                                 llvm::ConstantInt::get(llvm::Type::getInt32Ty(Ctx), 0);
                             emitPointerField(
@@ -876,7 +961,18 @@ namespace patchestry::klee_verifier {
                 // klee_init_array_expand_limit here — that limit guards the
                 // trivial-init fast path (flat symbolic over N elements);
                 // for a non-trivial init there is no safe flat path, so
-                // correctness wins over IR bound.
+                // correctness wins over IR bound. Users with pathologically
+                // large mixed-init globals will see O(N) extra IR;
+                // --v surfaces this so the inflation is attributable.
+                if (verbose && N > klee_init_array_expand_limit) {
+                    llvm::outs()
+                        << "[globals] non-trivial init on large array '"
+                        << name.str() << "' (" << N
+                        << " elements > limit "
+                        << klee_init_array_expand_limit
+                        << "); per-element walk preserves concrete values "
+                           "but inflates IR size\n";
+                }
                 for (uint64_t j = 0; j < N; ++j) {
                     llvm::Value *idxs[] = {
                         llvm::ConstantInt::get(llvm::Type::getInt64Ty(Ctx), 0),
@@ -894,10 +990,30 @@ namespace patchestry::klee_verifier {
                 return;
             }
 
-            // Top-level scalar (integer/float/pointer/vector) with a
-            // non-trivial constant initializer — preserve as-is. The
-            // declared value lives in the global's storage already; no
-            // store/symbolize needed.
+            // Top-level pointer global with a non-trivial initializer —
+            // preserve only relocatable pointer constants. Absolute
+            // `inttoptr` constants (MMIO/firmware magic addresses) must
+            // go through the symbolization path; otherwise the global's
+            // storage keeps the invalid bit pattern and the target hits
+            // a memory error on first deref under KLEE.
+            if (T->isPointerTy() && !isRelocatablePointerConstant(init)) {
+                if (verbose) {
+                    llvm::outs()
+                        << "[globals] absolute pointer constant in "
+                        << name.str()
+                        << "; symbolizing (not a host-valid address after "
+                           "retargeting)\n";
+                }
+                llvm::Value *zero =
+                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(Ctx), 0);
+                buildTypeInitBody(B, addr, zero, T, im, cache, name, M);
+                return;
+            }
+
+            // Top-level scalar (integer/float/relocatable-pointer/vector)
+            // with a non-trivial constant initializer — preserve as-is.
+            // The declared value lives in the global's storage already;
+            // no store/symbolize needed.
         }
 
         // Entry point for the per-type init machinery. Creates (or returns a

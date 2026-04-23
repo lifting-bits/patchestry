@@ -288,6 +288,21 @@ namespace patchestry::klee_verifier {
                 LOG(WARNING) << "unknown predicate kind '" << kind_str << "'\n";
             }
 
+            // Every predicate kind we support needs a target to have any
+            // effect at codegen (emitKleePredicate returns without emitting
+            // when target is empty). A missing `target=` key or one that
+            // `parseTarget` rejected leaves pred.target empty; without this
+            // gate those predicates would parse "successfully" here, be
+            // silently dropped at codegen, and evade the strict_contracts
+            // accounting — exactly the failure mode the flag was designed to
+            // surface. Demote to PK_Unknown so parseContractSection counts
+            // them as dropped.
+            if (pred.kind != PK_Unknown && pred.target.empty()) {
+                LOG(WARNING) << "predicate of kind '" << kind_str
+                             << "' has no target — dropping\n";
+                pred.kind = PK_Unknown;
+            }
+
             return pred;
         }
 

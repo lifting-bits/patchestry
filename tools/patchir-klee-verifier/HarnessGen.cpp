@@ -75,12 +75,10 @@ namespace patchestry::klee_verifier {
         // metadata names the target, regardless of whether it's a call site
         // or an instruction inside the target function's body.
         std::vector< std::string >
-        collectStaticContracts(llvm::Module &M, llvm::Function *target_fn) {
+        collectStaticContracts(llvm::Module &M, llvm::StringRef target_name) {
             std::vector< std::string > contracts;
-            if (!target_fn)
+            if (target_name.empty())
                 return contracts;
-
-            llvm::StringRef target_name = target_fn->getName();
 
             for (auto &F : M) {
                 for (auto &BB : F) {
@@ -506,6 +504,13 @@ namespace patchestry::klee_verifier {
         auto *ptrTy = llvm::PointerType::getUnqual(Ctx);
         auto *sizeTy = DL.getIntPtrType(Ctx);
 
+        // Contract metadata's operand(0) stores the target function's name at
+        // attachment time. When the target *is* main, the rename below changes
+        // `target_fn->getName()` to `__klee_orig_main`, and a later name-based
+        // lookup misses every contract. Snapshot the name as an owned string
+        // before any rewrite so the collection uses the pre-rename identity.
+        std::string contract_target_name = target_fn->getName().str();
+
         // Remove existing main if present — but not if it's the target function.
         //
         // A decompiled firmware module often contains a `main` that is still
@@ -571,7 +576,7 @@ namespace patchestry::klee_verifier {
         auto make_sym = getKleeMakeSymbolic(M);
 
         // 1. Collect static contract predicates
-        auto contracts = collectStaticContracts(M, target_fn);
+        auto contracts = collectStaticContracts(M, contract_target_name);
         std::vector< ParsedPredicate > all_preds;
         unsigned dropped_preds = 0;
         for (auto &c : contracts) {
@@ -661,6 +666,17 @@ namespace patchestry::klee_verifier {
                 llvm::Value *arg_ptr = B.CreateBitCast(Buf, param_ty);
                 args.push_back(arg_ptr);
                 arg_values[i] = arg_ptr;
+            } else if (param_size == 0) {
+                // Zero-sized non-pointer type (e.g. empty aggregate passed
+                // by value under some ABIs). klee_make_symbolic(ptr, 0,
+                // name) is a no-op and the subsequent load would read
+                // undef anyway; synthesize undef directly and skip the
+                // wasted call. Any contract predicate targeting this
+                // parameter is meaningless — there are no bits to
+                // constrain.
+                llvm::Value *Val = llvm::UndefValue::get(param_ty);
+                args.push_back(Val);
+                arg_values[i] = Val;
             } else {
                 // For non-pointer args: alloca, make symbolic, load
                 auto *Alloca = B.CreateAlloca(param_ty);
@@ -921,6 +937,52 @@ namespace patchestry::klee_verifier {
             }
         }
 
+        // After retargeting, pre-existing allocator declarations from the
+        // source datalayout (e.g. `declare ptr @malloc(i32)` from an ARM32
+        // decompile) still carry the old size-argument width. In opaque-
+        // pointer LLVM this is a legal (if inconsistent) state — call
+        // sites carry their own FunctionType — but KLEE's native allocator
+        // intercept uses host size_t, and any pre-existing call that
+        // passed an i32 size will be re-interpreted against the i64 ABI
+        // at execution time. Warn the user; the robust fix is to rebuild
+        // the IR at the host pointer width or supply a model library.
+        void scanAllocatorSignatureDrift(const llvm::Module &M) {
+            auto &Ctx       = M.getContext();
+            auto *sizeTy    = M.getDataLayout().getIntPtrType(Ctx);
+            auto *ptrTy     = llvm::PointerType::getUnqual(Ctx);
+            auto *voidTy    = llvm::Type::getVoidTy(Ctx);
+            unsigned size_bits = sizeTy->getIntegerBitWidth();
+
+            struct AllocatorSig {
+                llvm::StringRef name;
+                llvm::FunctionType *expected;
+            };
+
+            AllocatorSig sigs[] = {
+                { "malloc",  llvm::FunctionType::get(ptrTy,  { sizeTy }, false) },
+                { "calloc",  llvm::FunctionType::get(ptrTy,  { sizeTy, sizeTy }, false) },
+                { "realloc", llvm::FunctionType::get(ptrTy,  { ptrTy, sizeTy }, false) },
+                { "free",    llvm::FunctionType::get(voidTy, { ptrTy }, false) },
+            };
+
+            for (auto &sig : sigs) {
+                auto *fn = M.getFunction(sig.name);
+                if (!fn)
+                    continue;
+                if (fn->getFunctionType() == sig.expected)
+                    continue;
+                LOG(WARNING)
+                    << "allocator '" << sig.name.str()
+                    << "' declaration does not match the post-retarget "
+                       "host ABI (expected size_t = i" << size_bits
+                    << "); KLEE's native intercept uses host size_t, so "
+                       "pre-existing call sites that pass a narrower size "
+                       "argument will be misinterpreted. Rebuild the IR "
+                       "at the host pointer width or link a model library "
+                       "via --model-library.\n";
+            }
+        }
+
     } // namespace
 
     // Retarget `module` to x86_64 in-place for KLEE compatibility.
@@ -1014,6 +1076,11 @@ namespace patchestry::klee_verifier {
         // false positives here, which is acceptable noise — the patterns
         // we flag are ARM-specific names.
         scanARM32ABIArtifacts(M);
+
+        // Surface allocator declarations whose size-argument width is stale
+        // after retargeting — KLEE's native intercept uses host size_t and
+        // pre-existing call sites with the old width will be misinterpreted.
+        scanAllocatorSignatureDrift(M);
     }
 
 } // namespace patchestry::klee_verifier
