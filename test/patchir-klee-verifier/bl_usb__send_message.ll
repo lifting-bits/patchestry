@@ -49,9 +49,16 @@ entry:
 ; --- FileCheck: target function preserved ---
 ; HARNESS:       define i32 @bl_usb__send_message(ptr %msg)
 
+; --- FileCheck: klee_abort declaration is emitted early during abort
+; redirection (rewriteAbortCalls runs before harness codegen) ---
+; HARNESS:       declare void @klee_abort()
+
 ; --- FileCheck: harness main() ---
+; Globals are now initialized via an internally-linked dispatcher function
+; (@__klee_init_globals) that main() calls once before argument symbolization
+; and target invocation. See buildTypeInitBody in patchir-klee-verifier.
 ; HARNESS:       define i32 @main()
-; HARNESS:       call void @klee_make_symbolic(ptr @usb_g,
+; HARNESS:       call void @__klee_init_globals()
 ; HARNESS:       alloca [256 x i8]
 ; HARNESS:       call void @klee_make_symbolic(
 ; HARNESS:       icmp ne ptr
@@ -66,6 +73,17 @@ entry:
 ; HARNESS:       assert.cont:
 ; HARNESS:       ret i32 0
 
-; --- FileCheck: declarations (after main) ---
+; --- FileCheck: per-global wrapper for @usb_g. The zero initializer
+; routes to the trivial-init fast path; since the value type is i32
+; (pointer-free), the walker emits a single flat klee_make_symbolic
+; inline. No per-type init is created for scalar globals. ---
+; HARNESS:       define internal void @__klee_init_g_usb_g()
+; HARNESS:       call void @klee_make_symbolic(ptr @usb_g, i64 4,
+
+; --- FileCheck: the dispatcher is a counted loop over the descriptor table ---
+; HARNESS:       define internal void @__klee_init_globals()
+; HARNESS:       phi i64
+
+; --- FileCheck: klee_assume declaration is emitted at the end during
+; harness codegen ---
 ; HARNESS:       declare void @klee_assume(
-; HARNESS:       declare void @klee_abort()

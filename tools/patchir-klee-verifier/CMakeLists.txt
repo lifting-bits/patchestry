@@ -5,6 +5,10 @@
 
 add_executable(patchir-klee-verifier
     main.cpp
+    PredicateParser.cpp
+    Runtime.cpp
+    GlobalsInit.cpp
+    HarnessGen.cpp
 )
 
 target_link_libraries(patchir-klee-verifier

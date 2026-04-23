@@ -52,11 +52,18 @@ entry:
 ; CHECK:         call void @klee_make_symbolic(
 
 ; --- FileCheck: harness main() ---
+; Globals are initialized via the @__klee_init_globals dispatcher rather
+; than inline in main(). See buildTypeInitBody in patchir-klee-verifier.
 ; CHECK:       define i32 @main()
-; CHECK:       call void @klee_make_symbolic(ptr @usb_g,
+; CHECK:       call void @__klee_init_globals()
 ; CHECK:       call i32 @bl_usb__send_message(
 ; CHECK:       br i1 %{{[0-9]+}}, label %assert.cont, label %assert.fail
 ; CHECK:       call void @klee_abort()
 ; CHECK:       unreachable
 ; CHECK:       assert.cont:
 ; CHECK:       ret i32 0
+
+; --- Per-global wrapper for @usb_g: zero-init scalar → inline flat
+; klee_make_symbolic, no per-type init. ---
+; CHECK:       define internal void @__klee_init_g_usb_g()
+; CHECK:       call void @klee_make_symbolic(ptr @usb_g, i64 4,
