@@ -29,6 +29,7 @@ mlir_check_link_libraries(patchir-decomp)
 
 if(PATCHESTRY_INSTALL)
   install(TARGETS patchir-decomp
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT patchestry-tools
   )
 endif()

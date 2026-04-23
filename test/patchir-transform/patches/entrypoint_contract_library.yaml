@@ -1,0 +1,31 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "entrypoint-contract-library"
+  version: "1.0.0"
+  description: "Contracts inserted at function entrypoints"
+  author: "Security Team"
+  created: "2025-07-28"
+
+contracts:
+  - name: "message_entry_check_contract"
+    description: "Validates message pointer is non-null at function entrypoint"
+    category: "safety"
+    type: "RUNTIME"
+    code_file: "contracts/entrypoint_contract.c"
+    function_name: "contract::entrypoint::message_entry_check"
+    parameters:
+      - name: "msg"
+        type: "void*"
+        description: "Message pointer passed to bl_usb__send_message"
+
+  - name: "message_entry_check_contract_static"
+    description: "Static precondition: message pointer must be non-null at entry"
+    category: "safety"
+    type: "STATIC"
+
+    preconditions:
+      - id: "msg_nonnull"
+        pred:
+          kind: "nonnull"
+          target: "arg0"

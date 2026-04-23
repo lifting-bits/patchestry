@@ -1,0 +1,66 @@
+// Validate all YAML patch specification files using patchir-yaml-parser.
+// This test suite covers: deployment specs, library specs (via referencing specs),
+// all patch modes (apply_before, apply_after, replace, apply_at_entrypoint),
+// all predicate kinds (nonnull, relation, alignment, expr, range),
+// operation-based matching, and negative/error cases.
+//
+// --- Positive tests: each spec must parse with exit 0 ---
+//
+// BEFORE/AFTER patches — function-based matching, usb_security_patches.yaml library
+// RUN: %patchir-yaml-parser %S/bl_usb__send_message_before_patch.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+// RUN: %patchir-yaml-parser %S/bl_usb__send_message_after_patch.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+// RUN: %patchir-yaml-parser %S/bl_usb__send_message_before_update_patch.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+//
+// REPLACE patch — function-based, bloodview_device_entry_patches.yaml library
+// RUN: %patchir-yaml-parser %S/device_process_entry.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+//
+// APPLY_AT_ENTRYPOINT contract mode — runtime + static, entrypoint_contract_library.yaml
+// RUN: %patchir-yaml-parser %S/entrypoint_contract.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+//
+// ALL predicate kinds (nonnull, relation, alignment, expr, range) — all_predicates_library.yaml
+// RUN: %patchir-yaml-parser %S/all_predicates.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+//
+// Measurement update — BEFORE, AFTER, REPLACE, OPERATION modes — measurement_update_patch.yaml
+// RUN: %patchir-yaml-parser %S/measurement_update_before_patch.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+// RUN: %patchir-yaml-parser %S/measurement_update_after_patch.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+// RUN: %patchir-yaml-parser %S/measurement_update_replace_patch.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+// RUN: %patchir-yaml-parser %S/measurement_update_before_operation.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+//
+// Operation-based matching — BEFORE CMP operation — led_loop_before_cmp_operation.yaml
+// RUN: %patchir-yaml-parser %S/bl_led_loop_before_cmp_operation.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+//
+// Operation-based matching — REPLACE and APPLY_AFTER
+// RUN: %patchir-yaml-parser %S/operation_replace.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+// RUN: %patchir-yaml-parser %S/operation_apply_after.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+//
+// No-match spec — syntactically valid spec that matches nothing at runtime
+// RUN: %patchir-yaml-parser %S/no_match.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+//
+// OK: Successfully parsed
+//
+// --- Negative tests: specs that must fail the parser ---
+//
+// test_patch.yaml has a missing required 'name' field in a match block — must fail
+// RUN: not %patchir-yaml-parser %S/test_patch.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=PARSE_ERR %s
+// PARSE_ERR: {{[Ee]rror|[Ff]ailed|missing required key}}
+//
+// Missing spec file — parser must fail with non-zero exit and report the missing path
+// RUN: not %patchir-yaml-parser %T/nonexistent_spec.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=MISSING_FILE %s
+// MISSING_FILE: {{[Ee]rror|[Ff]ailed|[Nn]ot found|[Dd]oes not exist}}
+{}

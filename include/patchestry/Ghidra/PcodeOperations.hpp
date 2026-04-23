@@ -48,6 +48,7 @@ namespace patchestry::ghidra {
             VARNODE_TEMPORARY,
             VARNODE_CONSTANT,
             VARNODE_STRING,
+            VARNODE_INTRINSIC,
         };
 
         static Varnode::Kind convertToKind(const std::string &kdd) {
@@ -59,7 +60,8 @@ namespace patchestry::ghidra {
                 {  "function",  VARNODE_FUNCTION },
                 { "temporary", VARNODE_TEMPORARY },
                 {  "constant",  VARNODE_CONSTANT },
-                {    "string",    VARNODE_STRING }
+                {    "string",    VARNODE_STRING },
+                { "intrinsic", VARNODE_INTRINSIC }
             };
 
             // if kind is not present in the map, return varnode_unknown
@@ -99,27 +101,20 @@ namespace patchestry::ghidra {
                 case VARNODE_STRING:
                     kind_str = "STRING";
                     break;
+                case VARNODE_INTRINSIC:
+                    kind_str = "INTRINSIC";
+                    break;
             }
 
             result += "  kind: " + kind_str + "\n";
             result += "  size: " + std::to_string(size) + "\n";
             result += "  type_key: " + type_key + "\n";
 
-            if (operation) {
-                result += "  operation: " + *operation + "\n";
-            }
-            if (function) {
-                result += "  function: " + *function + "\n";
-            }
-            if (value) {
-                result += "  value: " + std::to_string(*value) + "\n";
-            }
-            if (string_value) {
-                result += "  string_value: " + *string_value + "\n";
-            }
-            if (global) {
-                result += "  global: " + *global + "\n";
-            }
+            if (operation) { result += "  operation: " + *operation + "\n"; }
+            if (function) { result += "  function: " + *function + "\n"; }
+            if (value) { result += "  value: " + std::to_string(*value) + "\n"; }
+            if (string_value) { result += "  string_value: " + *string_value + "\n"; }
+            if (global) { result += "  global: " + *global + "\n"; }
 
             result += "}";
             return result;
@@ -151,7 +146,16 @@ namespace patchestry::ghidra {
         Varnode::Kind kind;
         std::optional< std::string > function;
         std::optional< std::string > operation;
+        std::optional< std::string > global;   // For CALLIND global var targets
+        std::optional< std::string > type_key; // Type of the target
         bool is_noreturn;
+    };
+
+    struct SwitchCase
+    {
+        int64_t value;
+        std::string target_block;
+        bool has_exit = false;
     };
 
     struct Operation
@@ -180,6 +184,14 @@ namespace patchestry::ghidra {
         std::optional< std::string > not_taken_block;
         std::optional< Varnode > condition;
         std::optional< std::string > address;
+
+        // Indirect Branch: Ghidra-resolved jump-table successors (may be empty)
+        std::vector< std::string > successor_blocks;
+
+        // Switch recovery — all three are independently optional
+        std::optional< std::string > fallback_block;  // direct-goto fallback when no case matches
+        std::optional< Varnode > switch_input;         // original integer discriminant
+        std::vector< SwitchCase > switch_cases;        // case value → target block
     };
 
     struct BasicBlock

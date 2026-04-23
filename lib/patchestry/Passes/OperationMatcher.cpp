@@ -11,6 +11,8 @@
 #include <regex>
 #include <string>
 
+#include <llvm/ADT/SmallPtrSet.h>
+
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/IR/BuiltinAttributes.h>
@@ -19,6 +21,10 @@
 #include <mlir/IR/SymbolTable.h>
 
 #include <patchestry/Passes/Utils.hpp>
+
+namespace {
+    constexpr unsigned kMaxCastChainDepth = 32;
+} // namespace
 
 namespace patchestry::passes {
     bool OperationMatcher::patch_action_matches(
@@ -73,6 +79,7 @@ namespace patchestry::passes {
     ) {
         // If the match kind is not function, return false
         if (match.name.empty() || match.kind != MatchKind::FUNCTION) {
+            LOG(WARNING) << "Patch match name was empty or kind was not FUNCTION\n";
             return false;
         }
 
@@ -92,16 +99,23 @@ namespace patchestry::passes {
 
         // Check function context match (the function containing the call)
         if (!matches_function_context(func, match.function_context)) {
+            LOG(WARNING) << "Patch action: function context did not match\n";
             return false;
         }
 
         // Check argument matches for function calls
         if (!matches_arguments(op, match.argument_matches)) {
+            LOG(WARNING) << "Patch action: argument_matches did not match for callee '"
+                         << extract_callee_name(mlir::dyn_cast< cir::CallOp >(op))
+                         << "'\n";
             return false;
         }
 
         // Check variable matches as one of the arguments
         if (!matches_variables(op, match.variable_matches)) {
+            LOG(WARNING) << "Patch action: variable_matches did not match for callee '"
+                         << extract_callee_name(mlir::dyn_cast< cir::CallOp >(op))
+                         << "'\n";
             return false;
         }
 
@@ -178,11 +192,13 @@ namespace patchestry::passes {
         // all operations, clearly we don't want this. Return false if the operation name or
         // pattern is empty/whitespace
         if (operation_pattern.empty()) {
+            LOG(WARNING) << "Empty operation pattern provided\n";
             return false;
         }
 
         // Check if pattern contains only whitespace
         if (operation_pattern.find_first_not_of(" \t\n\r\f\v") == std::string::npos) {
+            LOG(WARNING) << "Whitespace-only operation pattern provided\n";
             return false;
         }
 
@@ -194,7 +210,7 @@ namespace patchestry::passes {
     ) {
         // If no function context specified, match all functions
         if (function_context.empty()) {
-            LOG(ERROR) << "Tragically, there was not function context, anything matches\n";
+            LOG(INFO) << "No function context specified; matching all functions\n";
 
             return true;
         }
@@ -205,7 +221,8 @@ namespace patchestry::passes {
             LOG(INFO) << "Checking '" << func_name << "' against '" << context.name << "'\n";
             // Check function name match
             if (!matches_pattern(func_name, context.name)) {
-                LOG(ERROR) << "Didn't match!\n";
+                LOG(ERROR) << "Function name '" << func_name << "' did not match context name '"
+                           << context.name << "'\n";
                 continue;
             }
 
@@ -220,7 +237,7 @@ namespace patchestry::passes {
             return true;
         }
 
-        LOG(ERROR) << "Could not match anything :(\n";
+        LOG(ERROR) << "Function '" << func_name << "' did not match any function context\n";
         return false;
     }
 
@@ -334,6 +351,9 @@ namespace patchestry::passes {
             if (!arg_match.name.empty()) {
                 std::string var_name = extract_variable_name(op, arg_match.index);
                 if (!matches_pattern(var_name, arg_match.name)) {
+                    LOG(WARNING) << "argument_matches: operand " << arg_match.index
+                                 << " name '" << var_name << "' does not match expected '"
+                                 << arg_match.name << "'\n";
                     return false;
                 }
             }
@@ -347,6 +367,9 @@ namespace patchestry::passes {
                 if (!matches_type(variable_type, arg_match.type)
                     && !matches_type(operand.getType(), arg_match.type))
                 {
+                    LOG(WARNING) << "argument_matches: operand " << arg_match.index
+                                 << " type does not match expected '" << arg_match.type
+                                 << "'\n";
                     return false;
                 }
             }
@@ -410,7 +433,7 @@ namespace patchestry::passes {
         // which rejects empty patterns - here empty patterns mean "don't filter by this
         // criterion")
         if (pattern.empty()) {
-            LOG(ERROR) << "No pattern provided to match; matching empty string\n";
+            LOG(DEBUG) << "No pattern provided; matching anything\n";
             return true;
         }
 
@@ -513,53 +536,92 @@ namespace patchestry::passes {
         return "";
     }
 
-    mlir::Type OperationMatcher::extract_ssa_value_type(mlir::Value value) {
-        // Check if the value is defined by an operation that might modify the original type
+    static mlir::Type extract_ssa_value_type_impl(
+        mlir::Value value, llvm::SmallPtrSetImpl< mlir::Value > &visited
+    ) {
+        // Guard against cycles and excessive depth: if we have already visited this value,
+        // fall back to its direct type rather than recursing forever.
+        if (!visited.insert(value).second) {
+            return value.getType();
+        }
+
         if (auto defining_op = value.getDefiningOp()) {
-            // For cast operations, try to get the original type
+            // For cast operations, follow the cast chain to get the original type
             if (auto cast_op = mlir::dyn_cast< cir::CastOp >(defining_op)) {
-                // Follow the cast chain to get the original type
-                auto src_value = cast_op.getSrc();
-                return extract_ssa_value_type(src_value);
+                return extract_ssa_value_type_impl(cast_op.getSrc(), visited);
             }
 
-            // For load operations, get the pointed-to type
+            // For load operations, get the pointed-to type.
+            // When the address is an alloca, also check whether the value stored
+            // into it comes from a global reference (through casts) so that the
+            // pre-cast type of the global is returned instead of the alloca's own
+            // widened element type (e.g., !cir.ptr<!void> vs the real struct ptr).
             if (auto load_op = mlir::dyn_cast< cir::LoadOp >(defining_op)) {
-                auto ptr_value = load_op.getAddr();
-                auto ptr_type  = ptr_value.getType();
+                auto addr = load_op.getAddr();
+                if (auto *addr_def = addr.getDefiningOp()) {
+                    if (mlir::isa< cir::AllocaOp >(addr_def)) {
+                        for (auto &use : addr.getUses()) {
+                            if (auto store_op =
+                                    mlir::dyn_cast< cir::StoreOp >(use.getOwner()))
+                            {
+                                if (store_op.getAddr() != addr) {
+                                    continue;
+                                }
+                                // Walk through casts to find a GetGlobalOp source.
+                                mlir::Value val = store_op.getValue();
+                                unsigned depth = 0;
+                                while (auto *vdef = val.getDefiningOp()) {
+                                    if (++depth > kMaxCastChainDepth) {
+                                        break;
+                                    }
+                                    if (auto cast_op =
+                                            mlir::dyn_cast< cir::CastOp >(vdef))
+                                    {
+                                        val = cast_op.getOperand();
+                                        continue;
+                                    }
+                                    if (mlir::isa< cir::GetGlobalOp >(vdef)) {
+                                        return val.getType();
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                auto ptr_type = addr.getType();
                 if (auto cir_ptr_type = mlir::dyn_cast< cir::PointerType >(ptr_type)) {
                     return cir_ptr_type.getPointee();
                 }
             }
 
-            // For get member operations, try to get the member type
+            // For get member operations, return the member type directly
             if (auto get_member_op = mlir::dyn_cast< cir::GetMemberOp >(defining_op)) {
-                // Return the type of the member being accessed
                 return get_member_op.getType();
             }
 
-            // For other operations, recursively check operands
+            // For other operations, follow the first operand
             auto operands = defining_op->getOperands();
             if (!operands.empty()) {
-                // For simple operations, follow the first operand
-                return extract_ssa_value_type(operands[0]);
+                return extract_ssa_value_type_impl(operands[0], visited);
             }
         }
 
-        // For block arguments, check if they represent function parameters with original types
+        // For block arguments that are function parameters, use the block argument type
         if (auto block_arg = mlir::dyn_cast< mlir::BlockArgument >(value)) {
-            auto block = block_arg.getOwner();
-            if (auto parent_op = block->getParentOp()) {
-                // For function arguments, the block argument type should be the actual
-                // parameter type
-                if (auto func_op = mlir::dyn_cast< cir::FuncOp >(parent_op)) {
+            if (auto parent_op = block_arg.getOwner()->getParentOp()) {
+                if (mlir::dyn_cast< cir::FuncOp >(parent_op)) {
                     return block_arg.getType();
                 }
             }
         }
 
-        // Default: return the direct type of the value
         return value.getType();
+    }
+
+    mlir::Type OperationMatcher::extract_ssa_value_type(mlir::Value value) {
+        llvm::SmallPtrSet< mlir::Value, 8 > visited;
+        return extract_ssa_value_type_impl(value, visited);
     }
 
     std::string OperationMatcher::extract_symbol_name(mlir::Operation *op) {
@@ -634,8 +696,43 @@ namespace patchestry::passes {
 
         // Check for load/store operations that might reference named variables
         if (auto load_op = mlir::dyn_cast< cir::LoadOp >(op)) {
-            // Try to extract name from the loaded address
-            auto addr             = load_op.getAddr();
+            auto addr = load_op.getAddr();
+
+            // When the address is an alloca, check whether the value stored into it
+            // originates from a global variable (through zero or more casts).  If so,
+            // return the global name so that argument_matches can identify the original
+            // symbol (e.g. `usb_g`) even when the value is routed through a temporary.
+            // We intentionally do NOT generalise this to other stored values (e.g. call
+            // results) because the alloca name itself is then the right identifier.
+            if (auto *addr_def = addr.getDefiningOp()) {
+                if (mlir::isa< cir::AllocaOp >(addr_def)) {
+                    for (auto &use : addr.getUses()) {
+                        if (auto store_op = mlir::dyn_cast< cir::StoreOp >(use.getOwner())) {
+                            if (store_op.getAddr() != addr) {
+                                continue;
+                            }
+                            // Walk through casts to find a GetGlobalOp source.
+                            mlir::Value val = store_op.getValue();
+                            unsigned depth = 0;
+                            while (auto *def = val.getDefiningOp()) {
+                                if (++depth > kMaxCastChainDepth) {
+                                    break;
+                                }
+                                if (auto cast_op = mlir::dyn_cast< cir::CastOp >(def)) {
+                                    val = cast_op.getOperand();
+                                    continue;
+                                }
+                                if (auto get_global = mlir::dyn_cast< cir::GetGlobalOp >(def)) {
+                                    return get_global.getName().str();
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fall back to the name of the address itself (e.g., an alloca's "name" attr).
             std::string addr_name = extract_ssa_value_name(addr);
             if (!addr_name.empty()) {
                 return addr_name;

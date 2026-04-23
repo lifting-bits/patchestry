@@ -5,9 +5,13 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <limits>
+#include <map>
 #include <memory>
 #include <sstream>
+#include <stack>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Attr.h>
@@ -15,6 +19,7 @@
 #include <clang/AST/OperationKinds.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Frontend/CompilerInstance.h>
+#include <llvm/Support/ErrorHandling.h>
 
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/OperationBuilder.hpp>
@@ -71,6 +76,164 @@ namespace patchestry::ast {
 
             return operation_vec;
         }
+
+        /**
+         * @brief Comparator for basic-block keys that sorts numerically rather than
+         * lexicographically.
+         *
+         * Block keys have the form "ram:HEXADDR:DECIMALIDX:basic" (or ":entry" for the entry
+         * block).  A plain std::map<string> would sort "10" before "2", producing wrong block
+         * ordering for functions with >= 10 basic blocks.  This comparator parses the address
+         * and index fields as integers so the ordering is always correct.
+         */
+        struct BlockKeyComparator {
+            static std::pair< uint64_t, int64_t > parse_key(const std::string &key) {
+                // "ram:HEXADDR:DECIMALIDX:basic"  or  "ram:HEXADDR:entry"
+                constexpr std::string_view kExpectedPrefix = "ram:";
+                if (key.substr(0, kExpectedPrefix.size()) != kExpectedPrefix) {
+                    LOG(WARNING) << "BlockKeyComparator: unexpected key format (no 'ram:' prefix): "
+                                 << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
+                }
+
+                auto first_colon = key.find(':');
+                auto second_colon = key.find(':', first_colon + 1);
+                if (second_colon == std::string::npos) {
+                    LOG(WARNING) << "BlockKeyComparator: malformed key (missing second ':'): " << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
+                }
+
+                uint64_t addr = 0;
+                try {
+                    addr = std::stoull(
+                        key.substr(first_colon + 1, second_colon - first_colon - 1), nullptr, 16
+                    );
+                } catch (...) {
+                    LOG(WARNING) << "BlockKeyComparator: failed to parse hex address in key: " << key;
+                    return {std::numeric_limits< uint64_t >::max(),
+                            std::numeric_limits< int64_t >::max()};
+                }
+
+                auto third_colon = key.find(':', second_colon + 1);
+                std::string idx_str = key.substr(
+                    second_colon + 1,
+                    third_colon == std::string::npos ? std::string::npos
+                                                     : third_colon - second_colon - 1
+                );
+
+                if (idx_str == "entry") {
+                    return {addr, -1};
+                }
+
+                int64_t idx = 0;
+                try {
+                    idx = std::stoll(idx_str);
+                } catch (...) {
+                    LOG(WARNING) << "BlockKeyComparator: failed to parse block index in key: " << key;
+                    return {addr, std::numeric_limits< int64_t >::max()};
+                }
+
+                return {addr, idx};
+            }
+
+            bool operator()(const std::string &a, const std::string &b) const {
+                auto [addr_a, idx_a] = parse_key(a);
+                auto [addr_b, idx_b] = parse_key(b);
+                if (addr_a != addr_b) {
+                    return addr_a < addr_b;
+                }
+                return idx_a < idx_b;
+            }
+        };
+
+        /**
+         * @brief Compute RPO block order from the P-Code CFG embedded in the function.
+         *
+         * Performs an iterative post-order DFS from the entry block, then reverses to
+         * obtain RPO.  Successor order (taken before not_taken) mirrors the ordering
+         * used by BasicBlockReorderPass so that the two orderings are identical.
+         * Unreachable blocks are appended after the RPO sequence in deterministic
+         * (address-sorted) order.
+         */
+        std::vector< std::string > compute_rpo(const Function &function) {
+            // Build per-block successor lists from branch operations.
+            std::unordered_map< std::string, std::vector< std::string > > succs;
+            for (const auto &[key, blk] : function.basic_blocks) {
+                for (const auto &op_key : blk.ordered_operations) {
+                    if (!blk.operations.contains(op_key)) {
+                        continue;
+                    }
+                    const auto &op = blk.operations.at(op_key);
+                    // taken_block before not_taken_block — mirrors BasicBlockReorderPass DFS
+                    // order so the emitted block sequence is identical to what that pass
+                    // would produce.
+                    if (op.taken_block) {
+                        succs[key].push_back(*op.taken_block);
+                    }
+                    if (op.not_taken_block) {
+                        succs[key].push_back(*op.not_taken_block);
+                    }
+                    if (op.target_block) {
+                        succs[key].push_back(*op.target_block);
+                    }
+                    for (const auto &s : op.successor_blocks) {
+                        succs[key].push_back(s);
+                    }
+                    for (const auto &sc : op.switch_cases) {
+                        succs[key].push_back(sc.target_block);
+                    }
+                    if (op.fallback_block.has_value()) {
+                        succs[key].push_back(*op.fallback_block);
+                    }
+                }
+            }
+
+            // Iterative post-order DFS, then reverse to get RPO.
+            std::vector< std::string > post_order;
+            std::unordered_set< std::string > visited;
+            std::stack< std::pair< std::string, bool > > stk;
+            if (!function.entry_block.empty()
+                && function.basic_blocks.contains(function.entry_block))
+            {
+                stk.push({function.entry_block, false});
+            }
+            while (!stk.empty()) {
+                auto [key, expanded] = stk.top();
+                stk.pop();
+                if (expanded) {
+                    post_order.push_back(key);
+                    continue;
+                }
+                if (visited.count(key)) {
+                    continue;
+                }
+                visited.insert(key);
+                stk.push({key, true});
+                for (const auto &s : succs[key]) {
+                    if (!visited.count(s)) {
+                        stk.push({s, false});
+                    }
+                }
+            }
+            std::reverse(post_order.begin(), post_order.end());
+
+            // Append unreachable blocks in deterministic (address-sorted) order.
+            std::vector< std::string > unreachable;
+            for (const auto &[key, block] : function.basic_blocks) {
+                if (!visited.count(key)) {
+                    unreachable.push_back(key);
+                }
+            }
+            std::sort(unreachable.begin(), unreachable.end(), BlockKeyComparator{});
+            for (auto &key : unreachable) {
+                post_order.push_back(std::move(key));
+            }
+
+            return post_order;
+        }
+
     } // namespace
 
     FunctionBuilder::FunctionBuilder(
@@ -144,7 +307,9 @@ namespace patchestry::ast {
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
         // if function is a declaration, add asm attribute with symbol name
-        if (!is_definition) {
+        // only when the symbol name differs from the C identifier (otherwise
+        // Clang's printer emits invalid syntax: asm("sym") void fn(void);)
+        if (!is_definition && function.get().name != func_decl->getName()) {
             if (auto *asm_attr = clang::AsmLabelAttr::Create(
                     ctx, function.get().name, true, func_decl->getSourceRange()
                 ))
@@ -157,8 +322,8 @@ namespace patchestry::ast {
         auto num_parameters = function.get().prototype.parameters.size();
         if (parameters.size() != num_parameters) {
             // If there is mismatch between number of parameters in function prototype and
-            // paramater declaration object, create default parameter considering there is an
-            // issue recovering the paramter operation from ghidra and function prototype is
+            // parameter declaration object, create default parameter considering there is an
+            // issue recovering the parameter operation from ghidra and function prototype is
             // correct.
             auto default_params =
                 create_default_paramaters(ctx, func_decl, function.get().prototype);
@@ -168,6 +333,11 @@ namespace patchestry::ast {
 
         std::vector< clang::ParmVarDecl * > parameter_vec;
         for (const auto &param_op : parameters) {
+            if (!param_op->type || !param_op->name) {
+                LOG(ERROR) << "Parameter operation missing type or name, key: "
+                           << param_op->key;
+                continue;
+            }
             const auto &param_type =
                 type_builder.get().get_serialized_types().at(*param_op->type);
             auto location = sourceLocation(ctx.getSourceManager(), param_op->key);
@@ -231,14 +401,14 @@ namespace patchestry::ast {
         }
 
         std::vector< clang::QualType > args_vector;
-        const auto &rttype = type_builder.get().get_serialized_types()[proto.rttype_key];
+        const auto &rttype = type_builder.get().get_serialized_types().at(proto.rttype_key);
         for (const auto &param : proto.parameters) {
             if (!type_builder.get().get_serialized_types().contains(param)) {
-                LOG(ERROR) << "Skipping, invalid paramater key in function.\n";
+                LOG(ERROR) << "Skipping, invalid parameter key in function.\n";
                 continue;
             }
 
-            args_vector.emplace_back(type_builder.get().get_serialized_types()[param]);
+            args_vector.emplace_back(type_builder.get().get_serialized_types().at(param));
         }
 
         clang::FunctionProtoType::ExtProtoInfo ext_proto_info;
@@ -415,33 +585,69 @@ namespace patchestry::ast {
         std::vector< clang::Stmt * > stmt_vec;
         create_labels(ctx, func_decl);
 
-        // Create entry block first
+        // Compute RPO block order from the P-Code CFG.  Emitting in RPO order
+        // matches what BasicBlockReorderPass would produce, making that pass a
+        // near-no-op and letting GotoCanonicalizePass see clean input earlier.
+        const auto rpo = compute_rpo(function.get());
+
+        // Emit the entry block first (no label).  Set current_next_block_key so
+        // that create_branch can skip the goto when it targets the immediately
+        // following block (RPO[1]).
         if (function.get().basic_blocks.contains(function.get().entry_block)) {
+            current_next_block_key = (rpo.size() > 1) ? rpo[1] : std::string{};
             const auto &entry_block =
                 function.get().basic_blocks.at(function.get().entry_block);
             auto entry_stmts = create_basic_block(ctx, entry_block);
             stmt_vec.insert(stmt_vec.end(), entry_stmts.begin(), entry_stmts.end());
         }
 
-        std::unordered_map< std::string, std::vector< clang::Stmt * > > bb_stmts;
-        for (const auto &[block_key, block] : function.get().basic_blocks) {
-            LOG(INFO) << "Processing basic block with key " << block_key << "\n";
-            const auto &bb = function.get().basic_blocks.at(block_key);
+        // Emit non-entry blocks in RPO order with labels.  RPO[0] is the entry
+        // block so the loop starts at index 1.
+        for (size_t i = 1; i < rpo.size(); ++i) {
+            const auto &key = rpo[i];
+            if (!function.get().basic_blocks.contains(key)) {
+                continue;
+            }
+            const auto &bb = function.get().basic_blocks.at(key);
             if (bb.is_entry_block) {
                 continue;
             }
 
+            // Block body was inlined into a switch case — skip entirely.
+            if (inlined_blocks.contains(key)) {
+                continue;
+            }
+
+            // has_exit target that could not be inlined — emit "label: break;".
+            // TODO(kumarak): Generating break statement outside switch/loop will cause error
+            // while lowering to CIR. At the moment create a goto to fallback or next block. It
+            // should be fixed after integrating minimal ast passes to inline the break inside
+            // switch statement.
+            /*if (break_target_blocks.contains(key)) {
+                auto loc         = sourceLocation(ctx.getSourceManager(), key);
+                auto *break_stmt = new (ctx) clang::BreakStmt(loc);
+                auto *label_stmt = new (ctx)
+                    clang::LabelStmt(loc, labels_declaration.at(key), break_stmt);
+                stmt_vec.push_back(label_stmt);
+                continue;
+            }*/
+
+            LOG(INFO) << "Processing basic block with key " << key << "\n";
+
+            // Expose the next block in RPO order so create_branch can elide
+            // gotos to the immediately following block.
+            current_next_block_key = (i + 1 < rpo.size()) ? rpo[i + 1] : std::string{};
+
             auto block_stmts = create_basic_block(ctx, bb);
-            bb_stmts.emplace(block_key, block_stmts);
-        }
-
-        for (auto &[key, block_stmts] : bb_stmts) {
-            if (!block_stmts.empty()) {
-                auto loc = sourceLocation(ctx.getSourceManager(), key);
-                auto *label_stmt =
-                    new (ctx) clang::LabelStmt(loc, labels_declaration.at(key), block_stmts[0]);
-
-                // replace first stmt of block with label stmts
+            auto loc         = sourceLocation(ctx.getSourceManager(), key);
+            clang::Stmt *first = block_stmts.empty()
+                ? static_cast< clang::Stmt * >(new (ctx) clang::NullStmt(loc, false))
+                : block_stmts[0];
+            auto *label_stmt = new (ctx)
+                clang::LabelStmt(loc, labels_declaration.at(key), first);
+            if (block_stmts.empty()) {
+                stmt_vec.push_back(label_stmt);
+            } else {
                 block_stmts[0] = label_stmt;
                 stmt_vec.insert(stmt_vec.end(), block_stmts.begin(), block_stmts.end());
             }
@@ -481,6 +687,14 @@ namespace patchestry::ast {
 
             const auto &operation = block.operations.at(operation_key);
             if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
+                // Drain any VarDecl materializations queued during create_operation
+                // (e.g., from create_temporary promoting a cached expr into a VarDecl).
+                // These must appear before the consuming statement in the output.
+                for (auto *pending : pending_materialized) {
+                    stmt_vec.push_back(pending);
+                }
+                pending_materialized.clear();
+
                 operation_stmts.emplace(operation.key, stmt);
                 if (!should_merge_to_next) {
                     stmt_vec.push_back(stmt);
@@ -565,7 +779,7 @@ namespace patchestry::ast {
             case Mnemonic::OP_INT_2COMP:
                 return op_builder->create_int_2comp(ctx, function, op);
             case Mnemonic::OP_INT_NEGATE:
-                return op_builder->create_unary_operation(ctx, function, op, clang::UO_LNot);
+                return op_builder->create_unary_operation(ctx, function, op, clang::UO_Not);
             case Mnemonic::OP_INT_XOR:
                 return op_builder->create_binary_operation(ctx, function, op, clang::BO_Xor);
             case Mnemonic::OP_INT_AND:
@@ -610,7 +824,7 @@ namespace patchestry::ast {
             case Mnemonic::OP_FLOAT_DIV:
                 return op_builder->create_binary_operation(ctx, function, op, clang::BO_Div);
             case Mnemonic::OP_FLOAT_NEG:
-                return op_builder->create_unary_operation(ctx, function, op, clang::UO_LNot);
+                return op_builder->create_unary_operation(ctx, function, op, clang::UO_Minus);
             case Mnemonic::OP_FLOAT_ABS:
                 return op_builder->create_float_abs(ctx, function, op);
             case Mnemonic::OP_FLOAT_SQRT:
@@ -648,8 +862,7 @@ namespace patchestry::ast {
             case Mnemonic::OP_LZCOUNT:
                 return op_builder->create_lzcount(ctx, function, op);
             case Mnemonic::OP_UNKNOWN:
-                assert(false);
-                break;
+                llvm_unreachable("Encountered OP_UNKNOWN P-Code mnemonic");
         }
 
         return {};

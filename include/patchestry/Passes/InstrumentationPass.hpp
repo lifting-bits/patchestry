@@ -34,7 +34,11 @@ namespace mlir {
 
 namespace patchestry::passes { // NOLINT
 
+    class ContractOperationImpl;
+    class PatchOperationImpl;
+
     struct InstrumentationOptions;
+    struct ContractInformation;
 
     /**
      * @brief Registers instrumentation passes with the MLIR pass registry.
@@ -79,12 +83,6 @@ namespace patchestry::passes { // NOLINT
         std::optional< patch::PatchAction > patch_action;
     };
 
-    struct ContractInformation
-    { // the use of optional here takes care of some typing errors
-        std::optional< contract::ContractSpec > spec;
-        std::optional< contract::ContractAction > action;
-    };
-
     /**
      * @brief MLIR pass that applies code instrumentation based on configuration.
      *
@@ -105,6 +103,9 @@ namespace patchestry::passes { // NOLINT
         : public mlir::PassWrapper< InstrumentationPass, mlir::OperationPass< mlir::ModuleOp > >
 
     {
+        friend class ContractOperationImpl;
+        friend class PatchOperationImpl;
+
         /** @brief Path to the YAML Patchestry configuration file */
         std::string configuration_file;
 
@@ -112,7 +113,7 @@ namespace patchestry::passes { // NOLINT
         std::optional< Configuration > config;
 
         /** @brief List of operations to be inlined after instrumentation */
-        std::vector< mlir::Operation * > inline_worklists;
+        std::set< mlir::Operation * > inline_worklists;
 
         /** @brief Reference to inlining configuration options */
         const InstrumentationOptions &options;
@@ -233,9 +234,16 @@ namespace patchestry::passes { // NOLINT
          * @param contract Contract information containing argument specifications
          * @param args Output vector to store the prepared arguments
          */
+        // When entrypoint_func is set (APPLY_AT_ENTRYPOINT mode):
+        //   - OPERAND sources are remapped to the enclosing function's block arguments
+        //     (index N → enclosing_func.getArguments()[N]) so that no call-site value
+        //     leaks into the entry block and violates SSA dominance.
+        //   - RETURN_VALUE is rejected: the call result is only defined at the matched
+        //     call site, not at the function entrypoint.
         void prepare_contract_call_arguments(
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp contract_func,
-            const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args
+            const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args,
+            std::optional< cir::FuncOp > entrypoint_func = std::nullopt
         );
 
         /**
@@ -372,6 +380,11 @@ namespace patchestry::passes { // NOLINT
          * This method copies a named symbol (function, global, etc.) from the source module
          * to the destination module, handling symbol conflicts through renaming when necessary.
          * It also recursively copies any symbols that the target symbol depends on.
+         *
+         * Function definitions (not declarations) are automatically assigned internal linkage
+         * to prevent symbol pollution in the final binary, enable better optimizations, and
+         * avoid naming conflicts. This makes instrumentation functions (patches/contracts)
+         * module-local implementation details rather than externally visible APIs.
          *
          * @param dest The destination module to merge symbols into
          * @param src The source module containing the symbol to merge

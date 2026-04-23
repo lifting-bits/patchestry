@@ -81,6 +81,15 @@ namespace patchestry::ghidra {
         program.lang   = get_string_if_valid(root, "id");
         program.format = get_string_if_valid(root, "format");
 
+        if (!program.arch.has_value()) {
+            LOG(ERROR) << "Required field 'architecture' is absent from JSON\n";
+            return std::nullopt;
+        }
+        if (!program.lang.has_value()) {
+            LOG(ERROR) << "Required field 'id' is absent from JSON\n";
+            return std::nullopt;
+        }
+
         // Deserialize types recovered
         if (const auto *types_array = root.getObject("types")) {
             deserialize_types(*types_array, program.serialized_types);
@@ -150,9 +159,14 @@ namespace patchestry::ghidra {
                     );
                     break;
                 case VarnodeType::Kind::VT_ARRAY: {
+                    auto *obj = json_value.getAsObject();
+                    if (!obj) {
+                        LOG(ERROR) << "Invalid JSON object for array type";
+                        break;
+                    }
                     deserialize_array(
                         *dynamic_cast< ArrayType * >(vnode_type.get()),
-                        json_value.getAsObject(), serialized_types
+                        obj, serialized_types
                     );
                     break;
                 }
@@ -296,7 +310,7 @@ namespace patchestry::ghidra {
         // Check for the pointee label in serialized types
         auto iter = serialized_types.find(pointee_key);
         if (iter == serialized_types.end()) {
-            LOG(ERROR) << "Pointee type is not availe in serialized types. Pointer key: "
+            LOG(ERROR) << "Pointee type is not available in serialized types. Pointer key: "
                        << varnode.key << "\n";
             return;
         }
@@ -329,7 +343,7 @@ namespace patchestry::ghidra {
         CompositeType &varnode, const JsonObject &composite_obj, const TypeMap &serialized_types
     ) {
         const auto *field_array = composite_obj.getArray("fields");
-        if (field_array->empty()) {
+        if (field_array == nullptr || field_array->empty()) {
             LOG(ERROR) << "No fields found in composite type object\n";
             return;
         }
@@ -389,18 +403,74 @@ namespace patchestry::ghidra {
     }
 
     void JsonParser::deserialize_enum(
-        EnumType &varnode, const JsonObject & /*unused*/, const TypeMap & /*unused*/
+        EnumType &varnode, const JsonObject &enum_obj, const TypeMap & /*unused*/
     ) {
         assert(varnode.kind == VarnodeType::Kind::VT_ENUM);
-        (void) varnode;
+
+        const auto *entries = enum_obj.getArray("entries");
+        if (entries == nullptr || entries->empty()) {
+            LOG(WARNING) << "Enum type '" << varnode.name << "' has no entries\n";
+            return;
+        }
+
+        unsigned entry_index = 0;
+        for (const auto &entry : *entries) {
+            const auto *entry_obj = entry.getAsObject();
+            if (entry_obj == nullptr) {
+                LOG(ERROR) << "Enum '" << varnode.name << "' entry #" << entry_index
+                           << ": Invalid format, skipping\n";
+                ++entry_index;
+                continue;
+            }
+
+            auto maybe_name = get_string_if_valid(*entry_obj, "name");
+            if (!maybe_name) {
+                LOG(ERROR) << "Enum '" << varnode.name << "' entry #" << entry_index
+                           << ": Missing 'name', skipping\n";
+                ++entry_index;
+                continue;
+            }
+
+            auto maybe_value = entry_obj->getInteger("value");
+            if (!maybe_value) {
+                LOG(ERROR) << "Enum '" << varnode.name << "' entry #" << entry_index
+                           << ": Missing 'value', skipping\n";
+                ++entry_index;
+                continue;
+            }
+
+            varnode.add_constant(*maybe_name, *maybe_value);
+            ++entry_index;
+        }
     }
 
     void JsonParser::deserialize_function_type(
-        FunctionType &varnode, const JsonObject & /*unused*/, const TypeMap &
-        /*unused*/
+        FunctionType &varnode, const JsonObject &func_obj, const TypeMap & /*unused*/
     ) {
         assert(varnode.kind == VarnodeType::Kind::VT_FUNCTION);
-        (void) varnode;
+
+        auto maybe_return_type = get_string_if_valid(func_obj, "return_type");
+        if (maybe_return_type) {
+            varnode.return_type_key = *maybe_return_type;
+        } else {
+            LOG(WARNING) << "Function type '" << varnode.name << "': Missing 'return_type'\n";
+        }
+
+        varnode.is_variadic = func_obj.getBoolean("is_variadic").value_or(false);
+        varnode.is_noreturn = func_obj.getBoolean("is_noreturn").value_or(false);
+
+        const auto *params = func_obj.getArray("parameter_types");
+        if (params != nullptr) {
+            for (const auto &param : *params) {
+                auto maybe_key = param.getAsString();
+                if (maybe_key) {
+                    varnode.param_type_keys.emplace_back(maybe_key->str());
+                } else {
+                    LOG(WARNING) << "Function type '" << varnode.name
+                                 << "': Invalid parameter type entry, skipping\n";
+                }
+            }
+        }
     }
 
     void JsonParser::deserialize_undefined_type(
@@ -486,6 +556,18 @@ namespace patchestry::ghidra {
             target.operation = call_op->str();
         }
 
+        // For CALLIND: parse global variable target
+        auto global_key = maybe_target->getString("global");
+        if (global_key.has_value() && !global_key->empty()) {
+            target.global = global_key->str();
+        }
+
+        // For CALLIND: parse type of the target
+        auto type_key = maybe_target->getString("type");
+        if (type_key.has_value() && !type_key->empty()) {
+            target.type_key = type_key->str();
+        }
+
         target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
         op.target           = std::move(target);
         op.has_return_value = call_obj.getBoolean("has_return_value").value_or(false);
@@ -512,6 +594,47 @@ namespace patchestry::ghidra {
         if (const auto *maybe_output = branch_obj.getObject("condition")) {
             if (auto maybe_varnode = create_varnode(*maybe_output)) {
                 op.condition = std::move(*maybe_varnode);
+            }
+        }
+
+        if (const auto *succ_array = branch_obj.getArray("successor_blocks")) {
+            for (auto item : *succ_array) {
+                if (auto s = item.getAsString()) {
+                    if (!s->empty()) {
+                        op.successor_blocks.emplace_back(*s);
+                    }
+                }
+            }
+        }
+
+        // fallback_block
+        set_target_field_if_valid(
+            get_string_if_valid(branch_obj, "fallback_block"), op.fallback_block
+        );
+
+        // switch_input varnode
+        if (const auto *sw_in = branch_obj.getObject("switch_input")) {
+            if (auto vn = create_varnode(*sw_in)) {
+                op.switch_input = std::move(*vn);
+            }
+        }
+
+        // switch_cases array
+        if (const auto *cases = branch_obj.getArray("switch_cases")) {
+            for (auto item : *cases) {
+                const auto *obj = item.getAsObject();
+                if (obj == nullptr) {
+                    continue;
+                }
+                auto val   = obj->getInteger("value");
+                auto block = get_string_if_valid(*obj, "target_block");
+                if (val && block && !block->empty()) {
+                    bool has_exit = false;
+                    if (auto exit_val = obj->getBoolean("has_exit")) {
+                        has_exit = *exit_val;
+                    }
+                    op.switch_cases.push_back({ *val, *block, has_exit });
+                }
             }
         }
     }
@@ -558,6 +681,7 @@ namespace patchestry::ghidra {
         switch (operation.mnemonic) {
             case Mnemonic::OP_CALL:
             case Mnemonic::OP_CALLIND:
+            case Mnemonic::OP_CALLOTHER:
                 deserialize_call_operation(pcode_obj, operation);
                 break;
             case Mnemonic::OP_CBRANCH:

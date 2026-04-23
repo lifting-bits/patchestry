@@ -1,0 +1,124 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
+// CIR-DAG: cir.func @float_eq_test
+// CIR-DAG: cir.func @float_ne_test
+// CIR-DAG: cir.func @float_lt_test
+// CIR-DAG: cir.func @float_le_test
+// CIR-DAG: cir.cmp(eq,
+// CIR-DAG: cir.cmp(ne,
+// CIR-DAG: cir.cmp(lt,
+// CIR-DAG: cir.cmp(le,
+// LL-DAG: define {{.*}} @float_eq_test
+// LL-DAG: define {{.*}} @float_ne_test
+// LL-DAG: define {{.*}} @float_lt_test
+// LL-DAG: define {{.*}} @float_le_test
+// LL-DAG: fcmp oeq float
+// LL-DAG: fcmp une float
+// LL-DAG: fcmp olt float
+// LL-DAG: fcmp ole float
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "float_eq_test",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_bool", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_float", "type_float"] },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_float", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_float", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "FLOAT_EQUAL", "type": "type_bool", "inputs": [{ "type": "type_float", "kind": "parameter", "operation": "p0" }, { "type": "type_float", "kind": "parameter", "operation": "p1" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_bool", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:20000000": {
+      "name": "float_ne_test",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_bool", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_float", "type_float"] },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_float", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_float", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "FLOAT_NOTEQUAL", "type": "type_bool", "inputs": [{ "type": "type_float", "kind": "parameter", "operation": "p0" }, { "type": "type_float", "kind": "parameter", "operation": "p1" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_bool", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    },
+    "ram:30000000": {
+      "name": "float_lt_test",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_bool", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_float", "type_float"] },
+      "basic_blocks": {
+        "ram:30000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_float", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_float", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:30000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:30000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "FLOAT_LESS", "type": "type_bool", "inputs": [{ "type": "type_float", "kind": "parameter", "operation": "p0" }, { "type": "type_float", "kind": "parameter", "operation": "p1" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_bool", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:30000000:entry"
+    },
+    "ram:40000000": {
+      "name": "float_le_test",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_bool", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_float", "type_float"] },
+      "basic_blocks": {
+        "ram:40000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_float", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_float", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:40000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:40000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "FLOAT_LESSEQUAL", "type": "type_bool", "inputs": [{ "type": "type_float", "kind": "parameter", "operation": "p0" }, { "type": "type_float", "kind": "parameter", "operation": "p1" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_bool", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:40000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_float": { "name": "float", "size": 4, "kind": "float" },
+    "type_bool": { "name": "bool", "size": 1, "kind": "boolean" }
+  }
+}

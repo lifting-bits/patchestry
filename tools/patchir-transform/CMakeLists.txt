@@ -21,12 +21,14 @@ target_link_libraries(patchir-transform
         patchestry::passes
         patchestry::yaml
         MLIROptLib
+        MLIRContracts
 )
 
 mlir_check_link_libraries(patchir-transform)
 
 if(PATCHESTRY_INSTALL)
   install(TARGETS patchir-transform
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT patchestry-tools
   )
 endif()

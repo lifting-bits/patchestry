@@ -234,7 +234,8 @@ int main(int argc, char **argv) {
 
     auto program = patchestry::ghidra::JsonParser().deserialize_program(*json->getAsObject());
     if (!program.has_value()) {
-        LOG(ERROR) << "Failed to process json object" << json.takeError();
+        LOG(ERROR) << "Failed to deserialize JSON file '" << options.input_file
+                   << "' as patchestry program\n";
         return EXIT_FAILURE;
     }
 
@@ -249,6 +250,7 @@ int main(int argc, char **argv) {
         LOG(ERROR) << "Failed to initialize diagnostics.\n";
         return EXIT_FAILURE;
     }
+
     createSourceManager(ci);
 
     std::shared_ptr< clang::TargetOptions > target_options =

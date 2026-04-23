@@ -31,7 +31,7 @@ namespace patchestry::yaml {
             return std::nullopt;
         }
 
-        return parse_yaml_content< T >(buffer->getBuffer().str());
+        return parse_yaml_content< T >(buffer->getBuffer().str(), file_path);
     }
 
     template< typename T >

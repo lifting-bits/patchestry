@@ -1,0 +1,93 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
+// CIR-DAG: cir.func @load_test
+// CIR-DAG: cir.func @store_test
+// CIR-DAG: cir.load deref
+// CIR-DAG: cir.store
+// LL-DAG: define dso_local i32 @load_test
+// LL-DAG: define {{.*}} @store_test
+// LL-DAG: load i32, ptr
+// LL-DAG: store i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "load_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "op0": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "inputs": [{ "type": "type_ptr_int", "kind": "parameter", "operation": "p0" }]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "op0" }]
+            }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:20000000": {
+      "name": "store_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int", "type_int"]
+      },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "val", "type": "type_int", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "op0": {
+              "mnemonic": "STORE",
+              "inputs": [
+                { "type": "type_ptr_int", "kind": "parameter", "operation": "p0" },
+                { "type": "type_int", "kind": "parameter", "operation": "p1" }
+              ]
+            },
+            "ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_ptr_int": { "kind": "pointer", "size": 4, "element_type": "type_int" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

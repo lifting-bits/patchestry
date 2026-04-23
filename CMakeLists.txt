@@ -183,6 +183,12 @@ set_project_warnings(patchestry_settings)
 include(sanitizers)
 enable_sanitizers(patchestry_settings)
 
+#
+# install settings
+#
+
+option(PATCHESTRY_INSTALL "Generate the install target." ${PATCHESTRY_MASTER_PROJECT})
+
 add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(tools)
@@ -193,12 +199,6 @@ if (PATCHESTRY_ENABLE_TESTING)
   enable_testing()
   add_subdirectory(test)
 endif()
-
-#
-# install settings
-#
-
-option(PATCHESTRY_INSTALL "Generate the install target." ${PATCHESTRY_MASTER_PROJECT})
 
 #
 # packaging support

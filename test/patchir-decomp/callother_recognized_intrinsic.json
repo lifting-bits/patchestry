@@ -1,0 +1,62 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// CIR: cir.func @volatile_read_test
+// CIR: cir.load
+// LL: define dso_local i32 @volatile_read_test
+// LL: load
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "volatile_read_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "temp0": { "mnemonic": "DECLARE_TEMPORARY", "name": "result", "kind": "temporary", "type": "type_int", "address": "ram:10000000:0:basic:vol_read_op" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "temp0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "vol_read_op": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_int",
+                            "output": { "kind": "temporary", "operation": "temp0", "type": "type_int" },
+              "target": {
+                "kind": "intrinsic",
+                "function": "volatile_read",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [{ "type": "type_ptr_int", "kind": "parameter", "operation": "p0" }]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "vol_read_op" }]
+            }
+          },
+          "ordered_operations": ["vol_read_op", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_ptr_int": { "kind": "pointer", "size": 4, "element_type": "type_int" }
+  }
+}

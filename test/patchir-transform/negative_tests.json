@@ -1,0 +1,49 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t1 >> /dev/null 2>&1
+//
+// Test 1: Missing YAML spec file — should fail with non-zero exit
+// RUN: not %patchir-transform %t1.cir --spec %T/nonexistent_spec_xyz.yaml -o %t2.cir 2>&1 | \
+// RUN:   %file-check -check-prefix=MISSING_SPEC %s
+// MISSING_SPEC: {{[Ee]rror|[Ff]ailed|[Nn]ot found|[Cc]annot open}}
+//
+// Test 2: Spec references an undefined patch_id — should fail
+// RUN: not %patchir-transform %t1.cir --spec %S/bad_patch_ref.yaml -o %t3.cir 2>&1 | \
+// RUN:   %file-check -check-prefix=BAD_REF %s
+// BAD_REF: {{[Ee]rror|[Nn]ot found|[Uu]ndefined|[Ff]ailed}}
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "minimal_func",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "COPY", "type": "type_int", "inputs": [{ "type": "type_int", "kind": "constant", "value": 0 }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" }
+  }
+}

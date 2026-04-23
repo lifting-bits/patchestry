@@ -46,18 +46,25 @@ namespace patchestry::yaml {
 
         // Parse YAML content with error handling
         template< typename T >
-        std::optional< T > parse_yaml_content(const std::string &content);
+        std::optional< T >
+        parse_yaml_content(const std::string &content, const std::string &source = "");
     };
 
     template< typename T >
-    std::optional< T > YAMLParser::parse_yaml_content(const std::string &content) {
+    std::optional< T >
+    YAMLParser::parse_yaml_content(const std::string &content, const std::string &source) {
         T result;
         llvm::yaml::Input input(content);
 
         input >> result;
 
         if (input.error()) {
-            LOG(ERROR) << "Input was malformed: " << input.error().message() << "\n";
+            if (!source.empty()) {
+                LOG(ERROR) << "YAML parse error in '" << source
+                           << "': " << input.error().message() << "\n";
+            } else {
+                LOG(ERROR) << "YAML parse error: " << input.error().message() << "\n";
+            }
             return std::nullopt;
         }
 

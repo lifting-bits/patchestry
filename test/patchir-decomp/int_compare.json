@@ -1,0 +1,174 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
+// CIR-DAG: cir.func @int_eq_test
+// CIR-DAG: cir.func @int_ne_test
+// CIR-DAG: cir.func @int_lt_test
+// CIR-DAG: cir.func @int_le_test
+// CIR-DAG: cir.func @int_slt_test
+// CIR-DAG: cir.func @int_sle_test
+// CIR-DAG: cir.cmp(eq,
+// CIR-DAG: cir.cmp(ne,
+// CIR-DAG: cir.cmp(lt,
+// CIR-DAG: cir.cmp(le,
+// LL-DAG: define {{.*}} @int_eq_test
+// LL-DAG: define {{.*}} @int_ne_test
+// LL-DAG: define {{.*}} @int_lt_test
+// LL-DAG: define {{.*}} @int_le_test
+// LL-DAG: define {{.*}} @int_slt_test
+// LL-DAG: define {{.*}} @int_sle_test
+// LL-DAG: icmp eq i32
+// LL-DAG: icmp ne i32
+// LL-DAG: icmp ult i32
+// LL-DAG: icmp ule i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "int_eq_test",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_bool", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int"] },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_int", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "INT_EQUAL", "type": "type_bool", "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "p0" }, { "type": "type_int", "kind": "parameter", "operation": "p1" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_bool", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:20000000": {
+      "name": "int_ne_test",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_bool", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int"] },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_int", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "INT_NOTEQUAL", "type": "type_bool", "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "p0" }, { "type": "type_int", "kind": "parameter", "operation": "p1" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_bool", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    },
+    "ram:30000000": {
+      "name": "int_lt_test",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_bool", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int"] },
+      "basic_blocks": {
+        "ram:30000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_int", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:30000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:30000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "INT_LESS", "type": "type_bool", "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "p0" }, { "type": "type_int", "kind": "parameter", "operation": "p1" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_bool", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:30000000:entry"
+    },
+    "ram:40000000": {
+      "name": "int_le_test",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_bool", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int"] },
+      "basic_blocks": {
+        "ram:40000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_int", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:40000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:40000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "INT_LESSEQUAL", "type": "type_bool", "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "p0" }, { "type": "type_int", "kind": "parameter", "operation": "p1" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_bool", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:40000000:entry"
+    },
+    "ram:50000000": {
+      "name": "int_slt_test",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_bool", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int"] },
+      "basic_blocks": {
+        "ram:50000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_int", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:50000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:50000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "INT_SLESS", "type": "type_bool", "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "p0" }, { "type": "type_int", "kind": "parameter", "operation": "p1" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_bool", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:50000000:entry"
+    },
+    "ram:60000000": {
+      "name": "int_sle_test",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_bool", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int"] },
+      "basic_blocks": {
+        "ram:60000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_int", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:60000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:60000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "INT_SLESSEQUAL", "type": "type_bool", "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "p0" }, { "type": "type_int", "kind": "parameter", "operation": "p1" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_bool", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:60000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_bool": { "name": "bool", "size": 1, "kind": "boolean" }
+  }
+}

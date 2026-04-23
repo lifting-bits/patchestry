@@ -6,9 +6,11 @@
  */
 
 #include <optional>
+#include <string>
 #include <utility>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Attr.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclAccessPair.h>
 #include <clang/AST/Expr.h>
@@ -25,10 +27,13 @@
 #include <clang/Sema/Lookup.h>
 #include <clang/Sema/Sema.h>
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Casting.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
+#include <patchestry/AST/IntrinsicHandlers.hpp>
 #include <patchestry/AST/OperationBuilder.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
@@ -124,6 +129,52 @@ namespace patchestry::ast {
             assert(!result.isInvalid() && "Failed to build builtin call expr");
 
             return result.getAs< clang::Expr >();
+        }
+
+        /**
+         * @brief Look up or create an opaque external function placeholder in the TU.
+         *
+         * Used by create_userdefined to emit a best-effort call expression that
+         * preserves operation inputs for downstream analysis.
+         *
+         * @param fn_name     Name of the placeholder function.
+         * @param ret_type    Return type of the placeholder.
+         * @param param_types Parameter types; must be non-empty (variadic with zero
+         *                    fixed params violates "prototyped function must have at
+         *                    least one non-variadic input").
+         * @param op_loc      Source location for the declaration.
+         */
+        clang::FunctionDecl *lookup_or_create_opaque_fn( // NOLINT
+            clang::ASTContext &ctx, const std::string &fn_name, clang::QualType ret_type,
+            llvm::ArrayRef< clang::QualType > param_types, clang::SourceLocation op_loc
+        ) {
+            auto &ident = ctx.Idents.get(fn_name);
+            auto lookup_result =
+                ctx.getTranslationUnitDecl()->lookup(clang::DeclarationName(&ident));
+            for (auto *d : lookup_result) {
+                if (auto *fd = llvm::dyn_cast< clang::FunctionDecl >(d)) {
+                    return fd;
+                }
+            }
+
+            // Ensure at least one non-variadic param (LLVM/CIR requirement)
+            llvm::SmallVector< clang::QualType, 4 > params(param_types.begin(), param_types.end());
+            if (params.empty()) {
+                params.push_back(ctx.VoidPtrTy);
+            }
+
+            clang::FunctionProtoType::ExtProtoInfo epi;
+            epi.Variadic = false;
+            auto fn_type = ctx.getFunctionType(ret_type, params, epi);
+
+            auto *fn_decl = clang::FunctionDecl::Create(
+                ctx, ctx.getTranslationUnitDecl(), op_loc, op_loc,
+                clang::DeclarationName(&ident), fn_type,
+                ctx.getTrivialTypeSourceInfo(fn_type), clang::SC_Extern
+            );
+            fn_decl->setDeclContext(ctx.getTranslationUnitDecl());
+            ctx.getTranslationUnitDecl()->addDecl(fn_decl);
+            return fn_decl;
         }
 
     } // namespace
@@ -276,6 +327,10 @@ namespace patchestry::ast {
 
         // Handle exact type match: no cast required
         if (ctx.hasSameUnqualifiedType(input_type, output_type)) {
+            // Array types are not directly assignable in C; use element-wise copy
+            if (output_type->isArrayType() || output_type->isConstantArrayType()) {
+                return create_array_assignment_operation(ctx, input_expr, output_expr, loc);
+            }
             auto assign_operation =
                 sema().CreateBuiltinBinOp(loc, clang::BO_Assign, output_expr, input_expr);
             assert(!assign_operation.isInvalid());
@@ -362,6 +417,19 @@ namespace patchestry::ast {
         );
     }
 
+    std::optional< clang::QualType > OpBuilder::lookup_op_type(const Operation &op) {
+        if (!op.type.has_value()) {
+            LOG(ERROR) << "Operation missing type field. key: " << op.key;
+            return std::nullopt;
+        }
+        auto it = type_builder().get_serialized_types().find(*op.type);
+        if (it == type_builder().get_serialized_types().end()) {
+            LOG(ERROR) << "Operation type not found in serialized types. key: " << op.key;
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_copy(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -419,15 +487,29 @@ namespace patchestry::ast {
         auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
 
         if (op.type) {
-            const auto &op_type = type_builder().get_serialized_types().at(*op.type);
-            auto pointer_type   = ctx.getPointerType(op_type);
-            auto *cast_expr     = make_cast(ctx, input_expr, pointer_type, op_loc);
-            assert(cast_expr != nullptr && "Failed to make cast expression");
+            auto op_type_opt = lookup_op_type(op);
+            if (!op_type_opt) {
+                return {};
+            }
+            auto pointer_type = ctx.getPointerType(*op_type_opt);
+            auto *cast_expr   = make_cast(ctx, input_expr, pointer_type, op_loc);
+            if (!cast_expr) {
+                LOG(ERROR) << "Failed to make cast expression for LOAD. key: " << op.key;
+                return {};
+            }
             input_expr = cast_expr;
         }
 
-        // TODO(kumarak): If input expr is of type void*, derefencing it will lead to type void.
-        // Should it be typecasted to int*??
+        // Dereferencing a void* is ill-formed in C.  When no explicit op.type cast has been
+        // applied above and the pointer is still void*, cast it to the output varnode's type
+        // (if known) or uint8_t* as a last resort.
+        if (input_expr->getType()->isVoidPointerType()) {
+            clang::QualType pointee = op.output.has_value()
+                                          ? get_varnode_type(ctx, *op.output)
+                                          : ctx.UnsignedCharTy;
+            input_expr = make_cast(ctx, input_expr, ctx.getPointerType(pointee), op_loc);
+            assert(input_expr != nullptr && "Failed to cast void* for load");
+        }
 
         auto derefed_expr = sema().CreateBuiltinUnaryOp(
             sourceLocation(ctx.getSourceManager(), op.key), clang::UO_Deref,
@@ -466,8 +548,12 @@ namespace patchestry::ast {
             auto *rhs_expr =
                 clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
 
-            // If not member expression, fallback to derefencing and assigning the value to lhs
-            // expression.
+            // Parenthesize pointer arithmetic so the deref binds the whole
+            // expression: *(ptr + offset) instead of *ptr + offset.
+            if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
+                lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+            }
+
             auto deref_result = sema().CreateBuiltinUnaryOp(
                 op_loc, clang::UO_Deref, clang::dyn_cast< clang::Expr >(lhs_expr)
             );
@@ -479,15 +565,42 @@ namespace patchestry::ast {
                      false };
         }
 
-        // TODO(kumarak): A pointer can come with space id and offset part. We don't handle
-        // such cases yet. Parameters           Description
-        //   input0(special)    Constant ID of space to storeinto.
-        //   input1             Varnode containing pointer offset of destination.
-        //   input2             Varnode containing data to be stored.
-        // Semantic statement
-        //   *input1 = input2;
-        //   *[input0] input1 = input2;
+        // 3-input form: input0 = address-space constant (not representable in C, ignored),
+        //               input1 = pointer, input2 = value to store.
+        // Semantic: *input1 = input2;  (same as the 2-input case, just different slot indices)
+        if (op.inputs.size() >= 3) {
+            auto op_loc    = sourceLocation(ctx.getSourceManager(), op.key);
+            auto *lhs_expr = clang::dyn_cast< clang::Expr >(
+                create_varnode(ctx, function, op.inputs[1])
+            );
+            auto *rhs_expr = clang::dyn_cast< clang::Expr >(
+                create_varnode(ctx, function, op.inputs[2])
+            );
+            if (!lhs_expr || !rhs_expr) {
+                 LOG(ERROR) << "Failed to create LHS or RHS expression for 3-input store operation. key: "
+                           << op.key << "\n";
+                 return {};
+            }
 
+            if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
+                lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
+            }
+
+            auto deref_result =
+                sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
+            if (deref_result.isInvalid()) {
+                LOG(ERROR) << "Failed to create deref expression for STORE. key: " << op.key;
+                return {};
+            }
+
+            return { create_assign_operation(
+                         ctx, rhs_expr, deref_result.getAs< clang::Expr >(), op_loc
+                     ),
+                     false };
+        }
+
+        LOG(ERROR) << "Store operation with unexpected number of inputs. key: " << op.key
+                   << "\n";
         return {};
     }
 
@@ -496,6 +609,14 @@ namespace patchestry::ast {
         if (!op.target_block) {
             LOG(ERROR) << "Branch instruction with no target block. key: " << op.key << "\n";
             return {};
+        }
+
+        // If the target is the immediately next block in the RPO emission order,
+        // control falls through naturally — no goto required.
+        if (!function_builder().current_next_block_key.empty()
+            && *op.target_block == function_builder().current_next_block_key)
+        {
+            return { nullptr, false };
         }
 
         if (!function_builder().labels_declaration.contains(*op.target_block)) {
@@ -579,16 +700,229 @@ namespace patchestry::ast {
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        if (input_expr == nullptr) {
+            LOG(ERROR) << "BRANCHIND: failed to create input expression. key: " << op.key << "\n";
+            return {};
+        }
         auto loc       = sourceLocation(ctx.getSourceManager(), op.key);
         auto expr_type = input_expr->getType();
         if (!expr_type->isPointerType()) {
-            auto op_type    = ctx.getPointerType(expr_type);
-            auto *cast_expr = make_cast(ctx, input_expr, op_type, loc);
-            assert(cast_expr != nullptr && "Failed to create cast expression");
+            auto *cast_expr = make_cast(ctx, input_expr, ctx.getPointerType(expr_type), loc);
+            if (cast_expr == nullptr) {
+                LOG(ERROR) << "BRANCHIND: failed to cast input to pointer type. key: " << op.key
+                           << "\n";
+                return {};
+            }
             input_expr = cast_expr;
         }
 
-        // Create indirect goto statement for branchind
+        // Build the trailing statement that follows the switch body:
+        // - goto fallback_block when a bounds-check out-of-range target is known,
+        // - __builtin_unreachable() otherwise (all cases are covered by the table).
+        auto make_fallback_stmt = [&]() -> clang::Stmt * {
+            if (op.fallback_block.has_value()
+                && function_builder().labels_declaration.contains(*op.fallback_block))
+            {
+                auto target_loc = sourceLocation(ctx.getSourceManager(), *op.fallback_block);
+                return new (ctx) clang::GotoStmt(
+                    function_builder().labels_declaration.at(*op.fallback_block), loc,
+                    target_loc
+                );
+            }
+            std::vector< clang::Expr * > no_args;
+            return create_builtin_call(
+                ctx, sema(), clang::Builtin::BI__builtin_unreachable, no_args, loc
+            );
+        };
+
+        // Wrap switch_stmt with a trailing fallback statement into a compound.
+        // The switch has no default arm; the fallback stmt handles the out-of-range
+        // path (or marks it unreachable when no fallback block is available).
+        auto wrap_with_fallback = [&](clang::Stmt *switch_stmt
+                                  ) -> std::pair< clang::Stmt *, bool > {
+            std::vector< clang::Stmt * > stmts = { switch_stmt, make_fallback_stmt() };
+            return {
+                clang::CompoundStmt::Create(ctx, stmts, clang::FPOptionsOverride(), loc, loc),
+                false
+            };
+        };
+
+        // Priority 1: switch_cases present — proper integer switch using per-case
+        // integer values recovered by Ghidra.  Prefer inputs[0] when it is a named
+        // local variable (the most direct discriminant); otherwise fall back to
+        // switch_input, which may resolve to an inlined call expression.
+        if (!op.switch_cases.empty()) {
+            clang::Expr *disc = nullptr;
+            if (op.inputs[0].kind == Varnode::VARNODE_LOCAL) {
+                disc = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            } else if (op.switch_input.has_value()) {
+                disc = clang::dyn_cast< clang::Expr >(
+                    create_varnode(ctx, function, *op.switch_input)
+                );
+            }
+            if (disc == nullptr) {
+                LOG(ERROR) << "BRANCHIND: failed to resolve switch discriminant. key: " << op.key
+                           << "\n";
+                return {};
+            }
+            if (!disc->getType()->isIntegerType()) {
+                auto *cast_disc = make_cast(ctx, disc, ctx.IntTy, loc);
+                if (cast_disc == nullptr) {
+                    LOG(ERROR) << "BRANCHIND: failed to cast switch discriminant to int. key: "
+                               << op.key << "\n";
+                    return {};
+                }
+                disc = cast_disc;
+            }
+
+            auto *switch_stmt =
+                clang::SwitchStmt::Create(ctx, nullptr, nullptr, disc, loc, loc);
+
+            const auto disc_width = ctx.getIntWidth(disc->getType());
+
+            auto create_case = [&](const SwitchCase &sc) -> clang::CaseStmt * {
+                auto *case_val = clang::IntegerLiteral::Create(
+                    ctx,
+                    llvm::APInt(disc_width, static_cast< uint64_t >(sc.value), /*isSigned=*/true),
+                    disc->getType(), loc
+                );
+                auto *case_stmt =
+                    clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
+                auto target_loc = sourceLocation(ctx.getSourceManager(), sc.target_block);
+
+                // Try to inline the target block body for has_exit cases.
+                // Requirements: block exists, has ordered ops, terminal op is BRANCH.
+                bool inlined = false;
+                if (sc.has_exit && function.basic_blocks.contains(sc.target_block)) {
+                    const auto &tb = function.basic_blocks.at(sc.target_block);
+                    if (!tb.ordered_operations.empty()) {
+                        const auto &last_op_key = tb.ordered_operations.back();
+                        bool terminal_is_branch =
+                            tb.operations.contains(last_op_key)
+                            && tb.operations.at(last_op_key).mnemonic == Mnemonic::OP_BRANCH;
+
+                        if (terminal_is_branch) {
+                            std::vector< clang::Stmt * > case_body;
+                            for (const auto &op_key : tb.ordered_operations) {
+                                if (!tb.operations.contains(op_key)) { continue; }
+                                const auto &target_op = tb.operations.at(op_key);
+                                // Skip the terminal BRANCH — break replaces it.
+                                if (target_op.mnemonic == Mnemonic::OP_BRANCH) { continue; }
+                                auto [stmt, merge] =
+                                    function_builder().create_operation(ctx, target_op);
+                                for (auto *p : function_builder().pending_materialized) {
+                                    case_body.push_back(p);
+                                }
+                                function_builder().pending_materialized.clear();
+                                if (stmt) {
+                                    function_builder().operation_stmts.emplace(
+                                        target_op.key, stmt
+                                    );
+                                    if (!merge) { case_body.push_back(stmt); }
+                                }
+                            }
+                            case_body.push_back(new (ctx) clang::BreakStmt(loc));
+                            case_stmt->setSubStmt(clang::CompoundStmt::Create(
+                                ctx, case_body, clang::FPOptionsOverride(), loc, loc
+                            ));
+                            function_builder().inlined_blocks.insert(sc.target_block);
+                            inlined = true;
+                        }
+                    }
+                }
+
+                if (!inlined) {
+                    auto *goto_stmt = new (ctx) clang::GotoStmt(
+                        function_builder().labels_declaration.at(sc.target_block), loc,
+                        target_loc
+                    );
+                    case_stmt->setSubStmt(goto_stmt);
+                    if (sc.has_exit) {
+                        function_builder().break_target_blocks.insert(sc.target_block);
+                    }
+                }
+
+                return case_stmt;
+            };
+
+            std::vector< clang::Stmt * > sw_body;
+            for (const auto &sc : op.switch_cases) {
+                if (function_builder().labels_declaration.contains(sc.target_block)) {
+                    sw_body.push_back(create_case(sc));
+                }
+            }
+            switch_stmt->setBody(
+                clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
+            );
+            return wrap_with_fallback(switch_stmt);
+        }
+
+        // Priority 2: successor_blocks only — address-based switch (existing logic).
+        if (!op.successor_blocks.empty()) {
+            // Helper: parse "ram:HEXADDR:NUM:basic" → HEXADDR as uint64.
+            auto parse_block_addr = [](const std::string &key) -> std::optional< uint64_t > {
+                auto p1 = key.find(':');
+                if (p1 == std::string::npos) {
+                    return std::nullopt;
+                }
+                auto p2 = key.find(':', p1 + 1U);
+                if (p2 == std::string::npos) {
+                    return std::nullopt;
+                }
+                const auto hex_str = key.substr(p1 + 1U, p2 - p1 - 1U);
+                if (hex_str.empty()) {
+                    return std::nullopt;
+                }
+                try {
+                    return std::stoull(hex_str, nullptr, 16);
+                } catch (...) {
+                    return std::nullopt;
+                }
+            };
+
+            const auto disc_type = ctx.getUIntPtrType();
+            auto *disc_expr      = input_expr;
+            if (!ctx.hasSameUnqualifiedType(disc_expr->getType(), disc_type)) {
+                disc_expr = make_cast(ctx, disc_expr, disc_type, loc);
+                if (!disc_expr) {
+                    return { nullptr, false };
+                }
+            }
+
+            auto *switch_stmt =
+                clang::SwitchStmt::Create(ctx, nullptr, nullptr, disc_expr, loc, loc);
+
+            std::vector< clang::Stmt * > sw_body;
+            const auto disc_width = ctx.getIntWidth(disc_type);
+            for (const auto &block_key : op.successor_blocks) {
+                if (!function_builder().labels_declaration.contains(block_key)) {
+                    continue;
+                }
+                auto maybe_addr = parse_block_addr(block_key);
+                if (!maybe_addr) {
+                    continue;
+                }
+                auto *case_val = clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(disc_width, *maybe_addr), disc_type, loc
+                );
+                auto *case_stmt =
+                    clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
+                auto target_loc = sourceLocation(ctx.getSourceManager(), block_key);
+                auto *goto_stmt = new (ctx) clang::GotoStmt(
+                    function_builder().labels_declaration.at(block_key), loc, target_loc
+                );
+                case_stmt->setSubStmt(goto_stmt);
+                sw_body.push_back(case_stmt);
+            }
+
+            switch_stmt->setBody(
+                clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
+            );
+            return wrap_with_fallback(switch_stmt);
+        }
+
+        // Priority 3: no successor info at all — emit IndirectGotoStmt as the only
+        // fallback when Ghidra has no resolved successors.
         auto *result_stmt = new (ctx) clang::IndirectGotoStmt(loc, loc, input_expr);
         assert(result_stmt != nullptr && "Failed to create indirect goto statement");
 
@@ -632,7 +966,11 @@ namespace patchestry::ast {
         // TODO(kumarak): Switch to delay the creation of AST node for function declaration and
         // fix return type during creating the node.
         if (op.type) {
-            const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+            auto op_type_opt = lookup_op_type(op);
+            if (!op_type_opt) {
+                return {};
+            }
+            const auto &op_type = *op_type_opt;
             if (callee->getReturnType() != op_type && callee->getReturnType()->isVoidType()) {
                 auto param_types    = proto_type->getParamTypes();
                 auto epi            = proto_type->getExtProtoInfo();
@@ -722,8 +1060,19 @@ namespace patchestry::ast {
                 function_builder().function_list.get().at(*op.target->function);
 
             call_expr = build_callexpr_from_function(ctx, function, op);
-            if (!op.output || callee->getReturnType()->isVoidType()) {
+            if (callee->getReturnType()->isVoidType()) {
                 return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
+            }
+            if (!op.output) {
+                // Non-void return but no explicit output varnode in the JSON.
+                // Return the CallExpr with should_merge_to_next=true so it is NOT
+                // emitted as a standalone statement.  Instead, the downstream op
+                // picks it up via create_temporary Case 2 and inlines it directly,
+                // producing exactly one call at the point of consumption and avoiding
+                // cross-block declaration hazards that arise from creating a synthetic
+                // VarDecl in one block whose DeclRefExpr survives in a different block
+                // after dead-block pruning.
+                return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), true);
             }
 
         } else if (op.target->operation) {
@@ -759,22 +1108,201 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_callind(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return {};
+        // 1. Validate operation
+        if (!op.target || op.mnemonic != Mnemonic::OP_CALLIND) {
+            LOG(ERROR) << "CALLIND operation or target is invalid. key: " << op.key << "\n";
+            return {};
+        }
+
+        auto op_loc            = sourceLocation(ctx.getSourceManager(), op.key);
+        clang::Expr *fn_ptr_expr = nullptr;
+
+        // 2. Get function pointer expression from target
+        if (op.target->global) {
+            // Target is a global variable containing the function pointer
+            if (!function_builder().global_var_list.get().contains(*op.target->global)) {
+                LOG(ERROR) << "CALLIND target global not found: " << *op.target->global
+                           << ". key: " << op.key << "\n";
+                return {};
+            }
+            auto *var_decl = function_builder().global_var_list.get().at(*op.target->global);
+            fn_ptr_expr    = clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
+                clang::SourceLocation(), var_decl->getType(), clang::VK_LValue
+            );
+        } else if (op.target->operation) {
+            // Target is a computed expression (temporary)
+            auto maybe_operation = operationFromKey(function, *op.target->operation);
+            if (!maybe_operation) {
+                LOG(ERROR) << "CALLIND target operation not found. key: " << op.key << "\n";
+                return {};
+            }
+            auto [stmt, _] = function_builder().create_operation(ctx, *maybe_operation);
+            fn_ptr_expr    = clang::dyn_cast< clang::Expr >(stmt);
+        } else {
+            LOG(ERROR) << "CALLIND target missing global or operation. key: " << op.key << "\n";
+            return {};
+        }
+
+        if (fn_ptr_expr == nullptr) {
+            LOG(ERROR) << "Failed to create function pointer expression. key: " << op.key << "\n";
+            return {};
+        }
+
+        // 3. Infer function pointer type and cast if needed
+        auto expr_type = fn_ptr_expr->getType();
+
+        // Check if we need to build an explicit function pointer type
+        const bool needs_type_inference =
+            !expr_type->isPointerType() || !expr_type->getPointeeType()->isFunctionType();
+
+        if (needs_type_inference) {
+            // Infer parameter types from inputs
+            std::vector< clang::QualType > param_types;
+            for (const auto &input : op.inputs) {
+                if (type_builder().get_serialized_types().contains(input.type_key)) {
+                    param_types.push_back(type_builder().get_serialized_types().at(input.type_key));
+                } else {
+                    param_types.push_back(ctx.IntTy); // Fallback
+                }
+            }
+
+            // Infer return type from op.type
+            clang::QualType return_type = ctx.VoidTy;
+            if (op.type && type_builder().get_serialized_types().contains(*op.type)) {
+                return_type = type_builder().get_serialized_types().at(*op.type);
+            }
+
+            // Build function type and pointer type
+            const clang::FunctionProtoType::ExtProtoInfo epi;
+            auto func_type     = ctx.getFunctionType(return_type, param_types, epi);
+            auto func_ptr_type = ctx.getPointerType(func_type);
+
+            // Cast callee to inferred function pointer type
+            fn_ptr_expr = make_cast(ctx, fn_ptr_expr, func_ptr_type, op_loc);
+            if (fn_ptr_expr == nullptr) {
+                LOG(ERROR) << "Failed to cast to function pointer type. key: " << op.key << "\n";
+                return {};
+            }
+        }
+
+        // 4. Build argument list from inputs
+        std::vector< clang::Expr * > arguments;
+        for (const auto &input : op.inputs) {
+            auto *arg_expr =
+                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+            if (arg_expr != nullptr) {
+                arguments.push_back(arg_expr);
+            }
+        }
+
+        // 5. Build the indirect call expression
+        auto result = sema().BuildCallExpr(nullptr, fn_ptr_expr, op_loc, arguments, op_loc);
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Failed to build CALLIND expression. key: " << op.key << "\n";
+            return {};
+        }
+        auto *call_expr = result.getAs< clang::Expr >();
+
+        // 6. Handle return value assignment if present
+        if (!op.output || !op.has_return_value.value_or(false)) {
+            return std::make_pair(call_expr, false);
+        }
+
+        auto *output_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        return { create_assign_operation(ctx, call_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_callother(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return {};
+        if (!op.target || op.target->kind != Varnode::VARNODE_INTRINSIC || !op.target->function) {
+            LOG(ERROR) << "Invalid CALLOTHER intrinsic target. key: " << op.key << "\n";
+            return {};
+        }
+
+        const auto &label = *op.target->function;
+        auto name         = parse_intrinsic_name(label);
+
+        // Look up specific handler
+        const auto &handlers = get_intrinsic_handlers();
+        auto it              = handlers.find(name);
+        if (it != handlers.end()) {
+            return it->second(*this, ctx, function, op);
+        }
+
+        // Fallback: use __patchestry_missing_<name> for unrecognized intrinsics
+        // This includes cases where Ghidra couldn't determine the actual intrinsic name
+        // (e.g., "stringdata" is a placeholder name)
+        // The function declaration includes an AnnotateAttr with metadata for debugging
+        return create_missing_intrinsic_call(ctx, function, op, name, label);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_userdefined(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        return {};
+        // OP_USERDEFINED covers processor-specific semantics; handled identically to
+        // OP_CALLOTHER: emit an opaque placeholder call so the operation is not silently lost.
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        clang::QualType ret_type = ctx.VoidTy;
+        if (op.output.has_value() && op.type.has_value()) {
+            const auto &types = type_builder().get_serialized_types();
+            auto it           = types.find(*op.type);
+            if (it != types.end()) {
+                ret_type = it->second;
+            }
+        }
+
+        std::string fn_name = "__patchestry_userdefined_" + sanitize_key_to_ident(op.key);
+
+        llvm::SmallVector< clang::QualType, 4 > param_types;
+        for (const auto &input : op.inputs) {
+            param_types.push_back(get_varnode_type(ctx, input));
+        }
+
+        clang::FunctionDecl *fn_decl =
+            lookup_or_create_opaque_fn(ctx, fn_name, ret_type, param_types, op_loc);
+
+        std::vector< clang::Expr * > args;
+        for (const auto &input : op.inputs) {
+            auto *arg_expr =
+                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+            if (arg_expr != nullptr) {
+                args.push_back(arg_expr);
+            }
+        }
+        // When fn was created with void* placeholder (zero inputs), pass (void*)0
+        if (args.empty() && op.inputs.empty()) {
+            auto *zero = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
+            );
+            auto *null_expr = make_cast(ctx, zero, ctx.VoidPtrTy, op_loc);
+            if (null_expr != nullptr) {
+                args.push_back(null_expr);
+            }
+        }
+
+        auto *ref_expr = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), fn_decl, false,
+            op_loc, ctx.getPointerType(fn_decl->getType()), clang::VK_PRValue
+        );
+
+        auto call_result = sema().BuildCallExpr(nullptr, ref_expr, op_loc, args, op_loc);
+        if (call_result.isInvalid()) {
+            LOG(ERROR) << "Failed to build userdefined placeholder for: " << op.key << "\n";
+            return {};
+        }
+        auto *call_expr = call_result.getAs< clang::Expr >();
+
+        if (!op.output.has_value() || ret_type->isVoidType()) {
+            return { call_expr, false };
+        }
+
+        auto *output_expr =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        return { create_assign_operation(ctx, call_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_return(
@@ -782,8 +1310,10 @@ namespace patchestry::ast {
     ) {
         auto location = sourceLocation(ctx.getSourceManager(), op.key);
         if (!op.inputs.empty()) {
-            auto varnode   = op.inputs.size() == 1 ? op.inputs.front() : op.inputs.at(1);
-            auto *ret_expr = create_varnode(ctx, function, varnode);
+            // For multi-input RETURN, input[0] is the address-space constant; use input[1].
+            // For single-input RETURN, use input[0] directly.
+            size_t idx     = op.inputs.size() > 1 ? 1 : 0;
+            auto *ret_expr = create_varnode(ctx, function, op.inputs[idx]);
             return std::make_pair(
                 clang::ReturnStmt::Create(
                     ctx, location, llvm::dyn_cast< clang::Expr >(ret_expr), nullptr
@@ -791,6 +1321,29 @@ namespace patchestry::ast {
                 false
             );
         }
+
+        // When the enclosing function returns non-void, emit "return (T)0;"
+        // instead of a bare "return;" to avoid a diagnostic on the (typically
+        // unreachable) empty return after __stack_chk_fail or similar.
+        const auto &types = type_builder().get_serialized_types();
+        auto type_it      = types.find(function.prototype.rttype_key);
+        if (type_it != types.end() && !type_it->second->isVoidType()) {
+            auto ret_type = type_it->second;
+            auto *zero    = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 0), ctx.IntTy, location
+            );
+            auto cast_result = sema().BuildCStyleCastExpr(
+                location, ctx.getTrivialTypeSourceInfo(ret_type), location, zero
+            );
+            assert(!cast_result.isInvalid());
+            return std::make_pair(
+                clang::ReturnStmt::Create(
+                    ctx, location, cast_result.getAs< clang::Expr >(), nullptr
+                ),
+                false
+            );
+        }
+
         return std::make_pair(
             clang::ReturnStmt::Create(ctx, location, nullptr, nullptr), false
         );
@@ -806,7 +1359,8 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        auto type_it = type_builder().get_serialized_types().find(*op.type);
+        if (type_it == type_builder().get_serialized_types().end()) {
             LOG(ERROR) << "PIECE Operation type is not serialized. key: " << op.key;
             return {};
         }
@@ -815,11 +1369,13 @@ namespace patchestry::ast {
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
         auto *input1_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+        if (!input0_expr || !input1_expr) {
+            LOG(ERROR) << "Failed to create PIECE input expression. key: " << op.key;
+            return {};
+        }
         auto location = sourceLocation(ctx.getSourceManager(), op.key);
 
-        // TODO(kumarak): It should be the size of input1 field in bits; At the moment
-        // consider it as 4 bytes but should be fixed.
-        unsigned low_width = ctx.getIntWidth(ctx.IntTy);
+        unsigned low_width = op.inputs[1].size * 8;
         auto merge_to_next = !op.output.has_value();
         auto *shift_value  = clang::IntegerLiteral::Create(
             ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), low_width), ctx.IntTy, location
@@ -828,12 +1384,20 @@ namespace patchestry::ast {
         // If Operation has type, convert expression to operation type and perform bit-shift and
         // or operation.
         if (op.type) {
-            auto op_type           = type_builder().get_serialized_types().at(*op.type);
+            auto op_type           = type_it->second;
             auto *cast_expr_input0 = make_cast(ctx, input0_expr, op_type, location);
-            assert(cast_expr_input0 != nullptr && "Failed to create cast expression");
+            if (!cast_expr_input0) {
+                LOG(ERROR) << "Failed to create cast expression for PIECE input0. key: "
+                           << op.key;
+                return {};
+            }
             input0_expr            = cast_expr_input0;
             auto *cast_expr_input1 = make_cast(ctx, input1_expr, op_type, location);
-            assert(cast_expr_input1 != nullptr && "Failed to create cast expression");
+            if (!cast_expr_input1) {
+                LOG(ERROR) << "Failed to create cast expression for PIECE input1. key: "
+                           << op.key;
+                return {};
+            }
             input1_expr = cast_expr_input1;
         }
 
@@ -850,7 +1414,10 @@ namespace patchestry::ast {
             location, clang::BO_Or, shifted_high_result.getAs< clang::Expr >(),
             clang::dyn_cast< clang::Expr >(input1_expr)
         );
-        assert(!or_result.isInvalid());
+        if (or_result.isInvalid()) {
+            LOG(ERROR) << "PIECE Operation invalid OR result. key: " << op.key;
+            return {};
+        }
 
         if (merge_to_next) {
             return std::make_pair(or_result.getAs< clang::Expr >(), merge_to_next);
@@ -875,13 +1442,14 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!type_builder().get_serialized_types().contains(*op.type)) {
+        auto type_it = type_builder().get_serialized_types().find(*op.type);
+        if (type_it == type_builder().get_serialized_types().end()) {
             LOG(ERROR) << "SUBPIECE Operation type is not serialized. key: " << op.key;
             return {};
         }
 
         auto merge_to_next  = !op.output.has_value();
-        const auto &op_type = type_builder().get_serialized_types().at(*op.type);
+        const auto &op_type = type_it->second;
         auto op_location    = sourceLocation(ctx.getSourceManager(), op.key);
 
         auto *shift_value =
@@ -905,7 +1473,7 @@ namespace patchestry::ast {
         );
 
         if (shifted_result.isInvalid()) {
-            assert(false);
+            LOG(ERROR) << "SUBPIECE invalid shifted result. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
 
@@ -921,7 +1489,7 @@ namespace patchestry::ast {
         );
 
         if (result.isInvalid()) {
-            assert(false);
+            LOG(ERROR) << "SUBPIECE invalid AND-mask result. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
 
@@ -938,7 +1506,7 @@ namespace patchestry::ast {
         );
 
         if (out_result.isInvalid()) {
-            assert(false);
+            LOG(ERROR) << "SUBPIECE invalid output assignment. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
 
@@ -948,7 +1516,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_zext(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if (op.inputs.size() != 1U && op.mnemonic != Mnemonic::OP_INT_ZEXT) {
+        if (op.inputs.size() != 1U || op.mnemonic != Mnemonic::OP_INT_ZEXT) {
             LOG(ERROR) << "INT_ZEXT operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -959,7 +1527,11 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        auto target_type = type_builder().get_serialized_types().at(*op.type);
+        auto target_type_opt = lookup_op_type(op);
+        if (!target_type_opt) {
+            return {};
+        }
+        auto target_type = *target_type_opt;
 
         auto implicit_result = sema().PerformImplicitConversion(
             input_expr, target_type, clang::AssignmentAction::Converting, true
@@ -989,7 +1561,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_sext(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if (op.inputs.size() != 1U && op.mnemonic != Mnemonic::OP_INT_SEXT) {
+        if (op.inputs.size() != 1U || op.mnemonic != Mnemonic::OP_INT_SEXT) {
             LOG(ERROR) << "INT_SEXT operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -1001,7 +1573,11 @@ namespace patchestry::ast {
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
 
-        auto target_type = type_builder().get_serialized_types().at(*op.type);
+        auto target_type_opt = lookup_op_type(op);
+        if (!target_type_opt) {
+            return {};
+        }
+        auto target_type = *target_type_opt;
 
         auto implicit_result = sema().PerformImplicitConversion(
             input_expr, target_type, clang::AssignmentAction::Converting, true
@@ -1069,15 +1645,139 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_scarry(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        return create_int_carry(ctx, function, op);
+        if (op.inputs.empty() || op.inputs.size() != 2U) {
+            LOG(ERROR) << "Skipping, scarry operation due to input operands. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        auto op_loc  = sourceLocation(ctx.getSourceManager(), op.key);
+        auto *input0 =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        auto *input1 =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+
+        // Compute sum = input0 + input1
+        auto sum =
+            sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_Add, input0, input1);
+        assert(!sum.isInvalid() && "Failed to create add operation");
+
+        // Signed overflow on addition occurs when both inputs have the same sign AND
+        // the result has a different sign from the inputs.
+        // Formula: (~(input0 ^ input1)) & (input0 ^ sum) < 0
+
+        // xor_inputs = input0 ^ input1
+        auto xor_inputs =
+            sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_Xor, input0, input1);
+        assert(!xor_inputs.isInvalid() && "Failed to create xor operation");
+
+        // not_xor_inputs = ~(input0 ^ input1)
+        // MSB is 1 when both inputs have the same sign
+        auto not_xor_inputs = sema().BuildUnaryOp(
+            sema().getCurScope(), op_loc, clang::UO_Not, xor_inputs.getAs< clang::Expr >()
+        );
+        assert(!not_xor_inputs.isInvalid() && "Failed to create bitwise not operation");
+
+        // xor_result = input0 ^ sum
+        // MSB is 1 when the sum's sign differs from input0
+        auto xor_result = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_Xor, input0,
+            sum.getAs< clang::Expr >()
+        );
+        assert(!xor_result.isInvalid() && "Failed to create xor operation");
+
+        // and_result = not_xor_inputs & xor_result
+        auto and_result = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_And, not_xor_inputs.getAs< clang::Expr >(),
+            xor_result.getAs< clang::Expr >()
+        );
+        assert(!and_result.isInvalid() && "Failed to create and operation");
+
+        // scarry = and_result < 0
+        auto *zero = clang::IntegerLiteral::Create(
+            ctx, llvm::APInt(ctx.getIntWidth(input0->getType()), 0, true), input0->getType(),
+            op_loc
+        );
+        auto scarry = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
+            zero
+        );
+        assert(!scarry.isInvalid() && "Failed to create scarry comparison");
+
+        if (!op.output.has_value()) {
+            return { scarry.getAs< clang::Stmt >(), true };
+        }
+
+        auto *output =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+
+        return { create_assign_operation(ctx, scarry.getAs< clang::Expr >(), output, op_loc),
+                 false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_sborrow(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        (void) ctx, (void) function, (void) op;
-        UNIMPLEMENTED("create_int_sborrow not implemented"); // NOLINT
-        return {};
+        if (op.inputs.empty() || op.inputs.size() != 2U) {
+            LOG(ERROR) << "Skipping, sborrow operation due to input operands. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        auto op_loc  = sourceLocation(ctx.getSourceManager(), op.key);
+        auto *input0 =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        auto *input1 =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+
+        // Compute diff = input0 - input1
+        auto diff =
+            sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_Sub, input0, input1);
+        assert(!diff.isInvalid() && "Failed to create sub operation");
+
+        // Signed overflow occurs when input0 and input1 have different signs AND
+        // input0 and diff have different signs.
+        // Formula: ((input0 ^ input1) & (input0 ^ diff)) < 0
+
+        // xor_inputs = input0 ^ input1
+        auto xor_inputs =
+            sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_Xor, input0, input1);
+        assert(!xor_inputs.isInvalid() && "Failed to create xor operation");
+
+        // xor_result = input0 ^ diff
+        auto xor_result = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_Xor, input0,
+            diff.getAs< clang::Expr >()
+        );
+        assert(!xor_result.isInvalid() && "Failed to create xor operation");
+
+        // and_result = xor_inputs & xor_result
+        auto and_result = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_And, xor_inputs.getAs< clang::Expr >(),
+            xor_result.getAs< clang::Expr >()
+        );
+        assert(!and_result.isInvalid() && "Failed to create and operation");
+
+        // sborrow = and_result < 0
+        auto *zero = clang::IntegerLiteral::Create(
+            ctx, llvm::APInt(ctx.getIntWidth(input0->getType()), 0, true), input0->getType(),
+            op_loc
+        );
+        auto sborrow = sema().BuildBinOp(
+            sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
+            zero
+        );
+        assert(!sborrow.isInvalid() && "Failed to create sborrow comparison");
+
+        if (!op.output.has_value()) {
+            return { sborrow.getAs< clang::Stmt >(), true };
+        }
+
+        auto *output =
+            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+
+        return { create_assign_operation(ctx, sborrow.getAs< clang::Expr >(), output, op_loc),
+                 false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_2comp(
@@ -1201,7 +1901,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_floor(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if ((op.mnemonic != Mnemonic::OP_FLOAT_ROUND) || (op.inputs.size() != 1U)) {
+        if ((op.mnemonic != Mnemonic::OP_FLOAT_FLOOR) || (op.inputs.size() != 1U)) {
             LOG(ERROR) << "FLOAT_FLOOR operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -1219,7 +1919,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_float_ceil(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if ((op.mnemonic != Mnemonic::OP_FLOAT_ROUND) || (op.inputs.size() != 1U)) {
+        if ((op.mnemonic != Mnemonic::OP_FLOAT_CEIL) || (op.inputs.size() != 1U)) {
             LOG(ERROR) << "FLOAT_CEIL operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -1292,7 +1992,7 @@ namespace patchestry::ast {
         std::vector args = { input_expr };
         auto *call_expr = create_builtin_call(ctx, sema(), id, args, op_loc);
 
-        if (op.output.has_value()) {
+        if (!op.output.has_value()) {
             return { call_expr, true };
         }
 
@@ -1304,7 +2004,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_int2float(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if ((op.mnemonic != Mnemonic::OP_FLOAT2FLOAT) || (op.inputs.size() != 1U)) {
+        if ((op.mnemonic != Mnemonic::OP_INT2FLOAT) || (op.inputs.size() != 1U)) {
             LOG(ERROR) << "INT2FLOAT operation is invalid or has invalid input operand. key: "
                        << op.key << "\n";
             return {};
@@ -1320,6 +2020,12 @@ namespace patchestry::ast {
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        if (!input_expr->isPRValue()) {
+            input_expr = make_implicit_cast(
+                ctx, input_expr, input_expr->getType(), clang::CastKind::CK_LValueToRValue
+            );
+        }
 
         auto *cast_expr =
             make_implicit_cast(ctx, input_expr, op_type, clang::CK_IntegralToFloating);
@@ -1390,6 +2096,12 @@ namespace patchestry::ast {
 
         auto *input_expr =
             clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+
+        if (!input_expr->isPRValue()) {
+            input_expr = make_implicit_cast(
+                ctx, input_expr, input_expr->getType(), clang::CastKind::CK_LValueToRValue
+            );
+        }
 
         auto *cast_expr = make_implicit_cast(ctx, input_expr, op_type, clang::CK_FloatingCast);
         if (!op.output.has_value()) {
@@ -1665,8 +2377,16 @@ namespace patchestry::ast {
 
         const auto &var_type = type_builder().get_serialized_types()[*op.type];
         auto op_loc          = sourceLocation(ctx.getSourceManager(), op.key);
+
+        std::string var_name = *op.name;
+        auto &name_counts    = function_builder().declared_name_counts;
+        auto [it, inserted]  = name_counts.try_emplace(var_name, 0);
+        if (!inserted) {
+            var_name += "_" + std::to_string(++(it->second));
+        }
+
         auto *var_decl =
-            create_variable_decl(ctx, sema().CurContext, *op.name, var_type, op_loc);
+            create_variable_decl(ctx, sema().CurContext, var_name, var_type, op_loc);
         // Mark all local variable used to avoid warning about unused variable
         var_decl->setIsUsed();
 
@@ -1680,6 +2400,226 @@ namespace patchestry::ast {
     ) {
         (void) ctx, (void) function, (void) op;
         return std::make_pair(nullptr, true);
+    }
+
+    clang::FunctionDecl *OpBuilder::get_or_create_intrinsic_decl(
+        clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,
+        bool is_variadic
+    ) {
+        // Check cache first
+        auto it = intrinsic_decls.find(name);
+        if (it != intrinsic_decls.end()) {
+            return it->second;
+        }
+
+        // Create a new intrinsic function declaration
+        auto loc = clang::SourceLocation();
+
+        // Create function type with variadic signature if requested.
+        // Note: Variadic prototypes must have at least one non-variadic parameter
+        // to satisfy CIR/LLVM lowering requirements.
+        clang::FunctionProtoType::ExtProtoInfo epi;
+        epi.Variadic = is_variadic;
+
+        llvm::SmallVector<clang::QualType, 1> param_types;
+        if (is_variadic) {
+            // Use a generic void * parameter to satisfy the "at least one fixed
+            // parameter" requirement for variadic functions.
+            auto void_ptr_ty = ctx.getPointerType(ctx.VoidTy);
+            param_types.push_back(void_ptr_ty);
+        }
+
+        auto func_type = ctx.getFunctionType(return_type, param_types, epi);
+        auto *func_decl = clang::FunctionDecl::Create(
+            ctx, ctx.getTranslationUnitDecl(), loc, loc, &ctx.Idents.get(name), func_type,
+            ctx.getTrivialTypeSourceInfo(func_type), clang::SC_Extern
+        );
+
+        if (func_decl == nullptr) {
+            LOG(ERROR) << "Failed to create intrinsic function declaration for: " << name << "\n";
+            return nullptr;
+        }
+
+        // Add to translation unit
+        ctx.getTranslationUnitDecl()->addDecl(func_decl);
+
+        // Cache it
+        intrinsic_decls[name] = func_decl;
+        return func_decl;
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_intrinsic_call(
+        clang::ASTContext &ctx, const Function &function, const Operation &op,
+        const std::string &name
+    ) {
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        // Determine return type
+        clang::QualType ret_type = ctx.VoidTy;
+        if (op.output) {
+            ret_type = get_varnode_type(ctx, *op.output);
+        }
+
+        // Get or create function declaration
+        auto *fn_decl = get_or_create_intrinsic_decl(ctx, name, ret_type, true);
+        if (fn_decl == nullptr) {
+            LOG(ERROR) << "Failed to get intrinsic declaration. key: " << op.key << "\n";
+            return {};
+        }
+
+        // Build arguments from inputs
+        std::vector< clang::Expr * > args;
+        for (const auto &input : op.inputs) {
+            auto *e = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+            if (e != nullptr) {
+                args.push_back(e);
+            }
+        }
+
+        // Build call expression
+        auto *fn_ref = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), fn_decl, false, op_loc,
+            fn_decl->getType(), clang::VK_LValue
+        );
+
+        auto result = sema().BuildCallExpr(nullptr, fn_ref, op_loc, args, op_loc);
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Failed to build intrinsic call expression. key: " << op.key << "\n";
+            return {};
+        }
+
+        auto *call_expr = result.getAs< clang::Expr >();
+
+        // If no output, just return the call
+        if (!op.output) {
+            return { call_expr, false };
+        }
+
+        // Assign result to output
+        auto *out = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        return { create_assign_operation(ctx, call_expr, out, op_loc), false };
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_missing_intrinsic_call(
+        clang::ASTContext &ctx, const Function &function, const Operation &op,
+        const std::string &original_name, const std::string &original_label
+    ) {
+        auto op_loc = sourceLocation(ctx.getSourceManager(), op.key);
+
+        // Build descriptive function name: __patchestry_missing_<original_name>
+        std::string func_name = "__patchestry_missing_" + original_name;
+
+        // Determine return type
+        clang::QualType ret_type = ctx.VoidTy;
+        if (op.output) {
+            ret_type = get_varnode_type(ctx, *op.output);
+        }
+
+        // Build metadata annotation string with useful debugging info
+        // Format: "intrinsic:<label> addr:<key> ret:<type> args:<count>"
+        std::string annotation = "intrinsic:" + original_label + " addr:" + op.key;
+        if (op.type) {
+            annotation += " ret:" + *op.type;
+        }
+        annotation += " args:" + std::to_string(op.inputs.size());
+
+        // Check cache for existing declaration
+        auto cache_it = intrinsic_decls.find(func_name);
+        clang::FunctionDecl *fn_decl = nullptr;
+
+        if (cache_it != intrinsic_decls.end()) {
+            fn_decl = cache_it->second;
+        } else {
+            // Build param types from inputs; use non-variadic to satisfy "prototyped
+            // function must have at least one non-variadic input" (void() and void(...)
+            // are invalid in CIR/LLVM lowering)
+            llvm::SmallVector< clang::QualType, 4 > param_types;
+            for (const auto &input : op.inputs) {
+                param_types.push_back(get_varnode_type(ctx, input));
+            }
+            if (param_types.empty()) {
+                param_types.push_back(ctx.VoidPtrTy);
+            }
+            clang::FunctionProtoType::ExtProtoInfo epi;
+            epi.Variadic = false;
+
+            auto func_type = ctx.getFunctionType(ret_type, param_types, epi);
+
+            fn_decl = clang::FunctionDecl::Create(
+                ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(),
+                clang::SourceLocation(), &ctx.Idents.get(func_name), func_type,
+                ctx.getTrivialTypeSourceInfo(func_type), clang::SC_Extern
+            );
+
+            if (fn_decl == nullptr) {
+                LOG(ERROR) << "Failed to create missing intrinsic declaration for: " << func_name
+                           << "\n";
+                return {};
+            }
+
+            // Create ParmVarDecls so Sema can access parameters during call conversion
+            std::vector< clang::ParmVarDecl * > param_decls;
+            for (std::size_t i = 0; i < param_types.size(); ++i) {
+                auto *param = clang::ParmVarDecl::Create(
+                    ctx, fn_decl, op_loc, op_loc, nullptr, param_types[i], nullptr,
+                    clang::SC_None, nullptr
+                );
+                param_decls.push_back(param);
+            }
+            fn_decl->setParams(param_decls);
+
+            // Add AnnotateAttr with metadata for debugging
+            fn_decl->addAttr(clang::AnnotateAttr::Create(
+                ctx, annotation, nullptr, 0, clang::SourceRange()
+            ));
+
+            // Add to translation unit and cache
+            ctx.getTranslationUnitDecl()->addDecl(fn_decl);
+            intrinsic_decls[func_name] = fn_decl;
+        }
+
+        // Build arguments from inputs
+        std::vector< clang::Expr * > args;
+        for (const auto &input : op.inputs) {
+            auto *e = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
+            if (e != nullptr) {
+                args.push_back(e);
+            }
+        }
+        // When function expects void* placeholder (op had zero inputs), pass (void*)0
+        if (op.inputs.empty() && args.empty()) {
+            auto *zero = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
+            );
+            auto *null_expr = make_cast(ctx, zero, ctx.VoidPtrTy, op_loc);
+            if (null_expr != nullptr) {
+                args.push_back(null_expr);
+            }
+        }
+
+        // Build call expression
+        auto *fn_ref = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), fn_decl, false, op_loc,
+            fn_decl->getType(), clang::VK_LValue
+        );
+
+        auto result = sema().BuildCallExpr(nullptr, fn_ref, op_loc, args, op_loc);
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Failed to build missing intrinsic call expression. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        auto *call_expr = result.getAs< clang::Expr >();
+
+        // If no output, just return the call
+        if (!op.output) {
+            return { call_expr, false };
+        }
+
+        // Assign result to output
+        auto *out = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        return { create_assign_operation(ctx, call_expr, out, op_loc), false };
     }
 
 } // namespace patchestry::ast

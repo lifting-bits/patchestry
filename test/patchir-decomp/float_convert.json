@@ -1,0 +1,79 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
+// CIR-DAG: cir.func @float2float_test
+// CIR-DAG: cir.func @trunc_test
+// CIR-DAG: cir.cast(floating,
+// CIR-DAG: cir.cast(float_to_int,
+// LL-DAG: define dso_local double @float2float_test
+// LL-DAG: define dso_local i32 @trunc_test
+// LL-DAG: fpext float
+// LL-DAG: fptoui float
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "float2float_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_double",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_float"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_float", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "FLOAT2FLOAT", "type": "type_double", "inputs": [{ "type": "type_float", "kind": "parameter", "operation": "p0" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_double", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:20000000": {
+      "name": "trunc_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_float"]
+      },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_float", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "br"]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "TRUNC", "type": "type_int", "inputs": [{ "type": "type_float", "kind": "parameter", "operation": "p0" }] },
+            "ret": { "mnemonic": "RETURN", "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "op0" }] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_float": { "name": "float", "size": 4, "kind": "float" },
+    "type_double": { "name": "double", "size": 8, "kind": "float" },
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" }
+  }
+}

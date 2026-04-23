@@ -158,12 +158,32 @@ namespace patchestry::ghidra {
     {
         FunctionType(std::string name, Kind kind, uint32_t size)
             : VarnodeType(name, kind, size) {}
+
+        std::string return_type_key;
+        std::vector< std::string > param_type_keys;
+        bool is_variadic = false;
+        bool is_noreturn = false;
     };
 
     // EnumType
     struct EnumType : public VarnodeType
     {
+        struct Constant
+        {
+            std::string name;
+            int64_t value;
+        };
+
         EnumType(std::string name, Kind kind, uint32_t size) : VarnodeType(name, kind, size) {}
+
+        void add_constant(std::string constant_name, int64_t constant_value) {
+            constants.emplace_back(Constant{ std::move(constant_name), constant_value });
+        }
+
+        const std::vector< Constant > &get_constants() const { return constants; }
+
+      private:
+        std::vector< Constant > constants;
     };
 
     // CompositeType

@@ -200,5 +200,6 @@ namespace patchestry::ast {
         std::unordered_map< std::string, clang::Decl * > missing_type_definition;
         std::reference_wrapper< clang::ASTContext > context;
         SerializedTypeMap serialized_types;
+        const TypeMap *lifted_types_ = nullptr;
     };
 } // namespace patchestry::ast

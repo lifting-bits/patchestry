@@ -1,0 +1,68 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=SW3 %s --input-file %t.c
+// SW3: switch (
+// SW3: case {{[0-9]+[U]?}}:
+// SW3: case {{[0-9]+[U]?}}:
+// SW3: __builtin_unreachable
+// SW3-NOT: default:
+// SW3-NOT: goto *
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:17000000": {
+      "name": "switch_successor_blocks",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:17000000:entry": {
+          "operations": {
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:17000000:0:basic" }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:17000000:0:basic": {
+          "operations": {
+            "ind": {
+              "mnemonic": "BRANCHIND",
+              "inputs": [
+                { "type": "type_ptr", "kind": "constant", "value": 0 }
+              ],
+              "successor_blocks": [
+                "ram:17000100:0:basic",
+                "ram:17000200:0:basic"
+              ]
+            }
+          },
+          "ordered_operations": ["ind"]
+        },
+        "ram:17000100:0:basic": {
+          "operations": {
+            "ret1": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["ret1"]
+        },
+        "ram:17000200:0:basic": {
+          "operations": {
+            "ret2": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["ret2"]
+        }
+      },
+      "entry_block": "ram:17000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int":  { "name": "int",  "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void"    },
+    "type_ptr":  { "kind": "pointer", "size": 4, "element_type": "type_void" }
+  }
+}

@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
@@ -122,5 +123,28 @@ namespace patchestry::ast {
         std::unordered_map< std::string, clang::VarDecl * > local_variables;
         std::unordered_map< std::string, clang::LabelDecl * > labels_declaration;
         std::unordered_map< std::string, clang::Stmt * > operation_stmts;
+
+        // Tracks how many times each local variable name has been declared so
+        // that duplicates (e.g. multiple Ghidra "UNNAMED" vars) get unique suffixes.
+        std::unordered_map< std::string, unsigned > declared_name_counts;
+
+        // Statements queued by create_temporary during an operation build that must be
+        // emitted immediately before the operation that triggered them.  Drained by
+        // create_basic_block after each create_operation call.
+        std::vector< clang::Stmt * > pending_materialized;
+
+        // Blocks whose operations have been inlined into a switch case body.
+        // create_function_body skips these entirely.
+        std::unordered_set< std::string > inlined_blocks;
+
+        // Blocks targeted by has_exit cases that could not be inlined.
+        // create_function_body emits "label: break;" for these.
+        std::unordered_set< std::string > break_target_blocks;
+
+        // Key of the next block to be emitted after the current one in RPO order.
+        // Set by create_function_body before building each block; read by
+        // create_branch to decide whether a BRANCH goto is redundant (i.e. the
+        // target is the immediately following block and control falls through).
+        std::string current_next_block_key;
     };
 } // namespace patchestry::ast

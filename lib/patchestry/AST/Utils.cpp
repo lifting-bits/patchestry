@@ -5,11 +5,14 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <cctype>
+
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/SourceManager.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/MemoryBuffer.h>
 
 #include <patchestry/AST/Utils.hpp>
@@ -45,14 +48,22 @@ namespace patchestry::ast {
             case 80:
                 return ctx.LongDoubleTy;
             default:
-                assert(false);
-                return clang::QualType();
+                llvm_unreachable("Unsupported float bit size in getTypeFromSize");
         }
     }
 
     std::string labelNameFromKey(std::string key) {
         std::replace(key.begin(), key.end(), ':', '_');
         return key;
+    }
+
+    std::string sanitize_key_to_ident(std::string_view key) {
+        std::string result;
+        result.reserve(key.size());
+        for (char c : key) {
+            result += (std::isalnum(static_cast< unsigned char >(c)) || c == '_') ? c : '_';
+        }
+        return result;
     }
 
     clang::CastKind getCastKind(

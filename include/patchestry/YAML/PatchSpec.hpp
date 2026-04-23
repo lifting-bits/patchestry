@@ -141,6 +141,8 @@ namespace llvm::yaml {
             } else if (mode_str == "Replace" || mode_str == "replace") {
                 action.mode = PatchInfoMode::REPLACE;
             } else {
+                LOG(ERROR) << "Unknown patch mode: '" << mode_str
+                           << "'. Valid modes: ApplyBefore, ApplyAfter, Replace";
                 action.mode = PatchInfoMode::NONE;
             }
         }
@@ -204,7 +206,6 @@ namespace llvm::yaml {
         static void mapping(IO &io, patch::MetaPatchConfig &meta_patch) {
             io.mapRequired("name", meta_patch.name);
             io.mapOptional("description", meta_patch.description);
-            io.mapRequired("patch_actions", meta_patch.patch_actions);
 
             std::vector< std::string > optimization;
             io.mapOptional("optimization", optimization);
@@ -240,6 +241,9 @@ namespace llvm::yaml {
                 arg.source = ArgumentSourceType::CONSTANT;
             } else if (source_str == "return_value") {
                 arg.source = ArgumentSourceType::RETURN_VALUE;
+            } else {
+                io.setError("Unknown argument source type: '" + source_str + "'");
+                return;
             }
 
             io.mapRequired("name", arg.name);
