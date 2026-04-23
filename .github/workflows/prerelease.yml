@@ -18,7 +18,7 @@ on:
 permissions: read-all
 
 jobs:
-  build:
+  build_prerelease:
     strategy:
       matrix:
         llvm-version: [20]
@@ -142,14 +142,14 @@ jobs:
           path: _site
           if-no-files-found: error
 
-  # Release publishing is split from the build so an immutable-release or
-  # asset-upload error can't skip the `deploy_doc` job. Previously both
-  # ran as steps inside a single `build_prerelease` job, and a failure in
-  # "Publish Pre-Release" — e.g. `Cannot delete asset from an immutable
+  # Release publishing is split from `build_prerelease` so an immutable-
+  # release or asset-upload error can't skip the `deploy_doc` job.
+  # Previously the publish step ran inside `build_prerelease` itself, and
+  # a failure here — e.g. `Cannot delete asset from an immutable
   # release` — would fail the whole job and leave gh-pages stale.
   publish_release:
     name: "Publish Pre-Release"
-    needs: build
+    needs: build_prerelease
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -177,7 +177,7 @@ jobs:
             ./package/*
 
   deploy_doc:
-    needs: build
+    needs: build_prerelease
     runs-on: ubuntu-latest
     permissions:
       contents: write
