@@ -45,6 +45,17 @@ namespace patchestry::klee_verifier {
 
     namespace {
 
+        // Name-mangling id tables for anonymous literal structs and other
+        // unnamed types. Kept at anonymous-namespace scope (not as
+        // function-local statics) so `installGlobalsInit` can .clear()
+        // them at entry — otherwise Type* keys from a previous pipeline
+        // run would dangle when the caller reuses the process for a new
+        // LLVMContext. Today main() exits after one invocation, but a
+        // future library-mode caller would otherwise silently alias
+        // fresh types to stale id slots.
+        llvm::DenseMap< llvm::Type *, unsigned > g_anon_type_ids;
+        llvm::DenseMap< llvm::Type *, unsigned > g_unknown_type_ids;
+
         // ========================================================================
         // Symbolic global-variable initialization
         //
@@ -349,9 +360,17 @@ namespace patchestry::klee_verifier {
                                         if (inner_gep->getNumIndices() == 1) {
                                             if (auto *CI = llvm::dyn_cast< llvm::ConstantInt >(
                                                     inner_gep->getOperand(1))) {
-                                                int64_t signed_idx = CI->getSExtValue();
-                                                if (signed_idx >= 0) {
-                                                    lower = static_cast< uint64_t >(signed_idx) + 1;
+                                                // getSExtValue asserts when the
+                                                // value does not fit in int64_t;
+                                                // GEP indices are practically
+                                                // always i32/i64, but guard to
+                                                // keep the tool from aborting on
+                                                // hypothetical i128 inputs.
+                                                if (CI->getBitWidth() <= 64) {
+                                                    int64_t signed_idx = CI->getSExtValue();
+                                                    if (signed_idx >= 0) {
+                                                        lower = static_cast< uint64_t >(signed_idx) + 1;
+                                                    }
                                                 }
                                             }
                                         }
@@ -522,9 +541,12 @@ namespace patchestry::klee_verifier {
         // Sanitize an LLVM type name so it can be embedded in a function
         // symbol. Non-identifier characters are replaced with '_'. Anonymous
         // literal structs and other unnamed types are keyed by Type* identity
-        // in a module-scoped map so repeated calls with the same type return
+        // in the module-scoped id tables (`g_anon_type_ids`,
+        // `g_unknown_type_ids`) so repeated calls with the same type return
         // the same suffix — bodies built per type rely on this determinism
-        // for child-name and global-string stability across calls.
+        // for child-name and global-string stability across calls. The
+        // tables are cleared at the top of `installGlobalsInit` so ids
+        // restart at 0 for each module.
         std::string mangleTypeName(llvm::Type *T) {
             std::string result;
             llvm::raw_string_ostream os(result);
@@ -538,8 +560,8 @@ namespace patchestry::klee_verifier {
                     }
                     return os.str();
                 }
-                static llvm::DenseMap< llvm::Type *, unsigned > anon_ids;
-                auto [it, inserted] = anon_ids.try_emplace(T, anon_ids.size());
+                auto [it, inserted] = g_anon_type_ids.try_emplace(
+                    T, g_anon_type_ids.size());
                 os << "anon_" << it->second;
                 return os.str();
             }
@@ -555,8 +577,8 @@ namespace patchestry::klee_verifier {
             if (T->isFloatTy())   return "f32";
             if (T->isDoubleTy())  return "f64";
             if (T->isPointerTy()) return "ptr";
-            static llvm::DenseMap< llvm::Type *, unsigned > unknown_ids;
-            auto [it, inserted] = unknown_ids.try_emplace(T, unknown_ids.size());
+            auto [it, inserted] = g_unknown_type_ids.try_emplace(
+                T, g_unknown_type_ids.size());
             os << "ty" << it->second;
             return os.str();
         }
@@ -854,35 +876,52 @@ namespace patchestry::klee_verifier {
         // every path. The call site must route such fields through the
         // symbolization path instead.
         bool isRelocatablePointerConstant(llvm::Constant *c) {
-            if (!c)
-                return false;
-            if (llvm::isa< llvm::ConstantPointerNull >(c))
-                return true;
-            if (llvm::isa< llvm::GlobalValue >(c))
-                return true;
-            if (llvm::isa< llvm::BlockAddress >(c))
-                return true;
-            if (auto *CE = llvm::dyn_cast< llvm::ConstantExpr >(c)) {
-                switch (CE->getOpcode()) {
-                case llvm::Instruction::BitCast:
-                case llvm::Instruction::AddrSpaceCast:
-                case llvm::Instruction::GetElementPtr:
-                    return isRelocatablePointerConstant(CE->getOperand(0));
-                default:
-                    // inttoptr, arithmetic, etc. — absolute or derived
-                    // from absolute addresses.
-                    return false;
+            // Iteratively strip forwarding ConstantExpr layers
+            // (bitcast / addrspacecast / getelementptr) so that a
+            // pathologically deep wrapper chain cannot blow the stack.
+            // Any other ConstantExpr opcode (inttoptr, arithmetic, ...)
+            // disqualifies the chain — those synthesize absolute or
+            // derived-from-absolute addresses. Classification of the
+            // final non-CE base is the loop's exit path.
+            while (c) {
+                if (auto *CE = llvm::dyn_cast< llvm::ConstantExpr >(c)) {
+                    switch (CE->getOpcode()) {
+                    case llvm::Instruction::BitCast:
+                    case llvm::Instruction::AddrSpaceCast:
+                    case llvm::Instruction::GetElementPtr:
+                        c = CE->getOperand(0);
+                        continue;
+                    default:
+                        return false;
+                    }
                 }
+                return llvm::isa< llvm::ConstantPointerNull >(c)
+                    || llvm::isa< llvm::GlobalValue >(c)
+                    || llvm::isa< llvm::BlockAddress >(c);
             }
             return false;
         }
 
         // Walk a global's type and initializer in lockstep, emitting
-        // symbolization only for sub-regions that are trivially initialized
-        // (null / undef / zero). Concrete non-trivial pointer values
-        // (function pointers, cross-global references, ConstantExpr ptrs)
-        // and concrete non-trivial scalar values are left untouched so the
-        // global's declared starting state survives into the symbolic run.
+        // symbolization only for sub-regions that carry no useful
+        // declared state. Two distinct classes are symbolized:
+        //
+        //   * Trivial inits (null / undef / zero) — no meaningful bytes
+        //     to preserve.
+        //   * Absolute pointer constants (`inttoptr <N>` and other
+        //     non-relocatable ConstantExprs) — the bit pattern survives
+        //     into the global's storage but no longer names a host-valid
+        //     address after retargeting. Without symbolization the
+        //     target would dereference e.g. 0x1000 and KLEE would
+        //     terminate every path with a memory error. See
+        //     isRelocatablePointerConstant for the gate.
+        //
+        // Relocatable pointer constants (`Function`, `GlobalVariable`,
+        // `GlobalAlias`, `GlobalIFunc`, `BlockAddress`, or a
+        // bitcast/addrspacecast/GEP ConstantExpr over one of those) and
+        // concrete non-trivial scalar values are left untouched so the
+        // global's declared starting state survives into the symbolic
+        // run — the loader rebinds their addresses at module-load time.
         //
         // This is the top-level entry for per-global init. Recursive pointee
         // allocation (pointer fields whose inferred kind is PointeeType)
@@ -1257,6 +1296,13 @@ namespace patchestry::klee_verifier {
     } // namespace
 
     llvm::Function *installGlobalsInit(llvm::Module &M, GlobalsInitStats &stats) {
+        // Reset per-module name-mangling state. See the comment on the
+        // tables at the top of the anonymous namespace: stale Type*
+        // keys from a previous invocation on a different LLVMContext
+        // would alias fresh types into old slots.
+        g_anon_type_ids.clear();
+        g_unknown_type_ids.clear();
+
         auto inference_map = inferPointerFieldTypes(M);
 
         // Pre-pass: promote `external global` declarations referenced by the
