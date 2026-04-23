@@ -674,7 +674,13 @@ namespace patchestry::klee_verifier {
 
             llvm::Value *max_depth_val =
                 llvm::ConstantInt::get(i32Ty, klee_init_max_depth);
-            llvm::Value *too_deep = B.CreateICmpSGE(depth, max_depth_val);
+            // Unsigned compare: the CLI option's type is `unsigned`, and a
+            // user-supplied value >= 2^31 (e.g. UINT_MAX meaning "unlimited")
+            // stuffed into i32 has its sign bit set. Under SGE that reads as
+            // a negative bound and every depth tests as "too deep", so every
+            // pointer field would be nulled out and recursive-pointee
+            // initialization would silently stop working.
+            llvm::Value *too_deep = B.CreateICmpUGE(depth, max_depth_val);
             B.CreateCondBr(too_deep, null_bb, recurse_bb);
 
             // Null branch — bounds the cyclic recursion at runtime.

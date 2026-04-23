@@ -61,7 +61,7 @@ entry:
 ; `init.null` on the too-deep path.
 ; CHECK:       define internal void @__klee_init_type_struct_Node(ptr %p, i32 %depth)
 ; CHECK:       call void @klee_make_symbolic(
-; CHECK:       icmp sge i32 %depth
+; CHECK:       icmp uge i32 %depth
 ; CHECK:       init.recurse:
 ; CHECK:       call ptr @malloc(
 ; CHECK:       call void @__klee_init_type_struct_Node(
