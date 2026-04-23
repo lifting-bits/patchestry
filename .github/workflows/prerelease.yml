@@ -23,9 +23,10 @@ jobs:
       matrix:
         llvm-version: [20]
         image-version: [22.04]
+        arch: [amd64, arm64]
 
     name: "Build Release and Doc"
-    runs-on: ubuntu-${{ matrix.image-version }}
+    runs-on: ${{ matrix.arch == 'arm64' && format('ubuntu-{0}-arm', matrix.image-version) || format('ubuntu-{0}', matrix.image-version) }}
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     timeout-minutes: 60
 
@@ -96,7 +97,10 @@ jobs:
             $DEV_IMAGE \
             cmake --build --preset ci-release -j $(nproc)
 
+      # Docs are arch-independent; build on amd64 only to avoid duplicate work
+      # and an artifact-name collision on the mkdocs-sites upload below.
       - name: Build Patchestry Doc
+        if: matrix.arch == 'amd64'
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
@@ -106,6 +110,7 @@ jobs:
             cmake --build --preset ci-release --target mlir-doc
 
       - name: Build Patchestry Pages
+        if: matrix.arch == 'amd64'
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
@@ -121,7 +126,7 @@ jobs:
             -v /tmp/.gitconfig:/root/.gitconfig:ro \
             -w /workspace \
             $DEV_IMAGE \
-            cpack --preset ci
+            cpack --preset ci -D CPACK_SYSTEM_NAME=Linux-${{ matrix.arch }}
 
       # Upload both artifacts before any publish step can fail. The
       # downstream `publish_release` and `deploy_doc` jobs each consume one
@@ -131,11 +136,12 @@ jobs:
       - name: Upload Patchestry build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Patchestry
+          name: Patchestry-${{ matrix.arch }}
           path: ./builds/ci/package/*
           retention-days: 1
 
       - name: Upload Patchestry sites
+        if: matrix.arch == 'amd64'
         uses: actions/upload-artifact@v4
         with:
           name: mkdocs-sites
@@ -160,11 +166,12 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Download Patchestry build artifact
+      - name: Download Patchestry build artifacts
         uses: actions/download-artifact@v4
         with:
-          name: Patchestry
+          pattern: Patchestry-*
           path: ./package
+          merge-multiple: true
 
       - name: Publish Pre-Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
