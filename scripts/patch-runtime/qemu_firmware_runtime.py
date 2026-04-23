@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -315,11 +315,18 @@ def main() -> int:
     parser.add_argument("--ld-lld", type=Path, required=True)
     parser.add_argument("--qemu-system-arm", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--fixture-dir", type=Path)
+    parser.add_argument("--refresh-ghidra-fixtures", action="store_true")
     args = parser.parse_args()
 
     repo_root = args.repo_root.resolve()
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    fixture_dir = (
+        args.fixture_dir.resolve()
+        if args.fixture_dir is not None
+        else (repo_root / "test" / "qemu-firmware-runtime" / "fixtures").resolve()
+    )
 
     firmware_dir = repo_root / "firmwares" / "qemu-serial"
     firmware_elf = firmware_dir / "build" / "qemu-serial.elf"
@@ -371,19 +378,31 @@ def main() -> int:
         rewritten_elf_path = case_dir / "rewritten.elf"
         transcript_path = case_dir / "qemu.log"
 
-        decompile_script = repo_root / "scripts" / "ghidra" / "decompile-headless.sh"
-        run(
-            [
-                "bash",
-                str(decompile_script),
-                "--input",
-                str(firmware_elf),
-                "--function",
-                case.function_name,
-                "--output",
-                str(json_path),
-            ]
-        )
+        fixture_json_path = fixture_dir / f"{case.function_name}.json"
+        if args.refresh_ghidra_fixtures:
+            decompile_script = repo_root / "scripts" / "ghidra" / "decompile-headless.sh"
+            run(
+                [
+                    "bash",
+                    str(decompile_script),
+                    "--input",
+                    str(firmware_elf),
+                    "--function",
+                    case.function_name,
+                    "--output",
+                    str(json_path),
+                ]
+            )
+            fixture_json_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(json_path, fixture_json_path)
+        else:
+            if not fixture_json_path.exists():
+                raise RuntimeError(
+                    f"Missing checked-in JSON fixture {fixture_json_path}. "
+                    "Either provide fixtures with --fixture-dir or rerun with --refresh-ghidra-fixtures."
+                )
+            shutil.copyfile(fixture_json_path, json_path)
+
         run([str(patchir_decomp), "-input", str(json_path), "-emit-cir", "-output", str(cir_stem)])
 
         transform_dir = repo_root / "test" / "patchir-transform"

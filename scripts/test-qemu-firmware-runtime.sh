@@ -5,6 +5,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 build_type="Debug"
 output_dir="$repo_root/builds/qemu-firmware-runtime"
+fixture_dir="${PATCHESTRY_RUNTIME_FIXTURE_DIR:-$repo_root/test/qemu-firmware-runtime/fixtures}"
+refresh_ghidra="${PATCHESTRY_RUNTIME_REFRESH_GHIDRA:-0}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -124,20 +126,31 @@ check_tool "$qemu_system_arm" "Set QEMU_SYSTEM_ARM to your qemu-system-arm binar
 check_tool "$(command -v uv)" "Install uv."
 check_tool "$(command -v cmake)" "Install CMake."
 check_tool "$(command -v ninja)" "Install Ninja."
-check_tool "$(command -v docker)" "Install Docker."
 
-ensure_docker
+if [[ "$refresh_ghidra" == "1" ]]; then
+  check_tool "$(command -v docker)" "Install Docker."
+  ensure_docker
+fi
+
 ensure_macos_keystone
 
 make -C "$repo_root/firmwares/qemu-serial" clean all \
   LLVM_PREFIX="$llvm_prefix" \
   LD_LLD="$ld_lld"
 
-uv run --python "$python_bin" --with patcherex2 python \
-  "$repo_root/scripts/patch-runtime/qemu_firmware_runtime.py" \
-  --repo-root "$repo_root" \
-  --build-type "$build_type" \
-  --llvm-prefix "$llvm_prefix" \
-  --ld-lld "$ld_lld" \
-  --qemu-system-arm "$qemu_system_arm" \
+runtime_args=(
+  "$repo_root/scripts/patch-runtime/qemu_firmware_runtime.py"
+  --repo-root "$repo_root"
+  --build-type "$build_type"
+  --llvm-prefix "$llvm_prefix"
+  --ld-lld "$ld_lld"
+  --qemu-system-arm "$qemu_system_arm"
+  --fixture-dir "$fixture_dir"
   --output-dir "$output_dir"
+)
+
+if [[ "$refresh_ghidra" == "1" ]]; then
+  runtime_args+=(--refresh-ghidra-fixtures)
+fi
+
+uv run --python "$python_bin" --with patcherex2 python "${runtime_args[@]}"

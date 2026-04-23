@@ -59,6 +59,18 @@ Downstream of this repo:
     |
     \- external binary rewriting / verification tools
        e.g. final patched binary, KLEE/SeaHorn-style analysis
+
+checked-in Ghidra JSON fixture
+  -> patchir-decomp
+  -> CIR
+  -> patchir-transform
+  -> patched CIR
+  -> patchir-cir2llvm
+  -> patched LLVM IR
+  -> target object code for the affected function
+  -> linked patch blob at a reserved firmware patch arena address
+  -> patcherex2 raw-byte rewrite of the original ELF
+  -> qemu-system-arm runtime validation
 ```
 
 ## Notes on Outputs
@@ -73,6 +85,7 @@ Downstream of this repo:
   firmware artifact.
 - Final patched binaries are downstream of this repository's core toolchain and
   are not the primary in-repo artifact produced by the tested flows here.
+- Current runtime validation is intentionally scoped to whole-function replacement of affected functions in the original ELF, even when the original Patchestry patch semantics are sub-function (`apply_before`, `apply_after`, `replace`, runtime contract insertion).
 
 ## Decompilation Semantics
 
@@ -116,13 +129,6 @@ The flow is layered:
 - The direct JSON -> CGraph path exists so control-flow structuring happens
   before CIR/LLVM lowering, while branch and switch intent is still explicit.
 
-### Current state in PR #182
-
-- The reviewed branch clearly moves the default path to:
-  `JSON -> CGraph -> SNode -> Clang AST`.
-- The implementation is intentionally partial:
-  switch recovery is present and tested, while broader goto elimination and
-  loop/if restructuring are still in progress.
 
 ## Maintenance Contract
 
@@ -131,5 +137,3 @@ The flow is layered:
   script entrypoint, or interface handoff, update this document in the same PR.
 - If a PR changes an affected interface and does not update this diagram, treat
   that as documentation debt to fix before merge.
-
-Current runtime validation is intentionally scoped to whole-function replacement of affected functions in the original ELF, even when the original Patchestry patch semantics are sub-function (`apply_before`, `apply_after`, `replace`, runtime contract insertion).
