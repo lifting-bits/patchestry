@@ -114,12 +114,6 @@ jobs:
     container:
       image:
         ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
-    services:
-      docker:
-        image: docker:20.10-dind
-        options: --privileged
-        ports:
-          - 12375:2375
     env:
       CMAKE_PREFIX_PATH: "/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/mlir/;/usr/lib/llvm-${{ matrix.llvm-version }}/lib/cmake/clang/"
       LLVM_EXTERNAL_LIT: "/usr/local/bin/lit"
@@ -133,8 +127,6 @@ jobs:
 
       - name: Free up disk space
         run: |
-          docker volume prune -f || true
-          docker system prune -af --volumes || true
           apt-get clean || true
           rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
           rm -rf /gha-runner/usr/local/lib/android || true
@@ -158,10 +150,6 @@ jobs:
 
       - name: Build Debug
         run: cmake --build --preset ci --config Debug -j"$(nproc)"
-
-      - name: Build the headless decompilation docker image
-        run: |
-          bash ./scripts/ghidra/build-headless-docker.sh
 
       - name: Run QEMU firmware runtime validation
         run: |

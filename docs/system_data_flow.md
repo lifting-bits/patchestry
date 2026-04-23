@@ -17,7 +17,13 @@ firmware ELF
 The repository now also has an opt-in runtime validation path for the QEMU ARM32 fixture:
 
 ```text
-patched LLVM IR
+checked-in Ghidra JSON fixture
+  -> patchir-decomp
+  -> CIR
+  -> patchir-transform
+  -> patched CIR
+  -> patchir-cir2llvm
+  -> patched LLVM IR
   -> target object code for the affected function
   -> linked patch blob at a reserved firmware patch arena address
   -> patcherex2 raw-byte rewrite of the original ELF
