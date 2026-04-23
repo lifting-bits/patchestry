@@ -18,19 +18,22 @@ on:
 permissions: read-all
 
 jobs:
-  build_prerelease:
+  build:
     strategy:
       matrix:
         llvm-version: [20]
         image-version: [22.04]
 
-    name: "Pre Release and Build Doc"
+    name: "Build Release and Doc"
     runs-on: ubuntu-${{ matrix.image-version }}
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     timeout-minutes: 60
 
+    # Build job only produces artifacts; `contents: write` is reserved for
+    # the downstream `publish_release` and `deploy_doc` jobs that actually
+    # touch the repository (release assets and gh-pages respectively).
     permissions:
-      contents: write
+      contents: read
 
     env:
         DEV_IMAGE: ghcr.io/lifting-bits/patchestry-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}-dev:latest
@@ -120,12 +123,48 @@ jobs:
             $DEV_IMAGE \
             cpack --preset ci
 
+      # Upload both artifacts before any publish step can fail. The
+      # downstream `publish_release` and `deploy_doc` jobs each consume one
+      # of these, so keeping the uploads here (and running them on every
+      # successful build) means a release-asset failure never blocks the
+      # docs deploy, and a docs-deploy failure never blocks the release.
       - name: Upload Patchestry build artifact
         uses: actions/upload-artifact@v4
         with:
           name: Patchestry
           path: ./builds/ci/package/*
           retention-days: 1
+
+      - name: Upload Patchestry sites
+        uses: actions/upload-artifact@v4
+        with:
+          name: mkdocs-sites
+          path: _site
+          if-no-files-found: error
+
+  # Release publishing is split from the build so an immutable-release or
+  # asset-upload error can't skip the `deploy_doc` job. Previously both
+  # ran as steps inside a single `build_prerelease` job, and a failure in
+  # "Publish Pre-Release" — e.g. `Cannot delete asset from an immutable
+  # release` — would fail the whole job and leave gh-pages stale.
+  publish_release:
+    name: "Publish Pre-Release"
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Clone the Patchestry repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download Patchestry build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Patchestry
+          path: ./package
 
       - name: Publish Pre-Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
@@ -135,17 +174,10 @@ jobs:
           generate_release_notes: true
           files: |
             ./LICENSE
-            ./builds/ci/package/*
-
-      - name: Upload Patchestry sites
-        uses: actions/upload-artifact@v4
-        with:
-          name: mkdocs-sites
-          path: _site
-          if-no-files-found: error
+            ./package/*
 
   deploy_doc:
-    needs: build_prerelease
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
