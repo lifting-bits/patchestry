@@ -81,6 +81,10 @@ jobs:
               directory = /workspace/vendor/clangir/src
           EOF
 
+      # CPACK_SYSTEM_NAME must be set at configure time. `include(CPack)`
+      # bakes CPACK_PACKAGE_FILE_NAME into CPackConfig.cmake during configure,
+      # so a later `cpack -D CPACK_SYSTEM_NAME=...` has no effect on the
+      # tarball name and both arches collide on `patchestry-<ver>-Linux.tar.gz`.
       - name: Configure build
         run: |
           docker run --rm \
@@ -91,7 +95,9 @@ jobs:
             -e LLVM_EXTERNAL_LIT="${LLVM_EXTERNAL_LIT}" \
             -e CI=true \
             $DEV_IMAGE \
-            cmake --preset ci -DLLVM_Z3_INSTALL_DIR=/usr/local
+            cmake --preset ci \
+              -DLLVM_Z3_INSTALL_DIR=/usr/local \
+              -DCPACK_SYSTEM_NAME=Linux-${{ matrix.arch }}
 
       - name: Build release
         run: |
@@ -132,7 +138,7 @@ jobs:
             -v /tmp/.gitconfig:/root/.gitconfig:ro \
             -w /workspace \
             $DEV_IMAGE \
-            cpack --preset ci -D CPACK_SYSTEM_NAME=Linux-${{ matrix.arch }}
+            cpack --preset ci
 
       # Upload both artifacts before any publish step can fail. The
       # downstream `publish_release` and `deploy_doc` jobs each consume one
@@ -171,20 +177,22 @@ jobs:
       contents: write
 
     steps:
+      # Deliberately not merging artifacts into one directory: if two uploads
+      # ever ship tarballs with the same basename, the second would silently
+      # overwrite the first. Per-artifact subdirs surface collisions.
       - name: Download Patchestry build artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: Patchestry-*
           path: ./package
-          merge-multiple: true
 
       - name: Verify both arch tarballs present
         run: |
-          amd=$(ls ./package/patchestry-*-Linux-amd64.tar.gz 2>/dev/null | wc -l)
-          arm=$(ls ./package/patchestry-*-Linux-arm64.tar.gz 2>/dev/null | wc -l)
+          amd=$(ls ./package/Patchestry-amd64/patchestry-*-Linux-amd64.tar.gz 2>/dev/null | wc -l)
+          arm=$(ls ./package/Patchestry-arm64/patchestry-*-Linux-arm64.tar.gz 2>/dev/null | wc -l)
           if [ "$amd" -ne 1 ] || [ "$arm" -ne 1 ]; then
             echo "::error::Expected 1 amd64 + 1 arm64 tarball, got amd=$amd arm=$arm"
-            ls -la ./package
+            ls -laR ./package
             exit 1
           fi
 
@@ -199,7 +207,7 @@ jobs:
             --target "${GITHUB_SHA}" \
             --prerelease \
             --notes "${RELEASE_NOTES}" \
-            ./package/*.tar.gz
+            ./package/Patchestry-*/patchestry-*-Linux-*.tar.gz
 
   deploy_doc:
     needs: build_prerelease
