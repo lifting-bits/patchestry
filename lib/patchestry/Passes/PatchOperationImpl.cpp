@@ -125,9 +125,17 @@ namespace patchestry {
                 new_function_args.push_back(new_arg);
             }
 
-            auto patch_call_op = builder.create< cir::CallOp >(
+            // The patch call takes whatever return type the patch
+            // function declares. Observational probes are typically
+            // void, but nothing in the before/after contract requires
+            // it — e.g. a probe returning a counter value for later
+            // use. Hardcoding `mlir::Type()` here would cause
+            // `incorrect number of results for callee` at verification
+            // for any non-void patch.
+            auto patch_func_type = patch_func.getFunctionType();
+            auto patch_call_op   = builder.create< cir::CallOp >(
                 target_op->getLoc(), symbol_ref,
-                mlir::Type(), // return type is void for all apply before and after patches
+                patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
                 new_function_args
             );
 
@@ -181,9 +189,16 @@ namespace patchestry {
             for (auto &[old_arg, new_arg] : function_args_map) {
                 function_args.push_back(new_arg);
             }
-            auto patch_call_op = builder.create< cir::CallOp >(
+            // See applyBeforePatch for the rationale — use the patch
+            // function's declared return type rather than a hardcoded
+            // void so non-void observational probes (e.g. counters
+            // whose returned value is discarded by the caller) don't
+            // trip `incorrect number of results for callee` at MLIR
+            // verification.
+            auto patch_func_type = patch_func.getFunctionType();
+            auto patch_call_op   = builder.create< cir::CallOp >(
                 target_op->getLoc(), symbol_ref,
-                mlir::Type(), // return type is void for all apply before and after patches
+                patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
                 function_args
             );
 

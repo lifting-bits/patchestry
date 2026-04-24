@@ -36,6 +36,18 @@
 // a cir.call to it inside compute_alloc_size.
 // VOID_REJECT_CIR-NOT: cir.call @patch__probe__void_mul
 //
+// Non-void apply_after regression: applyAfterPatch (and applyBeforePatch)
+// previously hardcoded `mlir::Type()` as the call's return type. Any
+// non-void observational probe failed MLIR verification with
+// `incorrect number of results for callee`. Now the call honors
+// `patch_func.getFunctionType().getReturnType()`, so a u32-returning
+// probe emitted as apply_after verifies cleanly and the emitted call's
+// result type matches the patch's declared signature.
+// RUN: %patchir-transform %t1.cir --spec %S/apply_after_nonvoid_probe.yaml -o %t6.cir
+// RUN: %file-check -vv -check-prefix=AFTER_NONVOID %s --input-file %t6.cir
+// AFTER_NONVOID: cir.binop(mul
+// AFTER_NONVOID: cir.call @patch__replace__passthrough_mul({{.*}}) {{.*}}: (!u32i, !u32i) -> !u32i
+//
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",
