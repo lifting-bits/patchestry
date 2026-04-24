@@ -48,6 +48,16 @@
 // AFTER_NONVOID: cir.binop(mul
 // AFTER_NONVOID: cir.call @patch__replace__passthrough_mul({{.*}}) {{.*}}: (!u32i, !u32i) -> !u32i
 //
+// Capture-reuse regression: bind capture A once, pass it to both
+// positions of the 2-arg passthrough_mul patch. Pre-fix, the MapVector
+// keyed by source value collapsed the two entries into one and the
+// emitted cir.call was short an operand. Post-fix, the call should
+// carry both argument slots referencing the SAME SSA value — pin that
+// via FileCheck capture-group match (%[[A]] twice).
+// RUN: %patchir-transform %t1.cir --spec %S/replace_binop_capture_reuse.yaml -o %t7.cir
+// RUN: %file-check -vv -check-prefix=REUSE %s --input-file %t7.cir
+// REUSE: cir.call @patch__replace__passthrough_mul(%[[A:[0-9]+]], %[[A]])
+//
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

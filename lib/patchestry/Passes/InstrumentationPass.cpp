@@ -759,7 +759,7 @@ namespace patchestry::passes {
     void InstrumentationPass::prepare_patch_call_arguments(
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
         const PatchInformation &patch,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        llvm::SmallVectorImpl< mlir::Value > &call_args,
         std::optional< cir::FuncOp > entrypoint_func,
         llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots
     ) {
@@ -805,31 +805,31 @@ namespace patchestry::passes {
             switch (arg_spec.source) {
                 case ArgumentSourceType::OPERAND:
                     handle_operand_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map, entrypoint_func,
+                        builder, call_op, arg_spec, patch_arg_type, call_args, entrypoint_func,
                         writeback_slots
                     );
                     break;
                 case ArgumentSourceType::VARIABLE:
                     handle_variable_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map, entrypoint_func
+                        builder, call_op, arg_spec, patch_arg_type, call_args, entrypoint_func
                     );
                     break;
                 case ArgumentSourceType::SYMBOL:
-                    handle_symbol_argument(builder, call_op, arg_spec, patch_arg_type, arg_map);
+                    handle_symbol_argument(builder, call_op, arg_spec, patch_arg_type, call_args);
                     break;
                 case ArgumentSourceType::RETURN_VALUE:
                     handle_return_value_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map, entrypoint_func
+                        builder, call_op, arg_spec, patch_arg_type, call_args, entrypoint_func
                     );
                     break;
                 case ArgumentSourceType::CONSTANT:
                     handle_constant_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                        builder, call_op, arg_spec, patch_arg_type, call_args
                     );
                     break;
                 case ArgumentSourceType::CAPTURE:
                     handle_capture_argument(
-                        builder, call_op, arg_spec, patch_arg_type, patch, arg_map,
+                        builder, call_op, arg_spec, patch_arg_type, patch, call_args,
                         entrypoint_func
                     );
                     break;
@@ -870,10 +870,10 @@ namespace patchestry::passes {
         // same key `handle_operand_argument` used when populating the sidecar
         // and look it up. Missing entry = the handler bailed soft (index out
         // of range, resolved to null, dominance-guard reject, etc.) — skip
-        // and move on. Enumerating `arg_map` directly would misalign with
-        // the spec whenever a handler early-returned or two specs collapsed
-        // onto the same SSA key, silently writing back to the wrong slot
-        // (or skipping the writeback entirely). `writeback_slots` carries
+        // and move on. Enumerating `call_args` directly would misalign with
+        // the spec whenever a handler early-returned, because indices would
+        // shift (and before the collapse fix, two specs resolving to the
+        // same SSA value also silently merged). `writeback_slots` carries
         // the pre-cast reference so the load reads the actual alloca, not a
         // pointer-cast of it.
         const auto &arg_specs = patch_action.action[0].arguments;
@@ -932,7 +932,7 @@ namespace patchestry::passes {
     void InstrumentationPass::handle_operand_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        llvm::SmallVectorImpl< mlir::Value > &call_args,
         std::optional< cir::FuncOp > entrypoint_func,
         llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots
     ) {
@@ -1044,21 +1044,20 @@ namespace patchestry::passes {
             if (writeback_slots) {
                 (*writeback_slots)[operand_value] = ref_value;
             }
-            arg_map[operand_value] =
-                create_cast_if_needed(builder, call_op, ref_value, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, ref_value, patch_arg_type)
+            );
         } else {
-            arg_map[operand_value] =
-                create_cast_if_needed(builder, call_op, operand_value, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, operand_value, patch_arg_type)
+            );
         }
-
-        // LOG(DEBUG) << "arg_map[operand] key=" << valueToString(operand_value)
-        //            << " value=" << valueToString(arg_map[operand_value]) << "\n";
     }
 
     void InstrumentationPass::handle_variable_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        llvm::SmallVectorImpl< mlir::Value > &call_args,
         std::optional< cir::FuncOp > entrypoint_func
     ) {
         if (!arg_spec.symbol.has_value()) {
@@ -1082,26 +1081,25 @@ namespace patchestry::passes {
 
         mlir::Value variable_reference = variable_ref.value();
         if (arg_spec.is_reference) {
-            arg_map[variable_reference] =
-                create_cast_if_needed(builder, call_op, variable_reference, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, variable_reference, patch_arg_type)
+            );
         } else {
             auto load_op = builder.create< cir::LoadOp >(
                 call_op->getLoc(), variable_reference, /*isDeref=*/true, /*isVolatile=*/false,
                 /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
                 /*tbaa=*/mlir::ArrayAttr{}
             );
-            arg_map[variable_reference] =
-                create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, load_op, patch_arg_type)
+            );
         }
-
-        // LOG(DEBUG) << "arg_map[variable] key=" << valueToString(variable_reference)
-        //            << " value=" << valueToString(arg_map[variable_reference]) << "\n";
     }
 
     void InstrumentationPass::handle_symbol_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::SmallVectorImpl< mlir::Value > &call_args
     ) {
         if (!arg_spec.symbol.has_value()) {
             LOG(ERROR) << "SYMBOL source requires symbol field\n";
@@ -1117,23 +1115,25 @@ namespace patchestry::passes {
 
         mlir::Value symbol_reference = symbol_ref.value();
         if (arg_spec.is_reference) {
-            arg_map[symbol_reference] =
-                create_cast_if_needed(builder, call_op, symbol_reference, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, symbol_reference, patch_arg_type)
+            );
         } else {
             auto load_op = builder.create< cir::LoadOp >(
                 call_op->getLoc(), symbol_reference, /*isDeref=*/true, /*isVolatile=*/false,
                 /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
                 /*tbaa=*/mlir::ArrayAttr{}
             );
-            arg_map[symbol_reference] =
-                create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, load_op, patch_arg_type)
+            );
         }
     }
 
     void InstrumentationPass::handle_return_value_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        llvm::SmallVectorImpl< mlir::Value > &call_args,
         std::optional< cir::FuncOp > entrypoint_func
     ) {
         // APPLY_AT_ENTRYPOINT: the call result is only defined at the matched call
@@ -1154,22 +1154,20 @@ namespace patchestry::passes {
 
         auto arg_value = call_op->getResult(0);
         if (arg_spec.is_reference) {
-            arg_map[arg_value] = create_cast_if_needed(
+            call_args.push_back(create_cast_if_needed(
                 builder, call_op, create_reference(builder, call_op, arg_value), patch_arg_type
-            );
+            ));
         } else {
-            arg_map[arg_value] =
-                create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, arg_value, patch_arg_type)
+            );
         }
-
-        // LOG(DEBUG) << "arg_map[return] key=" << valueToString(arg_value)
-        //        << " value=" << valueToString(arg_map[arg_value]) << "\n";
     }
 
     void InstrumentationPass::handle_constant_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::SmallVectorImpl< mlir::Value > &call_args
     ) {
         if (!arg_spec.value.has_value()) {
             LOG(ERROR) << "CONSTANT source requires value field\n";
@@ -1177,21 +1175,22 @@ namespace patchestry::passes {
         }
 
         const std::string &const_value = arg_spec.value.value();
-        mlir::Value arg_value;
-
-        arg_value = parse_constant_operand(builder, call_op, const_value, patch_arg_type);
+        mlir::Value arg_value =
+            parse_constant_operand(builder, call_op, const_value, patch_arg_type);
         if (!arg_value) {
             return;
         }
 
-        arg_map[arg_value] = create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
+        call_args.push_back(
+            create_cast_if_needed(builder, call_op, arg_value, patch_arg_type)
+        );
     }
 
     void InstrumentationPass::handle_capture_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
         const PatchInformation &patch,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+        llvm::SmallVectorImpl< mlir::Value > &call_args,
         std::optional< cir::FuncOp > entrypoint_func
     ) {
         // APPLY_AT_ENTRYPOINT: captures are SSA values bound at the matched call
@@ -1247,13 +1246,14 @@ namespace patchestry::passes {
         }
 
         if (arg_spec.is_reference) {
-            arg_map[captured] = create_cast_if_needed(
+            call_args.push_back(create_cast_if_needed(
                 builder, call_op, create_reference(builder, call_op, captured),
                 patch_arg_type
-            );
+            ));
         } else {
-            arg_map[captured] =
-                create_cast_if_needed(builder, call_op, captured, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, captured, patch_arg_type)
+            );
         }
     }
 

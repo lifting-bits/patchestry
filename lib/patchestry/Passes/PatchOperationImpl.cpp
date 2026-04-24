@@ -114,16 +114,12 @@ namespace patchestry {
 
             auto symbol_ref =
                 mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            llvm::SmallVector< mlir::Value > new_function_args;
             llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             pass.prepare_patch_call_arguments(
-                builder, target_op, patch_func, patch, function_args_map,
+                builder, target_op, patch_func, patch, new_function_args,
                 /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
-            llvm::SmallVector< mlir::Value > new_function_args;
-            for (auto &[old_arg, new_arg] : function_args_map) {
-                new_function_args.push_back(new_arg);
-            }
 
             // The patch call takes whatever return type the patch
             // function declares. Observational probes are typically
@@ -179,16 +175,12 @@ namespace patchestry {
 
             auto symbol_ref =
                 mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            llvm::SmallVector< mlir::Value > function_args;
             llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             pass.prepare_patch_call_arguments(
-                builder, target_op, patch_func, patch, function_args_map,
+                builder, target_op, patch_func, patch, function_args,
                 /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
-            llvm::SmallVector< mlir::Value > function_args;
-            for (auto &[old_arg, new_arg] : function_args_map) {
-                function_args.push_back(new_arg);
-            }
             // See applyBeforePatch for the rationale — use the patch
             // function's declared return type rather than a hardcoded
             // void so non-void observational probes (e.g. counters
@@ -241,16 +233,12 @@ namespace patchestry {
             }
 
             auto wrap_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
-            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            llvm::SmallVector< mlir::Value > wrap_call_args;
             llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             pass.prepare_patch_call_arguments(
-                builder, call_op, wrap_func, patch, function_args_map,
+                builder, call_op, wrap_func, patch, wrap_call_args,
                 /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
-            llvm::SmallVector< mlir::Value > wrap_call_args;
-            for (auto &[old_arg, new_arg] : function_args_map) {
-                wrap_call_args.push_back(new_arg);
-            }
             auto wrap_function_type = wrap_func.getFunctionType();
             auto wrap_call_op       = builder.create< cir::CallOp >(
                 loc, wrap_func_ref,
@@ -398,16 +386,12 @@ namespace patchestry {
                 return;
             }
 
-            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            llvm::SmallVector< mlir::Value > call_args;
             llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             pass.prepare_patch_call_arguments(
-                builder, op, patch_func, patch, function_args_map,
+                builder, op, patch_func, patch, call_args,
                 /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
-            llvm::SmallVector< mlir::Value > call_args;
-            for (auto &[old_arg, new_arg] : function_args_map) {
-                call_args.push_back(new_arg);
-            }
             auto patch_call_op = builder.create< cir::CallOp >(
                 loc, patch_func_ref,
                 patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
@@ -649,19 +633,15 @@ namespace patchestry {
             auto symbol_ref = mlir::FlatSymbolRefAttr::get(
                 call_op->getContext(), patch_function_name
             );
-            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
+            llvm::SmallVector< mlir::Value > call_args;
             llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             // Pass enclosing_func so that OPERAND sources remap to block arguments and
             // RETURN_VALUE / CAPTURE are rejected — both prevent call-site SSA values
             // from leaking into the entry block (which would violate dominance).
             pass.prepare_patch_call_arguments(
-                builder, call_op, patch_func, patch, function_args_map, enclosing_func,
+                builder, call_op, patch_func, patch, call_args, enclosing_func,
                 &writeback_slots
             );
-            llvm::SmallVector< mlir::Value > call_args;
-            for (auto &[old_arg, new_arg] : function_args_map) {
-                call_args.push_back(new_arg);
-            }
 
             // Patches are effectively single-result (void or one value); warn
             // on multi-result declarations so the silent truncation is visible.

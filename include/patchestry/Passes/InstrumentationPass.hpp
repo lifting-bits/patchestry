@@ -254,10 +254,17 @@ namespace patchestry::passes { // NOLINT
          *                          defined at the matched call site.
          *                        - VARIABLE / SYMBOL / CONSTANT resolve normally.
          */
+        // `call_args` is a positional list of transformed patch
+        // arguments, one entry per `arg_spec` in the matched action.
+        // It is a `SmallVector<Value>` rather than a map because (a)
+        // the caller only ever consumes values in order and (b) using
+        // a map keyed by source collapsed duplicate sources (e.g. the
+        // same capture reused twice) into a single call-argument slot,
+        // producing a short call that failed CIR's arity verifier.
         void prepare_patch_call_arguments(
             mlir::OpBuilder &builder, mlir::Operation *op, cir::FuncOp patch_func,
             const PatchInformation &patch,
-            llvm::MapVector< mlir::Value, mlir::Value > &args_map,
+            llvm::SmallVectorImpl< mlir::Value > &call_args,
             std::optional< cir::FuncOp > entrypoint_func = std::nullopt,
             llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots = nullptr
         );
@@ -346,7 +353,7 @@ namespace patchestry::passes { // NOLINT
         void handle_operand_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+            llvm::SmallVectorImpl< mlir::Value > &call_args,
             std::optional< cir::FuncOp > entrypoint_func = std::nullopt,
             llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots = nullptr
         );
@@ -357,7 +364,7 @@ namespace patchestry::passes { // NOLINT
         void handle_variable_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+            llvm::SmallVectorImpl< mlir::Value > &call_args,
             std::optional< cir::FuncOp > entrypoint_func = std::nullopt
         );
 
@@ -367,7 +374,7 @@ namespace patchestry::passes { // NOLINT
         void handle_symbol_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+            llvm::SmallVectorImpl< mlir::Value > &call_args
         );
 
         /**
@@ -376,7 +383,7 @@ namespace patchestry::passes { // NOLINT
         void handle_return_value_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+            llvm::SmallVectorImpl< mlir::Value > &call_args,
             std::optional< cir::FuncOp > entrypoint_func = std::nullopt
         );
 
@@ -386,7 +393,7 @@ namespace patchestry::passes { // NOLINT
         void handle_constant_argument(
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+            llvm::SmallVectorImpl< mlir::Value > &call_args
         );
 
         /**
@@ -397,7 +404,7 @@ namespace patchestry::passes { // NOLINT
             mlir::OpBuilder &builder, mlir::Operation *call_op,
             const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
             const PatchInformation &patch,
-            llvm::MapVector< mlir::Value, mlir::Value > &arg_map,
+            llvm::SmallVectorImpl< mlir::Value > &call_args,
             std::optional< cir::FuncOp > entrypoint_func = std::nullopt
         );
 
