@@ -1,0 +1,48 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "replace-binop-void-reject"
+  description: "Regression: replace cir.binop(mul) with a void patch must be rejected"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-04-23"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/replace_binop_patches.yaml"
+
+meta_patches:
+  - name: "binop_mul_void_reject"
+    description: >
+      Attempt to replace the value-producing multiply in
+      compute_alloc_size with a void function. `replaceOperationWithPatch`
+      must detect the arity mismatch up front and refuse — previously
+      the patch call was emitted first and the mismatch was only caught
+      after-the-fact, leaving both the patch call and the original op
+      in CIR.
+
+    patch_actions:
+      - id: "BINOP-REPLACE-VOID-REJECT-001"
+        description: "Replace multiply with a void probe (must be rejected)"
+
+        match:
+          - name: "cir.binop"
+            op_kind: "mul"
+            kind: "operation"
+            function_context:
+              - name: "compute_alloc_size"
+
+        action:
+          - mode: "replace"
+            patch_id: "void_probe_mul"
+            description: "Void patch — no cover for the binop's result"
+            arguments:
+              - name: "a"
+                source: "operand"
+                index: 0
+              - name: "b"
+                source: "operand"
+                index: 1

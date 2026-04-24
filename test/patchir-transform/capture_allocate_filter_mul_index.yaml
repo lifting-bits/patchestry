@@ -19,6 +19,7 @@ patches:
     description: "Index-based multiply replacement"
     match:
       name: "cir.binop"
+      op_kind: "mul"
       kind: "operation"
       context: ["data__allocate_filter"]
     action:

@@ -23,6 +23,7 @@ patches:
     description: "Replace multiply via captured $A and $B"
     match:
       name: "cir.binop"
+      op_kind: "mul"
       kind: "operation"
       context: ["compute_alloc_size"]
       captures:

@@ -18,6 +18,24 @@
 // RUN: %file-check -vv -check-prefix=INLINE_REPLACE_BINOP %s --input-file %t4.cir
 // INLINE_REPLACE_BINOP-NOT: patch__replace__passthrough_mul
 //
+// Arity pre-check regression: replacing the value-producing
+// cir.binop(mul) with a void patch must be rejected before any IR
+// mutation. Previously replaceOperationWithPatch emitted the patch
+// call, detected the mismatch, LOG(ERROR)'d, and returned without
+// rollback — leaving both the patch call and the original op in CIR.
+// Post-fix: the tool logs the refusal on stderr and the output CIR
+// has the original cir.binop intact with NO patch__probe__void_mul
+// call anywhere.
+// RUN: %patchir-transform %t1.cir --spec %S/replace_binop_void_reject.yaml -o %t5.cir 2> %t5.err
+// RUN: %file-check -vv -check-prefix=VOID_REJECT_ERR %s --input-file %t5.err
+// RUN: %file-check -vv -check-prefix=VOID_REJECT_CIR %s --input-file %t5.cir
+// VOID_REJECT_ERR: patch function {{.*}}void_mul{{.*}} returns 0 result(s)
+// VOID_REJECT_CIR: cir.binop(mul
+// The cir.func declaration for the patch may still be emitted (it is
+// materialized before the arity check fires); what must NOT appear is
+// a cir.call to it inside compute_alloc_size.
+// VOID_REJECT_CIR-NOT: cir.call @patch__probe__void_mul
+//
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

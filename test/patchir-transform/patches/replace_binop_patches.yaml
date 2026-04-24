@@ -35,3 +35,18 @@ patches:
         type: "unsigned int"
       - name: "b"
         type: "unsigned int"
+
+  # Void probe used by replace_binop_void_reject.json to exercise the
+  # arity pre-check in `replaceOperationWithPatch`: replacing a
+  # value-producing op with a void patch must be rejected up front, not
+  # half-applied.
+  - name: "void_probe_mul"
+    description: "Void patch (regression witness for arity pre-check)"
+    category: "integer_safety"
+    code_file: "patches/patch_void_probe_mul.c"
+    function_name: "patch::probe::void_mul"
+    parameters:
+      - name: "a"
+        type: "unsigned int"
+      - name: "b"
+        type: "unsigned int"

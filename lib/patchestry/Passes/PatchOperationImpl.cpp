@@ -349,7 +349,40 @@ namespace patchestry {
                 return;
             }
 
-            auto patch_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
+            auto patch_func_ref  = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
+            auto patch_func_type = patch_func.getFunctionType();
+            auto op_num_results  = op->getNumResults();
+
+            // Pre-validate arity *before* mutating the IR. If the patch
+            // function does not return enough values to cover every result
+            // of `op`, the late error paths below would leave the partially-
+            // emitted patch call in place alongside the original op — both
+            // execute, violating the "leave op unchanged on error" contract
+            // callers depend on (REPLACE mode docstring; parity with the
+            // apply_before/after and apply_at_entrypoint dispatchers).
+            //
+            // CIR function types carry at most one return value: `isVoid()`
+            // means zero call results, non-void means exactly one. The
+            // entry guard above has already rejected op_num_results == 0,
+            // so we need a non-void patch returning one value that covers
+            // the single op result; multi-result ops are rejected because
+            // CIR cannot produce a covering return.
+            unsigned patch_num_results = 0;
+            if (patch_func_type && !patch_func_type.isVoid()) {
+                patch_num_results = 1;
+            }
+            if (patch_num_results < op_num_results) {
+                LOG(ERROR)
+                    << "REPLACE: patch function '" << patch_function_name
+                    << "' returns " << patch_num_results
+                    << " result(s), cannot cover the " << op_num_results
+                    << " result(s) of '"
+                    << op->getName().getStringRef().str()
+                    << "'; refusing replacement (would leave both the patch "
+                       "call and the original op in IR).\n";
+                return;
+            }
+
             llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
             llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
             pass.prepare_patch_call_arguments(
@@ -360,8 +393,7 @@ namespace patchestry {
             for (auto &[old_arg, new_arg] : function_args_map) {
                 call_args.push_back(new_arg);
             }
-            auto patch_func_type = patch_func.getFunctionType();
-            auto patch_call_op   = builder.create< cir::CallOp >(
+            auto patch_call_op = builder.create< cir::CallOp >(
                 loc, patch_func_ref,
                 patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
                 call_args
@@ -378,38 +410,46 @@ namespace patchestry {
             mlir::OpBuilder::InsertionGuard guard(builder);
             builder.setInsertionPointAfter(patch_call_op);
 
-            // Replace all uses of old operation results with new call results
-            auto op_num_results   = op->getNumResults();
-            auto call_num_results = patch_call_op.getNumResults();
-
-            if (call_num_results == 0) {
-                LOG(ERROR) << "Patch function returns void but original operation "
-                           << "has " << op_num_results << " result(s)\n";
-            } else {
-                unsigned result_index = 0;
-                for (auto result : patch_call_op.getResults()) {
-                    if (result_index >= op_num_results) {
-                        break;
-                    }
-                    auto original_result = op->getResult(result_index);
-                    if (original_result.getType() != result.getType()) {
-                        auto cast_value = pass.create_cast_if_needed(
-                            builder, patch_call_op, result, original_result.getType()
-                        );
-                        original_result.replaceAllUsesWith(cast_value);
-                    } else {
-                        original_result.replaceAllUsesWith(result);
-                    }
-                    result_index++;
+            // Replace all uses of old operation results with new call
+            // results. Arity was validated above so the loop always covers
+            // every op result; if a per-type cast still fails we roll back
+            // the patch call to preserve the "op unchanged on error" contract.
+            unsigned result_index = 0;
+            for (auto result : patch_call_op.getResults()) {
+                if (result_index >= op_num_results) {
+                    break;
                 }
+                auto original_result = op->getResult(result_index);
+                if (original_result.getType() != result.getType()) {
+                    auto cast_value = pass.create_cast_if_needed(
+                        builder, patch_call_op, result, original_result.getType()
+                    );
+                    original_result.replaceAllUsesWith(cast_value);
+                } else {
+                    original_result.replaceAllUsesWith(result);
+                }
+                result_index++;
             }
 
             // Set appropriate attributes based on operation type
             pass.set_instrumentation_call_attributes(patch_call_op, op);
 
             if (!op->use_empty()) {
-                LOG(ERROR) << "Cannot erase operation, it still has uses: "
-                           << op->getName().getStringRef().str() << "\n";
+                // Defensive: pre-validation already rejected arity mismatch,
+                // so reaching this branch implies `create_cast_if_needed`
+                // produced a value that did not take over all uses of the
+                // original result. Roll back by erasing the patch call so
+                // the module is returned to the pre-replacement state (the
+                // already-performed replaceAllUsesWith calls are harmless —
+                // the erased call's results had no other users). Without the
+                // erase the patch call and the original op would both
+                // execute in program order, the exact bug this function now
+                // guards against.
+                LOG(ERROR) << "REPLACE: cast-aware replacement left uses on '"
+                           << op->getName().getStringRef().str()
+                           << "'; rolling back patch call to preserve the "
+                              "'op unchanged on error' invariant.\n";
+                patch_call_op->erase();
                 return;
             }
 

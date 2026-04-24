@@ -19,6 +19,7 @@ patches:
     id: "CAP-MUTEX-001"
     match:
       name: "cir.binop"
+      op_kind: "mul"
       kind: "operation"
       captures:
         - name: "BAD"

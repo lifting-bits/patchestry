@@ -19,6 +19,7 @@ patches:
     description: "Capture binop operands in varint decoder"
     match:
       name: "cir.binop"
+      op_kind: "add"
       kind: "operation"
       context: ["pb_decode_varint32_eof"]
       captures:

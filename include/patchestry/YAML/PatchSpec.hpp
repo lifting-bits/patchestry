@@ -563,6 +563,77 @@ namespace llvm::yaml {
                     "the operation-kind dispatch path does not implement it."
                 );
             }
+
+            // Cross-field validation: argument sources whose value is
+            // only bound at the matched call site cannot be used by an
+            // entrypoint-inserted patch call, which runs in the enclosing
+            // function's entry block and must satisfy SSA dominance
+            // there. The runtime dispatch in
+            // `handle_return_value_argument` / `handle_capture_argument`
+            // does reject these, but only *after* the rest of
+            // `prepare_patch_call_arguments` has decided to build a call
+            // — the truncated arg_map then yields a malformed `cir.call`
+            // that trips the CIR verifier with an arity error, rather
+            // than a clear spec-level diagnostic. Reject up-front so
+            // `patchir-yaml-parser --validate` catches the mistake and
+            // CI pipelines gating on it don't get a false positive.
+            if (action_obj.mode == InstrumentationMode::APPLY_AT_ENTRYPOINT) {
+                for (const auto &arg : action_obj.arguments) {
+                    if (arg.source == ArgumentSourceType::CAPTURE) {
+                        io.setError(
+                            "'mode: apply_at_entrypoint' does not accept "
+                            "'source: capture'; captures are bound at the "
+                            "matched call site and do not dominate the "
+                            "enclosing function's entry block. Use "
+                            "'operand', 'variable', 'symbol', or "
+                            "'constant' instead."
+                        );
+                    } else if (arg.source == ArgumentSourceType::RETURN_VALUE) {
+                        io.setError(
+                            "'mode: apply_at_entrypoint' does not accept "
+                            "'source: return_value'; the call result is "
+                            "only defined at the matched call site and "
+                            "cannot be referenced from the enclosing "
+                            "function's entry block. Use 'operand', "
+                            "'variable', 'symbol', or 'constant' instead."
+                        );
+                    }
+                }
+            }
+
+            // Cross-field validation: `mode: replace` on a kinded generic
+            // op (cir.binop, cir.cmp) requires an `op_kind` filter.
+            // Without it the match is a wildcard that fires on every
+            // arithmetic-or-comparison op in scope and substitutes the
+            // same patch call for add, sub, mul, div, shl, and/or, etc.
+            // The CIR verifier is happy (operand types match) but the
+            // semantics are silently wrong — a `patch__replace__int_mul`
+            // installed over every `+`/`-`/`/`/`<<` just miscomputes the
+            // program. Logging or observational modes (apply_before /
+            // apply_after) have a legitimate wildcard use case
+            // (operation counters, trace probes) so they are left
+            // unrestricted; replace must narrow to a single kind.
+            if (action_obj.mode == InstrumentationMode::REPLACE
+                && !match_obj.op_kind.has_value())
+            {
+                for (const auto &n : match_obj.names) {
+                    if (n == "cir.binop" || n == "cir.cmp") {
+                        io.setError(
+                            "'mode: replace' on a kinded generic op ('"
+                            + n
+                            + "') requires an 'op_kind' filter. A wildcard "
+                            "match replaces every arithmetic/comparison op in "
+                            "scope with the same patch call — the CIR "
+                            "verifier accepts it but the semantics are "
+                            "silently wrong across kinds. Narrow the match "
+                            "with e.g. 'op_kind: \"mul\"', or use "
+                            "'apply_before' / 'apply_after' for observational "
+                            "probes that genuinely want the wildcard."
+                        );
+                        break;
+                    }
+                }
+            }
         }
     };
 

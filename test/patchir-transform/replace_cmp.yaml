@@ -24,6 +24,7 @@ meta_patches:
 
         match:
           - name: "cir.cmp"
+            op_kind: "le"
             kind: "operation"
             function_context:
               - name: "circular_buffer_put"

@@ -18,6 +18,7 @@ patches:
     id: "CAP-MISSING-001"
     match:
       name: "cir.binop"
+      op_kind: "mul"
       kind: "operation"
       captures:
         - name: "NOTHING"
