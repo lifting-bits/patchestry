@@ -1,0 +1,34 @@
+# Regression: `optimization: ["inline-patches"]` on an `apply_after`
+# action. Exercises the inline worklist insertion at
+# PatchOperationImpl.cpp:193 (applyAfterPatch), which Phase 1's
+# apply_before fixture does not cover.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "inline-patches-apply-after"
+  description: "Apply_after + inline a patch at the spo2_lookup return site"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-04-22"
+
+libraries:
+  - "patches/measurement_update_patch.yaml"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+patches:
+  - name: "inline_after_spo2"
+    id: "INLINE-AFTER-001"
+    description: "Apply_after + inline the return-value handler"
+    match:
+      name: "spo2_lookup"
+      kind: "function"
+    action:
+      mode: "apply_after"
+      patch: "measurement_update_after_patch"
+      arguments:
+        - name: "function_return_value"
+          source: "return_value"
+      optimization: ["inline-patches"]

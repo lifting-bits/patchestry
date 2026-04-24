@@ -18,16 +18,13 @@
  */
 namespace patchestry::passes {
 
-    enum class PatchInfoMode : uint8_t {
+    enum class InstrumentationMode : uint8_t {
         NONE = 0, // No patch
         APPLY_BEFORE,
         APPLY_AFTER,
-        REPLACE
-    };
-
-    enum class ContractType : uint8_t {
-        RUNTIME = 0, // Runtime contract validation
-        STATIC,      // Static contract verification
+        APPLY_AT_ENTRYPOINT, // Insert patch call at caller's entry block
+        REPLACE,
+        ERASE // Delete matched op, no patch function
     };
 
     enum class ArgumentSourceType : uint8_t {
@@ -35,8 +32,28 @@ namespace patchestry::passes {
         VARIABLE,    // Reference to variable by name
         SYMBOL,      // Reference to symbol by name
         CONSTANT,    // Literal constant value
-        RETURN_VALUE // Return value of function or operation
+        RETURN_VALUE, // Return value of function or operation
+        CAPTURE      // Named capture bound from match.captures
     };
+
+    // Pin enum ordinals. These values are user-visible (attribute ordinals in
+    // MLIR serialization, .patchmod bytecode, future forks that parse the
+    // binary form) — reordering or inserting silently breaks round-trips.
+    // Adding new enumerators is fine as long as they go at the end; these
+    // asserts fail if anyone reorders the existing ones.
+    static_assert(static_cast< uint8_t >(InstrumentationMode::NONE) == 0);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::APPLY_BEFORE) == 1);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::APPLY_AFTER) == 2);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::APPLY_AT_ENTRYPOINT) == 3);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::REPLACE) == 4);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::ERASE) == 5);
+
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::OPERAND) == 0);
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::VARIABLE) == 1);
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::SYMBOL) == 2);
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::CONSTANT) == 3);
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::RETURN_VALUE) == 4);
+    static_assert(static_cast< uint8_t >(ArgumentSourceType::CAPTURE) == 5);
 
     struct Metadata
     {

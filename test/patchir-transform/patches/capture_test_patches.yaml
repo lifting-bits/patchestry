@@ -1,0 +1,42 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "capture_test_patches"
+  version: "1.0.0"
+  description: "Test patches for capture feature verification"
+  author: "Security Team"
+  created: "2026-04-20"
+
+patches:
+  - name: "ptr_log"
+    description: "Log a pointer and size, used by capture tests"
+    category: "test"
+    code_file: "patches/patch_ptr_logger.c"
+    function_name: "patch::before::ptr_log"
+    parameters:
+      - name: "ptr"
+        type: "void*"
+        description: "Pointer argument"
+      - name: "n"
+        type: "unsigned long"
+        description: "Size argument"
+
+  - name: "ptr_only"
+    description: "Single-pointer pre-call hook for tests"
+    category: "test"
+    code_file: "patches/patch_ptr_logger.c"
+    function_name: "patch::before::ptr_only"
+    parameters:
+      - name: "ptr"
+        type: "void*"
+        description: "Pointer argument"
+
+  - name: "replace_load_u32"
+    description: "Replace a cir.load with a call returning u32"
+    category: "test"
+    code_file: "patches/patch_replace_load.c"
+    function_name: "patch::replace::load_u32"
+    parameters:
+      - name: "ptr"
+        type: "unsigned int*"
+        description: "Pointer being loaded"

@@ -26,7 +26,6 @@ contracts:
   - name: "cwe190_static_contract"
     description: "Static contract: memcpy size must be in valid range"
     category: "integer_safety"
-    type: "STATIC"
 
     preconditions:
       - id: "ptr_nonnull"

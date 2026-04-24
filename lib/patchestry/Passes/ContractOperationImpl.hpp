@@ -5,56 +5,41 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
- #pragma once
+#pragma once
 
-#include <mlir/IR/Builders.h>
-#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Operation.h>
 
 #include <patchestry/YAML/ContractSpec.hpp>
 
 namespace patchestry::passes {
 
-    class InstrumentationPass;
-
-    using ContractMode = patchestry::passes::contract::InfoMode;
-
     struct ContractInformation
-    { // the use of optional here takes care of some typing errors
-        std::optional< contract::ContractSpec > spec;
+    {
+        std::optional< contract::ContractSpec >   spec;
         std::optional< contract::ContractAction > action;
     };
 
     class ContractOperationImpl
     {
-        friend class InstrumentationPass;
-
       public:
         ContractOperationImpl() = default;
 
-        static void emitRuntimeContract(
-            InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-            const ContractInformation &contract, ContractMode mode, bool shouldInline
-        );
-
+        // Static contracts attach a `contract.static` MLIR attribute on the
+        // matched op — no call is emitted and no insertion point is needed,
+        // so the signature is intentionally narrow.
         static void emitStaticContract(
-            InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-            const ContractInformation &contract, ContractMode mode, bool shouldInline
+            mlir::Operation *target_op, const ContractInformation &contract
         );
 
+        // apply* entry points match the dispatch in
+        // `InstrumentationPass::apply_contract_action_to_targets`; both
+        // currently delegate to `emitStaticContract` on the matched op.
         static void applyContractBefore(
-            InstrumentationPass &pass, mlir::Operation *targetOp,
-            const ContractInformation &contract, bool shouldInline
+            mlir::Operation *target_op, const ContractInformation &contract
         );
 
         static void applyContractAfter(
-            InstrumentationPass &pass, mlir::Operation *targetOp,
-            const ContractInformation &contract, bool shouldInline
-        );
-
-        static void applyContractAtEntrypoint(
-            InstrumentationPass &pass, cir::CallOp callOp, const ContractInformation &contract,
-            bool shouldInline
+            mlir::Operation *target_op, const ContractInformation &contract
         );
     };
 

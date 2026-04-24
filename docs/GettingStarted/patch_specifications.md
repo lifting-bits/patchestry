@@ -31,92 +31,130 @@ Patchestry supports two types of matching:
 
 ## Specification Format
 
-The patch specification is a YAML file with the following structure:
+A patchestry YAML file has a top-level `patches:` key listing the
+patches to apply. Each entry names a target match, a mode, and the
+patch function to invoke.
 
 ```yaml
-apiVersion: patchestry.io/v1             # API version
+apiVersion: patchestry.io/v1           # API version
 
-metadata:                                # Deployment metadata
-  name: "deployment-name"
+metadata:
+  name: "deployment-name"              # Deployment metadata
   description: "Deployment description"
   version: "1.0.0"
   author: "Author Name"
   created: "YYYY-MM-DD"
   organization: "organization-name"
 
-target:                                  # Target binary configuration
+target:                                # Target binary configuration
   binary: "target_binary.bin"
   arch: "ARCHITECTURE:ENDIANNESS:BITWIDTH:VARIANT"
 
-libraries:                               # External patch and contract libraries
+libraries:                             # External patch and contract libraries
   - "path/to/library.yaml"             # Each file may contain patches, contracts, or both
 
-execution_order:                         # Order of patch/contract execution
-  - "meta_patches::meta_patch_name"
-  - "meta_contracts::meta_contract_name"
-
-meta_patches:                            # Meta-patch configurations
-  - name: ...
+patches:                               # Patch configurations
+  - name: "..."
+    id: "..."
     description: "..."
-    optimization:                        # Optimization settings
-      - "inline-patches"
-      - "inline-contracts"
-    patch_actions:                       # Individual patch actions
-      - id: "PATCH-001"
-        description: "..."
-        match:                           # Match criteria
-          - name: "..."
-            kind: "..."
-            # Additional match criteria...
-        action:                          # Patch actions
-          - mode: "..."
-            patch_id: "..."
-            description: "..."
-            arguments:                   # Patch arguments
-              - name: "..."
-                source: "..."
-                index: "0"
-                is_reference: true
-
-meta_contracts:                          # Meta-contract configurations
-  - name: ...
-    description: "..."
-    contract_actions:                    # Individual contract actions
-      - name: "..."
-        id: "CONTRACT-001"
-        description: "..."
-        match:                          # Contract match criteria
-          - name: "..."
-            kind: "..."
-          # Additional match criteria...
-        action:                         # Contract actions
-          - mode: "..."
-            contract_id: "..."
-            description: "..."
-            arguments:                  # Contract arguments
-              - name: "..."
-                source: "..."
-                index: 0
-
+    match:
+      name: "..."
+      kind: "..."
+      context: ["..."]
+    action:
+      mode: "..."
+      patch: "..."
+      arguments:
+        - source: "..."
+          index: ...
+        - source: "..."
+          value: ...
+      optimization: ["..."]
 ```
 
-## Contract Types
+### Matching multiple callees
 
-Patchestry supports two types of contracts:
+Use `names:` (list) instead of `name:` (scalar) to match any of several
+callees with the same action (OR semantics, equivalent to PatchDSL's
+`pattern-either:`):
 
-1. **Runtime Contracts**: Implemented as C/C++ functions that are called at runtime to validate conditions
-2. **Static Contracts**: Declarative specifications attached as MLIR attributes for static analysis and verification
+```yaml
+patches:
+  - name: "bounded_copy"
+    match:
+      names: ["strcpy", "strcat", "sprintf"]
+      kind: "function"
+      context: ["eeprom_write"]
+    action:
+      mode: "replace"
+      patch: "safe_copy"
+      arguments:
+        - source: "operand"
+          index: 0
+```
 
-### Runtime vs Static Contracts
+Each name fires independently — if both `strcpy` and `strcat` appear
+in the matched context, both are replaced.
 
-| Aspect | Runtime Contracts | Static Contracts |
-|--------|------------------|------------------|
-| **Implementation** | C/C++ function code | Declarative predicates in YAML |
-| **Verification** | Runtime checks during execution | Static analysis at compile time |
-| **Performance** | Runtime overhead | No runtime overhead |
-| **Expressiveness** | Full programming language | Limited to supported predicates |
-| **Use Cases** | Complex validations, security checks | null checks, range checks, type constraints |
+For ad-hoc patterns, `name:` also accepts regex with `/pattern/` syntax:
 
+```yaml
+    match:
+      name: "/str(cpy|cat)|sprintf/"
+      kind: "function"
+```
+
+### Contracts
+
+Contracts use the `contracts:` top-level key. They are **static only** —
+declarative pre/postcondition predicates that attach to the matched op
+as MLIR attributes (`contract.static`). They emit no runtime code.
+Valid modes: `apply_before` and `apply_after` (both attach the same
+attribute; the mode just controls which op the attribute lands on
+relative to the match). `apply_at_entrypoint`, `replace`, and `erase`
+are patch-only.
+
+```yaml
+contracts:
+  - name: "usb_msg_nonnull"
+    id: "USB-CONTRACT-001"
+    description: "Message pointer must be non-null"
+    match:
+      name: "usbd_ep_write_packet"
+      context: ["bl_usb__send_message"]
+    action:
+      mode: "apply_before"
+      contract: "message_nonnull_contract"
+```
+
+### Ordering
+
+Entries apply in YAML declaration order: all `patches:` first (top to
+bottom), then all `contracts:` (top to bottom). No separate ordering
+field is needed — reorder the entries in the file to reorder execution.
+
+---
+
+## Contracts: Static Only
+
+`contracts:` describes **static** contracts — declarative
+pre/postcondition predicates that the pass attaches to the matched op
+as MLIR attributes (`contract.static`). They carry no executable code
+and produce no runtime overhead; they're consumed by downstream
+analyzers and verifiers (e.g. `patchir-klee-verifier`).
+
+What used to be called a "runtime contract" — a C/C++ function called
+at the matched site to validate a condition — was mechanically the
+same as an `apply_before` / `apply_after` / `apply_at_entrypoint`
+patch. Those cases have been merged into `patches:`; write the
+validator as a patch whose body does the check and asserts (or
+traps) on failure.
+
+**Migration**: if you have an older YAML with `type: "RUNTIME"` or a
+`code_file` under `contracts:`, move the entry into `patches:` with
+the same `code_file` / `function_name` and pick an appropriate patch
+mode. The parser rejects runtime contracts with a pointer to this
+section.
 
 ## Field Descriptions
 
@@ -128,9 +166,8 @@ Patchestry supports two types of contracts:
 | `metadata` | Deployment metadata container | See metadata fields below |
 | `target` | Target binary configuration | See target fields below |
 | `libraries` | External patch and contract library references | See library fields below |
-| `execution_order` | Order of patch/contract group execution | `- "meta_patches::group_name"` |
-| `meta_patches` | Meta-patch group configurations | List of patch groups |
-| `meta_contracts` | Meta-contract group configurations | List of contract groups |
+| `patches` | Patch entries to apply (in declaration order) | List of patch entries |
+| `contracts` | Contract entries to apply (in declaration order) | List of contract entries |
 
 ### Metadata Fields
 
@@ -163,54 +200,36 @@ libraries:
 |-------|-------------|---------|
 | `libraries` (list entry) | Path to a library YAML file containing `patches:` and/or `contracts:` definitions | `"patches/usb_security_patches.yaml"` |
 
-### Meta-Patch Entry Fields
+### Patch / Contract Entry Fields
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| `name` | Unique identifier for the patch group | `"usb_security_patches"` |
-| `description` | Description of the patch group purpose | `"USB security monitoring patches"` |
-| `optimization` | List of optimization flags | `["inline-patches", "inline-contracts"]` |
-| `patch_actions` | List of individual patch actions | See [patch action fields](#patch-action-fields) below |
+Each entry under a top-level `patches:` or `contracts:` list carries
+identity metadata, a required nested `match:` mapping, and a required
+nested `action:` mapping. Any action-level field (`mode`, `patch` /
+`contract`, `arguments`, `optimization`) must live inside `action:`;
+stray top-level spellings are rejected by the parser.
 
-### Meta-Contract Entry Fields
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `name` | Unique identifier for the contract group | `"usb_control_flow_contracts"` |
-| `description` | Description of the contract group purpose | `"USB control flow integrity contracts"` |
-| `contract_actions` | List of individual contract actions | See [contract action fields](#contract-action-fields) below |
-
-### Patch Action Fields
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `id` | Unique identifier for the patch action | `"USB-PATCH-001"` |
-| `description` | Description of what the patch does | `"Add USB security validation"` |
-| `match` | List of match criteria | See [match fields](#match-fields) below |
-| `action` | List of actions to apply | See [action fields](#action-fields) below |
-
-### Contract Action Fields
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `id` | Unique identifier for the contract action | `"USB-CONTRACT-001"` |
-| `description` | Description of what the contract does | `"Add USB control flow integrity checking"` |
-| `match` | List of match criteria | See [match fields](#match-fields) below |
-| `action` | List of actions to apply | See [action fields](#action-fields) below |
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| `name` | Yes | Descriptive entry name (used in logs) | `"usb_endpoint_write_validation_after"` |
+| `id` | No | Stable action ID; auto-generated from `name` if omitted | `"USB-PATCH-001"` |
+| `description` | No | Human-readable description | `"Validate USB endpoint writes"` |
+| `match` | Yes | Nested mapping selecting where to apply — see [Match Fields](#match-fields) | See example |
+| `action` | Yes | Nested mapping describing what to do — see [Action Fields](#action-fields) | See example |
 
 ### Match Fields
 
 | Field | Description | Example |
 |-------|-------------|---------|
 | `match.name` | Name pattern to match — a function name for `kind: "function"`, or an MLIR operation name (e.g. `"cir.call"`) for `kind: "operation"` | `"usbd_ep_write_packet"`, `"cir.call"` |
+| `match.names` | List of callee names with OR semantics (simplified form; mutually exclusive with `match.name`) | `["strcpy", "strcat"]` |
 | `match.kind` | Type of match target (`function` or `operation`) | `"function"` |
-| `match.function_context` | Functions where matches should be applied | `name: "/.*secure.*/"` |
+| `match.context` | Functions where matches should be applied (list of names or `/regex/` patterns) | `["bl_usb__send_message"]` |
 | `match.variable_matches` | Variables used in the operation (for function-based matching) | `name: "/.*password.*/"` |
 | `match.argument_matches` | Function arguments to match (for function-based matching) | See below |
 | `match.symbol_matches` | Symbols accessed by the operation (for operation-based matching) | `name: "/.*password.*/"` |
 | `match.operand_matches` | Operands to match (for operation-based matching) | See below |
-
-> **Multiple match entries**: Currently, only the first entry under `match:` is evaluated by the implementation. If multiple entries are provided, **only the first one is used** and any additional entries are ignored.
+| `match.op_kind` | Narrow `cir.binop` / `cir.cmp` matches to a specific kind (see [Op-kind discriminators](#op-kind-discriminators)) | `"mul"` |
+| `match.captures` | Bind operand/result values for reuse as `source: "capture"` arguments (see [Named captures](#named-captures)) | See below |
 
 #### Operation-Based Matching
 
@@ -270,21 +289,30 @@ Common operand patterns:
 
 ### Action Fields
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| `mode` | Patching or contract mode to apply. Patch modes: `apply_before`, `apply_after`, `replace`. Contract-only mode: `apply_at_entrypoint` | `"apply_before"` |
-| `patch_id` | Reference to the patch implementation | `"USB-PATCH-001"` |
-| `description` | Description of the action being applied | `"Pre-validation security check"` |
-| `arguments` | List of arguments to pass to patch function | See [Argument Specification](#argument-specification) |
+The action fields live under each entry's nested `action:` mapping
+(required sibling of `match:`).
+
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| `mode` | Yes | Patching or contract mode to apply. Shared modes: `apply_before`, `apply_after`. Patch-only modes: `apply_at_entrypoint`, `replace`, `erase` | `"apply_before"` |
+| `patch` | Under `patches:` (unless `mode: erase`) | Reference to the patch implementation `name:` in a library | `"usb_endpoint_write_validation_after"` |
+| `contract` | Under `contracts:` | Reference to the static contract `name:` in a library | `"usb_msg_nonnull"` |
+| `arguments` | No | List of arguments to pass to patch function (ignored for contracts) | See [Argument Specification](#argument-specification) |
+| `optimization` | No | Optimization flags for this action | `["inline-patches"]` |
 
 ### Optimization Flags
 
-The `optimization` field accepts a list of optimization settings:
+The `optimization` field accepts a list of optimization settings on each
+entry's `action:` block:
 
-| Flag | Applies to | Description | Effect |
-|------|------------|-------------|--------|
-| `"inline-patches"` | `meta_patches` | Inline patch function calls after insertion | Reduces function call overhead |
-| `"inline-contracts"` | `meta_contracts` | Inline contract function calls after insertion | Reduces contract validation overhead |
+| Flag | Description | Effect |
+|------|-------------|--------|
+| `"inline-patches"` | Inline patch function calls after insertion | Reduces function call overhead |
+
+> **Note:** `inline-contracts` is deprecated. Contracts are static-only —
+> they attach `contract.static` MLIR attributes rather than emitting calls,
+> so there is nothing to inline. The flag is still parsed for backward
+> compatibility but produces a warning and has no effect.
 
 ## Argument Specification
 
@@ -325,6 +353,109 @@ arguments:
 | `symbol` | Module-level global variable or function pointer, located in the module symbol table | `symbol` | Pass a global variable or function pointer to the patch |
 | `constant` | Literal constant value | `value` | Pass fixed values to patch functions |
 | `return_value` | Return value of function or operation | None | Access return value (`apply_before` / `apply_after` modes only — **not valid for `apply_at_entrypoint`**) |
+| `capture` | Named capture bound by `match.captures` — looks up an `mlir::Value` by name from the match site | `name` | Reference the same operand/result in multiple patch arguments, or rebind by name for readability (**not valid for `apply_at_entrypoint`** — captures are bound at the match site, not at function entry) |
+
+### Named captures
+
+The `match:` block can include a `captures:` list that binds an op's
+operands and results to names. Patch arguments can then reference those
+names via `source: "capture"` — equivalent to PatchDSL's `$A`, `$B` metavars.
+
+```yaml
+patches:
+  - name: "widen_mul"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+      context: ["compute_alloc_size"]
+      captures:
+        - name: "A"
+          operand: 0
+        - name: "B"
+          operand: 1
+        - name: "R"
+          result: 0
+    action:
+      mode: "replace"
+      patch: "checked_mul"
+      arguments:
+        - source: "capture"
+          name: "A"
+        - source: "capture"
+          name: "B"
+```
+
+Capture fields:
+
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `name` | yes | The capture's name, referenced later via `source: "capture"` |
+| `operand` | one of | Zero-based operand index to bind |
+| `result` | one of | Zero-based result index to bind |
+| `type` | no | Optional type constraint (advisory, not yet enforced) |
+
+`operand:` and `result:` are mutually exclusive — exactly one must be set.
+
+### Op-kind discriminators
+
+For operation-kind matching (`kind: "operation"`), the `op_kind:` field
+filters by the MLIR enum attribute carried on the op. This allows
+targeting a specific arithmetic or comparison kind instead of every
+`cir.binop` / `cir.cmp` instance.
+
+```yaml
+patches:
+  - name: "widen_multiply"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+      op_kind: "mul"       # only match Mul binops, not Add/Sub/Div/Rem/...
+      context: ["compute_alloc_size"]
+    action:
+      mode: "replace"
+      patch: "checked_mul"
+      arguments:
+        - source: "operand"
+          index: 0
+        - source: "operand"
+          index: 1
+```
+
+Supported values per op type:
+
+| Op | `op_kind` values |
+|---|---|
+| `cir.binop` | `mul`, `div`, `rem`, `add`, `sub`, `and`, `xor`, `or`, `max` |
+| `cir.cmp` | `lt`, `le`, `gt`, `ge`, `eq`, `ne` |
+
+Only `cir.binop` and `cir.cmp` participate in `op_kind:` filtering —
+the matcher stringifies their `BinOpKind` / `CmpOpKind` attribute and
+compares it to the YAML value. Omitting `op_kind:` matches every
+instance of the named op. Setting it on any other op (including
+`cir.load`, `cir.cast`, or `cir.shift`) causes the match to fail.
+
+> **`mode: replace` requires `op_kind:` on `cir.binop` / `cir.cmp`.**
+> A wildcard replace (no `op_kind:`) would substitute the same
+> concrete patch for every arithmetic or comparison kind in scope —
+> `add`, `sub`, `mul`, `div`, `and`/`or`/`xor`, or every relational
+> operator. Operand types still line up, so the CIR verifier accepts
+> the rewritten module, but the semantics are silently wrong. The
+> spec parser therefore rejects `mode: replace` paired with a kinded
+> generic op and no `op_kind:` filter at load time.
+>
+> Narrow with `op_kind:` when you want to swap a specific kind (see
+> the `"mul"` example above), or use `mode: apply_before` /
+> `apply_after` when the intent is observational — counters, trace
+> probes, and other kind-agnostic instrumentation are the legitimate
+> wildcard use case and stay unrestricted.
+
+> **Shift ops live on `cir.shift`, not `cir.binop`.** Left/right
+> shifts are a separate op whose direction is a unit attribute
+> (`isShiftleft`), not a `BinOpKind` enumerator, so `op_kind: "shl"`
+> / `op_kind: "shr"` on `cir.binop` matches nothing. To target a
+> shift, match `name: "cir.shift"` without an `op_kind:` and
+> (optionally in the future) filter by direction via a dedicated
+> attribute check.
 
 ### Argument Examples
 
@@ -371,10 +502,12 @@ arguments:
 
 #### Return Value Handling
 ```yaml
-# Access function return value (apply_before / apply_after mode only)
+# Access function return value (apply_before / apply_after modes only —
+# both patches and contracts support it there).
 # NOTE: return_value is NOT valid for apply_at_entrypoint — the call
 # result is only defined at the matched call site, not at the function
-# entrypoint.  Use variable, symbol, or constant instead.
+# entrypoint. Use variable, symbol, or constant instead. capture is
+# also rejected at entrypoint for the same reason.
 arguments:
   - name: "result"
     source: "return_value"
@@ -424,61 +557,40 @@ target:
 libraries:
   - "patches/usb_security_patches.yaml"
 
-execution_order:
-  - "meta_patches::usb_security_meta_patches"
-  - "meta_contracts::usb_security_meta_contracts"
+patches:
+  - name: "usb_security_replace_patch"
+    id: "USB-PATCH-001"
+    description: "Replace usbd_ep_write_packet with a validated wrapper"
+    match:
+      name: "usbd_ep_write_packet"
+      kind: "function"
+      context: ["bl_usb__send_message"]
+      argument_matches:
+        - index: 0
+          name: "usb_g"
+          type: "struct struct_anon_struct_4_1_58265f66*"
+    action:
+      mode: "replace"
+      patch: "usb_security_replace_patch"
+      optimization: ["inline-patches"]
+      arguments:
+        - name: "operand_0"
+          source: "operand"
+          index: 0
+        - name: "variable_2"
+          source: "variable"
+          symbol: "var1"
 
-meta_patches:
-  - name: usb_security_meta_patches
-    description: "Meta patches for USB security"
-    optimization:
-      - "inline-patches"
-      - "inline-contracts"
-
-    patch_actions:
-      - id: "USB-PATCH-001"
-        description: "Patch to add USB security validation"
-        match:
-          - name: "usbd_ep_write_packet"
-            kind: "function"
-            function_context:
-              - name: "bl_usb__send_message"
-            argument_matches:
-              - index: 0
-                name: "usb_g"
-                type: "struct struct_anon_struct_4_1_58265f66*"
-
-        action:
-          - mode: "replace"
-            patch_id: "USB-PATCH-001"
-            description: "Pre-validation security patch"
-            arguments:
-              - name: "operand_0"
-                source: "operand"
-                index: "0"
-              - name: "variable_2"
-                source: "variable"
-                symbol: "var1"
-
-meta_contracts:
-  - name: usb_security_meta_contracts
-    description: "Contracts for USB security validation"
-    contract_actions:
-      - id: "USB-CONTRACTS"
-        description: "Assert allocation size is suitable"
-        match:
-          - name: "usbd_ep_write_packet"
-            kind: "function"
-            function_context:
-              - name: "bl_usb__send_message"
-        action:
-          - mode: "apply_before"
-            contract_id: "USB-CONTRACT-001"
-            description: "Pre-validation security contract"
-            arguments:
-              - name: "operand_0"
-                source: "operand"
-                index: "0"
+contracts:
+  - name: "usb_security_contract_before"
+    id: "USB-CONTRACT-001"
+    description: "Assert allocation size is suitable before the call"
+    match:
+      name: "usbd_ep_write_packet"
+      context: ["bl_usb__send_message"]
+    action:
+      mode: "apply_before"
+      contract: "usb_security_contract"
 ```
 
 ## Operation-Based Matching Examples
@@ -488,14 +600,14 @@ meta_contracts:
 ```yaml
 - name: "sensitive_loads"
   match:
-    - name: "cir.load"
-      kind: "operation"
-      function_context:
-        - name: "/.*secure.*/"  # Functions containing "secure"
-        - name: "authenticate"  # Exact function name
-      symbol_matches:
-        - name: "/.*password.*/"  # Variables containing "password"
-          type: "int32*"
+    name: "cir.load"
+    kind: "operation"
+    context:
+      - "/.*secure.*/"   # Functions containing "secure"
+      - "authenticate"   # Exact function name
+    symbol_matches:
+      - name: "/.*password.*/"  # Variables containing "password"
+        type: "int32*"
 ```
 
 ### Example 2: Match Store Operations with Specific Operands
@@ -503,17 +615,17 @@ meta_contracts:
 ```yaml
 - name: "validate_stores"
   match:
-    - name: "cir.store"
-      kind: "operation"
-      function_context:
-        - name: "/.*critical.*/"
-      operand_matches:
-        - index: 0  # The value being stored (first operand)
-          name: "user_input"
-          type: "char*"
-        - index: 1  # The address being stored to (second operand)
-          name: "buffer"
-          type: "char[256]"
+    name: "cir.store"
+    kind: "operation"
+    context:
+      - "/.*critical.*/"
+    operand_matches:
+      - index: 0  # The value being stored (first operand)
+        name: "user_input"
+        type: "char*"
+      - index: 1  # The address being stored to (second operand)
+        name: "buffer"
+        type: "char[256]"
 ```
 
 ### Pattern Matching
@@ -530,28 +642,36 @@ Examples:
 
 ## Patch Modes
 
-The specification supports three patch modes and one contract-only mode:
+The specification supports five modes:
 
 - `apply_before`: Apply patch or contract before the matched function or operation
 - `apply_after`: Apply patch or contract after the matched function or operation completes
+- `apply_at_entrypoint`: Insert a patch at the entry point of the **caller** function (patches only — see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
 - `replace`: Completely replace the matched function call or operation (patches only)
-- `apply_at_entrypoint`: Insert a contract at the entry point of the **caller** function (contracts only — see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
+- `erase`: Delete the matched op without inserting any patch code (patches only — see [Erase Mode](#erase-mode))
 
 ### Apply Before Mode
 
 In `apply_before` mode, the patch is applied before the matched function or operation executes.
 ```yaml
-action:
-  - mode: "apply_before"
-    patch_id: "SECURITY-001"
+patches:
+  - name: "security_precheck"
+    id: "SECURITY-001"
     description: "Pre-execution validation"
-    arguments:
-      - name: "input_param"
-        source: "operand"
-        index: "0"
-      - name: "max_size"
-        source: "constant"
-        value: "4096"
+    match:
+      name: "sensitive_call"
+      kind: "function"
+      context: ["protected_fn"]
+    action:
+      mode: "apply_before"
+      patch: "security_precheck"
+      arguments:
+        - name: "input_param"
+          source: "operand"
+          index: 0
+        - name: "max_size"
+          source: "constant"
+          value: "4096"
 ```
 
 ### Apply After Mode
@@ -559,78 +679,130 @@ action:
 In `apply_after` mode, the patch or contract is applied immediately after the matched function call or operation completes. For patches, this works with both function-based and operation-based matching; for contracts, `apply_after` is currently only supported with function-based (function call) matching.
 
 ```yaml
-action:
-  - mode: "apply_after"
-    patch_id: "LOGGING-001"
+patches:
+  - name: "post_execution_logger"
+    id: "LOGGING-001"
     description: "Post-execution logging"
-    arguments:
-      - name: "return_value"
-        source: "return_value"
-      - name: "execution_time"
-        source: "variable"
-        symbol: "timer_end"
+    match:
+      name: "sensitive_call"
+      kind: "function"
+      context: ["protected_fn"]
+    action:
+      mode: "apply_after"
+      patch: "post_execution_logger"
+      arguments:
+        - name: "return_value"
+          source: "return_value"
+        - name: "execution_time"
+          source: "variable"
+          symbol: "timer_end"
 ```
 
 ### Replace Mode
 
-In `replace` mode, the matched function call is completely replaced by the patch function. The original code is not executed. **When used with operation-based matching, the target operation must be a `cir.call`** — attempting to replace other operation types (e.g., `cir.store`) will log an error and leave the operation unchanged.
+In `replace` mode, the matched operation is completely replaced by a
+call to the patch function. For function-kind matches the target is
+always a `cir.call`. For operation-kind matches, **any op with at
+least one result** may be replaced — including `cir.binop`, `cir.cmp`,
+`cir.cast`, `cir.load`, `cir.get_member`, `cir.ptr_stride`, and
+`cir.unary`. Result-less ops such as `cir.store` cannot be replaced
+(there's no value to rewire); use `erase` or `apply_before`/`apply_after`
+instead.
+
+The patch function's result types must match (or be castable to) the
+matched op's result types — the pass inserts casts where needed. If the
+patch returns void but the original op had results, the pass logs an
+error and leaves the op unchanged.
 
 ```yaml
-action:
-  - mode: "replace"
-    patch_id: "SECURE-REPLACEMENT-001"
+patches:
+  - name: "secure_replacement"
+    id: "SECURE-REPLACEMENT-001"
     description: "Secure function replacement"
-    arguments:
-      - name: "original_arg1"
-        source: "operand"
-        index: "0"
-      - name: "original_arg2"
-        source: "operand"
-        index: "1"
+    match:
+      name: "insecure_call"
+      kind: "function"
+      context: ["caller"]
+    action:
+      mode: "replace"
+      patch: "secure_replacement"
+      arguments:
+        - name: "original_arg1"
+          source: "operand"
+          index: 0
+        - name: "original_arg2"
+          source: "operand"
+          index: 1
 ```
+
+### Erase Mode
+
+In `erase` mode, the matched op is deleted. No patch function is called,
+so `action.patch:` is not required.
+
+When the deleted op has results that are used by other ops, each live result
+is replaced with a default (zero for integers / null for pointers / false for
+bools) so dependent ops remain well-formed. Unsupported result types
+abort the erase for that op and log an error.
+
+```yaml
+patches:
+  - name: "strip_debug_call"
+    id: "ERASE-001"
+    match:
+      name: "debug_log"
+      kind: "function"
+      context: ["process_request"]
+    action:
+      mode: "erase"
+```
+
+Use ERASE for removing debug/logging calls, stripping unused cleanup
+paths, or deleting obsolete instrumentation. For replacing a call with
+a different function, use `replace` instead.
 
 ### Apply At Entrypoint Mode
 
-`apply_at_entrypoint` is a **contract-only** mode that inserts the contract call at the beginning of the **caller** function — the function that *contains* the matched call — rather than at the matched call site itself.
+`apply_at_entrypoint` is a **patch-only** mode. It inserts the patch call at the beginning of the **caller** function — the function that *contains* the matched call — rather than at the matched call site itself.
 
-> **Important**: The name can be misleading. The contract is **not** inserted at the beginning of the matched function (the callee). It is inserted at the beginning of the *enclosing* function (the caller) that was specified in `function_context`. Insertion happens after all `cir.alloca` ops and parameter-initialization stores so that all of the caller's parameters are in scope.
+> Contracts do not support this mode. Static contracts attach as MLIR attributes on the matched op; there is no call to place, so "entrypoint" has no meaning for them. The earlier runtime-contract flavor that used `apply_at_entrypoint` has been merged into `patches:` — write the entry-block check as a patch.
+
+> **Important**: The name can be misleading. The call is **not** inserted at the beginning of the matched function (the callee). It is inserted at the beginning of the *enclosing* function (the caller) named via `match.context`. Insertion happens after all `cir.alloca` ops and parameter-initialization stores so that all of the caller's parameters are in scope.
 
 **When to use it**: When you want to validate invariants at function entry using the caller's local parameters, before any call inside the function executes.
 
 **How it works** (example):
 - `match.name` = `"usbd_ep_write_packet"` — the call to find inside the caller
-- `match.function_context.name` = `"bl_usb__send_message"` — the caller whose entry point receives the contract
-- The contract call is inserted at the start of `bl_usb__send_message`, not at the `usbd_ep_write_packet` call site
+- `match.context` = `["bl_usb__send_message"]` — the caller whose entry point receives the instrumentation
+- The call is inserted at the start of `bl_usb__send_message`, not at the `usbd_ep_write_packet` call site
 - Arguments (e.g., `source: "variable"`) are resolved from `bl_usb__send_message`'s local scope
 
+**Argument-source restrictions**: because the inserted call runs at the function entry, SSA values bound at the matched call site are not in scope. The pass rejects:
+- `source: "return_value"` — the call result is only defined at the match site
+- `source: "capture"` — captures are bound at the match site, not at entry
+
+Use `variable`, `symbol`, `constant`, or `operand` (which maps index N to the caller's Nth block argument) instead.
+
+**Patch example**:
 ```yaml
-contract_actions:
-  - id: "ENTRY-CONTRACT-001"
+patches:
+  - name: "entrypoint_message_check"
+    id: "ENTRY-PATCH-001"
     description: "Null-check message pointer at function entry"
-
     match:
-      - name: "usbd_ep_write_packet"   # call to find inside the caller
-        kind: "function"
-        function_context:
-          - name: "bl_usb__send_message"  # contract inserts HERE, at this function's entry
-
+      name: "usbd_ep_write_packet"       # call to find inside the caller
+      kind: "function"
+      context: ["bl_usb__send_message"]  # patch inserts HERE, at this function's entry
     action:
-      - mode: "apply_at_entrypoint"
-        contract_id: "message_entry_check_contract"
-        description: "Runtime null-check on message pointer at bl_usb__send_message entry"
-        arguments:
-          # source: variable — load a named local/parameter alloca at entry
-          - name: "msg"
-            source: "variable"
-            symbol: "msg"
-          # source: operand — index 0 maps to the 0th argument of bl_usb__send_message,
-          # not the 0th operand of the usbd_ep_write_packet call
-          - name: "usb_handle"
-            source: "operand"
-            index: 0
+      mode: "apply_at_entrypoint"
+      patch: "message_entry_check_patch"
+      arguments:
+        # source: variable — load a named local/parameter alloca at entry
+        - source: "variable"
+          symbol: "msg"
 ```
 
-> **Note**: The contract is inserted at the beginning of the **caller** (`bl_usb__send_message` — the function containing the matched call), not at the beginning of the matched function itself (`usbd_ep_write_packet`).
+> **Note**: The call is inserted at the beginning of the **caller** (`bl_usb__send_message` — the function containing the matched call), not at the beginning of the matched function itself (`usbd_ep_write_packet`).
 
 # Contract Library Specification
 
@@ -653,15 +825,8 @@ contracts:
     description: "Contract description"
     category: "validation_category"
     severity: "critical|high|medium|low"
-    type: "STATIC|RUNTIME"
-
-    # For STATIC contracts
     preconditions: [...]
     postconditions: [...]
-
-    # For RUNTIME contracts
-    function_name: ...
-    code_file: ...
 ```
 
 ### Contract Library Fields
@@ -674,17 +839,16 @@ contracts:
 
 ### Contract Specification Fields
 
-| Field | Description | Required | Type | Example |
-|-------|-------------|----------|------|---------|
-| `name` | Contract identifier | Yes | All | `"usb_validation_contract"` |
-| `description` | Contract description | No | All | `"Validates USB parameters"` |
-| `category` | Contract category | No | All | `"validation"`, `"security"` |
-| `severity` | Severity level | No | All | `"critical"`, `"high"`, `"medium"`, `"low"` |
-| `type` | Contract type | Yes | All | `"STATIC"` or `"RUNTIME"` |
-| `preconditions` | Static preconditions | STATIC only | STATIC | List of precondition specs |
-| `postconditions` | Static postconditions | STATIC only | STATIC | List of postcondition specs |
-| `function_name` | Runtime contract function name | RUNTIME only | RUNTIME | Implementation details |
-| `code_file` | Runtime contract implementation file | RUNTIME only | RUNTIME | Implementation details |
+Contracts are static-only. Runtime validators live under `patches:`.
+
+| Field | Description | Required | Example |
+|-------|-------------|----------|---------|
+| `name` | Contract identifier | Yes | `"usb_validation_contract"` |
+| `description` | Contract description | No | `"Validates USB parameters"` |
+| `category` | Contract category | No | `"validation"`, `"security"` |
+| `severity` | Severity level | No | `"critical"`, `"high"`, `"medium"`, `"low"` |
+| `preconditions` | Static preconditions (list of predicate specs) | No | See predicate structure |
+| `postconditions` | Static postconditions (list of predicate specs) | No | See predicate structure |
 
 ### Static Contract Predicates
 
@@ -909,7 +1073,6 @@ contracts:
   - name: "usb_endpoint_write_validation"
     description: "Validate USB endpoint write parameters"
     category: "write_validation"
-    type: "STATIC"
 
     preconditions:
       # Example 1: range predicate
@@ -956,36 +1119,127 @@ contracts:
 - **expr**: `kind` + `expr`
 - **range**: `kind` + `target` + `range` (with `min`/`max`) (`arg<N>`, `return_value`, or `symbol`)
 
-### Runtime Contract Implementation
+### Runtime Validators — use `patches:`
 
-For runtime contracts, specify the implementation details:
+What was previously called a "runtime contract" (a C/C++ function
+called at the match site to validate a condition) is now expressed
+as a plain patch. Write the validator like any other patch
+implementation and dispatch it with `apply_before`, `apply_after`,
+or `apply_at_entrypoint`:
 
 ```yaml
-contracts:
-  - name: "usb_endpoint_write_contract"
+# Patch library entry — same code_file/function_name shape as the old
+# runtime-contract entry had.
+patches:
+  - name: "usb_endpoint_write_validation"
     description: "Runtime validation for USB endpoint write"
-    type: "RUNTIME"
-
-    code_file: "contracts/usb_validation.c"
-    function_name: "contract::usb_endpoint_write_validation"
+    code_file: "patches/patch_usb_validation.c"
+    function_name: "patch::before::usb_endpoint_write"
     parameters:
       - name: "usb_device"
         type: "usb_device_t*"
-        description: "USB device context"
       - name: "buffer"
         type: "const void*"
-        description: "Data buffer"
       - name: "size"
         type: "uint32_t"
-        description: "Buffer size"
 ```
+
+Use a `contracts:` entry for the *static* predicate you want the
+verifier to check (pre/post on the same call site) — the two are
+complementary: the patch does the runtime check, the contract
+encodes the invariant for static analysis.
 
 ## Deployment Architecture
 
-The meta-patch architecture allows for:
+The patch architecture allows for:
 
 1. **Modular Organization**: Group related patches into logical units
 2. **External Libraries**: Reference shared patch and contract libraries
 3. **Execution Ordering**: Control the order of patch application
 4. **Optimization Control**: Fine-tune performance characteristics
 5. **Exclusion Patterns**: Exclude specific functions from patching
+
+## Limitations
+
+The current matcher handles single-op C expressions at the CIR level.
+The following patterns are **not yet supported**:
+
+### Control-flow and region-carrying ops
+
+Ops that carry regions (bodies or branches) can be matched by name
+(`name: "cir.if"`, etc.) but cannot be meaningfully used with REPLACE,
+and captures cannot reach into their regions.
+
+| C pattern | CIR representation |
+|---|---|
+| `if (cond) { … } else { … }` | `cir.if` (two regions) |
+| `for`, `while`, `do-while` | `cir.for`, `cir.while`, `cir.do` |
+| `switch (x) { cases… }` | `cir.switch` |
+| Scoped blocks `{ … }` | `cir.scope` |
+| `a ? b : c` | `cir.ternary` |
+| `a && b`, `a \|\| b` (short-circuit) | `cir.ternary` / region ops |
+
+### Statement-level and multi-op patterns
+
+Patterns that match more than one op in sequence require dataflow
+reachability analysis and are not expressible today:
+
+- `free(p); p = NULL;` — paired-op patterns
+- `p = malloc(n); … use(p) …` — resource-tracking patterns
+- Patterns anchored by preceding/following ops
+
+### Variadic captures
+
+PatchDSL's variadic metavar (`$...ARGS`) is not implemented. For example,
+matching `printf(fmt, $...ARGS)` to capture an arbitrary number of
+arguments is not possible. Workaround: match by callee name and use
+`apply_before`/`apply_after` without forwarding variadic args.
+
+### Result-less ops with REPLACE
+
+`cir.store`, `cir.return`, and other ops without results cannot be
+replaced — there is no value to rewire. Use `erase` together with
+`apply_before`/`apply_after` to achieve equivalent rewrites.
+
+### Semantic predicates
+
+PatchDSL-style `where:` predicates (`nonnull(x)`, `tainted(x from src)`,
+`bounded(x)`, `aliases(a, b)`, `reaches(a, b)`) require dedicated
+analysis passes and are not part of the YAML surface today.
+
+## Future work
+
+These capabilities are planned but deliberately out of scope for the
+current surface:
+
+1. **Region-aware matching.** Match the structure of `cir.if` /
+   `cir.for` / `cir.while` and bind captures from their condition
+   and body regions. Enables rewrites like "wrap the then-branch of
+   this if with a pre-check".
+
+2. **Multi-op pattern anchors.** Sequences like
+   `free($P); …; free($P)` with reachability between the anchors.
+   Requires a dataflow pass that tracks capture identity across
+   intervening ops.
+
+3. **Variadic operand capture.** `$...ARGS` binding to the trailing
+   operands of a call or the remaining operands of a variadic op.
+   Needed for patches that forward an arbitrary number of arguments.
+
+4. **Semantic predicates.** `where:` clauses backed by MLIR
+   analyses — nullness, integer range, taint, alias, escape. Each
+   predicate needs its own analysis pass; these land independently.
+
+5. **Inline rewrites.** Pattern-to-pattern substitution without
+   going through a C patch function, e.g.
+   `rewrite: ($R: uint16_t) = (uint16_t)((uint32_t)$A * (uint32_t)$B)`.
+   Requires a mini CIR codegen from C fragments.
+
+6. **Cross-scope capture references.** A capture bound at a call
+   site used by a patch inserted at the enclosing function's entry
+   (currently SSA dominance rejects this). Would require rewriting
+   captures to block-argument projections.
+
+Contributions on any of these items are welcome; each is designed to
+plug into the existing `MatchConfig` / capture plumbing rather than
+requiring a full rewrite of the matcher.

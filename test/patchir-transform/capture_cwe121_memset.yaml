@@ -1,0 +1,35 @@
+# Capture memset's dest and size arguments inside the CWE-121 eeprom handler
+# and replace with checked_mul (demonstrating captures on a 3-arg call in a
+# C++ mangled enclosing function).
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe121-memset-captured"
+
+target:
+  binary: "firmware.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  - "patches/capture_test_patches.yaml"
+
+patches:
+  - name: "capture_memset"
+    id: "CWE121-MEMSET-001"
+    match:
+      name: "memset"
+      kind: "function"
+      context: ["_ZN5Debug7Command13EepromHandler5WriteEtPNS0_7ContextE"]
+      captures:
+        - name: "DEST"
+          operand: 0
+        - name: "LEN"
+          operand: 2
+    action:
+      mode: "apply_before"
+      patch: "ptr_log"
+      arguments:
+        - source: "capture"
+          name: "DEST"
+        - source: "capture"
+          name: "LEN"

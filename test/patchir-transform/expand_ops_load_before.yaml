@@ -1,0 +1,30 @@
+# Phase C: insert a pre-check patch before every cir.load inside rcc_osc_off.
+# Captures the loaded pointer and result, passes the pointer to ptr_log.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "expand-load-before"
+
+target:
+  binary: "stm32_firmware.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  - "patches/capture_test_patches.yaml"
+
+patches:
+  - name: "load_prelog"
+    id: "EXPAND-LOAD-001"
+    match:
+      name: "cir.load"
+      kind: "operation"
+      context: ["rcc_osc_off"]
+      captures:
+        - name: "PTR"
+          operand: 0
+    action:
+      mode: "apply_before"
+      patch: "ptr_only"
+      arguments:
+        - source: "capture"
+          name: "PTR"

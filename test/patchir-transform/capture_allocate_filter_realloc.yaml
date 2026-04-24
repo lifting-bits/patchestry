@@ -1,0 +1,35 @@
+# Demonstrate captures on a cir.call: bind the realloc() operands by name.
+# Uses function-kind matching (callee name) with captures on its arguments.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "allocate-filter-realloc-captured"
+
+target:
+  binary: "bloodview.bin"
+  arch: "ARM:LE:32:v7"
+
+libraries:
+  - "patches/replace_binop_patches.yaml"
+
+patches:
+  - name: "capture_realloc_size"
+    id: "ALLOC-REALLOC-001"
+    description: "Replace realloc with a 2-arg call; capture binds the size argument"
+    match:
+      name: "realloc"
+      kind: "function"
+      context: ["data__allocate_filter"]
+      captures:
+        - name: "PTR"
+          operand: 0
+        - name: "SIZE"
+          operand: 1
+    action:
+      mode: "replace"
+      patch: "checked_mul"
+      arguments:
+        - source: "capture"
+          name: "PTR"
+        - source: "capture"
+          name: "SIZE"

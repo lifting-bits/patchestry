@@ -29,7 +29,6 @@ contracts:
   - name: "all_predicates_static_contract"
     description: "Static contract exercising nonnull, alignment, relation, range, and expr predicates"
     category: "safety"
-    type: "STATIC"
 
     preconditions:
       - id: "dest_nonnull"

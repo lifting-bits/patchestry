@@ -25,6 +25,7 @@ meta_patches:
 
         match:
           - name: "cir.binop"
+            op_kind: "mul"
             kind: "operation"
             function_context:
               - name: "peek_process"

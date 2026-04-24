@@ -1,0 +1,39 @@
+# Baseline: no op_kind filter — match every cir.binop regardless of kind.
+# Uses `apply_after` (observational) because the spec-load validator
+# rejects the dangerous `replace` + wildcard combination — installing a
+# single concrete patch for every arithmetic kind produces silently
+# wrong output. `apply_after` is the legitimate use case for a wildcard
+# (counters / trace probes / uniform observation), and it lets this
+# test continue to verify "N binops matched" via the
+# patchestry_operation attribute on the emitted cir.call.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "op-kind-baseline-all"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/replace_binop_patches.yaml"
+
+patches:
+  - name: "probe_any_binop"
+    id: "BINOP-ALL"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+    action:
+      # Must be a void patch — applyPatchAfter always creates the call
+      # op with a void return type (PatchOperationImpl.cpp:186). The
+      # void_probe_mul fixture takes (u32, u32) and returns nothing,
+      # matching the two-operand binop wildcard without interacting
+      # with the binop's result.
+      mode: "apply_after"
+      patch: "void_probe_mul"
+      arguments:
+        - source: "operand"
+          index: 0
+        - source: "operand"
+          index: 1

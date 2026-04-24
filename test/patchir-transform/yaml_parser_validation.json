@@ -63,4 +63,50 @@
 // RUN: not %patchir-yaml-parser %T/nonexistent_spec.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=MISSING_FILE %s
 // MISSING_FILE: {{[Ee]rror|[Ff]ailed|[Nn]ot found|[Dd]oes not exist}}
+//
+// apply_at_entrypoint is patch-only — a contract entry with that
+// mode must fail parsing so a spec author can't silently request
+// instrumentation the pass will drop.
+// RUN: not %patchir-yaml-parser %S/contract_apply_at_entrypoint_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=CONTRACT_ENTRYPOINT_ERR %s
+// CONTRACT_ENTRYPOINT_ERR: apply_at_entrypoint is not supported for contracts
+//
+// A capture must specify exactly one of `operand:` / `result:`. Both
+// set, or neither set, must fail the parser.
+// RUN: not %patchir-yaml-parser %S/capture_mutual_exclusion_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=CAP_BOTH_ERR %s
+// CAP_BOTH_ERR: cannot specify both 'operand' and 'result'
+// RUN: not %patchir-yaml-parser %S/capture_missing_source_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=CAP_NEITHER_ERR %s
+// CAP_NEITHER_ERR: must specify either 'operand' or 'result'
+//
+// apply_at_entrypoint does not accept source:capture / source:return_value —
+// both produce values bound only at the matched call site and cannot
+// dominate the enclosing function's entry block. Previously accepted
+// at spec load and only failed later with a CIR verifier arity error
+// (two-layer diagnostic; misleading). Now rejected up front.
+// RUN: not %patchir-yaml-parser %S/entrypoint_capture_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=ENTRY_CAPTURE_ERR %s
+// ENTRY_CAPTURE_ERR: apply_at_entrypoint{{.*}}source: capture
+// RUN: not %patchir-yaml-parser %S/entrypoint_return_value_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=ENTRY_RETVAL_ERR %s
+// ENTRY_RETVAL_ERR: apply_at_entrypoint{{.*}}source: return_value
+//
+// `mode: replace` on a kinded generic op (cir.binop / cir.cmp) requires
+// an `op_kind` filter. Without it the match is a wildcard that
+// substitutes the same concrete patch for every arithmetic/comparison
+// kind — CIR verifier is happy, semantics are silently wrong across
+// kinds. Observational modes (apply_before / apply_after) are exempt.
+// RUN: not %patchir-yaml-parser %S/wildcard_replace_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=WILDCARD_REPLACE_ERR %s
+// WILDCARD_REPLACE_ERR: mode: replace{{.*}}requires an 'op_kind' filter
+//
+// `op_kind:` is only meaningful for cir.binop / cir.cmp — the matcher
+// stringifies their BinOpKind / CmpOpKind attribute. Setting it on
+// any other op (or mis-spelling the op name) previously silently
+// dropped every match at runtime with only a DEBUG log. Now rejected
+// at parse so typos surface loudly.
+// RUN: not %patchir-yaml-parser %S/op_kind_unsupported_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OPKIND_UNSUPPORTED_ERR %s
+// OPKIND_UNSUPPORTED_ERR: 'op_kind:' is only meaningful for 'cir.binop' and 'cir.cmp'
 {}

@@ -5,6 +5,23 @@
 // RUN: %file-check -vv -check-prefix=REPLACE %s --input-file %t2.cir
 // REPLACE: cir.call @patch__replace__system({{.*}}) {patchestry_operation = "cir.call"}
 //
+// Test YAML syntax produces identical output
+// RUN: %patchir-transform %t1.cir --spec %S/cwe078_replace_simplified.yaml -o %t3.cir
+// RUN: diff %t2.cir %t3.cir
+//
+// Test `names:` list form matches multiple callees (OR semantics)
+// RUN: %patchir-transform %t1.cir --spec %S/cwe078_replace_multi.yaml -o %t4.cir
+// RUN: %file-check -vv -check-prefix=MULTI %s --input-file %t4.cir
+// MULTI: cir.call @patch__replace__system({{.*}}) {patchestry_operation = "cir.call"}
+// MULTI: cir.call @patch__replace__system({{.*}}) {patchestry_operation = "cir.call"}
+//
+// Test ERASE mode on a call whose return is consumed:
+// the call is removed and its result replaced with a zero constant.
+// RUN: %patchir-transform %t1.cir --spec %S/erase_call_with_return.yaml -o %t5.cir
+// RUN: %file-check -vv -check-prefix=ERASE_RET %s --input-file %t5.cir
+// ERASE_RET: cir.func @create_port
+// ERASE_RET-NOT: cir.call @sprintf
+//
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

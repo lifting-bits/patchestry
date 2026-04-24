@@ -53,12 +53,27 @@ namespace patchestry::passes {
             using RelationKind  = ::contracts::RelationKind;
         } // namespace attr_types
 
+        // Contracts attach as MLIR attributes on the matched op. APPLY_BEFORE
+        // and APPLY_AFTER currently produce the same attribute placement
+        // (both set `contract.static` on the matched op); the distinction is
+        // retained on the enum so the YAML surface and the dispatch in
+        // `ContractOperationImpl` stay aligned with patches and leave room
+        // for later differentiation. There is no runtime-call insertion
+        // (that path lives under patches: now), so apply_at_entrypoint is
+        // not a valid contract mode.
         enum class InfoMode : uint8_t {
             NONE = 0, // No contract
             APPLY_BEFORE,
-            APPLY_AFTER,
-            APPLY_AT_ENTRYPOINT
+            APPLY_AFTER
         };
+
+        // Pin enum ordinals. Mirror the BaseSpec guard: these values end up
+        // in MLIR attribute serialization and downstream bytecode, so a
+        // silent reorder would break round-trips. Add new enumerators at
+        // the end with a matching static_assert line.
+        static_assert(static_cast< uint8_t >(InfoMode::NONE) == 0);
+        static_assert(static_cast< uint8_t >(InfoMode::APPLY_BEFORE) == 1);
+        static_assert(static_cast< uint8_t >(InfoMode::APPLY_AFTER) == 2);
 
         // Contracts can only match at the function level.
         enum class MatchKind : uint8_t { NONE = 0, FUNCTION };
@@ -133,21 +148,18 @@ namespace patchestry::passes {
             std::optional< Predicate > pred;
         };
 
+        // Contracts are static only. Runtime contracts have been merged into
+        // patches — see patches: in PatchSpec.hpp for C-function-based
+        // instrumentation. A ContractSpec carries the declarative
+        // pre/postconditions attached as MLIR attributes by the pass.
         struct ContractSpec
         {
             std::string name;
             std::string description;
             std::string category;
             std::string severity;
-            ContractType type; // ContractType::STATIC or ContractType::RUNTIME
-            std::string code_file;
-            std::string function_name;
-            std::vector< Parameter > parameters;
-            std::optional< std::vector< StaticContractRequirement > >
-                preconditions; // For static contracts
-            std::optional< std::vector< StaticContractRequirement > >
-                postconditions; // For static contracts
-            std::optional< std::string > contract_module;
+            std::optional< std::vector< StaticContractRequirement > > preconditions;
+            std::optional< std::vector< StaticContractRequirement > > postconditions;
         };
 
         struct MetaContractConfig
@@ -155,7 +167,6 @@ namespace patchestry::passes {
             std::string name;
             std::string description;
             std::vector< ContractAction > contract_actions;
-            std::set< std::string > optimization;
         };
 
         [[maybe_unused]] inline std::string_view infoModeToString(InfoMode mode) {
@@ -166,11 +177,77 @@ namespace patchestry::passes {
                     return "APPLY_BEFORE";
                 case InfoMode::APPLY_AFTER:
                     return "APPLY_AFTER";
-                case InfoMode::APPLY_AT_ENTRYPOINT:
-                    return "APPLY_AT_ENTRYPOINT";
             }
             return "UNKNOWN";
         }
+
+        // Helper for parsing the nested `match:` object inside ContractEntry.
+        // Kept in the contract namespace (not llvm::yaml) so the struct lives
+        // with the types it serves; only its MappingTraits specialization is
+        // in llvm::yaml.
+        struct ContractMatchObject
+        {
+            std::string name;
+            std::vector< std::string > context;
+        };
+
+        // Sibling to ContractMatchObject for parsing the nested `action:`
+        // block on a contract entry. Arguments are accepted for schema
+        // symmetry with patches but warned-and-ignored at parse time
+        // (static contracts attach MLIR attributes, not runtime calls).
+        struct ContractActionObject
+        {
+            InfoMode mode = InfoMode::NONE;
+            std::string contract_id;
+            std::vector< ArgumentSource > arguments;
+            bool has_optimization = false;
+        };
+
+        // Simplified contract entry that inflates to MetaContractConfig.
+        struct ContractEntry
+        {
+            std::string name;
+            std::string id;
+            std::string description;
+            // match (single object)
+            std::string match_name;
+            std::vector< std::string > context; // function_context names
+            // action (inlined)
+            InfoMode mode = InfoMode::NONE;
+            std::string contract_id;
+            std::vector< ArgumentSource > arguments;
+        };
+
+        // Convert a ContractEntry to the canonical MetaContractConfig representation.
+        [[maybe_unused]] inline MetaContractConfig inflateContractEntry(const ContractEntry &entry) {
+            MetaContractConfig meta;
+            meta.name         = entry.name;
+            meta.description  = entry.description;
+
+            ContractAction ca;
+            ca.action_id   = entry.id.empty() ? entry.name + "/0" : entry.id;
+            ca.description = entry.description;
+
+            MatchConfig mc;
+            mc.name = entry.match_name;
+            mc.kind = MatchKind::FUNCTION;
+            for (const auto &ctx_name : entry.context) {
+                FunctionContext fc;
+                fc.name = ctx_name;
+                mc.function_context.push_back(fc);
+            }
+            ca.match.push_back(std::move(mc));
+
+            Action act;
+            act.mode        = entry.mode;
+            act.contract_id = entry.contract_id;
+            act.arguments   = entry.arguments;
+            ca.action.push_back(std::move(act));
+
+            meta.contract_actions.push_back(std::move(ca));
+            return meta;
+        }
+
     } // namespace contract
 } // namespace patchestry::passes
 
@@ -184,11 +261,46 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::MetaContractConfig)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::Range)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::Value)
 LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::Predicate)
+LLVM_YAML_IS_SEQUENCE_VECTOR(patchestry::passes::contract::ContractEntry)
 
 namespace llvm::yaml {
     using namespace patchestry::passes;
 
-    // Parse ContractSpec
+    // Helper: parse a YAML mode string into contract::InfoMode, reporting
+    // the right error via `io`. Shared between the legacy `meta_contracts:`
+    // action parser and the flat `contracts:` entry parser so the allowed
+    // spellings and error messages stay in sync.
+    inline contract::InfoMode parseContractInfoMode(
+        IO &io, const std::string &mode_str
+    ) {
+        if (mode_str == "ApplyBefore" || mode_str == "apply_before") {
+            return contract::InfoMode::APPLY_BEFORE;
+        }
+        if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
+            return contract::InfoMode::APPLY_AFTER;
+        }
+        if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint"
+            || mode_str == "apply_at_entry")
+        {
+            io.setError(
+                "apply_at_entrypoint is not supported for contracts — "
+                "contracts are static only. Move the entry under patches: "
+                "and use mode: apply_at_entrypoint there."
+            );
+            return contract::InfoMode::NONE;
+        }
+        io.setError(
+            "Unsupported contract mode: '" + mode_str
+            + "'. Valid modes: ApplyBefore, ApplyAfter"
+        );
+        return contract::InfoMode::NONE;
+    }
+
+    // Parse ContractSpec. Contracts are static-only; the legacy
+    // type: "RUNTIME" encoding has been merged into patches, and
+    // type: is quietly ignored if still present so older YAMLs keep
+    // parsing. Any contract carrying code_file / function_name is
+    // rejected with a pointer to patches:.
     template<>
     struct MappingTraits< contract::ContractSpec >
     {
@@ -199,24 +311,49 @@ namespace llvm::yaml {
             io.mapOptional("severity", spec.severity);
 
             std::string type_str;
-            io.mapRequired("type", type_str);
-            if (type_str == "STATIC") {
-                spec.type = ContractType::STATIC;
-            } else if (type_str == "RUNTIME") {
-                spec.type = ContractType::RUNTIME;
-            } else {
-                io.setError("Unknown contract type: '" + type_str
-                            + "'. Valid types: STATIC, RUNTIME");
+            io.mapOptional("type", type_str);
+            if (type_str == "RUNTIME") {
+                io.setError(
+                    "Runtime contracts are no longer supported — migrate '"
+                    + spec.name + "' to a patch entry under patches: (same "
+                    "code_file / function_name, applied via apply_before / "
+                    "apply_after / apply_at_entrypoint)."
+                );
                 return;
             }
-            if (spec.type == ContractType::STATIC) {
-                io.mapOptional("preconditions", spec.preconditions);
-                io.mapOptional("postconditions", spec.postconditions);
-            } else if (spec.type == ContractType::RUNTIME) {
-                io.mapRequired("code_file", spec.code_file);
-                io.mapRequired("function_name", spec.function_name);
-                io.mapOptional("parameters", spec.parameters);
+            if (!type_str.empty() && type_str != "STATIC") {
+                io.setError(
+                    "Unknown contract type: '" + type_str + "'. The type: "
+                    "field is deprecated; contracts are static-only. Remove "
+                    "it or set it to \"STATIC\"."
+                );
+                return;
             }
+
+            // Reject the runtime-only fields so stale YAMLs produce a clear
+            // error rather than being silently dropped.
+            std::string code_file;
+            std::string function_name;
+            io.mapOptional("code_file", code_file);
+            io.mapOptional("function_name", function_name);
+            if (!code_file.empty() || !function_name.empty()) {
+                io.setError(
+                    "Contract '" + spec.name + "' carries a code_file / "
+                    "function_name — runtime contracts have been merged "
+                    "into patches. Move the entry under patches:."
+                );
+                return;
+            }
+
+            // Consume `parameters:` if present to keep older library YAMLs
+            // parsing cleanly — it's reference-only metadata.
+            {
+                [[maybe_unused]] std::vector< Parameter > unused_parameters;
+                io.mapOptional("parameters", unused_parameters);
+            }
+
+            io.mapOptional("preconditions", spec.preconditions);
+            io.mapOptional("postconditions", spec.postconditions);
         }
     };
 
@@ -231,15 +368,18 @@ namespace llvm::yaml {
 
             std::string mode_str;
             io.mapRequired("mode", mode_str);
-            if (mode_str == "ApplyBefore" || mode_str == "apply_before") {
-                action.mode = contract::InfoMode::APPLY_BEFORE;
-            } else if (mode_str == "ApplyAfter" || mode_str == "apply_after") {
-                action.mode = contract::InfoMode::APPLY_AFTER;
-            } else if (mode_str == "ApplyAtEntrypoint" || mode_str == "apply_at_entrypoint") {
-                action.mode = contract::InfoMode::APPLY_AT_ENTRYPOINT;
-            } else {
-                io.setError("Unsupported contract mode: '" + mode_str
-                            + "'. Valid modes: ApplyBefore, ApplyAfter, ApplyAtEntrypoint");
+            action.mode = parseContractInfoMode(io, mode_str);
+
+            // Static contracts materialize MLIR attributes; they do not emit
+            // a call, so `arguments:` never reaches a consumer. Warn so
+            // spec authors migrating from the old runtime-contract shape
+            // realize the list is being dropped.
+            if (!action.arguments.empty()) {
+                LOG(WARNING)
+                    << "contract action '" << action.contract_id
+                    << "': 'arguments:' is ignored for static contracts. "
+                       "Express runtime-style invocation as a patch under "
+                       "patches: instead.\n";
             }
         }
     };
@@ -303,7 +443,9 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse MetaContractConfig
+    // Parse MetaContractConfig. Contracts are static-only, so `optimization:`
+    // (e.g. `inline-contracts`) is accepted-but-ignored for backward compat
+    // with older YAMLs; a warning is emitted when flags are present.
     template<>
     struct MappingTraits< contract::MetaContractConfig >
     {
@@ -314,8 +456,11 @@ namespace llvm::yaml {
 
             std::vector< std::string > optimization;
             io.mapOptional("optimization", optimization);
-            for (const auto &opt : optimization) {
-                meta_contract.optimization.insert(opt);
+            if (!optimization.empty()) {
+                LOG(WARNING)
+                    << "meta_contract '" << meta_contract.name
+                    << "': 'optimization:' is deprecated for contracts "
+                       "(contracts are static-only, nothing to inline) — ignoring.\n";
             }
         }
     };
@@ -452,15 +597,105 @@ namespace llvm::yaml {
                 arg.source = ArgumentSourceType::CONSTANT;
             } else if (source_str == "return_value") {
                 arg.source = ArgumentSourceType::RETURN_VALUE;
+            } else if (source_str == "capture") {
+                // Captures are bound at match time and consumed by patch calls.
+                // Contracts materialize MLIR attributes and don't run at match
+                // time, so nothing ever binds a capture for them — parsing
+                // this source used to succeed and then silently drop at emit
+                // time. Reject up front with a pointer to patches:.
+                io.setError(
+                    "'source: capture' is not supported for contracts "
+                    "(contracts attach MLIR attributes and have no bound "
+                    "match-site values). Use source: operand/variable/"
+                    "symbol/constant/return_value, or move the entry "
+                    "under patches: if you need capture-driven arguments."
+                );
+                return;
             } else {
                 io.setError("Unknown argument source type: '" + source_str + "'");
                 return;
             }
 
-            io.mapRequired("name", arg.name);
+            io.mapOptional("name", arg.name);
             io.mapOptional("index", arg.index);
             io.mapOptional("symbol", arg.symbol);
             io.mapOptional("value", arg.value);
         }
     };
+
+    template<>
+    struct MappingTraits< contract::ContractMatchObject >
+    {
+        static void mapping(IO &io, contract::ContractMatchObject &m) {
+            io.mapRequired("name", m.name);
+            io.mapOptional("context", m.context);
+        }
+    };
+
+    template<>
+    struct MappingTraits< contract::ContractActionObject >
+    {
+        static void mapping(IO &io, contract::ContractActionObject &a) {
+            std::string mode_str;
+            io.mapRequired("mode", mode_str);
+            a.mode = parseContractInfoMode(io, mode_str);
+
+            io.mapRequired("contract", a.contract_id);
+            io.mapOptional("arguments", a.arguments);
+
+            // Accept-and-warn for backward compat (see MetaContractConfig).
+            // The ContractEntry-facing trait doesn't have access to the
+            // entry name here, so the warning is emitted there after
+            // projection.
+            std::vector< std::string > optimization;
+            io.mapOptional("optimization", optimization);
+            a.has_optimization = !optimization.empty();
+        }
+    };
+
+    // Parse ContractEntry — simplified YAML surface for contracts.
+    template<>
+    struct MappingTraits< contract::ContractEntry >
+    {
+        static void mapping(IO &io, contract::ContractEntry &entry) {
+            io.mapRequired("name", entry.name);
+            io.mapOptional("id", entry.id);
+            io.mapOptional("description", entry.description);
+
+            // Parse nested match object
+            contract::ContractMatchObject match_obj;
+            io.mapRequired("match", match_obj);
+            entry.match_name = match_obj.name;
+            entry.context    = match_obj.context;
+
+            // Parse nested action object — projected onto the flat
+            // ContractEntry fields so inflateContractEntry keeps working
+            // unchanged.
+            contract::ContractActionObject action_obj;
+            io.mapRequired("action", action_obj);
+            entry.mode        = action_obj.mode;
+            entry.contract_id = action_obj.contract_id;
+            entry.arguments   = action_obj.arguments;
+
+            // Static-only contracts don't consume `arguments:` at emit time;
+            // warn so migrating authors realize the list is being dropped.
+            // (inflateContractEntry copies these straight to Action.arguments,
+            // bypassing the Action trait that would otherwise warn.)
+            if (!entry.arguments.empty()) {
+                LOG(WARNING)
+                    << "contract '" << entry.name
+                    << "': 'arguments:' is ignored for static contracts. "
+                       "Express runtime-style invocation as a patch under "
+                       "patches: instead.\n";
+            }
+
+            if (action_obj.has_optimization) {
+                LOG(WARNING)
+                    << "contract '" << entry.name
+                    << "': 'optimization:' is deprecated for contracts "
+                       "(contracts are static-only, nothing to inline) — ignoring.\n";
+            }
+        }
+    };
+
 } // namespace llvm::yaml

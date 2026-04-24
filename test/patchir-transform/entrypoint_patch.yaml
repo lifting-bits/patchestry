@@ -1,0 +1,34 @@
+# Test: flat YAML syntax for a patch in apply_at_entrypoint mode.
+# Equivalent shape to entrypoint_contract_simplified.yaml but using the
+# patches: key so patchestry instruments the caller's entry block with a
+# patch call rather than a contract call.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "entrypoint-patch-flat"
+  description: "Test APPLY_AT_ENTRYPOINT patch mode"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-04-21"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  - "patches/entrypoint_patch_library.yaml"
+
+patches:
+  - name: "entrypoint_message_check"
+    id: "ENTRY-PATCH-001"
+    description: "Insert message-pointer null check at the caller's entry"
+    match:
+      name: "usbd_ep_write_packet"
+      kind: "function"
+      context: ["bl_usb__send_message"]
+    action:
+      mode: "apply_at_entrypoint"
+      patch: "message_entry_check_patch"
+      arguments:
+        - source: "variable"
+          symbol: "msg"

@@ -1,0 +1,31 @@
+# Test: a region-carrying op (cir.if) can be matched by name even
+# though captures can't reach into its regions. The doc's "Limitations"
+# section promises exactly this; this fixture guards against the match
+# silently breaking.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "region-op-match"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/region_op_library.yaml"
+
+patches:
+  - name: "probe_cir_if"
+    id: "REGION-IF-001"
+    match:
+      name: "cir.if"
+      kind: "operation"
+      context: ["measurement_update"]
+    action:
+      mode: "apply_before"
+      patch: "if_probe_before"
+      arguments:
+      # operand: 0 is the cir.if condition — apply_before inserts just
+      # ahead of the cir.if so the condition SSA value already dominates.
+        - source: "operand"
+          index: 0

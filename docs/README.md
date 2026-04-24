@@ -116,9 +116,10 @@ meta-programming layer for describing _where_ and _how_ patches and contracts
 are applied is specified declaratively in YAML. This separates patch logic
 (familiar C code) from patch orchestration (structured YAML configuration),
 keeping both accessible to developers without requiring expertise in compiler
-internals or custom DSLs. Contracts follow the same pattern: runtime contracts
-are written in C, static contracts are expressed as YAML predicates, and
-meta-contracts define where they are applied.
+internals or custom DSLs. Contracts are declarative predicates expressed as
+YAML and attached as MLIR attributes for static verification — runtime
+validators that used to be called "runtime contracts" live under `patches:`
+now, since mechanically they were just patches.
 
 ## Why This Approach
 
@@ -221,8 +222,7 @@ Patchestry's technical approach enables the following workflow:
 
 4. The developer edits the decompiled function(s) to patch the vulnerability.
    Alternatively, the developer defines patches declaratively using YAML
-   specifications and the meta-patching library (see
-   [Patching Interface](#patching-interface)).
+   specifications (see [Patching Interface](#patching-interface)).
 
 5. Contracts are verified. Patchestry generates output compatible with LLVM-based
    analysis tools such as KLEE or SeaHorn to ensure that the patched code
@@ -239,7 +239,7 @@ Patchestry's technical approach enables the following workflow:
 
 Patchestry provides a declarative YAML-based interface for specifying patches
 and their application. This separates _what_ the patch does (the C code) from
-_where_ and _how_ it is applied (the meta-patch configuration).
+_where_ and _how_ it is applied (the patch entry in the top-level YAML).
 
 ### Patch Specification
 
@@ -267,33 +267,29 @@ patches:
         type: "const void*"
 ```
 
-### Meta-Patch Configuration
+### Patch Dispatch
 
-Meta-patches define _where_ patches are applied using match rules and _how_
-they are applied using action modes. This enables automated, declarative
-patching across the codebase:
+Each entry under the top-level `patches:` list pairs a `match:` block
+(where to find the target) with an `action:` block (what to do there),
+enabling automated, declarative patching across the codebase:
 
 ```yaml
-meta_patches:
-  - name: usb_security_meta_patches
-    description: "Meta patches for USB security"
-    optimization:
-      - "inline-patches"
-    patch_actions:
-      - id: "USB-PATCH-001"
-        description: "Pre-validation security check"
-        match:
-          - name: "usbd_ep_write_packet"
-            kind: "operation"
-            function_context:
-              - name: "bl_usb__send_message"
-        action:
-          - mode: "apply_before"
-            patch_id: "USB-PATCH-001"
-            arguments:
-              - name: "operand_0"
-                source: "operand"
-                index: 0
+patches:
+  - name: "usb_security_precheck"
+    id: "USB-PATCH-001"
+    description: "Pre-validation security check"
+    match:
+      name: "usbd_ep_write_packet"
+      kind: "function"
+      context: ["bl_usb__send_message"]
+    action:
+      mode: "apply_before"
+      patch: "usb_security_precheck"
+      optimization: ["inline-patches"]
+      arguments:
+        - name: "operand_0"
+          source: "operand"
+          index: 0
 ```
 
 The instrumentation engine supports three action modes:
@@ -314,8 +310,9 @@ Arguments to the patch function can be sourced from:
 ### Configuration File
 
 A top-level YAML configuration file ties together the target binary, patch
-libraries, contract libraries, meta-patches, and meta-contracts, along with
-an execution order:
+libraries, contract libraries, and the `patches:` / `contracts:` dispatch
+entries. Entries apply in YAML declaration order — patches first, then
+contracts:
 
 ```yaml
 apiVersion: patchestry.io/v1
@@ -329,54 +326,42 @@ libraries:
   - "patches/usb_security_patches.yaml"
   - "contracts/usb_security_contracts.yaml"
 
-execution_order:
-  - "meta_patches::usb_security"
-  - "meta_contracts::usb_security"
+patches:
+  - name: "usb_security_precheck"
+    # ... match + action ...
 
-meta_patches:
-  - name: usb_security
-    # ... patch actions ...
-
-meta_contracts:
-  - name: usb_security
-    # ... contract actions ...
+contracts:
+  - name: "usb_security_static"
+    # ... match + action ...
 ```
 
 ## Contracts Interface
 
 Patchestry provides contracts as a mechanism for specifying and verifying
 correctness properties of patched code. Unlike patches, contracts do not alter
-program state. There are two types of contracts:
+program state. Contracts are **static-only**: they are declarative predicates
+(preconditions / postconditions) that the instrumentation pass attaches to the
+matched op as MLIR attributes. They emit no runtime code and produce no runtime
+overhead; downstream verifiers such as KLEE or SeaHorn consume the attributes
+to check that the predicates hold.
 
-- __Runtime contracts__: Checks that persist in the compiled binary and execute
-  at runtime. These address unexpected states during execution and are written
-  as C functions referencing a `code_file`, similar to patches.
-- __Static contracts__: Constraints used exclusively for formal verification.
-  These are checked by tools such as KLEE or SeaHorn and do not persist in the
-  compiled binary. Static contracts can specify preconditions and postconditions
-  using predicates.
+The "runtime contract" concept that previously lived here — a C function called
+at the matched site to validate a condition — was mechanically the same as a
+patch, so those cases have been merged into `patches:`. Write the runtime check
+as a patch whose body asserts (or traps) on failure; attach a `contracts:` entry
+alongside it to encode the same property for the verifier.
 
 ### Contract Specification
 
-Contracts are defined in YAML and can be either runtime or static:
+Contracts are declarative, static-only predicates expressed as YAML and
+attached to the matched op as MLIR attributes for the verifier to consume.
+If you need runtime validation (a C function called at the match site),
+write it as a patch with `apply_before` / `apply_after` /
+`apply_at_entrypoint`.
 
 ```yaml
 contracts:
-  # Runtime contract: C code that executes at runtime
-  - name: "buffer_size_check"
-    type: RUNTIME
-    severity: high
-    code_file: "contracts/buffer_check.c"
-    function_name: "check_buffer_bounds"
-    parameters:
-      - name: buffer
-        type: "const void*"
-      - name: size
-        type: "size_t"
-
-  # Static contract: formal predicate checked by verifier
   - name: "nonnull_pointer"
-    type: STATIC
     severity: critical
     preconditions:
       - id: "pre-001"
@@ -394,24 +379,30 @@ Static contract predicates support:
 - __`range`__: Assert that a value falls within a min/max range.
 - __`expr`__: Assert an arbitrary expression.
 
-### Meta-Contract Configuration
+### Contract Dispatch
 
-Meta-contracts define where contracts are applied, similar to meta-patches.
-Contracts can be applied at three points:
+Each entry under the top-level `contracts:` list pairs a `match:` block
+(the call site the contract applies to) with an `action:` block
+(`mode` + `contract:` reference). Contracts support two modes; both
+attach the same `contract.static` attribute and differ only in which op
+the attribute lands on:
 
-- __`apply_before`__: Check the contract before the matched function or
-  operation.
-- __`apply_after`__: Check the contract after the matched function or operation.
-- __`apply_at_entrypoint`__: Check the contract at the entry of the enclosing
-  function.
+- __`apply_before`__: Attach the predicate to the matched op (or the op
+  immediately preceding the match site).
+- __`apply_after`__: Attach the predicate to the op immediately following the
+  match site.
+
+`apply_at_entrypoint`, `replace`, and `erase` are patch-only. For a check that
+needs to run at the caller's entry block, write a patch with
+`mode: apply_at_entrypoint`.
 
 ## Architecture
 
 The Patchestry design places a strong emphasis on modularity and seamless
 developer interaction. The developer plays a key role, providing the binary
 pieces to be patched, a patch description, and instructions on how to apply
-these patches using the meta-programming framework (meta-patches). Contracts are
-similarly specified and applied by instrumentation using the same meta-language.
+these patches via the declarative YAML surface. Contracts are specified and
+applied by instrumentation using the same declarative language.
 
 A significant architectural innovation is the MLIR Tower of IRs, which serves as
 the connecting element. This tower facilitates the association of
@@ -486,10 +477,11 @@ void patch_calloc_overflow(size_t num_elements) {
 }
 ```
 
-The meta-patch configuration in YAML describes where and how to apply it:
+The YAML spec describes where and how to apply it, with a patch library
+(defining the C patch function) and a deployment spec (dispatching it):
 
 ```yaml
-# Patch library
+# patches/cve_2021_22156_library.yaml
 patches:
   - name: calloc_overflow_check
     id: "CVE-2021-22156"
@@ -500,64 +492,80 @@ patches:
     parameters:
       - name: num_elements
         type: "size_t"
-
-# Meta-patch: apply before every call to calloc
-meta_patches:
-  - name: cve_2021_22156_meta
-    patch_actions:
-      - id: "CVE-2021-22156-ACTION"
-        match:
-          - name: "calloc"
-            kind: "operation"
-        action:
-          - mode: "apply_before"
-            patch_id: "CVE-2021-22156"
-            arguments:
-              - name: "num_elements"
-                source: "operand"
-                index: 0
 ```
-
-Similarly, a contract can be defined to verify the property holds. A runtime
-contract is written in C:
-
-```c
-// contracts/cve_2021_22156_contract.c
-void check_calloc_bounds(size_t num_elements) {
-    assert(num_elements <= SIZE_MAX/sizeof(long));
-}
-```
-
-And its meta-contract specifies where to apply it:
 
 ```yaml
+# deployment.yaml — apply before every calloc in process_command
+libraries:
+  - "patches/cve_2021_22156_library.yaml"
+
+patches:
+  - name: "cve_2021_22156_precheck"
+    id: "CVE-2021-22156-ACTION"
+    match:
+      name: "calloc"
+      kind: "function"
+      context: ["process_command"]
+    action:
+      mode: "apply_before"
+      patch: "calloc_overflow_check"
+      arguments:
+        - name: "num_elements"
+          source: "operand"
+          index: 0
+```
+
+To express the same property declaratively for the verifier, attach a
+static contract. The predicate is carried as an MLIR attribute and
+produces no runtime overhead. The contract definition lives in its own
+library file that the deployment spec references via `libraries:`, and
+the deployment spec dispatches it at the match site:
+
+```yaml
+# contracts/cve_2021_22156_library.yaml
 contracts:
   - name: calloc_bounds_contract
-    type: RUNTIME
     severity: high
-    code_file: "contracts/cve_2021_22156_contract.c"
-    function_name: "check_calloc_bounds"
-    parameters:
-      - name: num_elements
-        type: "size_t"
-
-meta_contracts:
-  - name: cve_2021_22156_contract_meta
-    contract_actions:
-      - id: "CVE-2021-22156-CONTRACT"
-        match:
-          - name: "calloc"
-            kind: "function"
-            function_context:
-              - name: "*"
-        action:
-          - mode: "apply_before"
-            contract_id: "calloc_bounds_contract"
-            arguments:
-              - name: "num_elements"
-                source: "operand"
-                index: 0
+    preconditions:
+      - id: "num_elements_bounded"
+        description: "calloc count must not overflow a 32-bit size_t"
+        pred:
+          kind: range
+          target: arg0
+          # min/max are string-encoded integer literals parsed with
+          # std::stoll — C macros and expressions like
+          # "SIZE_MAX/sizeof(long)" are not supported. Compute the
+          # bound in the spec author's environment and inline the
+          # integer.
+          range:
+            min: "0"
+            max: "1073741823"   # (2^32 - 1) / 4, i.e. SIZE_MAX/sizeof(long)
+                                # on a 32-bit target with 4-byte long
 ```
+
+```yaml
+# deployment.yaml (contract dispatch)
+libraries:
+  - "contracts/cve_2021_22156_library.yaml"
+
+contracts:
+  - name: "cve_2021_22156_contract_at_calloc"
+    id: "CVE-2021-22156-CONTRACT"
+    match:
+      name: "calloc"
+      context: ["process_command"]
+    action:
+      mode: "apply_before"
+      contract: "calloc_bounds_contract"
+```
+
+> Contract library definitions (with `preconditions:` / `postconditions:`)
+> belong in a dedicated `libraries:` file; the deployment spec only
+> dispatches them via its top-level `contracts:` list.
+
+If you want a runtime check that traps on violation, write it as a
+patch (the old "runtime contract" shape) — same `code_file` /
+`function_name` fields, just under `patches:` instead.
 
 A contract is similar to a regression test or a behavioral assertion that an
 analysis tool like KLEE or SeaHorn would check.

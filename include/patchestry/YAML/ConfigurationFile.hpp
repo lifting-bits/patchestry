@@ -74,7 +74,6 @@ namespace patchestry::passes {
         Metadata metadata;
         Target target;
         Library libraries;
-        std::vector< std::string > execution_order;
         std::vector< patch::MetaPatchConfig > meta_patches;
         std::vector< contract::MetaContractConfig > meta_contracts;
     };
@@ -215,32 +214,68 @@ namespace llvm::yaml {
             io.mapOptional("libraries", library_files);
 
             for (const auto &file : library_files) {
-                // Try loading as patch library
+                // A library that fails to load is a hard error. Falling
+                // through to "continue" silently left the spec missing
+                // patches, and the pass would later fail at dispatch time
+                // with a confusing "patch specification for ID '…' not
+                // found" instead of pointing at the misconfigured path.
                 auto library = patchestry::yaml::utils::LoadLibrary(file);
                 if (!library) {
-                    LOG(ERROR) << "Failed to load library: " << file << "\n";
-                    continue;
+                    io.setError("Failed to load library: " + file);
+                    return;
                 }
-                // check for api version mismatch
                 if (config.api_version != library.value().api_version) {
-                    LOG(ERROR) << "API version mismatch: expected " << config.api_version
-                               << ", got " << library.value().api_version << "\n";
-                    continue;
+                    io.setError(
+                        "API version mismatch in library '" + file + "': expected "
+                        + config.api_version + ", got " + library.value().api_version
+                    );
+                    return;
                 }
 
                 config.libraries.patches.insert(
-                    config.libraries.patches.end(), library.value().patches.begin(),
-                    library.value().patches.end()
+                    config.libraries.patches.end(),
+                    std::make_move_iterator(library.value().patches.begin()),
+                    std::make_move_iterator(library.value().patches.end())
                 );
                 config.libraries.contracts.insert(
-                    config.libraries.contracts.end(), library.value().contracts.begin(),
-                    library.value().contracts.end()
+                    config.libraries.contracts.end(),
+                    std::make_move_iterator(library.value().contracts.begin()),
+                    std::make_move_iterator(library.value().contracts.end())
                 );
             }
 
-            io.mapOptional("execution_order", config.execution_order);
             io.mapOptional("meta_patches", config.meta_patches);
             io.mapOptional("meta_contracts", config.meta_contracts);
+
+            // Simplified `patches:` key (mutually exclusive with meta_patches)
+            std::vector< patch::PatchEntry > patch_entries;
+            io.mapOptional("patches", patch_entries);
+
+            if (!patch_entries.empty() && !config.meta_patches.empty()) {
+                io.setError(
+                    "'patches' and 'meta_patches' are mutually exclusive in one file"
+                );
+                return;
+            }
+
+            for (const auto &entry : patch_entries) {
+                config.meta_patches.emplace_back(patch::inflatePatchEntry(entry));
+            }
+
+            // Simplified `contracts:` key (mutually exclusive with meta_contracts)
+            std::vector< contract::ContractEntry > contract_entries;
+            io.mapOptional("contracts", contract_entries);
+
+            if (!contract_entries.empty() && !config.meta_contracts.empty()) {
+                io.setError(
+                    "'contracts' and 'meta_contracts' are mutually exclusive in one file"
+                );
+                return;
+            }
+
+            for (const auto &entry : contract_entries) {
+                config.meta_contracts.emplace_back(contract::inflateContractEntry(entry));
+            }
         }
     };
 } // namespace llvm::yaml

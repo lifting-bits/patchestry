@@ -1,0 +1,21 @@
+# Test: ERASE mode — delete matched calls without inserting patch code.
+# Matches bl_spi_send() (void return, no uses) inside bl_led_loop and erases it.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "erase-spi-send"
+  description: "Remove bl_spi_send() call from bl_led_loop"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+patches:
+  - name: "strip_spi_send"
+    id: "ERASE-SPI-001"
+    match:
+      name: "bl_spi_send"
+      kind: "function"
+      context: ["bl_led_loop"]
+    action:
+      mode: "erase"

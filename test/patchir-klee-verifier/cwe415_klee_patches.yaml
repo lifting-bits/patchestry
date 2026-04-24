@@ -23,7 +23,6 @@ contracts:
   - name: "cwe415_static_contract"
     description: "Static contract: context arg must be non-null"
     category: "memory_safety"
-    type: "STATIC"
 
     preconditions:
       - id: "ctx_nonnull"

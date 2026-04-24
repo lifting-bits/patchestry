@@ -7,7 +7,6 @@
 
 #include <memory>
 #include <optional>
-#include <regex>
 #include <set>
 #include <string_view>
 #include <unordered_map>
@@ -346,24 +345,8 @@ namespace patchestry::passes {
                 continue;
             }
         }
-        for (auto &spec : config->libraries.contracts) {
-            // STATIC contracts have no code_file — skip compilation.
-            if (spec.code_file.empty()) continue;
-
-            auto contracts_file_path =
-                ConfigurationFile::GetInstance().ResolvePath(spec.code_file);
-            if (!llvm::sys::fs::exists(contracts_file_path)) {
-                LOG(ERROR) << "Contract file " << contracts_file_path << " does not exist\n";
-                continue;
-            }
-
-            auto contract_module = emitModuleAsString(contracts_file_path, config->target.arch);
-            if (!contract_module) {
-                LOG(ERROR) << "Failed to emit contract module for " << spec.name << "\n";
-                continue;
-            }
-            spec.contract_module = contract_module;
-        }
+        // Contracts are static-only: no C module to compile. The
+        // runtime-contract path was merged into patches.
     }
 
     /**
@@ -397,50 +380,44 @@ namespace patchestry::passes {
             }
         });
 
-        // if the execution order is empty, apply meta patches and contracts in order
-        if (config->execution_order.empty()) {
-            for (const auto &meta_patch : config->meta_patches) {
-                LOG(INFO) << "Applying patch: " << meta_patch.name << "\n";
-                apply_meta_patches(function_worklist, operation_worklist, meta_patch.name);
-            }
-            for (const auto &meta_contract : config->meta_contracts) {
-                LOG(INFO) << "Applying contract: " << meta_contract.name << "\n";
-                apply_meta_contracts(function_worklist, meta_contract.name);
-            }
-        } else {
-            // process execution order if specified
-            for (const auto &execution_item : config->execution_order) {
-                // Parse execution item format: "meta_patches: name" or "meta_contracts: name"
-                auto colon_pos = execution_item.find("::");
-                if (colon_pos == std::string::npos) {
-                    LOG(ERROR) << "Invalid execution order format: " << execution_item << "\n";
-                    continue;
-                }
-
-                std::string type = execution_item.substr(0, colon_pos);
-                std::string name = execution_item.substr(colon_pos + 2);
-
-                // Trim whitespace
-                name.erase(0, name.find_first_not_of(" \t"));
-                name.erase(name.find_last_not_of(" \t") + 1);
-
-                if (type == "meta_patches") {
-                    LOG(INFO) << "Applying patch: " << name << "\n";
-                    apply_meta_patches(function_worklist, operation_worklist, name);
-                } else if (type == "meta_contracts") {
-                    LOG(INFO) << "Applying contract: " << name << "\n";
-                    apply_meta_contracts(function_worklist, name);
-                } else {
-                    LOG(ERROR) << "Unknown execution type: " << type << "\n";
-                }
-            }
+        // Apply patches first, then contracts, each in YAML declaration order.
+        for (const auto &meta_patch : config->meta_patches) {
+            LOG(INFO) << "Applying patch: " << meta_patch.name << "\n";
+            apply_meta_patches(function_worklist, operation_worklist, meta_patch.name);
+        }
+        for (const auto &meta_contract : config->meta_contracts) {
+            LOG(INFO) << "Applying contract: " << meta_contract.name << "\n";
+            apply_meta_contracts(function_worklist, meta_contract.name);
         }
 
-        // Inline inserted patch/contract call operations if requested
+        // Inline inserted patch/contract call operations if requested.
+        // Capture callee names up-front so we can sweep dead patch funcs
+        // after all inlines complete — `inline_call` itself no longer
+        // erases the callee, since the same symbol may be called by
+        // additional entries still in the worklist.
+        llvm::SmallVector< std::string, 4 > inlined_callee_names;
         for (auto *op : inline_worklists) {
-            std::ignore = inline_call(mod, mlir::cast< cir::CallOp >(op));
+            auto call = mlir::cast< cir::CallOp >(op);
+            if (auto name = call.getCallee()) {
+                inlined_callee_names.push_back(name->str());
+            }
+            std::ignore = inline_call(mod, call);
         }
         inline_worklists.clear();
+
+        // Sweep patch callees that are now unreferenced anywhere in the
+        // module. A name appearing multiple times in `inlined_callee_names`
+        // (same patch inlined at N match sites) hits this loop once per
+        // entry; after the first erase the subsequent `lookupSymbol`
+        // returns null and we skip. `symbolKnownUseEmpty` also guards
+        // against erasing a patch that's still referenced elsewhere —
+        // e.g. another meta_patch entry that didn't request inlining.
+        for (const auto &name : inlined_callee_names) {
+            auto fn = mod.lookupSymbol< cir::FuncOp >(name);
+            if (fn && mlir::SymbolTable::symbolKnownUseEmpty(fn, mod)) {
+                fn.erase();
+            }
+        }
     }
 
     /**
@@ -477,27 +454,36 @@ namespace patchestry::passes {
             }
             auto &action = patch_action.action[0];
 
-            // Find the corresponding patch specification by patch_id
-            auto patch_spec = lookup(config->libraries.patches, action.patch_id);
-            if (!patch_spec || patch_spec == std::nullopt) {
-                LOG(ERROR) << "Patch specification for ID '" << action.patch_id
-                           << "' not found\n";
-                signalPassFailure();
-                return;
-            } else {
-                // Create a modified patch info with the action's mode and arguments
-                PatchInformation patch_to_apply = { .spec         = patch_spec,
-                                                    .patch_action = patch_action };
-                // Apply the patch to matching functions and operations
-                apply_patch_action_to_targets(
-                    function_worklist, operation_worklist, *target_meta_patch, patch_to_apply
-                );
+            // ERASE mode has no patch function — skip spec lookup.
+            std::optional< patch::PatchSpec > patch_spec;
+            if (action.mode != InstrumentationMode::ERASE) {
+                patch_spec = lookup(config->libraries.patches, action.patch_id);
+                if (!patch_spec) {
+                    LOG(ERROR) << "Patch specification for ID '" << action.patch_id
+                               << "' not found\n";
+                    signalPassFailure();
+                    return;
+                }
             }
+
+            PatchInformation patch_to_apply = { .spec         = patch_spec,
+                                                .patch_action = patch_action,
+                                                .captures     = {} };
+            apply_patch_action_to_targets(
+                function_worklist, operation_worklist, *target_meta_patch, patch_to_apply
+            );
         }
     }
 
     /**
      * @brief Applies a specific patch action to target functions and operations.
+     *
+     * OPERATION-mode safety: `operation_worklist` holds raw `Operation *` captured
+     * once in `runOnOperation()`. ERASE and REPLACE both free the matched op
+     * (`Operation::erase()` invalidates the pointer), so before iterating we
+     * rebuild the worklist from the current module state. This drops pointers
+     * freed by earlier patch actions and avoids a use-after-free when multiple
+     * actions target overlapping ops.
      *
      * @param function_worklist List of functions to process
      * @param operation_worklist List of operations to process
@@ -520,121 +506,195 @@ namespace patchestry::passes {
         const auto &match  = patch_action.match[0];
         const auto &action = patch_action.action[0];
 
+        const bool should_inline = options.enable_inlining
+            || meta_patch.optimization.contains("inline-patches");
+
         if (match.kind == MatchKind::FUNCTION) {
             // Apply to function calls
             for (auto func : function_worklist) {
-                func.walk([&](cir::CallOp call_op) {
-                    // Create a temporary spec with the patch action match
+                // ERASE collects matched ops first, then erases after walk
+                // to avoid invalidating walk iterators.
+                llvm::SmallVector< mlir::Operation *, 8 > to_erase;
 
-                    if (OperationMatcher::patch_action_matches(
-                            call_op, func, patch_action, OperationMatcher::Mode::FUNCTION
+                func.walk([&](cir::CallOp call_op) {
+                    // Note: intentionally no skip-guard on `patchestry_operation`.
+                    // Some specs chain patches by matching a prior action's
+                    // emitted patch call by name (e.g. APPLY_AFTER on
+                    // `patch__replace__sprintf`). `match.name` is the only
+                    // hook the user has for that targeting.
+                    llvm::StringMap< mlir::Value > match_captures;
+                    if (!OperationMatcher::patch_action_matches(
+                            call_op, func, patch_action, OperationMatcher::Mode::FUNCTION,
+                            match_captures
                         ))
                     {
-                        auto patch_module = load_code_module(
-                            *call_op->getContext(), *patch_to_apply.spec->patch_module
-                        );
-                        if (!patch_module) {
-                            LOG(ERROR) << "Failed to load patch module for function: "
-                                       << call_op.getCallee()->str() << "\n";
-                            return;
-                        }
+                        return;
+                    }
 
-                        LOG(INFO)
-                            << "Applying patch '" << patch_to_apply.spec->name << "' in mode '"
-                            << patchestry::passes::patch::infoModeToString(action.mode)
-                            << "' \n";
-                        switch (action.mode) {
-                            case PatchInfoMode::APPLY_BEFORE:
-                                PatchOperationImpl::applyBeforePatch(
-                                    *this, call_op, patch_to_apply, patch_module.get(),
-                                    options.enable_inlining
-                                        || meta_patch.optimization.contains("inline-patches")
-                                );
-                                break;
-                            case PatchInfoMode::APPLY_AFTER:
-                                PatchOperationImpl::applyAfterPatch(
-                                    *this, call_op, patch_to_apply, patch_module.get(),
-                                    options.enable_inlining
-                                        || meta_patch.optimization.contains("inline-patches")
-                                );
-                                break;
-                            case PatchInfoMode::REPLACE:
-                                PatchOperationImpl::replaceCallWithPatch(
-                                    *this, call_op, patch_to_apply, patch_module.get(),
-                                    options.enable_inlining
-                                        || meta_patch.optimization.contains("inline-patches")
-                                );
-                                break;
-                            default:
-                                LOG(ERROR) << "Unsupported patch mode for function call\n";
-                                break;
-                        }
-                    } else {
-                        LOG(INFO) << "function worklist entry '"
-                                  << func.getSymName().str()
-                                  << "' did not match the patch action; continuing\n";
+                    const std::string callee_name =
+                        OperationMatcher::extract_callee_name(call_op);
+
+                    if (action.mode == InstrumentationMode::ERASE) {
+                        LOG(INFO) << "Erasing call '" << callee_name
+                                  << "' (patch action '" << patch_action.action_id << "')\n";
+                        to_erase.push_back(call_op.getOperation());
+                        return;
+                    }
+
+                    auto patch_module = load_code_module(
+                        *call_op->getContext(), *patch_to_apply.spec->patch_module
+                    );
+                    if (!patch_module) {
+                        LOG(ERROR) << "Failed to load patch module for function: "
+                                   << callee_name << "\n";
+                        return;
+                    }
+
+                    // Per-match PatchInformation with captures bound
+                    PatchInformation patch_site = patch_to_apply;
+                    patch_site.captures        = std::move(match_captures);
+
+                    LOG(INFO)
+                        << "Applying patch '" << patch_to_apply.spec->name << "' in mode '"
+                        << patchestry::passes::patch::infoModeToString(action.mode)
+                        << "' \n";
+                    switch (action.mode) {
+                        case InstrumentationMode::APPLY_BEFORE:
+                            PatchOperationImpl::applyBeforePatch(
+                                *this, call_op, patch_site, patch_module.get(), should_inline
+                            );
+                            break;
+                        case InstrumentationMode::APPLY_AFTER:
+                            PatchOperationImpl::applyAfterPatch(
+                                *this, call_op, patch_site, patch_module.get(), should_inline
+                            );
+                            break;
+                        case InstrumentationMode::APPLY_AT_ENTRYPOINT:
+                            PatchOperationImpl::applyPatchAtEntrypoint(
+                                *this, call_op, patch_site, patch_module.get(), should_inline
+                            );
+                            break;
+                        case InstrumentationMode::REPLACE:
+                            PatchOperationImpl::replaceCallWithPatch(
+                                *this, call_op, patch_site, patch_module.get(), should_inline
+                            );
+                            break;
+                        default:
+                            // Mirror the OPERATION-mode default (see below):
+                            // unknown modes should not silently succeed. The
+                            // YAML parser rejects every mode that isn't in
+                            // this switch, so reaching here means a new enum
+                            // variant was added without a dispatch case.
+                            LOG(ERROR) << "Unsupported patch mode '"
+                                       << patch::infoModeToString(action.mode)
+                                       << "' for function-kind match on '"
+                                       << callee_name << "'\n";
+                            signalPassFailure();
+                            return;
+                    }
+                });
+
+                for (auto *op : to_erase) {
+                    PatchOperationImpl::eraseOperation(*this, op);
+                }
+            }
+        } else if (match.kind == MatchKind::OPERATION) {
+            // Rebuild the worklist from the current module state so we skip
+            // any ops freed by earlier patch actions (see function comment).
+            if (!function_worklist.empty()) {
+                auto mod = function_worklist.front()
+                               ->getParentOfType< mlir::ModuleOp >();
+                operation_worklist.clear();
+                mod.walk([&](mlir::Operation *op) {
+                    if (!mlir::isa< cir::FuncOp, mlir::ModuleOp, cir::GlobalOp >(op)) {
+                        operation_worklist.push_back(op);
                     }
                 });
             }
-        } else if (match.kind == MatchKind::OPERATION) {
+
             // Apply to operations
+            llvm::SmallVector< mlir::Operation *, 8 > to_erase;
             for (auto *op : operation_worklist) {
                 auto func = op->getParentOfType< cir::FuncOp >();
                 if (!func) {
                     continue;
                 }
 
-                if (OperationMatcher::patch_action_matches(
-                        op, func, patch_action, OperationMatcher::Mode::OPERATION
+                llvm::StringMap< mlir::Value > match_captures;
+                if (!OperationMatcher::patch_action_matches(
+                        op, func, patch_action, OperationMatcher::Mode::OPERATION,
+                        match_captures
                     ))
                 {
-                    auto patch_module =
-                        load_code_module(*op->getContext(), *patch_to_apply.spec->patch_module);
-                    if (!patch_module) {
-                        LOG(ERROR) << "Failed to load patch module for operation: "
-                                   << op->getName().getStringRef().str() << "\n";
-                        continue;
-                    }
-
-                    switch (action.mode) {
-                        case PatchInfoMode::APPLY_BEFORE:
-                            PatchOperationImpl::applyBeforePatch(
-                                *this, op, patch_to_apply, patch_module.get(),
-                                options.enable_inlining
-                                    || meta_patch.optimization.contains("inline-patches")
-                            );
-                            break;
-                        case PatchInfoMode::APPLY_AFTER:
-                            PatchOperationImpl::applyAfterPatch(
-                                *this, op, patch_to_apply, patch_module.get(),
-                                options.enable_inlining
-                                    || meta_patch.optimization.contains("inline-patches")
-                            );
-                            break;
-                        case PatchInfoMode::REPLACE:
-                            if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
-                                PatchOperationImpl::replaceCallWithPatch(
-                                    *this, call_op, patch_to_apply, patch_module.get(),
-                                    options.enable_inlining
-                                        || meta_patch.optimization.contains("inline-patches")
-                                );
-                            } else if (mlir::isa< cir::BinOp, cir::CmpOp >(op)) {
-                                PatchOperationImpl::replaceOperationWithPatch(
-                                    *this, op, patch_to_apply, patch_module.get(),
-                                    options.enable_inlining
-                                        || meta_patch.optimization.contains("inline-patches")
-                                );
-                            } else {
-                                LOG(ERROR) << "REPLACE mode is not supported for: "
-                                           << op->getName().getStringRef().str() << "\n";
-                            }
-                            break;
-                        default:
-                            LOG(ERROR) << "Unsupported patch mode for operation: "
-                                       << op->getName().getStringRef().str() << "\n";
-                            break;
-                    }
+                    continue;
                 }
+
+                if (action.mode == InstrumentationMode::ERASE) {
+                    LOG(INFO) << "Erasing operation '"
+                              << op->getName().getStringRef().str()
+                              << "' (patch action '" << patch_action.action_id << "')\n";
+                    to_erase.push_back(op);
+                    continue;
+                }
+
+                auto patch_module =
+                    load_code_module(*op->getContext(), *patch_to_apply.spec->patch_module);
+                if (!patch_module) {
+                    LOG(ERROR) << "Failed to load patch module for operation: "
+                               << op->getName().getStringRef().str() << "\n";
+                    continue;
+                }
+
+                // Per-match PatchInformation with captures bound
+                PatchInformation patch_site = patch_to_apply;
+                patch_site.captures        = std::move(match_captures);
+
+                switch (action.mode) {
+                    case InstrumentationMode::APPLY_BEFORE:
+                        PatchOperationImpl::applyBeforePatch(
+                            *this, op, patch_site, patch_module.get(), should_inline
+                        );
+                        break;
+                    case InstrumentationMode::APPLY_AFTER:
+                        PatchOperationImpl::applyAfterPatch(
+                            *this, op, patch_site, patch_module.get(), should_inline
+                        );
+                        break;
+                    case InstrumentationMode::REPLACE:
+                        if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
+                            PatchOperationImpl::replaceCallWithPatch(
+                                *this, call_op, patch_site, patch_module.get(), should_inline
+                            );
+                        } else if (op->getNumResults() > 0) {
+                            // Any op with at least one result can be replaced
+                            // (cir.binop, cir.cmp, cir.load, cir.cast,
+                            // cir.get_member, cir.unary, cir.ptr_stride, ...).
+                            PatchOperationImpl::replaceOperationWithPatch(
+                                *this, op, patch_site, patch_module.get(), should_inline
+                            );
+                        } else {
+                            LOG(ERROR) << "REPLACE mode requires an op with results; "
+                                       << op->getName().getStringRef().str()
+                                       << " has none. Use erase or apply_before/after.\n";
+                        }
+                        break;
+                    default:
+                        // Defense in depth: the YAML parser already rejects
+                        // `apply_at_entrypoint` + `kind: operation` (see
+                        // MappingTraits<PatchEntry> in PatchSpec.hpp). If any
+                        // unimplemented mode slips past the parser, signal
+                        // pass failure instead of silently succeeding.
+                        LOG(ERROR) << "Unsupported patch mode '"
+                                   << patch::infoModeToString(action.mode)
+                                   << "' for operation-kind match on "
+                                   << op->getName().getStringRef().str() << "\n";
+                        signalPassFailure();
+                        return;
+                }
+            }
+
+            for (auto *op : to_erase) {
+                PatchOperationImpl::eraseOperation(*this, op);
             }
         }
     }
@@ -698,7 +758,10 @@ namespace patchestry::passes {
 
     void InstrumentationPass::prepare_patch_call_arguments(
         mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp patch_func,
-        const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        const PatchInformation &patch,
+        llvm::SmallVectorImpl< mlir::Value > &call_args,
+        std::optional< cir::FuncOp > entrypoint_func,
+        llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots
     ) {
         if (!patch.patch_action.has_value()) {
             LOG(ERROR) << "Patch action is missing\n";
@@ -721,32 +784,53 @@ namespace patchestry::passes {
              ++i)
         {
             const auto &arg_spec = patch_action.action[0].arguments[i];
-            auto patch_arg_type  = is_variadic && (i > patch_func.getNumArguments() - 1)
-                 ? patch_func.getArgumentTypes().back()
-                 : patch_func.getArgumentTypes()[i];
+            auto arg_types       = patch_func.getArgumentTypes();
+            mlir::Type patch_arg_type;
+            if (i < arg_types.size()) {
+                patch_arg_type = arg_types[i];
+            } else if (is_variadic && !arg_types.empty()) {
+                // Reuse the last fixed parameter's type for trailing variadic slots.
+                patch_arg_type = arg_types.back();
+            } else {
+                // Variadic patch with zero fixed parameters — no declared type
+                // to use for coercion. Skip this argument rather than reading
+                // past the empty type vector.
+                LOG(ERROR) << "Patch function '" << patch_func.getName().str()
+                           << "' has no fixed parameters; cannot determine argument "
+                              "type for index "
+                           << i << " — declare at least one fixed parameter.\n";
+                continue;
+            }
 
             switch (arg_spec.source) {
                 case ArgumentSourceType::OPERAND:
                     handle_operand_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                        builder, call_op, arg_spec, patch_arg_type, call_args, entrypoint_func,
+                        writeback_slots
                     );
                     break;
                 case ArgumentSourceType::VARIABLE:
                     handle_variable_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                        builder, call_op, arg_spec, patch_arg_type, call_args, entrypoint_func
                     );
                     break;
                 case ArgumentSourceType::SYMBOL:
-                    handle_symbol_argument(builder, call_op, arg_spec, patch_arg_type, arg_map);
+                    handle_symbol_argument(builder, call_op, arg_spec, patch_arg_type, call_args);
                     break;
                 case ArgumentSourceType::RETURN_VALUE:
                     handle_return_value_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                        builder, call_op, arg_spec, patch_arg_type, call_args, entrypoint_func
                     );
                     break;
                 case ArgumentSourceType::CONSTANT:
                     handle_constant_argument(
-                        builder, call_op, arg_spec, patch_arg_type, arg_map
+                        builder, call_op, arg_spec, patch_arg_type, call_args
+                    );
+                    break;
+                case ArgumentSourceType::CAPTURE:
+                    handle_capture_argument(
+                        builder, call_op, arg_spec, patch_arg_type, patch, call_args,
+                        entrypoint_func
                     );
                     break;
             }
@@ -755,8 +839,14 @@ namespace patchestry::passes {
 
     void InstrumentationPass::update_state_after_patch(
         mlir::OpBuilder &builder, cir::CallOp patch_call_op, mlir::Operation *target_op,
-        const PatchInformation &patch, llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        const PatchInformation &patch,
+        std::optional< cir::FuncOp > entrypoint_func,
+        const llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots
     ) {
+        if (!writeback_slots || writeback_slots->empty()) {
+            return;
+        }
+
         mlir::OpBuilder::InsertionGuard guard(builder);
         builder.setInsertionPointAfter(patch_call_op);
 
@@ -775,17 +865,54 @@ namespace patchestry::passes {
             return;
         }
 
-        for (auto &&[index, mapping] : llvm::enumerate(arg_map)) {
-            auto &arg_spec = patch_action.action[0].arguments[index];
+        // Iterate the spec in declared order. The writeback is only meaningful
+        // for OPERAND sources flagged `is_reference`; for each, rebuild the
+        // same key `handle_operand_argument` used when populating the sidecar
+        // and look it up. Missing entry = the handler bailed soft (index out
+        // of range, resolved to null, dominance-guard reject, etc.) — skip
+        // and move on. Enumerating `call_args` directly would misalign with
+        // the spec whenever a handler early-returned, because indices would
+        // shift (and before the collapse fix, two specs resolving to the
+        // same SSA value also silently merged). `writeback_slots` carries
+        // the pre-cast reference so the load reads the actual alloca, not a
+        // pointer-cast of it.
+        const auto &arg_specs = patch_action.action[0].arguments;
+        for (const auto &arg_spec : arg_specs) {
             if (!(arg_spec.is_reference && arg_spec.source == ArgumentSourceType::OPERAND)) {
                 continue;
             }
+            if (!arg_spec.index.has_value()) {
+                continue;
+            }
+            unsigned idx = arg_spec.index.value();
 
-            mlir::Value old_arg = mapping.first;
-            mlir::Value new_arg = mapping.second;
+            mlir::Value old_arg;
+            if (entrypoint_func.has_value()) {
+                auto func_args = entrypoint_func->getArguments();
+                if (idx >= func_args.size()) {
+                    continue;
+                }
+                old_arg = func_args[idx];
+            } else if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(target_op)) {
+                if (idx >= orig_call_op.getArgOperands().size()) {
+                    continue;
+                }
+                old_arg = orig_call_op.getArgOperands()[idx];
+            } else {
+                if (idx >= target_op->getNumOperands()) {
+                    continue;
+                }
+                old_arg = target_op->getOperand(idx);
+            }
+
+            auto it = writeback_slots->find(old_arg);
+            if (it == writeback_slots->end()) {
+                continue;
+            }
+            mlir::Value slot = it->second;
 
             auto load_op = builder.create< cir::LoadOp >(
-                old_arg.getLoc(), new_arg, /*isDeref=*/true, /*isVolatile=*/false,
+                old_arg.getLoc(), slot, /*isDeref=*/true, /*isVolatile=*/false,
                 /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
                 /*tbaa=*/mlir::ArrayAttr{}
             );
@@ -805,7 +932,9 @@ namespace patchestry::passes {
     void InstrumentationPass::handle_operand_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::SmallVectorImpl< mlir::Value > &call_args,
+        std::optional< cir::FuncOp > entrypoint_func,
+        llvm::MapVector< mlir::Value, mlir::Value > *writeback_slots
     ) {
         if (!arg_spec.index.has_value()) {
             LOG(ERROR) << "OPERAND source requires index field\n";
@@ -814,7 +943,19 @@ namespace patchestry::passes {
         unsigned idx = arg_spec.index.value();
         mlir::Value operand_value;
 
-        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
+        if (entrypoint_func.has_value()) {
+            // APPLY_AT_ENTRYPOINT: remap index N to the enclosing function's Nth block
+            // argument so no call-site value leaks into the entry block (which would
+            // violate SSA dominance).
+            auto func_args = entrypoint_func->getArguments();
+            if (idx >= func_args.size()) {
+                LOG(ERROR) << "OPERAND index " << idx
+                           << " out of range for enclosing function (has "
+                           << func_args.size() << " argument(s))\n";
+                return;
+            }
+            operand_value = func_args[idx];
+        } else if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
             if (idx >= orig_call_op.getArgOperands().size()) {
                 LOG(ERROR) << "Operand index " << idx << " out of range\n";
                 return;
@@ -834,23 +975,90 @@ namespace patchestry::passes {
         }
 
         if (arg_spec.is_reference) {
-            arg_map[operand_value] = create_cast_if_needed(
-                builder, call_op, create_reference(builder, call_op, operand_value),
-                patch_arg_type
+            // For APPLY_AT_ENTRYPOINT, pass the caller's own parameter
+            // alloca slot as the reference — NOT a fresh temporary. In
+            // C-lowered CIR the entry prologue stores `%argN` into an
+            // alloca `%0 = cir.alloca T, "argname"` + `cir.store %argN, %0`,
+            // and downstream code reads from `%0` rather than `%argN`
+            // directly. The entrypoint call is inserted AFTER that
+            // parameter-init store, so a patch writing to a temporary
+            // slot leaves `%0` holding the pre-patch value — later
+            // loads continue to see it. Passing `%0` as the reference
+            // means the patch mutates the slot the function actually
+            // uses. `update_state_after_patch` still rewires direct
+            // block-arg uses (rare but possible) via replaceUsesWithIf
+            // under the normal dominance check.
+            mlir::Value ref_value;
+            if (entrypoint_func.has_value()) {
+                auto block_arg = mlir::dyn_cast< mlir::BlockArgument >(operand_value);
+                if (block_arg) {
+                    // Walk the enclosing function's entry block for
+                    // `cir.store block_arg, alloca` — the canonical
+                    // parameter-init pattern from ClangEmitter. Continue
+                    // past the first hit so a stray second matching store
+                    // to a different alloca surfaces as a warning; the
+                    // patch would mutate only the first slot and any
+                    // downstream load of the second slot would silently
+                    // see pre-patch state. ClangEmitter doesn't emit this
+                    // shape, so the warning is purely a guard against
+                    // non-standard prologues (hand-authored CIR, future
+                    // lowering modes).
+                    mlir::Block &entry = entrypoint_func->getBody().front();
+                    for (mlir::Operation &op : entry) {
+                        auto store = mlir::dyn_cast< cir::StoreOp >(&op);
+                        if (!store) {
+                            continue;
+                        }
+                        if (store.getValue() != block_arg) {
+                            continue;
+                        }
+                        if (!mlir::isa_and_nonnull< cir::AllocaOp >(
+                                store.getAddr().getDefiningOp()))
+                        {
+                            continue;
+                        }
+                        if (!ref_value) {
+                            ref_value = store.getAddr();
+                            continue;
+                        }
+                        if (store.getAddr() != ref_value) {
+                            LOG(WARNING)
+                                << "entry block stores block arg " << idx
+                                << " into more than one alloca; using the first. "
+                                   "Later loads from the other slot(s) will miss "
+                                   "the patch mutation.\n";
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!ref_value) {
+                ref_value = create_reference(builder, call_op, operand_value);
+            }
+            // Record the pre-cast address so `update_state_after_patch` can
+            // load through the actual alloca rather than a pointer-cast of
+            // it. Loading from the post-cast `Value` would dereference a
+            // pointer whose pointee type matches `patch_arg_type`, not
+            // `old_arg.getType()` — the CIR verifier rejects that typed
+            // mismatch, and lowering would miscompile the load otherwise.
+            if (writeback_slots) {
+                (*writeback_slots)[operand_value] = ref_value;
+            }
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, ref_value, patch_arg_type)
             );
         } else {
-            arg_map[operand_value] =
-                create_cast_if_needed(builder, call_op, operand_value, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, operand_value, patch_arg_type)
+            );
         }
-
-        // LOG(DEBUG) << "arg_map[operand] key=" << valueToString(operand_value)
-        //            << " value=" << valueToString(arg_map[operand_value]) << "\n";
     }
 
     void InstrumentationPass::handle_variable_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::SmallVectorImpl< mlir::Value > &call_args,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
         if (!arg_spec.symbol.has_value()) {
             LOG(ERROR) << "VARIABLE source requires symbol field\n";
@@ -858,34 +1066,40 @@ namespace patchestry::passes {
         }
 
         const std::string &var_name = arg_spec.symbol.value();
-        auto variable_ref           = find_local_variable(call_op, var_name);
+        auto variable_ref = find_local_variable(call_op, var_name, entrypoint_func);
         if (!variable_ref.has_value()) {
-            LOG(WARNING) << "Local variable '" << var_name << "' not found\n";
+            LOG(WARNING) << "Local variable '" << var_name << "' not found"
+                         << (entrypoint_func.has_value()
+                                 ? " in the caller's entry block (APPLY_AT_ENTRYPOINT"
+                                   " only sees entry-block allocas; variables declared"
+                                   " inside cir.scope / after control flow aren't live"
+                                   " at the insertion point)"
+                                 : "")
+                         << "\n";
             return;
         }
 
         mlir::Value variable_reference = variable_ref.value();
         if (arg_spec.is_reference) {
-            arg_map[variable_reference] =
-                create_cast_if_needed(builder, call_op, variable_reference, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, variable_reference, patch_arg_type)
+            );
         } else {
             auto load_op = builder.create< cir::LoadOp >(
                 call_op->getLoc(), variable_reference, /*isDeref=*/true, /*isVolatile=*/false,
                 /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
                 /*tbaa=*/mlir::ArrayAttr{}
             );
-            arg_map[variable_reference] =
-                create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, load_op, patch_arg_type)
+            );
         }
-
-        // LOG(DEBUG) << "arg_map[variable] key=" << valueToString(variable_reference)
-        //            << " value=" << valueToString(arg_map[variable_reference]) << "\n";
     }
 
     void InstrumentationPass::handle_symbol_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::SmallVectorImpl< mlir::Value > &call_args
     ) {
         if (!arg_spec.symbol.has_value()) {
             LOG(ERROR) << "SYMBOL source requires symbol field\n";
@@ -901,24 +1115,38 @@ namespace patchestry::passes {
 
         mlir::Value symbol_reference = symbol_ref.value();
         if (arg_spec.is_reference) {
-            arg_map[symbol_reference] =
-                create_cast_if_needed(builder, call_op, symbol_reference, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, symbol_reference, patch_arg_type)
+            );
         } else {
             auto load_op = builder.create< cir::LoadOp >(
                 call_op->getLoc(), symbol_reference, /*isDeref=*/true, /*isVolatile=*/false,
                 /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
                 /*tbaa=*/mlir::ArrayAttr{}
             );
-            arg_map[symbol_reference] =
-                create_cast_if_needed(builder, call_op, load_op, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, load_op, patch_arg_type)
+            );
         }
     }
 
     void InstrumentationPass::handle_return_value_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::SmallVectorImpl< mlir::Value > &call_args,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
+        // APPLY_AT_ENTRYPOINT: the call result is only defined at the matched call
+        // site, which dominates neither the entry block nor any insertion point
+        // before the call. Using it here would produce invalid SSA IR.
+        if (entrypoint_func.has_value()) {
+            LOG(ERROR) << "RETURN_VALUE source is not valid for APPLY_AT_ENTRYPOINT: "
+                          "the call result is only defined at the matched call site, "
+                          "not at the function entrypoint. Use 'variable', 'symbol', "
+                          "or 'constant' instead.\n";
+            return;
+        }
+
         if (call_op->getNumResults() == 0) {
             LOG(ERROR) << "Operation/function does not have a return value\n";
             return;
@@ -926,22 +1154,20 @@ namespace patchestry::passes {
 
         auto arg_value = call_op->getResult(0);
         if (arg_spec.is_reference) {
-            arg_map[arg_value] = create_cast_if_needed(
+            call_args.push_back(create_cast_if_needed(
                 builder, call_op, create_reference(builder, call_op, arg_value), patch_arg_type
-            );
+            ));
         } else {
-            arg_map[arg_value] =
-                create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, arg_value, patch_arg_type)
+            );
         }
-
-        // LOG(DEBUG) << "arg_map[return] key=" << valueToString(arg_value)
-        //        << " value=" << valueToString(arg_map[arg_value]) << "\n";
     }
 
     void InstrumentationPass::handle_constant_argument(
         mlir::OpBuilder &builder, mlir::Operation *call_op,
         const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
-        llvm::MapVector< mlir::Value, mlir::Value > &arg_map
+        llvm::SmallVectorImpl< mlir::Value > &call_args
     ) {
         if (!arg_spec.value.has_value()) {
             LOG(ERROR) << "CONSTANT source requires value field\n";
@@ -949,14 +1175,86 @@ namespace patchestry::passes {
         }
 
         const std::string &const_value = arg_spec.value.value();
-        mlir::Value arg_value;
-
-        arg_value = parse_constant_operand(builder, call_op, const_value, patch_arg_type);
+        mlir::Value arg_value =
+            parse_constant_operand(builder, call_op, const_value, patch_arg_type);
         if (!arg_value) {
             return;
         }
 
-        arg_map[arg_value] = create_cast_if_needed(builder, call_op, arg_value, patch_arg_type);
+        call_args.push_back(
+            create_cast_if_needed(builder, call_op, arg_value, patch_arg_type)
+        );
+    }
+
+    void InstrumentationPass::handle_capture_argument(
+        mlir::OpBuilder &builder, mlir::Operation *call_op,
+        const patch::ArgumentSource &arg_spec, mlir::Type patch_arg_type,
+        const PatchInformation &patch,
+        llvm::SmallVectorImpl< mlir::Value > &call_args,
+        std::optional< cir::FuncOp > entrypoint_func
+    ) {
+        // APPLY_AT_ENTRYPOINT: captures are SSA values bound at the matched call
+        // site and do not dominate the enclosing function's entry block.
+        if (entrypoint_func.has_value()) {
+            LOG(ERROR) << "CAPTURE source is not valid for APPLY_AT_ENTRYPOINT: "
+                          "captures are only bound at the matched call site, not at "
+                          "the function entrypoint. Use 'variable', 'symbol', or "
+                          "'constant' instead.\n";
+            return;
+        }
+
+        if (arg_spec.name.empty()) {
+            LOG(ERROR) << "CAPTURE source requires 'name' field\n";
+            return;
+        }
+        auto it = patch.captures.find(arg_spec.name);
+        if (it == patch.captures.end()) {
+            LOG(ERROR) << "Capture '" << arg_spec.name
+                       << "' not bound at this match site\n";
+            return;
+        }
+        mlir::Value captured = it->second;
+        if (!captured) {
+            LOG(ERROR) << "Capture '" << arg_spec.name << "' resolved to null\n";
+            return;
+        }
+
+        // Dominance guard for `result:` captures. A capture bound via
+        // `result: N` is `call_op->getResult(N)` — only defined once
+        // `call_op` has executed. In `apply_before` and `replace` the
+        // patch call is inserted at `call_op`'s position (before it in
+        // block order), so using the match-site's result as a patch
+        // argument produces invalid SSA. `apply_after` is the only safe
+        // mode; operand captures are always safe since SSA operands
+        // dominate their using op by construction.
+        if (captured.getDefiningOp() == call_op && patch.patch_action.has_value()
+            && !patch.patch_action->action.empty())
+        {
+            auto mode = patch.patch_action->action[0].mode;
+            if (mode == InstrumentationMode::APPLY_BEFORE
+                || mode == InstrumentationMode::REPLACE)
+            {
+                LOG(ERROR)
+                    << "capture '" << arg_spec.name
+                    << "' is bound to the match-site op's result, which is not yet "
+                       "defined at the '"
+                    << patch::infoModeToString(mode)
+                    << "' insertion point. Use 'mode: apply_after', or capture an "
+                       "operand (which always dominates the match site).\n";
+                return;
+            }
+        }
+
+        if (arg_spec.is_reference) {
+            call_args.push_back(create_cast_if_needed(
+                builder, call_op, create_reference(builder, call_op, captured),
+                patch_arg_type
+            ));
+        } else {
+            call_args.push_back(
+                create_cast_if_needed(builder, call_op, captured, patch_arg_type)
+            );
+        }
     }
 
     mlir::Value InstrumentationPass::parse_constant_operand(
@@ -1007,11 +1305,39 @@ namespace patchestry::passes {
     }
 
     std::optional< mlir::Value > InstrumentationPass::find_local_variable(
-        mlir::Operation *call_op, const std::string &var_name
+        mlir::Operation *call_op, const std::string &var_name,
+        std::optional< cir::FuncOp > entrypoint_func
     ) {
         auto func = call_op->getParentOfType< cir::FuncOp >();
         if (!func) {
             LOG(ERROR) << "Cannot find parent function for local variable lookup\n";
+            return std::nullopt;
+        }
+
+        // For APPLY_AT_ENTRYPOINT, restrict the search to the enclosing
+        // function's entry-block allocas. A whole-function walk could
+        // return an alloca nested inside `cir.scope` / declared after
+        // control flow, which would not yet dominate the patch call
+        // inserted at the entry block's prologue — producing invalid
+        // SSA. Other insertion points (apply_before / apply_after /
+        // replace) emit at the match site, where any visible alloca
+        // already dominates, so the whole-function walk is safe there.
+        if (entrypoint_func.has_value()) {
+            auto enclosing = entrypoint_func.value();
+            if (enclosing.getBody().empty()) {
+                return std::nullopt;
+            }
+            for (mlir::Operation &op : enclosing.getBody().front()) {
+                auto alloca_op = mlir::dyn_cast< cir::AllocaOp >(&op);
+                if (!alloca_op) {
+                    continue;
+                }
+                if (auto name_attr = op.getAttrOfType< mlir::StringAttr >("name")) {
+                    if (name_attr.getValue() == var_name) {
+                        return alloca_op.getResult();
+                    }
+                }
+            }
             return std::nullopt;
         }
 
@@ -1071,243 +1397,6 @@ namespace patchestry::passes {
         return std::nullopt;
     }
 
-    /**
-     * @brief Prepares arguments for a contract function call.
-     *
-     * This method handles argument preparation for contract function calls, including
-     * type casting when necessary. It supports special argument handling such as
-     * passing return values and ensures type compatibility between original and instrumentation
-     * functions.
-     *
-     * @param builder MLIR operation builder for creating new operations
-     * @param call_op The original operation being instrumented
-     * @param contract_func The contract function to be called
-     * @param contract Contract information containing argument specifications
-     * @param args Output vector to store the prepared arguments
-     */
-    void InstrumentationPass::prepare_contract_call_arguments(
-        mlir::OpBuilder &builder, mlir::Operation *call_op, cir::FuncOp contract_func,
-        const ContractInformation &contract, llvm::SmallVector< mlir::Value > &args,
-        std::optional< cir::FuncOp > entrypoint_func
-    ) {
-        auto create_cast = [&](mlir::Value value, mlir::Type type) -> mlir::Value {
-            if (value.getType() == type) {
-                return value;
-            }
-
-            auto cast_op = builder.create< cir::CastOp >(
-                call_op->getLoc(), type, GetCastKind(value.getType(), type), value
-            );
-            return cast_op->getResults().front();
-        };
-
-        if (!contract.action.has_value()) {
-            LOG(ERROR) << "Contract action is missing\n";
-            signalPassFailure();
-            return;
-        }
-        const auto &action = contract.action.value();
-        if (action.action.empty()) {
-            LOG(ERROR) << "Contract action has empty action list\n";
-            signalPassFailure();
-            return;
-        }
-
-        // Handle structured argument specifications
-        for (size_t i = 0;
-             i < action.action[0].arguments.size() && i < contract_func.getNumArguments(); ++i)
-        {
-            const auto &arg_spec = action.action[0].arguments[i];
-            auto contract_arg_type = contract_func.getArgumentTypes()[i];
-            mlir::Value arg_value;
-
-            switch (arg_spec.source) {
-                case ArgumentSourceType::OPERAND: {
-                    // Get operand by index
-                    if (!arg_spec.index.has_value()) {
-                        LOG(ERROR) << "OPERAND source requires index field\n";
-                        continue;
-                    }
-                    unsigned idx = arg_spec.index.value();
-
-                    if (entrypoint_func.has_value()) {
-                        // APPLY_AT_ENTRYPOINT: remap index N to the enclosing function's
-                        // Nth block argument so no call-site value leaks into the entry
-                        // block (which would violate SSA dominance).
-                        auto func_args = entrypoint_func->getArguments();
-                        if (idx >= func_args.size()) {
-                            LOG(ERROR) << "OPERAND index " << idx
-                                       << " out of range for enclosing function (has "
-                                       << func_args.size() << " argument(s))\n";
-                            continue;
-                        }
-                        arg_value = func_args[idx];
-                    } else if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
-                        if (idx >= orig_call_op.getArgOperands().size()) {
-                            LOG(ERROR) << "Operand index " << idx << " out of range\n";
-                            continue;
-                        }
-                        arg_value = orig_call_op.getArgOperands()[idx];
-                    } else {
-                        if (idx >= call_op->getNumOperands()) {
-                            LOG(ERROR) << "Operand index " << idx << " out of range\n";
-                            continue;
-                        }
-                        arg_value = call_op->getOperand(idx);
-                    }
-                    break;
-                }
-                case ArgumentSourceType::VARIABLE: {
-                    // Handle local variables only
-                    if (!arg_spec.symbol.has_value()) {
-                        LOG(ERROR) << "VARIABLE source requires symbol field\n";
-                        continue;
-                    }
-
-                    const std::string &var_name = arg_spec.symbol.value();
-                    mlir::Value var_value;
-                    bool found = false;
-
-                    // Look for local variables in function scope only
-                    auto func = call_op->getParentOfType< cir::FuncOp >();
-                    if (!func) {
-                        LOG(ERROR) << "Cannot find parent function for local variable lookup\n";
-                        continue;
-                    }
-
-                    // Search for local variables in function scope
-                    func.walk([&](mlir::Operation *op) {
-                        if (auto alloca_op = mlir::dyn_cast< cir::AllocaOp >(op)) {
-                            if (auto name_attr = op->getAttrOfType< mlir::StringAttr >("name"))
-                            {
-                                if (name_attr.getValue() == var_name) {
-                                    var_value = alloca_op.getResult();
-                                    found     = true;
-                                    return mlir::WalkResult::interrupt();
-                                }
-                            }
-                        }
-                        return mlir::WalkResult::advance();
-                    });
-
-                    if (!found) {
-                        LOG(WARNING) << "Local variable '" << var_name << "' not found\n";
-                        continue;
-                    }
-                    arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), var_value);
-                    break;
-                }
-                case ArgumentSourceType::SYMBOL: {
-                    // Handle global variables, functions, and any symbol in symbol table
-                    if (!arg_spec.symbol.has_value()) {
-                        LOG(ERROR) << "SYMBOL source requires symbol field\n";
-                        continue;
-                    }
-
-                    const std::string &symbol_name = arg_spec.symbol.value();
-                    mlir::Value symbol_value;
-                    bool found = false;
-
-                    auto module = call_op->getParentOfType< mlir::ModuleOp >();
-                    if (!module) {
-                        LOG(ERROR) << "Cannot find parent module for symbol lookup\n";
-                        continue;
-                    }
-
-                    // Look for global variables
-                    if (auto global_op = module.lookupSymbol< cir::GlobalOp >(symbol_name)) {
-                        // Create a GetGlobal operation to access the global variable
-                        auto global_type = global_op.getSymType();
-                        if (auto global_ptr_type =
-                                mlir::dyn_cast< cir::PointerType >(global_type))
-                        {
-                            symbol_value = builder.create< cir::GetGlobalOp >(
-                                call_op->getLoc(), global_ptr_type, symbol_name
-                            );
-                            found = true;
-                        } else {
-                            // For non-pointer globals, create a pointer type
-                            auto ptr_type =
-                                cir::PointerType::get(builder.getContext(), global_type);
-                            symbol_value = builder.create< cir::GetGlobalOp >(
-                                call_op->getLoc(), ptr_type, symbol_name
-                            );
-                            found = true;
-                        }
-                    }
-
-                    // Look for functions
-                    if (!found) {
-                        if (auto func_op = module.lookupSymbol< cir::FuncOp >(symbol_name)) {
-                            // Create a function reference
-                            auto func_type = func_op.getFunctionType();
-                            auto func_ptr_type =
-                                cir::PointerType::get(builder.getContext(), func_type);
-                            auto symbol_ref =
-                                mlir::FlatSymbolRefAttr::get(builder.getContext(), symbol_name);
-
-                            // Create a constant operation for the function pointer
-                            symbol_value = builder.create< cir::GetGlobalOp >(
-                                call_op->getLoc(), func_ptr_type, symbol_ref
-                            );
-                            found = true;
-                        }
-                    }
-
-                    if (!found) {
-                        LOG(WARNING)
-                            << "Symbol '" << symbol_name << "' not found in symbol table\n";
-                        continue;
-                    }
-                    arg_value = builder.create< cir::LoadOp >(call_op->getLoc(), symbol_value);
-                    break;
-                }
-                case ArgumentSourceType::RETURN_VALUE: {
-                    // APPLY_AT_ENTRYPOINT: the call result is only defined at the matched
-                    // call site, which dominates neither the entry block nor any insertion
-                    // point before the call.  Using it here would produce invalid SSA IR.
-                    if (entrypoint_func.has_value()) {
-                        LOG(ERROR)
-                            << "RETURN_VALUE source is not valid for APPLY_AT_ENTRYPOINT: "
-                               "the call result is only defined at the matched call site, "
-                               "not at the function entrypoint. Use 'variable', 'symbol', "
-                               "or 'constant' instead.\n";
-                        continue;
-                    }
-
-                    // Handle return value of function or operation
-                    if (call_op->getNumResults() == 0) {
-                        LOG(ERROR) << "Operation/function does not have a return value\n";
-                        continue;
-                    }
-
-                    // Get the first result (most common case)
-                    arg_value = call_op->getResult(0);
-                    break;
-                }
-                case ArgumentSourceType::CONSTANT: {
-                    // Create constant value
-                    if (!arg_spec.value.has_value()) {
-                        LOG(ERROR) << "CONSTANT source requires value field\n";
-                        continue;
-                    }
-                    const std::string &const_value = arg_spec.value.value();
-
-                    arg_value = parse_constant_operand(
-                        builder, call_op, const_value, contract_arg_type
-                    );
-                    if (!arg_value) {
-                        continue;
-                    }
-                    break;
-                }
-            }
-
-            if (arg_value) {
-                args.push_back(create_cast(arg_value, contract_arg_type));
-            }
-        }
-    }
 
     /**
      * @brief Sets appropriate attributes for the instrumentation call operation.
@@ -1568,20 +1657,64 @@ namespace patchestry::passes {
      * body of the called function. It handles control flow, argument mapping, and
      * block management to properly integrate the inlined code.
      *
+     * Return handling: `cir::ReturnOp`s at the callee's top-level block
+     * iteration are rewritten post-clone into a branch to the caller's
+     * continuation block (`split_block`). Multi-return top-level cases
+     * unify result values through allocas in the caller's entry block;
+     * the continuation block loads once and RAUWs the original call's
+     * result uses. Single-return skips the alloca round-trip and RAUWs
+     * directly at the return site.
+     *
+     * Known limitation: patch bodies with `cir::ReturnOp` nested inside
+     * a structured region (`cir.scope`, `cir.if`, etc. — emitted by C
+     * early-return patterns like `if (cond) return X; return Y;`) are
+     * rejected up-front with a clear error. A correct fix requires
+     * either (a) flattening the callee's structured control flow to a
+     * raw CFG before inlining, or (b) wiring up MLIR's stock
+     * `InlinerInterface` (which CIR does not currently implement).
+     *
      * @param module The module containing both caller and callee
      * @param call_op The call operation to be inlined
      * @return mlir::LogicalResult Success or failure of the inlining operation
      */
+    void InstrumentationPass::erase_op(mlir::Operation *op) {
+        if (!op) {
+            return;
+        }
+        // Drop any pending inline entry pointing at this op before the
+        // pointer goes stale. std::set::erase is a no-op if absent, so
+        // callers that erase non-patch-call ops are unaffected.
+        inline_worklists.erase(op);
+        op->erase();
+    }
+
     mlir::LogicalResult
     InstrumentationPass::inline_call(mlir::ModuleOp module, cir::CallOp call_op) {
         mlir::OpBuilder builder(call_op);
         mlir::Location loc = call_op.getLoc();
 
-        auto callee = mlir::dyn_cast< cir::FuncOp >(
-            module.lookupSymbol< cir::FuncOp >(call_op.getCallee()->str())
-        );
+        // `cir::CallOp::getCallee()` is `std::optional<StringRef>` — `nullopt`
+        // for indirect calls. The inliner only operates on direct calls to
+        // module-level symbols, so reject anything else up front instead of
+        // dereferencing the optional. Today the inline worklist only holds
+        // patch-emitted direct calls, but a stray indirect call pointer would
+        // otherwise fault inside the existing `->str()` uses below.
+        if (!call_op.getCallee().has_value()) {
+            LOG(ERROR) << "Cannot inline indirect call: no callee symbol\n";
+            return mlir::failure();
+        }
+        const std::string callee_name = call_op.getCallee()->str();
+
+        // `lookupSymbol<cir::FuncOp>` already returns a typed `cir::FuncOp`
+        // (or a null/default-constructed one when the symbol is absent).
+        // Wrapping in a second `dyn_cast` dereferences the null `Operation*`
+        // inside LLVM's casting machinery before our null check can run —
+        // the exact crash path hit when a patch had already been erased
+        // by a prior inline of a sibling call site.
+        auto callee = module.lookupSymbol< cir::FuncOp >(callee_name);
         if (!callee) {
-            LOG(ERROR) << "Callee not found in module\n";
+            LOG(ERROR) << "Callee '" << callee_name
+                       << "' not found in module (already inlined and erased?)\n";
             return mlir::failure();
         }
 
@@ -1605,117 +1738,238 @@ namespace patchestry::passes {
             mapper.map(arg, operand);
         }
 
+        // Pre-inline guards (all must be done before any IR mutation on the
+        // caller side, otherwise `failure()` leaves a half-spliced caller
+        // block with a dead branch and an unreachable suffix):
+        //
+        //   1. Nested returns inside structured regions (cir.scope / cir.if /
+        //      cir.for / cir.while) — C→CIR lowering emits this for early
+        //      returns like `if (cond) return X; return Y;`. Rewriting such a
+        //      `cir::ReturnOp` into a `cir::BrOp` targeting the caller's
+        //      continuation would cross region boundaries, which MLIR's
+        //      verifier rejects with "reference to block defined in another
+        //      region".
+        //   2. Noreturn callee + used call result — if the callee has zero
+        //      top-level `cir::ReturnOp`s and the caller still uses the call's
+        //      result, the downstream `call_op->erase()` asserts on a used op.
+        //   3. Return-arity mismatch — if any top-level `cir::ReturnOp`'s
+        //      operand count differs from `call_op.getResults().size()`, the
+        //      post-clone return-rewriting loop can't map return values to
+        //      call result slots. The mismatch used to be detected AFTER
+        //      `splitBlock` + full clone, stranding a dead branch and an
+        //      unreachable suffix on the caller side; check it here with
+        //      the other guards so the caller IR stays intact on failure.
+        //
+        // One pass over the callee body captures all three signals; no second
+        // walk is needed.
+        {
+            const size_t expected_results = call_op.getResults().size();
+            bool has_nested_return    = false;
+            bool has_top_level_return = false;
+            for (mlir::Block &block : callee.getBody()) {
+                for (mlir::Operation &op : block) {
+                    if (auto ret = mlir::dyn_cast< cir::ReturnOp >(&op)) {
+                        has_top_level_return = true; // safe to rewrite post-clone
+                        if (ret.getNumOperands() != expected_results) {
+                            LOG(ERROR) << "Cannot inline '" << callee_name
+                                       << "': return arity mismatch (callee returns "
+                                       << ret.getNumOperands() << " value(s), call "
+                                       << "expects " << expected_results << ")\n";
+                            return mlir::failure();
+                        }
+                        continue;
+                    }
+                    op.walk([&](cir::ReturnOp) {
+                        has_nested_return = true;
+                        return mlir::WalkResult::interrupt();
+                    });
+                    if (has_nested_return) break;
+                }
+                if (has_nested_return) break;
+            }
+            if (has_nested_return) {
+                LOG(ERROR) << "Cannot inline '" << callee_name
+                           << "': patch body has an early return nested inside "
+                              "a structured region (cir.scope / cir.if). "
+                              "Cross-region branches to the caller's "
+                              "continuation block fail MLIR verification. "
+                              "Restructure the patch to a single cir.return at "
+                              "function scope, or remove 'inline-patches' from "
+                              "the action.\n";
+                return mlir::failure();
+            }
+            if (!has_top_level_return && !call_op->use_empty()) {
+                LOG(ERROR) << "Cannot inline '" << callee_name
+                           << "': callee produced no cir.return to supply a "
+                              "replacement and the call's result is still used. "
+                              "Leaving the original call in place.\n";
+                return mlir::failure();
+            }
+        }
+
         // get caller block and split it at call site
         mlir::Block *caller_block = call_op->getBlock();
         mlir::Block *split_block  = caller_block->splitBlock(call_op->getIterator());
 
-        // Note: Using of DenseMap is causing null-pointer dereference issue with ci.
-        mlir::DenseMap< mlir::Block *, mlir::Block * > block_map;
-
-        // First pass: clone all blocks (without operations)
+        // First pass: clone blocks (no ops yet). Register each block *and*
+        // its args in `mapper` so the second pass can delegate successor
+        // and block-arg remapping to `builder.clone`. The entry block's
+        // args are the function's parameters, already mapped to call
+        // operands above; skip re-registering them (would overwrite the
+        // call-operand substitution).
         mlir::Region &callee_region = callee.getBody();
+        mlir::Block *entry_block   = &callee_region.front();
+
         for (mlir::Block &block : callee_region) {
-            mlir::Block *cloned_block = new mlir::Block();
-            if (cloned_block == nullptr) {
-                LOG(ERROR) << "Failed to allocate block during inlining\n";
-                return mlir::failure();
-            }
-
-            for (mlir::BlockArgument arg : block.getArguments()) {
-                cloned_block->addArgument(arg.getType(), arg.getLoc());
-            }
-
+            auto *cloned_block = new mlir::Block();
             caller_block->getParent()->getBlocks().insert(
                 split_block->getIterator(), cloned_block
             );
 
-            block_map[&block] = cloned_block;
+            if (&block != entry_block) {
+                // Non-entry block args need cloned siblings and must be
+                // registered in `mapper` so cloned ops / cloned branches
+                // reference the cloned args, not the originals (which
+                // live on the callee and would dangle after inlining).
+                for (mlir::BlockArgument arg : block.getArguments()) {
+                    auto cloned_arg = cloned_block->addArgument(arg.getType(), arg.getLoc());
+                    mapper.map(arg, cloned_arg);
+                }
+            }
+            mapper.map(&block, cloned_block);
         }
 
-        // Second pass: clone operations and fix up block references
+        // Second pass: clone ops into cloned blocks uniformly — including
+        // `cir::ReturnOp`s. All returns are rewritten post-clone so we
+        // handle nested ones (inside cloned region-carrying ops like
+        // `cir.scope` / `cir.if` / `cir.for`) with the same logic as
+        // top-level ones. `builder.clone(op, mapper)` remaps operands,
+        // successors, and nested block refs in one shot.
         for (mlir::Block &orig_block : callee_region) {
-            mlir::Block *cloned_block = block_map[&orig_block];
+            auto *cloned_block = mapper.lookupOrNull(&orig_block);
+            if (!cloned_block) {
+                LOG(ERROR) << "Cloned block missing from mapper during inlining\n";
+                return mlir::failure();
+            }
             builder.setInsertionPointToEnd(cloned_block);
 
             for (mlir::Operation &op : orig_block) {
-                if (op.hasTrait< mlir::OpTrait::IsTerminator >()) {
-                    if (auto return_op = dyn_cast< cir::ReturnOp >(&op)) {
-                        // Handle return operation - branch to continue block
-                        mlir::SmallVector< mlir::Value > results;
-                        for (mlir::Value result : return_op.getOperands()) {
-                            auto mapped_result = mapper.lookup(result);
-                            if (!mapped_result) {
-                                LOG(ERROR) << "Failed to map return value during inlining\n";
-                                return mlir::failure();
-                            }
-                            results.push_back(mapped_result);
-                        }
-
-                        // Replace call results and branch to continue block
-                        auto call_results = call_op.getResults();
-                        if (call_results.size() != results.size()) {
-                            LOG(ERROR) << "Result count mismatch during inlining\n";
-                            return mlir::failure();
-                        }
-
-                        for (auto [callResult, returnValue] : llvm::zip(call_results, results))
-                        {
-                            if (!callResult || !returnValue) {
-                                LOG(ERROR) << "Null result encountered during inlining\n";
-                                return mlir::failure();
-                            }
-                            callResult.replaceAllUsesWith(returnValue);
-                        }
-
-                        builder.create< cir::BrOp >(loc, split_block);
-                    } else if (auto branch_op = dyn_cast< cir::BrOp >(&op)) {
-                        // Fix branch destinations
-                        mlir::Block *targetBlock = block_map[branch_op.getDest()];
-                        if (!targetBlock) {
-                            LOG(ERROR) << "Failed to find target block during inlining\n";
-                            return mlir::failure();
-                        }
-                        mlir::SmallVector< mlir::Value > operands;
-                        for (mlir::Value operand : branch_op.getDestOperands()) {
-                            auto mapped_operand = mapper.lookup(operand);
-                            if (!mapped_operand) {
-                                LOG(ERROR) << "Failed to map branch operand during inlining\n";
-                                return mlir::failure();
-                            }
-                            operands.push_back(mapped_operand);
-                        }
-                        builder.create< cir::BrOp >(loc, targetBlock, operands);
-                    }
-                } else {
-                    // Clone regular operations
-                    builder.clone(op, mapper);
-                }
+                builder.clone(op, mapper);
             }
         }
 
-        auto entry_it = block_map.find(&callee_region.front());
-        if (entry_it == block_map.end()) {
-            LOG(ERROR) << "Entry block not found in block map during inlining\n";
-            return mlir::failure();
-        }
-        mlir::Block *callee_entry_block = entry_it->second;
-        builder.setInsertionPointToEnd(caller_block);
-
-        // If entry block has arguments, pass them from the call operands
-        mlir::SmallVector< mlir::Value > entry_args;
-        for (mlir::Value arg : callee.getArguments()) {
-            auto mapped = mapper.lookupOrNull(arg);
-            if (!mapped) {
-                LOG(ERROR) << "Unmapped callee argument during inlining\n";
+        // Post-clone: collect every top-level `cir::ReturnOp` from the
+        // cloned blocks. Nested returns (inside `cir.scope` / `cir.if` /
+        // `cir.for` regions) are impossible here — the `has_nested_return`
+        // guard above rejects callees that contain any, so only function-
+        // scope returns survive to be walked. Each surviving return
+        // represents an exit from the callee body and must be rewritten
+        // to exit the inlined region via a branch to `split_block`.
+        // Multi-return callees unify their result values through allocas
+        // in the caller's function entry block; single-return uses
+        // direct RAUW.
+        mlir::SmallVector< cir::ReturnOp > cloned_returns;
+        for (mlir::Block &orig_block : callee_region) {
+            auto *cloned_block = mapper.lookupOrNull(&orig_block);
+            if (!cloned_block) {
+                LOG(ERROR) << "Cloned block missing from mapper during return collection\n";
                 return mlir::failure();
             }
-            entry_args.push_back(mapped);
+            cloned_block->walk([&](cir::ReturnOp ret) {
+                cloned_returns.push_back(ret);
+            });
         }
-        builder.create< cir::BrOp >(loc, callee_entry_block, entry_args);
 
-        // Remove the original call
+        // Return-arity is already checked pre-split (see guard #3 above);
+        // surviving `cloned_returns` are guaranteed to match the caller's
+        // result count by construction.
+        auto call_results = call_op.getResults();
+
+        // Multi-return + non-void inlines go through an alloca per call
+        // result: each return site stores into the slot and branches;
+        // `split_block` loads once at its head and RAUWs the original
+        // call's result uses. For single-return we skip the alloca round-
+        // trip and RAUW directly at the return site.
+        mlir::SmallVector< mlir::Value > result_slots;
+        const bool unify_via_alloca =
+            cloned_returns.size() > 1 && !call_results.empty();
+
+        if (unify_via_alloca) {
+            mlir::Block *fn_entry = &caller_block->getParent()->front();
+            mlir::OpBuilder alloca_builder(fn_entry, fn_entry->begin());
+            auto layout = mlir::DataLayout::closest(call_op);
+            for (mlir::Value cr : call_results) {
+                auto align = mlir::IntegerAttr::get(
+                    mlir::IntegerType::get(builder.getContext(), 64),
+                    static_cast< int64_t >(layout.getTypeABIAlignment(cr.getType()))
+                );
+                auto addr_type = cir::PointerType::get(builder.getContext(), cr.getType());
+                auto slot = alloca_builder.create< cir::AllocaOp >(
+                    loc, addr_type, cr.getType(), "inline_ret", align
+                );
+                result_slots.push_back(slot.getResult());
+            }
+        }
+
+        for (cir::ReturnOp ret : cloned_returns) {
+            mlir::OpBuilder rb(ret);
+            mlir::Location ret_loc = ret.getLoc();
+
+            if (unify_via_alloca) {
+                for (auto [slot, val] : llvm::zip(result_slots, ret.getOperands())) {
+                    rb.create< cir::StoreOp >(ret_loc, val, slot);
+                }
+            } else if (!call_results.empty()) {
+                // Single-return + non-void: RAUW directly with the
+                // return's operands (already remapped by `builder.clone`).
+                for (auto [cr, val] : llvm::zip(call_results, ret.getOperands())) {
+                    cr.replaceAllUsesWith(val);
+                }
+            }
+            rb.create< cir::BrOp >(ret_loc, split_block);
+            ret.erase();
+        }
+
+        if (unify_via_alloca) {
+            mlir::OpBuilder load_builder(split_block, split_block->begin());
+            for (auto [cr, slot] : llvm::zip(call_results, result_slots)) {
+                auto loaded = load_builder.create< cir::LoadOp >(loc, cr.getType(), slot);
+                cr.replaceAllUsesWith(loaded.getResult());
+            }
+        }
+
+        auto *callee_entry_block = mapper.lookupOrNull(entry_block);
+        if (!callee_entry_block) {
+            LOG(ERROR) << "Entry block not cloned during inlining\n";
+            return mlir::failure();
+        }
+        builder.setInsertionPointToEnd(caller_block);
+
+        // Branch into the cloned entry block. The entry block itself
+        // takes no args here — callee function params are already
+        // registered in `mapper`, so ops cloned into the cloned entry
+        // reference call operands directly via mapper substitution.
+        builder.create< cir::BrOp >(loc, callee_entry_block);
+
+        // Remove the original call. The callee itself is left in place —
+        // the same patch symbol may be referenced by other call ops still
+        // in the inline worklist, and erasing it here would turn the next
+        // `lookupSymbol` into a null (and previously, a crash). Dead patch
+        // functions are swept post-inline in `runOnOperation`.
+        //
+        // The noreturn-with-used-result edge case was rejected up front by
+        // the pre-split guard above, so reaching this point with uses still
+        // present would indicate a logic error (e.g. a return-count mismatch
+        // that should have been caught earlier). Keep the assertion-style
+        // guard as defense in depth; any failure here is a bug, not a user
+        // error, so the prior caller-side mutations are already committed.
+        if (!call_op->use_empty()) {
+            LOG(ERROR) << "Internal: inlined call '" << callee_name
+                       << "' still has uses after return rewriting; refusing to "
+                          "erase. This indicates a missed return-shape check.\n";
+            return mlir::failure();
+        }
         call_op.erase();
-        callee.erase();
         return mlir::success();
     }
 
@@ -1766,16 +2020,13 @@ namespace patchestry::passes {
                                                           .action = contract_action };
 
                 // Apply the contract to matching functions
-                apply_contract_action_to_targets(
-                    function_worklist, *target_meta_contract, contract_to_apply
-                );
+                apply_contract_action_to_targets(function_worklist, contract_to_apply);
             }
         }
     }
 
     void InstrumentationPass::apply_contract_action_to_targets(
         llvm::SmallVector< cir::FuncOp, 8 > &function_worklist,
-        const contract::MetaContractConfig &meta_contract,
         const ContractInformation &contract_to_apply
     ) {
         if (!contract_to_apply.action.has_value()) {
@@ -1810,23 +2061,12 @@ namespace patchestry::passes {
                     switch (action.mode) {
                         case contract::InfoMode::APPLY_BEFORE:
                             ContractOperationImpl::applyContractBefore(
-                                *this, call_op, contract_to_apply,
-                                options.enable_inlining
-                                    || meta_contract.optimization.contains("inline-contracts")
+                                call_op, contract_to_apply
                             );
                             break;
                         case contract::InfoMode::APPLY_AFTER:
                             ContractOperationImpl::applyContractAfter(
-                                *this, call_op, contract_to_apply,
-                                options.enable_inlining
-                                    || meta_contract.optimization.contains("inline-contracts")
-                            );
-                            break;
-                        case contract::InfoMode::APPLY_AT_ENTRYPOINT:
-                            ContractOperationImpl::applyContractAtEntrypoint(
-                                *this, call_op, contract_to_apply,
-                                options.enable_inlining
-                                    || meta_contract.optimization.contains("inline-contracts")
+                                call_op, contract_to_apply
                             );
                             break;
                         default:
@@ -1835,8 +2075,8 @@ namespace patchestry::passes {
                             break;
                     }
                 } else {
-                    LOG(INFO) << "function worklist entry '" << func.getSymName().str()
-                              << "' did not match the contract action; continuing\n";
+                    LOG(DEBUG) << "call in function '" << func.getSymName().str()
+                               << "' did not match the contract action; continuing\n";
                 }
             });
         }

@@ -1,0 +1,27 @@
+# Negative: `apply_at_entrypoint` combined with `kind: operation` used to
+# parse successfully, hit the operation-dispatch switch in
+# InstrumentationPass.cpp, fall into its default case (no
+# implementation), log an error, and then let the pass *succeed*
+# without signalling failure — silently dropping the requested
+# instrumentation. Now rejected up-front in MappingTraits<PatchEntry>.
+apiVersion: patchestry.io/v1
+metadata:
+  name: "op-entrypoint-reject"
+target:
+  binary: "x.bin"
+  arch: "ARM:LE:32"
+libraries:
+  - "patches/measurement_update_patch.yaml"
+patches:
+  - name: "bogus_op_entrypoint"
+    id: "OP-ENTRY-REJECT-001"
+    match:
+      name: "cir.call"
+      kind: "operation"
+      context: ["measurement_update"]
+    action:
+      mode: "apply_at_entrypoint"
+      patch: "measurement_update_before_patch"
+      arguments:
+        - source: "operand"
+          index: 0

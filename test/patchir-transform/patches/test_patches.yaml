@@ -1,0 +1,17 @@
+# patches/test_patches.yaml
+
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "test_patches"
+  version: "1.0.0"
+  description: "Basic transform test patches"
+  author: "Test Suite"
+  created: "2026-04-21"
+
+patches:
+  - name: "test_function_before"
+    description: "Insert marker call before test_function invocations"
+    category: "test"
+    code_file: "patches/patch_test_function.c"
+    function_name: "patch::before::test_function"

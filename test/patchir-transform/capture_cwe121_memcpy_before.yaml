@@ -1,0 +1,35 @@
+# Insert a capture-based pre-check patch before every memcpy call in the
+# CWE-121 eeprom handler. The memcpy itself is preserved; the patch is
+# inserted immediately above it using APPLY_BEFORE.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "cwe121-memcpy-before-captured"
+
+target:
+  binary: "firmware.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  - "patches/capture_test_patches.yaml"
+
+patches:
+  - name: "capture_memcpy_precheck"
+    id: "CWE121-MEMCPY-001"
+    match:
+      name: "memcpy"
+      kind: "function"
+      context: ["_ZN5Debug7Command13EepromHandler5WriteEtPNS0_7ContextE"]
+      captures:
+        - name: "DST"
+          operand: 0
+        - name: "LEN"
+          operand: 2
+    action:
+      mode: "apply_before"
+      patch: "ptr_log"
+      arguments:
+        - source: "capture"
+          name: "DST"
+        - source: "capture"
+          name: "LEN"

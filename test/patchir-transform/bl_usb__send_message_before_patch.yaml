@@ -13,71 +13,51 @@ target:
   arch: "ARM:LE:32"
 
 libraries:
- # these references are in relation to the location of this file
   - "patches/usb_security_patches.yaml"
 
-execution_order:
-  - "meta_patches::usb_security_meta_patches"
-  - "meta_contracts::usb_security_meta_contracts"
+patches:
+  - name: "usb_endpoint_write_validation_before"
+    id: "USB-PATCH-001"
+    description: "Endpoint-write pre-instrumentation"
+    match:
+      name: "usbd_ep_write_packet"
+      kind: "function"
+      context: ["bl_usb__send_message"]
+      argument_matches:
+        - index: 0
+          name: "usb_g"
+          type: "struct _usbd_device*"
+    action:
+      mode: "apply_before"
+      patch: "usb_endpoint_write_validation_before"
+      arguments:
+        - name: "operand_0"
+          source: "operand"
+          index: "0"
+        - name: "operand_2"
+          source: "operand"
+          index: "2"
 
-meta_patches:
-  - name: usb_security_meta_patches
-    description: "Meta patches for USB security"
-
-    # Patch Action Configuration
-    patch_actions:
-       - id: "USB-PATCH-001"
-         description: "Patch to add USB security"
-
-         # Match Configuration
-         match:
-          - name: "usbd_ep_write_packet"
-            kind: "function"
-            function_context:
-              - name: "bl_usb__send_message"
-            argument_matches:
-              - index: 0
-                name: "usb_g"
-                type: "struct _usbd_device*"
-
-         # Actions to Apply
-         action:
-          - mode: "apply_before"
-            patch_id: "usb_endpoint_write_validation_before"
-            description: "Pre-validation security check"
-            arguments:
-              - name: "operand_0"
-                source: "operand"
-                index: "0"
-              - name: "operand_2"
-                source: "operand"
-                index: "2"
-
-
-meta_contracts:
-  - name: usb_security_meta_contracts
-    description: "Meta contracts for USB security"
-
-    contract_actions:
-      - id: "USB-CONTRACT-001"
-        description: "Asserts message to send is less than maximum size"
-
-        match:
-        - name: "usbd_ep_write_packet"
-          kind: "function"
-          function_context:
-            - name: "bl_usb__send_message"
-          argument_matches:
-            - index: 0
-              name: "usb_g"
-
-        action:
-        - mode: "apply_before"
-          contract_id: "usb_endpoint_write_validation_contract_before"
-          arguments:
-            - name: usb_device
-              source: "argument"
-              index: "0"
-            - name: buffer
-              source: "argument"
-              index: "1"
+  # Second apply_before action, migrated from the removed test_contract
+  # runtime-contract dispatch. It asserts the USB device state is
+  # CONFIGURED before the packet write.
+  - name: "usb_state_check_before"
+    id: "USB-PATCH-002"
+    description: "USB state assertion"
+    match:
+      name: "usbd_ep_write_packet"
+      kind: "function"
+      context: ["bl_usb__send_message"]
+      argument_matches:
+        - index: 0
+          name: "usb_g"
+    action:
+      mode: "apply_before"
+      patch: "usb_state_check_before"
+      arguments:
+        - name: "usb_device"
+          source: "argument"
+          index: "0"
+        - name: "buffer"
+          source: "argument"
+          index: "1"

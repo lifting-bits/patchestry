@@ -1,0 +1,29 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "entrypoint-patch-library"
+  version: "1.0.0"
+  description: "Patches inserted at function entrypoints"
+  author: "Security Team"
+  created: "2026-04-21"
+
+patches:
+  - name: "message_entry_check_patch"
+    description: "Validates message pointer is non-null at function entrypoint"
+    category: "safety"
+    code_file: "patches/patch_msg_entry_check.c"
+    function_name: "patch::entrypoint::message_entry_check"
+    parameters:
+      - name: "msg"
+        type: "void*"
+        description: "Message pointer passed to bl_usb__send_message"
+
+  - name: "message_entry_refmut_patch"
+    description: "Mutates the message pointer via reference at function entrypoint"
+    category: "safety"
+    code_file: "patches/patch_msg_entry_refmut.c"
+    function_name: "patch::entrypoint::message_entry_refmut"
+    parameters:
+      - name: "msg_ref"
+        type: "void**"
+        description: "Reference slot for the caller's msg parameter"

@@ -1,0 +1,18 @@
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "capture-result-library"
+  version: "1.0.0"
+  description: "Probe used to exercise result-index captures"
+  author: "Test Suite"
+  created: "2026-04-21"
+
+patches:
+  - name: "int_probe_after"
+    description: "apply_after probe receiving a binop's result via capture"
+    category: "test"
+    code_file: "patches/patch_int_probe.c"
+    function_name: "patch::after::int_probe"
+    parameters:
+      - name: "result"
+        type: "uint32_t"

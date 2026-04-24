@@ -1,0 +1,39 @@
+# Regression: `optimization: ["inline-patches"]` must work when the same
+# patch fires at multiple match sites. Prior to the fix, inline_call
+# erased the patch callee after the first inline and the second call
+# site triggered a null-deref crash in patchir-transform.
+#
+# measurement_update calls __aeabi_fdiv three times; matching it there
+# with apply_before + inline-patches forces three inlines of the same
+# patch.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "inline-patches-multisite"
+  description: "Inline the same apply_before patch at every __aeabi_fdiv call"
+  version: "1.0.0"
+  author: "Security Team"
+  created: "2026-04-22"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/measurement_update_patch.yaml"
+
+patches:
+  - name: "inline_multisite_fdiv"
+    id: "INLINE-MULTISITE-001"
+    description: "Apply + inline patch at every __aeabi_fdiv call site"
+    match:
+      name: "__aeabi_fdiv"
+      kind: "function"
+    action:
+      mode: "apply_before"
+      patch: "measurement_update_before_patch"
+      arguments:
+        - name: "function_argument"
+          source: "operand"
+          index: 0
+      optimization: ["inline-patches"]

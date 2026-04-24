@@ -12,27 +12,15 @@ target:
   arch: "ARM:LE:32"
 
 libraries:
-  -"patches/test_patches.yaml"
+  - "patches/test_patches.yaml"
 
-execution_order:
-  - "meta_patches::test_meta_patches"
-
-meta_patches:
-  - name: test_meta_patches
-    id: "test_meta_patches"
-    description: "Test meta patches"
-    optimization:
-      - "inline-patches"
-
-    patch_actions:
-       - id: "TEST-PATCH-001"
-         description: "Basic test patch"
-
-         match:
-          - name: "test_function"
-            kind: "function"
-
-         action:          
-          - mode: "apply_before"
-            patch_id: "TEST-PATCH-001"
-            description: "Test pre-validation"
+patches:
+  - name: "test_function_before"
+    id: "TEST-PATCH-001"
+    description: "Insert marker call before test_function"
+    match:
+      name: "test_function"
+      kind: "function"
+    action:
+      mode: "apply_before"
+      patch: "test_function_before"

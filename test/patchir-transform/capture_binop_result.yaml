@@ -1,0 +1,34 @@
+# Test: `captures: - result: 0` binds the result of the matched op.
+# Apply-after the Mul binop inside int_mult_test, pass the captured
+# result to the probe patch, and verify downstream (in
+# op_kind_int_arith.json) that the probe's argument is the same SSA
+# value the binop produced.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "capture-binop-result"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/capture_result_library.yaml"
+
+patches:
+  - name: "capture_mul_result"
+    id: "CAP-RESULT-001"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+      op_kind: "mul"
+      context: ["int_mult_test"]
+      captures:
+        - name: "R"
+          result: 0
+    action:
+      mode: "apply_after"
+      patch: "int_probe_after"
+      arguments:
+        - source: "capture"
+          name: "R"

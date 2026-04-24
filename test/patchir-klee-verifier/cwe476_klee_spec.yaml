@@ -15,10 +15,6 @@ target:
 libraries:
   - "cwe476_klee_patches.yaml"
 
-execution_order:
-  - "meta_patches::cwe476_patch"
-  - "meta_contracts::cwe476_contract"
-
 meta_patches:
   - name: "cwe476_patch"
     description: "Inject null pointer check before get_name"

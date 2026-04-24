@@ -15,19 +15,17 @@ target:
   binary: "test_binary.bin"
   arch: "ARM:LE:32"
 
-meta_patches:
-  - name: "missing_library_meta_patch"
-    description: "Unused action; parser should fail before this matters"
-    patch_actions:
-      - id: "MISSING-LIB-001"
-        description: "Should never execute"
-        match:
-          - name: "spo2_lookup"
-            kind: "function"
-        action:
-          - mode: "apply_before"
-            patch_id: "measurement_update_before_patch"
-            arguments:
-              - name: "function_argument"
-                source: "variable"
-                symbol: "var6"
+patches:
+  - name: "missing_library_patch"
+    id: "MISSING-LIB-001"
+    description: "Should never execute"
+    match:
+      name: "spo2_lookup"
+      kind: "function"
+    action:
+      mode: "apply_before"
+      patch: "measurement_update_before_patch"
+      arguments:
+        - name: "function_argument"
+          source: "variable"
+          symbol: "var6"

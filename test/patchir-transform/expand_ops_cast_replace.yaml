@@ -1,0 +1,33 @@
+# Phase C: REPLACE a cir.cast with a patch call. Before Phase C, this would
+# error with "REPLACE mode is not supported for cir.cast". Now the generic
+# replaceOperationWithPatch path accepts any op with results.
+#
+# The fixture casts s32 -> u32 once in rcc_osc_off; we replace exactly that.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "expand-cast-replace"
+
+target:
+  binary: "stm32_firmware.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  - "patches/capture_test_patches.yaml"
+
+patches:
+  - name: "replace_cast"
+    id: "EXPAND-CAST-001"
+    match:
+      name: "cir.cast"
+      kind: "operation"
+      context: ["rcc_osc_off"]
+      captures:
+        - name: "IN"
+          operand: 0
+    action:
+      mode: "replace"
+      patch: "replace_load_u32"
+      arguments:
+        - source: "capture"
+          name: "IN"

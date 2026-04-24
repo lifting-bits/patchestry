@@ -14,91 +14,6 @@
 
 namespace patchestry::passes {
 
-    extern std::string namifyFunction(const std::string &str);
-
-    void ContractOperationImpl::emitRuntimeContract(
-        InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-        const ContractInformation &contract, ContractMode mode, bool shouldInline
-    ) {
-        if (!targetOp) {
-            LOG(ERROR
-            ) << "emit_runtime_contract: the passed function to be instrumented was null";
-            return;
-        }
-
-        if (!contract.spec->contract_module) {
-            LOG(ERROR) << "Non-static contract '" << contract.spec->name
-                       << "' is missing contract_module\n";
-            return;
-        }
-        auto contractModule =
-            pass.load_code_module(*targetOp->getContext(), *contract.spec->contract_module);
-
-        switch (mode) {
-            case ContractMode::APPLY_BEFORE:
-                builder.setInsertionPoint(targetOp);
-                break;
-            case ContractMode::APPLY_AFTER:
-                builder.setInsertionPointAfter(targetOp);
-                break;
-            case ContractMode::APPLY_AT_ENTRYPOINT:
-                break;
-            default:
-                LOG(ERROR) << "Unsupported contract mode: " << contract::infoModeToString(mode)
-                           << "\n";
-                return;
-        }
-
-        auto module                      = targetOp->getParentOfType< mlir::ModuleOp >();
-        std::string contractFunctionName = namifyFunction(contract.spec->function_name);
-
-        auto contractFuncFromModule =
-            contractModule->lookupSymbol< cir::FuncOp >(contractFunctionName);
-        if (!contractFuncFromModule) {
-            LOG(ERROR) << "Contract module not found or contract function not defined: "
-                       << contractFunctionName << "\n";
-            return;
-        }
-
-        auto contractFunc = module.lookupSymbol< cir::FuncOp >(contractFunctionName);
-        if (!contractFunc) {
-            if (mlir::failed(
-                    pass.merge_module_symbol(module, *contractModule, contractFunctionName)
-                ))
-            {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-            contractFunc = module.lookupSymbol< cir::FuncOp >(contractFunctionName);
-        }
-
-        if (!contractFunc) {
-            LOG(ERROR) << "Contract function " << contractFunctionName
-                       << " not defined after insertion. Insertion failed...\n";
-            return;
-        }
-
-        auto symbolRef =
-            mlir::FlatSymbolRefAttr::get(targetOp->getContext(), contractFunctionName);
-        llvm::SmallVector< mlir::Value > functionArgs;
-        pass.prepare_contract_call_arguments(
-            builder, targetOp, contractFunc, contract, functionArgs
-        );
-
-        auto contractCallOp = builder.create< cir::CallOp >(
-            targetOp->getLoc(), symbolRef,
-            contractFunc->getResultTypes().empty() ? mlir::Type()
-                                                   : contractFunc->getResultTypes().front(),
-            functionArgs
-        );
-
-        pass.set_instrumentation_call_attributes(contractCallOp, targetOp);
-
-        if (shouldInline) {
-            pass.inline_worklists.insert(contractCallOp);
-        }
-    }
-
     // Helper to build PredicateAttr from parsed Predicate struct
     static std::optional< ::contracts::PredicateAttr > buildPredicateAttr(
         mlir::MLIRContext *ctx, mlir::Operation *op, const contract::Predicate &pred
@@ -247,8 +162,7 @@ namespace patchestry::passes {
 
     // apply static contract to the target operation
     void ContractOperationImpl::emitStaticContract(
-        InstrumentationPass &pass, mlir::OpBuilder &builder, mlir::Operation *targetOp,
-        const ContractInformation &contract, ContractMode mode, bool shouldInline
+        mlir::Operation *targetOp, const ContractInformation &contract
     ) {
         // check if the target operation is null
         if (targetOp == nullptr) {
@@ -257,11 +171,6 @@ namespace patchestry::passes {
         }
 
         const auto &spec = contract.spec.value();
-        if (spec.type != ContractType::STATIC) {
-            LOG(ERROR) << "Contract type is not static\n";
-            return;
-        }
-
         auto ctx = targetOp->getContext();
 
         // Build preconditions as PreconditionAttr
@@ -324,16 +233,10 @@ namespace patchestry::passes {
                          << spec.name << "\n";
             return;
         }
-
-        (void) shouldInline;
-        (void) pass;
-        (void) builder;
-        (void) mode;
     }
 
     void ContractOperationImpl::applyContractBefore(
-        InstrumentationPass &pass, mlir::Operation *target_op,
-        const ContractInformation &contract, bool should_inline
+        mlir::Operation *target_op, const ContractInformation &contract
     ) {
         if (target_op == nullptr) {
             LOG(ERROR
@@ -341,175 +244,18 @@ namespace patchestry::passes {
             return;
         }
 
-        const auto &spec = contract.spec.value();
-        switch (spec.type) {
-            case ContractType::RUNTIME: {
-                mlir::OpBuilder builder(target_op);
-                emitRuntimeContract(
-                    pass, builder, target_op, contract, ContractMode::APPLY_BEFORE,
-                    should_inline
-                );
-                break;
-            }
-            case ContractType::STATIC: {
-                mlir::OpBuilder builder(target_op);
-                emitStaticContract(
-                    pass, builder, target_op, contract, ContractMode::APPLY_BEFORE,
-                    should_inline
-                );
-                break;
-            }
-        }
+        emitStaticContract(target_op, contract);
     }
 
     void ContractOperationImpl::applyContractAfter(
-        InstrumentationPass &pass, mlir::Operation *target_op,
-        const ContractInformation &contract, bool should_inline
+        mlir::Operation *target_op, const ContractInformation &contract
     ) {
         if (target_op == nullptr) {
             LOG(ERROR) << "applyContractAfter: the passed function to be instrumented was null";
             return;
         }
 
-        const auto &spec = contract.spec.value();
-        switch (spec.type) {
-            case ContractType::RUNTIME: {
-                mlir::OpBuilder builder(target_op);
-                emitRuntimeContract(
-                    pass, builder, target_op, contract, ContractMode::APPLY_AFTER, should_inline
-                );
-                break;
-            }
-            case ContractType::STATIC: {
-                mlir::OpBuilder builder(target_op);
-                emitStaticContract(
-                    pass, builder, target_op, contract, ContractMode::APPLY_AFTER, should_inline
-                );
-                break;
-            }
-        }
-    }
-
-    void ContractOperationImpl::applyContractAtEntrypoint(
-        InstrumentationPass &pass, cir::CallOp call_op, const ContractInformation &contract,
-        bool should_inline
-    ) {
-        if (call_op == nullptr) {
-            LOG(ERROR) << "applyContractAtEntrypoint: the passed function to be "
-                          "instrumented was null";
-            return;
-        }
-
-        const auto &contract_spec = contract.spec.value();
-        auto contract_type        = contract_spec.type;
-        if (contract_type == ContractType::STATIC) {
-            LOG(ERROR) << "Static contracts are not supported in entrypoint mode\n";
-            return;
-        }
-
-        std::string contract_function_name =
-            namifyFunction(contract_spec.function_name);
-
-        auto contract_module =
-            pass.load_code_module(*call_op->getContext(), *contract.spec->contract_module);
-        if (!contract_module) {
-            LOG(ERROR) << "Failed to load contract module for function: "
-                       << call_op.getCallee()->str() << "\n";
-            return;
-        }
-
-        auto contractFuncFromModule =
-            contract_module->lookupSymbol< cir::FuncOp >(contract_function_name);
-        if (!contractFuncFromModule) {
-            LOG(ERROR) << "Contract module not found or contract function not defined\n";
-            return;
-        }
-
-        auto module = call_op->getParentOfType< mlir::ModuleOp >();
-        assert(module && "Wrap around patch: no module found");
-
-        // APPLY_AT_ENTRYPOINT inserts the contract at the beginning of the enclosing
-        // function (i.e. the function that contains the matched call), not the callee.
-        // The matched call identifies which enclosing function to instrument.
-        // Argument sources are resolved against the entry block:
-        //   - OPERAND index N  → Nth block argument of the enclosing function
-        //   - VARIABLE/SYMBOL  → alloca/global already live at the entry block
-        //   - CONSTANT         → created inline, always valid
-        //   - RETURN_VALUE     → rejected (only defined at the call site)
-        auto enclosing_func = call_op->getParentOfType< cir::FuncOp >();
-        if (!enclosing_func) {
-            LOG(ERROR) << "applyContractAtEntrypoint: cannot find enclosing function\n";
-            return;
-        }
-        if (enclosing_func.getBody().empty()) {
-            LOG(ERROR) << "applyContractAtEntrypoint: enclosing function has no body\n";
-            return;
-        }
-
-        mlir::Block &entry_block = enclosing_func.getBody().front();
-        auto target_op           = entry_block.getParentOp();
-
-        // Find the insertion point just after all alloca ops and any stores that
-        // initialize parameters (i.e. stores whose value is a block argument).
-        // This ensures all parameter allocas are defined and initialized before
-        // the contract call, allowing "source: variable" to load a parameter value.
-        auto insert_pos = entry_block.begin();
-        while (insert_pos != entry_block.end() && mlir::isa< cir::AllocaOp >(*insert_pos)) {
-            ++insert_pos;
-        }
-        while (insert_pos != entry_block.end()) {
-            if (auto store_op = mlir::dyn_cast< cir::StoreOp >(&*insert_pos)) {
-                if (mlir::isa< mlir::BlockArgument >(store_op->getOperand(0))) {
-                    ++insert_pos;
-                    continue;
-                }
-            }
-            break;
-        }
-        mlir::OpBuilder builder(&entry_block, insert_pos);
-
-        if (!module.lookupSymbol< cir::FuncOp >(contract_function_name)) {
-            auto result =
-                pass.merge_module_symbol(module, *contract_module, contract_function_name);
-            if (mlir::failed(result)) {
-                LOG(ERROR) << "Failed to insert symbol into module\n";
-                return;
-            }
-        } else {
-            LOG(INFO) << "Contract function " << contract_function_name
-                      << " already exists in module, skipping merge\n";
-        }
-
-        auto contract_func = module.lookupSymbol< cir::FuncOp >(contract_function_name);
-        if (!contract_func) {
-            LOG(ERROR) << "Contract function " << contract_function_name
-                       << " not defined. Patching failed...\n";
-            return;
-        }
-
-        auto symbol_ref =
-            mlir::FlatSymbolRefAttr::get(target_op->getContext(), contract_function_name);
-        llvm::SmallVector< mlir::Value > function_args;
-        // Pass enclosing_func so that OPERAND sources are remapped to block arguments of
-        // the enclosing function and RETURN_VALUE is rejected: both prevent call-site SSA
-        // values from leaking into the entry block (which would violate dominance).
-        pass.prepare_contract_call_arguments(
-            builder, call_op, contract_func, contract, function_args, enclosing_func
-        );
-        auto contract_call_op = builder.create< cir::CallOp >(
-            enclosing_func->getLoc(), symbol_ref,
-            contract_func->getResultTypes().size() != 0
-                ? contract_func->getResultTypes().front()
-                : mlir::Type(),
-            function_args
-        );
-
-        // Set appropriate attributes based on operation type
-        pass.set_instrumentation_call_attributes(contract_call_op, call_op);
-
-        if (should_inline) {
-            pass.inline_worklists.insert(contract_call_op);
-        }
+        emitStaticContract(target_op, contract);
     }
 
 } // namespace patchestry::passes

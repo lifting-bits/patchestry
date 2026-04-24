@@ -20,3 +20,33 @@ patches:
       - name: "b"
         type: "unsigned int"
         description: "Right operand"
+
+  # Single-return variant used by inline_patches_replace_binop.yaml to
+  # exercise replaceOperationWithPatch + inline-patches
+  # (PatchOperationImpl:379). `checked_mul` has an early return and is
+  # blocked by Bug F; this one has no control flow.
+  - name: "passthrough_mul"
+    description: "Single-return multiply replacement suitable for inlining"
+    category: "integer_safety"
+    code_file: "patches/patch_simple_mul.c"
+    function_name: "patch::replace::passthrough_mul"
+    parameters:
+      - name: "a"
+        type: "unsigned int"
+      - name: "b"
+        type: "unsigned int"
+
+  # Void probe used by replace_binop_void_reject.json to exercise the
+  # arity pre-check in `replaceOperationWithPatch`: replacing a
+  # value-producing op with a void patch must be rejected up front, not
+  # half-applied.
+  - name: "void_probe_mul"
+    description: "Void patch (regression witness for arity pre-check)"
+    category: "integer_safety"
+    code_file: "patches/patch_void_probe_mul.c"
+    function_name: "patch::probe::void_mul"
+    parameters:
+      - name: "a"
+        type: "unsigned int"
+      - name: "b"
+        type: "unsigned int"

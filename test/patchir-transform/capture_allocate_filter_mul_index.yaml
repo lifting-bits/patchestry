@@ -1,0 +1,32 @@
+# Same replacement as capture_allocate_filter_mul.yaml but using index-based
+# operand references. The resulting CIR must be byte-identical to prove
+# captures are pure syntactic sugar over operand indices.
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "allocate-filter-mul-index"
+
+target:
+  binary: "bloodview.bin"
+  arch: "ARM:LE:32:v7"
+
+libraries:
+  - "patches/replace_binop_patches.yaml"
+
+patches:
+  - name: "capture_mul_filter"
+    id: "ALLOC-MUL-002"
+    description: "Index-based multiply replacement"
+    match:
+      name: "cir.binop"
+      op_kind: "mul"
+      kind: "operation"
+      context: ["data__allocate_filter"]
+    action:
+      mode: "replace"
+      patch: "checked_mul"
+      arguments:
+        - source: "operand"
+          index: 0
+        - source: "operand"
+          index: 1

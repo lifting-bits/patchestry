@@ -15,41 +15,27 @@ target:
 libraries:
   - "patches/usb_security_patches.yaml"
 
-execution_order:
-  - "meta_patches::usb_security_meta_patches"
-
-meta_patches:
-  - name: usb_security_meta_patches
-    description: "Meta patches for USB security"
-
-    # Patch Action Configuration
-    patch_actions:
-       - id: "USB-UPDATE-STATE-PATCH-001"
-         description: "Patch to add USB security"
-
-         # Match Configuration
-         match:
-          - name: "usbd_ep_write_packet"
-            kind: "function"
-            function_context:
-              - name: "bl_usb__send_message"
-            argument_matches:
-              - index: 0
-                name: "usb_g"
-                type: "struct _usbd_device*"
-
-         # Actions to Apply
-         action:
-          - mode: "apply_before"
-            patch_id: "usb_endpoint_write_validation_before_update_state"
-            description: "Pre-validation security check"
-            arguments:
-              - name: "operand_0"
-                source: "operand"
-                index: "0"
-                is_reference: true
-              - name: "operand_2"
-                source: "operand"
-                index: "2"
-                is_reference: true
-
+patches:
+  - name: "usb_endpoint_write_validation_before_update_state"
+    id: "USB-UPDATE-STATE-PATCH-001"
+    description: "Patch to add USB security"
+    match:
+      name: "usbd_ep_write_packet"
+      kind: "function"
+      context: ["bl_usb__send_message"]
+      argument_matches:
+        - index: 0
+          name: "usb_g"
+          type: "struct _usbd_device*"
+    action:
+      mode: "apply_before"
+      patch: "usb_endpoint_write_validation_before_update_state"
+      arguments:
+        - name: "operand_0"
+          source: "operand"
+          index: "0"
+          is_reference: true
+        - name: "operand_2"
+          source: "operand"
+          index: "2"
+          is_reference: true

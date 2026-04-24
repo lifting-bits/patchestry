@@ -1,0 +1,41 @@
+# Test: a capture bound to operand 0 of an indirect cir.call must
+# resolve to the user argument, not the callee function pointer.
+# Before the capture path was CallOp-aware it indexed into the raw
+# operand list; operand 0 of an indirect cir.call is the callee SSA
+# value, so `captures: operand: 0` bound the wrong thing and disagreed
+# with `source: operand, index: 0` (which uses CallOp::getArgOperands()).
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "indirect-call-capture-parity"
+  description: "Capture vs source: operand parity on indirect calls"
+  version: "1.0.0"
+  author: "Test Suite"
+  created: "2026-04-21"
+
+target:
+  binary: "test_binary.bin"
+  arch: "ARM:LE:32:Cortex"
+
+libraries:
+  - "patches/indirect_capture_library.yaml"
+
+patches:
+  - name: "indirect_capture_parity"
+    id: "IND-CAP-001"
+    description: "Insert a probe that receives the captured user arg"
+    match:
+      # The measurement_update fixture loads @callback_on_update and
+      # invokes it indirectly; the callee is a function pointer SSA value,
+      # not a symbol, so indirect-call handling is exercised here.
+      name: "callback_on_update"
+      kind: "function"
+      captures:
+        - name: "USER_ARG0"
+          operand: 0
+    action:
+      mode: "apply_before"
+      patch: "indirect_capture_probe"
+      arguments:
+        - source: "capture"
+          name: "USER_ARG0"

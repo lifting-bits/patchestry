@@ -114,23 +114,30 @@ namespace patchestry {
 
             auto symbol_ref =
                 mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
-            pass.prepare_patch_call_arguments(
-                builder, target_op, patch_func, patch, function_args_map
-            );
             llvm::SmallVector< mlir::Value > new_function_args;
-            for (auto &[old_arg, new_arg] : function_args_map) {
-                new_function_args.push_back(new_arg);
-            }
+            llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
+            pass.prepare_patch_call_arguments(
+                builder, target_op, patch_func, patch, new_function_args,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
+            );
 
-            auto patch_call_op = builder.create< cir::CallOp >(
+            // The patch call takes whatever return type the patch
+            // function declares. Observational probes are typically
+            // void, but nothing in the before/after contract requires
+            // it — e.g. a probe returning a counter value for later
+            // use. Hardcoding `mlir::Type()` here would cause
+            // `incorrect number of results for callee` at verification
+            // for any non-void patch.
+            auto patch_func_type = patch_func.getFunctionType();
+            auto patch_call_op   = builder.create< cir::CallOp >(
                 target_op->getLoc(), symbol_ref,
-                mlir::Type(), // return type is void for all apply before and after patches
+                patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
                 new_function_args
             );
 
             pass.update_state_after_patch(
-                builder, patch_call_op, target_op, patch, function_args_map
+                builder, patch_call_op, target_op, patch,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
 
             // Set appropriate attributes based on operation type
@@ -143,7 +150,7 @@ namespace patchestry {
 
         void PatchOperationImpl::applyAfterPatch(
             InstrumentationPass &pass, mlir::Operation *target_op,
-            const PatchInformation &patch, mlir::ModuleOp patch_module, bool inline_patches
+            const PatchInformation &patch, mlir::ModuleOp patch_module, bool should_inline
         ) {
             if (target_op == nullptr) {
                 LOG(ERROR) << "Patch after: Operation is null";
@@ -168,35 +175,41 @@ namespace patchestry {
 
             auto symbol_ref =
                 mlir::FlatSymbolRefAttr::get(target_op->getContext(), patch_function_name);
-            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
-            pass.prepare_patch_call_arguments(
-                builder, target_op, patch_func, patch, function_args_map
-            );
             llvm::SmallVector< mlir::Value > function_args;
-            for (auto &[old_arg, new_arg] : function_args_map) {
-                function_args.push_back(new_arg);
-            }
-            auto patch_call_op = builder.create< cir::CallOp >(
+            llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
+            pass.prepare_patch_call_arguments(
+                builder, target_op, patch_func, patch, function_args,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
+            );
+            // See applyBeforePatch for the rationale — use the patch
+            // function's declared return type rather than a hardcoded
+            // void so non-void observational probes (e.g. counters
+            // whose returned value is discarded by the caller) don't
+            // trip `incorrect number of results for callee` at MLIR
+            // verification.
+            auto patch_func_type = patch_func.getFunctionType();
+            auto patch_call_op   = builder.create< cir::CallOp >(
                 target_op->getLoc(), symbol_ref,
-                mlir::Type(), // return type is void for all apply before and after patches
+                patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
                 function_args
             );
 
             pass.update_state_after_patch(
-                builder, patch_call_op, target_op, patch, function_args_map
+                builder, patch_call_op, target_op, patch,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
 
             // Set appropriate attributes based on operation type
             pass.set_instrumentation_call_attributes(patch_call_op, target_op);
 
-            if (inline_patches) {
+            if (should_inline) {
                 pass.inline_worklists.insert(patch_call_op);
             }
         }
 
         void PatchOperationImpl::replaceCallWithPatch(
             InstrumentationPass &pass, cir::CallOp call_op, const PatchInformation &patch,
-            mlir::ModuleOp patch_module, bool inline_patches
+            mlir::ModuleOp patch_module, bool should_inline
         ) {
             mlir::OpBuilder builder(call_op);
             auto loc    = call_op.getLoc();
@@ -220,14 +233,12 @@ namespace patchestry {
             }
 
             auto wrap_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
-            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
-            pass.prepare_patch_call_arguments(
-                builder, call_op, wrap_func, patch, function_args_map
-            );
             llvm::SmallVector< mlir::Value > wrap_call_args;
-            for (auto &[old_arg, new_arg] : function_args_map) {
-                wrap_call_args.push_back(new_arg);
-            }
+            llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
+            pass.prepare_patch_call_arguments(
+                builder, call_op, wrap_func, patch, wrap_call_args,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
+            );
             auto wrap_function_type = wrap_func.getFunctionType();
             auto wrap_call_op       = builder.create< cir::CallOp >(
                 loc, wrap_func_ref,
@@ -237,8 +248,6 @@ namespace patchestry {
 
             mlir::OpBuilder::InsertionGuard guard(builder);
             builder.setInsertionPointAfter(wrap_call_op);
-            mlir::DominanceInfo DT(wrap_call_op->getParentOfType< mlir::FunctionOpInterface >()
-            );
 
             // Replace all uses of old call results with new call results
             // Handle type mismatches by inserting casts as needed
@@ -272,6 +281,16 @@ namespace patchestry {
                 }
             }
 
+            // Writeback for `is_reference: true` operand args. The original
+            // call's operands may still be live elsewhere in the function;
+            // rewiring their dominated uses to the patched slot mirrors the
+            // apply_before/after semantics (`update_state_after_patch` is a
+            // no-op when no spec flagged `is_reference`).
+            pass.update_state_after_patch(
+                builder, wrap_call_op, call_op.getOperation(), patch,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
+            );
+
             // Set appropriate attributes based on operation type
             pass.set_instrumentation_call_attributes(wrap_call_op, call_op);
 
@@ -280,12 +299,26 @@ namespace patchestry {
                 LOG(ERROR) << "Cannot erase call_op, it still has uses. "
                            << "Original results: " << call_num_results
                            << ", Patch results: " << wrap_num_results << "\n";
+                // The wrapper call has been emitted but the original still
+                // carries its uses — leaving both in place would silently
+                // execute both the original and the patch (and, if
+                // should_inline was set, the orphaned wrapper would never
+                // reach `inline_worklists.insert` below). Erase the dead
+                // wrapper via `pass.erase_op` so the module stays well-
+                // formed, and signal pass failure so the user sees the
+                // shape mismatch instead of a silent no-op patch.
+                pass.erase_op(wrap_call_op.getOperation());
+                pass.signal_failure();
                 return;
             }
 
-            call_op.erase();
+            // Route through pass.erase_op so `inline_worklists` drops the
+            // pointer too — otherwise chaining a later replace/erase on an
+            // already-worklist-queued call site leaves a dangling pointer
+            // that the post-pass inline loop dereferences.
+            pass.erase_op(call_op.getOperation());
 
-            if (inline_patches) {
+            if (should_inline) {
                 pass.inline_worklists.insert(wrap_call_op);
             }
         }
@@ -293,7 +326,7 @@ namespace patchestry {
         void PatchOperationImpl::replaceOperationWithPatch(
             InstrumentationPass &pass, mlir::Operation *op,
             const PatchInformation &patch, mlir::ModuleOp patch_module,
-            bool inline_patches
+            bool should_inline
         ) {
             if (op->getNumResults() == 0) {
                 LOG(ERROR) << "REPLACE mode requires an operation with results, got: "
@@ -319,63 +352,334 @@ namespace patchestry {
                 return;
             }
 
-            auto patch_func_ref = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
-            llvm::MapVector< mlir::Value, mlir::Value > function_args_map;
-            pass.prepare_patch_call_arguments(
-                builder, op, patch_func, patch, function_args_map
-            );
-            llvm::SmallVector< mlir::Value > call_args;
-            for (auto &[old_arg, new_arg] : function_args_map) {
-                call_args.push_back(new_arg);
-            }
+            auto patch_func_ref  = mlir::FlatSymbolRefAttr::get(ctx, patch_function_name);
             auto patch_func_type = patch_func.getFunctionType();
-            auto patch_call_op   = builder.create< cir::CallOp >(
+            auto op_num_results  = op->getNumResults();
+
+            // Pre-validate arity *before* mutating the IR. If the patch
+            // function does not return enough values to cover every result
+            // of `op`, the late error paths below would leave the partially-
+            // emitted patch call in place alongside the original op — both
+            // execute, violating the "leave op unchanged on error" contract
+            // callers depend on (REPLACE mode docstring; parity with the
+            // apply_before/after and apply_at_entrypoint dispatchers).
+            //
+            // CIR function types carry at most one return value: `isVoid()`
+            // means zero call results, non-void means exactly one. The
+            // entry guard above has already rejected op_num_results == 0,
+            // so we need a non-void patch returning one value that covers
+            // the single op result; multi-result ops are rejected because
+            // CIR cannot produce a covering return.
+            unsigned patch_num_results = 0;
+            if (patch_func_type && !patch_func_type.isVoid()) {
+                patch_num_results = 1;
+            }
+            if (patch_num_results < op_num_results) {
+                LOG(ERROR)
+                    << "REPLACE: patch function '" << patch_function_name
+                    << "' returns " << patch_num_results
+                    << " result(s), cannot cover the " << op_num_results
+                    << " result(s) of '"
+                    << op->getName().getStringRef().str()
+                    << "'; refusing replacement (would leave both the patch "
+                       "call and the original op in IR).\n";
+                return;
+            }
+
+            llvm::SmallVector< mlir::Value > call_args;
+            llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
+            pass.prepare_patch_call_arguments(
+                builder, op, patch_func, patch, call_args,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
+            );
+            auto patch_call_op = builder.create< cir::CallOp >(
                 loc, patch_func_ref,
                 patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
                 call_args
             );
 
+            // Writeback for `is_reference: true` operand args; matches the
+            // apply_before/after semantics. No-op when no spec flagged
+            // `is_reference`.
+            pass.update_state_after_patch(
+                builder, patch_call_op, op, patch,
+                /*entrypoint_func=*/std::nullopt, &writeback_slots
+            );
+
             mlir::OpBuilder::InsertionGuard guard(builder);
             builder.setInsertionPointAfter(patch_call_op);
 
-            // Replace all uses of old operation results with new call results
-            auto op_num_results   = op->getNumResults();
-            auto call_num_results = patch_call_op.getNumResults();
-
-            if (call_num_results == 0) {
-                LOG(ERROR) << "Patch function returns void but original operation "
-                           << "has " << op_num_results << " result(s)\n";
-            } else {
-                unsigned result_index = 0;
-                for (auto result : patch_call_op.getResults()) {
-                    if (result_index >= op_num_results) {
-                        break;
-                    }
-                    auto original_result = op->getResult(result_index);
-                    if (original_result.getType() != result.getType()) {
-                        auto cast_value = pass.create_cast_if_needed(
-                            builder, patch_call_op, result, original_result.getType()
-                        );
-                        original_result.replaceAllUsesWith(cast_value);
-                    } else {
-                        original_result.replaceAllUsesWith(result);
-                    }
-                    result_index++;
+            // Replace all uses of old operation results with new call
+            // results. Arity was validated above so the loop always covers
+            // every op result; if a per-type cast still fails we roll back
+            // the patch call to preserve the "op unchanged on error" contract.
+            unsigned result_index = 0;
+            for (auto result : patch_call_op.getResults()) {
+                if (result_index >= op_num_results) {
+                    break;
                 }
+                auto original_result = op->getResult(result_index);
+                if (original_result.getType() != result.getType()) {
+                    auto cast_value = pass.create_cast_if_needed(
+                        builder, patch_call_op, result, original_result.getType()
+                    );
+                    original_result.replaceAllUsesWith(cast_value);
+                } else {
+                    original_result.replaceAllUsesWith(result);
+                }
+                result_index++;
             }
 
             // Set appropriate attributes based on operation type
             pass.set_instrumentation_call_attributes(patch_call_op, op);
 
             if (!op->use_empty()) {
-                LOG(ERROR) << "Cannot erase operation, it still has uses: "
-                           << op->getName().getStringRef().str() << "\n";
+                // Defensive: pre-validation already rejected arity mismatch,
+                // so reaching this branch implies `create_cast_if_needed`
+                // produced a value that did not take over all uses of the
+                // original result. Roll back by erasing the patch call so
+                // the module is returned to the pre-replacement state (the
+                // already-performed replaceAllUsesWith calls are harmless —
+                // the erased call's results had no other users). Without the
+                // erase the patch call and the original op would both
+                // execute in program order, the exact bug this function now
+                // guards against.
+                LOG(ERROR) << "REPLACE: cast-aware replacement left uses on '"
+                           << op->getName().getStringRef().str()
+                           << "'; rolling back patch call to preserve the "
+                              "'op unchanged on error' invariant.\n";
+                patch_call_op->erase();
                 return;
             }
 
-            op->erase();
+            // See pass.erase_op contract above.
+            pass.erase_op(op);
 
-            if (inline_patches) {
+            if (should_inline) {
+                pass.inline_worklists.insert(patch_call_op);
+            }
+        }
+
+        namespace {
+            // Build a zero/default value for the given CIR type. Used by
+            // ERASE mode to replace uses of a deleted op's results.
+            // Returns nullptr if the type is not handled.
+            mlir::Value buildDefaultValue(
+                mlir::OpBuilder &builder, mlir::Location loc, mlir::Type type
+            ) {
+                auto *ctx = builder.getContext();
+
+                if (auto int_type = mlir::dyn_cast< cir::IntType >(type)) {
+                    auto attr = cir::IntAttr::get(
+                        int_type,
+                        llvm::APSInt(
+                            llvm::APInt(int_type.getWidth(), 0), !int_type.isSigned()
+                        )
+                    );
+                    return builder.create< cir::ConstantOp >(loc, int_type, attr);
+                }
+                if (auto ptr_type = mlir::dyn_cast< cir::PointerType >(type)) {
+                    // Canonical null pointer — `ConstPtrAttr` with an empty
+                    // IntegerAttr is the target-width-independent way to
+                    // express null (avoids the 64-bit int_to_ptr dance that
+                    // mis-sizes on 32-bit targets).
+                    auto null_attr =
+                        cir::ConstPtrAttr::get(ctx, ptr_type, mlir::IntegerAttr{});
+                    return builder.create< cir::ConstantOp >(loc, ptr_type, null_attr);
+                }
+                if (auto bool_type = mlir::dyn_cast< cir::BoolType >(type)) {
+                    auto attr = cir::BoolAttr::get(ctx, bool_type, false);
+                    return builder.create< cir::ConstantOp >(loc, bool_type, attr);
+                }
+                if (mlir::isa< cir::CIRFPTypeInterface >(type)) {
+                    // Covers cir::SingleType, cir::DoubleType, and any other
+                    // floating-point type that implements the CIR FP interface.
+                    auto attr = cir::FPAttr::getZero(type);
+                    return builder.create< cir::ConstantOp >(loc, type, attr);
+                }
+                if (mlir::isa< cir::StructType, cir::ArrayType >(type)) {
+                    // Aggregate zero (`#cir.zero<…>`) for struct/array results.
+                    auto attr = cir::ZeroAttr::get(ctx, type);
+                    return builder.create< cir::ConstantOp >(loc, type, attr);
+                }
+                return nullptr;
+            }
+        } // namespace
+
+        void PatchOperationImpl::eraseOperation(InstrumentationPass &pass, mlir::Operation *op) {
+            if (op == nullptr) {
+                LOG(ERROR) << "Erase: operation is null\n";
+                return;
+            }
+
+            // Two-phase substitution: build every default value first, then
+            // commit the substitutions + erase only if every live result
+            // resolved. Bailing out partway through `replaceAllUsesWith`
+            // would leave the IR in a mixed state (some users rewired, the
+            // op itself still present), which later passes could miscompile.
+            llvm::SmallVector< std::pair< mlir::Value, mlir::Value >, 4 > substitutions;
+            llvm::SmallVector< mlir::Operation *, 4 > new_constants;
+            if (!op->use_empty()) {
+                mlir::OpBuilder builder(op);
+                builder.setInsertionPoint(op);
+                for (auto result : op->getResults()) {
+                    if (result.use_empty()) {
+                        continue;
+                    }
+                    auto default_val =
+                        buildDefaultValue(builder, op->getLoc(), result.getType());
+                    if (!default_val) {
+                        LOG(ERROR) << "Erase: cannot build default value for result "
+                                      "type of '"
+                                   << op->getName().getStringRef().str()
+                                   << "', leaving op in place\n";
+                        // Roll back the constants we already inserted so we
+                        // don't leak dead ops into the IR. Route through
+                        // `pass.erase_op` for parity with every other erase
+                        // in this file — the inline worklist can't contain a
+                        // just-created constant today, but keeping the
+                        // invariant "all op erases go through `pass.erase_op`"
+                        // means a future refactor that queues constants into
+                        // the worklist won't silently regress.
+                        for (auto *c : llvm::reverse(new_constants)) {
+                            pass.erase_op(c);
+                        }
+                        return;
+                    }
+                    substitutions.emplace_back(result, default_val);
+                    new_constants.push_back(default_val.getDefiningOp());
+                }
+            }
+
+            for (auto &[result, default_val] : substitutions) {
+                result.replaceAllUsesWith(default_val);
+            }
+            pass.erase_op(op);
+        }
+
+        void PatchOperationImpl::applyPatchAtEntrypoint(
+            InstrumentationPass &pass, cir::CallOp call_op,
+            const PatchInformation &patch, mlir::ModuleOp patch_module, bool should_inline
+        ) {
+            if (call_op == nullptr) {
+                LOG(ERROR) << "applyPatchAtEntrypoint: the matched call was null";
+                return;
+            }
+
+            // Defensive: callers in InstrumentationPass::apply_patch_action_to_targets
+            // check spec presence before dispatch for every non-ERASE mode, but a
+            // future caller could skip that check. `.value()` throws bad_optional_access.
+            if (!patch.spec.has_value()) {
+                LOG(ERROR) << "applyPatchAtEntrypoint: patch.spec is empty\n";
+                return;
+            }
+            const auto &patch_spec = patch.spec.value();
+            std::string patch_function_name = namifyFunction(patch_spec.function_name);
+
+            // APPLY_AT_ENTRYPOINT inserts the patch at the beginning of the enclosing
+            // function (i.e. the function that contains the matched call), not the
+            // callee. The matched call identifies which enclosing function to
+            // instrument. Argument sources are resolved against the entry block:
+            //   - OPERAND index N  → Nth block argument of the enclosing function
+            //   - VARIABLE/SYMBOL  → alloca/global already live at the entry block
+            //   - CONSTANT         → created inline, always valid
+            //   - RETURN_VALUE     → rejected (only defined at the call site)
+            //   - CAPTURE          → rejected (only bound at the match site)
+            auto enclosing_func = call_op->getParentOfType< cir::FuncOp >();
+            if (!enclosing_func) {
+                LOG(ERROR) << "applyPatchAtEntrypoint: cannot find enclosing function\n";
+                return;
+            }
+            if (enclosing_func.getBody().empty()) {
+                LOG(ERROR) << "applyPatchAtEntrypoint: enclosing function has no body\n";
+                return;
+            }
+
+            auto module = call_op->getParentOfType< mlir::ModuleOp >();
+            assert(module && "applyPatchAtEntrypoint: no module found");
+
+            auto patch_func = ensurePatchFunctionAvailable(
+                pass, module, patch_module, patch_function_name, "Patch at entrypoint"
+            );
+            if (!patch_func) {
+                return;
+            }
+
+            // Skip the entry-block prologue (allocas + stores-of-block-args) so
+            // `source: variable` can load a parameter value after the prologue
+            // has initialized it. Single-pass form handles any interleaving of
+            // alloca/store in the prologue — a sequence like
+            // `alloca, store-arg, alloca, store-arg` stops the old two-phase
+            // walk at the second alloca, which would insert the patch call
+            // before that alloca's initializer.
+            mlir::Block &entry_block = enclosing_func.getBody().front();
+            auto insert_pos          = entry_block.begin();
+            while (insert_pos != entry_block.end()) {
+                mlir::Operation &prologue_op = *insert_pos;
+                if (mlir::isa< cir::AllocaOp >(prologue_op)) {
+                    ++insert_pos;
+                    continue;
+                }
+                if (auto store = mlir::dyn_cast< cir::StoreOp >(prologue_op);
+                    store && mlir::isa< mlir::BlockArgument >(store.getOperand(0)))
+                {
+                    ++insert_pos;
+                    continue;
+                }
+                break;
+            }
+            mlir::OpBuilder builder(&entry_block, insert_pos);
+
+            auto symbol_ref = mlir::FlatSymbolRefAttr::get(
+                call_op->getContext(), patch_function_name
+            );
+            llvm::SmallVector< mlir::Value > call_args;
+            llvm::MapVector< mlir::Value, mlir::Value > writeback_slots;
+            // Pass enclosing_func so that OPERAND sources remap to block arguments and
+            // RETURN_VALUE / CAPTURE are rejected — both prevent call-site SSA values
+            // from leaking into the entry block (which would violate dominance).
+            pass.prepare_patch_call_arguments(
+                builder, call_op, patch_func, patch, call_args, enclosing_func,
+                &writeback_slots
+            );
+
+            // Patches are effectively single-result (void or one value); warn
+            // on multi-result declarations so the silent truncation is visible.
+            auto result_types = patch_func->getResultTypes();
+            if (result_types.size() > 1) {
+                LOG(WARNING) << "Patch function '" << patch_function_name
+                             << "' declares " << result_types.size()
+                             << " result types; only the first will be wired "
+                                "into the emitted call.\n";
+            }
+
+            auto patch_call_op = builder.create< cir::CallOp >(
+                enclosing_func->getLoc(), symbol_ref,
+                result_types.empty() ? mlir::Type() : result_types.front(),
+                call_args
+            );
+
+            // Writeback for `is_reference: true` operand args. The normal
+            // before/after/replace paths run this after their patch call
+            // so that a patch mutating a caller operand propagates back
+            // into the original SSA value; without it, the mutation stays
+            // in the temporary alloca materialized by
+            // `handle_operand_argument` at the entry block and later uses
+            // of the caller's block arg continue seeing the pre-patch
+            // value. Threading `enclosing_func` mirrors the entrypoint
+            // path in `prepare_patch_call_arguments` so the writeback
+            // rebuilds keys against the function's block arguments rather
+            // than the matched call site's operands. `writeback_slots`
+            // carries the pre-cast reference (the caller's parameter
+            // alloca) so the load reads the actual slot instead of a
+            // pointer-cast of it.
+            pass.update_state_after_patch(
+                builder, patch_call_op, call_op, patch, enclosing_func, &writeback_slots
+            );
+
+            pass.set_instrumentation_call_attributes(patch_call_op, call_op);
+
+            if (should_inline) {
                 pass.inline_worklists.insert(patch_call_op);
             }
         }

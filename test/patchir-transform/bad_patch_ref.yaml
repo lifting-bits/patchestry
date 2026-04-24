@@ -16,22 +16,17 @@ target:
   binary: "test_binary.bin"
   arch: "ARM:LE:32"
 
-meta_patches:
-  - name: "bad_ref_meta_patches"
-    description: "References a patch_id that does not exist"
-
-    patch_actions:
-      - id: "BAD-REF-001"
-        description: "This action references an undefined patch"
-
-        match:
-          - name: "spo2_lookup"
-            kind: "function"
-
-        action:
-          - mode: "apply_before"
-            patch_id: "patch_that_does_not_exist_anywhere"
-            arguments:
-              - name: "function_argument"
-                source: "variable"
-                symbol: "var6"
+patches:
+  - name: "bad_ref_patch"
+    id: "BAD-REF-001"
+    description: "This action references an undefined patch"
+    match:
+      name: "spo2_lookup"
+      kind: "function"
+    action:
+      mode: "apply_before"
+      patch: "patch_that_does_not_exist_anywhere"
+      arguments:
+        - name: "function_argument"
+          source: "variable"
+          symbol: "var6"

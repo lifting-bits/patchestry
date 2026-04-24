@@ -15,10 +15,6 @@ target:
 libraries:
   - "cwe190_klee_patches.yaml"
 
-execution_order:
-  - "meta_patches::cwe190_patch"
-  - "meta_contracts::cwe190_contract"
-
 meta_patches:
   - name: "cwe190_patch"
     description: "Replace unchecked multiply with overflow-checked version"

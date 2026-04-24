@@ -15,19 +15,17 @@ target:
   binary: "test_binary.bin"
   arch: "ARM:LE:32"
 
-meta_patches:
-  - name: "unsupported_argument_source_meta_patch"
-    description: "Uses an invalid argument source"
-    patch_actions:
-      - id: "UNSUPPORTED-SOURCE-001"
-        description: "Should fail during parsing"
-        match:
-          - name: "spo2_lookup"
-            kind: "function"
-        action:
-          - mode: "apply_before"
-            patch_id: "measurement_update_before_patch"
-            arguments:
-              - name: "function_argument"
-                source: "mystery_source"
-                symbol: "var6"
+patches:
+  - name: "unsupported_argument_source_patch"
+    id: "UNSUPPORTED-SOURCE-001"
+    description: "Should fail during parsing"
+    match:
+      name: "spo2_lookup"
+      kind: "function"
+    action:
+      mode: "apply_before"
+      patch: "measurement_update_before_patch"
+      arguments:
+        - name: "function_argument"
+          source: "mystery_source"
+          symbol: "var6"

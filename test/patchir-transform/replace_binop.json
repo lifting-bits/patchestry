@@ -5,6 +5,59 @@
 // RUN: %file-check -vv -check-prefix=REPLACE %s --input-file %t2.cir
 // REPLACE: cir.call @patch__replace__int_mul({{.*}}) {patchestry_operation = "cir.binop"}
 //
+// Captured form: match with named captures + source: "capture" produces
+// byte-identical CIR to the index-based form above.
+// RUN: %patchir-transform %t1.cir --spec %S/replace_binop_captured.yaml -o %t3.cir
+// RUN: diff %t2.cir %t3.cir
+//
+// inline-patches on operation-kind replace: PatchOperationImpl:379
+// inserts the emitted patch call into the worklist. Uses a single-return
+// replacement (patch__replace__passthrough_mul) so we don't trip Bug F.
+// After inlining, neither the patch call nor its func survive.
+// RUN: %patchir-transform %t1.cir --spec %S/inline_patches_replace_binop.yaml -o %t4.cir
+// RUN: %file-check -vv -check-prefix=INLINE_REPLACE_BINOP %s --input-file %t4.cir
+// INLINE_REPLACE_BINOP-NOT: patch__replace__passthrough_mul
+//
+// Arity pre-check regression: replacing the value-producing
+// cir.binop(mul) with a void patch must be rejected before any IR
+// mutation. Previously replaceOperationWithPatch emitted the patch
+// call, detected the mismatch, LOG(ERROR)'d, and returned without
+// rollback — leaving both the patch call and the original op in CIR.
+// Post-fix: the tool logs the refusal on stderr and the output CIR
+// has the original cir.binop intact with NO patch__probe__void_mul
+// call anywhere.
+// RUN: %patchir-transform %t1.cir --spec %S/replace_binop_void_reject.yaml -o %t5.cir 2> %t5.err
+// RUN: %file-check -vv -check-prefix=VOID_REJECT_ERR %s --input-file %t5.err
+// RUN: %file-check -vv -check-prefix=VOID_REJECT_CIR %s --input-file %t5.cir
+// VOID_REJECT_ERR: patch function {{.*}}void_mul{{.*}} returns 0 result(s)
+// VOID_REJECT_CIR: cir.binop(mul
+// The cir.func declaration for the patch may still be emitted (it is
+// materialized before the arity check fires); what must NOT appear is
+// a cir.call to it inside compute_alloc_size.
+// VOID_REJECT_CIR-NOT: cir.call @patch__probe__void_mul
+//
+// Non-void apply_after regression: applyAfterPatch (and applyBeforePatch)
+// previously hardcoded `mlir::Type()` as the call's return type. Any
+// non-void observational probe failed MLIR verification with
+// `incorrect number of results for callee`. Now the call honors
+// `patch_func.getFunctionType().getReturnType()`, so a u32-returning
+// probe emitted as apply_after verifies cleanly and the emitted call's
+// result type matches the patch's declared signature.
+// RUN: %patchir-transform %t1.cir --spec %S/apply_after_nonvoid_probe.yaml -o %t6.cir
+// RUN: %file-check -vv -check-prefix=AFTER_NONVOID %s --input-file %t6.cir
+// AFTER_NONVOID: cir.binop(mul
+// AFTER_NONVOID: cir.call @patch__replace__passthrough_mul({{.*}}) {{.*}}: (!u32i, !u32i) -> !u32i
+//
+// Capture-reuse regression: bind capture A once, pass it to both
+// positions of the 2-arg passthrough_mul patch. Pre-fix, the MapVector
+// keyed by source value collapsed the two entries into one and the
+// emitted cir.call was short an operand. Post-fix, the call should
+// carry both argument slots referencing the SAME SSA value — pin that
+// via FileCheck capture-group match (%[[A]] twice).
+// RUN: %patchir-transform %t1.cir --spec %S/replace_binop_capture_reuse.yaml -o %t7.cir
+// RUN: %file-check -vv -check-prefix=REUSE %s --input-file %t7.cir
+// REUSE: cir.call @patch__replace__passthrough_mul(%[[A:[0-9]+]], %[[A]])
+//
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

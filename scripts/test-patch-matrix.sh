@@ -476,12 +476,29 @@ main() {
     'patch__replace__spo2_lookup' \
     'patch__replace__spo2_lookup|patchestry_operation' || CASE_FAILURE=1
 
+  # inline-patches multisite: patch__before__spo2_lookup inlined at three
+  # __aeabi_fdiv sites. The value of this case is the end-to-end pipeline
+  # signal — the multi-site UAF that Phase 1 fixed would crash
+  # patchir-transform here. Post-inline content patterns are fragile
+  # across platforms (e.g. `isfinite_float` gets inlined by ClangEmitter
+  # on some targets but kept as a call on others), so no CIR/LLVM pattern
+  # assertions: passing = the pipeline ran to completion.
+  run_matrix_case \
+    "measurement_inline_multisite" \
+    "pulseox_measurement_update" \
+    "${REPO_ROOT}/test/patchir-transform/inline_patches_multisite.yaml" \
+    '' \
+    '' || CASE_FAILURE=1
+
+  # The USB pre-instrumentation spec used to dispatch a runtime contract
+  # `contract__before__test_contract`; post-PR#199 that's migrated to a
+  # second patch_action emitting `patch__before__usb_state_check`.
   run_matrix_case \
     "usb_before_patch" \
     "bloodlight_usb_send_message" \
     "${REPO_ROOT}/test/patchir-transform/bl_usb__send_message_before_patch.yaml" \
-    'patch__before__usbd_ep_write_packet|contract__before__test_contract' \
-    'patch__before__usbd_ep_write_packet|contract__before__test_contract|patchestry_operation' || CASE_FAILURE=1
+    'patch__before__usbd_ep_write_packet|patch__before__usb_state_check' \
+    'patch__before__usbd_ep_write_packet|patch__before__usb_state_check|patchestry_operation' || CASE_FAILURE=1
 
   run_matrix_case \
     "usb_after_patch" \
@@ -497,19 +514,26 @@ main() {
     'patch__before__usbd_cp_write_packet__update_state' \
     'patch__before__usbd_cp_write_packet__update_state|patchestry_operation' || CASE_FAILURE=1
 
+  # APPLY_AT_ENTRYPOINT is patch-only now (contracts are static-only, no
+  # runtime dispatch). Switched from entrypoint_contract.yaml (which
+  # expected a runtime-contract call that never gets emitted) to the
+  # flat-surface entrypoint_patch.yaml replacement.
   run_matrix_case \
-    "usb_entrypoint_contract" \
+    "usb_entrypoint_patch" \
     "bloodlight_usb_send_message" \
-    "${REPO_ROOT}/test/patchir-transform/entrypoint_contract.yaml" \
-    'contract__entrypoint__message_entry_check|contract.static' \
-    'contract__entrypoint__message_entry_check|static_contract|msg_nonnull' || CASE_FAILURE=1
+    "${REPO_ROOT}/test/patchir-transform/entrypoint_patch.yaml" \
+    'patch__entrypoint__message_entry_check|patchestry_operation' \
+    'patch__entrypoint__message_entry_check|patchestry_operation' || CASE_FAILURE=1
 
+  # Contracts are static-only: `contract.static` attribute is attached
+  # directly to the patch__replace__sprintf call; no separate
+  # `contract__sprintf` runtime call is emitted.
   run_matrix_case \
     "bloodview_device_process_entry" \
     "bloodview_device_process_entry" \
     "${REPO_ROOT}/test/patchir-transform/device_process_entry.yaml" \
-    'patch__replace__sprintf|contract__sprintf|contract.static' \
-    'patch__replace__sprintf|contract__sprintf|static_contract' || CASE_FAILURE=1
+    'patch__replace__sprintf|contract.static' \
+    'patch__replace__sprintf|static_contract' || CASE_FAILURE=1
 
   run_matrix_case \
     "bloodview_all_predicates" \
@@ -532,12 +556,16 @@ main() {
     "\"${PATCHIR_TRANSFORM}\" \"${FIXTURE_DIR}/pulseox_measurement_update/pulseox_measurement_update.cir\" --spec \"${FIXTURE_DIR}/does-not-exist.yaml\" -o \"${OUTPUT_DIR}/negative_missing_spec_file/unused.cir\"" \
     'File does not exist|Failed to load file|failed to load config' || CASE_FAILURE=1
 
+  # llvm::yaml stops processing after the first mapping error, so only
+  # the offending entry's diagnostics reach the log. The negative
+  # fixture is shaped to always trigger a "missing required key" error
+  # on the first (intentionally broken) `patches:` entry.
   run_negative_case \
     "negative_malformed_schema" \
     "-" \
     "${REPO_ROOT}/test/patchir-transform/test_patch.yaml" \
     "\"${PATCHIR_YAML_PARSER}\" \"${REPO_ROOT}/test/patchir-transform/test_patch.yaml\" --validate" \
-    'error|missing required key|must include' || CASE_FAILURE=1
+    'error|missing required key' || CASE_FAILURE=1
 
   run_negative_case \
     "negative_bad_patch_reference" \
@@ -572,6 +600,23 @@ EOF
 
   if [[ ${CASE_FAILURE} -ne 0 ]]; then
     echo "Patch matrix validation failed. See ${SUMMARY_MD}" >&2
+    # Dump the summary + any FAIL case's run.log so CI captures the
+    # full failure context in its step log (the summary file itself
+    # isn't uploaded as an artifact).
+    if [[ -f "${SUMMARY_MD}" ]]; then
+      echo "----- ${SUMMARY_MD} -----" >&2
+      cat "${SUMMARY_MD}" >&2
+      echo "-----" >&2
+    fi
+    if [[ -f "${SUMMARY_TSV}" ]]; then
+      while IFS=$'\t' read -r case status case_type fixture spec patched_cir llvm_ir log; do
+        if [[ "${status}" == "FAIL" ]]; then
+          echo "----- FAIL case '${case}' log: ${log} -----" >&2
+          [[ -f "${log}" ]] && cat "${log}" >&2
+          echo "-----" >&2
+        fi
+      done < <(tail -n +2 "${SUMMARY_TSV}")
+    fi
     exit 1
   fi
 

@@ -15,10 +15,6 @@ target:
 libraries:
   - "cwe415_klee_patches.yaml"
 
-execution_order:
-  - "meta_patches::cwe415_patch"
-  - "meta_contracts::cwe415_contract"
-
 meta_patches:
   - name: "cwe415_patch"
     description: "Null pointer after free to prevent double free"
