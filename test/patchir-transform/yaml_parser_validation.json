@@ -100,4 +100,13 @@
 // RUN: not %patchir-yaml-parser %S/wildcard_replace_reject.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=WILDCARD_REPLACE_ERR %s
 // WILDCARD_REPLACE_ERR: mode: replace{{.*}}requires an 'op_kind' filter
+//
+// `op_kind:` is only meaningful for cir.binop / cir.cmp — the matcher
+// stringifies their BinOpKind / CmpOpKind attribute. Setting it on
+// any other op (or mis-spelling the op name) previously silently
+// dropped every match at runtime with only a DEBUG log. Now rejected
+// at parse so typos surface loudly.
+// RUN: not %patchir-yaml-parser %S/op_kind_unsupported_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OPKIND_UNSUPPORTED_ERR %s
+// OPKIND_UNSUPPORTED_ERR: 'op_kind:' is only meaningful for 'cir.binop' and 'cir.cmp'
 {}

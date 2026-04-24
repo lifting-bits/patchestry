@@ -601,6 +601,35 @@ namespace llvm::yaml {
                 }
             }
 
+            // Cross-field validation: `op_kind:` only makes sense for
+            // `cir.binop` / `cir.cmp` — the matcher stringifies their
+            // BinOpKind / CmpOpKind attribute for comparison. Setting it
+            // on any other op (or mis-spelling the op name) silently
+            // drops every match at runtime with only a DEBUG log. Reject
+            // at parse so a typo surfaces loudly instead of yielding a
+            // "succeeded but did nothing" transform run.
+            if (match_obj.op_kind.has_value()
+                && !match_obj.names.empty())
+            {
+                bool any_supported = false;
+                for (const auto &n : match_obj.names) {
+                    if (n == "cir.binop" || n == "cir.cmp") {
+                        any_supported = true;
+                        break;
+                    }
+                }
+                if (!any_supported) {
+                    io.setError(
+                        "'op_kind:' is only meaningful for 'cir.binop' "
+                        "and 'cir.cmp'; setting it on any other op "
+                        "silently drops every match at runtime. Remove "
+                        "the 'op_kind:' entry, or change 'match.name' "
+                        "to 'cir.binop' / 'cir.cmp' if the intent was "
+                        "to filter an arithmetic or comparison kind."
+                    );
+                }
+            }
+
             // Cross-field validation: `mode: replace` on a kinded generic
             // op (cir.binop, cir.cmp) requires an `op_kind` filter.
             // Without it the match is a wildcard that fires on every
