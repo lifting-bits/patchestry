@@ -434,6 +434,21 @@ compares it to the YAML value. Omitting `op_kind:` matches every
 instance of the named op. Setting it on any other op (including
 `cir.load`, `cir.cast`, or `cir.shift`) causes the match to fail.
 
+> **`mode: replace` requires `op_kind:` on `cir.binop` / `cir.cmp`.**
+> A wildcard replace (no `op_kind:`) would substitute the same
+> concrete patch for every arithmetic or comparison kind in scope —
+> `add`, `sub`, `mul`, `div`, `and`/`or`/`xor`, or every relational
+> operator. Operand types still line up, so the CIR verifier accepts
+> the rewritten module, but the semantics are silently wrong. The
+> spec parser therefore rejects `mode: replace` paired with a kinded
+> generic op and no `op_kind:` filter at load time.
+>
+> Narrow with `op_kind:` when you want to swap a specific kind (see
+> the `"mul"` example above), or use `mode: apply_before` /
+> `apply_after` when the intent is observational — counters, trace
+> probes, and other kind-agnostic instrumentation are the legitimate
+> wildcard use case and stay unrestricted.
+
 > **Shift ops live on `cir.shift`, not `cir.binop`.** Left/right
 > shifts are a separate op whose direction is a unit attribute
 > (`isShiftleft`), not a `BinOpKind` enumerator, so `op_kind: "shl"`
