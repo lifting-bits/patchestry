@@ -86,7 +86,7 @@ ensure_macos_keystone() {
 
   local cmake_file
   cmake_file="$(
-    find "$UV_CACHE_DIR/sdists-v9/pypi/keystone-engine" -name CMakeLists.txt 2>/dev/null \
+    find "$UV_CACHE_DIR"/sdists-*/pypi/keystone-engine -name CMakeLists.txt 2>/dev/null \
       | rg '/src/src/CMakeLists.txt$' \
       | head -n 1
   )"
