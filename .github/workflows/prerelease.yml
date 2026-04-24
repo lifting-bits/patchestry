@@ -17,8 +17,8 @@ on:
     workflow_dispatch:
       inputs:
         release_notes:
-          description: "Optional release notes"
-          required: false
+          description: "Release notes"
+          required: true
           type: string
 
 permissions: read-all
@@ -33,7 +33,7 @@ jobs:
 
     name: "Build Release and Doc"
     runs-on: ${{ matrix.arch == 'arm64' && format('ubuntu-{0}-arm', matrix.image-version) || format('ubuntu-{0}', matrix.image-version) }}
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || github.event.workflow_run.conclusion == 'success' }}
     timeout-minutes: 60
 
     # Build job only produces artifacts; `contents: write` is reserved for
@@ -195,14 +195,10 @@ jobs:
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
           tag="${GITHUB_SHA:0:7}-${GITHUB_RUN_NUMBER}"
-          notes_args=()
-          if [ -n "${RELEASE_NOTES}" ]; then
-            notes_args=(--notes "${RELEASE_NOTES}")
-          fi
           gh release create "${tag}" \
             --target "${GITHUB_SHA}" \
             --prerelease \
-            "${notes_args[@]}" \
+            --notes "${RELEASE_NOTES}" \
             ./package/*.tar.gz
 
   deploy_doc:
