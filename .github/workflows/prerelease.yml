@@ -14,6 +14,12 @@ on:
         - completed
       branches:
         - "main"
+    workflow_dispatch:
+      inputs:
+        release_notes:
+          description: "Release notes"
+          required: true
+          type: string
 
 permissions: read-all
 
@@ -27,7 +33,7 @@ jobs:
 
     name: "Build Release and Doc"
     runs-on: ${{ matrix.arch == 'arm64' && format('ubuntu-{0}-arm', matrix.image-version) || format('ubuntu-{0}', matrix.image-version) }}
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || github.event.workflow_run.conclusion == 'success' }}
     timeout-minutes: 60
 
     # Build job only produces artifacts; `contents: write` is reserved for
@@ -148,24 +154,23 @@ jobs:
           path: _site
           if-no-files-found: error
 
-  # Release publishing is split from `build_prerelease` so an immutable-
-  # release or asset-upload error can't skip the `deploy_doc` job.
-  # Previously the publish step ran inside `build_prerelease` itself, and
-  # a failure here — e.g. `Cannot delete asset from an immutable
-  # release` — would fail the whole job and leave gh-pages stale.
+  # Release publishing is split from `build_prerelease` so a publish
+  # failure can't skip the `deploy_doc` job and vice versa.
+  #
+  # Only runs on manual `workflow_dispatch` — rolling builds on every
+  # main push would accumulate releases quickly. Each publish creates a
+  # fresh release tagged with the short commit SHA so every tag is
+  # unique and immutability semantics never conflict (GitHub reserves
+  # a tag name once used by an immutable release).
   publish_release:
     name: "Publish Pre-Release"
     needs: build_prerelease
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Clone the Patchestry repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
       - name: Download Patchestry build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -173,15 +178,28 @@ jobs:
           path: ./package
           merge-multiple: true
 
+      - name: Verify both arch tarballs present
+        run: |
+          amd=$(ls ./package/patchestry-*-Linux-amd64.tar.gz 2>/dev/null | wc -l)
+          arm=$(ls ./package/patchestry-*-Linux-arm64.tar.gz 2>/dev/null | wc -l)
+          if [ "$amd" -ne 1 ] || [ "$arm" -ne 1 ]; then
+            echo "::error::Expected 1 amd64 + 1 arm64 tarball, got amd=$amd arm=$arm"
+            ls -la ./package
+            exit 1
+          fi
+
       - name: Publish Pre-Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
-        with:
-          tag_name: "latest"
-          prerelease: true
-          generate_release_notes: true
-          files: |
-            ./LICENSE
-            ./package/*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          tag="${GITHUB_SHA:0:7}-${GITHUB_RUN_NUMBER}"
+          gh release create "${tag}" \
+            --target "${GITHUB_SHA}" \
+            --prerelease \
+            --notes "${RELEASE_NOTES}" \
+            ./package/*.tar.gz
 
   deploy_doc:
     needs: build_prerelease
