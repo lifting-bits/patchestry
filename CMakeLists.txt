@@ -302,7 +302,7 @@ if (PATCHESTRY_INSTALL)
   #   - static/import archives (*.a, *.lib)
   #   - shared libraries on every platform, INCLUDING versioned variants:
   #       *.so           bare Linux/ELF name or symlink
-  #       *.so.*         Linux/ELF versioned target (e.g. libz3.so.4.15)
+  #       *.so.*         Linux/ELF versioned target (e.g. libfoo.so.N)
   #       *.dylib        bare macOS name or symlink
   #       *.*.dylib      macOS versioned target (e.g. libfoo.4.dylib)
   #       *.dll          Windows runtime
@@ -312,6 +312,11 @@ if (PATCHESTRY_INSTALL)
   # Without the versioned .so.* pattern the unversioned symlink survives
   # but dangles, and every tool in bin/ fails at load time with
   # "cannot open shared object file: No such file or directory".
+  #
+  # libz3 is excluded: LLVMExports.cmake in the dev container hardcodes
+  # /usr/local/lib/libz3.so into its link interface, so binaries
+  # DT_NEED that soname rather than the vendored one. Ship that linked
+  # Z3 in the block below.
   install(DIRECTORY ${PE_VENDOR_INSTALL_DIR}/
     DESTINATION .
     USE_SOURCE_PERMISSIONS
@@ -329,5 +334,15 @@ if (PATCHESTRY_INSTALL)
     PATTERN "*.lib"
     PATTERN "*.cmake"
     PATTERN "*.pc"
+    PATTERN "libz3*" EXCLUDE
   )
+
+  if(LLVM_LIBRARY_DIRS AND EXISTS "${LLVM_LIBRARY_DIRS}/libz3.so")
+    install(DIRECTORY "${LLVM_LIBRARY_DIRS}/"
+      DESTINATION lib
+      USE_SOURCE_PERMISSIONS
+      FILES_MATCHING
+      PATTERN "libz3.so*"
+    )
+  endif()
 endif()
