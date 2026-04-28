@@ -25,7 +25,7 @@ patches:
       kind: "function"
       context: ["create_port"]
     action:
-      mode: "replace"
+      mode: "rewrite"
       patch: "cwe078_sanitized_system"
       arguments:
         - source: "operand"

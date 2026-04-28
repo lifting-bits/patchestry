@@ -108,7 +108,11 @@ namespace patchestry::passes { // NOLINT
      *   entry block, after the alloca + parameter-store prologue. Patch-only — contracts
      *   are static and attach predicates as MLIR attributes, so "entrypoint" has no
      *   meaning for them.
-     * - REPLACE: Replace the matched op with a call to the patch function (patch-only).
+     * - REWRITE: Substitute the matched op's result. Two forms (selected
+     *   per-spec): an inline C expression fragment (`expr:`) compiled
+     *   through the clang/CIR fragment compiler and inlined at the match
+     *   site, or an external patch function (`patch:` + `arguments:`)
+     *   called as a `cir.call`.
      * - ERASE: Delete the matched op, replacing live results with default values
      *   (patch-only; no patch function invoked).
      *
@@ -163,7 +167,7 @@ namespace patchestry::passes { // NOLINT
          * @brief Erase an operation while keeping `inline_worklists` consistent.
          *
          * The inline worklist stores raw `Operation *` pointers pending
-         * post-pass inlining. A later patch action with `mode: replace` or
+         * post-pass inlining. A later patch action with `mode: rewrite` or
          * `mode: erase` may target a previously-emitted patch call by name
          * (see the intentional no-skip comment in `apply_patch_action_to_targets`).
          * If such an action erases an op that's still in `inline_worklists`,
@@ -332,15 +336,19 @@ namespace patchestry::passes { // NOLINT
             mlir::ModuleOp dest, mlir::ModuleOp src, const std::string &symbol_name
         );
 
+      public:
         /**
          * @brief Creates a cast operation if types differ, otherwise returns the original
-         * value.
+         * value. Public so the rewrite-mode inliner (FragmentCompiler) can
+         * reuse the same cast-kind decision table the rest of the pass uses, rather
+         * than re-deriving it.
          */
         mlir::Value create_cast_if_needed(
             mlir::OpBuilder &builder, mlir::Operation *call_op, mlir::Value value,
             mlir::Type target_type
         );
 
+      private:
         /**
          * @brief Creates a reference (alloca + store) for a given value.
          */

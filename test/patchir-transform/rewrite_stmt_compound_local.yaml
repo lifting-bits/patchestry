@@ -1,0 +1,17 @@
+apiVersion: patchestry.io/v1
+metadata: { name: "stmt-compound-local", version: "1.0.0" }
+target: { binary: "x", arch: "ARM:LE:32" }
+patches:
+  - name: "rewrite-stmt-compound-local"
+    id: "REWRITE-STMT-COMPOUND-LOCAL-001"
+    match:
+      name: "log_value"
+      kind: "function"
+      context: ["stmt_compound_host"]
+      captures:
+        - { name: "V", operand: 0 }
+    action:
+      mode: "rewrite"
+      stmt: |
+        uint32_t tmp = $V + 1;
+        log_value(tmp);

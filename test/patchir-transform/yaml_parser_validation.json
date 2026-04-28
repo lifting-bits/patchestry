@@ -1,6 +1,6 @@
 // Validate all YAML patch specification files using patchir-yaml-parser.
 // This test suite covers: deployment specs, library specs (via referencing specs),
-// all patch modes (apply_before, apply_after, replace, apply_at_entrypoint),
+// all patch modes (apply_before, apply_after, rewrite, apply_at_entrypoint),
 // all predicate kinds (nonnull, relation, alignment, expr, range),
 // operation-based matching, and negative/error cases.
 //
@@ -14,7 +14,8 @@
 // RUN: %patchir-yaml-parser %S/bl_usb__send_message_before_update_patch.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=OK %s
 //
-// REPLACE patch — function-based, bloodview_device_entry_patches.yaml library
+// REWRITE (patch form, formerly REPLACE) — function-based,
+// bloodview_device_entry_patches.yaml library
 // RUN: %patchir-yaml-parser %S/device_process_entry.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=OK %s
 //
@@ -26,7 +27,7 @@
 // RUN: %patchir-yaml-parser %S/all_predicates.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=OK %s
 //
-// Measurement update — BEFORE, AFTER, REPLACE, OPERATION modes — measurement_update_patch.yaml
+// Measurement update — BEFORE, AFTER, REWRITE, OPERATION modes — measurement_update_patch.yaml
 // RUN: %patchir-yaml-parser %S/measurement_update_before_patch.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=OK %s
 // RUN: %patchir-yaml-parser %S/measurement_update_after_patch.yaml 2>&1 | \
@@ -40,7 +41,7 @@
 // RUN: %patchir-yaml-parser %S/bl_led_loop_before_cmp_operation.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=OK %s
 //
-// Operation-based matching — REPLACE and APPLY_AFTER
+// Operation-based matching — REWRITE and APPLY_AFTER
 // RUN: %patchir-yaml-parser %S/operation_replace.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=OK %s
 // RUN: %patchir-yaml-parser %S/operation_apply_after.yaml 2>&1 | \
@@ -92,14 +93,14 @@
 // RUN:   %file-check -check-prefix=ENTRY_RETVAL_ERR %s
 // ENTRY_RETVAL_ERR: apply_at_entrypoint{{.*}}source: return_value
 //
-// `mode: replace` on a kinded generic op (cir.binop / cir.cmp) requires
+// `mode: rewrite` on a kinded generic op (cir.binop / cir.cmp) requires
 // an `op_kind` filter. Without it the match is a wildcard that
-// substitutes the same concrete patch for every arithmetic/comparison
+// substitutes the same concrete replacement for every arithmetic/comparison
 // kind — CIR verifier is happy, semantics are silently wrong across
 // kinds. Observational modes (apply_before / apply_after) are exempt.
 // RUN: not %patchir-yaml-parser %S/wildcard_replace_reject.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=WILDCARD_REPLACE_ERR %s
-// WILDCARD_REPLACE_ERR: mode: replace{{.*}}requires an 'op_kind' filter
+// WILDCARD_REPLACE_ERR: mode: rewrite{{.*}}requires an 'op_kind' filter
 //
 // `op_kind:` is only meaningful for cir.binop / cir.cmp — the matcher
 // stringifies their BinOpKind / CmpOpKind attribute. Setting it on

@@ -22,7 +22,7 @@ patches:
       op_kind: "add"
       context: ["pb_decode_varint32_eof"]
     action:
-      mode: "replace"
+      mode: "rewrite"
       patch: "checked_mul"
       arguments:
         - source: "operand"

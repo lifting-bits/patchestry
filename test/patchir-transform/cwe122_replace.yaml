@@ -30,7 +30,7 @@ meta_patches:
               - name: "process_rx"
 
         action:
-          - mode: "replace"
+          - mode: "rewrite"
             patch_id: "cwe122_bounded_memcpy"
             description: "Replace memcpy with bounded version"
             arguments:

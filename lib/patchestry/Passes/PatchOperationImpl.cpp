@@ -5,13 +5,23 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
- #include <mlir/IR/Builders.h>
- #include <mlir/IR/Dominance.h>
- #include <mlir/IR/SymbolTable.h>
- 
- #include <clang/CIR/Dialect/IR/CIRDialect.h>
+ #include <functional>
+ #include <set>
+ #include <sstream>
 
+#include <clang/CIR/Dialect/IR/CIRDialect.h>
+#include <clang/CIR/Dialect/IR/CIRTypes.h>
+#include <llvm/ADT/SetVector.h>
+
+#include <mlir/IR/Builders.h>
+#include <mlir/IR/Dominance.h>
+#include <mlir/IR/IRMapping.h>
+#include <mlir/IR/SymbolTable.h>
+#include <mlir/Parser/Parser.h>
+
+#include <patchestry/Passes/FragmentCompiler.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
+#include <patchestry/Passes/Utils.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/YAML/PatchSpec.hpp>
 
@@ -30,6 +40,142 @@ namespace patchestry {
                 std::string prefix = context_label.str();
                 prefix.append(": ");
                 return prefix;
+            }
+
+            // Walks pointer/array indirections and struct members.
+            // Order is first-discovery; topo_order_structs refines it
+            // before complete decls are emitted.
+            void collect_struct_types_rec(
+                mlir::Type ty, llvm::SetVector< cir::StructType > &out
+            ) {
+                if (!ty) {
+                    return;
+                }
+                if (auto st = mlir::dyn_cast< cir::StructType >(ty)) {
+                    if (!out.insert(st)) {
+                        return;
+                    }
+                    for (mlir::Type m : st.getMembers()) {
+                        collect_struct_types_rec(m, out);
+                    }
+                    return;
+                }
+                if (auto pt = mlir::dyn_cast< cir::PointerType >(ty)) {
+                    collect_struct_types_rec(pt.getPointee(), out);
+                    return;
+                }
+                if (auto at = mlir::dyn_cast< cir::ArrayType >(ty)) {
+                    collect_struct_types_rec(at.getEltType(), out);
+                    return;
+                }
+            }
+
+            // Topological order on by-value member edges. Pointer cycles are
+            // safe — the caller emits forward decls first.
+            void topo_order_structs(
+                llvm::ArrayRef< cir::StructType > all,
+                llvm::SmallVectorImpl< cir::StructType > &ordered
+            ) {
+                llvm::SmallPtrSet< mlir::Type, 8 > visiting;
+                llvm::SmallPtrSet< mlir::Type, 8 > emitted;
+                std::function< void(cir::StructType) > visit = [&](cir::StructType st) {
+                    if (emitted.contains(st)) {
+                        return;
+                    }
+                    if (!visiting.insert(st).second) {
+                        return; // by-value cycle: illegal C, drop
+                    }
+                    for (mlir::Type m : st.getMembers()) {
+                        while (auto at = mlir::dyn_cast< cir::ArrayType >(m)) {
+                            m = at.getEltType();
+                        }
+                        if (auto child_st = mlir::dyn_cast< cir::StructType >(m)) {
+                            visit(child_st);
+                        }
+                    }
+                    visiting.erase(st);
+                    ordered.push_back(st);
+                    emitted.insert(st);
+                };
+                for (cir::StructType st : all) {
+                    visit(st);
+                }
+            }
+
+            // CIR's StructType has member types but no names; mine prior
+            // cir.get_member ops in the module for them. Falls back to
+            // `field_<idx>` when no access has named that slot.
+            std::string lookup_field_name(
+                cir::StructType st, unsigned idx, mlir::ModuleOp module_op
+            ) {
+                std::string found;
+                module_op.walk([&](cir::GetMemberOp gm) -> mlir::WalkResult {
+                    auto pointee = mlir::dyn_cast< cir::StructType >(
+                        gm.getAddrTy().getPointee()
+                    );
+                    if (pointee && pointee == st && gm.getIndex() == idx) {
+                        found = gm.getName().str();
+                        return mlir::WalkResult::interrupt();
+                    }
+                    return mlir::WalkResult::advance();
+                });
+                if (found.empty()) {
+                    found = "field_" + std::to_string(idx);
+                }
+                return found;
+            }
+
+            // Emits forward decls + topo-ordered complete decls for
+            // every struct transitively reachable from `seed_types`.
+            // Anonymous structs are skipped — synthesising a typedef
+            // for them isn't supported yet.
+            void emit_struct_decls_for_types(
+                llvm::ArrayRef< mlir::Type > seed_types, mlir::ModuleOp module_op,
+                std::ostringstream &os
+            ) {
+                if (!module_op) {
+                    return;
+                }
+                llvm::SetVector< cir::StructType > all;
+                for (mlir::Type ty : seed_types) {
+                    collect_struct_types_rec(ty, all);
+                }
+                if (all.empty()) {
+                    return;
+                }
+
+                for (cir::StructType st : all) {
+                    if (auto nm = st.getName()) {
+                        os << "struct " << nm.getValue().str() << ";\n";
+                    }
+                }
+
+                llvm::SmallVector< cir::StructType, 8 > ordered;
+                llvm::SmallVector< cir::StructType, 8 > input(all.begin(), all.end());
+                topo_order_structs(input, ordered);
+
+                for (cir::StructType st : ordered) {
+                    auto nm = st.getName();
+                    if (!nm) {
+                        continue;
+                    }
+                    os << "struct " << nm.getValue().str() << " {\n";
+                    auto members = st.getMembers();
+                    for (unsigned i = 0; i < members.size(); i++) {
+                        std::string fname = lookup_field_name(st, i, module_op);
+                        std::string ctype =
+                            typing::ConvertCirTypesToCTypes(members[i]);
+                        // Splice "T[N]" → "T NAME[N]" for array members.
+                        auto bracket = ctype.find('[');
+                        if (bracket != std::string::npos) {
+                            os << "    " << ctype.substr(0, bracket) << " "
+                               << fname << ctype.substr(bracket) << ";\n";
+                        } else {
+                            os << "    " << ctype << " " << fname << ";\n";
+                        }
+                    }
+                    os << "};\n";
+                }
             }
         } // namespace
 
@@ -329,7 +475,7 @@ namespace patchestry {
             bool should_inline
         ) {
             if (op->getNumResults() == 0) {
-                LOG(ERROR) << "REPLACE mode requires an operation with results, got: "
+                LOG(ERROR) << "REWRITE mode (patch form) requires an operation with results, got: "
                            << op->getName().getStringRef().str() << "\n";
                 return;
             }
@@ -361,7 +507,7 @@ namespace patchestry {
             // of `op`, the late error paths below would leave the partially-
             // emitted patch call in place alongside the original op — both
             // execute, violating the "leave op unchanged on error" contract
-            // callers depend on (REPLACE mode docstring; parity with the
+            // callers depend on (REWRITE-with-patch docstring; parity with the
             // apply_before/after and apply_at_entrypoint dispatchers).
             //
             // CIR function types carry at most one return value: `isVoid()`
@@ -376,7 +522,7 @@ namespace patchestry {
             }
             if (patch_num_results < op_num_results) {
                 LOG(ERROR)
-                    << "REPLACE: patch function '" << patch_function_name
+                    << "REWRITE (patch form): patch function '" << patch_function_name
                     << "' returns " << patch_num_results
                     << " result(s), cannot cover the " << op_num_results
                     << " result(s) of '"
@@ -444,7 +590,7 @@ namespace patchestry {
                 // erase the patch call and the original op would both
                 // execute in program order, the exact bug this function now
                 // guards against.
-                LOG(ERROR) << "REPLACE: cast-aware replacement left uses on '"
+                LOG(ERROR) << "REWRITE (patch form): cast-aware replacement left uses on '"
                            << op->getName().getStringRef().str()
                            << "'; rolling back patch call to preserve the "
                               "'op unchanged on error' invariant.\n";
@@ -682,6 +828,828 @@ namespace patchestry {
             if (should_inline) {
                 pass.inline_worklists.insert(patch_call_op);
             }
+        }
+
+        // Source storage address backing a captured value (the alloca
+        // or global it was loaded from), or null for constants / binop
+        // results / unalloca'd args. `rewriteWithExpression` maps
+        // wrapper-arg → source alloca when this returns non-null so
+        // writes propagate; null means a temp is materialised and
+        // writes are validator-rejected.
+        mlir::Value find_capture_source_alloca(mlir::Value cap_value) {
+            auto load = cap_value.getDefiningOp< cir::LoadOp >();
+            if (!load) {
+                return {};
+            }
+            mlir::Value addr = load.getAddr();
+            if (auto *def = addr.getDefiningOp()) {
+                if (mlir::isa< cir::AllocaOp >(def)
+                    || mlir::isa< cir::GetGlobalOp >(def))
+                {
+                    return addr;
+                }
+            }
+            return {};
+        }
+
+        // Eliminate clang's per-parameter slot for `__cap_*` args:
+        // RAUW the slot's loads with the param block-arg, then erase
+        // alloca + init store + loads. Non-canonical slot use (second
+        // store, address-of, ...) leaves the slot intact — the cloned
+        // IR then carries the slot round-trip but is still correct.
+        void promote_parameter_slots(cir::FuncOp wrapper) {
+            mlir::Block &entry = wrapper.getBody().front();
+            llvm::SmallVector< cir::AllocaOp, 4 > slots;
+            entry.walk([&](cir::AllocaOp alloca) {
+                llvm::StringRef name = alloca.getName();
+                if (name.starts_with("__cap_")) {
+                    slots.push_back(alloca);
+                }
+            });
+
+            for (cir::AllocaOp slot : slots) {
+                cir::StoreOp init_store;
+                llvm::SmallVector< cir::LoadOp, 4 > loads;
+                bool canonical = true;
+                for (mlir::OpOperand &use : slot.getResult().getUses()) {
+                    if (auto store = mlir::dyn_cast< cir::StoreOp >(use.getOwner())) {
+                        // Slot must be the store dest (not a stored
+                        // value), and only one init store may exist.
+                        if (store.getAddr() != slot.getResult() || init_store) {
+                            canonical = false;
+                            break;
+                        }
+                        init_store = store;
+                        continue;
+                    }
+                    if (auto load = mlir::dyn_cast< cir::LoadOp >(use.getOwner())) {
+                        loads.push_back(load);
+                        continue;
+                    }
+                    canonical = false;
+                    break;
+                }
+
+                if (!canonical || !init_store) {
+                    continue;
+                }
+
+                mlir::Value param_arg = init_store.getValue();
+                for (cir::LoadOp ld : loads) {
+                    ld.getResult().replaceAllUsesWith(param_arg);
+                    ld.erase();
+                }
+                init_store.erase();
+                slot.erase();
+            }
+        }
+
+        // The value stored into clang's `__retval` alloca right before
+        // the wrapper's cir.return — that's the rewrite root. Null when
+        // there is no such alloca (void wrapper).
+        mlir::Value find_rewrite_root_in_wrapper(cir::FuncOp wrapper) {
+            mlir::Block &entry = wrapper.getBody().front();
+
+            mlir::Value retval_alloca;
+            for (auto &nested : entry) {
+                auto alloca_op = mlir::dyn_cast< cir::AllocaOp >(&nested);
+                if (alloca_op && alloca_op.getName() == "__retval") {
+                    retval_alloca = alloca_op.getResult();
+                    break;
+                }
+            }
+            if (!retval_alloca) {
+                return {};
+            }
+            for (auto it = entry.rbegin(); it != entry.rend(); ++it) {
+                auto store_op = mlir::dyn_cast< cir::StoreOp >(&*it);
+                if (store_op && store_op.getAddr() == retval_alloca) {
+                    return store_op.getValue();
+                }
+            }
+            return {};
+        }
+
+        void PatchOperationImpl::rewriteWithExpression(
+            InstrumentationPass &pass, mlir::Operation *op,
+            const PatchInformation &patch, const std::string &expr,
+            const std::string &arch
+        ) {
+            if (op == nullptr) {
+                LOG(ERROR) << "rewriteWithExpression: operation is null\n";
+                pass.signalPassFailure();
+                return;
+            }
+            // 0-result matched ops use a void wrapper; the inliner
+            // skips __retval / RAUW handling for them.
+            const bool void_rewrite = (op->getNumResults() == 0);
+
+            std::vector< fragment_expr::CaptureBinding > bindings;
+            std::vector< std::string > capture_names;
+            std::vector< mlir::Value > capture_values;
+            bindings.reserve(patch.captures.size());
+            capture_names.reserve(patch.captures.size());
+            capture_values.reserve(patch.captures.size());
+            for (const auto &kv : patch.captures) {
+                bindings.push_back(fragment_expr::CaptureBinding{
+                    kv.getKey().str(),
+                    typing::ConvertCirTypesToCTypes(kv.getValue().getType()),
+                });
+                capture_names.push_back(kv.getKey().str());
+                capture_values.push_back(kv.getValue());
+            }
+
+            // Wrapper return = matched op's first-result type (or void).
+            // clang then casts the body to fit, so the inlined root
+            // usually matches without a post-clone reconciliation step.
+            std::string return_c_type = void_rewrite
+                ? std::string("void")
+                : typing::ConvertCirTypesToCTypes(op->getResult(0).getType());
+
+            // Synthesise extern callee + struct decls so the fragment
+            // can name everything in the matched module. Struct decls
+            // first so the extern signatures can reference them.
+            mlir::ModuleOp module_op = op->getParentOfType< mlir::ModuleOp >();
+            std::string extra_decls;
+            if (module_op) {
+                std::ostringstream decls;
+
+                // Seed with capture types + matched op's result type so
+                // a rewrite returning a struct still gets the decl even
+                // when no capture mentions it.
+                llvm::SmallVector< mlir::Type, 8 > seed_types;
+                for (mlir::Value v : capture_values) {
+                    seed_types.push_back(v.getType());
+                }
+                if (!void_rewrite) {
+                    seed_types.push_back(op->getResult(0).getType());
+                }
+                emit_struct_decls_for_types(seed_types, module_op, decls);
+
+                std::set< std::string > emitted_funcs;
+                for (auto fn : module_op.getOps< cir::FuncOp >()) {
+                    std::string fname = fn.getSymName().str();
+                    if (fname.rfind("__rw_", 0) == 0) {
+                        continue; // skip rewrite wrappers
+                    }
+                    if (!emitted_funcs.insert(fname).second) {
+                        continue;
+                    }
+                    auto fn_type = fn.getFunctionType();
+                    decls << "extern "
+                          << typing::ConvertCirTypesToCTypes(fn_type.getReturnType())
+                          << " " << fname << "(";
+                    auto inputs = fn_type.getInputs();
+                    if (inputs.empty()) {
+                        decls << "void";
+                    }
+                    for (std::size_t i = 0; i < inputs.size(); i++) {
+                        if (i > 0) {
+                            decls << ", ";
+                        }
+                        decls << typing::ConvertCirTypesToCTypes(inputs[i]);
+                    }
+                    decls << ");\n";
+                }
+                extra_decls = decls.str();
+            }
+
+            auto cres = fragment_expr::compile_fragment(
+                expr, bindings, arch, return_c_type, extra_decls
+            );
+            if (!cres.error.empty()) {
+                LOG(ERROR) << "rewriteWithExpression: fragment compile failed: " << cres.error
+                           << "\n  expr: " << expr << "\n";
+                pass.signalPassFailure();
+                return;
+            }
+            if (!cres.module_text.has_value()) {
+                LOG(ERROR)
+                    << "rewriteWithExpression: clang produced no module "
+                       "for expr: " << expr << "\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            mlir::MLIRContext *mctx = op->getContext();
+            mlir::OwningOpRef< mlir::ModuleOp > parsed_module =
+                mlir::parseSourceString< mlir::ModuleOp >(
+                    *cres.module_text, mctx
+                );
+            if (!parsed_module) {
+                LOG(ERROR)
+                    << "rewriteWithExpression: could not parse the "
+                       "compiled wrapper module text\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            cir::FuncOp wrapper;
+            parsed_module->walk([&](cir::FuncOp f) {
+                if (f.getSymName() == cres.func_name) {
+                    wrapper = f;
+                    return mlir::WalkResult::interrupt();
+                }
+                return mlir::WalkResult::advance();
+            });
+            if (!wrapper) {
+                LOG(ERROR)
+                    << "rewriteWithExpression: wrapper '"
+                    << cres.func_name << "' not found in compiled module\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            // After promotion, body reads/writes of `(*__cap_X)` go
+            // directly against the wrapper's block argument — that's
+            // also the shape the write validator below scans for.
+            promote_parameter_slots(wrapper);
+
+            // Void rewrites clone for side effects only — no root.
+            mlir::Value root_value;
+            if (!void_rewrite) {
+                root_value = find_rewrite_root_in_wrapper(wrapper);
+                if (!root_value) {
+                    LOG(ERROR)
+                        << "rewriteWithExpression: could not locate the "
+                           "rewrite root in wrapper body (no __retval "
+                           "store)\n";
+                    pass.signalPassFailure();
+                    return;
+                }
+            }
+
+            // Wrapper-param order matches `bindings` (and therefore
+            // `capture_names` / `capture_values`) above.
+            mlir::Block &entry = wrapper.getBody().front();
+            llvm::ArrayRef< mlir::BlockArgument > args = entry.getArguments();
+            if (args.size() != capture_values.size()) {
+                LOG(ERROR)
+                    << "rewriteWithExpression: wrapper has "
+                    << args.size() << " params but "
+                    << capture_values.size() << " captures provided\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            llvm::SmallVector< mlir::Value, 4 > capture_sources(args.size());
+            for (std::size_t i = 0; i < capture_values.size(); i++) {
+                capture_sources[i] = find_capture_source_alloca(capture_values[i]);
+            }
+
+            // Reject writes to a capture with no source alloca — both
+            // direct (`cir.store v, %arg`) and through derived
+            // addresses (`cir.get_member`, `cir.ptr_stride`, and
+            // `cir.cast` chains rooted at `%arg`). The derived case
+            // catches by-value struct captures from non-storage
+            // sources where `$S.field = …` lowers to
+            // `cir.get_member %arg → cir.store` — without this walk
+            // the store would silently land on the wrapper-local temp
+            // and never propagate to caller storage. The chain
+            // intentionally stops at `cir.load`: writes through a
+            // *loaded* pointer (e.g. `*$P = 5` for a non-storage
+            // pointer capture) target whatever the loaded pointer
+            // points at — typically real storage on the caller side —
+            // so they should not be rejected here.
+            auto reaches_store_via_addr = [](mlir::Value root) {
+                llvm::SmallVector< mlir::Value, 4 > worklist;
+                llvm::SmallPtrSet< mlir::Operation *, 8 > visited;
+                worklist.push_back(root);
+                while (!worklist.empty()) {
+                    mlir::Value v = worklist.pop_back_val();
+                    for (mlir::OpOperand &use : v.getUses()) {
+                        mlir::Operation *user = use.getOwner();
+                        if (auto store = mlir::dyn_cast< cir::StoreOp >(user)) {
+                            // Only flag stores writing *through* `v`.
+                            // A store with `v` as the value operand
+                            // (`cir.store %v, %slot`) just stashes the
+                            // pointer elsewhere — not a write to
+                            // capture storage.
+                            if (store.getAddr() == v) { return true; }
+                            continue;
+                        }
+                        if (mlir::isa< cir::GetMemberOp, cir::PtrStrideOp, cir::CastOp >(user))
+                        {
+                            if (!visited.insert(user).second) { continue; }
+                            for (mlir::Value r : user->getResults()) { worklist.push_back(r); }
+                        }
+                    }
+                }
+                return false;
+            };
+
+            llvm::SmallVector< bool, 4 > arg_has_write(args.size(), false);
+            for (std::size_t i = 0; i < args.size(); i++) {
+                arg_has_write[i] = reaches_store_via_addr(args[i]);
+            }
+            for (std::size_t i = 0; i < args.size(); i++) {
+                if (!arg_has_write[i] || capture_sources[i]) { continue; }
+                std::string origin_name = "<unknown>";
+                if (mlir::Operation *def = capture_values[i].getDefiningOp()) {
+                    origin_name = def->getName().getStringRef().str();
+                } else if (mlir::isa< mlir::BlockArgument >(capture_values[i])) {
+                    origin_name = "block argument";
+                }
+                LOG(ERROR)
+                    << "rewriteWithExpression: capture '$"
+                    << capture_names[i]
+                    << "' is written to inside 'expr:' but its captured "
+                       "value has no backing storage at the match site "
+                       "(originates from "
+                    << origin_name
+                    << "). Captures from constants, results, binop "
+                       "outputs, or computed values cannot be assigned. "
+                       "Use 'mode: rewrite' with 'patch:' + 'arguments:' "
+                       "to mutate a caller-side variable through a patch "
+                       "function.\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            // SSA dominance: a `result:` capture makes the cloned ops
+            // depend on the matched op, so insert after it and use
+            // RAUW-except to keep it live. The same insertion point
+            // also positions any materialised temp correctly.
+            bool keep_matched = false;
+            for (mlir::Value v : capture_values) {
+                if (v.getDefiningOp() == op) {
+                    keep_matched = true;
+                    break;
+                }
+            }
+            mlir::OpBuilder builder(op);
+            if (keep_matched) {
+                builder.setInsertionPointAfter(op);
+            } else {
+                builder.setInsertionPoint(op);
+            }
+
+            // Map each wrapper block arg to either the capture's
+            // source alloca (writes propagate to caller storage) or a
+            // freshly materialised temp (read-only, init-stored with
+            // the captured value). The cloner uses this mapping
+            // throughout, including inside region-carrying ops.
+            //
+            // Temp-alloca init ops are tracked so the keep-matched
+            // RAUW exempts them — otherwise `cir.store %cap, %temp`'s
+            // value operand would be rewritten to the rewrite root
+            // (which itself depends on the temp), creating a cycle.
+            mlir::IRMapping mapping;
+            llvm::SmallPtrSet< mlir::Operation *, 4 > materialised_init_ops;
+            for (std::size_t i = 0; i < args.size(); i++) {
+                mlir::Value addr = capture_sources[i];
+                if (!addr) {
+                    addr = pass.create_reference(builder, op, capture_values[i]);
+                    if (!addr) {
+                        LOG(ERROR)
+                            << "rewriteWithExpression: failed to materialise "
+                               "temp alloca for capture '$"
+                            << capture_names[i] << "'\n";
+                        pass.signalPassFailure();
+                        return;
+                    }
+                    // create_reference emits alloca + init store;
+                    // exempt both from keep-matched RAUW.
+                    if (auto *def = addr.getDefiningOp()) {
+                        materialised_init_ops.insert(def);
+                        for (mlir::Operation *user : addr.getUsers()) {
+                            if (mlir::isa< cir::StoreOp >(user)) {
+                                materialised_init_ops.insert(user);
+                                break;
+                            }
+                        }
+                    }
+                }
+                mapping.map(args[i], addr);
+            }
+
+            // Locate the final store-to-__retval so we can skip cloning
+            // it (its operand is the root). Walk from the back; clang
+            // emits one but be defensive.
+            mlir::Operation *retval_store_op = nullptr;
+            if (!void_rewrite) {
+                for (auto it = entry.rbegin(); it != entry.rend(); ++it) {
+                    if (auto s = mlir::dyn_cast< cir::StoreOp >(&*it)) {
+                        if (s.getValue() == root_value) {
+                            retval_store_op = &*it;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            llvm::SmallVector< mlir::Operation *, 16 > emitted_ops;
+            auto fail = [&] {
+                for (mlir::Operation *e : llvm::reverse(emitted_ops)) {
+                    e->erase();
+                }
+                // Roll back the `arg_ref` temps materialised by
+                // `create_reference` for non-storage captures. Without
+                // this, a fail-after-materialise (e.g. root not found in
+                // the mapping, or cast-to-result-type rejected) leaves
+                // dead alloca + init-store pairs in the function — the
+                // pass calls signalPassFailure so consumers don't observe
+                // the orphans, but the contract on `fail()` is "rollback
+                // to pre-rewrite state". Partition first because the set
+                // holds raw pointers; iterating it a second time after
+                // erase() would dereference freed memory. Stores erase
+                // before allocas since the store's address operand is
+                // the alloca's result.
+                llvm::SmallVector< mlir::Operation *, 4 > init_stores;
+                llvm::SmallVector< mlir::Operation *, 4 > temp_allocas;
+                for (mlir::Operation *e : materialised_init_ops) {
+                    if (mlir::isa< cir::StoreOp >(e)) {
+                        init_stores.push_back(e);
+                    } else {
+                        temp_allocas.push_back(e);
+                    }
+                }
+                for (mlir::Operation *e : init_stores) { e->erase(); }
+                for (mlir::Operation *e : temp_allocas) { e->erase(); }
+                pass.signalPassFailure();
+            };
+
+            for (auto &nested : entry) {
+                if (&nested == retval_store_op) {
+                    continue;
+                }
+                if (mlir::isa< cir::BrOp, cir::ReturnOp >(&nested)) {
+                    continue;
+                }
+                mlir::Operation *clone = builder.clone(nested, mapping);
+                emitted_ops.push_back(clone);
+            }
+
+            if (void_rewrite) {
+                // Route through pass.erase_op so `inline_worklists` drops
+                // the pointer too — chain-patching specs intentionally
+                // match a prior action's emitted patch call by name (see
+                // the dispatcher comment), and that emitted call may be
+                // sitting in `inline_worklists` from its should_inline
+                // insertion. A direct erase here would leave the post-
+                // pass inline loop dereferencing a freed pointer.
+                pass.erase_op(op);
+                return;
+            }
+
+            mlir::Value new_root = mapping.lookupOrNull(root_value);
+            if (!new_root) {
+                LOG(ERROR)
+                    << "rewriteWithExpression: cloned root value not "
+                       "found in mapping (internal inliner bug)\n";
+                fail();
+                return;
+            }
+
+            mlir::Value original_result = op->getResult(0);
+            if (new_root.getType() != original_result.getType()) {
+                mlir::Value casted = pass.create_cast_if_needed(
+                    builder, op, new_root, original_result.getType()
+                );
+                if (!casted) {
+                    LOG(ERROR)
+                        << "rewriteWithExpression: cannot cast root "
+                           "to matched op's result type\n";
+                    fail();
+                    return;
+                }
+                if (auto *cast_op = casted.getDefiningOp()) {
+                    emitted_ops.push_back(cast_op);
+                }
+                new_root = casted;
+            }
+
+            if (keep_matched) {
+                // RAUW reroutes uses of the matched op's result to
+                // the rewrite root, exempting the cloned chain (so
+                // it can still read the matched op) and the
+                // temp-init ops (so the captured-value operand of
+                // their init store doesn't become a self-cycle).
+                llvm::SmallPtrSet< mlir::Operation *, 16 > except_set;
+                for (mlir::Operation *e : emitted_ops) {
+                    except_set.insert(e);
+                    e->walk([&](mlir::Operation *nested) {
+                        except_set.insert(nested);
+                    });
+                }
+                for (mlir::Operation *e : materialised_init_ops) {
+                    except_set.insert(e);
+                }
+                original_result.replaceAllUsesExcept(new_root, except_set);
+            } else {
+                original_result.replaceAllUsesWith(new_root);
+                if (op->getNumResults() > 1) {
+                    LOG(WARNING)
+                        << "rewriteWithExpression: matched op has "
+                        << op->getNumResults()
+                        << " results; only result(0) was rerouted.\n";
+                } else {
+                    // See the void_rewrite branch above: pass.erase_op
+                    // keeps `inline_worklists` consistent when the
+                    // matched op was a prior action's emitted patch
+                    // call. Direct erase here would risk a UAF in the
+                    // post-pass inline loop.
+                    pass.erase_op(op);
+                }
+            }
+        }
+
+        void PatchOperationImpl::rewriteWithStatements(
+            InstrumentationPass &pass, mlir::Operation *op,
+            const PatchInformation &patch, const std::string &stmt,
+            const std::string &arch
+        ) {
+            if (op == nullptr) {
+                LOG(ERROR) << "rewriteWithStatements: operation is null\n";
+                pass.signalPassFailure();
+                return;
+            }
+            // Stmt form is implicitly result-erasing; non-zero-result
+            // ops belong on expr-form.
+            if (op->getNumResults() > 0) {
+                LOG(ERROR)
+                    << "rewriteWithStatements: stmt form requires a 0-result "
+                       "matched op (use expr: form for value-substituting "
+                       "rewrites). Got '"
+                    << op->getName().getStringRef().str() << "' with "
+                    << op->getNumResults() << " result(s).\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            auto enclosing_func = op->getParentOfType< cir::FuncOp >();
+            if (!enclosing_func) {
+                LOG(ERROR)
+                    << "rewriteWithStatements: cannot find enclosing function\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            std::vector< fragment_expr::CaptureBinding > bindings;
+            std::vector< std::string > capture_names;
+            std::vector< mlir::Value > capture_values;
+            bindings.reserve(patch.captures.size());
+            capture_names.reserve(patch.captures.size());
+            capture_values.reserve(patch.captures.size());
+            for (const auto &kv : patch.captures) {
+                bindings.push_back(fragment_expr::CaptureBinding{
+                    kv.getKey().str(),
+                    typing::ConvertCirTypesToCTypes(kv.getValue().getType()),
+                });
+                capture_names.push_back(kv.getKey().str());
+                capture_values.push_back(kv.getValue());
+            }
+
+            // Marker extern's argument type comes from the enclosing
+            // function so clang type-checks each `return X;` at compile
+            // time.
+            auto enclosing_fn_type = enclosing_func.getFunctionType();
+            std::string enclosing_ret_c_type =
+                enclosing_fn_type.isVoid()
+                    ? std::string("void")
+                    : typing::ConvertCirTypesToCTypes(
+                          enclosing_fn_type.getReturnType()
+                      );
+
+            // Same extern + struct prelude as expr-form. Wrapper
+            // prefixes (`__rw_`, `__rwst_`) and the reserved
+            // `__patchestry_*` namespace are excluded.
+            mlir::ModuleOp module_op = op->getParentOfType< mlir::ModuleOp >();
+            std::string extra_decls;
+            if (module_op) {
+                std::ostringstream decls;
+                llvm::SmallVector< mlir::Type, 8 > seed_types;
+                for (mlir::Value v : capture_values) {
+                    seed_types.push_back(v.getType());
+                }
+                emit_struct_decls_for_types(seed_types, module_op, decls);
+                std::set< std::string > emitted_funcs;
+                for (auto fn : module_op.getOps< cir::FuncOp >()) {
+                    std::string fname = fn.getSymName().str();
+                    if (fname.rfind("__rw_", 0) == 0
+                        || fname.rfind("__rwst_", 0) == 0
+                        || fname.rfind("__patchestry_", 0) == 0)
+                    {
+                        continue;
+                    }
+                    if (!emitted_funcs.insert(fname).second) {
+                        continue;
+                    }
+                    auto fn_type = fn.getFunctionType();
+                    decls << "extern "
+                          << typing::ConvertCirTypesToCTypes(fn_type.getReturnType())
+                          << " " << fname << "(";
+                    auto inputs = fn_type.getInputs();
+                    if (inputs.empty()) {
+                        decls << "void";
+                    }
+                    for (std::size_t i = 0; i < inputs.size(); i++) {
+                        if (i > 0) {
+                            decls << ", ";
+                        }
+                        decls << typing::ConvertCirTypesToCTypes(inputs[i]);
+                    }
+                    decls << ");\n";
+                }
+                extra_decls = decls.str();
+            }
+
+            auto cres = fragment_expr::compile_stmt_fragment(
+                stmt, bindings, arch, enclosing_ret_c_type, extra_decls
+            );
+            if (!cres.error.empty() || !cres.module_text.has_value()) {
+                LOG(ERROR)
+                    << "rewriteWithStatements: fragment compile failed: "
+                    << (cres.error.empty() ? "no module produced" : cres.error)
+                    << "\n  stmt: " << stmt << "\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            mlir::OwningOpRef< mlir::ModuleOp > parsed_module =
+                mlir::parseSourceString< mlir::ModuleOp >(
+                    *cres.module_text, op->getContext()
+                );
+            if (!parsed_module) {
+                LOG(ERROR)
+                    << "rewriteWithStatements: could not parse the "
+                       "compiled wrapper module text\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            cir::FuncOp wrapper;
+            parsed_module->walk([&](cir::FuncOp f) {
+                if (f.getSymName() == cres.func_name) {
+                    wrapper = f;
+                    return mlir::WalkResult::interrupt();
+                }
+                return mlir::WalkResult::advance();
+            });
+            if (!wrapper) {
+                LOG(ERROR)
+                    << "rewriteWithStatements: wrapper '" << cres.func_name
+                    << "' not found in compiled module\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            promote_parameter_slots(wrapper);
+
+            // MVP: marker → real-CFG rewrite is a follow-up. A
+            // surviving `__patchestry_*` call means the user wrote
+            // `return …;` in the body; reject loudly.
+            bool has_marker_call = false;
+            wrapper.walk([&](cir::CallOp call) {
+                if (auto callee = call.getCallee()) {
+                    if (callee->starts_with("__patchestry_")) {
+                        has_marker_call = true;
+                        return mlir::WalkResult::interrupt();
+                    }
+                }
+                return mlir::WalkResult::advance();
+            });
+            if (has_marker_call) {
+                LOG(ERROR)
+                    << "rewriteWithStatements: stmt-form bodies using "
+                       "`return` are not yet supported (marker → CFG "
+                       "rewrite is a follow-up). Drop the `return` or "
+                       "use 'mode: rewrite' with 'patch:' for early-"
+                       "exit semantics.\n  stmt: " << stmt << "\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            // Multi-block wrappers (goto, complex switch) need
+            // inter-block branch rewiring the simple splice doesn't do.
+            if (!llvm::hasSingleElement(wrapper.getBody().getBlocks())) {
+                LOG(ERROR)
+                    << "rewriteWithStatements: multi-block wrapper CFG "
+                       "is not yet supported. Use linear stmt-form "
+                       "bodies (no `goto`).\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            mlir::Block &entry = wrapper.getBody().front();
+            llvm::ArrayRef< mlir::BlockArgument > args = entry.getArguments();
+            if (args.size() != capture_values.size()) {
+                LOG(ERROR)
+                    << "rewriteWithStatements: wrapper has " << args.size()
+                    << " params but " << capture_values.size()
+                    << " captures provided\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            llvm::SmallVector< mlir::Value, 4 > capture_sources(args.size());
+            for (std::size_t i = 0; i < capture_values.size(); i++) {
+                capture_sources[i] = find_capture_source_alloca(capture_values[i]);
+            }
+
+            // Same write-through-derived-address walker as expr-form.
+            auto reaches_store_via_addr = [](mlir::Value root) {
+                llvm::SmallVector< mlir::Value, 4 > worklist;
+                llvm::SmallPtrSet< mlir::Operation *, 8 > visited;
+                worklist.push_back(root);
+                while (!worklist.empty()) {
+                    mlir::Value v = worklist.pop_back_val();
+                    for (mlir::OpOperand &use : v.getUses()) {
+                        mlir::Operation *user = use.getOwner();
+                        if (auto store = mlir::dyn_cast< cir::StoreOp >(user)) {
+                            if (store.getAddr() == v) {
+                                return true;
+                            }
+                            continue;
+                        }
+                        if (mlir::isa< cir::GetMemberOp, cir::PtrStrideOp,
+                                       cir::CastOp >(user))
+                        {
+                            if (!visited.insert(user).second) {
+                                continue;
+                            }
+                            for (mlir::Value r : user->getResults()) {
+                                worklist.push_back(r);
+                            }
+                        }
+                    }
+                }
+                return false;
+            };
+
+            llvm::SmallVector< bool, 4 > arg_has_write(args.size(), false);
+            for (std::size_t i = 0; i < args.size(); i++) {
+                arg_has_write[i] = reaches_store_via_addr(args[i]);
+            }
+            for (std::size_t i = 0; i < args.size(); i++) {
+                if (!arg_has_write[i] || capture_sources[i]) {
+                    continue;
+                }
+                std::string origin_name = "<unknown>";
+                if (mlir::Operation *def = capture_values[i].getDefiningOp()) {
+                    origin_name = def->getName().getStringRef().str();
+                } else if (mlir::isa< mlir::BlockArgument >(capture_values[i])) {
+                    origin_name = "block argument";
+                }
+                LOG(ERROR)
+                    << "rewriteWithStatements: capture '$"
+                    << capture_names[i]
+                    << "' is written to inside 'stmt:' but its captured "
+                       "value has no backing storage at the match site "
+                       "(originates from "
+                    << origin_name
+                    << "). Use 'mode: rewrite' with 'patch:' + "
+                       "'arguments:' to mutate a caller-side variable.\n";
+                pass.signalPassFailure();
+                return;
+            }
+
+            mlir::OpBuilder builder(op);
+            builder.setInsertionPoint(op);
+
+            mlir::IRMapping mapping;
+            llvm::SmallVector< mlir::Operation *, 16 > emitted_ops;
+            llvm::SmallPtrSet< mlir::Operation *, 4 > materialised_init_ops;
+            for (std::size_t i = 0; i < args.size(); i++) {
+                mlir::Value addr = capture_sources[i];
+                if (!addr) {
+                    addr = pass.create_reference(builder, op, capture_values[i]);
+                    if (!addr) {
+                        LOG(ERROR)
+                            << "rewriteWithStatements: failed to materialise "
+                               "temp alloca for capture '$"
+                            << capture_names[i] << "'\n";
+                        pass.signalPassFailure();
+                        return;
+                    }
+                    if (auto *def = addr.getDefiningOp()) {
+                        materialised_init_ops.insert(def);
+                        for (mlir::Operation *user : addr.getUsers()) {
+                            if (mlir::isa< cir::StoreOp >(user)) {
+                                materialised_init_ops.insert(user);
+                                break;
+                            }
+                        }
+                    }
+                }
+                mapping.map(args[i], addr);
+            }
+
+            // Splice the wrapper body before the matched op. Top-level
+            // cir.return / cir.br are dropped — fall-through is just
+            // sequential flow into the matched op's tail. Region-
+            // carrying ops clone recursively.
+            for (auto &nested : entry) {
+                if (mlir::isa< cir::BrOp, cir::ReturnOp >(&nested)) {
+                    continue;
+                }
+                mlir::Operation *clone = builder.clone(nested, mapping);
+                emitted_ops.push_back(clone);
+            }
+
+            // pass.erase_op (vs op->erase) scrubs inline_worklists for
+            // the chain-patching case.
+            pass.erase_op(op);
         }
 
     } // namespace passes
