@@ -37,7 +37,7 @@ patches:
         - name: "A"
           operand: 0
     action:
-      mode: "replace"
+      mode: "rewrite"
       patch: "passthrough_mul"
       arguments:
         - source: "capture"

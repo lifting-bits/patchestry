@@ -62,6 +62,8 @@ namespace patchestry::passes {
             std::string patch_id;
             std::string description;
             std::vector< ArgumentSource > arguments;
+            std::string expr;
+            std::string stmt;
         };
 
         struct PatchAction
@@ -102,10 +104,10 @@ namespace patchestry::passes {
                     return "APPLY_AFTER";
                 case InstrumentationMode::APPLY_AT_ENTRYPOINT:
                     return "APPLY_AT_ENTRYPOINT";
-                case InstrumentationMode::REPLACE:
-                    return "REPLACE";
                 case InstrumentationMode::ERASE:
                     return "ERASE";
+                case InstrumentationMode::REWRITE:
+                    return "REWRITE";
             }
             return "UNKNOWN";
         }
@@ -137,6 +139,8 @@ namespace patchestry::passes {
             std::string patch_id;
             std::vector< ArgumentSource > arguments;
             std::set< std::string > optimization;
+            std::string expr;
+            std::string stmt;
         };
 
         // Simplified YAML surface that inflates to MetaPatchConfig.
@@ -159,6 +163,8 @@ namespace patchestry::passes {
             InstrumentationMode mode = InstrumentationMode::NONE;
             std::string patch_id;
             std::vector< ArgumentSource > arguments;
+            std::string expr; // rewrite-mode C expression fragment
+            std::string stmt; // rewrite-mode C statement body (parser-rejected for now)
             // optimization
             std::set< std::string > optimization;
         };
@@ -209,6 +215,8 @@ namespace patchestry::passes {
                 act.mode      = entry.mode;
                 act.patch_id  = entry.patch_id;
                 act.arguments = entry.arguments;
+                act.expr      = entry.expr;
+                act.stmt      = entry.stmt;
                 pa.action.push_back(std::move(act));
 
                 meta.patch_actions.push_back(std::move(pa));
@@ -263,15 +271,24 @@ namespace llvm::yaml {
             return InstrumentationMode::APPLY_AT_ENTRYPOINT;
         }
         if (mode_str == "Replace" || mode_str == "replace") {
-            return InstrumentationMode::REPLACE;
+            io.setError(
+                "'mode: replace' has been merged into 'mode: rewrite'. "
+                "For inline fragments use 'mode: rewrite' with 'expr:'; "
+                "for external patch functions use 'mode: rewrite' with "
+                "'patch:' + 'arguments:'."
+            );
+            return InstrumentationMode::NONE;
         }
         if (mode_str == "Erase" || mode_str == "erase") {
             return InstrumentationMode::ERASE;
         }
+        if (mode_str == "Rewrite" || mode_str == "rewrite") {
+            return InstrumentationMode::REWRITE;
+        }
         io.setError(
             "Unknown patch mode: '" + mode_str
             + "'. Valid modes: ApplyBefore, ApplyAfter, "
-              "ApplyAtEntrypoint, Replace, Erase"
+              "ApplyAtEntrypoint, Erase, Rewrite"
         );
         return InstrumentationMode::NONE;
     }
@@ -284,13 +301,56 @@ namespace llvm::yaml {
             io.mapOptional("patch_id", action.patch_id);
             io.mapOptional("description", action.description);
             io.mapOptional("arguments", action.arguments);
+            io.mapOptional("expr", action.expr);
+            io.mapOptional("stmt", action.stmt);
 
             std::string mode_str;
             io.mapRequired("mode", mode_str);
             action.mode = parsePatchInfoMode(io, mode_str);
 
-            if (action.mode != InstrumentationMode::ERASE && action.patch_id.empty()) {
-                io.setError("'patch_id' is required for mode '" + mode_str + "'");
+            if (action.mode == InstrumentationMode::REWRITE) {
+                const bool has_expr  = !action.expr.empty();
+                const bool has_stmt  = !action.stmt.empty();
+                const bool has_patch = !action.patch_id.empty();
+                const int set_count = int(has_expr) + int(has_stmt) + int(has_patch);
+                if (set_count > 1) {
+                    io.setError(
+                        "'expr', 'stmt', and 'patch_id' are mutually exclusive in mode '"
+                        + mode_str
+                        + "'; pick exactly one — 'expr' for a single C expression, "
+                        "'stmt' for a C statement body, or 'patch_id' (with "
+                        "'arguments') for an external patch function."
+                    );
+                }
+                if (set_count == 0) {
+                    io.setError(
+                        "mode '" + mode_str
+                        + "' requires exactly one of 'expr' (single C expression), "
+                        "'stmt' (C statement body), or 'patch_id' (external patch "
+                        "function)."
+                    );
+                }
+                if ((has_expr || has_stmt) && !action.arguments.empty()) {
+                    io.setError(
+                        "'arguments' is not valid alongside 'expr' or 'stmt' in mode '"
+                        + mode_str
+                        + "'; reference captures via $NAME in the inline body"
+                    );
+                }
+            } else {
+                if (!action.expr.empty()) {
+                    io.setError(
+                        "'expr' is only valid for mode 'Rewrite', not '" + mode_str + "'"
+                    );
+                }
+                if (!action.stmt.empty()) {
+                    io.setError(
+                        "'stmt' is only valid for mode 'Rewrite', not '" + mode_str + "'"
+                    );
+                }
+                if (action.mode != InstrumentationMode::ERASE && action.patch_id.empty()) {
+                    io.setError("'patch_id' is required for mode '" + mode_str + "'");
+                }
             }
         }
     };
@@ -502,9 +562,52 @@ namespace llvm::yaml {
 
             io.mapOptional("patch", a.patch_id);
             io.mapOptional("arguments", a.arguments);
+            io.mapOptional("expr", a.expr);
+            io.mapOptional("stmt", a.stmt);
 
-            if (a.mode != InstrumentationMode::ERASE && a.patch_id.empty()) {
-                io.setError("'patch' field is required for mode '" + mode_str + "'");
+            if (a.mode == InstrumentationMode::REWRITE) {
+                const bool has_expr  = !a.expr.empty();
+                const bool has_stmt  = !a.stmt.empty();
+                const bool has_patch = !a.patch_id.empty();
+                const int set_count = int(has_expr) + int(has_stmt) + int(has_patch);
+                if (set_count > 1) {
+                    io.setError(
+                        "'expr', 'stmt', and 'patch' are mutually exclusive in mode '"
+                        + mode_str
+                        + "'; pick exactly one — 'expr' for a single C expression, "
+                        "'stmt' for a C statement body, or 'patch' (with "
+                        "'arguments') for an external patch function."
+                    );
+                }
+                if (set_count == 0) {
+                    io.setError(
+                        "mode '" + mode_str
+                        + "' requires exactly one of 'expr' (single C expression), "
+                        "'stmt' (C statement body), or 'patch' (external patch "
+                        "function)."
+                    );
+                }
+                if ((has_expr || has_stmt) && !a.arguments.empty()) {
+                    io.setError(
+                        "'arguments' is not valid alongside 'expr' or 'stmt' in mode '"
+                        + mode_str
+                        + "'; reference captures via $NAME in the inline body"
+                    );
+                }
+            } else {
+                if (!a.expr.empty()) {
+                    io.setError(
+                        "'expr' is only valid for mode 'rewrite', not '" + mode_str + "'"
+                    );
+                }
+                if (!a.stmt.empty()) {
+                    io.setError(
+                        "'stmt' is only valid for mode 'rewrite', not '" + mode_str + "'"
+                    );
+                }
+                if (a.mode != InstrumentationMode::ERASE && a.patch_id.empty()) {
+                    io.setError("'patch' field is required for mode '" + mode_str + "'");
+                }
             }
 
             std::vector< std::string > optimization;
@@ -544,6 +647,8 @@ namespace llvm::yaml {
             entry.mode         = action_obj.mode;
             entry.patch_id     = action_obj.patch_id;
             entry.arguments    = action_obj.arguments;
+            entry.expr         = action_obj.expr;
+            entry.stmt         = action_obj.stmt;
             entry.optimization = action_obj.optimization;
 
             // Cross-field validation: `apply_at_entrypoint` inserts the
@@ -630,29 +735,29 @@ namespace llvm::yaml {
                 }
             }
 
-            // Cross-field validation: `mode: replace` on a kinded generic
+            // Cross-field validation: `mode: rewrite` on a kinded generic
             // op (cir.binop, cir.cmp) requires an `op_kind` filter.
             // Without it the match is a wildcard that fires on every
             // arithmetic-or-comparison op in scope and substitutes the
-            // same patch call for add, sub, mul, div, shl, and/or, etc.
+            // same replacement for add, sub, mul, div, shl, and/or, etc.
             // The CIR verifier is happy (operand types match) but the
             // semantics are silently wrong — a `patch__replace__int_mul`
             // installed over every `+`/`-`/`/`/`<<` just miscomputes the
             // program. Logging or observational modes (apply_before /
             // apply_after) have a legitimate wildcard use case
             // (operation counters, trace probes) so they are left
-            // unrestricted; replace must narrow to a single kind.
-            if (action_obj.mode == InstrumentationMode::REPLACE
+            // unrestricted; rewrite must narrow to a single kind.
+            if (action_obj.mode == InstrumentationMode::REWRITE
                 && !match_obj.op_kind.has_value())
             {
                 for (const auto &n : match_obj.names) {
                     if (n == "cir.binop" || n == "cir.cmp") {
                         io.setError(
-                            "'mode: replace' on a kinded generic op ('"
+                            "'mode: rewrite' on a kinded generic op ('"
                             + n
                             + "') requires an 'op_kind' filter. A wildcard "
-                            "match replaces every arithmetic/comparison op in "
-                            "scope with the same patch call — the CIR "
+                            "match substitutes every arithmetic/comparison op in "
+                            "scope with the same replacement — the CIR "
                             "verifier accepts it but the semantics are "
                             "silently wrong across kinds. Narrow the match "
                             "with e.g. 'op_kind: \"mul\"', or use "

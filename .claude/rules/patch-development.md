@@ -24,6 +24,10 @@ paths:
 | Add LIT transform test | `test/patchir-transform/` — copy an existing YAML test as template |
 | Modify CIR→LLVM lowering | `tools/patchir-cir2llvm/main.cpp` — CIR to LLVM IR/bitcode with contract metadata |
 | Update spec docs | `docs/GettingStarted/patch_specifications.md` |
+| Update fragment wrapper synthesis | `lib/patchestry/Passes/FragmentCompiler.cpp` — `synthesise_wrapper`, `is_statement_form`, `substitute_metavars`. Captures pass by-reference (`T *__cap_NAME`, `$NAME` → `(*__cap_NAME)`); clang/clangIR is the only parser. |
+| Extend the rewrite inliner — `expr:` form | `lib/patchestry/Passes/PatchOperationImpl.cpp` — `rewriteWithExpression`, `find_rewrite_root_in_wrapper`, `find_capture_source_alloca`, `promote_parameter_slots`. Each wrapper block-arg maps to either the capture's source alloca (writes propagate) or a fresh `arg_ref` temp from `pass.create_reference` (read-only; the post-clang validator rejects `cir.store ..., %arg` against non-storage captures). |
+| Adjust the struct-decl walker (capture types → wrapper-source decls) | `lib/patchestry/Passes/PatchOperationImpl.cpp` — `collect_struct_types_rec`, `topo_order_structs`, `lookup_field_name`, `emit_struct_decls_for_types`. Field names are recovered from module-level `cir::GetMemberOp` ops; `rewriteWithExpression` seeds collection with capture types + the matched op's result type. |
+| Add a C-type spelling for capture-type conversion | `lib/patchestry/Passes/Utils.cpp` — `ConvertCirTypesToCTypes`. If the new spelling needs a typedef for clang to accept it, also extend the prelude in `synthesise_wrapper` (`lib/patchestry/Passes/FragmentCompiler.cpp`). |
 
 ## Adding a New Argument Source
 

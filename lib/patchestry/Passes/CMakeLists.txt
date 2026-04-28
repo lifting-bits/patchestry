@@ -10,6 +10,7 @@ add_library(patchestry_passes STATIC
     OperationMatcher.cpp
     PatchOperationImpl.cpp
     Utils.cpp
+    FragmentCompiler.cpp
 )
 
 set(CLANG_IR_LIBS
@@ -22,6 +23,7 @@ target_link_libraries(patchestry_passes
     PUBLIC
         MLIRContracts
     PRIVATE
+        patchestry_codegen
         patchestry_settings
         patchestry_yaml
         MLIRSupport

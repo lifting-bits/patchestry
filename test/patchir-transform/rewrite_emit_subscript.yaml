@@ -1,0 +1,16 @@
+apiVersion: patchestry.io/v1
+metadata: { name: "subscript", version: "1.0.0" }
+target: { binary: "x", arch: "ARM:LE:32" }
+patches:
+  - name: "rewrite-subscript"
+    id: "REWRITE-SUBSCRIPT-001"
+    match:
+      name: "sink_subscript"
+      kind: "function"
+      context: ["rewrite_subscript_host"]
+      captures:
+        - { name: "p", operand: 0 }
+        - { name: "i", operand: 1 }
+    action:
+      mode: "rewrite"
+      expr: "$p[$i]"
