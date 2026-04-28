@@ -82,7 +82,7 @@ ensure_macos_keystone() {
     return
   fi
 
-  uv run --python "$python_bin" --with patcherex2 python -c 'print("patcherex2 cache primed")' >/dev/null
+  uv run --python "$python_bin" --with 'patcherex2 @ git+https://github.com/trail-of-forks/Patcherex2.git@patche_support' python -c 'print("patcherex2 cache primed")' >/dev/null
 
   local cmake_file
   cmake_file="$(
@@ -119,7 +119,6 @@ ensure_macos_keystone() {
 }
 
 check_tool "$llvm_prefix/clang" "Set PATCHESTRY_LLVM_PREFIX to your patched LLVM bin directory."
-check_tool "$llvm_prefix/llvm-objcopy" "Set PATCHESTRY_LLVM_PREFIX to your patched LLVM bin directory."
 check_tool "$ld_lld" "Set PATCHESTRY_LD_LLD to an ELF-capable lld binary."
 check_tool "$python_bin" "Set PATCHESTRY_PYTHON to a Python 3.11 binary."
 check_tool "$qemu_system_arm" "Set QEMU_SYSTEM_ARM to your qemu-system-arm binary."
@@ -142,8 +141,6 @@ runtime_args=(
   "$repo_root/scripts/patch-runtime/qemu_firmware_runtime.py"
   --repo-root "$repo_root"
   --build-type "$build_type"
-  --llvm-prefix "$llvm_prefix"
-  --ld-lld "$ld_lld"
   --qemu-system-arm "$qemu_system_arm"
   --fixture-dir "$fixture_dir"
   --output-dir "$output_dir"
@@ -153,4 +150,4 @@ if [[ "$refresh_ghidra" == "1" ]]; then
   runtime_args+=(--refresh-ghidra-fixtures)
 fi
 
-uv run --python "$python_bin" --with patcherex2 python "${runtime_args[@]}"
+uv run --python "$python_bin" --with 'patcherex2 @ git+https://github.com/trail-of-forks/Patcherex2.git@patche_support' python "${runtime_args[@]}"
