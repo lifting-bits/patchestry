@@ -38,7 +38,6 @@ LDFLAGS := \
 SOURCES := \
 	startup.S \
 	src/main.c \
-	src/patch_arena.S \
 	src/targets.c \
 	src/uart.c
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -11,8 +12,8 @@ from pathlib import Path
 from typing import Iterable
 
 from elftools.elf.elffile import ELFFile
-from patcherex2 import ModifyRawBytesPatch, Patcherex
-from patcherex2.targets import BinArmBare
+from patcherex2 import InsertFunctionPatch, ModifyFunctionPatch, Patcherex
+from patcherex2.targets.elf_arm_bare import ElfArmBare
 
 
 @dataclass(frozen=True)
@@ -98,8 +99,7 @@ BASELINE_LINES: tuple[str, ...] = (
     "DONE",
 )
 
-PATCH_ARENA_SLOT_SIZE = 0x100
-THUMB_NOP = b"\x00\xbf"
+PATCHEREX2_LOAD_OPTIONS = {"rebase_granularity": 0x1000}
 
 
 def run(
@@ -131,6 +131,10 @@ def normalize_transcript(output: bytes) -> tuple[str, ...]:
 
 
 def run_qemu(qemu_system_arm: Path, kernel: Path) -> tuple[str, ...]:
+    # Compare against the firmware's UART output only. QEMU's own diagnostic
+    # messages (e.g. "Timer with period zero, disabling" emitted by the
+    # lm3s6965evb timer model when the firmware idles after DONE) go to stderr
+    # and would otherwise leak into the transcript and break the comparison.
     argv = [
         str(qemu_system_arm),
         "-M",
@@ -141,10 +145,10 @@ def run_qemu(qemu_system_arm: Path, kernel: Path) -> tuple[str, ...]:
     ]
     try:
         result = subprocess.run(argv, check=False, capture_output=True, timeout=2.0)
-        output = (result.stdout or b"") + (result.stderr or b"")
+        stdout = result.stdout or b""
     except subprocess.TimeoutExpired as exc:
-        output = (exc.stdout or b"") + (exc.stderr or b"")
-    return normalize_transcript(output)
+        stdout = exc.stdout or b""
+    return normalize_transcript(stdout)
 
 
 def load_symbols(path: Path) -> dict[str, SymbolInfo]:
@@ -170,27 +174,129 @@ def load_symbols(path: Path) -> dict[str, SymbolInfo]:
         return symbols
 
 
-def undefined_symbols(path: Path) -> list[str]:
+def detect_arm_bare_regions(path: Path) -> tuple[int, int, int, int, int]:
+    """Return (flash_start, flash_end, ram_start, ram_end, entry_point).
+
+    PT_LOAD segments with PF_X and not PF_W are treated as flash; PF_W and
+    not PF_X are treated as RAM. Each range is extended past the highest
+    populated address so Patcherex2 has room to place inserted functions
+    (1 MiB for flash, 64 KiB for RAM, matching the patche_firmware.py
+    convention). Fail loudly if the heuristic returns no regions or the
+    entry point is unset — silently substituting STM32-like defaults would
+    miscompile firmwares with a different memory map (e.g. lm3s6965evb,
+    where flash starts at 0x00000000).
+    """
     with path.open("rb") as f:
         elf = ELFFile(f)
-        symtab = elf.get_section_by_name(".symtab")
-        if symtab is None:
-            raise RuntimeError(f"Missing .symtab in {path}")
-        missing: list[str] = []
-        for symbol in symtab.iter_symbols():
-            if symbol["st_shndx"] != "SHN_UNDEF" or not symbol.name:
+        flash_regions: list[tuple[int, int]] = []
+        ram_regions: list[tuple[int, int]] = []
+        for segment in elf.iter_segments():
+            if segment["p_type"] != "PT_LOAD":
                 continue
-            missing.append(symbol.name)
-        return missing
+            vaddr = int(segment["p_vaddr"])
+            end = vaddr + int(segment["p_memsz"])
+            flags = int(segment["p_flags"])
+            executable = bool(flags & 0x1)
+            writable = bool(flags & 0x2)
+            if executable and not writable:
+                flash_regions.append((vaddr, end))
+            elif writable and not executable:
+                ram_regions.append((vaddr, end))
+        entry_point = int(elf.header["e_entry"]) & ~1
+
+    if not flash_regions:
+        raise RuntimeError(
+            f"{path}: no executable-only PT_LOAD segments found; cannot "
+            "infer flash region for Patcherex2"
+        )
+    if not ram_regions:
+        raise RuntimeError(
+            f"{path}: no writable-only PT_LOAD segments found; cannot "
+            "infer RAM region for Patcherex2"
+        )
+    if entry_point == 0:
+        raise RuntimeError(f"{path}: ELF entry point is 0; cannot pick a Patcherex2 insert point")
+
+    flash_start = min(start for start, _ in flash_regions)
+    flash_end = max(end for _, end in flash_regions) + 0x100000
+    ram_start = min(start for start, _ in ram_regions)
+    ram_end = max(end for _, end in ram_regions) + 0x10000
+    return flash_start, flash_end, ram_start, ram_end, entry_point
 
 
-def dump_section(path: Path, section_name: str) -> bytes:
-    with path.open("rb") as f:
-        elf = ELFFile(f)
-        section = elf.get_section_by_name(section_name)
-        if section is None:
-            raise RuntimeError(f"Missing {section_name} in {path}")
-        return bytes(section.data())
+_LL_FUNCTION_PATTERN = re.compile(
+    r"define\s+(?:dso_local\s+)?(?:\w+\s+)*@(\w+)\([^)]*\)[^{]*\{(?:[^{}]*|\{[^{}]*\})*\}",
+    re.MULTILINE | re.DOTALL,
+)
+_LL_LINKAGE_KEYWORDS = re.compile(
+    r"^(?:private|internal|available_externally|linkonce(?:_odr)?"
+    r"|weak(?:_odr)?|common|appending|extern_weak|external)\s+",
+)
+
+
+def extract_functions_from_llvm_ir(content: str) -> dict[str, str]:
+    """Split an LLVM IR module into one self-contained snippet per function.
+
+    Each snippet carries the module-level type defs, globals, external
+    declarations, attribute groups, and metadata, plus `declare`s for the
+    *other* functions defined in the module — so it can be compiled in
+    isolation by Patcherex2's clang invocation. Mirrors
+    Patcherex2/tools/patche_firmware.py:106–210 since that helper is not
+    part of the installed `patcherex2` package.
+    """
+    type_defs = re.findall(
+        r"^%[\w.]+ = type\s+(?:opaque|<?\{[^}]*\}>?).*$",
+        content,
+        re.MULTILINE,
+    )
+    global_vars = re.findall(
+        r"^@[\w.]+ = (?:private |internal |external |global )?(?:constant |global).*$",
+        content,
+        re.MULTILINE,
+    )
+    declarations = re.findall(
+        r"^declare.*?@\w+\([^)]*\).*?(?:\n|$)",
+        content,
+        re.MULTILINE | re.DOTALL,
+    )
+    attributes = re.findall(r"^attributes #\d+ = \{[^}]+\}", content, re.MULTILINE)
+    metadata = re.findall(r"^![\w.]+ = .*$", content, re.MULTILINE)
+
+    local_decls: dict[str, str] = {}
+    for match in _LL_FUNCTION_PATTERN.finditer(content):
+        signature_match = re.match(
+            r"(define\s+(?:dso_local\s+)?(?:\w+\s+)*@\w+\([^)]*\)[^{]*)",
+            match.group(0),
+        )
+        if signature_match is None:
+            continue
+        body_match = re.match(
+            r"define\s+(?:dso_local\s+)?(.*?@\w+\([^)]*\))",
+            signature_match.group(1),
+        )
+        if body_match is None:
+            continue
+        body = _LL_LINKAGE_KEYWORDS.sub("", body_match.group(1))
+        local_decls[match.group(1)] = f"declare {body}"
+
+    suffix = "\n\n" + "\n".join(attributes) + "\n\n" + "\n".join(metadata)
+
+    snippets: dict[str, str] = {}
+    for match in _LL_FUNCTION_PATTERN.finditer(content):
+        name = match.group(1)
+        other_decls = [decl for fn, decl in local_decls.items() if fn != name]
+        prefix = (
+            "\n".join(type_defs)
+            + "\n\n"
+            + "\n".join(global_vars)
+            + "\n\n"
+            + "\n".join(declarations)
+            + "\n"
+            + "\n".join(other_decls)
+            + "\n\n"
+        )
+        snippets[name] = prefix + match.group(0) + suffix
+    return snippets
 
 
 def write_lines(path: Path, lines: Iterable[str]) -> None:
@@ -205,104 +311,75 @@ def candidate_repo_roots(repo_root: Path) -> tuple[Path, ...]:
 
 
 def repo_tool(repo_root: Path, build_type: str, tool_name: str) -> Path:
+    # Try every builds/<preset>/ directory so this works for the local
+    # `default` preset and CI's `ci` preset (and any other preset added later)
+    # without needing to plumb a preset name from the caller.
+    tried: list[Path] = []
     for root in candidate_repo_roots(repo_root):
-        path = root / "builds" / "default" / "tools" / tool_name / build_type / tool_name
-        if path.exists():
-            return path
+        builds_dir = root / "builds"
+        if not builds_dir.is_dir():
+            continue
+        # Prefer "default" first (legacy local-dev path), then any other preset.
+        preset_dirs = sorted(
+            (p for p in builds_dir.iterdir() if p.is_dir()),
+            key=lambda p: (p.name != "default", p.name),
+        )
+        for preset_dir in preset_dirs:
+            path = preset_dir / "tools" / tool_name / build_type / tool_name
+            tried.append(path)
+            if path.exists():
+                return path
+    searched = "\n  ".join(str(p) for p in tried) or "(no builds/ subdirectories found)"
     raise RuntimeError(
-        f"Missing tool {tool_name} under the default build tree for {repo_root}. "
-        f"Build the {build_type} preset first."
+        f"Missing tool {tool_name} under any build tree for {repo_root}. "
+        f"Build a preset that produces {build_type} artifacts first.\n"
+        f"Searched:\n  {searched}"
     )
 
 
-def compile_patched_module(
-    llvm_clang: Path,
-    patched_ll: Path,
-    output_obj: Path,
-) -> None:
-    run(
-        [
-            str(llvm_clang),
-            "--target=thumbv7m-none-eabi",
-            "-mcpu=cortex-m3",
-            "-mthumb",
-            "-ffreestanding",
-            "-fno-builtin",
-            "-fno-stack-protector",
-            "-Wno-override-module",
-            "-c",
-            str(patched_ll),
-            "-o",
-            str(output_obj),
-        ]
-    )
-
-
-def link_patch_blob(
-    ld_lld: Path,
-    original_symbols: dict[str, SymbolInfo],
-    input_obj: Path,
-    patch_addr: int,
-    output_elf: Path,
-    linker_script: Path,
-) -> None:
-    linker_script.write_text(
-        "\n".join(
-            [
-                "SECTIONS {",
-                f"  .patchblob 0x{patch_addr:x} : ALIGN(4) {{",
-                "    *(.text)",
-                "    *(.rodata*)",
-                "  }",
-                "}",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    argv = [
-        str(ld_lld),
-        str(input_obj),
-        "-T",
-        str(linker_script),
-        "-o",
-        str(output_elf),
-    ]
-
-    for name in undefined_symbols(input_obj):
-        if name not in original_symbols:
-            raise RuntimeError(f"Undefined symbol {name} from {input_obj} is not present in the original ELF.")
-        symbol = original_symbols[name]
-        value = symbol.addr | 1 if symbol.kind == "STT_FUNC" else symbol.addr
-        argv.append(f"--defsym={name}=0x{value:x}")
-
-    run(argv)
-
-
-def patch_original_elf(
+def patch_function_in_elf(
     original_elf: Path,
+    patched_ll: Path,
+    target_function: str,
     rewritten_elf: Path,
-    patch_blob: bytes,
-    patch_addr: int,
-    target_addr: int,
-    target_size: int,
 ) -> None:
-    p = Patcherex(str(original_elf), target_cls=BinArmBare)
-    jump_bytes = p.assembler.assemble(f"b.w 0x{patch_addr:x}", target_addr, is_thumb=True)
-    if len(jump_bytes) > target_size:
+    snippets = extract_functions_from_llvm_ir(patched_ll.read_text(encoding="utf-8"))
+    if target_function not in snippets:
         raise RuntimeError(
-            f"Detour jump for {hex(target_addr)} is {len(jump_bytes)} bytes, "
-            f"which exceeds the original function size {target_size}."
+            f"Patched LLVM IR {patched_ll} does not define {target_function}. "
+            f"Defines: {sorted(snippets)}"
         )
-    remaining = target_size - len(jump_bytes)
-    if remaining % len(THUMB_NOP) != 0:
-        raise RuntimeError(
-            f"Function at {hex(target_addr)} has size {target_size}, leaving a non-nop remainder {remaining}."
-        )
-    entry_patch = jump_bytes + THUMB_NOP * (remaining // len(THUMB_NOP))
-    p.patches.append(ModifyRawBytesPatch(patch_addr, patch_blob))
-    p.patches.append(ModifyRawBytesPatch(target_addr, entry_patch))
+
+    flash_start, flash_end, ram_start, ram_end, entry_point = detect_arm_bare_regions(original_elf)
+
+    p = Patcherex(
+        str(original_elf),
+        target_cls=ElfArmBare,
+        target_opts={
+            "binary_analyzer": "angr",
+            "compiler": "clang19",
+            "binfmt_tool": "default",
+            "allocation_manager": "default",
+        },
+        components_opts={
+            "binfmt_tool": {
+                "flash_start": flash_start,
+                "flash_end": flash_end,
+                "ram_start": ram_start,
+                "ram_end": ram_end,
+                "insert_points": [entry_point],
+            }
+        },
+    )
+
+    compile_opts = {"extension": ".ll", "load_options": PATCHEREX2_LOAD_OPTIONS}
+    for name, code in snippets.items():
+        if name == target_function:
+            continue
+        p.patches.append(InsertFunctionPatch(name, code, compile_opts=compile_opts))
+    p.patches.append(
+        ModifyFunctionPatch(target_function, snippets[target_function], compile_opts=compile_opts)
+    )
     p.apply_patches()
     p.save_binary(str(rewritten_elf))
 
@@ -311,8 +388,6 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--build-type", default="Debug")
-    parser.add_argument("--llvm-prefix", type=Path, required=True)
-    parser.add_argument("--ld-lld", type=Path, required=True)
     parser.add_argument("--qemu-system-arm", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--fixture-dir", type=Path)
@@ -334,25 +409,11 @@ def main() -> int:
         raise RuntimeError(f"Missing firmware ELF at {firmware_elf}. Run the firmware build first.")
 
     original_symbols = load_symbols(firmware_elf)
-    for symbol_name in ("__patch_arena_start", "__patch_arena_end"):
-        if symbol_name not in original_symbols:
-            raise RuntimeError(f"Missing linker symbol {symbol_name} in {firmware_elf}.")
-
-    patch_arena_start = original_symbols["__patch_arena_start"].addr
-    patch_arena_end = original_symbols["__patch_arena_end"].addr
-    required_patch_arena = patch_arena_start + PATCH_ARENA_SLOT_SIZE * len(CASES)
-    if required_patch_arena > patch_arena_end:
-        raise RuntimeError(
-            f"Patch arena is too small: need {hex(required_patch_arena - patch_arena_start)} bytes, "
-            f"have {hex(patch_arena_end - patch_arena_start)} bytes."
-        )
 
     patchir_decomp = repo_tool(repo_root, args.build_type, "patchir-decomp")
     patchir_transform = repo_tool(repo_root, args.build_type, "patchir-transform")
     patchir_cir2llvm = repo_tool(repo_root, args.build_type, "patchir-cir2llvm")
     patchir_yaml_parser = repo_tool(repo_root, args.build_type, "patchir-yaml-parser")
-    llvm_objcopy = args.llvm_prefix / "llvm-objcopy"
-    llvm_clang = args.llvm_prefix / "clang"
 
     baseline_lines = run_qemu(args.qemu_system_arm, firmware_elf)
     write_lines(output_dir / "baseline.log", baseline_lines)
@@ -363,7 +424,7 @@ def main() -> int:
 
     summary_rows = ["case\tstatus\tartifact"]
 
-    for index, case in enumerate(CASES):
+    for case in CASES:
         case_dir = output_dir / case.name
         case_dir.mkdir(parents=True, exist_ok=True)
 
@@ -372,9 +433,6 @@ def main() -> int:
         cir_path = case_dir / f"{case.function_name}.cir"
         patched_cir_path = case_dir / f"{case.function_name}.patched.cir"
         patched_ll_path = case_dir / f"{case.function_name}.patched.ll"
-        compiled_obj_path = case_dir / f"{case.function_name}.patched.o"
-        linker_script_path = case_dir / "patch_blob.ld"
-        patch_blob_elf_path = case_dir / "patch_blob.elf"
         rewritten_elf_path = case_dir / "rewritten.elf"
         transcript_path = case_dir / "qemu.log"
 
@@ -430,38 +488,14 @@ def main() -> int:
             ]
         )
 
-        compile_patched_module(llvm_clang, patched_ll_path, compiled_obj_path)
-
-        patch_addr = patch_arena_start + index * PATCH_ARENA_SLOT_SIZE
-        link_patch_blob(
-            args.ld_lld,
-            original_symbols,
-            compiled_obj_path,
-            patch_addr,
-            patch_blob_elf_path,
-            linker_script_path,
-        )
-
-        patch_blob = dump_section(patch_blob_elf_path, ".patchblob")
-        if len(patch_blob) > PATCH_ARENA_SLOT_SIZE:
-            raise RuntimeError(
-                f"Patch blob for {case.name} is {len(patch_blob)} bytes, "
-                f"which exceeds slot size {PATCH_ARENA_SLOT_SIZE}."
-            )
-
-        target_symbol = original_symbols.get(case.function_name)
-        if target_symbol is None:
+        if case.function_name not in original_symbols:
             raise RuntimeError(f"Original ELF is missing function symbol {case.function_name}.")
-        if target_symbol.size == 0:
-            raise RuntimeError(f"Original function {case.function_name} has zero size in {firmware_elf}.")
 
-        patch_original_elf(
+        patch_function_in_elf(
             firmware_elf,
+            patched_ll_path,
+            case.function_name,
             rewritten_elf_path,
-            patch_blob,
-            patch_addr,
-            target_symbol.addr,
-            target_symbol.size,
         )
 
         transcript_lines = run_qemu(args.qemu_system_arm, rewritten_elf_path)
