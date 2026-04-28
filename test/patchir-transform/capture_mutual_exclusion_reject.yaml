@@ -26,7 +26,7 @@ patches:
           operand: 0   # mutually exclusive with
           result: 0    # — these cannot both be set.
     action:
-      mode: "replace"
+      mode: "rewrite"
       patch: "ptr_only"
       arguments:
         - source: "capture"

@@ -30,7 +30,7 @@ meta_patches:
               - name: "eeprom_write"
 
         action:
-          - mode: "replace"
+          - mode: "rewrite"
             patch_id: "cwe121_bounded_strcat"
             description: "Use strncat with remaining buffer capacity"
             arguments:

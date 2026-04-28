@@ -253,7 +253,10 @@ namespace patchestry::passes {
         }
 
         std::unique_ptr< clang::CompilerInstance >
-        createCompilerInstance(const std::string &filename, const std::string &lang) { // NOLINT
+        createCompilerInstanceFromBuffer( // NOLINT
+            std::unique_ptr< llvm::MemoryBuffer > buffer,
+            const std::string &virtual_filename, const std::string &lang
+        ) {
             auto ci                = std::make_unique< clang::CompilerInstance >();
             auto &invocation       = ci->getInvocation();
             auto &inv_target_opts  = invocation.getTargetOpts();
@@ -282,16 +285,11 @@ namespace patchestry::passes {
 
             ci->createFileManager();
             ci->createSourceManager(ci->getFileManager());
-            auto buffer_or_error = llvm::MemoryBuffer::getFileOrSTDIN(filename);
-            if (!buffer_or_error) {
-                LOG(ERROR) << "Failed to open file: " << filename << "\n";
-                return nullptr;
-            }
-            auto buffer = std::move(*buffer_or_error);
 
             llvm::ErrorOr< clang::FileEntryRef > file_entry_ref_or_err =
                 ci->getFileManager().getVirtualFileRef(
-                    filename, static_cast< off_t >(buffer->getBufferSize()), 0
+                    virtual_filename, static_cast< off_t >(buffer->getBufferSize()),
+                    0
                 );
 
             if (!file_entry_ref_or_err) {
@@ -356,6 +354,18 @@ namespace patchestry::passes {
             return ci;
         }
 
+        std::unique_ptr< clang::CompilerInstance >
+        createCompilerInstance(const std::string &filename, const std::string &lang) { // NOLINT
+            auto buffer_or_error = llvm::MemoryBuffer::getFileOrSTDIN(filename);
+            if (!buffer_or_error) {
+                LOG(ERROR) << "Failed to open file: " << filename << "\n";
+                return nullptr;
+            }
+            return createCompilerInstanceFromBuffer(
+                std::move(*buffer_or_error), filename, lang
+            );
+        }
+
     } // namespace
 
     std::optional< std::string >
@@ -365,6 +375,42 @@ namespace patchestry::passes {
             return {};
         }
         clang::ParseAST(ci->getSema());
+        auto codegen = std::make_unique< patchestry::codegen::CodeGenerator >(*ci);
+        auto module  = codegen->lower_ast_to_mlir(ci->getASTContext());
+        if (!module.has_value()) {
+            return {};
+        }
+        std::string module_string;
+        llvm::raw_string_ostream os(module_string);
+        auto flags = mlir::OpPrintingFlags();
+        flags.enableDebugInfo(true, false);
+        module->print(os, flags);
+        return module_string;
+    }
+
+    // In-memory variant of emitModuleAsString. Takes the C source as a
+    // string + a virtual filename used purely for diagnostics. Mirrors
+    // the disk-loading path otherwise (same target setup, same lowering
+    // through CodeGenerator). Used by the rewrite-mode fragment compiler
+    // (lib/patchestry/Passes/FragmentCompiler.cpp) to compile
+    // synthesised wrapper functions without touching disk.
+    std::optional< std::string > emitModuleAsStringFromSource( // NOLINT
+        const std::string &source, const std::string &virtual_name,
+        const std::string &lang
+    ) {
+        auto buffer = llvm::MemoryBuffer::getMemBufferCopy(source, virtual_name);
+        if (!buffer) {
+            return {};
+        }
+        auto ci =
+            createCompilerInstanceFromBuffer(std::move(buffer), virtual_name, lang);
+        if (!ci) {
+            return {};
+        }
+        clang::ParseAST(ci->getSema());
+        if (ci->getDiagnostics().hasErrorOccurred()) {
+            return {};
+        }
         auto codegen = std::make_unique< patchestry::codegen::CodeGenerator >(*ci);
         auto module  = codegen->lower_ast_to_mlir(ci->getASTContext());
         if (!module.has_value()) {

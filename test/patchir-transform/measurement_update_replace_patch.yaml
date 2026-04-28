@@ -23,7 +23,7 @@ patches:
       name: "spo2_lookup"
       kind: "function"
     action:
-      mode: "replace"
+      mode: "rewrite"
       patch: "measurement_update_replace_patch"
       arguments:
         - name: "function_argument"

@@ -28,7 +28,7 @@ patches:
         - name: "RHS"
           operand: 1
     action:
-      mode: "replace"
+      mode: "rewrite"
       patch: "checked_mul"
       arguments:
         - source: "capture"

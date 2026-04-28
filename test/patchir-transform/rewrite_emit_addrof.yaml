@@ -1,0 +1,15 @@
+apiVersion: patchestry.io/v1
+metadata: { name: "addrof", version: "1.0.0" }
+target: { binary: "x", arch: "ARM:LE:32" }
+patches:
+  - name: "rewrite-addrof"
+    id: "REWRITE-ADDROF-001"
+    match:
+      name: "sink_addrof"
+      kind: "function"
+      context: ["rewrite_addrof_host"]
+      captures:
+        - { name: "x", operand: 0 }
+    action:
+      mode: "rewrite"
+      expr: "&$x"

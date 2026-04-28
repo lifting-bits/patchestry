@@ -1,4 +1,4 @@
-# Negative test: `mode: replace` on a kinded generic op (cir.binop /
+# Negative test: `mode: rewrite` on a kinded generic op (cir.binop /
 # cir.cmp) with no `op_kind` filter must be rejected at spec load.
 # A wildcard match here substitutes the same concrete patch for every
 # arithmetic/comparison kind (add, sub, mul, div, shl, and/or/xor, ...),
@@ -30,7 +30,7 @@ patches:
       name: "cir.binop"
       kind: "operation"
     action:
-      mode: "replace"
+      mode: "rewrite"
       patch: "checked_mul"
       arguments:
         - source: "operand"

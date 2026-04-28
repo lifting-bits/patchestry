@@ -1,0 +1,16 @@
+apiVersion: patchestry.io/v1
+metadata: { name: "ternary", version: "1.0.0" }
+target: { binary: "x", arch: "ARM:LE:32" }
+patches:
+  - name: "rewrite-ternary"
+    id: "REWRITE-TERNARY-001"
+    match:
+      name: "cir.binop"
+      kind: "operation"
+      op_kind: "mul"
+      context: ["rewrite_host"]
+      captures:
+        - { name: "R", result: 0 }
+    action:
+      mode: "rewrite"
+      expr: "$R > 0 ? $R : (uint32_t)1"
