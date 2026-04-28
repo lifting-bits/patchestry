@@ -39,7 +39,7 @@ for tool_path in tool_paths:
 config.python_executable = config.python_executable if config.python_executable else sys.executable
 
 # Define file suffixes for test files
-config.suffixes = ['.c', '.cpp', '.json', '.ll', '.mlir']
+config.suffixes = ['.c', '.cpp', '.json', '.ll']
 
 # Set the root directory where tests should be executed
 config.test_exec_root = os.path.join(config.patchestry_obj_root, 'test')

@@ -75,7 +75,8 @@ patches:                               # Patch configurations
 ### Matching multiple callees
 
 Use `names:` (list) instead of `name:` (scalar) to match any of several
-callees with the same action (OR semantics):
+callees with the same action (OR semantics, equivalent to PatchDSL's
+`pattern-either:`):
 
 ```yaml
 patches:
@@ -85,7 +86,7 @@ patches:
       kind: "function"
       context: ["eeprom_write"]
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "safe_copy"
       arguments:
         - source: "operand"
@@ -110,7 +111,7 @@ declarative pre/postcondition predicates that attach to the matched op
 as MLIR attributes (`contract.static`). They emit no runtime code.
 Valid modes: `apply_before` and `apply_after` (both attach the same
 attribute; the mode just controls which op the attribute lands on
-relative to the match). `apply_at_entrypoint`, `rewrite`, and `erase`
+relative to the match). `apply_at_entrypoint`, `replace`, and `erase`
 are patch-only.
 
 ```yaml
@@ -125,128 +126,6 @@ contracts:
       mode: "apply_before"
       contract: "message_nonnull_contract"
 ```
-
-### Rewrite Mode
-
-`mode: "rewrite"` replaces a matched op. It accepts exactly one of three
-mutually-exclusive forms:
-
-1. **Expression form (`expr:`)** — a single inline C expression compiled
-   through clang/CIR. The expression's value becomes the matched op's
-   first result. No external patch function or library entry is
-   required; captures from `match.captures` are referenced as `$NAME`.
-2. **Statement form (`stmt:`)** — a C statement body spliced as real
-   CFG into the enclosing function at the matched op's site. The
-   matched op must be 0-result (use `expr:` for value-substituting
-   rewrites); after splice, the matched op is erased and control
-   continues with whatever followed it. Captures use `$NAME` and write
-   semantics match `expr:`.
-3. **Patch-function form (`patch:` + `arguments:`)** — call out to a
-   pre-defined C patch function from a referenced library. The matched
-   op is replaced with a `cir.call` to the patch.
-
-```yaml
-# Expression form — inline fragment, no library entry needed
-patches:
-  - name: "widen_narrow_u16_mul"
-    match:
-      name: "cir.binop"
-      kind: "operation"
-      op_kind: "mul"
-      captures:
-        - { name: "A", operand: 0 }
-        - { name: "B", operand: 1 }
-    action:
-      mode: "rewrite"
-      expr: "(uint16_t)((uint32_t)$A * (uint32_t)$B)"
-```
-
-```yaml
-# Patch-function form — replace matched call with a library patch
-patches:
-  - name: "secure_replacement"
-    id: "SECURE-REPLACEMENT-001"
-    match:
-      name: "insecure_call"
-      kind: "function"
-      context: ["caller"]
-    action:
-      mode: "rewrite"
-      patch: "secure_replacement"
-      arguments:
-        - name: "original_arg1"
-          source: "operand"
-          index: 0
-```
-
-**Field rules.** Exactly one of `expr:`, `stmt:`, or `patch:` must be
-set; two-set, three-set, or none-set is rejected at parse. `arguments:`
-is only valid alongside `patch:` (for the inline forms, captures are
-referenced as `$NAME` inside the body instead).
-
-#### Statement-form examples
-
-```yaml
-action:
-  mode: "rewrite"
-  stmt: |
-    free($P);
-    $P = 0;
-```
-
-```yaml
-# stmt-form with control flow.
-action:
-  mode: "rewrite"
-  stmt: |
-    if ($P) free($P);
-```
-
-> **MVP limitation:** `stmt:` bodies that use the C `return` keyword
-> (intended to exit the enclosing function) are currently rejected at
-> rewrite time. The marker preprocessor converts `return X;` to
-> `__patchestry_return(X);` and the inliner-side rewrite of those
-> markers to real CFG ops is a follow-up phase. For early-exit
-> semantics today, use the `patch:` form.
-
-`stmt:` bodies may use any plain C the wrapper can compile: multi-
-statement sequences, `if` / `while` / `for` / `do-while`, local
-declarations, casts, pointer operations, struct access, and calls to
-functions visible in the matched module. The matched op must be
-0-result (use `expr:` for value-substituting rewrites). Capture
-references must be declared in `match.captures`.
-
-**Captures and writes (both `expr:` and `stmt:`).** Capture metavars
-(`$NAME`) pass by-reference at the wrapper boundary — the synthesised
-wrapper's parameter is `T *__cap_NAME` rather than `T __cap_NAME`.
-Reads (`$P`, `$P->field`, etc.) dereference through the pointer;
-writes (`$P = ...`, `$P++`) store through it.
-
-To write back to a non-storage capture, use the patch-function form
-of `mode: rewrite` (`patch:` + `arguments:`) and let the patch
-function take the variable by reference through `arguments:` with
-`is_reference: true`.
-
-**Calling external functions.** Both `expr:` and `stmt:` wrappers
-can call any function already declared in the matched MLIR — the
-wrapper's prelude is auto-populated with `extern` decls for every
-non-wrapper-prefix `cir.func` in the module. If a rewrite introduces
-a libc or runtime helper that the module does not already declare,
-add an inline `extern` declaration in the body (`stmt:` only — `expr:`
-is a single expression and can't host a declaration):
-
-```yaml
-action:
-  mode: "rewrite"
-  stmt: |
-    extern void free(void *);
-    free($p);
-    $p = 0;
-```
-
-System headers are not included by the wrapper synthesizer. Inline
-`extern` declarations keep the generated CIR tied to the target
-signature instead of the host's libc or sysroot.
 
 ### Ordering
 
@@ -415,7 +294,7 @@ The action fields live under each entry's nested `action:` mapping
 
 | Field | Required | Description | Example |
 |-------|----------|-------------|---------|
-| `mode` | Yes | Patching or contract mode to apply. Shared modes: `apply_before`, `apply_after`. Patch-only modes: `apply_at_entrypoint`, `rewrite`, `erase` | `"apply_before"` |
+| `mode` | Yes | Patching or contract mode to apply. Shared modes: `apply_before`, `apply_after`. Patch-only modes: `apply_at_entrypoint`, `replace`, `erase` | `"apply_before"` |
 | `patch` | Under `patches:` (unless `mode: erase`) | Reference to the patch implementation `name:` in a library | `"usb_endpoint_write_validation_after"` |
 | `contract` | Under `contracts:` | Reference to the static contract `name:` in a library | `"usb_msg_nonnull"` |
 | `arguments` | No | List of arguments to pass to patch function (ignored for contracts) | See [Argument Specification](#argument-specification) |
@@ -480,7 +359,7 @@ arguments:
 
 The `match:` block can include a `captures:` list that binds an op's
 operands and results to names. Patch arguments can then reference those
-names via `source: "capture"`.
+names via `source: "capture"` — equivalent to PatchDSL's `$A`, `$B` metavars.
 
 ```yaml
 patches:
@@ -497,7 +376,7 @@ patches:
         - name: "R"
           result: 0
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "checked_mul"
       arguments:
         - source: "capture"
@@ -533,7 +412,7 @@ patches:
       op_kind: "mul"       # only match Mul binops, not Add/Sub/Div/Rem/...
       context: ["compute_alloc_size"]
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "checked_mul"
       arguments:
         - source: "operand"
@@ -555,13 +434,13 @@ compares it to the YAML value. Omitting `op_kind:` matches every
 instance of the named op. Setting it on any other op (including
 `cir.load`, `cir.cast`, or `cir.shift`) causes the match to fail.
 
-> **`mode: rewrite` requires `op_kind:` on `cir.binop` / `cir.cmp`.**
-> A wildcard rewrite (no `op_kind:`) would substitute the same
-> concrete replacement for every arithmetic or comparison kind in scope —
+> **`mode: replace` requires `op_kind:` on `cir.binop` / `cir.cmp`.**
+> A wildcard replace (no `op_kind:`) would substitute the same
+> concrete patch for every arithmetic or comparison kind in scope —
 > `add`, `sub`, `mul`, `div`, `and`/`or`/`xor`, or every relational
 > operator. Operand types still line up, so the CIR verifier accepts
 > the rewritten module, but the semantics are silently wrong. The
-> spec parser therefore rejects `mode: rewrite` paired with a kinded
+> spec parser therefore rejects `mode: replace` paired with a kinded
 > generic op and no `op_kind:` filter at load time.
 >
 > Narrow with `op_kind:` when you want to swap a specific kind (see
@@ -691,7 +570,7 @@ patches:
           name: "usb_g"
           type: "struct struct_anon_struct_4_1_58265f66*"
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "usb_security_replace_patch"
       optimization: ["inline-patches"]
       arguments:
@@ -768,8 +647,8 @@ The specification supports five modes:
 - `apply_before`: Apply patch or contract before the matched function or operation
 - `apply_after`: Apply patch or contract after the matched function or operation completes
 - `apply_at_entrypoint`: Insert a patch at the entry point of the **caller** function (patches only — see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
+- `replace`: Completely replace the matched function call or operation (patches only)
 - `erase`: Delete the matched op without inserting any patch code (patches only — see [Erase Mode](#erase-mode))
-- `rewrite`: Replace the matched op via one of three forms — an inline C expression (`expr:`), an inline C statement body (`stmt:`), or an external patch function (`patch:` + `arguments:`). Absorbs the legacy `replace` keyword (patches only — see [Rewrite Mode](#rewrite-mode))
 
 ### Apply Before Mode
 
@@ -819,6 +698,43 @@ patches:
           symbol: "timer_end"
 ```
 
+### Replace Mode
+
+In `replace` mode, the matched operation is completely replaced by a
+call to the patch function. For function-kind matches the target is
+always a `cir.call`. For operation-kind matches, **any op with at
+least one result** may be replaced — including `cir.binop`, `cir.cmp`,
+`cir.cast`, `cir.load`, `cir.get_member`, `cir.ptr_stride`, and
+`cir.unary`. Result-less ops such as `cir.store` cannot be replaced
+(there's no value to rewire); use `erase` or `apply_before`/`apply_after`
+instead.
+
+The patch function's result types must match (or be castable to) the
+matched op's result types — the pass inserts casts where needed. If the
+patch returns void but the original op had results, the pass logs an
+error and leaves the op unchanged.
+
+```yaml
+patches:
+  - name: "secure_replacement"
+    id: "SECURE-REPLACEMENT-001"
+    description: "Secure function replacement"
+    match:
+      name: "insecure_call"
+      kind: "function"
+      context: ["caller"]
+    action:
+      mode: "replace"
+      patch: "secure_replacement"
+      arguments:
+        - name: "original_arg1"
+          source: "operand"
+          index: 0
+        - name: "original_arg2"
+          source: "operand"
+          index: 1
+```
+
 ### Erase Mode
 
 In `erase` mode, the matched op is deleted. No patch function is called,
@@ -843,8 +759,7 @@ patches:
 
 Use ERASE for removing debug/logging calls, stripping unused cleanup
 paths, or deleting obsolete instrumentation. For replacing a call with
-a different function, use `mode: rewrite` (with `patch:` + `arguments:`)
-instead.
+a different function, use `replace` instead.
 
 ### Apply At Entrypoint Mode
 
@@ -1246,26 +1161,51 @@ The patch architecture allows for:
 
 ## Limitations
 
-`match:` binds to a single anchor op; the *body* may still be
-multi-statement (`stmt:`) or arbitrarily complex. Today's gaps:
+The current matcher handles single-op C expressions at the CIR level.
+The following patterns are **not yet supported**:
 
-- **Cross-op match patterns** (e.g. `p = malloc(n); … use(p)`) need
-  dataflow reachability and aren't expressible. Rewrite *bodies*
-  spanning multiple ops are fine via `stmt:`.
-- **Region-carrying anchors** (`cir.if` / `cir.for` / `cir.while` /
-  `cir.switch` / `cir.scope` / `cir.ternary`) match by name but
-  region contents are opaque to `match.captures`. `stmt:` and
-  `expr:` can still *emit* these ops from C control-flow.
-- **`return X;` inside `stmt:`** — auto-converted to a marker call;
-  inliner-side rewrite to real `cir.return` is a follow-up. Use
-  `patch:` form for early-exit semantics today.
-- **Variadic captures** (`$...ARGS`) are not implemented. Match by
-  callee and use `apply_before` / `apply_after`.
-- **Result-less ops in `patch:` form** (`cir.store`, `cir.return`,
-  …) — no value to rewire. Use `stmt:` instead.
-- **Semantic predicates** (`nonnull`, `tainted`, `bounded`,
-  `aliases`, `reaches`) require dedicated analysis passes; not on
-  the YAML surface today.
+### Control-flow and region-carrying ops
+
+Ops that carry regions (bodies or branches) can be matched by name
+(`name: "cir.if"`, etc.) but cannot be meaningfully used with REPLACE,
+and captures cannot reach into their regions.
+
+| C pattern | CIR representation |
+|---|---|
+| `if (cond) { … } else { … }` | `cir.if` (two regions) |
+| `for`, `while`, `do-while` | `cir.for`, `cir.while`, `cir.do` |
+| `switch (x) { cases… }` | `cir.switch` |
+| Scoped blocks `{ … }` | `cir.scope` |
+| `a ? b : c` | `cir.ternary` |
+| `a && b`, `a \|\| b` (short-circuit) | `cir.ternary` / region ops |
+
+### Statement-level and multi-op patterns
+
+Patterns that match more than one op in sequence require dataflow
+reachability analysis and are not expressible today:
+
+- `free(p); p = NULL;` — paired-op patterns
+- `p = malloc(n); … use(p) …` — resource-tracking patterns
+- Patterns anchored by preceding/following ops
+
+### Variadic captures
+
+PatchDSL's variadic metavar (`$...ARGS`) is not implemented. For example,
+matching `printf(fmt, $...ARGS)` to capture an arbitrary number of
+arguments is not possible. Workaround: match by callee name and use
+`apply_before`/`apply_after` without forwarding variadic args.
+
+### Result-less ops with REPLACE
+
+`cir.store`, `cir.return`, and other ops without results cannot be
+replaced — there is no value to rewire. Use `erase` together with
+`apply_before`/`apply_after` to achieve equivalent rewrites.
+
+### Semantic predicates
+
+PatchDSL-style `where:` predicates (`nonnull(x)`, `tainted(x from src)`,
+`bounded(x)`, `aliases(a, b)`, `reaches(a, b)`) require dedicated
+analysis passes and are not part of the YAML surface today.
 
 ## Future work
 
@@ -1277,14 +1217,10 @@ current surface:
    and body regions. Enables rewrites like "wrap the then-branch of
    this if with a pre-check".
 
-2. **Multi-op match anchors.** A `match:` whose pattern spans more
-   than one op — e.g. "the matched call's result must be stored into
-   a specific local before the next branch" — with reachability
-   between the anchors. Today the matcher binds to a single op; a
-   multi-op anchor requires a dataflow pass that tracks capture
-   identity across intervening ops. (`mode: rewrite` already accepts
-   multi-statement *bodies*; this item is about multi-anchor
-   *matching*.)
+2. **Multi-op pattern anchors.** Sequences like
+   `free($P); …; free($P)` with reachability between the anchors.
+   Requires a dataflow pass that tracks capture identity across
+   intervening ops.
 
 3. **Variadic operand capture.** `$...ARGS` binding to the trailing
    operands of a call or the remaining operands of a variadic op.
@@ -1294,7 +1230,12 @@ current surface:
    analyses — nullness, integer range, taint, alias, escape. Each
    predicate needs its own analysis pass; these land independently.
 
-5. **Cross-scope capture references.** A capture bound at a call
+5. **Inline rewrites.** Pattern-to-pattern substitution without
+   going through a C patch function, e.g.
+   `rewrite: ($R: uint16_t) = (uint16_t)((uint32_t)$A * (uint32_t)$B)`.
+   Requires a mini CIR codegen from C fragments.
+
+6. **Cross-scope capture references.** A capture bound at a call
    site used by a patch inserted at the enclosing function's entry
    (currently SSA dominance rejects this). Would require rewriting
    captures to block-argument projections.

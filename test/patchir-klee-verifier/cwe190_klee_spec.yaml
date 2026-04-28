@@ -30,7 +30,7 @@ meta_patches:
               - name: "peek_process"
 
         action:
-          - mode: "rewrite"
+          - mode: "replace"
             patch_id: "cwe190_checked_mul16"
             description: "Replace multiply with overflow-safe version"
             arguments:

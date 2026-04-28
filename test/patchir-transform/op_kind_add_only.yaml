@@ -19,7 +19,7 @@ patches:
       kind: "operation"
       op_kind: "add"
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "checked_mul"
       arguments:
         - source: "operand"

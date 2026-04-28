@@ -147,33 +147,6 @@ namespace patchestry::passes {
          */
         static void eraseOperation(InstrumentationPass &pass, mlir::Operation *op);
 
-        /**
-         * @brief REWRITE mode: substitute the matched op with the inline
-         * C fragment `expr`. Compiled via FragmentCompiler and
-         * inlined at the matched op's site; `$IDENT` metavars bind to
-         * `patch.captures`. `arch` is the Ghidra `lang` string
-         * ("ARM:LE:32").
-         */
-        static void rewriteWithExpression(
-            InstrumentationPass &pass, mlir::Operation *op,
-            const PatchInformation &patch, const std::string &expr,
-            const std::string &arch
-        );
-
-        /**
-         * @brief REWRITE mode (stmt form): splice a C statement body
-         * at the matched op's site (which must be 0-result).
-         * Captures, storage-write validation, and arg_ref temp
-         * materialisation match `rewriteWithExpression`'s void path.
-         * MVP rejects `return X;` / `return;` bodies — marker → CFG
-         * rewrite is a follow-up.
-         */
-        static void rewriteWithStatements(
-            InstrumentationPass &pass, mlir::Operation *op,
-            const PatchInformation &patch, const std::string &stmt,
-            const std::string &arch
-        );
-
       private:
         /**
          * @brief Ensures that the patch function is available in the target module.

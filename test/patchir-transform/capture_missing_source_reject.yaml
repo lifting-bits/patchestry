@@ -24,7 +24,7 @@ patches:
         - name: "NOTHING"
           # deliberately omits both operand: and result:
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "ptr_only"
       arguments:
         - source: "capture"

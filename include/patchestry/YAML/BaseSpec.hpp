@@ -23,8 +23,8 @@ namespace patchestry::passes {
         APPLY_BEFORE,
         APPLY_AFTER,
         APPLY_AT_ENTRYPOINT, // Insert patch call at caller's entry block
-        ERASE, // Delete matched op, no patch function
-        REWRITE
+        REPLACE,
+        ERASE // Delete matched op, no patch function
     };
 
     enum class ArgumentSourceType : uint8_t {
@@ -45,8 +45,8 @@ namespace patchestry::passes {
     static_assert(static_cast< uint8_t >(InstrumentationMode::APPLY_BEFORE) == 1);
     static_assert(static_cast< uint8_t >(InstrumentationMode::APPLY_AFTER) == 2);
     static_assert(static_cast< uint8_t >(InstrumentationMode::APPLY_AT_ENTRYPOINT) == 3);
-    static_assert(static_cast< uint8_t >(InstrumentationMode::ERASE) == 4);
-    static_assert(static_cast< uint8_t >(InstrumentationMode::REWRITE) == 5);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::REPLACE) == 4);
+    static_assert(static_cast< uint8_t >(InstrumentationMode::ERASE) == 5);
 
     static_assert(static_cast< uint8_t >(ArgumentSourceType::OPERAND) == 0);
     static_assert(static_cast< uint8_t >(ArgumentSourceType::VARIABLE) == 1);

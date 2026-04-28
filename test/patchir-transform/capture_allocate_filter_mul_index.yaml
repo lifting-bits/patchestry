@@ -23,7 +23,7 @@ patches:
       kind: "operation"
       context: ["data__allocate_filter"]
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "checked_mul"
       arguments:
         - source: "operand"

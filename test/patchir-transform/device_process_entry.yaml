@@ -24,7 +24,7 @@ patches:
       kind: "function"
       context: ["bl_device__process_entry"]
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "device_list_replace_sprintf_patch"
       arguments:
         - name: "argument0"

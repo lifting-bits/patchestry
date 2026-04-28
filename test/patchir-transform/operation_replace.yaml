@@ -31,7 +31,7 @@ patches:
       symbol_matches:
         - name: "spo2_lookup"
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "measurement_update_replace_patch"
       arguments:
         - name: "function_argument"

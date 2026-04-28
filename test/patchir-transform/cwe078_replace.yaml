@@ -30,7 +30,7 @@ meta_patches:
               - name: "create_port"
 
         action:
-          - mode: "rewrite"
+          - mode: "replace"
             patch_id: "cwe078_sanitized_system"
             description: "Validate command string before execution"
             arguments:

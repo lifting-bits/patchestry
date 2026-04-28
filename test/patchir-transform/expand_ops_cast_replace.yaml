@@ -1,7 +1,8 @@
-# Rewrite a cir.cast operation by routing through a patch function.
-# `replaceOperationWithPatch` accepts any op with results, including
-# cir.cast — the fixture casts s32 -> u32 once in rcc_osc_off, and
-# the patch substitutes that cast with a load.
+# Phase C: REPLACE a cir.cast with a patch call. Before Phase C, this would
+# error with "REPLACE mode is not supported for cir.cast". Now the generic
+# replaceOperationWithPatch path accepts any op with results.
+#
+# The fixture casts s32 -> u32 once in rcc_osc_off; we replace exactly that.
 apiVersion: patchestry.io/v1
 
 metadata:
@@ -25,7 +26,7 @@ patches:
         - name: "IN"
           operand: 0
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "replace_load_u32"
       arguments:
         - source: "capture"

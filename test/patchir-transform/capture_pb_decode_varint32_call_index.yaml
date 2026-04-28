@@ -21,7 +21,7 @@ patches:
       kind: "function"
       context: ["pb_decode_varint32_eof"]
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "checked_mul"
       arguments:
         - source: "operand"

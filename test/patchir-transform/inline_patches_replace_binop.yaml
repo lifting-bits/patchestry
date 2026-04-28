@@ -29,7 +29,7 @@ patches:
       op_kind: "mul"
       context: ["compute_alloc_size"]
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "passthrough_mul"
       arguments:
         - name: "a"

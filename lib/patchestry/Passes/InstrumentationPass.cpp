@@ -454,16 +454,9 @@ namespace patchestry::passes {
             }
             auto &action = patch_action.action[0];
 
-            // ERASE and REWRITE inline forms (`expr:` / `stmt:`)
-            // carry no library spec — only REWRITE patch form does.
+            // ERASE mode has no patch function — skip spec lookup.
             std::optional< patch::PatchSpec > patch_spec;
-            const bool is_rewrite_inline =
-                action.mode == InstrumentationMode::REWRITE
-                && (!action.expr.empty() || !action.stmt.empty());
-            const bool needs_patch_spec =
-                action.mode != InstrumentationMode::ERASE
-                && !is_rewrite_inline;
-            if (needs_patch_spec) {
+            if (action.mode != InstrumentationMode::ERASE) {
                 patch_spec = lookup(config->libraries.patches, action.patch_id);
                 if (!patch_spec) {
                     LOG(ERROR) << "Patch specification for ID '" << action.patch_id
@@ -486,7 +479,7 @@ namespace patchestry::passes {
      * @brief Applies a specific patch action to target functions and operations.
      *
      * OPERATION-mode safety: `operation_worklist` holds raw `Operation *` captured
-     * once in `runOnOperation()`. ERASE and REWRITE both free the matched op
+     * once in `runOnOperation()`. ERASE and REPLACE both free the matched op
      * (`Operation::erase()` invalidates the pointer), so before iterating we
      * rebuild the worklist from the current module state. This drops pointers
      * freed by earlier patch actions and avoids a use-after-free when multiple
@@ -548,31 +541,6 @@ namespace patchestry::passes {
                         return;
                     }
 
-                    // REWRITE inline forms (`expr:` / `stmt:`) skip
-                    // the module load — only `patch:` needs it.
-                    if (action.mode == InstrumentationMode::REWRITE
-                        && !action.expr.empty())
-                    {
-                        PatchInformation patch_site = patch_to_apply;
-                        patch_site.captures        = std::move(match_captures);
-                        PatchOperationImpl::rewriteWithExpression(
-                            *this, call_op.getOperation(), patch_site,
-                            action.expr, config->target.arch
-                        );
-                        return;
-                    }
-                    if (action.mode == InstrumentationMode::REWRITE
-                        && !action.stmt.empty())
-                    {
-                        PatchInformation patch_site = patch_to_apply;
-                        patch_site.captures        = std::move(match_captures);
-                        PatchOperationImpl::rewriteWithStatements(
-                            *this, call_op.getOperation(), patch_site,
-                            action.stmt, config->target.arch
-                        );
-                        return;
-                    }
-
                     auto patch_module = load_code_module(
                         *call_op->getContext(), *patch_to_apply.spec->patch_module
                     );
@@ -606,9 +574,7 @@ namespace patchestry::passes {
                                 *this, call_op, patch_site, patch_module.get(), should_inline
                             );
                             break;
-                        case InstrumentationMode::REWRITE:
-                            // External-patch form of `mode: rewrite`
-                            // (`expr:` form is short-circuited above).
+                        case InstrumentationMode::REPLACE:
                             PatchOperationImpl::replaceCallWithPatch(
                                 *this, call_op, patch_site, patch_module.get(), should_inline
                             );
@@ -671,31 +637,6 @@ namespace patchestry::passes {
                     continue;
                 }
 
-                // REWRITE inline forms (`expr:` / `stmt:`) skip the
-                // module load — only `patch:` needs it.
-                if (action.mode == InstrumentationMode::REWRITE
-                    && !action.expr.empty())
-                {
-                    PatchInformation patch_site = patch_to_apply;
-                    patch_site.captures        = std::move(match_captures);
-                    PatchOperationImpl::rewriteWithExpression(
-                        *this, op, patch_site, action.expr,
-                        config->target.arch
-                    );
-                    continue;
-                }
-                if (action.mode == InstrumentationMode::REWRITE
-                    && !action.stmt.empty())
-                {
-                    PatchInformation patch_site = patch_to_apply;
-                    patch_site.captures        = std::move(match_captures);
-                    PatchOperationImpl::rewriteWithStatements(
-                        *this, op, patch_site, action.stmt,
-                        config->target.arch
-                    );
-                    continue;
-                }
-
                 auto patch_module =
                     load_code_module(*op->getContext(), *patch_to_apply.spec->patch_module);
                 if (!patch_module) {
@@ -719,9 +660,7 @@ namespace patchestry::passes {
                             *this, op, patch_site, patch_module.get(), should_inline
                         );
                         break;
-                    case InstrumentationMode::REWRITE:
-                        // External-patch form of `mode: rewrite` (`expr:`
-                        // form is short-circuited above).
+                    case InstrumentationMode::REPLACE:
                         if (auto call_op = mlir::dyn_cast< cir::CallOp >(op)) {
                             PatchOperationImpl::replaceCallWithPatch(
                                 *this, call_op, patch_site, patch_module.get(), should_inline
@@ -734,8 +673,7 @@ namespace patchestry::passes {
                                 *this, op, patch_site, patch_module.get(), should_inline
                             );
                         } else {
-                            LOG(ERROR) << "REWRITE mode (patch form) requires an op with "
-                                          "results; "
+                            LOG(ERROR) << "REPLACE mode requires an op with results; "
                                        << op->getName().getStringRef().str()
                                        << " has none. Use erase or apply_before/after.\n";
                         }
@@ -788,18 +726,8 @@ namespace patchestry::passes {
             target_type = cir::BoolType::get(builder.getContext());
         }
 
-        // The reference op is used purely as a location source. Callers
-        // outside the traditional match-and-replace flow (e.g. the
-        // rewrite-mode emitter, which doesn't always have a natural
-        // "call op" to point at) may pass nullptr — fall back to the
-        // value's defining op, or finally to an unknown location, so
-        // the helper stays tolerant of the missing context.
-        mlir::Location loc =
-            call_op != nullptr ? call_op->getLoc()
-                : (value.getDefiningOp() != nullptr ? value.getDefiningOp()->getLoc()
-                                                    : builder.getUnknownLoc());
         auto cast_op =
-            builder.create< cir::CastOp >(loc, target_type, cast_kind, value);
+            builder.create< cir::CastOp >(call_op->getLoc(), target_type, cast_kind, value);
         auto results = cast_op->getResults();
         if (results.empty()) {
             LOG(ERROR) << "Cast operation produced no results\n";
@@ -1293,7 +1221,7 @@ namespace patchestry::passes {
 
         // Dominance guard for `result:` captures. A capture bound via
         // `result: N` is `call_op->getResult(N)` — only defined once
-        // `call_op` has executed. In `apply_before` and `rewrite` the
+        // `call_op` has executed. In `apply_before` and `replace` the
         // patch call is inserted at `call_op`'s position (before it in
         // block order), so using the match-site's result as a patch
         // argument produces invalid SSA. `apply_after` is the only safe
@@ -1304,7 +1232,7 @@ namespace patchestry::passes {
         {
             auto mode = patch.patch_action->action[0].mode;
             if (mode == InstrumentationMode::APPLY_BEFORE
-                || mode == InstrumentationMode::REWRITE)
+                || mode == InstrumentationMode::REPLACE)
             {
                 LOG(ERROR)
                     << "capture '" << arg_spec.name

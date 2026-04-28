@@ -30,7 +30,7 @@ meta_patches:
               - name: "circular_buffer_put"
 
         action:
-          - mode: "rewrite"
+          - mode: "replace"
             patch_id: "fixed_bounds_check"
             description: "Replace comparison with fixed bounds check"
             arguments:

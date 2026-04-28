@@ -26,7 +26,7 @@ patches:
       name: "spo2_lookup"
       kind: "function"
     action:
-      mode: "rewrite"
+      mode: "replace"
       patch: "measurement_update_saturate_patch"
       arguments:
         - name: "function_argument"

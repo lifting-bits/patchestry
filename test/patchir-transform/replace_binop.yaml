@@ -30,7 +30,7 @@ meta_patches:
               - name: "compute_alloc_size"
 
         action:
-          - mode: "rewrite"
+          - mode: "replace"
             patch_id: "checked_mul"
             description: "Replace multiply with checked version"
             arguments:

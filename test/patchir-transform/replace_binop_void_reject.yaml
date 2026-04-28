@@ -36,7 +36,7 @@ meta_patches:
               - name: "compute_alloc_size"
 
         action:
-          - mode: "rewrite"
+          - mode: "replace"
             patch_id: "void_probe_mul"
             description: "Void patch — no cover for the binop's result"
             arguments:
