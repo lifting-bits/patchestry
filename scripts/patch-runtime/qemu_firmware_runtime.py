@@ -131,6 +131,10 @@ def normalize_transcript(output: bytes) -> tuple[str, ...]:
 
 
 def run_qemu(qemu_system_arm: Path, kernel: Path) -> tuple[str, ...]:
+    # Compare against the firmware's UART output only. QEMU's own diagnostic
+    # messages (e.g. "Timer with period zero, disabling" emitted by the
+    # lm3s6965evb timer model when the firmware idles after DONE) go to stderr
+    # and would otherwise leak into the transcript and break the comparison.
     argv = [
         str(qemu_system_arm),
         "-M",
@@ -141,10 +145,10 @@ def run_qemu(qemu_system_arm: Path, kernel: Path) -> tuple[str, ...]:
     ]
     try:
         result = subprocess.run(argv, check=False, capture_output=True, timeout=2.0)
-        output = (result.stdout or b"") + (result.stderr or b"")
+        stdout = result.stdout or b""
     except subprocess.TimeoutExpired as exc:
-        output = (exc.stdout or b"") + (exc.stderr or b"")
-    return normalize_transcript(output)
+        stdout = exc.stdout or b""
+    return normalize_transcript(stdout)
 
 
 def load_symbols(path: Path) -> dict[str, SymbolInfo]:
