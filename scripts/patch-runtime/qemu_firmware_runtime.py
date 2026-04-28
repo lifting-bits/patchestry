@@ -307,13 +307,29 @@ def candidate_repo_roots(repo_root: Path) -> tuple[Path, ...]:
 
 
 def repo_tool(repo_root: Path, build_type: str, tool_name: str) -> Path:
+    # Try every builds/<preset>/ directory so this works for the local
+    # `default` preset and CI's `ci` preset (and any other preset added later)
+    # without needing to plumb a preset name from the caller.
+    tried: list[Path] = []
     for root in candidate_repo_roots(repo_root):
-        path = root / "builds" / "default" / "tools" / tool_name / build_type / tool_name
-        if path.exists():
-            return path
+        builds_dir = root / "builds"
+        if not builds_dir.is_dir():
+            continue
+        # Prefer "default" first (legacy local-dev path), then any other preset.
+        preset_dirs = sorted(
+            (p for p in builds_dir.iterdir() if p.is_dir()),
+            key=lambda p: (p.name != "default", p.name),
+        )
+        for preset_dir in preset_dirs:
+            path = preset_dir / "tools" / tool_name / build_type / tool_name
+            tried.append(path)
+            if path.exists():
+                return path
+    searched = "\n  ".join(str(p) for p in tried) or "(no builds/ subdirectories found)"
     raise RuntimeError(
-        f"Missing tool {tool_name} under the default build tree for {repo_root}. "
-        f"Build the {build_type} preset first."
+        f"Missing tool {tool_name} under any build tree for {repo_root}. "
+        f"Build a preset that produces {build_type} artifacts first.\n"
+        f"Searched:\n  {searched}"
     )
 
 
