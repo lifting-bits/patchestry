@@ -5,8 +5,13 @@ This workflow validates an ARM32 firmware patch end to end:
 1. Build a minimal bare-metal firmware for QEMU `lm3s6965evb`.
 2. Load a checked-in decompile fixture for the target function.
 3. Generate the patch with Patchestry from the normal YAML/C patch inputs.
-4. Lower the patched function to LLVM IR and compile it back to ARM32 code.
-5. Use `patcherex2` to write the replacement blob and detour into the original ELF.
+4. Lower the patched function to LLVM IR.
+5. Use `patcherex2.ModifyFunctionPatch` to compile the LLVM IR, place the
+   patched function in flash, and emit a trampoline at the original
+   function entry. Helper functions defined in the same module are inserted
+   via `InsertFunctionPatch`. The wrapper installs `patcherex2` from the
+   `trail-of-forks/Patcherex2@patche_support` branch (LLVM-IR patch support
+   and ARM bare-metal trampoline fixes are not yet upstream).
 6. Boot the rewritten original ELF in QEMU and assert the serial transcript.
 
 The implementation lives in:

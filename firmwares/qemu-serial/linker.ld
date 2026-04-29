@@ -21,17 +21,10 @@ SECTIONS
     *(.rodata*)
   } > FLASH
 
-  .patch_arena : ALIGN(4)
-  {
-    __patch_arena_start = .;
-    KEEP(*(.patch_arena))
-    __patch_arena_end = .;
-  } > FLASH
-
   .data : ALIGN(4)
   {
     _sdata = .;
-    *(.data*)
+    KEEP(*(.data*))
     _edata = .;
   } > SRAM AT > FLASH
 

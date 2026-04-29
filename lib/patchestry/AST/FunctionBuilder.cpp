@@ -355,8 +355,22 @@ namespace patchestry::ast {
         }
 
         if (function.get().basic_blocks.empty()) {
-            LOG(ERROR) << "Can't create function shell for '" << c_name << "'. No basic blocks.\n";
-            return {};
+            // Ghidra exports callees that the active decompile request did not
+            // descend into (e.g. emit_before_base referenced from
+            // qemu_target_before in the qemu-serial fixture) as declaration-only
+            // entries with no basic blocks. Emit a forward declaration so the
+            // call site type-checks and downstream patch matchers can still
+            // see the callee, instead of failing the AST build outright.
+            LOG(INFO) << "Function '" << function.get().name
+                      << "' has no basic blocks; emitting a forward declaration only.\n";
+            auto decl_type = prev_decl != nullptr
+                ? prev_decl->getType()
+                : create_function_type(ctx, function.get().prototype);
+            auto *decl = create_declaration(ctx, decl_type, /*is_definition=*/false);
+            if (decl != nullptr && prev_decl != nullptr) {
+                decl->setPreviousDecl(prev_decl);
+            }
+            return decl;
         }
 
         auto function_type = prev_decl != nullptr
