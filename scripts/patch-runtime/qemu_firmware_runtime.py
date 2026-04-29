@@ -252,14 +252,52 @@ def detect_arm_bare_regions(path: Path) -> tuple[int, int, int, int, int]:
     return flash_start, flash_end, ram_start, ram_end, entry_point
 
 
-_LL_FUNCTION_PATTERN = re.compile(
-    r"define\s+(?:dso_local\s+)?(?:\w+\s+)*@(\w+)\([^)]*\)[^{]*\{(?:[^{}]*|\{[^{}]*\})*\}",
-    re.MULTILINE | re.DOTALL,
+_LL_FUNCTION_HEADER_PATTERN = re.compile(
+    r"^define\s+(?:dso_local\s+)?(?:\w+\s+)*@(\w+)\(",
 )
 _LL_LINKAGE_KEYWORDS = re.compile(
     r"^(?:private|internal|available_externally|linkonce(?:_odr)?"
     r"|weak(?:_odr)?|common|appending|extern_weak|external)\s+",
 )
+
+
+def iter_function_definitions(content: str) -> Iterable[tuple[str, str, str]]:
+    pos = 0
+    while True:
+        start = content.find("define ", pos)
+        while start != -1 and start > 0 and content[start - 1] != "\n":
+            start = content.find("define ", start + len("define "))
+        if start == -1:
+            return
+
+        body_start = content.find("{", start)
+        if body_start == -1:
+            raise RuntimeError("Malformed LLVM IR: unterminated function header")
+
+        header = content[start:body_start]
+        header_match = _LL_FUNCTION_HEADER_PATTERN.match(header.strip())
+        if header_match is None:
+            raise RuntimeError(
+                "Malformed LLVM IR: could not extract function name from header:\n"
+                f"{header.strip()}"
+            )
+
+        depth = 1
+        cursor = body_start + 1
+        while cursor < len(content) and depth > 0:
+            char = content[cursor]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            cursor += 1
+        if depth != 0:
+            raise RuntimeError(
+                f"Malformed LLVM IR: unterminated function body for {header_match.group(1)}"
+            )
+
+        yield header_match.group(1), header, content[start:cursor]
+        pos = cursor
 
 
 def extract_functions_from_llvm_ir(content: str) -> dict[str, str]:
@@ -290,11 +328,13 @@ def extract_functions_from_llvm_ir(content: str) -> dict[str, str]:
     attributes = re.findall(r"^attributes #\d+ = \{[^}]+\}", content, re.MULTILINE)
     metadata = re.findall(r"^![\w.]+ = .*$", content, re.MULTILINE)
 
+    functions = tuple(iter_function_definitions(content))
+
     local_decls: dict[str, str] = {}
-    for match in _LL_FUNCTION_PATTERN.finditer(content):
+    for name, _, function_body in functions:
         signature_match = re.match(
             r"(define\s+(?:dso_local\s+)?(?:\w+\s+)*@\w+\([^)]*\)[^{]*)",
-            match.group(0),
+            function_body,
         )
         if signature_match is None:
             continue
@@ -305,13 +345,12 @@ def extract_functions_from_llvm_ir(content: str) -> dict[str, str]:
         if body_match is None:
             continue
         body = _LL_LINKAGE_KEYWORDS.sub("", body_match.group(1))
-        local_decls[match.group(1)] = f"declare {body}"
+        local_decls[name] = f"declare {body}"
 
     suffix = "\n\n" + "\n".join(attributes) + "\n\n" + "\n".join(metadata)
 
     snippets: dict[str, str] = {}
-    for match in _LL_FUNCTION_PATTERN.finditer(content):
-        name = match.group(1)
+    for name, _, function_body in functions:
         other_decls = [decl for fn, decl in local_decls.items() if fn != name]
         prefix = (
             "\n".join(type_defs)
@@ -323,7 +362,7 @@ def extract_functions_from_llvm_ir(content: str) -> dict[str, str]:
             + "\n".join(other_decls)
             + "\n\n"
         )
-        snippets[name] = prefix + match.group(0) + suffix
+        snippets[name] = prefix + function_body + suffix
     return snippets
 
 
