@@ -133,6 +133,18 @@ fi
 
 ensure_macos_keystone
 
+# Patcherex2 (trail-of-forks/Patcherex2 @ patche_support) hardcodes
+# clang_version=19 for bare-metal ARM, so it shells out to clang-19 and
+# ld.lld-19 unconditionally. Expose the host's existing clang/ld.lld
+# under those names via a shim dir on PATH instead of forcing every
+# environment to install LLVM 19 alongside.
+patcherex_shim_dir="${PATCHESTRY_PATCHEREX_SHIM_DIR:-${TMPDIR:-/tmp}/patchestry-patcherex-shim}"
+rm -rf "$patcherex_shim_dir"
+mkdir -p "$patcherex_shim_dir"
+ln -sf "$llvm_prefix/clang" "$patcherex_shim_dir/clang-19"
+ln -sf "$ld_lld" "$patcherex_shim_dir/ld.lld-19"
+export PATH="$patcherex_shim_dir:$PATH"
+
 make -C "$repo_root/firmwares/qemu-serial" clean all \
   LLVM_PREFIX="$llvm_prefix" \
   LD_LLD="$ld_lld"

@@ -13,7 +13,35 @@ from typing import Iterable
 
 from elftools.elf.elffile import ELFFile
 from patcherex2 import InsertFunctionPatch, ModifyFunctionPatch, Patcherex
+from patcherex2.components.compilers import clang_arm as _patcherex_clang_arm
 from patcherex2.targets.elf_arm_bare import ElfArmBare
+
+
+# Patcherex2's ClangArm.compile() post-processes the assembled Thumb bytes and
+# rewrites every `bl <known_symbol>` into `blx`. That is correct when patching
+# an ARM-mode binary that wants to call into Thumb-compiled patches: the BLX
+# (immediate) flips the encoding bit so the CPU exchanges modes on entry.
+# For Cortex-M (Thumb-only) firmware, both the trampoline and the patch are
+# Thumb, and the rewrite drops us into ARM on every patch call — the M-profile
+# core has no ARM decoder and the firmware faults immediately. Skip the
+# rewrite by short-circuiting the post-processor to the freshly compiled bytes.
+def _thumb_only_compile(self, code, base=0, symbols=None, extension=".c",
+                        extra_compiler_flags=None, is_thumb=False, **kwargs):
+    if symbols is None:
+        symbols = {}
+    if extra_compiler_flags is None:
+        extra_compiler_flags = []
+    extra_compiler_flags = list(extra_compiler_flags)
+    extra_compiler_flags += ["-mthumb"] if is_thumb else ["-mno-thumb"]
+    # Skip ClangArm.compile entirely; defer to the base Compiler.compile so the
+    # bl→blx (and blx→bl) rewrite never runs.
+    return _patcherex_clang_arm.Compiler.compile(
+        self, code, base=base, symbols=symbols, extension=extension,
+        extra_compiler_flags=extra_compiler_flags, **kwargs,
+    )
+
+
+_patcherex_clang_arm.ClangArm.compile = _thumb_only_compile
 
 
 @dataclass(frozen=True)
@@ -367,16 +395,33 @@ def patch_function_in_elf(
                 "flash_end": flash_end,
                 "ram_start": ram_start,
                 "ram_end": ram_end,
-                "insert_points": [entry_point],
+                # ElfArmBare.finalize() injects a save_context push/pop shim
+                # at every insert_point to copy any FLASH-resident "new mapped
+                # blocks" into RAM at boot. The shim uses force_insert=True
+                # and clobbers the 4 bytes at the insert_point without
+                # relocating the displaced instructions, so pointing it at
+                # entry_point destroys Reset_Handler's .data-init prologue
+                # and the firmware fails to reach main. None of the current
+                # patches add RAM-resident blocks, so the shim has nothing to
+                # do — pass an empty list to skip it. Re-introduce the entry
+                # insert_point only if a patch lives in RAM and needs the
+                # FLASH→RAM copy stub, and even then point it past the
+                # .data/.bss init in startup.S, not at the reset vector.
+                "insert_points": [],
             }
         },
     )
 
     compile_opts = {"extension": ".ll", "load_options": PATCHEREX2_LOAD_OPTIONS}
+    # Cortex-M / ElfArmBare targets only execute Thumb. InsertFunctionPatch
+    # defaults is_thumb=False, which makes patcherex2 compile the patch with
+    # -mno-thumb (ARM mode); the BLX from the Thumb trampoline then jumps
+    # into ARM code and the M-profile core faults on the first instruction.
+    # Force Thumb for every inserted helper.
     for name, code in snippets.items():
         if name == target_function:
             continue
-        p.patches.append(InsertFunctionPatch(name, code, compile_opts=compile_opts))
+        p.patches.append(InsertFunctionPatch(name, code, is_thumb=True, compile_opts=compile_opts))
     p.patches.append(
         ModifyFunctionPatch(target_function, snippets[target_function], compile_opts=compile_opts)
     )

@@ -24,7 +24,7 @@ SECTIONS
   .data : ALIGN(4)
   {
     _sdata = .;
-    *(.data*)
+    KEEP(*(.data*))
     _edata = .;
   } > SRAM AT > FLASH
 
