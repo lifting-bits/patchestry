@@ -15,11 +15,11 @@ target:
 libraries:
   - "patches/qemu_serial_patch_library.yaml"
 
-meta_contracts:
+meta_patches:
   - name: "qemu_serial_entry_meta_contract"
     description: "Runtime contract inserted at qemu_target_contract entry"
 
-    contract_actions:
+    patch_actions:
       - id: "QEMU-SERIAL-ENTRY-CONTRACT-001"
         description: "Insert a visible entry contract"
 
@@ -31,7 +31,7 @@ meta_contracts:
 
         action:
           - mode: "apply_at_entrypoint"
-            contract_id: "qemu_serial_entry_contract"
+            patch_id: "qemu_serial_entry_contract"
             description: "Emit a contract line at qemu_target_contract entrypoint"
 
             arguments: []

@@ -26,10 +26,8 @@ patches:
     code_file: "qemu_serial_patch.c"
     function_name: "patch::replace::qemu_target_replace"
 
-contracts:
   - name: "qemu_serial_entry_contract"
     description: "Emit a visible runtime contract line at function entry"
     category: "qemu-serial"
-    type: "runtime"
     code_file: "qemu_serial_patch.c"
     function_name: "contract::entrypoint::qemu_target_contract"
