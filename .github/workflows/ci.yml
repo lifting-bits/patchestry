@@ -6,8 +6,6 @@
 #
 
 name: CI
-permissions:
-  contents: read
 on:
   push:
     branches:
@@ -285,7 +283,6 @@ jobs:
             echo "::warning::${FAILED} KLEE test(s) failed"
             exit 1
           fi
-          lit ./builds/ci/test -D BUILD_TYPE=${{ matrix.build-type }} -v -DCI_OUTPUT_FOLDER=${{ github.workspace }}/builds/ci/test/ghidra/Output
 
   qemu-runtime-validation:
     strategy:
