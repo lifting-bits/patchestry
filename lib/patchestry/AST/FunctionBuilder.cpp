@@ -355,22 +355,17 @@ namespace patchestry::ast {
         }
 
         if (function.get().basic_blocks.empty()) {
-            // Ghidra exports callees that the active decompile request did not
-            // descend into (e.g. emit_before_base referenced from
-            // qemu_target_before in the qemu-serial fixture) as declaration-only
-            // entries with no basic blocks. Emit a forward declaration so the
-            // call site type-checks and downstream patch matchers can still
-            // see the callee, instead of failing the AST build outright.
-            LOG(INFO) << "Function '" << function.get().name
-                      << "' has no basic blocks; emitting a forward declaration only.\n";
-            auto decl_type = prev_decl != nullptr
-                ? prev_decl->getType()
-                : create_function_type(ctx, function.get().prototype);
-            auto *decl = create_declaration(ctx, decl_type, /*is_definition=*/false);
-            if (decl != nullptr && prev_decl != nullptr) {
-                decl->setPreviousDecl(prev_decl);
-            }
-            return decl;
+            // The canonical forward decl for a no-basic-blocks function (e.g.
+            // a Ghidra-exported callee that the decompile request did not
+            // descend into, like emit_before_base in the qemu-serial fixture)
+            // is created by the FunctionBuilder constructor and registered in
+            // function_list. ASTConsumer skips these via has_basic_blocks(),
+            // so reaching here means a caller violated that contract.
+            LOG(ERROR) << "create_definition called for '" << c_name
+                       << "' which has no basic blocks; caller should skip "
+                          "via has_basic_blocks(). The forward decl from the "
+                          "FunctionBuilder constructor is canonical.\n";
+            return {};
         }
 
         auto function_type = prev_decl != nullptr
