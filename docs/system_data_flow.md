@@ -60,17 +60,26 @@ Downstream of this repo:
     \- external binary rewriting / verification tools
        e.g. final patched binary, KLEE/SeaHorn-style analysis
 
-checked-in Ghidra JSON fixture
-  -> patchir-decomp
-  -> CIR
-  -> patchir-transform
-  -> patched CIR
-  -> patchir-cir2llvm
-  -> patched LLVM IR
-  -> target object code for the affected function
-  -> linked patch blob at a reserved firmware patch arena address
-  -> patcherex2 raw-byte rewrite of the original ELF
-  -> qemu-system-arm runtime validation
+Current firmware runtime-validation path:
+[Checked-in Ghidra JSON fixture]
+    |
+    | patchir-decomp --emit-cir
+    v
+[CIR]
+    |
+    | patchir-transform + YAML spec + patch/contract C code
+    v
+[Patched CIR]
+    |
+    | patchir-cir2llvm -S
+    v
+[Patched LLVM IR]
+    |
+    \- downstream whole-function replacement flow
+       target object for affected function
+       -> linked patch blob at reserved firmware patch arena address
+       -> patcherex2 raw-byte rewrite of original ELF
+       -> qemu-system-arm runtime validation
 ```
 
 ## Notes on Outputs
