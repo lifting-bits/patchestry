@@ -229,7 +229,7 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    // 5. Write output
+    // 6. Write output
     if (!writeModuleToFile(*module, output_filename)) {
         LOG(ERROR) << "failed to write output\n";
         return EXIT_FAILURE;

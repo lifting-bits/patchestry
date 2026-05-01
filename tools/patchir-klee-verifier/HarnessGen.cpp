@@ -495,6 +495,19 @@ namespace patchestry::klee_verifier {
         unsigned dropped_total = 0;
         unsigned instrumented = 0;
         for (auto &site : sites) {
+            // InvokeInst is itself a terminator, so site.call->getNextNode()
+            // returns null and the splitBasicBlock below would assert/UB.
+            // Postcondition instrumentation needs an instruction *after* the
+            // call site, which only non-terminator call shapes provide. Skip
+            // the contract entirely (rather than partial-instrument with just
+            // preconditions) so the diagnostic is unambiguous.
+            if (llvm::isa< llvm::InvokeInst >(site.call)) {
+                LOG(WARNING) << "skipping !static_contract on InvokeInst — "
+                                "post-call instrumentation requires a "
+                                "non-terminator call\n";
+                continue;
+            }
+
             unsigned dropped = 0;
             auto preds = parseStaticContractText(site.body, dropped);
             dropped_total += dropped;
@@ -554,6 +567,22 @@ namespace patchestry::klee_verifier {
                 for (auto &P : preds) {
                     if (P.is_precondition)
                         continue;
+                    // Postconditions on by-value (non-pointer) Arg(N) check
+                    // a property of the value passed in — the call cannot
+                    // mutate the caller's binding, so the assertion is a
+                    // structural no-op (post == pre on the same SSA value).
+                    // Warn the spec author rather than emit silently.
+                    if (P.target.substr(0, 3) == "Arg"
+                        && P.arg_index < site.call->arg_size()
+                        && !site.call->getArgOperand(P.arg_index)
+                                     ->getType()
+                                     ->isPointerTy())
+                    {
+                        LOG(WARNING)
+                            << "postcondition on by-value Arg(" << P.arg_index
+                            << ") at call site is a no-op — call cannot "
+                               "mutate it\n";
+                    }
                     llvm::Value *arg_val = resolve_arg(P);
                     emitKleePredicate(B, M, P, arg_val, ret_val);
                 }
