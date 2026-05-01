@@ -189,12 +189,15 @@ namespace llvm::yaml {
             io.mapOptional("apiVersion", library.api_version);
             io.mapOptional("metadata", library.metadata);
 
-            // Reject legacy `patches:` / `contracts:` keys before parsing
-            // the new ones — silently accepting either spelling masks
-            // partial migrations and lets a stale library shadow a
-            // newly-renamed one.
-            std::vector< patch::PatchSpec > legacy_patches;
-            std::vector< contract::ContractSpec > legacy_contracts;
+            // Library keys are `patch_definitions:` / `contract_definitions:`.
+            // The legacy `patches:` / `contracts:` spellings are not mapped,
+            // so a partially-migrated library hits one of two errors at
+            // parse time: if it carries any new key alongside a legacy one,
+            // LLVM YAMLTraits' strict path raises "unknown key 'patches'";
+            // if it carries only legacy keys, the "must include at least
+            // one 'patch_definitions' or 'contract_definitions' entry"
+            // check below fires first. Either path keeps a stale library
+            // from silently shadowing a newly-renamed one.
             io.mapOptional("patch_definitions", library.patches);
             io.mapOptional("contract_definitions", library.contracts);
 
