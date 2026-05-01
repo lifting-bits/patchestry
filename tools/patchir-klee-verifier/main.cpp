@@ -214,7 +214,16 @@ int main(int argc, char **argv) {
         llvm::outs() << "Stubbed " << stub_count << " external function(s)\n";
     }
 
-    // 4. Generate main() harness
+    // 4. Instrument static contracts at each call site that carries
+    //    `!static_contract` metadata. Runs before harness generation so the
+    //    harness's call to target_fn flows through the now-instrumented
+    //    bodies of target_fn and its callees.
+    if (!instrumentStaticContracts(*module)) {
+        LOG(ERROR) << "failed to instrument static contracts\n";
+        return EXIT_FAILURE;
+    }
+
+    // 5. Generate main() harness
     if (!generateHarness(*module, target_fn)) {
         LOG(ERROR) << "failed to generate harness\n";
         return EXIT_FAILURE;

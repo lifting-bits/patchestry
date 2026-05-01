@@ -1,0 +1,48 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: bl-device-process-entry-safe
+  description: Replace sprintf with bounds-aware wrapper, attach the bounds contract
+  version: 1.0.0
+  author: Security Team
+  created: '2026-05-01'
+  kind: PatchSpec
+target:
+  binary: bloodview
+  arch: ARM:LE:32
+libraries:
+- bloodview_klee_patches.yaml
+patches:
+- name: REPLACE-SPRINTF-001
+  id: REPLACE-SPRINTF-001
+  description: Replace sprintf with bounds-aware wrapper
+  match:
+    name: sprintf
+    context:
+    - bl_device__process_entry
+  action:
+    mode: replace
+    patch: device_list_replace_sprintf_patch
+    arguments:
+    - name: argument0
+      source: operand
+      index: 0
+    - name: argument1
+      source: constant
+      value: 32
+    - name: argument2
+      source: operand
+      index: 1
+    - name: argument3
+      source: operand
+      index: 2
+contracts:
+- name: sprintf_contract_at_replacement
+  id: SAFE-CONTRACT-001
+  description: Verify the bounds-aware wrapper honors the bounds contract
+  match:
+    name: patch__replace__sprintf
+    context:
+    - bl_device__process_entry
+  action:
+    mode: apply_before
+    contract: sprintf_contract_static

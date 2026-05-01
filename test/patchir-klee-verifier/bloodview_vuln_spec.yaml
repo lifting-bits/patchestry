@@ -1,0 +1,24 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: bl-device-process-entry-vuln
+  description: Attach the bounds contract to the unpatched sprintf call
+  version: 1.0.0
+  author: Security Team
+  created: '2026-05-01'
+  kind: PatchSpec
+target:
+  binary: bloodview
+  arch: ARM:LE:32
+libraries:
+- bloodview_klee_patches.yaml
+contracts:
+- name: sprintf_contract_at_raw_sprintf
+  id: VULN-CONTRACT-001
+  description: Bound the unpatched sprintf return to [0, 32] — KLEE will explore returns > 32 and the postcondition fires
+  match:
+    name: sprintf
+    context:
+    - bl_device__process_entry
+  action:
+    mode: apply_before
+    contract: sprintf_contract_static

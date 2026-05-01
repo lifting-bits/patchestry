@@ -53,58 +53,45 @@ namespace patchestry::klee_verifier {
 
     namespace {
 
-        // Collect static_contract metadata pertaining to the target function.
-        //
-        // The `static_contract` MDTuple schema is:
-        //   operand(0) -> MDString: function name the contract applies to
+        // Collect every CallBase in `M` carrying a `!static_contract`
+        // MDTuple, alongside its serialised body. The schema is:
+        //   operand(0) -> MDString: tag (informational, not used to scope)
         //   operand(1) -> MDString: serialised contract body
         //
-        // We match on the *name* in operand(0) rather than deriving the target
-        // from `CallBase::getCalledFunction()`. Pointer equality on the called
-        // function is brittle: it returns null for indirect calls through a
-        // function pointer (decompiled dispatch tables, callbacks), for calls
-        // that go through a bitcast `ConstantExpr` (common when the Ghidra
-        // decompiler emits a call-site signature that doesn't exactly match
-        // the callee's definition), and for calls through a `GlobalAlias`.
-        // Every one of those cases silently dropped contract predicates with
-        // no diagnostic before. Since the decompiler stamps operand(0) at
-        // attachment time, it's the authoritative identifier and covers all
-        // call-site shapes uniformly.
-        //
-        // We walk the whole module once and collect any instruction whose
-        // metadata names the target, regardless of whether it's a call site
-        // or an instruction inside the target function's body.
-        std::vector< std::string >
-        collectStaticContracts(llvm::Module &M, llvm::StringRef target_name) {
-            std::vector< std::string > contracts;
-            if (target_name.empty())
-                return contracts;
-
+        // Earlier revisions filtered by operand(0) against the harness's
+        // target function name, but contracts are an *operation-level*
+        // property: they're stamped on the matched call op in CIR (see
+        // ContractOperationImpl::applyContractBefore/After), so the right
+        // place to instrument them is at the call site, regardless of which
+        // function contains it. Multiple contracts at multiple call sites
+        // are independent and each get their own assume/assert pair.
+        struct ContractSite {
+            llvm::CallBase *call;
+            std::string     body;
+        };
+        std::vector< ContractSite > collectContractSites(llvm::Module &M) {
+            std::vector< ContractSite > sites;
             for (auto &F : M) {
                 for (auto &BB : F) {
                     for (auto &I : BB) {
-                        auto *contract_md = I.getMetadata("static_contract");
+                        auto *cb = llvm::dyn_cast< llvm::CallBase >(&I);
+                        if (!cb)
+                            continue;
+                        auto *contract_md = cb->getMetadata("static_contract");
                         if (!contract_md)
                             continue;
 
                         auto *tuple = llvm::dyn_cast< llvm::MDTuple >(contract_md);
                         if (!tuple || tuple->getNumOperands() < 2)
                             continue;
-
-                        auto *fn_name = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(0));
-                        if (!fn_name || fn_name->getString() != target_name)
+                        auto *body = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1));
+                        if (!body)
                             continue;
-
-                        auto *md_str = llvm::dyn_cast< llvm::MDString >(tuple->getOperand(1));
-                        if (!md_str)
-                            continue;
-
-                        contracts.push_back(md_str->getString().str());
+                        sites.push_back({ cb, body->getString().str() });
                     }
                 }
             }
-
-            return contracts;
+            return sites;
         }
 
         // Helper to extend integer value to i64 for range comparisons.
@@ -497,19 +484,111 @@ namespace patchestry::klee_verifier {
         return count;
     }
 
+    bool instrumentStaticContracts(llvm::Module &M) {
+        auto sites = collectContractSites(M);
+        if (sites.empty()) {
+            if (verbose)
+                llvm::outs() << "No static contracts found\n";
+            return true;
+        }
+
+        unsigned dropped_total = 0;
+        unsigned instrumented = 0;
+        for (auto &site : sites) {
+            unsigned dropped = 0;
+            auto preds = parseStaticContractText(site.body, dropped);
+            dropped_total += dropped;
+            if (preds.empty())
+                continue;
+
+            // Resolve a predicate's `Arg(N)` reference to the i-th operand of
+            // the contracted call site. `ReturnValue` resolves to the call's
+            // SSA result (skipped on void calls — caller checks).
+            auto resolve_arg = [&](const ParsedPredicate &P) -> llvm::Value * {
+                if (P.target.substr(0, 3) != "Arg")
+                    return nullptr;
+                if (P.arg_index >= site.call->arg_size())
+                    return nullptr;
+                return site.call->getArgOperand(P.arg_index);
+            };
+
+            // Preconditions: emit klee_assume just before the call. No bb
+            // surgery needed — klee_assume is a non-terminator call.
+            {
+                llvm::IRBuilder<> B(site.call);
+                for (auto &P : preds) {
+                    if (!P.is_precondition)
+                        continue;
+                    // ReturnValue in a precondition is meaningless (the call
+                    // hasn't run yet). emitKleePredicate skips when V is null.
+                    llvm::Value *arg_val = resolve_arg(P);
+                    emitKleePredicate(B, M, P, arg_val, /*ret_val=*/nullptr);
+                }
+            }
+
+            // Postconditions: emit klee_assert just after the call. Each
+            // assertion expands to `if (!cond) klee_abort()`, which needs a
+            // terminator — split the bb after the call so the assertion
+            // chain owns its own terminators, then close with a branch to
+            // the post-call tail.
+            bool has_post = false;
+            for (auto &P : preds) {
+                if (!P.is_precondition) {
+                    has_post = true;
+                    break;
+                }
+            }
+            if (has_post) {
+                auto *parent_bb = site.call->getParent();
+                auto *post_bb   = parent_bb->splitBasicBlock(
+                    site.call->getNextNode(), "after.contract"
+                );
+                // splitBasicBlock added an unconditional br; replace it with
+                // our own terminator chain.
+                parent_bb->getTerminator()->eraseFromParent();
+
+                llvm::IRBuilder<> B(parent_bb);
+                llvm::Value *ret_val = site.call->getType()->isVoidTy()
+                    ? nullptr
+                    : static_cast< llvm::Value * >(site.call);
+                for (auto &P : preds) {
+                    if (P.is_precondition)
+                        continue;
+                    llvm::Value *arg_val = resolve_arg(P);
+                    emitKleePredicate(B, M, P, arg_val, ret_val);
+                }
+                B.CreateBr(post_bb);
+            }
+
+            ++instrumented;
+        }
+
+        if (verbose) {
+            llvm::outs() << "Instrumented " << instrumented << " of " << sites.size()
+                         << " contract site(s)\n";
+        }
+
+        if (dropped_total > 0) {
+            if (strict_contracts) {
+                LOG(ERROR)
+                    << dropped_total
+                    << " predicate(s) failed to parse — refusing to emit an "
+                       "under-constrained harness (pass --strict-contracts=false to override)\n";
+                return false;
+            }
+            LOG(WARNING) << dropped_total
+                         << " predicate(s) dropped during parsing — harness may be "
+                            "under-constrained\n";
+        }
+        return true;
+    }
+
     bool generateHarness(llvm::Module &M, llvm::Function *target_fn) {
         auto &Ctx   = M.getContext();
         auto &DL    = M.getDataLayout();
         auto *i32Ty = llvm::Type::getInt32Ty(Ctx);
         auto *ptrTy = llvm::PointerType::getUnqual(Ctx);
         auto *sizeTy = DL.getIntPtrType(Ctx);
-
-        // Contract metadata's operand(0) stores the target function's name at
-        // attachment time. When the target *is* main, the rename below changes
-        // `target_fn->getName()` to `__klee_orig_main`, and a later name-based
-        // lookup misses every contract. Snapshot the name as an owned string
-        // before any rewrite so the collection uses the pre-rename identity.
-        std::string contract_target_name = target_fn->getName().str();
 
         // Remove existing main if present — but not if it's the target function.
         //
@@ -575,37 +654,7 @@ namespace patchestry::klee_verifier {
 
         auto make_sym = getKleeMakeSymbolic(M);
 
-        // 1. Collect static contract predicates
-        auto contracts = collectStaticContracts(M, contract_target_name);
-        std::vector< ParsedPredicate > all_preds;
-        unsigned dropped_preds = 0;
-        for (auto &c : contracts) {
-            auto preds = parseStaticContractText(c, dropped_preds);
-            all_preds.insert(all_preds.end(), preds.begin(), preds.end());
-        }
-
-        if (dropped_preds > 0) {
-            if (strict_contracts) {
-                LOG(ERROR)
-                    << dropped_preds
-                    << " predicate(s) failed to parse for target '"
-                    << target_fn->getName()
-                    << "' — refusing to emit an under-constrained harness "
-                       "(pass --strict-contracts=false to override)\n";
-                return false;
-            }
-            LOG(WARNING) << dropped_preds
-                         << " predicate(s) dropped during parsing for target '"
-                         << target_fn->getName()
-                         << "' — harness may be under-constrained\n";
-        }
-
-        if (verbose) {
-            llvm::outs() << "Found " << contracts.size() << " static contract(s) with "
-                         << all_preds.size() << " predicate(s)\n";
-        }
-
-        // 2. Symbolically initialize module-wide globals via the per-type
+        // 1. Symbolically initialize module-wide globals via the per-type
         //    init machinery (see GlobalsInit.cpp for the four-stage design).
         //    Emits a single call to the dispatcher at the top of main(),
         //    before argument symbolization so the target sees initialized
@@ -624,11 +673,9 @@ namespace patchestry::klee_verifier {
                          << " pointer field(s) inferred\n";
         }
 
-        // 3. Create symbolic arguments for the target function
+        // 2. Create symbolic arguments for the target function
         llvm::FunctionType *target_ft = target_fn->getFunctionType();
         std::vector< llvm::Value * > args;
-        // Map from arg index to the loaded argument value (for predicates)
-        std::map< unsigned, llvm::Value * > arg_values;
 
         for (unsigned i = 0; i < target_ft->getNumParams(); ++i) {
             llvm::Type *param_ty = target_ft->getParamType(i);
@@ -665,18 +712,14 @@ namespace patchestry::klee_verifier {
 
                 llvm::Value *arg_ptr = B.CreateBitCast(Buf, param_ty);
                 args.push_back(arg_ptr);
-                arg_values[i] = arg_ptr;
             } else if (param_size == 0) {
                 // Zero-sized non-pointer type (e.g. empty aggregate passed
                 // by value under some ABIs). klee_make_symbolic(ptr, 0,
                 // name) is a no-op and the subsequent load would read
                 // undef anyway; synthesize undef directly and skip the
-                // wasted call. Any contract predicate targeting this
-                // parameter is meaningless — there are no bits to
-                // constrain.
+                // wasted call.
                 llvm::Value *Val = llvm::UndefValue::get(param_ty);
                 args.push_back(Val);
-                arg_values[i] = Val;
             } else {
                 // For non-pointer args: alloca, make symbolic, load
                 auto *Alloca = B.CreateAlloca(param_ty);
@@ -688,7 +731,6 @@ namespace patchestry::klee_verifier {
 
                 llvm::Value *Val = B.CreateLoad(param_ty, Alloca);
                 args.push_back(Val);
-                arg_values[i] = Val;
             }
 
             if (verbose) {
@@ -698,52 +740,17 @@ namespace patchestry::klee_verifier {
             }
         }
 
-        // 4. Emit precondition assumes
-        for (auto &P : all_preds) {
-            if (!P.is_precondition)
-                continue;
-
-            llvm::Value *arg_val = nullptr;
-            if (P.target.substr(0, 3) == "Arg") {
-                auto it = arg_values.find(P.arg_index);
-                if (it != arg_values.end())
-                    arg_val = it->second;
-            }
-
-            emitKleePredicate(B, M, P, arg_val, nullptr);
-        }
-
-        // 5. Call the target function
-        llvm::Value *ret_val = nullptr;
+        // 3. Call the target function. Contract predicates have already been
+        //    instrumented around their respective call sites by
+        //    instrumentStaticContracts(); the harness no longer needs to
+        //    reason about contracts at this level.
         if (target_ft->getReturnType()->isVoidTy()) {
             B.CreateCall(target_fn, args);
         } else {
-            ret_val = B.CreateCall(target_fn, args);
+            B.CreateCall(target_fn, args);
         }
 
-        // 6. Emit postcondition asserts
-        for (auto &P : all_preds) {
-            if (P.is_precondition)
-                continue;
-
-            llvm::Value *arg_val = nullptr;
-            if (P.target.substr(0, 3) == "Arg") {
-                if (P.arg_index < target_ft->getNumParams() &&
-                    !target_ft->getParamType(P.arg_index)->isPointerTy())
-                {
-                    LOG(WARNING)
-                        << "postcondition on by-value Arg(" << P.arg_index
-                        << ") is a no-op — callee cannot mutate it\n";
-                }
-                auto it = arg_values.find(P.arg_index);
-                if (it != arg_values.end())
-                    arg_val = it->second;
-            }
-
-            emitKleePredicate(B, M, P, arg_val, ret_val);
-        }
-
-        // 7. Return 0
+        // 4. Return 0
         B.CreateRet(llvm::ConstantInt::get(i32Ty, 0));
 
         if (verbose) {
