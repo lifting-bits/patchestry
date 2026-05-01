@@ -1,26 +1,23 @@
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "basic-transform-test"
-  description: "Basic transform test for unit testing"
-  version: "1.0.0"
-  author: "Test Suite"
-  created: "2024-01-01"
-
+  name: basic-transform-test
+  description: Basic transform test for unit testing
+  version: 1.0.0
+  author: Test Suite
+  created: '2024-01-01'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/test_patches.yaml"
-
+- patches/test_patches.yaml
 patches:
-  - name: "test_function_before"
-    id: "TEST-PATCH-001"
-    description: "Insert marker call before test_function"
-    match:
-      name: "test_function"
-      kind: "function"
-    action:
-      mode: "apply_before"
-      patch: "test_function_before"
+- name: test_function_before
+  id: TEST-PATCH-001
+  description: Insert marker call before test_function
+  match:
+    name: test_function
+    kind: function
+  action:
+    mode: apply_before
+    patch: test_function_before

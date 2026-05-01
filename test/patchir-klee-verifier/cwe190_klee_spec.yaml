@@ -1,60 +1,44 @@
-# KLEE verification spec for CWE-190 integer overflow
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "cwe190-klee-verification"
-  description: "E2E test: decomp → transform (patch + static contract) → cir2llvm → klee-verifier"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-03-26"
-
+  name: cwe190-klee-verification
+  description: 'E2E test: decomp → transform (patch + static contract) → cir2llvm → klee-verifier'
+  version: 1.0.0
+  author: Security Team
+  created: '2026-03-26'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "cwe190_klee_patches.yaml"
-
-meta_patches:
-  - name: "cwe190_patch"
-    description: "Replace unchecked multiply with overflow-checked version"
-
-    patch_actions:
-      - id: "CWE-190-KLEE-001"
-        description: "Replace 16-bit multiply with overflow-checked version"
-
-        match:
-          - name: "cir.binop"
-            kind: "operation"
-            function_context:
-              - name: "peek_process"
-
-        action:
-          - mode: "replace"
-            patch_id: "cwe190_checked_mul16"
-            description: "Replace multiply with overflow-safe version"
-            arguments:
-              - name: "count"
-                source: "operand"
-                index: 0
-              - name: "block_size"
-                source: "operand"
-                index: 1
-
-meta_contracts:
-  - name: "cwe190_contract"
-    description: "Static contract: return value range and pointer validity"
-
-    contract_actions:
-      - id: "CWE-190-KLEE-002"
-        description: "Attach range postcondition to memcpy call"
-
-        match:
-          - name: "memcpy"
-            kind: "function"
-            function_context:
-              - name: "peek_process"
-
-        action:
-          - mode: "apply_before"
-            contract_id: "cwe190_static_contract"
+- cwe190_klee_patches.yaml
+patches:
+- name: cwe190_patch
+  id: CWE-190-KLEE-001
+  description: Replace 16-bit multiply with overflow-checked version
+  match:
+    name: cir.binop
+    op_kind: mul
+    kind: operation
+    context:
+    - peek_process
+  action:
+    mode: replace
+    patch: cwe190_checked_mul16
+    arguments:
+    - name: count
+      source: operand
+      index: 0
+    - name: block_size
+      source: operand
+      index: 1
+contracts:
+- name: cwe190_contract
+  id: CWE-190-KLEE-002
+  description: Attach range postcondition to memcpy call
+  match:
+    name: memcpy
+    context:
+    - peek_process
+  action:
+    mode: apply_before
+    contract: cwe190_static_contract

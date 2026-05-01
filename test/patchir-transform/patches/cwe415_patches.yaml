@@ -1,21 +1,18 @@
-# patches/cwe415_patches.yaml
-
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "cwe415_patches"
-  version: "1.0.0"
-  description: "CWE-415 double free patches"
-  author: "Security Team"
-  created: "2026-03-23"
-
-patches:
-  - name: "cwe415_null_after_free"
-    description: "Null pointer after free to prevent double free"
-    category: "memory_safety"
-    code_file: "patches/patch_null_after_free.c"
-    function_name: "patch::after::free"
-    parameters:
-      - name: "ptr_ref"
-        type: "void*"
-        description: "Reference to the pointer being freed (via is_reference)"
+  name: cwe415_patches
+  description: CWE-415 double free patches
+  version: 1.0.0
+  author: Security Team
+  created: '2026-03-23'
+  kind: PatchLibrary
+patch_definitions:
+- name: cwe415_null_after_free
+  description: Null pointer after free to prevent double free
+  category: memory_safety
+  function_name: patch::after::free
+  code_file: patches/patch_null_after_free.c
+  parameters:
+  - name: ptr_ref
+    type: void*
+    description: Reference to the pointer being freed (via is_reference)

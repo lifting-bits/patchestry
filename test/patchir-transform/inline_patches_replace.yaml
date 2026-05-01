@@ -1,39 +1,29 @@
-# Negative test: `optimization: ["inline-patches"]` on a `replace`
-# action targeting a patch with a nested early return
-# (`if (oob) return 0; return (u8)p;` lowers to a `cir.return` inside
-# `cir.scope { cir.if { ... } }`). The inliner can't rewrite that
-# return into a branch to the caller's continuation without tripping
-# MLIR's cross-region-branch verifier, so it rejects up-front with a
-# clear diagnostic. The companion LIT block in `measurement_update.json`
-# asserts the error message.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "inline-patches-replace"
-  description: "Replace + inline a multi-return patch at spo2_lookup"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-04-22"
-
-libraries:
-  - "patches/measurement_update_patch.yaml"
-
+  name: inline-patches-replace
+  description: Replace + inline a multi-return patch at spo2_lookup
+  version: 1.0.0
+  author: Security Team
+  created: '2026-04-22'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
+libraries:
+- patches/measurement_update_patch.yaml
 patches:
-  - name: "inline_replace_spo2"
-    id: "INLINE-REPLACE-001"
-    description: "Replace + inline the matched spo2_lookup call"
-    match:
-      name: "spo2_lookup"
-      kind: "function"
-    action:
-      mode: "replace"
-      patch: "measurement_update_replace_patch"
-      arguments:
-        - name: "function_argument"
-          source: "operand"
-          index: 0
-      optimization: ["inline-patches"]
+- name: inline_replace_spo2
+  id: INLINE-REPLACE-001
+  description: Replace + inline the matched spo2_lookup call
+  match:
+    name: spo2_lookup
+    kind: function
+  action:
+    mode: replace
+    patch: measurement_update_replace_patch
+    arguments:
+    - name: function_argument
+      source: operand
+      index: 0
+    optimization:
+    - inline-patches

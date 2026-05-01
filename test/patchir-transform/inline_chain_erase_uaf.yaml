@@ -1,45 +1,34 @@
-# Regression: use-after-free in the deferred-inline worklist.
-# Sequence:
-#   1. P1 runs apply_before + optimization: ["inline-patches"] on
-#      spo2_lookup. The emitted `patch__before__spo2_lookup` call is
-#      enqueued on `inline_worklists` (raw Operation*).
-#   2. P2 matches `patch__before__spo2_lookup` by name (allowed — specs
-#      chain by prior-emitted callee name, see the no-skip-guard in
-#      apply_patch_action_to_targets) with `mode: erase`, which erases
-#      the matched call.
-#   3. Post-pass, runOnOperation iterates `inline_worklists`. Pre-fix,
-#      the still-queued pointer was dangling → dereference crash.
-# Fix routes every patch-level erase through InstrumentationPass::erase_op,
-# which drops the op from `inline_worklists` before erasing.
 apiVersion: patchestry.io/v1
 metadata:
-  name: "inline-chain-erase-uaf"
-  description: "Regression: chained erase on an inline-queued patch call"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-04-22"
+  name: inline-chain-erase-uaf
+  description: 'Regression: chained erase on an inline-queued patch call'
+  version: 1.0.0
+  author: Security Team
+  created: '2026-04-22'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/measurement_update_patch.yaml"
+- patches/measurement_update_patch.yaml
 patches:
-  - name: "uaf_p1_inline"
-    id: "UAF-P1"
-    match:
-      name: "spo2_lookup"
-      kind: "function"
-    action:
-      mode: "apply_before"
-      patch: "measurement_update_before_patch"
-      arguments:
-        - source: "operand"
-          index: 0
-      optimization: ["inline-patches"]
-  - name: "uaf_p2_erase_emitted"
-    id: "UAF-P2"
-    match:
-      name: "patch__before__spo2_lookup"
-      kind: "function"
-    action:
-      mode: "erase"
+- name: uaf_p1_inline
+  id: UAF-P1
+  match:
+    name: spo2_lookup
+    kind: function
+  action:
+    mode: apply_before
+    patch: measurement_update_before_patch
+    arguments:
+    - source: operand
+      index: 0
+    optimization:
+    - inline-patches
+- name: uaf_p2_erase_emitted
+  id: UAF-P2
+  match:
+    name: patch__before__spo2_lookup
+    kind: function
+  action:
+    mode: erase

@@ -1,22 +1,18 @@
-# Test: ERASE mode on a call whose return value is used.
-# Erases sprintf() in create_port — its result (stored to %3) is replaced
-# with a default (zero) value so dependent ops stay well-formed.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "erase-sprintf-with-return"
-  description: "Remove sprintf() call whose return is consumed"
-
+  name: erase-sprintf-with-return
+  description: Remove sprintf() call whose return is consumed
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 patches:
-  - name: "strip_sprintf"
-    id: "ERASE-SPRINTF-001"
-    match:
-      name: "sprintf"
-      kind: "function"
-      context: ["create_port"]
-    action:
-      mode: "erase"
+- name: strip_sprintf
+  id: ERASE-SPRINTF-001
+  match:
+    name: sprintf
+    kind: function
+    context:
+    - create_port
+  action:
+    mode: erase

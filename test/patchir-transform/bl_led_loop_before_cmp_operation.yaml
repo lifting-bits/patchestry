@@ -1,34 +1,30 @@
-# Test patching specification
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "led-loop-before-cmp-operation"
-  description: "Deploy LED loop before cmp operation"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2025-07-28"
-
+  name: led-loop-before-cmp-operation
+  description: Deploy LED loop before cmp operation
+  version: 1.0.0
+  author: Security Team
+  created: '2025-07-28'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/led_loop_before_cmp_operation.yaml"
-
+- patches/led_loop_before_cmp_operation.yaml
 patches:
-  - name: "led_loop_before_cmp_operation"
-    id: "led_loop_before_cmp_operation"
-    description: "Apply before cmp operation"
-    match:
-      name: "cir.cmp"
-      kind: "operation"
-      symbol_matches:
-        - name: "bl_spi_mode"
-          type: "!cir.int<s, 8>"
-    action:
-      mode: "apply_before"
-      patch: "led_loop_before_cmp_operation"
-      arguments:
-        - name: "global_var"
-          source: "symbol"
-          symbol: "bl_spi_mode"
+- name: led_loop_before_cmp_operation
+  id: led_loop_before_cmp_operation
+  description: Apply before cmp operation
+  match:
+    name: cir.cmp
+    kind: operation
+    symbol_matches:
+    - name: bl_spi_mode
+      type: '!cir.int<s, 8>'
+  action:
+    mode: apply_before
+    patch: led_loop_before_cmp_operation
+    arguments:
+    - name: global_var
+      source: symbol
+      symbol: bl_spi_mode

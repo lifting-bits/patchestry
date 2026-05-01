@@ -1,29 +1,24 @@
-# op_kind: "mul" — only cir.binop with Mul kind is replaced.
-# The 4 other binops (add, sub, div, rem) stay intact.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "op-kind-mul-only"
-
+  name: op-kind-mul-only
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/replace_binop_patches.yaml"
-
+- patches/replace_binop_patches.yaml
 patches:
-  - name: "replace_mul_only"
-    id: "BINOP-MUL"
-    match:
-      name: "cir.binop"
-      kind: "operation"
-      op_kind: "mul"
-    action:
-      mode: "replace"
-      patch: "checked_mul"
-      arguments:
-        - source: "operand"
-          index: 0
-        - source: "operand"
-          index: 1
+- name: replace_mul_only
+  id: BINOP-MUL
+  match:
+    name: cir.binop
+    op_kind: mul
+    kind: operation
+  action:
+    mode: replace
+    patch: checked_mul
+    arguments:
+    - source: operand
+      index: 0
+    - source: operand
+      index: 1

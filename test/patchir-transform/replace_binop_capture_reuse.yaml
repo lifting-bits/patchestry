@@ -1,46 +1,34 @@
-# Regression: reusing a single named capture at multiple argument
-# positions must emit a patch call whose matching argument slots all
-# reference the same SSA value. Pre-fix, `prepare_patch_call_arguments`
-# stored transformed values in a MapVector keyed by the source
-# mlir::Value, so a spec binding capture "A" once and using it twice
-# collapsed to one entry and the emitted call was short one operand —
-# CIR verifier rejected with `incorrect number of operands for callee`.
-#
-# Post-fix, the transformed-args container is a SmallVector appended
-# per spec entry, so reuse works by construction.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "binop-capture-reuse"
-  description: "Capture A bound once, reused twice in the arguments list"
-  version: "1.0.0"
-  author: "Test Suite"
-  created: "2026-04-23"
-
+  name: binop-capture-reuse
+  description: Capture A bound once, reused twice in the arguments list
+  version: 1.0.0
+  author: Test Suite
+  created: '2026-04-23'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/replace_binop_patches.yaml"
-
+- patches/replace_binop_patches.yaml
 patches:
-  - name: "binop_capture_reuse"
-    id: "BINOP-CAPTURE-REUSE-001"
-    description: "Pass capture A to both patch parameters"
-    match:
-      name: "cir.binop"
-      op_kind: "mul"
-      kind: "operation"
-      context: ["compute_alloc_size"]
-      captures:
-        - name: "A"
-          operand: 0
-    action:
-      mode: "replace"
-      patch: "passthrough_mul"
-      arguments:
-        - source: "capture"
-          name: "A"
-        - source: "capture"
-          name: "A"
+- name: binop_capture_reuse
+  id: BINOP-CAPTURE-REUSE-001
+  description: Pass capture A to both patch parameters
+  match:
+    name: cir.binop
+    op_kind: mul
+    kind: operation
+    context:
+    - compute_alloc_size
+    captures:
+    - name: A
+      operand: 0
+  action:
+    mode: replace
+    patch: passthrough_mul
+    arguments:
+    - name: A
+      source: capture
+    - name: A
+      source: capture

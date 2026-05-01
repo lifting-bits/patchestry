@@ -1,22 +1,17 @@
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "entrypoint-contract-library"
-  version: "1.0.0"
-  description: "Static contracts attached at function entrypoints"
-  author: "Security Team"
-  created: "2025-07-28"
-
-# Runtime contracts that previously lived here have been migrated to
-# patches — see entrypoint_patch_library.yaml for the patch equivalent
-# of the old message_entry_check_contract.
-contracts:
-  - name: "message_entry_check_contract_static"
-    description: "Static precondition: message pointer must be non-null at entry"
-    category: "safety"
-
-    preconditions:
-      - id: "msg_nonnull"
-        pred:
-          kind: "nonnull"
-          target: "arg0"
+  name: entrypoint-contract-library
+  description: Static contracts attached at function entrypoints
+  version: 1.0.0
+  author: Security Team
+  created: '2025-07-28'
+  kind: PatchLibrary
+contract_definitions:
+- name: message_entry_check_contract_static
+  description: 'Static precondition: message pointer must be non-null at entry'
+  category: safety
+  preconditions:
+  - id: msg_nonnull
+    pred:
+      kind: nonnull
+      target: arg0

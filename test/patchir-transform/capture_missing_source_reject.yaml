@@ -1,31 +1,24 @@
-# Negative test: a capture that sets neither `operand:` nor `result:`
-# must be rejected at parse time. Same MappingTraits<patch::CaptureSpec>
-# guard as capture_mutual_exclusion_reject.yaml.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "capture-missing-source-reject"
-
+  name: capture-missing-source-reject
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/capture_test_patches.yaml"
-
+- patches/capture_test_patches.yaml
 patches:
-  - name: "should_not_parse"
-    id: "CAP-MISSING-001"
-    match:
-      name: "cir.binop"
-      op_kind: "mul"
-      kind: "operation"
-      captures:
-        - name: "NOTHING"
-          # deliberately omits both operand: and result:
-    action:
-      mode: "replace"
-      patch: "ptr_only"
-      arguments:
-        - source: "capture"
-          name: "NOTHING"
+- name: should_not_parse
+  id: CAP-MISSING-001
+  match:
+    name: cir.binop
+    op_kind: mul
+    kind: operation
+    captures:
+    - name: NOTHING
+  action:
+    mode: replace
+    patch: ptr_only
+    arguments:
+    - name: NOTHING
+      source: capture

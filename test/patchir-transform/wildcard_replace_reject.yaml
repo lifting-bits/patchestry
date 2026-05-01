@@ -1,39 +1,28 @@
-# Negative test: `mode: replace` on a kinded generic op (cir.binop /
-# cir.cmp) with no `op_kind` filter must be rejected at spec load.
-# A wildcard match here substitutes the same concrete patch for every
-# arithmetic/comparison kind (add, sub, mul, div, shl, and/or/xor, ...),
-# which the CIR verifier accepts (operand types match) but the runtime
-# semantics are silently wrong. Observational modes
-# (apply_before / apply_after) have a legitimate wildcard use case and
-# stay unrestricted.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "wildcard-replace-reject"
-  description: "replace + cir.binop without op_kind must fail parse"
-  version: "1.0.0"
-  author: "Test Suite"
-  created: "2026-04-23"
-
+  name: wildcard-replace-reject
+  description: replace + cir.binop without op_kind must fail parse
+  version: 1.0.0
+  author: Test Suite
+  created: '2026-04-23'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/replace_binop_patches.yaml"
-
+- patches/replace_binop_patches.yaml
 patches:
-  - name: "dangerous_wildcard_replace"
-    id: "WILDCARD-REJECT-001"
-    description: "Intentionally omits op_kind — must be rejected"
-    match:
-      name: "cir.binop"
-      kind: "operation"
-    action:
-      mode: "replace"
-      patch: "checked_mul"
-      arguments:
-        - source: "operand"
-          index: 0
-        - source: "operand"
-          index: 1
+- name: dangerous_wildcard_replace
+  id: WILDCARD-REJECT-001
+  description: Intentionally omits op_kind — must be rejected
+  match:
+    name: cir.binop
+    kind: operation
+  action:
+    mode: replace
+    patch: checked_mul
+    arguments:
+    - source: operand
+      index: 0
+    - source: operand
+      index: 1
