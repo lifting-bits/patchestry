@@ -1,0 +1,29 @@
+# Test patching specification for the QEMU serial firmware fixture
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "qemu-serial-before-patch"
+  description: "Insert behavior before qemu_target_before calls emit_before_base"
+  version: "1.0.0"
+  author: "Codex"
+  created: "2026-04-22"
+
+target:
+  binary: "qemu-serial.elf"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/qemu_serial_patch_library.yaml"
+
+patches:
+  - name: "qemu_serial_before_patch"
+    id: "QEMU-SERIAL-BEFORE-001"
+    description: "Insert output before emit_before_base in qemu_target_before"
+    match:
+      name: "emit_before_base"
+      kind: "function"
+      context: ["qemu_target_before"]
+    action:
+      mode: "apply_before"
+      patch: "qemu_serial_before_patch"
+      arguments: []

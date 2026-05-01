@@ -1,0 +1,29 @@
+# Test contract specification for the QEMU serial firmware fixture
+apiVersion: patchestry.io/v1
+
+metadata:
+  name: "qemu-serial-entry-contract"
+  description: "Insert a visible runtime contract at qemu_target_contract entry"
+  version: "1.0.0"
+  author: "Codex"
+  created: "2026-04-22"
+
+target:
+  binary: "qemu-serial.elf"
+  arch: "ARM:LE:32"
+
+libraries:
+  - "patches/qemu_serial_patch_library.yaml"
+
+patches:
+  - name: "qemu_serial_entry_contract"
+    id: "QEMU-SERIAL-ENTRY-CONTRACT-001"
+    description: "Emit a contract line at qemu_target_contract entrypoint"
+    match:
+      name: "emit_contract_base"
+      kind: "function"
+      context: ["qemu_target_contract"]
+    action:
+      mode: "apply_at_entrypoint"
+      patch: "qemu_serial_entry_contract"
+      arguments: []

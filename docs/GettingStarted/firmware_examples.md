@@ -78,6 +78,8 @@ First, make sure that the firwmare decompilation Ghidra docker image is set up c
 $ sh scripts/ghidra/build-headless-docker.sh
 ```
 
+For the separate ARM32 QEMU runtime validation path, see `docs/GettingStarted/qemu_firmware_runtime.md`.
+
 This should succeed in building `docker.io/trailofbits/patchestry-decompilation:latest`
 
 ## Build the Firmware

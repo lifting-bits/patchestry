@@ -355,7 +355,16 @@ namespace patchestry::ast {
         }
 
         if (function.get().basic_blocks.empty()) {
-            LOG(ERROR) << "Can't create function shell for '" << c_name << "'. No basic blocks.\n";
+            // The canonical forward decl for a no-basic-blocks function (e.g.
+            // a Ghidra-exported callee that the decompile request did not
+            // descend into, like emit_before_base in the qemu-serial fixture)
+            // is created by the FunctionBuilder constructor and registered in
+            // function_list. ASTConsumer skips these via has_basic_blocks(),
+            // so reaching here means a caller violated that contract.
+            LOG(ERROR) << "create_definition called for '" << c_name
+                       << "' which has no basic blocks; caller should skip "
+                          "via has_basic_blocks(). The forward decl from the "
+                          "FunctionBuilder constructor is canonical.\n";
             return {};
         }
 

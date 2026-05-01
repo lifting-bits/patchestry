@@ -59,6 +59,27 @@ Downstream of this repo:
     |
     \- external binary rewriting / verification tools
        e.g. final patched binary, KLEE/SeaHorn-style analysis
+
+Current firmware runtime-validation path:
+[Checked-in Ghidra JSON fixture]
+    |
+    | patchir-decomp --emit-cir
+    v
+[CIR]
+    |
+    | patchir-transform + YAML spec + patch/contract C code
+    v
+[Patched CIR]
+    |
+    | patchir-cir2llvm -S
+    v
+[Patched LLVM IR]
+    |
+    \- downstream whole-function replacement flow
+       target object for affected function
+       -> linked patch blob at reserved firmware patch arena address
+       -> patcherex2 raw-byte rewrite of original ELF
+       -> qemu-system-arm runtime validation
 ```
 
 ## Notes on Outputs
@@ -73,6 +94,7 @@ Downstream of this repo:
   firmware artifact.
 - Final patched binaries are downstream of this repository's core toolchain and
   are not the primary in-repo artifact produced by the tested flows here.
+- Current runtime validation is intentionally scoped to whole-function replacement of affected functions in the original ELF, even when the original Patchestry patch semantics are sub-function (`apply_before`, `apply_after`, `replace`, runtime contract insertion).
 
 ## Decompilation Semantics
 
@@ -116,13 +138,6 @@ The flow is layered:
 - The direct JSON -> CGraph path exists so control-flow structuring happens
   before CIR/LLVM lowering, while branch and switch intent is still explicit.
 
-### Current state in PR #182
-
-- The reviewed branch clearly moves the default path to:
-  `JSON -> CGraph -> SNode -> Clang AST`.
-- The implementation is intentionally partial:
-  switch recovery is present and tested, while broader goto elimination and
-  loop/if restructuring are still in progress.
 
 ## Maintenance Contract
 
