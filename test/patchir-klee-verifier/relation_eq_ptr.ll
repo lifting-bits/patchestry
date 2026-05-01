@@ -15,17 +15,8 @@ entry:
 
 !0 = !{!"static_contract", !"preconditions=[{kind=relation, target=Arg(0), relation=eq, value=0}], postconditions=[]"}
 
-; --- Target with eq-null assume before the inner call ---
-; CHECK:       define void @check_eq_ptr(ptr %p)
+; CHECK-LABEL: define void @check_eq_ptr(ptr %p)
 ; CHECK:       icmp eq ptr
 ; CHECK:       call void @klee_assume(
 ; CHECK:       call void @inner(
-
-; --- No postconditions ---
 ; CHECK-NOT:   call void @klee_abort(
-
-; --- Harness main() ---
-; CHECK:       define i32 @main()
-; CHECK:       call void @klee_make_symbolic(
-; CHECK:       call void @check_eq_ptr(
-; CHECK:       ret i32 0

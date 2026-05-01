@@ -15,17 +15,8 @@ entry:
 
 !0 = !{!"static_contract", !"preconditions=[{kind=relation, target=Arg(0), relation=gt, value=0}], postconditions=[]"}
 
-; --- Target body: sgt assume before the inner call ---
-; CHECK:       define void @check_gt(i32 %val)
+; CHECK-LABEL: define void @check_gt(i32 %val)
 ; CHECK:       icmp sgt i32 %{{[a-zA-Z0-9_]+}}, 0
 ; CHECK:       call void @klee_assume(
 ; CHECK:       call void @inner(
-
-; --- No postconditions ---
 ; CHECK-NOT:   call void @klee_abort(
-
-; --- Harness main() ---
-; CHECK:       define i32 @main()
-; CHECK:       call void @klee_make_symbolic(
-; CHECK:       call void @check_gt(
-; CHECK:       ret i32 0

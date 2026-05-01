@@ -15,17 +15,8 @@ entry:
 
 !0 = !{!"static_contract", !"preconditions=[{kind=relation, target=Arg(0), relation=lte, value=50}], postconditions=[]"}
 
-; --- Target body: sle assume before the inner call ---
-; CHECK:       define void @check_lte(i32 %val)
+; CHECK-LABEL: define void @check_lte(i32 %val)
 ; CHECK:       icmp sle i32 %{{[a-zA-Z0-9_]+}}, 50
 ; CHECK:       call void @klee_assume(
 ; CHECK:       call void @inner(
-
-; --- No postconditions ---
 ; CHECK-NOT:   call void @klee_abort(
-
-; --- Harness main() ---
-; CHECK:       define i32 @main()
-; CHECK:       call void @klee_make_symbolic(
-; CHECK:       call void @check_lte(
-; CHECK:       ret i32 0

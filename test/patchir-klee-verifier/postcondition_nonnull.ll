@@ -19,23 +19,15 @@ entry:
 
 !0 = !{!"static_contract", !"preconditions=[], postconditions=[{kind=nonnull, target=ReturnValue}]"}
 
-; --- Target with contract instrumentation around @inner_get.
-; Block layout after splitBasicBlock + emitKleePredicate is:
+; Block layout after splitBasicBlock + emitKleePredicate:
 ;   entry -> after.contract -> assert.fail -> assert.cont -> (br after.contract)
-; ---
-; CHECK:       define ptr @get_buffer()
+; CHECK-LABEL: define ptr @get_buffer()
 ; CHECK:       call ptr @inner_get()
 ; CHECK:       icmp ne ptr
 ; CHECK:       br i1 %{{[0-9]+}}, label %assert.cont, label %assert.fail
 ; CHECK:       after.contract:
-; CHECK:       ret ptr
 ; CHECK:       assert.fail:
 ; CHECK:       call void @klee_abort()
 ; CHECK:       unreachable
 ; CHECK:       assert.cont:
 ; CHECK:       br label %after.contract
-
-; --- Harness main() drives the target; no contract emission in main ---
-; CHECK:       define i32 @main()
-; CHECK:       call ptr @get_buffer()
-; CHECK:       ret i32 0

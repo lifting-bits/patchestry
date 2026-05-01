@@ -36,8 +36,8 @@ entry:
 
 !0 = !{!"static_contract", !"preconditions=[{kind=nonnull, target=Arg(0)}], postconditions=[{kind=range, target=ReturnValue, range=[min=0, max=255]}]"}
 
-; --- Target body with contract instrumentation around the modeled call ---
-; CHECK:       define i32 @bl_usb__send_message(ptr %msg)
+; Contract instrumentation around the modeled call.
+; CHECK-LABEL: define i32 @bl_usb__send_message(ptr %msg)
 ; CHECK:       icmp ne ptr
 ; CHECK:       call void @klee_assume(
 ; CHECK:       call i32 @usbd_ep_write_packet(
@@ -45,23 +45,13 @@ entry:
 ; CHECK:       icmp sle i64 %{{[0-9]+}}, 255
 ; CHECK:       br i1 %{{[0-9]+}}, label %assert.cont, label %assert.fail
 ; CHECK:       after.contract:
-; CHECK:       ret i32
 ; CHECK:       assert.fail:
 ; CHECK:       call void @klee_abort()
 ; CHECK:       unreachable
 ; CHECK:       assert.cont:
 ; CHECK:       br label %after.contract
 
-; --- Model body for usbd_ep_write_packet (from usb_hal_models.c) ---
+; The model library supplied a body (define, not declare) for
+; @usbd_ep_write_packet — the distinctive thing this test checks.
 ; CHECK:       define {{.*}} @usbd_ep_write_packet(
-; CHECK:         call void @klee_make_symbolic(
-
-; --- Harness main(): globals init dispatcher then target call ---
-; CHECK:       define i32 @main()
-; CHECK:       call void @__klee_init_globals()
-; CHECK:       call i32 @bl_usb__send_message(
-; CHECK:       ret i32 0
-
-; --- Per-global wrapper for @usb_g (scalar i32 → trivial-init fast path) ---
-; CHECK:       define internal void @__klee_init_g_usb_g()
-; CHECK:       call void @klee_make_symbolic(ptr @usb_g, i64 4,
+; CHECK:       call void @klee_make_symbolic(

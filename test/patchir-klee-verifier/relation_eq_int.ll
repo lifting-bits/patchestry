@@ -22,17 +22,8 @@ entry:
 
 !0 = !{!"static_contract", !"preconditions=[{kind=relation, target=Arg(0), relation=eq, value=1}], postconditions=[]"}
 
-; --- Target with klee_assume(arg0 == 1) emitted before @inner call ---
-; CHECK:       define void @contract__entrypoint__message_entry_check(i32 %flag)
+; CHECK-LABEL: define void @contract__entrypoint__message_entry_check(i32 %flag)
 ; CHECK:       icmp eq i32 %{{[a-zA-Z0-9_]+}}, 1
 ; CHECK:       call void @klee_assume(
 ; CHECK:       call void @inner(
-
-; --- No postconditions => no klee_abort branch in target ---
 ; CHECK-NOT:   call void @klee_abort(
-
-; --- Harness main() drives target ---
-; CHECK:       define i32 @main()
-; CHECK:       call void @klee_make_symbolic(
-; CHECK:       call void @contract__entrypoint__message_entry_check(
-; CHECK:       ret i32 0

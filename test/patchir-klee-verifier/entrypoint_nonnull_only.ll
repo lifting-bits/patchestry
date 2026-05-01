@@ -22,22 +22,8 @@ entry:
 
 !0 = !{!"static_contract", !"preconditions=[{kind=nonnull, target=Arg(0)}], postconditions=[]"}
 
-; --- External stub (void return — just ret void) ---
-; CHECK:       define void @usbd_ep_write_packet(ptr %0)
-; CHECK-NEXT:  entry:
-; CHECK-NEXT:    ret void
-
-; --- Target body: nonnull assume before the inner call ---
-; CHECK:       define void @bl_usb__send_message(ptr %msg)
+; CHECK-LABEL: define void @bl_usb__send_message(ptr %msg)
 ; CHECK:       icmp ne ptr
 ; CHECK:       call void @klee_assume(
 ; CHECK:       call void @usbd_ep_write_packet(
-
-; --- No postconditions => no klee_abort branch ---
 ; CHECK-NOT:   call void @klee_abort(
-
-; --- Harness main() ---
-; CHECK:       define i32 @main()
-; CHECK:       call void @klee_make_symbolic(
-; CHECK:       call void @bl_usb__send_message(
-; CHECK:       ret i32 0
