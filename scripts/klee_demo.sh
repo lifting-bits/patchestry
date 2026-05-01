@@ -80,8 +80,20 @@ VERIFIER="$ROOT/builds/default/tools/patchir-klee-verifier/Release/patchir-klee-
 STRIP="$ROOT/test/scripts/strip-json-comments.sh"
 GHIDRA="$ROOT/scripts/ghidra/decompile-headless.sh"
 RUN_KLEE="$ROOT/scripts/klee/run-klee.sh"
-PATCHEREX="${PATCHEREX_BIN:-/home/akshayk/Patcherex2/patche_binary.sh}"
-PATCH_FNS="${PATCH_FUNCTIONS:-${FN},patch__replace__sprintf}"
+# Patcherex2 is a sibling repo by convention; if it isn't cloned next to
+# patchestry the script auto-fetches the trail-of-forks fork (branch
+# patche_support) which carries patche_binary.sh + patche_firmware.py.
+# patche_binary.sh accepts an optional function-mapping argument; when
+# empty it processes ALL functions in the supplied LLVM IR (modify
+# existing, insert new). The cir2llvm output contains exactly the patched
+# target plus any inserted patch helper bodies, so the empty default is
+# correct for both the safe (patches replace call sites) and degenerate
+# (no patches matched) cases. Override via PATCH_FUNCTIONS only when a
+# spec produces extra IR symbols you do not want patched.
+PATCHEREX="${PATCHEREX_BIN:-$(dirname "$ROOT")/Patcherex2/patche_binary.sh}"
+PATCH_FNS="${PATCH_FUNCTIONS:-}"
+PATCHEREX_REPO_URL="${PATCHEREX_REPO_URL:-https://github.com/trail-of-forks/Patcherex2.git}"
+PATCHEREX_REPO_REF="${PATCHEREX_REPO_REF:-patche_support}"
 
 # Symbolic model sources live under lib/patchestry/klee/models/ alongside
 # klee_stub.h. The verifier requires the linked model library to match the
@@ -163,18 +175,76 @@ rm -rf "$OUT/${LABEL}_klee"
 
 errs=$(find "$OUT/${LABEL}_klee" -name '*.err' 2>/dev/null | wc -l)
 
+# patch_status tracks the outcome of the patcherex stage so the summary
+# can report it accurately rather than inferring from `errs` alone.
+#   not-run        : not reached
+#   ok             : patcherex completed and (if available) verify_patched
+#                    accepted the result
+#   failed         : patcherex script ran and exited non-zero
+#   verify-failed  : patcherex produced a binary but verify_patched.sh failed
+#   missing        : PATCHEREX path not found / not executable
+#   skipped        : klee reported errors; patching deliberately skipped
+patch_status="not-run"
+patched_bin=""
+
 if [[ "$errs" -eq 0 ]]; then
-    banner "6/5" "patcherex2 :: patche_binary.sh" \
-           "no klee errors -> apply ${LABEL}.ll to $BIN, functions: $PATCH_FNS"
-    if [[ -x "$PATCHEREX" ]]; then
-        bash "$PATCHEREX" "$BIN" "$OUT/${LABEL}.ll" "$PATCH_FNS"
+    # Auto-clone Patcherex2 if the sibling checkout is missing. We only
+    # clone when the parent directory genuinely doesn't exist, to avoid
+    # clobbering a hand-managed checkout that might have local edits or
+    # be on a different branch. A clone failure is non-fatal; the
+    # subsequent -f check downgrades the stage to `missing`. Use -f
+    # rather than -x because patche_binary.sh is invoked via `bash` and
+    # doesn't need its execute bit set (the upstream tarball ships
+    # without it on some platforms).
+    patcherex_dir=$(dirname "$PATCHEREX")
+    if [[ ! -f "$PATCHEREX" && ! -d "$patcherex_dir" ]]; then
+        banner "6a/5" "patcherex2 :: clone" \
+               "$PATCHEREX_REPO_URL (branch $PATCHEREX_REPO_REF) -> $patcherex_dir"
+        git clone --depth 1 --branch "$PATCHEREX_REPO_REF" \
+            "$PATCHEREX_REPO_URL" "$patcherex_dir" \
+            || printf 'patcherex clone failed; continuing without patching\n' >&2
+    fi
+
+    if [[ -f "$PATCHEREX" ]]; then
+        banner "6/5" "patcherex2 :: patche_binary.sh" \
+               "0 klee errors -> apply $OUT/${LABEL}.ll to $BIN${PATCH_FNS:+ (functions: $PATCH_FNS)}"
+        # Capture exit status without tripping `set -e`. patche_binary.sh
+        # treats an empty function-mapping argument as "process all", so
+        # only forward $PATCH_FNS when the user explicitly set it.
+        if [[ -n "$PATCH_FNS" ]]; then
+            bash "$PATCHEREX" "$BIN" "$OUT/${LABEL}.ll" "$PATCH_FNS" \
+                && patch_status="ok" || patch_status="failed"
+        else
+            bash "$PATCHEREX" "$BIN" "$OUT/${LABEL}.ll" \
+                && patch_status="ok" || patch_status="failed"
+        fi
+
+        # patche_binary.sh writes the patched ELF next to itself in outs/
+        # named `<original-basename>_patched`. Verify the pair when the
+        # sibling verify_patched.sh script is available; treat verify
+        # failure as a soft signal in the summary, not a fatal error.
+        if [[ "$patch_status" == "ok" ]]; then
+            patched_bin="$patcherex_dir/outs/$(basename "$BIN")_patched"
+            verify_sh="$patcherex_dir/verify_patched.sh"
+            if [[ -f "$verify_sh" && -f "$patched_bin" ]]; then
+                banner "7/5" "patcherex2 :: verify_patched.sh" \
+                       "verify $patched_bin against $BIN"
+                bash "$verify_sh" "$BIN" "$patched_bin" \
+                    || patch_status="verify-failed"
+            elif [[ ! -f "$patched_bin" ]]; then
+                printf 'note: expected patched binary not found at %s\n' "$patched_bin"
+                patched_bin=""
+            fi
+        fi
     else
-        printf 'patcherex script not found or not executable: %s\n' "$PATCHEREX"
-        printf 'set PATCHEREX_BIN to override.\n'
+        banner "6/5" "patcherex2 SKIPPED" \
+               "patche_binary.sh not found at $PATCHEREX (set PATCHEREX_BIN to override)"
+        patch_status="missing"
     fi
 else
     banner "6/5" "patcherex2 SKIPPED" \
            "klee found $errs error(s); refusing to patch the binary"
+    patch_status="skipped"
 fi
 
 banner "summary" "$LABEL"
@@ -183,7 +253,26 @@ printf 'klee output dir    : %s\n' "$OUT/${LABEL}_klee"
 if [[ "$errs" -gt 0 ]]; then
     printf 'errors:\n'
     find "$OUT/${LABEL}_klee" -name '*.err' -printf '  %f\n' 2>/dev/null | sort
-    printf 'binary not patched (override by re-running spec until klee is clean).\n'
-else
-    printf 'binary patched   : ok (see patcherex outs/ above)\n'
 fi
+case "$patch_status" in
+    ok)
+        printf 'binary patched     : ok\n'
+        [[ -n "$patched_bin" ]] && printf 'patched binary     : %s\n' "$patched_bin"
+        ;;
+    verify-failed)
+        printf 'binary patched     : produced but verify_patched.sh reported issues\n'
+        [[ -n "$patched_bin" ]] && printf 'patched binary     : %s\n' "$patched_bin"
+        ;;
+    failed)
+        printf 'binary patched     : FAILED (patcherex returned non-zero)\n'
+        ;;
+    missing)
+        printf 'binary patched     : skipped (patcherex script not found)\n'
+        ;;
+    skipped)
+        printf 'binary patched     : skipped (klee found %s error(s))\n' "$errs"
+        ;;
+    *)
+        printf 'binary patched     : not-run\n'
+        ;;
+esac
