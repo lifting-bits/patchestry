@@ -16,6 +16,12 @@
 // RUN: not %patchir-transform %t1.cir --spec %S/duplicate_definition_reject.yaml -o %t6.cir 2>&1 | \
 // RUN:   %file-check -check-prefix=DUP_DEF %s
 // DUP_DEF: {{duplicate patch definition|dup_patch}}
+//
+// Test 4: A single library declaring the same patch name twice — must reject
+// at load time, not silently keep only the first entry.
+// RUN: not %patchir-transform %t1.cir --spec %S/duplicate_within_lib_reject.yaml -o %t7.cir 2>&1 | \
+// RUN:   %file-check -check-prefix=DUP_WITHIN %s
+// DUP_WITHIN: {{duplicate patch definition|dup_patch}}
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

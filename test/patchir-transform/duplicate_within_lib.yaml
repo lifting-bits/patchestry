@@ -1,0 +1,12 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: dup-within-lib
+  version: 1.0.0
+  kind: PatchLibrary
+patch_definitions:
+- name: dup_patch
+  function_name: patch::dup_first
+  code_file: patches/patch_usbd_ep_write_packet.c
+- name: dup_patch
+  function_name: patch::dup_second
+  code_file: patches/patch_usbd_ep_write_packet.c

@@ -9,6 +9,7 @@
 
 #include <fstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <llvm/ADT/SmallVector.h>
@@ -271,6 +272,17 @@ namespace llvm::yaml {
             std::vector< std::string > library_files;
             io.mapOptional("libraries", library_files);
 
+            // Track origin of every patch/contract definition seen so far,
+            // keyed by name. The maps span the outer for-loop so the same
+            // probe catches duplicates *across* libraries AND duplicates
+            // *within* a single library (a copy/paste mistake the prior
+            // cross-library-only loop missed). On collision the saved
+            // origin file makes the conflict immediately diagnosable —
+            // for an intra-library dup both file paths are identical,
+            // which is itself a useful hint.
+            std::unordered_map< std::string, std::string > patch_origin;
+            std::unordered_map< std::string, std::string > contract_origin;
+
             for (const auto &file : library_files) {
                 // A library that fails to load is a hard error. Falling
                 // through to "continue" silently left the spec missing
@@ -290,42 +302,32 @@ namespace llvm::yaml {
                     return;
                 }
 
-                // Reject duplicate definition names across libraries —
-                // before this check the loader silently shadowed
-                // (last-loaded wins), turning a copy/paste mistake into
-                // a "patch ran but with the wrong implementation"
-                // miscompile. Loud failure with both libraries' names
-                // points the spec author at the conflict immediately.
                 for (const auto &incoming : library.value().patches) {
-                    for (const auto &existing : config.libraries.patches) {
-                        if (incoming.name == existing.name) {
-                            io.setError(
-                                "duplicate patch definition '"
-                                + incoming.name + "' loaded from '" + file
-                                + "' — a definition with the same name "
-                                  "was already loaded from an earlier "
-                                  "library. Rename one of the entries or "
-                                  "drop the redundant 'libraries:' "
-                                  "reference."
-                            );
-                            return;
-                        }
+                    auto [it, inserted] = patch_origin.emplace(incoming.name, file);
+                    if (!inserted) {
+                        io.setError(
+                            "duplicate patch definition '" + incoming.name
+                            + "' loaded from '" + file
+                            + "' — a definition with the same name was "
+                              "already loaded from '" + it->second
+                            + "'. Rename one of the entries or drop the "
+                              "redundant 'libraries:' reference."
+                        );
+                        return;
                     }
                 }
                 for (const auto &incoming : library.value().contracts) {
-                    for (const auto &existing : config.libraries.contracts) {
-                        if (incoming.name == existing.name) {
-                            io.setError(
-                                "duplicate contract definition '"
-                                + incoming.name + "' loaded from '" + file
-                                + "' — a definition with the same name "
-                                  "was already loaded from an earlier "
-                                  "library. Rename one of the entries or "
-                                  "drop the redundant 'libraries:' "
-                                  "reference."
-                            );
-                            return;
-                        }
+                    auto [it, inserted] = contract_origin.emplace(incoming.name, file);
+                    if (!inserted) {
+                        io.setError(
+                            "duplicate contract definition '" + incoming.name
+                            + "' loaded from '" + file
+                            + "' — a definition with the same name was "
+                              "already loaded from '" + it->second
+                            + "'. Rename one of the entries or drop the "
+                              "redundant 'libraries:' reference."
+                        );
+                        return;
                     }
                 }
 
