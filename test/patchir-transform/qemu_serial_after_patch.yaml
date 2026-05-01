@@ -15,23 +15,15 @@ target:
 libraries:
   - "patches/qemu_serial_patch_library.yaml"
 
-meta_patches:
-  - name: "qemu_serial_after_meta_patch"
-    description: "Runtime after patch for qemu_target_after"
-
-    patch_actions:
-      - id: "QEMU-SERIAL-AFTER-001"
-        description: "Insert output after emit_after_base in qemu_target_after"
-
-        match:
-          - name: "emit_after_base"
-            kind: "function"
-            function_context:
-              - name: "qemu_target_after"
-
-        action:
-          - mode: "apply_after"
-            patch_id: "qemu_serial_after_patch"
-            description: "Emit a visible after line"
-
-            arguments: []
+patches:
+  - name: "qemu_serial_after_patch"
+    id: "QEMU-SERIAL-AFTER-001"
+    description: "Insert output after emit_after_base in qemu_target_after"
+    match:
+      name: "emit_after_base"
+      kind: "function"
+      context: ["qemu_target_after"]
+    action:
+      mode: "apply_after"
+      patch: "qemu_serial_after_patch"
+      arguments: []

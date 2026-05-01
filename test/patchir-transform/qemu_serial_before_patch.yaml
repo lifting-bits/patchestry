@@ -15,23 +15,15 @@ target:
 libraries:
   - "patches/qemu_serial_patch_library.yaml"
 
-meta_patches:
-  - name: "qemu_serial_before_meta_patch"
-    description: "Runtime before patch for qemu_target_before"
-
-    patch_actions:
-      - id: "QEMU-SERIAL-BEFORE-001"
-        description: "Insert output before emit_before_base in qemu_target_before"
-
-        match:
-          - name: "emit_before_base"
-            kind: "function"
-            function_context:
-              - name: "qemu_target_before"
-
-        action:
-          - mode: "apply_before"
-            patch_id: "qemu_serial_before_patch"
-            description: "Emit a visible before line"
-
-            arguments: []
+patches:
+  - name: "qemu_serial_before_patch"
+    id: "QEMU-SERIAL-BEFORE-001"
+    description: "Insert output before emit_before_base in qemu_target_before"
+    match:
+      name: "emit_before_base"
+      kind: "function"
+      context: ["qemu_target_before"]
+    action:
+      mode: "apply_before"
+      patch: "qemu_serial_before_patch"
+      arguments: []

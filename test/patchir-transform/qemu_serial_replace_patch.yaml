@@ -15,21 +15,15 @@ target:
 libraries:
   - "patches/qemu_serial_patch_library.yaml"
 
-meta_patches:
-  - name: "qemu_serial_replace_meta_patch"
-    description: "Runtime replace patch for qemu_target_replace"
-
-    patch_actions:
-      - id: "QEMU-SERIAL-REPLACE-001"
-        description: "Replace emit_replace_base inside qemu_target_replace"
-
-        match:
-          - name: "emit_replace_base"
-            kind: "function"
-            function_context:
-              - name: "qemu_target_replace"
-
-        action:
-          - mode: "replace"
-            patch_id: "qemu_serial_replace_patch"
-            description: "Replace qemu_target_replace with a visible patched body"
+patches:
+  - name: "qemu_serial_replace_patch"
+    id: "QEMU-SERIAL-REPLACE-001"
+    description: "Replace emit_replace_base inside qemu_target_replace"
+    match:
+      name: "emit_replace_base"
+      kind: "function"
+      context: ["qemu_target_replace"]
+    action:
+      mode: "replace"
+      patch: "qemu_serial_replace_patch"
+      arguments: []
