@@ -220,6 +220,7 @@ namespace llvm::yaml {
                     + "' must include at least one 'patch_definitions' "
                       "or 'contract_definitions' entry."
                 );
+                return;
             }
         }
     };
