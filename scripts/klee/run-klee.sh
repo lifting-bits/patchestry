@@ -21,15 +21,21 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-IMAGE_NAME="${KLEE_IMAGE:-patchestry/klee:latest}"
+IMAGE_NAME="${KLEE_IMAGE:-ghcr.io/lifting-bits/patchestry-klee-ubuntu-22.04-llvm-20:latest}"
 
 # ------------------------------------------------------------------
-# Ensure image exists
+# Ensure image exists (pull amd64 manifest if missing; do not auto-build)
 # ------------------------------------------------------------------
 ensure_klee_image() {
-    if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
-        echo "KLEE Docker image not found. Building..."
-        KLEE_IMAGE="${IMAGE_NAME}" bash "${SCRIPT_DIR}/build-klee-docker.sh"
+    if docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
+        return
+    fi
+    echo "KLEE Docker image '${IMAGE_NAME}' not found locally. Pulling..."
+    if ! docker pull --platform linux/amd64 "${IMAGE_NAME}"; then
+        echo "Error: failed to pull '${IMAGE_NAME}'." >&2
+        echo "       Override with --image <name> or KLEE_IMAGE=<name>," >&2
+        echo "       or build locally via scripts/klee/build-klee-docker.sh." >&2
+        exit 1
     fi
 }
 
