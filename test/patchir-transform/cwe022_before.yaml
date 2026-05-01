@@ -1,39 +1,29 @@
-# Test patching specification
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "cwe022-apply_before"
-  description: "Reject directory traversal sequences before mkdir"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-03-17"
-
+  name: cwe022-apply_before
+  description: Reject directory traversal sequences before mkdir
+  version: 1.0.0
+  author: Security Team
+  created: '2026-03-17'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/cwe022_patches.yaml"
-
-meta_patches:
-  - name: "cwe022_mkdir_fix"
-    description: "Reject directory traversal sequences before mkdir"
-
-    patch_actions:
-      - id: "CWE-022-001"
-        description: "Validate path against directory traversal before mkdir"
-
-        match:
-          - name: "mkdir"
-            kind: "function"
-            function_context:
-              - name: "init_logger"
-
-        action:
-          - mode: "apply_before"
-            patch_id: "cwe022_path_validation"
-            description: "Reject directory traversal sequences before mkdir"
-            arguments:
-              - name: "path"
-                source: "operand"
-                index: 0
+- patches/cwe022_patches.yaml
+patches:
+- name: cwe022_mkdir_fix
+  id: CWE-022-001
+  description: Validate path against directory traversal before mkdir
+  match:
+    name: mkdir
+    kind: function
+    context:
+    - init_logger
+  action:
+    mode: apply_before
+    patch: cwe022_path_validation
+    arguments:
+    - name: path
+      source: operand
+      index: 0

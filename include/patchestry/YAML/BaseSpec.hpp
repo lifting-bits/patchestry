@@ -63,6 +63,9 @@ namespace patchestry::passes {
         std::string author;
         std::string created;
         std::string organization;
+        // Optional self-identification: "PatchSpec" for deployment files,
+        // "PatchLibrary" for library files.
+        std::string kind;
     };
 
     enum class MatchKind : uint8_t { NONE = 0, OPERATION, FUNCTION };
@@ -111,6 +114,7 @@ namespace llvm::yaml {
             io.mapOptional("author", metadata.author);
             io.mapOptional("created", metadata.created);
             io.mapOptional("organization", metadata.organization);
+            io.mapOptional("kind", metadata.kind);
         }
     };
 

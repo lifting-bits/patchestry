@@ -1,34 +1,30 @@
-# Test: flat YAML syntax for patch specification (replace mode)
-# Equivalent to cwe078_replace.yaml but using simplified `patches:` key.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "cwe078-replace-flat"
-  description: "Sanitize shell metacharacters before system() calls"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-04-20"
-
+  name: cwe078-replace-flat
+  description: Sanitize shell metacharacters before system() calls
+  version: 1.0.0
+  author: Security Team
+  created: '2026-04-20'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/cwe078_patches.yaml"
-
+- patches/cwe078_patches.yaml
 patches:
-  - name: "cwe078_system_sanitize"
-    id: "CWE-078-001"
-    description: "Replace system() in create_port with metacharacter-filtered version"
-    match:
-      name: "system"
-      kind: "function"
-      context: ["create_port"]
-    action:
-      mode: "replace"
-      patch: "cwe078_sanitized_system"
-      arguments:
-        - source: "operand"
-          index: 0
-        - source: "constant"
-          value: 512
+- name: cwe078_system_sanitize
+  id: CWE-078-001
+  description: Replace system() in create_port with metacharacter-filtered version
+  match:
+    name: system
+    kind: function
+    context:
+    - create_port
+  action:
+    mode: replace
+    patch: cwe078_sanitized_system
+    arguments:
+    - source: operand
+      index: 0
+    - source: constant
+      value: 512

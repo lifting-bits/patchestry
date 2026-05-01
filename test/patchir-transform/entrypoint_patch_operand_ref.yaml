@@ -1,43 +1,29 @@
-# Regression fixture for commit 500016e
-# (apply_at_entrypoint: use parameter alloca as is_reference slot).
-#
-# The combination `mode: apply_at_entrypoint` + `source: operand` +
-# `is_reference: true` must hand the patch the caller's parameter
-# alloca — i.e. the slot that `cir.store %argN, %alloca` writes to in
-# the prologue — rather than a freshly allocated `arg_ref` temporary.
-# Only then does a write through the reference land in the slot the
-# rest of the function actually reads from.
-#
-# See lib/patchestry/Passes/InstrumentationPass.cpp:937-960 for the
-# entry-block scan that selects the parameter alloca.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "entrypoint-patch-operand-ref"
-  description: "Cover is_reference + operand + apply_at_entrypoint"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-04-22"
-
+  name: entrypoint-patch-operand-ref
+  description: Cover is_reference + operand + apply_at_entrypoint
+  version: 1.0.0
+  author: Security Team
+  created: '2026-04-22'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32:Cortex"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32:Cortex
 libraries:
-  - "patches/entrypoint_patch_library.yaml"
-
+- patches/entrypoint_patch_library.yaml
 patches:
-  - name: "entrypoint_operand_ref"
-    id: "ENTRY-PATCH-REF-001"
-    description: "Bind 0th block arg of bl_usb__send_message as a reference"
-    match:
-      name: "usbd_ep_write_packet"
-      kind: "function"
-      context: ["bl_usb__send_message"]
-    action:
-      mode: "apply_at_entrypoint"
-      patch: "message_entry_refmut_patch"
-      arguments:
-        - source: "operand"
-          index: 0
-          is_reference: true
+- name: entrypoint_operand_ref
+  id: ENTRY-PATCH-REF-001
+  description: Bind 0th block arg of bl_usb__send_message as a reference
+  match:
+    name: usbd_ep_write_packet
+    kind: function
+    context:
+    - bl_usb__send_message
+  action:
+    mode: apply_at_entrypoint
+    patch: message_entry_refmut_patch
+    arguments:
+    - source: operand
+      index: 0
+      is_reference: true

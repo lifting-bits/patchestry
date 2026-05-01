@@ -1,67 +1,54 @@
-# patches/measurement_update_patch.yaml
-
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "measurement_update_patch"
-  version: "1.0.0"
-  description: "Measurement update patch"
-  created: "2025-07-28"
-  author: "Security Team"
-
-patches:
-  - name: "measurement_update_before_patch"
-    description: "Measurement update patch"
-    category: "measurement"
-    code_file: "patches/patch_spo2_lookup.c"
-    function_name: "patch::before::spo2_lookup"
-    parameters: # Parameters are optional and is for reference only
-      - name: "function_argument"
-        type: "float"
-        description: "Function argument"
-
-
-  - name: "measurement_update_after_patch"
-    description: "Measurement update patch"
-    category: "measurement"
-    code_file: "patches/patch_spo2_lookup.c"
-    function_name: "patch::after::spo2_lookup"
-    parameters: # Parameters are optional and is for reference only
-      - name: "function_return_value"
-        type: "uint8_t"
-        description: "Function return value"
-
-
-  - name: "measurement_update_before_operation"
-    description: "Measurement update patch"
-    category: "measurement"
-    code_file: "patches/patch_spo2_lookup.c"
-    function_name: "patch::before::spo2_lookup"
-    parameters: # Parameters are optional and is for reference only
-      - name: "function_argument"
-        type: "float"
-        description: "Function argument"
-
-  - name: "measurement_update_replace_patch"
-    description: "Measurement update patch"
-    category: "measurement"
-    code_file: "patches/patch_spo2_lookup.c"
-    function_name: "patch::replace::spo2_lookup"
-    parameters: # Parameters are optional and is for reference only
-      - name: "function_argument"
-        type: "float"
-        description: "Function argument"
-
-  # Single-return variant used by inline_patches_replace_positive.yaml to
-  # exercise replaceCallWithPatch + inline-patches (PatchOperationImpl:289).
-  # patch__replace__spo2_lookup has an early return inside cir.if (Bug F)
-  # so isn't inlinable; this one is.
-  - name: "measurement_update_saturate_patch"
-    description: "Single-return replacement suitable for inline-patches"
-    category: "measurement"
-    code_file: "patches/patch_saturate_spo2.c"
-    function_name: "patch::replace::saturate_spo2"
-    parameters:
-      - name: "function_argument"
-        type: "float"
-        description: "Function argument"
+  name: measurement_update_patch
+  description: Measurement update patch
+  version: 1.0.0
+  author: Security Team
+  created: '2025-07-28'
+  kind: PatchLibrary
+patch_definitions:
+- name: measurement_update_before_patch
+  description: Measurement update patch
+  category: measurement
+  function_name: patch::before::spo2_lookup
+  code_file: patches/patch_spo2_lookup.c
+  parameters:
+  - name: function_argument
+    type: float
+    description: Function argument
+- name: measurement_update_after_patch
+  description: Measurement update patch
+  category: measurement
+  function_name: patch::after::spo2_lookup
+  code_file: patches/patch_spo2_lookup.c
+  parameters:
+  - name: function_return_value
+    type: uint8_t
+    description: Function return value
+- name: measurement_update_before_operation
+  description: Measurement update patch
+  category: measurement
+  function_name: patch::before::spo2_lookup
+  code_file: patches/patch_spo2_lookup.c
+  parameters:
+  - name: function_argument
+    type: float
+    description: Function argument
+- name: measurement_update_replace_patch
+  description: Measurement update patch
+  category: measurement
+  function_name: patch::replace::spo2_lookup
+  code_file: patches/patch_spo2_lookup.c
+  parameters:
+  - name: function_argument
+    type: float
+    description: Function argument
+- name: measurement_update_saturate_patch
+  description: Single-return replacement suitable for inline-patches
+  category: measurement
+  function_name: patch::replace::saturate_spo2
+  code_file: patches/patch_saturate_spo2.c
+  parameters:
+  - name: function_argument
+    type: float
+    description: Function argument

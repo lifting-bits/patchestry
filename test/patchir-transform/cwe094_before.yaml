@@ -1,39 +1,29 @@
-# Test patching specification
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "cwe094-apply_before"
-  description: "Block arbitrary code execution via popen() allowlist"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-03-17"
-
+  name: cwe094-apply_before
+  description: Block arbitrary code execution via popen() allowlist
+  version: 1.0.0
+  author: Security Team
+  created: '2026-03-17'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/cwe094_patches.yaml"
-
-meta_patches:
-  - name: "cwe094_popen_fix"
-    description: "Block arbitrary code execution via popen() allowlist"
-
-    patch_actions:
-      - id: "CWE-094-001"
-        description: "Inject allowlist check before popen()"
-
-        match:
-          - name: "popen"
-            kind: "function"
-            function_context:
-              - name: "run_diagnostic"
-
-        action:
-          - mode: "apply_before"
-            patch_id: "cwe094_popen_allowlist"
-            description: "Block arbitrary code execution via popen() allowlist"
-            arguments:
-              - name: "command"
-                source: "operand"
-                index: 0
+- patches/cwe094_patches.yaml
+patches:
+- name: cwe094_popen_fix
+  id: CWE-094-001
+  description: Inject allowlist check before popen()
+  match:
+    name: popen
+    kind: function
+    context:
+    - run_diagnostic
+  action:
+    mode: apply_before
+    patch: cwe094_popen_allowlist
+    arguments:
+    - name: command
+      source: operand
+      index: 0

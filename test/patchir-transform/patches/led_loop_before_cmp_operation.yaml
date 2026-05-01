@@ -1,21 +1,18 @@
-# patches/led_loop_before_cmp_operation.yaml
-
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "led_loop_before_cmp_operation"
-  version: "1.0.0"
-  description: "LED loop before cmp operation"
-  created: "2025-07-28"
-  author: "Security Team"
-
-patches:
-  - name: "led_loop_before_cmp_operation"
-    description: "LED loop before cmp operation"
-    category: "led"
-    code_file: "patches/patch_bl_spi_mode.c"
-    function_name: "patch::before::cmp__bl_spi_mode"
-    parameters: # Parameters are optional and is for reference only
-      - name: "global_var"
-        type: "uint32_t"
-        description: "Global variable"
+  name: led_loop_before_cmp_operation
+  description: LED loop before cmp operation
+  version: 1.0.0
+  author: Security Team
+  created: '2025-07-28'
+  kind: PatchLibrary
+patch_definitions:
+- name: led_loop_before_cmp_operation
+  description: LED loop before cmp operation
+  category: led
+  function_name: patch::before::cmp__bl_spi_mode
+  code_file: patches/patch_bl_spi_mode.c
+  parameters:
+  - name: global_var
+    type: uint32_t
+    description: Global variable

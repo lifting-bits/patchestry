@@ -1,18 +1,17 @@
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "indirect-capture-library"
-  version: "1.0.0"
-  description: "Probe used to check capture/non-capture operand parity on indirect cir.call sites"
-  author: "Test Suite"
-  created: "2026-04-21"
-
-patches:
-  - name: "indirect_capture_probe"
-    description: "One-arg probe that takes the captured operand 0"
-    category: "test"
-    code_file: "patches/patch_indirect_capture_probe.c"
-    function_name: "patch::before::indirect_capture_probe"
-    parameters:
-      - name: "user_arg0"
-        type: "uint32_t*"
+  name: indirect-capture-library
+  description: Probe used to check capture/non-capture operand parity on indirect cir.call sites
+  version: 1.0.0
+  author: Test Suite
+  created: '2026-04-21'
+  kind: PatchLibrary
+patch_definitions:
+- name: indirect_capture_probe
+  description: One-arg probe that takes the captured operand 0
+  category: test
+  function_name: patch::before::indirect_capture_probe
+  code_file: patches/patch_indirect_capture_probe.c
+  parameters:
+  - name: user_arg0
+    type: uint32_t*

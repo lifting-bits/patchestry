@@ -10,6 +10,18 @@
 // RUN: not %patchir-transform %t1.cir --spec %S/bad_patch_ref.yaml -o %t3.cir 2>&1 | \
 // RUN:   %file-check -check-prefix=BAD_REF %s
 // BAD_REF: {{[Ee]rror|[Nn]ot found|[Uu]ndefined|[Ff]ailed}}
+//
+// Test 3: Library still using legacy `patches:` key — must reject with
+// a migration-pointing error instead of silently accepting both.
+// RUN: not %patchir-transform %t1.cir --spec %S/legacy_library_keys_reject_spec.yaml -o %t4.cir 2>&1 | \
+// RUN:   %file-check -check-prefix=LEGACY_KEYS %s
+// LEGACY_KEYS: {{patch_definitions|legacy keys|migrate}}
+//
+// Test 5: Two libraries both defining the same patch name — must reject at
+// load time, not silently let one shadow the other.
+// RUN: not %patchir-transform %t1.cir --spec %S/duplicate_definition_reject.yaml -o %t6.cir 2>&1 | \
+// RUN:   %file-check -check-prefix=DUP_DEF %s
+// DUP_DEF: {{duplicate patch definition|dup_patch}}
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

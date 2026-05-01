@@ -1,37 +1,28 @@
-# Intentionally malformed spec — used by the patch matrix
-# `negative_malformed_schema` case. Two independent schema errors:
-#   - entry A has a match: block without `name:` or `names:`
-#     → "match must include 'name' or 'names'"
-#   - entry B is missing the required entry-level `name:` field
-#     → "missing required key 'name'"
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "malformed-schema-test"
-  description: "Deliberately broken spec; should fail YAML validation"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-04-21"
-
+  name: malformed-schema-test
+  description: Deliberately broken spec; should fail YAML validation
+  version: 1.0.0
+  author: Security Team
+  created: '2026-04-21'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/usb_security_patches.yaml"
-
+- patches/usb_security_patches.yaml
 patches:
-  - description: "entry-level 'name:' is absent → missing required key"
-    match:
-      name: "usbd_ep_write_packet"
-      kind: "function"
-    action:
-      mode: "apply_before"
-      patch: "usb_endpoint_write_validation_before"
-  - name: "match_missing_name"
-    description: "match: block has neither 'name:' nor 'names:' → must include"
-    match:
-      kind: "function"
-    action:
-      mode: "apply_before"
-      patch: "usb_endpoint_write_validation_before"
+- description: entry-level 'name:' is absent → missing required key
+  match:
+    name: usbd_ep_write_packet
+    kind: function
+  action:
+    mode: apply_before
+    patch: usb_endpoint_write_validation_before
+- name: match_missing_name
+  description: 'match: block has neither ''name:'' nor ''names:'' → must include'
+  match:
+    kind: function
+  action:
+    mode: apply_before
+    patch: usb_endpoint_write_validation_before

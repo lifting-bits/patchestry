@@ -1,41 +1,36 @@
-# Test: named captures on a cir.binop match.
-# Equivalent to replace_binop.yaml but uses `captures:` + `source: "capture"`
-# instead of index-based operand references. Output must be byte-identical.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "binop-captured"
-  description: "Replace multiply using captured operands"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-04-20"
-
+  name: binop-captured
+  description: Replace multiply using captured operands
+  version: 1.0.0
+  author: Security Team
+  created: '2026-04-20'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/replace_binop_patches.yaml"
-
+- patches/replace_binop_patches.yaml
 patches:
-  - name: "binop_mul_fix_captured"
-    id: "BINOP-CAPTURED-001"
-    description: "Replace multiply via captured $A and $B"
-    match:
-      name: "cir.binop"
-      op_kind: "mul"
-      kind: "operation"
-      context: ["compute_alloc_size"]
-      captures:
-        - name: "A"
-          operand: 0
-        - name: "B"
-          operand: 1
-    action:
-      mode: "replace"
-      patch: "checked_mul"
-      arguments:
-        - source: "capture"
-          name: "A"
-        - source: "capture"
-          name: "B"
+- name: binop_mul_fix_captured
+  id: BINOP-CAPTURED-001
+  description: Replace multiply via captured $A and $B
+  match:
+    name: cir.binop
+    op_kind: mul
+    kind: operation
+    context:
+    - compute_alloc_size
+    captures:
+    - name: A
+      operand: 0
+    - name: B
+      operand: 1
+  action:
+    mode: replace
+    patch: checked_mul
+    arguments:
+    - name: A
+      source: capture
+    - name: B
+      source: capture

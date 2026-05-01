@@ -1,31 +1,26 @@
-# op_kind discriminator on a real firmware function (nanopb varint decoder).
-# The body has a mix of add/and/or binops — we match only `add` and leave the
-# rest untouched.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "pb-varint-opkind-add"
-
+  name: pb-varint-opkind-add
+  kind: PatchSpec
 target:
-  binary: "bloodview.bin"
-  arch: "ARM:LE:32:Cortex"
-
+  binary: bloodview.bin
+  arch: ARM:LE:32:Cortex
 libraries:
-  - "patches/replace_binop_patches.yaml"
-
+- patches/replace_binop_patches.yaml
 patches:
-  - name: "replace_pb_add"
-    id: "PB-OPKIND-ADD"
-    match:
-      name: "cir.binop"
-      kind: "operation"
-      op_kind: "add"
-      context: ["pb_decode_varint32_eof"]
-    action:
-      mode: "replace"
-      patch: "checked_mul"
-      arguments:
-        - source: "operand"
-          index: 0
-        - source: "operand"
-          index: 1
+- name: replace_pb_add
+  id: PB-OPKIND-ADD
+  match:
+    name: cir.binop
+    op_kind: add
+    kind: operation
+    context:
+    - pb_decode_varint32_eof
+  action:
+    mode: replace
+    patch: checked_mul
+    arguments:
+    - source: operand
+      index: 0
+    - source: operand
+      index: 1

@@ -1,22 +1,21 @@
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "replace_cmp_patches"
-  version: "1.0.0"
-  description: "Patches for replacing comparison operations"
-  author: "Security Team"
-  created: "2026-03-23"
-
-patches:
-  - name: "fixed_bounds_check"
-    description: "Replace off-by-one bounds comparison"
-    category: "bounds_safety"
-    code_file: "patches/patch_fixed_bounds_check.c"
-    function_name: "patch::replace::bounds_cmp"
-    parameters:
-      - name: "index"
-        type: "unsigned int"
-        description: "Array index"
-      - name: "size"
-        type: "unsigned int"
-        description: "Array size"
+  name: replace_cmp_patches
+  description: Patches for replacing comparison operations
+  version: 1.0.0
+  author: Security Team
+  created: '2026-03-23'
+  kind: PatchLibrary
+patch_definitions:
+- name: fixed_bounds_check
+  description: Replace off-by-one bounds comparison
+  category: bounds_safety
+  function_name: patch::replace::bounds_cmp
+  code_file: patches/patch_fixed_bounds_check.c
+  parameters:
+  - name: index
+    type: unsigned int
+    description: Array index
+  - name: size
+    type: unsigned int
+    description: Array size

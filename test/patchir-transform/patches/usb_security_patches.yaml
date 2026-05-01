@@ -1,120 +1,104 @@
-# patches/usb_security_patches.yaml
-
 apiVersion: patchestry.io/v1
-
 metadata:
   name: usb-security-patches
-  version: "1.0.0"
-  description: "USB endpoint security patches for medical devices"
-  created: "2025-06-31"
-  author: "Security Team"
-
-patches:
-  - name: usb_endpoint_write_validation_before
-    description: "Validate USB endpoint write operations"
-    category: usb_security
-    function_name: "patch::before::usbd_ep_write_packet"
-    code_file: "patches/patch_usbd_ep_write_packet.c"
-    parameters: # Parameters are optional and is for reference only
-      - name: usb_device
-        type: "usb_device*"
-        description: "USB device context"
-      - name: buffer
-        type: "const void*"
-        description: "Data buffer to write"
-
-  - name: usb_endpoint_write_validation_after
-    description: "Validate USB endpoint write return value"
-    category: usb_security
-    code_file: "patches/patch_usbd_ep_write_packet.c"
-    function_name: "patch::after::usbd_ep_write_packet"
-    parameters: # Parameters are optional and is for reference only
-      - name: "return_value"
-        type: "uint32_t"
-        description: "Return value from USB endpoint write operation"
-
-  - name: usb_endpoint_write_validation_before_update_state
-    description: "Validate USB endpoint write operations"
-    category: usb_security
-    code_file: "patches/patch_usbd_ep_write_packet.c"
-    function_name: "patch::before::usbd_cp_write_packet::update_state"
-    parameters: # Parameters are optional and is for reference only
-      - name: usb_device_pointer
-        type: "void**"
-        description: "USB device context pointer"
-      - name: buffer_pointer
-        type: "void**"
-        description: "Data buffer to write"
-
-  # USB device-state assertion invoked before usbd_ep_write_packet.
-  # Migrated from the runtime-contract version (was test_contract /
-  # contract__before__test_contract) when runtime contracts were merged
-  # into patches.
-  - name: usb_state_check_before
-    description: "Assert USB device state is CONFIGURED before a packet write"
-    category: usb_security
-    code_file: "patches/patch_usb_state_check.c"
-    function_name: "patch::before::usb_state_check"
-    parameters:
-      - name: usb_device
-        type: "usb_device*"
-        description: "USB device context"
-      - name: buffer
-        type: "const void*"
-        description: "Data buffer to write"
-
-contracts:
-  - name: "usb_endpoint_write_validation_contract_static"
-    description: "Validate USB endpoint write"
-    category: "write_validation"
-
-    preconditions:
-      - id: "precondition_1"
-        pred:
-          kind: "relation"
-          target: "arg0"
-          relation: "ne"
-          value: "0"
-          symbol: "usb_device"
-      - id: "precondition_2"
-        pred:
-          kind: "relation"
-          target: "arg1"
-          relation: "ne"
-          value: "0"
-          symbol: "buffer"
-      - id: "precondition_3"
-        pred:
-          kind: "range"
-          target: "arg2"
-          symbol: "buffer_length"
-          range:
-            min: "0"
-            max: "512"
-
-    postconditions:
-      - id: "postcondition_1"
-        pred:
-          kind: "range"
-          target: "return_value"
-          range:
-            min: "0"
-            max: "512"
-
-  - name: "test_entrypoint_insertion_contract_static"
-    description: "Validate USB endpoint write at function entrypoint"
-    category: "write_validation"
-
-    preconditions:
-      - id: "precondition_1"
-        pred:
-          kind: "relation"
-          target: "arg0"
-          relation: "eq"
-          value: "1"
-
-    postconditions:
-      - id: "postcondition_1"
-        pred:
-          kind: "expr"
-          expr: "usb_device != NULL"
+  description: USB endpoint security patches for medical devices
+  version: 1.0.0
+  author: Security Team
+  created: '2025-06-31'
+  kind: PatchLibrary
+patch_definitions:
+- name: usb_endpoint_write_validation_before
+  description: Validate USB endpoint write operations
+  category: usb_security
+  function_name: patch::before::usbd_ep_write_packet
+  code_file: patches/patch_usbd_ep_write_packet.c
+  parameters:
+  - name: usb_device
+    type: usb_device*
+    description: USB device context
+  - name: buffer
+    type: const void*
+    description: Data buffer to write
+- name: usb_endpoint_write_validation_after
+  description: Validate USB endpoint write return value
+  category: usb_security
+  function_name: patch::after::usbd_ep_write_packet
+  code_file: patches/patch_usbd_ep_write_packet.c
+  parameters:
+  - name: return_value
+    type: uint32_t
+    description: Return value from USB endpoint write operation
+- name: usb_endpoint_write_validation_before_update_state
+  description: Validate USB endpoint write operations
+  category: usb_security
+  function_name: patch::before::usbd_cp_write_packet::update_state
+  code_file: patches/patch_usbd_ep_write_packet.c
+  parameters:
+  - name: usb_device_pointer
+    type: void**
+    description: USB device context pointer
+  - name: buffer_pointer
+    type: void**
+    description: Data buffer to write
+- name: usb_state_check_before
+  description: Assert USB device state is CONFIGURED before a packet write
+  category: usb_security
+  function_name: patch::before::usb_state_check
+  code_file: patches/patch_usb_state_check.c
+  parameters:
+  - name: usb_device
+    type: usb_device*
+    description: USB device context
+  - name: buffer
+    type: const void*
+    description: Data buffer to write
+contract_definitions:
+- name: usb_endpoint_write_validation_contract_static
+  description: Validate USB endpoint write
+  category: write_validation
+  preconditions:
+  - id: precondition_1
+    pred:
+      kind: relation
+      target: arg0
+      relation: ne
+      value: '0'
+      symbol: usb_device
+  - id: precondition_2
+    pred:
+      kind: relation
+      target: arg1
+      relation: ne
+      value: '0'
+      symbol: buffer
+  - id: precondition_3
+    pred:
+      kind: range
+      target: arg2
+      symbol: buffer_length
+      range:
+        min: '0'
+        max: '512'
+  postconditions:
+  - id: postcondition_1
+    pred:
+      kind: range
+      target: return_value
+      range:
+        min: '0'
+        max: '512'
+- name: test_entrypoint_insertion_contract_static
+  description: Validate USB endpoint write at function entrypoint
+  category: write_validation
+  preconditions:
+  - id: precondition_1
+    pred:
+      kind: relation
+      target: arg0
+      relation: eq
+      value: '1'
+  postconditions:
+  - id: postcondition_1
+    pred:
+      kind: expr
+      expr: usb_device != NULL

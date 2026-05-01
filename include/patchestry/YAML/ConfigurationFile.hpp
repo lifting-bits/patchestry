@@ -181,20 +181,40 @@ namespace llvm::yaml {
         }
     };
 
-    // Parse Library
     template<>
     struct MappingTraits< patchestry::passes::Library >
     {
         static void mapping(IO &io, patchestry::passes::Library &library) {
             io.mapOptional("apiVersion", library.api_version);
             io.mapOptional("metadata", library.metadata);
-            io.mapOptional("patches", library.patches);
-            io.mapOptional("contracts", library.contracts);
+
+            // Reject legacy `patches:` / `contracts:` keys before parsing
+            // the new ones — silently accepting either spelling masks
+            // partial migrations and lets a stale library shadow a
+            // newly-renamed one.
+            std::vector< patch::PatchSpec > legacy_patches;
+            std::vector< contract::ContractSpec > legacy_contracts;
+            io.mapOptional("patch_definitions", library.patches);
+            io.mapOptional("contract_definitions", library.contracts);
+
+            if (!library.metadata.kind.empty()
+                && library.metadata.kind != "PatchLibrary")
+            {
+                io.setError(
+                    "library '" + library.metadata.name
+                    + "' has metadata.kind: '" + library.metadata.kind
+                    + "', but only 'PatchLibrary' is valid for files "
+                      "loaded via 'libraries:'. Either remove the kind "
+                      "field or set it to 'PatchLibrary'."
+                );
+                return;
+            }
 
             if (library.contracts.empty() && library.patches.empty()) {
                 io.setError(
                     "Library '" + library.metadata.name
-                    + "' must include at least one 'patches' or 'contracts' entry."
+                    + "' must include at least one 'patch_definitions' "
+                      "or 'contract_definitions' entry."
                 );
             }
         }
@@ -208,6 +228,44 @@ namespace llvm::yaml {
             io.mapOptional("apiVersion", config.api_version);
             io.mapOptional("metadata", config.metadata);
             io.mapOptional("target", config.target);
+
+            // If `metadata.kind` is set on the deployment file it must
+            // identify it as a PatchSpec; the only other accepted value
+            // is PatchLibrary, which would be a misuse here (deployments
+            // carry rules + targets, not definitions).
+            if (!config.metadata.kind.empty()
+                && config.metadata.kind != "PatchSpec")
+            {
+                io.setError(
+                    "deployment file '" + config.metadata.name
+                    + "' has metadata.kind: '" + config.metadata.kind
+                    + "', but only 'PatchSpec' is valid for deployment "
+                      "files (the ones carrying 'target:' / "
+                      "'libraries:' / rule entries). 'PatchLibrary' "
+                      "files belong under 'libraries:'."
+                );
+                return;
+            }
+
+            // A `kind: PatchSpec` deployment must not use the library
+            // keys; otherwise the file is structurally a library that
+            // happens to be loaded as a deployment, which would silently
+            // drop its definitions. Reject loudly.
+            std::vector< patch::PatchSpec > stray_patch_defs;
+            std::vector< contract::ContractSpec > stray_contract_defs;
+            io.mapOptional("patch_definitions", stray_patch_defs);
+            io.mapOptional("contract_definitions", stray_contract_defs);
+            if (!stray_patch_defs.empty() || !stray_contract_defs.empty()) {
+                io.setError(
+                    "deployment file '" + config.metadata.name
+                    + "' carries 'patch_definitions:' / "
+                      "'contract_definitions:' keys, which belong in a "
+                      "'kind: PatchLibrary' file loaded via "
+                      "'libraries:'. Move these definitions into a "
+                      "library YAML and reference it from 'libraries:'."
+                );
+                return;
+            }
 
             // Parse libraries as array of file paths
             std::vector< std::string > library_files;
@@ -232,6 +290,45 @@ namespace llvm::yaml {
                     return;
                 }
 
+                // Reject duplicate definition names across libraries —
+                // before this check the loader silently shadowed
+                // (last-loaded wins), turning a copy/paste mistake into
+                // a "patch ran but with the wrong implementation"
+                // miscompile. Loud failure with both libraries' names
+                // points the spec author at the conflict immediately.
+                for (const auto &incoming : library.value().patches) {
+                    for (const auto &existing : config.libraries.patches) {
+                        if (incoming.name == existing.name) {
+                            io.setError(
+                                "duplicate patch definition '"
+                                + incoming.name + "' loaded from '" + file
+                                + "' — a definition with the same name "
+                                  "was already loaded from an earlier "
+                                  "library. Rename one of the entries or "
+                                  "drop the redundant 'libraries:' "
+                                  "reference."
+                            );
+                            return;
+                        }
+                    }
+                }
+                for (const auto &incoming : library.value().contracts) {
+                    for (const auto &existing : config.libraries.contracts) {
+                        if (incoming.name == existing.name) {
+                            io.setError(
+                                "duplicate contract definition '"
+                                + incoming.name + "' loaded from '" + file
+                                + "' — a definition with the same name "
+                                  "was already loaded from an earlier "
+                                  "library. Rename one of the entries or "
+                                  "drop the redundant 'libraries:' "
+                                  "reference."
+                            );
+                            return;
+                        }
+                    }
+                }
+
                 config.libraries.patches.insert(
                     config.libraries.patches.end(),
                     std::make_move_iterator(library.value().patches.begin()),
@@ -244,35 +341,21 @@ namespace llvm::yaml {
                 );
             }
 
-            io.mapOptional("meta_patches", config.meta_patches);
-            io.mapOptional("meta_contracts", config.meta_contracts);
-
-            // Simplified `patches:` key (mutually exclusive with meta_patches)
+            // The legacy `meta_patches:` / `meta_contracts:` YAML
+            // surface is removed. Authors use the simplified
+            // `patches:` / `contracts:` keys exclusively. Spec files
+            // still carrying the old keys hard-error here via LLVM
+            // YAMLTraits' "unknown key" path — since neither
+            // `meta_patches` nor `meta_contracts` is mapped, strict
+            // mode rejects them at parse time.
             std::vector< patch::PatchEntry > patch_entries;
             io.mapOptional("patches", patch_entries);
-
-            if (!patch_entries.empty() && !config.meta_patches.empty()) {
-                io.setError(
-                    "'patches' and 'meta_patches' are mutually exclusive in one file"
-                );
-                return;
-            }
-
             for (const auto &entry : patch_entries) {
                 config.meta_patches.emplace_back(patch::inflatePatchEntry(entry));
             }
 
-            // Simplified `contracts:` key (mutually exclusive with meta_contracts)
             std::vector< contract::ContractEntry > contract_entries;
             io.mapOptional("contracts", contract_entries);
-
-            if (!contract_entries.empty() && !config.meta_contracts.empty()) {
-                io.setError(
-                    "'contracts' and 'meta_contracts' are mutually exclusive in one file"
-                );
-                return;
-            }
-
             for (const auto &entry : contract_entries) {
                 config.meta_contracts.emplace_back(contract::inflateContractEntry(entry));
             }

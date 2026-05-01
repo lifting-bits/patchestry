@@ -1,45 +1,35 @@
-# Test patching specification
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "cwe121-complex-replace"
-  description: "Fix loop-based strcat overflow in eeprom_write"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-03-17"
-
+  name: cwe121-complex-replace
+  description: Fix loop-based strcat overflow in eeprom_write
+  version: 1.0.0
+  author: Security Team
+  created: '2026-03-17'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/cwe121_complex_patches.yaml"
-
-meta_patches:
-  - name: "cwe121_strcat_fix"
-    description: "Replace strcat with bounded strncat in eeprom_write"
-
-    patch_actions:
-      - id: "CWE-121-COMPLEX-001"
-        description: "Replace strcat in eeprom_write with bounded version"
-
-        match:
-          - name: "strcat"
-            kind: "function"
-            function_context:
-              - name: "eeprom_write"
-
-        action:
-          - mode: "replace"
-            patch_id: "cwe121_bounded_strcat"
-            description: "Use strncat with remaining buffer capacity"
-            arguments:
-              - name: "dest"
-                source: "operand"
-                index: 0
-              - name: "src"
-                source: "operand"
-                index: 1
-              - name: "buf_size"
-                source: "constant"
-                value: 64
+- patches/cwe121_complex_patches.yaml
+patches:
+- name: cwe121_strcat_fix
+  id: CWE-121-COMPLEX-001
+  description: Replace strcat in eeprom_write with bounded version
+  match:
+    name: strcat
+    kind: function
+    context:
+    - eeprom_write
+  action:
+    mode: replace
+    patch: cwe121_bounded_strcat
+    arguments:
+    - name: dest
+      source: operand
+      index: 0
+    - name: src
+      source: operand
+      index: 1
+    - name: buf_size
+      source: constant
+      value: 64

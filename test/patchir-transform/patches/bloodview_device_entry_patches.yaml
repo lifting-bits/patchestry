@@ -1,62 +1,54 @@
-
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "led_loop_before_cmp_operation"
-  version: "1.0.0"
-  description: "LED loop before cmp operation"
-  author: "Security Team"
-
-patches:
-  - name: "device_list_replace_sprintf_patch"
-    description: "Device list replace sprintf patch"
-    category: "device"
-    code_file: "patches/bloodview_patch.c"
-    function_name: "patch::replace::sprintf"
-    parameters: # Parameters are optional and is for reference only
-      - name: "argument0"
-        type: "string"
-        description: "Argument 0"
-      - name: "argument1"
-        type: "size_t"
-        description: "Argument 1"
-      - name: "argument2"
-        type: "string"
-        description: "Argument 2"
-
-  # Bounds check on the replaced sprintf's return value. Migrated from
-  # the runtime-contract version (was device_list_replace_sprintf_contract
-  # / contract__sprintf) when runtime contracts were merged into patches.
-  - name: "sprintf_bounds_check_after"
-    description: "Assert sprintf return value is within destination bounds"
-    category: "device"
-    code_file: "patches/bloodview_patch.c"
-    function_name: "patch::after::sprintf_bounds"
-    parameters:
-      - name: "return_value"
-        type: "int"
-        description: "Return value"
-      - name: "dest_size"
-        type: "unsigned int"
-        description: "Destination size"
-contracts:
-  - name: "sprintf_contract_static"
-    description: "Static contract for sprintf"
-    category: "device"
-
-    preconditions:
-      - id: "dest_size_nonzero"
-        pred:
-          kind: "relation"
-          target: "arg1"
-          relation: "ne"
-          value: "0"
-
-    postconditions:
-      - id: "return_value_range"
-        pred:
-          kind: "range"
-          target: "return_value"
-          range:
-            min: "0"
-            max: "32"
+  name: led_loop_before_cmp_operation
+  description: LED loop before cmp operation
+  version: 1.0.0
+  author: Security Team
+  kind: PatchLibrary
+patch_definitions:
+- name: device_list_replace_sprintf_patch
+  description: Device list replace sprintf patch
+  category: device
+  function_name: patch::replace::sprintf
+  code_file: patches/bloodview_patch.c
+  parameters:
+  - name: argument0
+    type: string
+    description: Argument 0
+  - name: argument1
+    type: size_t
+    description: Argument 1
+  - name: argument2
+    type: string
+    description: Argument 2
+- name: sprintf_bounds_check_after
+  description: Assert sprintf return value is within destination bounds
+  category: device
+  function_name: patch::after::sprintf_bounds
+  code_file: patches/bloodview_patch.c
+  parameters:
+  - name: return_value
+    type: int
+    description: Return value
+  - name: dest_size
+    type: unsigned int
+    description: Destination size
+contract_definitions:
+- name: sprintf_contract_static
+  description: Static contract for sprintf
+  category: device
+  preconditions:
+  - id: dest_size_nonzero
+    pred:
+      kind: relation
+      target: arg1
+      relation: ne
+      value: '0'
+  postconditions:
+  - id: return_value_range
+    pred:
+      kind: range
+      target: return_value
+      range:
+        min: '0'
+        max: '32'

@@ -1,30 +1,26 @@
-# Test patching specification
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "measurement-update-after-patch"
-  description: "Patch measurement update after function"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2025-07-28"
-
-libraries:
-  - "patches/measurement_update_patch.yaml"
-
+  name: measurement-update-after-patch
+  description: Patch measurement update after function
+  version: 1.0.0
+  author: Security Team
+  created: '2025-07-28'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
+libraries:
+- patches/measurement_update_patch.yaml
 patches:
-  - name: "measurement_update_after_patch"
-    id: "MEASUREMENT-UPDATE-AFTER-PATCH-001"
-    description: "Patch measurement update after function"
-    match:
-      name: "spo2_lookup"
-      kind: "function"
-    action:
-      mode: "apply_after"
-      patch: "measurement_update_after_patch"
-      arguments:
-        - name: "function_return_value"
-          source: "return_value"
+- name: measurement_update_after_patch
+  id: MEASUREMENT-UPDATE-AFTER-PATCH-001
+  description: Patch measurement update after function
+  match:
+    name: spo2_lookup
+    kind: function
+  action:
+    mode: apply_after
+    patch: measurement_update_after_patch
+    arguments:
+    - name: function_return_value
+      source: return_value

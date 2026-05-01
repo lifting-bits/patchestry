@@ -45,13 +45,15 @@ metadata:
   author: "Author Name"
   created: "YYYY-MM-DD"
   organization: "organization-name"
+  kind: PatchSpec                      # Optional: PatchSpec (deployment)
+                                       #   or PatchLibrary (library)
 
 target:                                # Target binary configuration
   binary: "target_binary.bin"
   arch: "ARCHITECTURE:ENDIANNESS:BITWIDTH:VARIANT"
 
 libraries:                             # External patch and contract libraries
-  - "path/to/library.yaml"             # Each file may contain patches, contracts, or both
+  - "path/to/library.yaml"             # Each file carries patch/contract definitions
 
 patches:                               # Patch configurations
   - name: "..."
@@ -188,17 +190,20 @@ section.
 
 ### Libraries Fields
 
-`libraries` is a list of paths to external library YAML files. Each library file may define `patches`, `contracts`, or both. Paths are resolved relative to the location of the top-level spec file.
+`libraries` is a list of paths to external library YAML files. Each
+library file defines `patch_definitions`, `contract_definitions`, or
+both. Paths are resolved relative to the location of the top-level spec
+file.
 
 ```yaml
 libraries:
   - "patches/my_patches.yaml"
-  - "patches/my_contracts.yaml"   # can also hold contracts despite the name
+  - "patches/my_contracts.yaml"   # can also hold contract definitions
 ```
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `libraries` (list entry) | Path to a library YAML file containing `patches:` and/or `contracts:` definitions | `"patches/usb_security_patches.yaml"` |
+| `libraries` (list entry) | Path to a library YAML file containing `patch_definitions:` and/or `contract_definitions:` | `"patches/usb_security_patches.yaml"` |
 
 ### Patch / Contract Entry Fields
 
@@ -819,8 +824,9 @@ metadata:
   description: "Description of contract library"
   author: "Author Name"
   created: "YYYY-MM-DD"
+  kind: PatchLibrary               # optional self-doc
 
-contracts:
+contract_definitions:              # was `contracts:` in v1.0
   - name: "contract_name"
     description: "Contract description"
     category: "validation_category"
@@ -835,7 +841,7 @@ contracts:
 |-------|-------------|----------|---------|
 | `apiVersion` | API version | Yes | `"patchestry.io/v1"` |
 | `metadata` | Library metadata | Yes | See metadata fields |
-| `contracts` | List of contract specifications | Yes | See contract spec fields |
+| `contract_definitions` | List of contract specifications | Yes | See contract spec fields |
 
 ### Contract Specification Fields
 

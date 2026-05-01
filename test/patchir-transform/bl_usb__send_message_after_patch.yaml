@@ -1,35 +1,32 @@
-# Test patching specification
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "usb-security-monitoring-deployment"
-  description: "Deploy USB security monitoring for medical device firmware"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2025-06-31"
-
+  name: usb-security-monitoring-deployment
+  description: Deploy USB security monitoring for medical device firmware
+  version: 1.0.0
+  author: Security Team
+  created: '2025-06-31'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32:Cortex"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32:Cortex
 libraries:
-  - "patches/usb_security_patches.yaml"
-
+- patches/usb_security_patches.yaml
 patches:
-  - name: "usb_endpoint_write_validation_after"
-    id: "USB-PATCH-001"
-    description: "Patch to add USB security"
-    match:
-      name: "usbd_ep_write_packet"
-      kind: "function"
-      context: ["bl_usb__send_message"]
-      argument_matches:
-        - index: 0
-          name: "usb_g"
-          type: "struct _usbd_device*"
-    action:
-      mode: "apply_after"
-      patch: "usb_endpoint_write_validation_after"
-      arguments:
-        - name: "function_return_value"
-          source: "return_value"
+- name: usb_endpoint_write_validation_after
+  id: USB-PATCH-001
+  description: Patch to add USB security
+  match:
+    name: usbd_ep_write_packet
+    kind: function
+    context:
+    - bl_usb__send_message
+    argument_matches:
+    - index: 0
+      name: usb_g
+      type: struct _usbd_device*
+  action:
+    mode: apply_after
+    patch: usb_endpoint_write_validation_after
+    arguments:
+    - name: function_return_value
+      source: return_value

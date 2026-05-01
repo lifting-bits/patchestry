@@ -1,28 +1,24 @@
-# Negative test: apply_at_entrypoint is no longer a valid contract
-# mode. The parser must reject this file with a pointer to patches:.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "contract-entrypoint-reject"
-  description: "Contract with apply_at_entrypoint — must fail parsing"
-  version: "1.0.0"
-  author: "Test Suite"
-  created: "2026-04-21"
-
+  name: contract-entrypoint-reject
+  description: Contract with apply_at_entrypoint — must fail parsing
+  version: 1.0.0
+  author: Test Suite
+  created: '2026-04-21'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32:Cortex"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32:Cortex
 libraries:
-  - "patches/entrypoint_contract_library.yaml"
-
+- patches/entrypoint_contract_library.yaml
 contracts:
-  - name: "should_not_parse"
-    id: "BAD-ENTRY-001"
-    description: "apply_at_entrypoint is patch-only"
-    match:
-      name: "usbd_ep_write_packet"
-      context: ["bl_usb__send_message"]
-    action:
-      mode: "apply_at_entrypoint"
-      contract: "message_entry_check_contract_static"
+- name: should_not_parse
+  id: BAD-ENTRY-001
+  description: apply_at_entrypoint is patch-only
+  match:
+    name: usbd_ep_write_packet
+    context:
+    - bl_usb__send_message
+  action:
+    mode: apply_at_entrypoint
+    contract: message_entry_check_contract_static

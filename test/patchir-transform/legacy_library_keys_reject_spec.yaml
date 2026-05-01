@@ -1,0 +1,18 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: legacy-library-loader
+  kind: PatchSpec
+target:
+  binary: test_binary.bin
+  arch: ARM:LE:32
+libraries:
+- legacy_library_keys_reject.yaml
+patches:
+- name: irrelevant
+  id: IRRELEVANT-001
+  match:
+    name: minimal_func
+    kind: function
+  action:
+    mode: apply_before
+    patch: legacy_patch

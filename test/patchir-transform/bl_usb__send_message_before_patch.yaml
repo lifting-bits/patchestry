@@ -1,63 +1,57 @@
-# Test patching specification
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "usb-security-monitoring-deployment"
-  description: "Deploy USB security monitoring for medical device firmware"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2025-06-31"
-
+  name: usb-security-monitoring-deployment
+  description: Deploy USB security monitoring for medical device firmware
+  version: 1.0.0
+  author: Security Team
+  created: '2025-06-31'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/usb_security_patches.yaml"
-
+- patches/usb_security_patches.yaml
 patches:
-  - name: "usb_endpoint_write_validation_before"
-    id: "USB-PATCH-001"
-    description: "Endpoint-write pre-instrumentation"
-    match:
-      name: "usbd_ep_write_packet"
-      kind: "function"
-      context: ["bl_usb__send_message"]
-      argument_matches:
-        - index: 0
-          name: "usb_g"
-          type: "struct _usbd_device*"
-    action:
-      mode: "apply_before"
-      patch: "usb_endpoint_write_validation_before"
-      arguments:
-        - name: "operand_0"
-          source: "operand"
-          index: "0"
-        - name: "operand_2"
-          source: "operand"
-          index: "2"
-
-  # Second apply_before action, migrated from the removed test_contract
-  # runtime-contract dispatch. It asserts the USB device state is
-  # CONFIGURED before the packet write.
-  - name: "usb_state_check_before"
-    id: "USB-PATCH-002"
-    description: "USB state assertion"
-    match:
-      name: "usbd_ep_write_packet"
-      kind: "function"
-      context: ["bl_usb__send_message"]
-      argument_matches:
-        - index: 0
-          name: "usb_g"
-    action:
-      mode: "apply_before"
-      patch: "usb_state_check_before"
-      arguments:
-        - name: "usb_device"
-          source: "argument"
-          index: "0"
-        - name: "buffer"
-          source: "argument"
-          index: "1"
+- name: usb_endpoint_write_validation_before
+  id: USB-PATCH-001
+  description: Endpoint-write pre-instrumentation
+  match:
+    name: usbd_ep_write_packet
+    kind: function
+    context:
+    - bl_usb__send_message
+    argument_matches:
+    - index: 0
+      name: usb_g
+      type: struct _usbd_device*
+  action:
+    mode: apply_before
+    patch: usb_endpoint_write_validation_before
+    arguments:
+    - name: operand_0
+      source: operand
+      index: '0'
+    - name: operand_2
+      source: operand
+      index: '2'
+- name: usb_state_check_before
+  id: USB-PATCH-002
+  description: USB state assertion
+  match:
+    name: usbd_ep_write_packet
+    kind: function
+    context:
+    - bl_usb__send_message
+    argument_matches:
+    - index: 0
+      name: usb_g
+  action:
+    mode: apply_before
+    patch: usb_state_check_before
+    arguments:
+    - name: usb_device
+      source: argument
+      index: '0'
+    - name: buffer
+      source: argument
+      index: '1'

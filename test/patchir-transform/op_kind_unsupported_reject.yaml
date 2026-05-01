@@ -1,36 +1,29 @@
-# Negative test: `op_kind:` only applies to `cir.binop` / `cir.cmp`.
-# Setting it on any other op (or a typo like "cir.bnop") previously
-# silently dropped every match at runtime with only a DEBUG log — a
-# "succeeded but did nothing" transform run. Rejected at spec load.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "op-kind-unsupported-reject"
-  description: "op_kind on cir.cast must be rejected at parse"
-  version: "1.0.0"
-  author: "Test Suite"
-  created: "2026-04-23"
-
+  name: op-kind-unsupported-reject
+  description: op_kind on cir.cast must be rejected at parse
+  version: 1.0.0
+  author: Test Suite
+  created: '2026-04-23'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/replace_binop_patches.yaml"
-
+- patches/replace_binop_patches.yaml
 patches:
-  - name: "op_kind_on_cast_reject"
-    id: "OPK-UNSUPPORTED-001"
-    description: "op_kind is only meaningful for cir.binop / cir.cmp"
-    match:
-      name: "cir.cast"
-      op_kind: "mul"          # meaningless on cir.cast — must fail
-      kind: "operation"
-    action:
-      mode: "apply_after"
-      patch: "void_probe_mul"
-      arguments:
-        - source: "operand"
-          index: 0
-        - source: "operand"
-          index: 1
+- name: op_kind_on_cast_reject
+  id: OPK-UNSUPPORTED-001
+  description: op_kind is only meaningful for cir.binop / cir.cmp
+  match:
+    name: cir.cast
+    op_kind: mul
+    kind: operation
+  action:
+    mode: apply_after
+    patch: void_probe_mul
+    arguments:
+    - source: operand
+      index: 0
+    - source: operand
+      index: 1

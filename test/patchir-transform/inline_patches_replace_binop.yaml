@@ -1,41 +1,35 @@
-# Regression: `optimization: ["inline-patches"]` on an operation-kind
-# replace (cir.binop). Exercises `PatchOperationImpl.cpp:379
-# (replaceOperationWithPatch)` + the inline worklist — previously
-# uncovered in CI. Uses the single-return `passthrough_mul` patch so
-# it doesn't trip Bug F.
 apiVersion: patchestry.io/v1
-
 metadata:
-  name: "inline-patches-replace-binop"
-  description: "Replace cir.binop + inline a single-return patch"
-  version: "1.0.0"
-  author: "Security Team"
-  created: "2026-04-22"
-
+  name: inline-patches-replace-binop
+  description: Replace cir.binop + inline a single-return patch
+  version: 1.0.0
+  author: Security Team
+  created: '2026-04-22'
+  kind: PatchSpec
 target:
-  binary: "test_binary.bin"
-  arch: "ARM:LE:32"
-
+  binary: test_binary.bin
+  arch: ARM:LE:32
 libraries:
-  - "patches/replace_binop_patches.yaml"
-
+- patches/replace_binop_patches.yaml
 patches:
-  - name: "inline_replace_binop"
-    id: "INLINE-REPLACE-BINOP-001"
-    description: "Replace + inline the matched multiply"
-    match:
-      name: "cir.binop"
-      kind: "operation"
-      op_kind: "mul"
-      context: ["compute_alloc_size"]
-    action:
-      mode: "replace"
-      patch: "passthrough_mul"
-      arguments:
-        - name: "a"
-          source: "operand"
-          index: 0
-        - name: "b"
-          source: "operand"
-          index: 1
-      optimization: ["inline-patches"]
+- name: inline_replace_binop
+  id: INLINE-REPLACE-BINOP-001
+  description: Replace + inline the matched multiply
+  match:
+    name: cir.binop
+    op_kind: mul
+    kind: operation
+    context:
+    - compute_alloc_size
+  action:
+    mode: replace
+    patch: passthrough_mul
+    arguments:
+    - name: a
+      source: operand
+      index: 0
+    - name: b
+      source: operand
+      index: 1
+    optimization:
+    - inline-patches
