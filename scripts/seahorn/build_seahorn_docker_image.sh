@@ -14,6 +14,7 @@ LLVM_VERSION="${LLVM_VERSION:-20}"
 IMAGE_VERSION="${IMAGE_VERSION:-22.04}"
 SEAHORN_REPO="${SEAHORN_REPO:-https://github.com/trail-of-forks/seahorn.git}"
 SEAHORN_BRANCH="${SEAHORN_BRANCH:-dev20}"
+SEAHORN_REF="${SEAHORN_REF:-}"
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
 NO_CACHE="${NO_CACHE:-false}"
 
@@ -32,6 +33,7 @@ Environment overrides:
   IMAGE_VERSION    Ubuntu version for the base image (default: ${IMAGE_VERSION})
   SEAHORN_REPO     SeaHorn git repo URL (default: ${SEAHORN_REPO})
   SEAHORN_BRANCH   SeaHorn branch (default: ${SEAHORN_BRANCH})
+  SEAHORN_REF      SeaHorn commit SHA to check out (default: Dockerfile pin)
   BUILD_TYPE       CMake build type (default: ${BUILD_TYPE})
   IMAGE_NAME       Output image name (default: ${IMAGE_NAME})
   IMAGE_TAG        Output image tag (default: ${IMAGE_TAG})
@@ -68,7 +70,7 @@ fi
 echo "=== SeaHorn Docker build ==="
 echo "  Base image:    ${BASE_IMAGE}"
 echo "  Output image:  ${IMAGE_NAME}:${IMAGE_TAG}"
-echo "  SeaHorn:       ${SEAHORN_REPO} @ ${SEAHORN_BRANCH}"
+echo "  SeaHorn:       ${SEAHORN_REPO} @ ${SEAHORN_BRANCH}${SEAHORN_REF:+ (ref: ${SEAHORN_REF})}"
 echo "  Build type:    ${BUILD_TYPE}"
 echo "  No cache:      ${NO_CACHE}"
 echo ""
@@ -83,6 +85,11 @@ if [[ "${NO_CACHE}" == "true" ]]; then
     CACHE_FLAG=(--no-cache)
 fi
 
+REF_ARG=()
+if [[ -n "${SEAHORN_REF}" ]]; then
+    REF_ARG=(--build-arg SEAHORN_REF="${SEAHORN_REF}")
+fi
+
 DOCKER_BUILDKIT=1 docker build \
     --platform linux/amd64 \
     "${CACHE_FLAG[@]}" \
@@ -90,6 +97,7 @@ DOCKER_BUILDKIT=1 docker build \
     --build-arg LLVM_VERSION="${LLVM_VERSION}" \
     --build-arg SEAHORN_REPO="${SEAHORN_REPO}" \
     --build-arg SEAHORN_BRANCH="${SEAHORN_BRANCH}" \
+    "${REF_ARG[@]}" \
     --build-arg BUILD_TYPE="${BUILD_TYPE}" \
     -t "${IMAGE_NAME}:${IMAGE_TAG}" \
     -f "${SCRIPT_DIR}/Dockerfile" \
