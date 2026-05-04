@@ -99,15 +99,22 @@ jobs:
 
       - name: Solver-backed smoke test
         run: |
-          # Use __VERIFIER_nondet_int so clang/seapp can't constant-fold the
-          # branch away; the assertion must survive to z3 for this to prove
-          # the solver wiring (LLVM front-end → sea-dsa → crab → z3) works.
+          # __VERIFIER_assume is declared but has no visible body, so clang
+          # can't merge the assumption into later branches the way it folds
+          # `if (x > 10 && x < 5)`. The constraint only gets resolved by
+          # SeaHorn on the way to z3 — which is exactly what we want to
+          # exercise. The post-run guard rejects the vacuous "no assertion
+          # was found" case so a future optimizer change can't silently
+          # turn this back into a no-op.
           mkdir -p smoke && cat > smoke/safe.c <<'EOF'
           extern int __VERIFIER_nondet_int(void);
+          extern void __VERIFIER_assume(int);
           extern void __VERIFIER_error(void) __attribute__((__noreturn__));
           int main(void) {
-              int x = __VERIFIER_nondet_int();
-              if (x > 10 && x < 5) __VERIFIER_error();
+              int a = __VERIFIER_nondet_int();
+              int b = __VERIFIER_nondet_int();
+              __VERIFIER_assume(a == b);
+              if (a != b) __VERIFIER_error();
               return 0;
           }
           EOF
