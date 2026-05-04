@@ -625,20 +625,77 @@ public class PcodeSerializer {
 			return null;  // Unknown userop
 		}
 
-		// Return the label of an intrinsic with `CALLOTHER`. This is based
-		// off of the return value.
-		String intrinsicLabel(PcodeOp pcodeOp) throws Exception {
-			if (pcodeOp.getOpcode() == PcodeOp.CALLOTHER) {
-				int index = (int) pcodeOp.getInput(0).getOffset();
-				String name = resolveUseropName(index);
-				if (name == null) {
-					throw new UnsupportedOperationException(
-						"Unknown CALLOTHER index: 0x" + Integer.toHexString(index));
+		// Returns true when Ghidra exposes no name for this CALLOTHER's
+		// userop index — i.e. resolveUseropName would return null. Kept as
+		// a single source of truth so callers can branch on "is unmodeled"
+		// without re-deriving the index.
+		boolean isUnmodeledCallother(PcodeOp pcodeOp) {
+			if (pcodeOp == null || pcodeOp.getOpcode() != PcodeOp.CALLOTHER) {
+				return false;
+			}
+			int index = (int) pcodeOp.getInput(0).getOffset();
+			return resolveUseropName(index) == null;
+		}
+
+		// Resolve a CALLOTHER userop index to a serializable name. Returns
+		// the canonical SLEIGH/builtin/synthetic name when known, or a
+		// deterministic fallback derived from the underlying instruction
+		// or raw index when Ghidra has not modeled the userop. Never
+		// returns null.
+		//
+		// The fallback path is what keeps a single unmodeled userop
+		// (typical for vendor SIMD or ISA extensions Ghidra has not caught
+		// up with — AVX-512, SVE2, ARMv9 SME, etc.) from aborting whole-
+		// function serialization. The label still routes through
+		// intrinsicLabel(name, returnType) so it composes with the type
+		// suffix the rest of the pipeline expects.
+		//
+		// Naming contract for the unmodeled fallback (consumed by the C++
+		// AST builder in OperationStmt.cpp):
+		//   - asm_<mnemonic>        when the underlying instruction is
+		//                           recoverable from the program listing
+		//   - asm_unknown_<hex>     when even the instruction is not
+		//                           recoverable (data-disassembled regions,
+		//                           addresses outside the live instruction
+		//                           map). The hex suffix is the raw userop
+		//                           index so collisions across distinct
+		//                           opcodes are impossible.
+		// The single `asm_` prefix lets the lifter route both cases through
+		// one weak-NOP path; literal `__asm__` is reserved as a Clang/GCC
+		// inline-assembly keyword and cannot be used as a function name.
+		String resolveUseropNameOrFallback(PcodeOp pcodeOp) {
+			int index = (int) pcodeOp.getInput(0).getOffset();
+			String name = resolveUseropName(index);
+			if (name != null) {
+				return name;
+			}
+			Instruction insn = null;
+			try {
+				Address target = pcodeOp.getSeqnum().getTarget();
+				if (target != null && currentProgram != null) {
+					insn = currentProgram.getListing().getInstructionAt(target);
 				}
-				return intrinsicLabel(name, intrinsicReturnType(pcodeOp));
-			} else {
+			} catch (Exception ignored) {
+				// Listing access can fail when the target address sits in
+				// unmapped memory or in an instruction Ghidra disassembled
+				// as data. Fall through to the index-based fallback.
+			}
+			if (insn != null) {
+				return "asm_" + insn.getMnemonicString().toLowerCase();
+			}
+			return "asm_unknown_" + Integer.toHexString(index);
+		}
+
+		// Return the label of an intrinsic with `CALLOTHER`. This is based
+		// off of the return value. Unmodeled userops route through
+		// resolveUseropNameOrFallback so a single unknown index does not
+		// abort whole-function serialization.
+		String intrinsicLabel(PcodeOp pcodeOp) throws Exception {
+			if (pcodeOp.getOpcode() != PcodeOp.CALLOTHER) {
 				throw new UnsupportedOperationException("Can only label a CALLOTHER PcodeOp, to which the first input should always be a constant representing the user-defined op index");
 			}
+			String name = resolveUseropNameOrFallback(pcodeOp);
+			return intrinsicLabel(name, intrinsicReturnType(pcodeOp));
 		}
 		
 		String intrinsicLabel(
@@ -2495,14 +2552,19 @@ public class PcodeSerializer {
 							if (callotherIndex >= MIN_CALLOTHER && callotherIndex < BUILTIN_STRINGDATA) {
 								break;
 							}
-							// Process SLEIGH userops and decompiler built-ins as intrinsics
-							String userDefinedOpName = resolveUseropName(callotherIndex);
-							if (userDefinedOpName != null) {
-								callotherUsePcodeOps.add(pcodeOp);
-							} else {
-								System.out.println("Unsupported CALLOTHER at " + label(pcodeOp) + ": " + pcodeOp.toString());
-								return false;
+							// Process SLEIGH userops and decompiler built-ins
+							// as intrinsics. Unmodeled userops (typical for
+							// vendor SIMD / ISA extensions Ghidra has not
+							// caught up with) are still queued; they emit as
+							// opaque intrinsics with is_unmodeled=true rather
+							// than aborting whole-function serialization.
+							if (resolveUseropName(callotherIndex) == null) {
+								System.out.println("Unmodeled CALLOTHER at "
+									+ label(pcodeOp) + " (index 0x"
+									+ Integer.toHexString(callotherIndex)
+									+ "); emitting as opaque intrinsic");
 							}
+							callotherUsePcodeOps.add(pcodeOp);
 							break;
 						case PcodeOp.CALL:
 							// Rewrite call argument if there is type mismatch and can't be
@@ -3376,15 +3438,61 @@ public class PcodeSerializer {
 			writer.endArray();
 		}
 		
+		// Hex-encode the underlying instruction bytes for a CALLOTHER op.
+		// Returns null when the listing has no instruction at the op's
+		// target (data-disassembled regions, addresses outside the live
+		// instruction map). Used by serializeIntrinsicCallOp to emit
+		// `asm_bytes` for unmodeled CALLOTHERs so the C++ AST builder can
+		// lift them as `__asm__(".byte 0x.., ...")` passthrough rather
+		// than weak NOP — preserves real-hardware semantics on same-arch
+		// patching workflows.
+		String instructionBytesHex(PcodeOp pcodeOp) {
+			if (pcodeOp == null || currentProgram == null) {
+				return null;
+			}
+			try {
+				Address target = pcodeOp.getSeqnum().getTarget();
+				if (target == null) {
+					return null;
+				}
+				Instruction insn = currentProgram.getListing().getInstructionAt(target);
+				if (insn == null) {
+					return null;
+				}
+				byte[] bytes = insn.getBytes();
+				if (bytes == null || bytes.length == 0) {
+					return null;
+				}
+				StringBuilder sb = new StringBuilder(bytes.length * 2);
+				for (byte b : bytes) {
+					sb.append(String.format("%02x", b & 0xff));
+				}
+				return sb.toString();
+			} catch (Exception ignored) {
+				return null;
+			}
+		}
+
 		// Serialize a `CALLOTHER` as a call to an intrinsic.
 		void serializeIntrinsicCallOp(PcodeOp pcodeOp) throws Exception {
 			serializeOutput(pcodeOp);
-			
+
 			writer.name("target").beginObject();
 			writer.name("kind").value("intrinsic");
 			writer.name("function").value(intrinsicLabel(pcodeOp));
 			writer.name("is_variadic").value(true);
 			writer.name("is_noreturn").value(false);
+			// For unmodeled CALLOTHERs, emit the underlying instruction
+			// bytes so the C++ AST builder can lift them as inline-asm
+			// passthrough. Named/handled CALLOTHERs (cpuid, mfence, ...)
+			// don't get bytes — they're expected to resolve via a strong
+			// runtime definition supplied by the user.
+			if (isUnmodeledCallother(pcodeOp)) {
+				String bytesHex = instructionBytesHex(pcodeOp);
+				if (bytesHex != null) {
+					writer.name("asm_bytes").value(bytesHex);
+				}
+			}
 			writer.endObject();  // End of `target`.
 			
 			writer.name("inputs").beginArray();			
@@ -3938,20 +4046,26 @@ public class PcodeSerializer {
             "deregister_tm_clones", "__sinit"
 		);
 
-		// Serialize all `CALLOTHER` intrinsics.
+		// Serialize all `CALLOTHER` intrinsics. Unmodeled userops (those for
+		// which Ghidra's getUserDefinedOpName returns null) are still emitted
+		// as ordinary intrinsic declarations; the C++ lifter recognizes them
+		// by their synthetic `asm_` name prefix.
 		void serializeIntrinsics() throws Exception {
 			Set<String> seenIntrinsics = new HashSet<>();
 			int numIntrinsics = 0;
-			
+			int numUnmodeled = 0;
+
 			for (PcodeOp pcodeOp : callotherUsePcodeOps) {
-				int index = (int) pcodeOp.getInput(0).getOffset();
-				String name = resolveUseropName(index);
+				String name = resolveUseropNameOrFallback(pcodeOp);
 				DataType returnType = intrinsicReturnType(pcodeOp);
 				String label = intrinsicLabel(name, returnType);
 				if (!seenIntrinsics.add(label)) {
 					continue;
 				}
-				
+				if (isUnmodeledCallother(pcodeOp)) {
+					++numUnmodeled;
+				}
+
 				writer.name(label).beginObject();
 				writer.name("name").value(name);
 				writer.name("is_intrinsic").value(true);
@@ -3962,11 +4076,12 @@ public class PcodeSerializer {
 				writer.name("parameter_types").beginArray().endArray();
 				writer.endObject();  // End of `type`.
 				writer.endObject();
-				
+
 				++numIntrinsics;
 			}
-			
-			System.out.println("Total serialized intrinsics: " + Integer.toString(numIntrinsics));
+
+			System.out.println("Total serialized intrinsics: " + numIntrinsics
+				+ " (unmodeled: " + numUnmodeled + ")");
 		}
 		
 		// Serialize all functions.

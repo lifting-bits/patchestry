@@ -774,6 +774,16 @@ namespace patchestry::ghidra {
         }
 
         target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
+
+        // Hex-encoded instruction bytes — only present on unmodeled
+        // CALLOTHER call sites (PcodeSerializer.java emits them when the
+        // userop is unnamed by Ghidra). Used downstream to lift the call
+        // as `__asm__(".byte ..")` passthrough.
+        auto bytes = maybe_target->getString("asm_bytes");
+        if (bytes.has_value() && !bytes->empty()) {
+            target.asm_bytes = bytes->str();
+        }
+
         op.target           = std::move(target);
         op.has_return_value = call_obj.getBoolean("has_return_value").value_or(false);
     }

@@ -30,6 +30,7 @@
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/Support/CommandLine.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
@@ -47,6 +48,26 @@ namespace patchestry::ast {
     operationFromKey(const Function &function, const std::string &lookup_key); // NOLINT
 
     namespace {
+
+        // Hidden developer knob: when set, unmodeled CALLOTHER placeholders
+        // (`asm_*` names synthesized by PcodeSerializer.java) get a weak
+        // function body — `__asm__ volatile (".byte 0x..")` passthrough when
+        // the original instruction bytes are recoverable, NOP fallback
+        // otherwise. Default off, so the placeholder stays extern and any
+        // unresolved symbol fails loudly at link time. This matches the
+        // project's preference for loud failure over silent miscompile and
+        // keeps the operand-dataflow inaccuracy of bare passthrough opt-in.
+        // NOLINTNEXTLINE(cert-err58-cpp)
+        llvm::cl::opt< bool > enable_unmodeled_callother_passthrough(
+            "enable-unmodeled-callother-passthrough",
+            llvm::cl::desc(
+                "Lift unmodeled CALLOTHER (asm_* placeholders) as weak "
+                "__asm__ .byte passthrough with NOP fallback. Default: "
+                "leave extern so the link fails when no strong definition "
+                "is supplied."
+            ),
+            llvm::cl::init(false), llvm::cl::Hidden
+        );
 
         // Simplify *(&expr) → expr.  When PTRADD produces &base[index] and
         // STORE/LOAD dereferences it, this cancels the redundant &/* pair so the
@@ -143,11 +164,140 @@ namespace patchestry::ast {
             return result.getAs< clang::Expr >();
         }
 
+        // Build a return statement of `ret_type` zero-initialized (or a
+        // bare `return;` for void). Shared by the weak-NOP and weak-asm
+        // body builders below.
+        clang::Stmt *make_default_return_stmt( // NOLINT
+            clang::ASTContext &ctx, clang::Sema &sema,
+            clang::QualType ret_type, clang::SourceLocation op_loc
+        ) {
+            if (ret_type.isNull() || ret_type->isVoidType()) {
+                return clang::ReturnStmt::Create(ctx, op_loc, nullptr, nullptr);
+            }
+            auto *zero = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
+            );
+            auto cast_result = sema.BuildCStyleCastExpr(
+                op_loc, ctx.getTrivialTypeSourceInfo(ret_type), op_loc, zero
+            );
+            clang::Expr *ret_expr = cast_result.isInvalid()
+                ? llvm::dyn_cast< clang::Expr >(zero)
+                : cast_result.getAs< clang::Expr >();
+            return clang::ReturnStmt::Create(ctx, op_loc, ret_expr, nullptr);
+        }
+
+        // Convert a hex byte string ("62f27d29c4c1") into a GCC asm
+        // `.byte 0x.., 0x..` directive. Returns empty string when the
+        // input is malformed (odd length, non-hex chars) so callers can
+        // fall back to a NOP body.
+        std::string format_byte_directive(llvm::StringRef bytes_hex) { // NOLINT
+            if (bytes_hex.empty() || (bytes_hex.size() % 2) != 0) {
+                return {};
+            }
+            for (char c : bytes_hex) {
+                if (!std::isxdigit(static_cast< unsigned char >(c))) {
+                    return {};
+                }
+            }
+            std::string out = ".byte ";
+            for (size_t i = 0; i + 1 < bytes_hex.size(); i += 2) {
+                if (i != 0) {
+                    out += ", ";
+                }
+                out += "0x";
+                out += bytes_hex[i];
+                out += bytes_hex[i + 1];
+            }
+            return out;
+        }
+
+        // Attach a weak body that executes the original CPU instruction
+        // verbatim via `__asm__ volatile (".byte 0x.., ..")`. Cross-arch
+        // runs trap with SIGILL at the right symbol; same-arch runs
+        // execute the bytes. Operand-level dataflow on the caller's
+        // varnodes is NOT modeled — only the CPU side effects happen.
+        void attach_weak_asm_body( // NOLINT
+            clang::ASTContext &ctx, clang::Sema &sema, clang::FunctionDecl *fn_decl,
+            clang::QualType ret_type, llvm::StringRef bytes_hex,
+            clang::SourceLocation op_loc
+        ) {
+            if (fn_decl == nullptr || fn_decl->hasBody()) {
+                return;
+            }
+            std::string asm_text = format_byte_directive(bytes_hex);
+            if (asm_text.empty()) {
+                return;
+            }
+
+            // StringLiteral size includes the trailing null terminator,
+            // matching how StringLiteral::Create is used elsewhere here.
+            auto asm_array_type = ctx.getConstantArrayType(
+                ctx.CharTy.withConst(),
+                llvm::APInt(32, asm_text.size() + 1), nullptr,
+                clang::ArraySizeModifier::Normal, 0
+            );
+            auto *asm_str = clang::StringLiteral::Create(
+                ctx, asm_text, clang::StringLiteralKind::Ordinary,
+                /*Pascal*/ false, asm_array_type, op_loc
+            );
+
+            // `volatile` keeps the optimizer from removing the asm. The
+            // empty operand/clobber lists are inaccurate (the real
+            // instruction touches CPU state) but match the C-level
+            // signature of the lifted intrinsic.
+            auto *asm_stmt = new (ctx) clang::GCCAsmStmt(
+                ctx, op_loc, /*IsSimple*/ true, /*IsVolatile*/ true,
+                /*NumOutputs*/ 0, /*NumInputs*/ 0,
+                /*Names*/ nullptr, /*Constraints*/ nullptr, /*Exprs*/ nullptr,
+                asm_str, /*NumClobbers*/ 0, /*Clobbers*/ nullptr,
+                /*NumLabels*/ 0, /*RParenLoc*/ op_loc
+            );
+
+            clang::Stmt *return_stmt =
+                make_default_return_stmt(ctx, sema, ret_type, op_loc);
+            llvm::SmallVector< clang::Stmt *, 2 > stmts{ asm_stmt, return_stmt };
+            auto *body = clang::CompoundStmt::Create(
+                ctx, stmts, clang::FPOptionsOverride(), op_loc, op_loc
+            );
+
+            fn_decl->setBody(body);
+            fn_decl->setStorageClass(clang::SC_None);
+            fn_decl->addAttr(clang::WeakAttr::CreateImplicit(ctx));
+            fn_decl->setIsUsed();
+        }
+
+        void attach_weak_nop_body( // NOLINT
+            clang::ASTContext &ctx, clang::Sema &sema, clang::FunctionDecl *fn_decl,
+            clang::QualType ret_type, clang::SourceLocation op_loc
+        ) {
+            if (fn_decl == nullptr || fn_decl->hasBody()) {
+                return;
+            }
+            clang::Stmt *return_stmt =
+                make_default_return_stmt(ctx, sema, ret_type, op_loc);
+            llvm::SmallVector< clang::Stmt *, 1 > stmts{ return_stmt };
+            auto *body = clang::CompoundStmt::Create(
+                ctx, stmts, clang::FPOptionsOverride(), op_loc, op_loc
+            );
+
+            fn_decl->setBody(body);
+            // Drop SC_Extern so the decl is treated as a definition; weak
+            // linkage is supplied via WeakAttr below.
+            fn_decl->setStorageClass(clang::SC_None);
+            fn_decl->addAttr(clang::WeakAttr::CreateImplicit(ctx));
+            // Mark used so Clang/CIR emits the definition even when the only
+            // references are inside other functions in this TU.
+            fn_decl->setIsUsed();
+        }
+
         /**
          * @brief Look up or create an opaque external function placeholder in the TU.
          *
          * Used by create_userdefined to emit a best-effort call expression that
-         * preserves operation inputs for downstream analysis.
+         * preserves operation inputs for downstream analysis. Emits as an extern
+         * declaration so unresolved symbols fail loudly at link time — this
+         * matches OP_USERDEFINED's contract that the user must supply concrete
+         * semantics rather than silently falling back to a NOP.
          *
          * @param fn_name     Name of the placeholder function.
          * @param ret_type    Return type of the placeholder.
@@ -3137,6 +3287,32 @@ namespace patchestry::ast {
             // Add to translation unit and cache
             ctx.getTranslationUnitDecl()->addDecl(fn_decl);
             intrinsic_decls[func_name] = fn_decl;
+
+            // Opt-in weak passthrough body for unmodeled CALLOTHERs (Ghidra
+            // had no name; the Java side synthesized `asm_<mnemonic>` or
+            // `asm_unknown_<hex>`). Default-off keeps the placeholder
+            // extern so unresolved references fail loudly at link time;
+            // the flag accepts the operand-dataflow inaccuracy in exchange
+            // for a runnable lift on same-arch patching. Named CALLOTHERs
+            // do not enter this branch and stay extern unconditionally.
+            const bool is_unmodeled = original_name.rfind("asm_", 0) == 0;
+            if (is_unmodeled && enable_unmodeled_callother_passthrough) {
+                const bool has_bytes = op.target.has_value()
+                    && op.target->asm_bytes.has_value()
+                    && !op.target->asm_bytes->empty();
+                if (has_bytes) {
+                    attach_weak_asm_body(
+                        ctx, sema(), fn_decl, ret_type,
+                        *op.target->asm_bytes, op_loc
+                    );
+                }
+                // attach_weak_asm_body bails on malformed hex — fall back
+                // to NOP. Both helpers no-op when the body is already
+                // attached.
+                if (!fn_decl->hasBody()) {
+                    attach_weak_nop_body(ctx, sema(), fn_decl, ret_type, op_loc);
+                }
+            }
         }
 
         // Build arguments from inputs

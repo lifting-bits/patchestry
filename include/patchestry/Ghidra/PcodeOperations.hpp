@@ -149,6 +149,14 @@ namespace patchestry::ghidra {
         std::optional< std::string > global;   // For CALLIND global var targets
         std::optional< std::string > type_key; // Type of the target
         bool is_noreturn;
+        // Hex-encoded raw instruction bytes for unmodeled CALLOTHER call
+        // sites. Populated by PcodeSerializer.java when the underlying
+        // instruction is recoverable from the listing; consumed by the
+        // C++ AST builder to emit a weak `__asm__(".byte 0x..")`
+        // passthrough body so unmodeled instructions preserve their
+        // real-hardware semantics on same-arch patching workflows.
+        // Empty on every other call kind.
+        std::optional< std::string > asm_bytes;
     };
 
     struct SwitchCase

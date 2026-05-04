@@ -1,0 +1,65 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// Default mode: -enable-unmodeled-callother-passthrough is OFF, so an
+// unmodeled CALLOTHER (asm_*) must remain an extern declaration. No
+// weak body must be attached; linking the produced module against a
+// caller will fail loudly until a strong definition is supplied.
+//
+// CIR: cir.func @unmodeled_default_extern
+// CIR: __patchestry_missing_asm_avx512_kmov
+//
+// LL: declare {{.*}}@__patchestry_missing_asm_avx512_kmov
+// LL-NOT: define {{[^@]*}}@__patchestry_missing_asm_avx512_kmov
+{
+  "architecture": "x86",
+  "id": "x86:LE:64:default",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "unmodeled_default_extern",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "call_op": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "asm_avx512_kmov",
+                "is_variadic": true,
+                "is_noreturn": false,
+                "asm_bytes": "62f27d29c4c1"
+              },
+              "inputs": [{ "type": "type_ptr_int", "kind": "parameter", "operation": "p0" }]
+            },
+            "ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["call_op", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_ptr_int": { "kind": "pointer", "size": 8, "element_type": "type_int" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}
