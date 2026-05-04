@@ -30,9 +30,18 @@ namespace patchestry::klee_verifier {
     // the number of declarations that were given a synthetic body.
     unsigned stubExternalFunctions(llvm::Module &M, llvm::Function *target_fn);
 
+    // Walk every CallBase in `M` carrying `!static_contract` metadata and
+    // instrument klee_assume(precondition)/klee_assert(postcondition) pairs
+    // around each call site, resolving `Arg(N)` to the call's operand and
+    // `ReturnValue` to the call's result. Returns false when --strict-contracts
+    // is set and any predicate fails to parse; the caller should treat that
+    // as a fatal configuration error.
+    bool instrumentStaticContracts(llvm::Module &M);
+
     // Generate the main() harness function that drives `target_fn` under KLEE.
-    // Returns false when strict-contract parsing drops any predicate; the
-    // caller should treat that as a fatal configuration error.
+    // Symbolizes globals and target arguments and calls the target — contract
+    // instrumentation lives at each call site (see instrumentStaticContracts),
+    // so this routine emits no assume/assert calls itself.
     bool generateHarness(llvm::Module &M, llvm::Function *target_fn);
 
     // Write module to output file, choosing LLVM IR or bitcode based on the

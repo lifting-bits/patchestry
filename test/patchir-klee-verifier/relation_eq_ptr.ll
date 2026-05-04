@@ -5,23 +5,18 @@
 
 target datalayout = "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
 
+declare void @inner(ptr)
+
 define void @check_eq_ptr(ptr %p) {
 entry:
+  call void @inner(ptr %p), !static_contract !0
   ret void
 }
 
-define void @caller() {
-entry:
-  call void @check_eq_ptr(ptr null), !static_contract !0
-  ret void
-}
+!0 = !{!"static_contract", !"preconditions=[{kind=relation, target=Arg(0), relation=eq, value=0}], postconditions=[]"}
 
-!0 = !{!"check_eq_ptr", !"preconditions=[{kind=relation, target=Arg(0), relation=eq, value=0}], postconditions=[]"}
-
-; CHECK:       define i32 @main()
-; CHECK:       call void @klee_make_symbolic(
+; CHECK-LABEL: define void @check_eq_ptr(ptr %p)
 ; CHECK:       icmp eq ptr
 ; CHECK:       call void @klee_assume(
-; CHECK:       call void @check_eq_ptr(
+; CHECK:       call void @inner(
 ; CHECK-NOT:   call void @klee_abort(
-; CHECK:       ret i32 0

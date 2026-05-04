@@ -1,0 +1,55 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: bloodview-klee-patches
+  description: bloodview bl_device__process_entry patches and static contract for KLEE verification
+  version: 1.0.0
+  author: Security Team
+  created: '2026-05-01'
+  kind: PatchLibrary
+patch_definitions:
+- name: device_list_replace_sprintf_patch
+  description: Replace sprintf with bounds-aware vsnprintf wrapper
+  category: device
+  function_name: patch::replace::sprintf
+  code_file: ../patchir-transform/patches/bloodview_patch.c
+  parameters:
+  - name: argument0
+    type: string
+    description: Destination buffer
+  - name: argument1
+    type: size_t
+    description: Destination size
+  - name: argument2
+    type: string
+    description: Format string
+- name: sprintf_bounds_check_after
+  description: Assert sprintf return value is within destination bounds
+  category: device
+  function_name: patch::after::sprintf_bounds
+  code_file: ../patchir-transform/patches/bloodview_patch.c
+  parameters:
+  - name: return_value
+    type: int
+    description: Return value
+  - name: dest_size
+    type: unsigned int
+    description: Destination size
+contract_definitions:
+- name: sprintf_contract_static
+  description: Bound the sprintf call's destination pointer and return range
+  category: device
+  preconditions:
+  - id: dev_node_nonnull
+    pred:
+      kind: relation
+      target: arg0
+      relation: ne
+      value: '0'
+  postconditions:
+  - id: return_value_range
+    pred:
+      kind: range
+      target: return_value
+      range:
+        min: '0'
+        max: '32'
