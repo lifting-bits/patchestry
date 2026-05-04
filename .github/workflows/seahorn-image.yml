@@ -27,6 +27,19 @@ on:
         required: false
         type: boolean
         default: false
+  # Trigger on pushes to the SeaHorn image dev branch so we can iterate
+  # without merging to main first. Paths-filtered to avoid burning a
+  # 1-2h image build on unrelated edits.
+  push:
+    branches:
+      - kumarak/seahorn_image
+    paths:
+      - 'scripts/seahorn/**'
+      - '.github/workflows/seahorn-image.yml'
+  pull_request:
+    paths:
+      - 'scripts/seahorn/**'
+      - '.github/workflows/seahorn-image.yml'
 
 permissions: read-all
 
