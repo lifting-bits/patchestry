@@ -99,15 +99,15 @@ jobs:
 
       - name: Solver-backed smoke test
         run: |
-          # Tiny SV-COMP-style program: the error branch is unreachable, so
-          # `sea pf` should report the program safe (unsat). This actually
-          # exercises the LLVM front-end, sea-dsa, crab, and z3 — proving the
-          # solver wiring isn't broken (which `sea --help` cannot).
+          # Use __VERIFIER_nondet_int so clang/seapp can't constant-fold the
+          # branch away; the assertion must survive to z3 for this to prove
+          # the solver wiring (LLVM front-end → sea-dsa → crab → z3) works.
           mkdir -p smoke && cat > smoke/safe.c <<'EOF'
+          extern int __VERIFIER_nondet_int(void);
           extern void __VERIFIER_error(void) __attribute__((__noreturn__));
           int main(void) {
-              int x = 0;
-              if (x != 0) __VERIFIER_error();
+              int x = __VERIFIER_nondet_int();
+              if (x > 10 && x < 5) __VERIFIER_error();
               return 0;
           }
           EOF
@@ -115,8 +115,12 @@ jobs:
               -v "${PWD}/smoke:/smoke:ro" \
               --entrypoint sea "${IMAGE_NAME}" pf /smoke/safe.c \
               | tee smoke.log
-          grep -q "BRUNCH_STAT Result TRUE" smoke.log \
-              || { echo "Solver smoke test did not report TRUE"; exit 1; }
+          if grep -q "no assertion was found" smoke.log; then
+              echo "Smoke test is vacuous: the frontend discharged the assertion before z3 ran." >&2
+              exit 1
+          fi
+          grep -qx "unsat" smoke.log \
+              || { echo "Solver smoke test did not report unsat"; exit 1; }
 
       - name: Log in to registry
         if: github.event_name == 'workflow_dispatch'
