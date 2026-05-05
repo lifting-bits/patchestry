@@ -61,10 +61,6 @@ namespace patchestry::codegen {
         // Emit CIR representation from ASTContext
         std::optional< mlir::ModuleOp > lower_ast_to_mlir(clang::ASTContext &ctx);
 
-        // Emit LLVM IR representation from ASTContext
-        std::unique_ptr< llvm::Module >
-        lower_ast_to_llvm(clang::ASTContext &ctx, llvm::LLVMContext &llvm_ctx);
-
       private:
         void emit_cir(clang::ASTContext &ctx, const patchestry::Options &options);
 

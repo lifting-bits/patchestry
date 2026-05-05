@@ -20,7 +20,6 @@ target_link_libraries(patchir-decomp
         patchestry::ast
         patchestry::codegen
         patchestry::yaml
-        $<$<BOOL:${PE_USE_RELLIC}>:rellic::rellic>
         glog::glog
         clangFrontend
 )

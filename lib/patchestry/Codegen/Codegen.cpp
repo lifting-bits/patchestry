@@ -27,22 +27,11 @@
 #include <mlir/IR/Verifier.h>
 #include <mlir/InitAllDialects.h>
 
-#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/LLVMContext.h>
-#include <llvm/MC/TargetRegistry.h>
-#include <llvm/Support/TargetSelect.h>
-#include <llvm/Target/TargetMachine.h>
-#include <llvm/TargetParser/Host.h>
 
-#include "clang/CodeGen/CodeGenAction.h"
 #include <mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Export.h>
-
-#include <clang/CodeGen/ModuleBuilder.h>
-#ifdef PATCHESTRY_ENABLE_RELLIC
-#include <rellic/Decompiler.h>
-#endif
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
@@ -63,77 +52,12 @@ namespace patchestry::codegen {
         return std::make_optional(cirdriver->getModule());
     }
 
-    std::unique_ptr< llvm::Module >
-    CodeGenerator::lower_ast_to_llvm(clang::ASTContext &ctx, llvm::LLVMContext &llvm_ctx) {
-        auto &cg_opts = ci.getCodeGenOpts();
-        auto &diags   = ci.getDiagnostics();
-
-        std::unique_ptr< clang::CodeGenerator > cg(clang::CreateLLVMCodeGen(
-            diags, ci.getFrontendOpts().OutputFile,
-            ci.getFileManager().getVirtualFileSystemPtr(), ci.getHeaderSearchOpts(),
-            ci.getPreprocessorOpts(), cg_opts, llvm_ctx
-        ));
-        cg->Initialize(ctx);
-        for (const auto &decl : ctx.getTranslationUnitDecl()->noload_decls()) {
-            cg->HandleTopLevelDecl(clang::DeclGroupRef(decl));
-        }
-        return std::unique_ptr< llvm::Module >(cg->ReleaseModule());
-    }
-
     void
     CodeGenerator::lower_to_ir(clang::ASTContext &actx, const patchestry::Options &options) {
         // Check if diagnostic error is set. If yes, ignore it.
         if (actx.getDiagnostics().hasErrorOccurred()) {
             actx.getDiagnostics().Reset();
         }
-
-#ifdef PATCHESTRY_ENABLE_RELLIC
-        // NOTE: We use rellic to improve the generated AST. There are issues running rellic AST
-        // passes directly on AST. Temporarily we lower the AST to llvm IR and regenerate AST
-
-        llvm::LLVMContext llvm_ctx;
-        auto transform_ast = [&](clang::ASTContext &ctx
-                             ) -> std::optional< rellic::DecompilationResult > {
-            auto llvm_mod = lower_ast_to_llvm(ctx, llvm_ctx);
-            if (!llvm_mod) {
-                return {};
-            }
-
-            // Decompile llvm IR using rellic
-            rellic::DecompilationOptions opts{
-                .lower_switches       = false,
-                // https://github.com/lifting-bits/rellic/issues/102
-                // If there are Phi nodes, it can't be converted back to AST. Enable removing
-                // phi node before decompiling.
-                .remove_phi_nodes     = true,
-                .additional_providers = {},
-            };
-            auto results = rellic::Decompile(std::move(llvm_mod), std::move(opts));
-            if (!results.Succeeded()) {
-                LOG(ERROR) << "Failed to decompile LLVM ir for transforming AST"
-                           << results.TakeError().message;
-                return {};
-            }
-
-            return results.TakeValue();
-        };
-
-        if (options.use_rellic_transform) {
-            auto results = transform_ast(actx);
-            if (results && results->ast) {
-                emit_cir(results->ast->getASTContext(), options);
-                return;
-            }
-            LOG(WARNING
-            ) << "Failed to transform AST using remill; Fallback to default generation";
-        }
-#else
-        if (options.use_rellic_transform) {
-            LOG(WARNING
-            ) << "use_rellic_transform requested but RELLIC support was disabled at build "
-                 "time (PE_USE_RELLIC=OFF); using default generation";
-        }
-#endif
 
         emit_cir(actx, options);
     }

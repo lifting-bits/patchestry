@@ -25,7 +25,3 @@ endif()
 if(PE_USE_VENDORED_CLANG)
     add_subdirectory(llvm-project)
 endif()
-
-if(PE_USE_RELLIC)
-    add_subdirectory(rellic)  # Depends on glog and llvm-project (if vendored)
-endif()

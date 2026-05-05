@@ -2,10 +2,6 @@
 	path = vendor/llvm-project/src
 	url = https://github.com/trail-of-forks/llvm-project.git
 	branch = patchir-llvmorg-22.1.4
-[submodule "vendor/rellic/src"]
-	path = vendor/rellic/src
-	url = https://github.com/lifting-bits/rellic.git
-	branch = llvm20
 [submodule "vendor/glog/src"]
 	path = vendor/glog/src
 	url = https://github.com/google/glog.git

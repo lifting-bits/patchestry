@@ -19,7 +19,6 @@ namespace patchestry {
         bool emit_asm             = false;
         bool emit_obj             = false;
         bool verbose              = false;
-        bool use_rellic_transform = false;
         bool use_structuring_pass = false;
 
         std::string output_file;

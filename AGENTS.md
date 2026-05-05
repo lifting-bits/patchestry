@@ -235,7 +235,6 @@ The current pinned revisions in this repository are:
 | Dependency | Pinned revision | Location | Purpose |
 |---|---|---|---|
 | llvm-project | `patchir-llvmorg-22.1.4` | `vendor/llvm-project/src` | Patched LLVM/Clang/MLIR+CIR toolchain (trail-of-forks fork) when using vendored clang |
-| rellic | `cff5bb7b` (`llvm20`) | `vendor/rellic/src` | AST recovery and decompilation support |
 | glog | `7b134a5c` | `vendor/glog/src` | Structured logging in core tools |
 | gflags | `a738fdf9` | `vendor/gflags/src` | CLI flag parsing |
 | z3 | `8d67feef` | `vendor/z3/src` | SMT solver used in analysis/verification flows |
@@ -354,10 +353,8 @@ The verified macOS host-native path uses the fork's `clang`/`clang++` from
 
 Notes:
 
-- The main patchestry build vendors `gflags`, `glog`, `z3`, and the `rellic`
-  library as part of configure.
-- The vendored `rellic` helper tools are not part of patchestry's validated
-  host-native build path; patchestry only links against the `rellic` library.
+- The main patchestry build vendors `gflags`, `glog`, and `z3` as part of
+  configure.
 
 ### `build.sh` containerized workflow
 
