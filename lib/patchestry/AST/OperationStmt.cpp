@@ -2746,7 +2746,7 @@ namespace patchestry::ast {
                 sema()
                     .BuildUnaryOp(sema().getCurScope(), op_loc, clang::UO_AddrOf, mem_expr)
                     .get();
-            ptr_expr = addrof_expr;
+            ptr_expr = make_cast(ctx, addrof_expr, op_type, op_loc);
         } else {
             auto *byte_offset = clang::dyn_cast< clang::Expr >(
                 create_varnode(ctx, function, op.inputs[1], op_loc)
