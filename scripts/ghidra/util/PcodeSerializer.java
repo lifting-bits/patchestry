@@ -108,6 +108,8 @@ import ghidra.program.model.data.Undefined;
 import ghidra.program.model.data.Union;
 import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.data.WideCharDataType;
+import ghidra.program.model.data.WideChar16DataType;
+import ghidra.program.model.data.WideChar32DataType;
 
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.Reference;
@@ -829,10 +831,12 @@ public class PcodeSerializer {
 				writer.name("bit_size").value(bitField.getBitSize());
 				writer.name("base_type").value(label(bitField.getBaseDataType()));
 				
-			} else if (dataType instanceof WideCharDataType) {
+			} else if (dataType instanceof WideCharDataType
+					|| dataType instanceof WideChar16DataType
+					|| dataType instanceof WideChar32DataType) {
 				writer.name("kind").value("wchar");
 				writer.name("size").value(dataType.getLength());
-				
+
 			} else if (dataType instanceof StringDataType) {
 				writer.name("kind").value("string");
 				writer.name("size").value(dataType.getLength());
