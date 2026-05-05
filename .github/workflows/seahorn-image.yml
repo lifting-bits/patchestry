@@ -7,10 +7,6 @@
 
 name: Build SeaHorn Image
 
-# SeaHorn pulls prebuilt z3 and yices2 binaries that ship x86_64 only, so the
-# image is amd64-only. If/when arm64 builds of those dependencies are wired up,
-# add an arm64 matrix here.
-
 on:
   workflow_dispatch:
     inputs:
@@ -27,19 +23,6 @@ on:
         required: false
         type: boolean
         default: false
-  # Trigger on pushes to the SeaHorn image dev branch so we can iterate
-  # without merging to main first. Paths-filtered to avoid burning a
-  # 1-2h image build on unrelated edits.
-  push:
-    branches:
-      - kumarak/seahorn_image
-    paths:
-      - 'scripts/seahorn/**'
-      - '.github/workflows/seahorn-image.yml'
-  pull_request:
-    paths:
-      - 'scripts/seahorn/**'
-      - '.github/workflows/seahorn-image.yml'
 
 permissions: read-all
 
@@ -99,13 +82,6 @@ jobs:
 
       - name: Solver-backed smoke test
         run: |
-          # __VERIFIER_assume is declared but has no visible body, so clang
-          # can't merge the assumption into later branches the way it folds
-          # `if (x > 10 && x < 5)`. The constraint only gets resolved by
-          # SeaHorn on the way to z3 — which is exactly what we want to
-          # exercise. The post-run guard rejects the vacuous "no assertion
-          # was found" case so a future optimizer change can't silently
-          # turn this back into a no-op.
           mkdir -p smoke && cat > smoke/safe.c <<'EOF'
           extern int __VERIFIER_nondet_int(void);
           extern void __VERIFIER_assume(int);
