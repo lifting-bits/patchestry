@@ -39,18 +39,18 @@ DOCKER_BUILDKIT=1 docker build \
 ```
 
 This runs `install-clangir.sh` inside the container, which clones the
-`trail-of-forks/clangir` fork (branch `patche-clangir-20`) and builds
-LLVM/Clang/MLIR with CIR support.  The toolchain is installed to
+`trail-of-forks/llvm-project` fork (branch `patchir-llvmorg-22.1.4`) and
+builds LLVM/Clang/MLIR with CIR support.  The toolchain is installed to
 `/usr/local` inside the image.
 
 ## Step 2: Verify the image
 
 ```sh
 docker run --rm patchestry-dev:local /usr/local/bin/clang --version
-# Should show clang version 20.x with CIR support
+# Should show clang version 22.x with CIR support
 
 docker run --rm patchestry-dev:local /usr/local/bin/lit --version
-# Should show lit 20.x
+# Should show lit 22.x
 ```
 
 ## Step 3: Use with VS Code devcontainer
@@ -85,7 +85,7 @@ cmake --build --preset release -j
 
 ## Rebuilding after ClangIR updates
 
-If the `trail-of-forks/clangir` fork is updated, rebuild the image:
+If the `trail-of-forks/llvm-project` fork is updated, rebuild the image:
 
 ```sh
 cd .devcontainer

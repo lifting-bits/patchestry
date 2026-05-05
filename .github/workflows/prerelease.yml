@@ -27,7 +27,7 @@ jobs:
   build_prerelease:
     strategy:
       matrix:
-        llvm-version: [20]
+        llvm-version: [22]
         image-version: [22.04]
         arch: [amd64, arm64]
 
@@ -78,7 +78,7 @@ jobs:
               directory = /workspace/vendor/glog/src
               directory = /workspace/vendor/gflags/src
               directory = /workspace/vendor/z3/src
-              directory = /workspace/vendor/clangir/src
+              directory = /workspace/vendor/llvm-project/src
           EOF
 
       # CPACK_SYSTEM_NAME must be set at configure time. `include(CPack)`

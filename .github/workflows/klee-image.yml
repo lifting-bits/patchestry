@@ -40,7 +40,7 @@ jobs:
       contents: read
 
     env:
-      LLVM_VER: ${{ inputs.llvm-version || '20' }}
+      LLVM_VER: ${{ inputs.llvm-version || '22' }}
       IMAGE_VER: ${{ inputs.image-version || '22.04' }}
       NO_CACHE: ${{ inputs.no-cache || 'false' }}
 

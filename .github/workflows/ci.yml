@@ -65,7 +65,7 @@ jobs:
   llvm-build-and-test:
     strategy:
       matrix:
-        llvm-version: [20]
+        llvm-version: [22]
         image-version: [22.04]
         build-type: [Release, Debug]
         sanitizers: [OFF]
@@ -111,7 +111,7 @@ jobs:
               directory = /workspace/vendor/glog/src
               directory = /workspace/vendor/gflags/src
               directory = /workspace/vendor/z3/src
-              directory = /workspace/vendor/clangir/src
+              directory = /workspace/vendor/llvm-project/src
           EOF
 
       - name: Configure build - sanitizers ${{ matrix.sanitizers }}
@@ -287,7 +287,7 @@ jobs:
   qemu-runtime-validation:
     strategy:
       matrix:
-        llvm-version: [20]
+        llvm-version: [22]
         image-version: [22.04]
     runs-on: ubuntu-${{ matrix.image-version }}
     timeout-minutes: 45

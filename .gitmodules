@@ -1,6 +1,7 @@
-[submodule "vendor/clangir/src"]
-	path = vendor/clangir/src
-	url = https://github.com/trail-of-forks/clangir.git
+[submodule "vendor/llvm-project/src"]
+	path = vendor/llvm-project/src
+	url = https://github.com/trail-of-forks/llvm-project.git
+	branch = patchir-llvmorg-22.1.4
 [submodule "vendor/rellic/src"]
 	path = vendor/rellic/src
 	url = https://github.com/lifting-bits/rellic.git
