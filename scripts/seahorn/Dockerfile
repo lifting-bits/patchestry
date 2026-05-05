@@ -10,9 +10,9 @@
 ARG IMAGE_VERSION=22.04
 ARG LLVM_VERSION=20
 ARG SEAHORN_REPO=https://github.com/trail-of-forks/seahorn.git
-ARG SEAHORN_BRANCH=dev20
 # Commit pin for trail-of-forks/seahorn dev20. Bump intentionally; the
 # branch tip is mutable, so the pin is what makes the image reproducible.
+# Accepts any git-resolvable ref (commit SHA, branch, or tag).
 ARG SEAHORN_REF=0f5ad78bc6a9d0ed5340b1ed19996151b27f54cf
 ARG BUILD_TYPE=RelWithDebInfo
 
@@ -28,7 +28,6 @@ FROM ghcr.io/lifting-bits/patchestry-ubuntu-${IMAGE_VERSION}-llvm-${LLVM_VERSION
 
 ARG LLVM_VERSION
 ARG SEAHORN_REPO
-ARG SEAHORN_BRANCH
 ARG SEAHORN_REF
 ARG BUILD_TYPE
 ARG Z3_SHA256
@@ -67,9 +66,9 @@ RUN curl -sSOL https://yices.csl.sri.com/releases/2.6.1/yices-2.6.1-x86_64-pc-li
     && cd yices-2.6.1 && ./install-yices /opt/yices-2.6.1 \
     && cd /tmp && rm -rf yices-2.6.1 yices-2.6.1-x86_64-pc-linux-gnu-static-gmp.tar.gz
 
-# Clone SeaHorn and check out the pinned commit. Branch is used to seed
-# the clone; SEAHORN_REF is what we actually build, so retagging dev20
-# upstream cannot silently change the published image.
+# Clone SeaHorn and check out the pinned ref. SEAHORN_REF is what we
+# actually build, so retagging dev20 upstream cannot silently change the
+# published image. Accepts a SHA, branch, or tag.
 WORKDIR /seahorn
 RUN git clone "${SEAHORN_REPO}" /seahorn/src \
     && cd /seahorn/src \
