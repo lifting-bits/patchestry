@@ -64,10 +64,14 @@ namespace patchestry::ast {
             clang::ASTContext &ctx, clang::DeclContext *dc, const std::string &name,
             clang::QualType type, clang::SourceLocation loc
         ) {
-            return clang::VarDecl::Create(
+            auto *vd = clang::VarDecl::Create(
                 ctx, dc, loc, loc, &ctx.Idents.get(name), type,
                 ctx.getTrivialTypeSourceInfo(type), clang::SC_None
             );
+            // CIRGen asserts every VarDecl referenced by a DeclRefExpr is
+            // marked used. Patchestry bypasses Sema, so we mark it here.
+            vd->setIsUsed();
+            return vd;
         }
 
         clang::DeclStmt *create_decl_stmt( // NOLINT
@@ -86,21 +90,21 @@ namespace patchestry::ast {
             if (param_type->isIntegerType()) {
                 return new (ctx) clang::IntegerLiteral(
                     ctx, llvm::APInt(ctx.getIntWidth(param_type), 0), param_type,
-                    clang::SourceLocation()
+                    VirtualLoc(ctx)
                 );
             } else if (param_type->isFloatingType()) {
                 llvm::APFloat value(llvm::APFloat::IEEEsingle(), "0.0");
                 return clang::FloatingLiteral::Create(
-                    ctx, value, false, param_type, clang::SourceLocation()
+                    ctx, value, false, param_type, VirtualLoc(ctx)
                 );
             } else if (param_type->isPointerType()) {
                 return new (ctx) clang::IntegerLiteral(
                     ctx, llvm::APInt(ctx.getIntWidth(param_type), 0), param_type,
-                    clang::SourceLocation()
+                    VirtualLoc(ctx)
                 );
             } else if (param_type->isBooleanType()) {
                 return new (ctx)
-                    clang::CXXBoolLiteralExpr(true, param_type, clang::SourceLocation());
+                    clang::CXXBoolLiteralExpr(true, param_type, VirtualLoc(ctx));
             } else {
                 LOG(ERROR) << "Failed to create default value for paramer\n";
                 return nullptr;
@@ -130,9 +134,11 @@ namespace patchestry::ast {
             // Create the builtin declaration
             auto *builtin_decl = sema.CreateBuiltin(II, ty, builtin_id, loc);
 
-            // Create a DeclRefExpr for the builtin
+            // Create a DeclRefExpr for the builtin. ctx is const here, so we
+            // can't allocate a virtual buffer; reuse the caller-provided loc
+            // which is already valid by contract.
             auto *decl_ref = clang::DeclRefExpr::Create(
-                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), builtin_decl,
+                ctx, clang::NestedNameSpecifierLoc(), loc, builtin_decl,
                 false, loc, builtin_decl->getType(), clang::VK_PRValue
             );
 
@@ -445,6 +451,7 @@ namespace patchestry::ast {
         if ((input_expr == nullptr) || (output_expr == nullptr)) {
             return {};
         }
+        if (loc.isInvalid()) loc = VirtualLoc(ctx);
 
         clang::QualType input_type  = input_expr->getType();
         clang::QualType output_type = output_expr->getType();
@@ -496,6 +503,7 @@ namespace patchestry::ast {
         if ((input_expr == nullptr) || (output_expr == nullptr)) {
             return nullptr;
         }
+        if (loc.isInvalid()) loc = VirtualLoc(ctx);
 
         auto to_type      = output_expr->getType();
         auto *elem_type   = to_type->getPointeeOrArrayElementType();
@@ -506,6 +514,7 @@ namespace patchestry::ast {
             ctx, sema().CurContext, loc, loc, &ctx.Idents.get("i"), ctx.IntTy, nullptr,
             clang::SC_None
         );
+        index->setIsUsed();
 
         auto *index_init = clang::IntegerLiteral::Create(
             ctx, llvm::APInt(static_cast< unsigned >(ctx.getTypeSize(ctx.IntTy)), 0), ctx.IntTy,
@@ -516,7 +525,7 @@ namespace patchestry::ast {
 
         auto *index_ref = clang::DeclRefExpr::Create(
             ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), index, false,
-            clang::SourceLocation(), index->getType(), clang::VK_LValue
+            VirtualLoc(ctx), index->getType(), clang::VK_LValue
         );
 
         auto *cond_expr = sema()
@@ -1213,10 +1222,11 @@ namespace patchestry::ast {
                     for (unsigned i = 0; i < new_param_types.size(); ++i) {
                         std::string pname = "param_" + std::to_string(i);
                         auto *pd = clang::ParmVarDecl::Create(
-                            ctx, callee, clang::SourceLocation(),
-                            clang::SourceLocation(), &ctx.Idents.get(pname),
+                            ctx, callee, VirtualLoc(ctx),
+                            VirtualLoc(ctx), &ctx.Idents.get(pname),
                             new_param_types[i], nullptr, clang::SC_None, nullptr
                         );
+                        pd->setIsUsed();
                         new_params.push_back(pd);
                     }
                     callee->setParams(new_params);
@@ -1413,7 +1423,7 @@ namespace patchestry::ast {
             auto *var_decl = function_builder().global_var_list.get().at(*op.target->global);
             fn_ptr_expr    = clang::DeclRefExpr::Create(
                 ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
-                clang::SourceLocation(), var_decl->getType(), clang::VK_LValue
+                VirtualLoc(ctx), var_decl->getType(), clang::VK_LValue
             );
         } else if (op.target->operation) {
             // Target is a computed expression — resolve via create_varnode for varnode
@@ -2539,7 +2549,7 @@ namespace patchestry::ast {
 
         auto nan_value = llvm::APFloat::getQNaN(llvm::APFloat::IEEEsingle());
         auto *nan_expr = clang::FloatingLiteral::Create(
-            ctx, nan_value, true, ctx.FloatTy, clang::SourceLocation()
+            ctx, nan_value, true, ctx.FloatTy, VirtualLoc(ctx)
         );
 
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
@@ -2645,6 +2655,7 @@ namespace patchestry::ast {
             LOG(ERROR) << "Can't make member expre, base type is not pointer of record decl!\n";
             return nullptr;
         }
+        if (loc.isInvalid()) loc = VirtualLoc(ctx);
 
         auto find_field_decl = [&](clang::ASTContext &ctx, clang::RecordDecl *decl,
                                    unsigned int target_offset) -> clang::FieldDecl * {
@@ -2709,7 +2720,7 @@ namespace patchestry::ast {
         clang::DeclarationNameInfo member_name_info(field->getDeclName(), loc);
         return sema().BuildMemberExpr(
             convert_rvalue(ctx, base), true, loc, clang::NestedNameSpecifierLoc(),
-            clang::SourceLocation(), field,
+            VirtualLoc(ctx), field,
             clang::DeclAccessPair::make(field, clang::AS_public), false, member_name_info,
             field->getType(), clang::VK_LValue, clang::OK_Ordinary
         );
@@ -2974,7 +2985,7 @@ namespace patchestry::ast {
         }
 
         // Create a new intrinsic function declaration
-        auto loc = clang::SourceLocation();
+        auto loc = VirtualLoc(ctx);
 
         // Create function type with variadic signature if requested.
         // Note: Variadic prototypes must have at least one non-variadic parameter
@@ -3107,8 +3118,8 @@ namespace patchestry::ast {
             auto func_type = ctx.getFunctionType(ret_type, param_types, epi);
 
             fn_decl = clang::FunctionDecl::Create(
-                ctx, ctx.getTranslationUnitDecl(), clang::SourceLocation(),
-                clang::SourceLocation(), &ctx.Idents.get(func_name), func_type,
+                ctx, ctx.getTranslationUnitDecl(), VirtualLoc(ctx),
+                VirtualLoc(ctx), &ctx.Idents.get(func_name), func_type,
                 ctx.getTrivialTypeSourceInfo(func_type), clang::SC_Extern
             );
 
@@ -3125,6 +3136,7 @@ namespace patchestry::ast {
                     ctx, fn_decl, op_loc, op_loc, nullptr, param_types[i], nullptr,
                     clang::SC_None, nullptr
                 );
+                param->setIsUsed();
                 param_decls.push_back(param);
             }
             fn_decl->setParams(param_decls);
