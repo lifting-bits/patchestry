@@ -2,9 +2,9 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
-// CIR-DAG: cir.func @int_zext_test
-// CIR-DAG: cir.func @int_sext_test
-// CIR-DAG: cir.cast(integral,
+// CIR-DAG: cir.func dso_local @int_zext_test
+// CIR-DAG: cir.func dso_local @int_sext_test
+// CIR-DAG: cir.cast integral
 // LL-DAG: define dso_local i32 @int_zext_test
 // LL-DAG: define dso_local i32 @int_sext_test
 // LL-DAG: zext i8

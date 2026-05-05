@@ -13,15 +13,12 @@
 #include <vector>
 
 #include <clang/AST/ASTContext.h>
-#include <clang/CIR/CIRGenerator.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <llvm/Support/VirtualFileSystem.h>
 #include <mlir/IR/BuiltinOps.h>
-
-#include <llvm/Support/VirtualFileSystem.h>
-
-#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/MLIRContext.h>
+
+#include <clang/CIR/CIRGenerator.h>
 
 #include <patchestry/Util/Options.hpp>
 

@@ -10,15 +10,16 @@ add_executable(patchir-cir2llvm
 target_link_libraries(patchir-cir2llvm
     PRIVATE
         clangCIRLoweringDirectToLLVM
+        MLIRRegisterAllDialects
         MLIRGPUToLLVMIRTranslation
-        MLIRAMXToLLVMIRTranslation
         MLIRSPIRVToLLVMIRTranslation
         MLIRArmNeonToLLVMIRTranslation
         MLIRArmSVEToLLVMIRTranslation
         MLIRArmSMEToLLVMIRTranslation
         MLIRVCIXToLLVMIRTranslation
-        MLIRX86VectorToLLVMIRTranslation
         MLIROpenACCToLLVMIRTranslation
+        MLIROpenMPToLLVMIRTranslation
+        MLIRPtrToLLVMIRTranslation
         MLIRContracts
 )
 

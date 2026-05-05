@@ -2,7 +2,7 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
-// CIR: cir.func @bitfield_mask_test
+// CIR: cir.func dso_local @bitfield_mask_test
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // LL: define dso_local i32 @bitfield_mask_test
 // LL: and i32

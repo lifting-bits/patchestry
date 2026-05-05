@@ -93,7 +93,7 @@ FindAndSelectClangCompiler()
 #
 # LLVM & MLIR & Clang
 #
-find_package(LLVM 22 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+find_package(LLVM 22.1 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 
@@ -101,12 +101,12 @@ include(TableGen)
 include(AddLLVM)
 include(HandleLLVMOptions)
 
-find_package(MLIR 22 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+find_package(MLIR 22.1 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 include(AddMLIR)
 
-find_package(Clang 22 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+find_package(Clang 22.1 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
 
 

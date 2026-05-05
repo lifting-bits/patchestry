@@ -2,7 +2,7 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
-// FN: cir.func @decode_basic_field(
+// FN: cir.func dso_local @decode_basic_field(
 // CIR-DAG: @decode_basic_field
 // CIR-DAG: @pb_decode_bool
 // CIR-DAG: @pb_decode_varint

@@ -164,7 +164,7 @@ namespace {
     void createSourceManager(clang::CompilerInstance &ci) {
         // Create file manager and setup source manager
         ci.createFileManager();
-        ci.createSourceManager(ci.getFileManager());
+        ci.createSourceManager();
 
         // get source manager and setup main_file_id for the source manager
         auto &sm = ci.getSourceManager();
@@ -319,8 +319,8 @@ int main(int argc, char **argv) {
     clang::TargetOptions &inv_target_opts = invocation.getTargetOpts();
     inv_target_opts.Triple                = llvm::sys::getDefaultTargetTriple();
 
-    ci.createDiagnostics(*llvm::vfs::getRealFileSystem());
-    ci.getDiagnostics().setClient(new patchestry::DiagnosticClient());
+    ci.createVirtualFileSystem();
+    ci.createDiagnostics(new patchestry::DiagnosticClient(), /*ShouldOwnClient=*/true);
     if (!ci.hasDiagnostics()) {
         LOG(ERROR) << "Failed to initialize diagnostics.\n";
         return EXIT_FAILURE;
@@ -331,7 +331,7 @@ int main(int argc, char **argv) {
     std::shared_ptr< clang::TargetOptions > target_options =
         std::make_shared< clang::TargetOptions >();
     target_options->Triple = createTargetTriple(*program->arch, *program->lang);
-    ci.setTarget(clang::TargetInfo::CreateTargetInfo(ci.getDiagnostics(), target_options));
+    ci.setTarget(clang::TargetInfo::CreateTargetInfo(ci.getDiagnostics(), *target_options));
 
     setCodegenOptions(ci);
 

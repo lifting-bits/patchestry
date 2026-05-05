@@ -11,7 +11,6 @@ add_library(patchestry_codegen STATIC
 set(CLANG_IR_LIBS
   clangCIR
   clangCIRLoweringDirectToLLVM
-  clangCIRLoweringThroughMLIR
 )
 
 add_library(patchestry::codegen ALIAS patchestry_codegen)

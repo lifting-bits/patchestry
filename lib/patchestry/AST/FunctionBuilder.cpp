@@ -166,7 +166,7 @@ namespace patchestry::ast {
                 || original_name[0] == '?');
         if (is_mangled && original_name != c_name) {
             if (auto *asm_attr = clang::AsmLabelAttr::Create(
-                    ctx, original_name, true, func_decl->getSourceRange()
+                    ctx, original_name, func_decl->getSourceRange()
                 ))
             {
                 func_decl->addAttr(asm_attr);

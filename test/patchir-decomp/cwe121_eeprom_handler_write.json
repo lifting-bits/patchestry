@@ -3,7 +3,7 @@
 // RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
-// FN: cir.func @_ZN5Debug7Command13EepromHandler5WriteEtPNS0_7ContextE(
+// FN: cir.func dso_local @_ZN5Debug7Command13EepromHandler5WriteEtPNS0_7ContextE(
 // RUN: %gen-call-checks %t.json > %t.call.checks
 // RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir
 //

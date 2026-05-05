@@ -82,7 +82,7 @@ namespace patchestry::codegen {
             auto *mctx      = cloned_mod.getContext();
             PassManagerBuilder bld(mctx);
             auto pm = bld.build();
-            cir::direct::populateCIRToLLVMPasses(*pm, true);
+            cir::direct::populateCIRToLLVMPasses(*pm);
             auto result = pm->run(cloned_mod);
             if (result.failed()) {
                 LOG(ERROR) << "Failed to run conversion passes\n";

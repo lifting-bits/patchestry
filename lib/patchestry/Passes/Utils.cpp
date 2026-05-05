@@ -27,12 +27,10 @@ namespace patchestry::typing {
             // Create the struct identifier string for CIR
             std::string struct_id = "struct_" + struct_name;
 
-            // Use CIR's StructType::get with proper signature
-            auto structType = cir::StructType::get(
+            auto structType = cir::RecordType::get(
                 context, fields, mlir::StringAttr::get(context, struct_id),
                 /*packed=*/false,
-                /*padded=*/false, cir::StructType::RecordKind::Struct,
-                cir::ASTRecordDeclInterface{} // Empty AST interface for now
+                /*padded=*/false, cir::RecordType::RecordKind::Struct
             );
 
             return structType;
@@ -44,11 +42,10 @@ namespace patchestry::typing {
             llvm::SmallVector< mlir::Type, 0 > fields;
             std::string union_id = "union_" + union_name;
 
-            auto union_type = cir::StructType::get(
+            auto union_type = cir::RecordType::get(
                 context, fields, mlir::StringAttr::get(context, union_id),
                 /*packed=*/false,
-                /*padded=*/false, cir::StructType::RecordKind::Union,
-                cir::ASTRecordDeclInterface{} // Empty AST interface
+                /*padded=*/false, cir::RecordType::RecordKind::Union
             );
 
             return union_type;
@@ -293,7 +290,7 @@ namespace patchestry::typing {
         }
 
         if (auto array_type = mlir::dyn_cast< cir::ArrayType >(cir_type)) {
-            mlir::Type element_type       = array_type.getEltType();
+            mlir::Type element_type       = array_type.getElementType();
             uint64_t size                 = array_type.getSize();
             std::string element_type_name = ConvertCirTypesToCTypes(element_type);
             return element_type_name + "[" + std::to_string(size) + "]";
@@ -315,7 +312,7 @@ namespace patchestry::typing {
             return "bool";
         }
 
-        if (auto struct_type = mlir::dyn_cast< cir::StructType >(cir_type)) {
+        if (auto struct_type = mlir::dyn_cast< cir::RecordType >(cir_type)) {
             // Extract struct name from the CIR struct type
             if (auto name_attr = struct_type.getName()) {
                 return "struct " + name_attr.getValue().str();
