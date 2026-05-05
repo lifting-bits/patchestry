@@ -250,7 +250,7 @@ namespace patchestry::ast {
                                         llvm::APInt(case_width,
                                                     static_cast<uint64_t>(sc.value),
                                                     true),
-                                        case_type, clang::SourceLocation());
+                                        case_type, VirtualLoc(ctx));
                                     SNode *body = nullptr;
                                     if (sc.succ_index < node.succs.size()) {
                                         auto &tn = flow_graph.Node(
@@ -353,6 +353,7 @@ namespace patchestry::ast {
                 &ctx.Idents.get(sanitized_name), var_type,
                 ctx.getTrivialTypeSourceInfo(var_type), clang::SC_Extern
             );
+            var_decl->setIsUsed();
             var_decl->setDeclContext(ctx.getTranslationUnitDecl());
             ctx.getTranslationUnitDecl()->addDecl(var_decl);
             global_variable_declarations.emplace(variable.key, var_decl);

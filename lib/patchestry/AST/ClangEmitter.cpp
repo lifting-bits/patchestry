@@ -22,10 +22,9 @@ namespace patchestry::ast {
 
     namespace detail {
         static clang::CompoundStmt *MakeCompound(
-            clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts,
-            clang::SourceLocation l = clang::SourceLocation(),
-            clang::SourceLocation r = clang::SourceLocation()) {
-            return clang::CompoundStmt::Create(ctx, stmts, clang::FPOptionsOverride(), l, r);
+            clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts) {
+            auto loc = VirtualLoc(ctx);
+            return clang::CompoundStmt::Create(ctx, stmts, clang::FPOptionsOverride(), loc, loc);
         }
     } // namespace detail
 
@@ -86,7 +85,7 @@ namespace patchestry::ast {
         class Emitter {
           public:
             Emitter(clang::ASTContext &ctx, clang::FunctionDecl *fn)
-                : ctx_(ctx), fn_(fn) {}
+                : ctx_(ctx), fn_(fn), loc_(VirtualLoc(ctx)) {}
 
             clang::Stmt *Emit(const SNode *node) {
                 if (!node) return nullptr;
@@ -123,7 +122,7 @@ namespace patchestry::ast {
             // After emitting, add LabelStmt for any goto targets that don't have
             // corresponding label definitions. This prevents CIR goto/label mismatch.
           private:
-            clang::SourceLocation Loc() const { return clang::SourceLocation(); }
+            clang::SourceLocation Loc() const { return loc_; }
 
             clang::Stmt *EmitSeq(const SSeq *seq) {
                 std::vector< clang::Stmt * > stmts;
@@ -350,6 +349,7 @@ namespace patchestry::ast {
 
             clang::ASTContext &ctx_;
             clang::FunctionDecl *fn_;
+            clang::SourceLocation loc_;
             std::unordered_map< std::string, clang::LabelDecl * > labels_;
             std::unordered_map< std::string, clang::LabelDecl * > goto_labels_;
             std::unordered_set< std::string > emitted_labels_;
@@ -426,7 +426,7 @@ namespace patchestry::ast {
 
         // Guarantee a non-null Stmt* for set* methods that require one.
         auto safe = [&](clang::Stmt *r) -> clang::Stmt * {
-            return r ? r : new (ctx) clang::NullStmt(clang::SourceLocation());
+            return r ? r : new (ctx) clang::NullStmt(VirtualLoc(ctx));
         };
 
         // Recurse into structured statement bodies
@@ -527,9 +527,9 @@ namespace patchestry::ast {
                 // Skip file-scope / extern globals — CIR asserts isLocalVarDecl()
                 if (!vd->isLocalVarDecl()) continue;
                 // Synthesize a DeclStmt for this missing variable
+                auto loc = VirtualLoc(ctx);
                 auto *ds = new (ctx) clang::DeclStmt(
-                    clang::DeclGroupRef(vd),
-                    clang::SourceLocation(), clang::SourceLocation()
+                    clang::DeclGroupRef(vd), loc, loc
                 );
                 decl_stmts.push_back(ds);
             }

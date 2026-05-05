@@ -914,7 +914,7 @@ namespace patchestry::ast {
                         EnsureRValue(ctx_, outer_cond),
                         EnsureRValue(ctx_, inner_cond),
                         clang::BO_LOr, ctx_.BoolTy, clang::VK_PRValue,
-                        clang::OK_Ordinary, clang::SourceLocation(),
+                        clang::OK_Ordinary, VirtualLoc(ctx_),
                         clang::FPOptionsOverride());
 
                     auto *if_goto = factory_.Make<SIfThenElse>(
@@ -944,7 +944,7 @@ namespace patchestry::ast {
                         EnsureRValue(ctx_, outer_cond),
                         EnsureRValue(ctx_, inner_cond),
                         clang::BO_LAnd, ctx_.BoolTy, clang::VK_PRValue,
-                        clang::OK_Ordinary, clang::SourceLocation(),
+                        clang::OK_Ordinary, VirtualLoc(ctx_),
                         clang::FPOptionsOverride());
 
                     auto *if_goto = factory_.Make<SIfThenElse>(
@@ -1020,7 +1020,7 @@ namespace patchestry::ast {
                         EnsureRValue(ctx_, outer_cond),
                         EnsureRValue(ctx_, inner_cond),
                         clang::BO_LOr, ctx_.BoolTy, clang::VK_PRValue,
-                        clang::OK_Ordinary, clang::SourceLocation(),
+                        clang::OK_Ordinary, VirtualLoc(ctx_),
                         clang::FPOptionsOverride());
 
                     auto *if_goto = factory_.Make<SIfThenElse>(
@@ -1049,7 +1049,7 @@ namespace patchestry::ast {
                         EnsureRValue(ctx_, outer_cond),
                         EnsureRValue(ctx_, inner_cond),
                         clang::BO_LAnd, ctx_.BoolTy, clang::VK_PRValue,
-                        clang::OK_Ordinary, clang::SourceLocation(),
+                        clang::OK_Ordinary, VirtualLoc(ctx_),
                         clang::FPOptionsOverride());
 
                     auto *if_goto = factory_.Make<SIfThenElse>(
@@ -2055,7 +2055,7 @@ namespace patchestry::ast {
                     auto *val = clang::IntegerLiteral::Create(
                         ctx_,
                         llvm::APInt(case_width, static_cast<uint64_t>(sc.value), true),
-                        case_type, clang::SourceLocation());
+                        case_type, VirtualLoc(ctx_));
                     sw->AddCase(val, case_body);
                 }
                 continue;
@@ -2230,7 +2230,7 @@ namespace patchestry::ast {
                 auto *val = clang::IntegerLiteral::Create(
                     ctx_,
                     llvm::APInt(case_width, static_cast<uint64_t>(sc.value), true),
-                    case_type, clang::SourceLocation());
+                    case_type, VirtualLoc(ctx_));
                 sw->AddCase(val, case_body);
             }
         }
@@ -4007,8 +4007,7 @@ namespace patchestry::ast {
 
         /// Build a clang::ReturnStmt from an SReturn.
         clang::ReturnStmt *MakeReturn(clang::ASTContext &ctx, SReturn *sr) {
-            auto loc = clang::SourceLocation();
-            return clang::ReturnStmt::Create(ctx, loc, sr->Value(), nullptr);
+            return clang::ReturnStmt::Create(ctx, VirtualLoc(ctx), sr->Value(), nullptr);
         }
 
         /// Try to flatten a terminating SNode body into clang::Stmts.
@@ -4081,7 +4080,7 @@ namespace patchestry::ast {
                     if (then_stmts.size() == 1)
                         then_body = then_stmts[0];
                     else {
-                        auto loc = clang::SourceLocation();
+                        auto loc = VirtualLoc(ctx);
                         then_body = clang::CompoundStmt::Create(
                             ctx, then_stmts, clang::FPOptionsOverride(),
                             loc, loc);
@@ -4094,13 +4093,13 @@ namespace patchestry::ast {
                         if (else_stmts.size() == 1)
                             else_body = else_stmts[0];
                         else {
-                            auto loc = clang::SourceLocation();
+                            auto loc = VirtualLoc(ctx);
                             else_body = clang::CompoundStmt::Create(
                                 ctx, else_stmts, clang::FPOptionsOverride(),
                                 loc, loc);
                         }
                     }
-                    auto loc = clang::SourceLocation();
+                    auto loc = VirtualLoc(ctx);
                     auto *new_if = clang::IfStmt::Create(
                         ctx, loc, clang::IfStatementKind::Ordinary,
                         nullptr, nullptr, ite->Cond(), loc, loc,
@@ -4327,7 +4326,7 @@ namespace patchestry::ast {
             }
             for (auto *s : label_body)
                 stmts.push_back(s);
-            auto loc = clang::SourceLocation();
+            auto loc = VirtualLoc(ctx);
             return clang::CompoundStmt::Create(
                 ctx, stmts, clang::FPOptionsOverride(), loc, loc);
         }

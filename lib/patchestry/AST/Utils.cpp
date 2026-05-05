@@ -7,6 +7,7 @@
 
 #include <cassert>
 #include <cctype>
+#include <unordered_map>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Expr.h>
@@ -29,6 +30,18 @@ namespace patchestry::ast {
         sm.overrideFileContents(fe, std::move(buffer));
         auto fid = sm.createFileID(fe, clang::SourceLocation(), clang::SrcMgr::C_User, 0);
         return sm.getLocForStartOfFile(fid);
+    }
+
+    clang::SourceLocation VirtualLoc(clang::ASTContext &ctx) {
+        static std::unordered_map< clang::SourceManager *, clang::SourceLocation > cache;
+        auto *sm = &ctx.getSourceManager();
+        auto it  = cache.find(sm);
+        if (it != cache.end()) {
+            return it->second;
+        }
+        auto loc  = SourceLocation(*sm, "<patchestry-virtual>");
+        cache[sm] = loc;
+        return loc;
     }
 
     clang::QualType GetTypeFromSize(
