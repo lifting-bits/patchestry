@@ -7,7 +7,6 @@
 
 #include <cassert>
 #include <cctype>
-#include <unordered_map>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Expr.h>
@@ -33,15 +32,27 @@ namespace patchestry::ast {
     }
 
     clang::SourceLocation VirtualLoc(clang::ASTContext &ctx) {
-        static std::unordered_map< clang::SourceManager *, clang::SourceLocation > cache;
-        auto *sm = &ctx.getSourceManager();
-        auto it  = cache.find(sm);
-        if (it != cache.end()) {
-            return it->second;
+        // Idempotent per SourceManager: FileManager::getVirtualFileRef is
+        // a get-or-create on the virtual name, and SourceManager::translateFile
+        // returns the existing FileID for that entry (or invalid on first use).
+        // We avoid a global pointer-keyed cache because SourceManagers come
+        // and go (Passes/Compiler.cpp builds a fresh one per compilation),
+        // a stale cache entry could outlive its owner and the heap may reuse
+        // the same address for a later SM, vending a SourceLocation whose
+        // FileID belongs to a destroyed table.
+        static constexpr llvm::StringLiteral kVirtualName = "<patchestry-virtual>";
+        auto &sm = ctx.getSourceManager();
+        auto &fm = sm.getFileManager();
+
+        auto fe = fm.getVirtualFileRef(
+            kVirtualName, static_cast< int >(kVirtualName.size()), 0
+        );
+        clang::FileID fid = sm.translateFile(&fe.getFileEntry());
+        if (fid.isInvalid()) {
+            sm.overrideFileContents(fe, llvm::MemoryBuffer::getMemBufferCopy(kVirtualName));
+            fid = sm.createFileID(fe, clang::SourceLocation(), clang::SrcMgr::C_User, 0);
         }
-        auto loc  = SourceLocation(*sm, "<patchestry-virtual>");
-        cache[sm] = loc;
-        return loc;
+        return sm.getLocForStartOfFile(fid);
     }
 
     clang::QualType GetTypeFromSize(

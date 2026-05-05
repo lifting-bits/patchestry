@@ -45,8 +45,11 @@ namespace patchestry::ast {
     
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key);
 
-    /// Returns a single cached valid SourceLocation backed by a virtual
-    /// "<patchestry-virtual>" buffer in the given context's SourceManager.
+    /// Returns a valid SourceLocation backed by a virtual "<patchestry-virtual>"
+    /// buffer in the given context's SourceManager.  Idempotent: subsequent
+    /// calls with the same SourceManager reuse the same FileID via
+    /// FileManager::getVirtualFileRef + SourceManager::translateFile, so the
+    /// SM owns the location's lifetime and there is no cross-SM aliasing.
     /// Use this anywhere a default-constructed clang::SourceLocation() would
     /// otherwise be passed to an AST node constructor — CIRGen asserts every
     /// location is valid, and synthetic locations satisfy that invariant
