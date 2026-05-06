@@ -279,6 +279,7 @@ namespace patchestry::passes {
                 clang::TargetInfo::CreateTargetInfo(ci->getDiagnostics(), *target_options)
             );
 
+            ci->createVirtualFileSystem();
             ci->createFileManager();
             ci->createSourceManager();
             auto buffer_or_error = llvm::MemoryBuffer::getFileOrSTDIN(filename);

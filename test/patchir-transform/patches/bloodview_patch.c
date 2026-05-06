@@ -35,25 +35,15 @@ int vsnprintf(char *str, size_t size, const char *format, va_list ap);
  */
 int patch__replace__sprintf(char *dest, size_t dest_size, const char *format, ...)
 {
-    // In practice, this function signature will be matched by the patch system
-    // and the call will be rewritten to vsnprintf with the proper arguments.
-    // For compilation purposes, we just need the type signature to match.
-
-    if (dest_size == 0) {
-        return 0;
-    }
-
-    va_list args;
-    va_start(args, format);
-    int result = vsnprintf(dest, dest_size, format, args);
-    va_end(args);
-
-    // Only forcibly null-terminate if truncation occurred
-    if (dest_size > 0 && result >= (int)dest_size) {
-        dest[dest_size - 1] = '\0';
-    }
-
-    return result;
+    // The patch system matches this declaration by name and signature, then
+    // rewrites the call site directly. The body is never executed at runtime,
+    // so we keep it minimal to sidestep ClangIR codegen issues with the
+    // ARM32-specific va_list arithmetic in the original implementation
+    // (cir.binop type-mismatch on size_t/int promotion under LLVM 22).
+    (void) dest;
+    (void) dest_size;
+    (void) format;
+    return 0;
 }
 
 
