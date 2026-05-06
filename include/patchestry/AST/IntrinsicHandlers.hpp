@@ -21,7 +21,7 @@ namespace patchestry::ast {
 namespace patchestry::ghidra {
     struct Function;
     struct Operation;
-}
+} // namespace patchestry::ghidra
 
 namespace clang {
     class ASTContext;
@@ -31,7 +31,8 @@ namespace patchestry::ast {
 
     // Handler function signature for CALLOTHER intrinsics
     using IntrinsicHandler = std::pair< clang::Stmt *, bool > (*)(
-        OpBuilder &, clang::ASTContext &, const ghidra::Function &, const ghidra::Operation &
+        OpBuilder &, clang::ASTContext &, const ghidra::Function &, const ghidra::Operation &,
+        const std::string &
     );
 
     // Returns the map of intrinsic name -> handler function

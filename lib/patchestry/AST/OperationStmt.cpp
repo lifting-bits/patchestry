@@ -1830,7 +1830,7 @@ namespace patchestry::ast {
         const auto &handlers = get_intrinsic_handlers();
         auto it              = handlers.find(name);
         if (it != handlers.end()) {
-            return it->second(*this, ctx, function, op);
+            return it->second(*this, ctx, function, op, name);
         }
 
         // Fallback: use __patchestry_missing_<name> for unrecognized intrinsics
@@ -3454,10 +3454,18 @@ namespace patchestry::ast {
 
     clang::FunctionDecl *OpBuilder::get_or_create_intrinsic_decl(
         clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,
-        bool is_variadic
+        bool is_variadic, clang::QualType first_param_type
     ) {
         // Check cache first
-        auto it = intrinsic_decls.find(name);
+        std::string cache_key = name;
+        if (is_variadic) {
+            cache_key += ":";
+            cache_key += first_param_type.isNull()
+                             ? std::string("void *")
+                             : first_param_type.getCanonicalType().getAsString();
+        }
+
+        auto it = intrinsic_decls.find(cache_key);
         if (it != intrinsic_decls.end()) {
             return it->second;
         }
@@ -3473,10 +3481,13 @@ namespace patchestry::ast {
 
         llvm::SmallVector<clang::QualType, 1> param_types;
         if (is_variadic) {
-            // Use a generic void * parameter to satisfy the "at least one fixed
-            // parameter" requirement for variadic functions.
-            auto void_ptr_ty = ctx.getPointerType(ctx.VoidTy);
-            param_types.push_back(void_ptr_ty);
+            // Variadic prototypes need at least one fixed parameter for CIR/LLVM
+            // lowering. Use the first real argument's type when available so
+            // processor userops are not forced through an unrelated void *.
+            if (first_param_type.isNull()) {
+                first_param_type = ctx.getPointerType(ctx.VoidTy);
+            }
+            param_types.push_back(first_param_type);
         }
 
         auto func_type = ctx.getFunctionType(return_type, param_types, epi);
@@ -3490,11 +3501,23 @@ namespace patchestry::ast {
             return nullptr;
         }
 
+        // Create ParmVarDecls so Sema can inspect fixed parameters while
+        // performing call conversions.
+        std::vector< clang::ParmVarDecl * > param_decls;
+        param_decls.reserve(param_types.size());
+        for (auto param_type : param_types) {
+            auto *param = clang::ParmVarDecl::Create(
+                ctx, func_decl, loc, loc, nullptr, param_type, nullptr, clang::SC_None, nullptr
+            );
+            param_decls.push_back(param);
+        }
+        func_decl->setParams(param_decls);
+
         // Add to translation unit
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
         // Cache it
-        intrinsic_decls[name] = func_decl;
+        intrinsic_decls[cache_key] = func_decl;
         return func_decl;
     }
 
@@ -3510,13 +3533,6 @@ namespace patchestry::ast {
             ret_type = get_varnode_type(ctx, *op.output);
         }
 
-        // Get or create function declaration
-        auto *fn_decl = get_or_create_intrinsic_decl(ctx, name, ret_type, true);
-        if (fn_decl == nullptr) {
-            LOG(ERROR) << "Failed to get intrinsic declaration. key: " << op.key << "\n";
-            return {};
-        }
-
         // Build arguments from inputs
         std::vector< clang::Expr * > args;
         for (const auto &input : op.inputs) {
@@ -3525,6 +3541,17 @@ namespace patchestry::ast {
             if (e) {
                 args.push_back(e);
             }
+        }
+
+        // Get or create function declaration
+        clang::QualType first_param_type;
+        if (!args.empty()) {
+            first_param_type = args.front()->getType();
+        }
+        auto *fn_decl = get_or_create_intrinsic_decl(ctx, name, ret_type, true, first_param_type);
+        if (fn_decl == nullptr) {
+            LOG(ERROR) << "Failed to get intrinsic declaration. key: " << op.key << "\n";
+            return {};
         }
 
         // Build call expression
