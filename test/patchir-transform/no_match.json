@@ -2,7 +2,7 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -output %t1 >> /dev/null 2>&1
 // RUN: %patchir-transform %t1.cir --spec %S/no_match.yaml -o %t2.cir
 // RUN: %file-check -vv -check-prefix=NOMATCH %s --input-file %t2.cir
-// NOMATCH: cir.func @spo2_lookup_stub
+// NOMATCH: cir.func dso_local @spo2_lookup_stub
 // NOMATCH-NOT: patchestry_operation
 {
   "architecture": "ARM",

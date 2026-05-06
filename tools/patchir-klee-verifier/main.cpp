@@ -156,17 +156,17 @@ int main(int argc, char **argv) {
         // rejecting on it would force model authors to rebuild for every
         // libc variant. Empty triple/DL (older bitcode) is stamped with
         // the host values.
-        const std::string &model_triple_str = model_mod->getTargetTriple();
-        const std::string &model_dl         = model_mod->getDataLayoutStr();
-        const std::string &host_triple_str  = module->getTargetTriple();
-        const std::string &host_dl          = module->getDataLayoutStr();
+        const llvm::Triple &model_triple = model_mod->getTargetTriple();
+        const std::string &model_dl      = model_mod->getDataLayoutStr();
+        const llvm::Triple &host_triple  = module->getTargetTriple();
+        const std::string &host_dl       = module->getDataLayoutStr();
+        const std::string model_triple_str = model_triple.str();
+        const std::string host_triple_str  = host_triple.str();
 
         if (model_triple_str.empty() && model_dl.empty()) {
-            model_mod->setTargetTriple(host_triple_str);
+            model_mod->setTargetTriple(host_triple);
             model_mod->setDataLayout(module->getDataLayout());
         } else {
-            llvm::Triple model_triple(model_triple_str);
-            llvm::Triple host_triple(host_triple_str);
             bool triple_compatible =
                 model_triple.getArch()   == host_triple.getArch()   &&
                 model_triple.getVendor() == host_triple.getVendor() &&

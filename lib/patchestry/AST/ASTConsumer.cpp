@@ -30,21 +30,6 @@
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/raw_ostream.h>
 
-#ifdef PATCHESTRY_ENABLE_RELLIC
-#include "rellic/AST/LoopRefine.h"
-#include "rellic/AST/MaterializeConds.h"
-#include "rellic/AST/NestedCondProp.h"
-#include "rellic/AST/NestedScopeCombine.h"
-#include "rellic/AST/ReachBasedRefine.h"
-#include "rellic/AST/Z3CondSimplify.h"
-#include <rellic/AST/ASTPass.h>
-#include <rellic/AST/CondBasedRefine.h>
-#include <rellic/AST/DeadStmtElim.h>
-#include <rellic/AST/ExprCombine.h>
-#include <rellic/AST/LocalDeclRenamer.h>
-#include <rellic/AST/StructFieldRenamer.h>
-#endif
-
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/AST/CfgDotEmitter.hpp>
 #include <patchestry/AST/ClangEmitter.hpp>

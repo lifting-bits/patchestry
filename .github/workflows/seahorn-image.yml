@@ -13,11 +13,15 @@ on:
       llvm-version:
         description: 'LLVM version for the base image'
         required: false
-        default: '20'
+        default: '22'
       image-version:
         description: 'Ubuntu version for the base image'
         required: false
         default: '22.04'
+      seahorn-ref:
+        description: 'SeaHorn git ref (commit SHA, branch, or tag) to check out'
+        required: false
+        default: '0f5ad78bc6a9d0ed5340b1ed19996151b27f54cf'
       no-cache:
         description: 'Build without Docker cache'
         required: false
@@ -35,8 +39,9 @@ jobs:
       contents: read
 
     env:
-      LLVM_VER: ${{ inputs.llvm-version || '20' }}
+      LLVM_VER: ${{ inputs.llvm-version || '22' }}
       IMAGE_VER: ${{ inputs.image-version || '22.04' }}
+      SEAHORN_REF: ${{ inputs.seahorn-ref || '0f5ad78bc6a9d0ed5340b1ed19996151b27f54cf' }}
       NO_CACHE: ${{ inputs.no-cache || 'false' }}
 
     steps:
@@ -72,6 +77,7 @@ jobs:
             ${CACHE_FLAG} \
             --build-arg IMAGE_VERSION="${IMAGE_VER}" \
             --build-arg LLVM_VERSION="${LLVM_VER}" \
+            --build-arg SEAHORN_REF="${SEAHORN_REF}" \
             -t "${IMAGE_NAME}" \
             -f Dockerfile \
             .

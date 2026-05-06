@@ -1055,8 +1055,8 @@ namespace patchestry::klee_verifier {
             "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128"
             "-f80:128-n8:16:32:64-S128";
 
-        std::string currentTriple = M.getTargetTriple();
-        llvm::Triple parsed(currentTriple);
+        const llvm::Triple &parsed = M.getTargetTriple();
+        std::string currentTriple = parsed.str();
         bool is_x86_64 = parsed.getArch() == llvm::Triple::x86_64;
         if (!currentTriple.empty() && is_x86_64)
             return;
@@ -1076,7 +1076,7 @@ namespace patchestry::klee_verifier {
                          << "' to x86_64 for KLEE compatibility\n";
         }
 
-        M.setTargetTriple(kX86_64_Triple);
+        M.setTargetTriple(llvm::Triple(kX86_64_Triple));
         M.setDataLayout(kX86_64_DataLayout);
 
         if (old_ptr_bits == 0 || old_ptr_bits == 64)

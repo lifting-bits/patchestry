@@ -2,7 +2,7 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
-// FN: cir.func @pb_decode_inner(
+// FN: cir.func dso_local @pb_decode_inner(
 // LL: define {{.*}} @pb_decode_inner(
 // RUN: %gen-call-checks %t.json > %t.call.checks
 // RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir

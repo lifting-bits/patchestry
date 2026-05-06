@@ -6,18 +6,14 @@
 #define USE_C99_TYPES
 #include "patchestry/intrinsics/patchestry_intrinsics.h"
 
-// Manual variadic argument handling for ARM32 AAPCS
-// Variadic arguments are passed on the stack after named parameters
-typedef char* va_list;
-
-// Calculate the size of a type rounded up to the nearest word (4 bytes on ARM32)
-#define __va_argsiz(t) (((sizeof(t) + 3) & ~3))
-
-// Initialize va_list to point to the first variadic argument
-#define va_start(ap, last) ((ap) = (va_list)&(last) + __va_argsiz(last))
-
-// Clean up (no-op on ARM32)
-#define va_end(ap) ((void)0)
+// Use the compiler's built-in va_list support so the ABI-correct lowering
+// is selected per target. The previous hand-rolled char*-based va_list
+// performed manual word-aligned pointer arithmetic that clangir 22 rejected
+// with 'cir.binop op requires all operands to have the same type' (size_t
+// vs int promotion in __va_argsiz).
+typedef __builtin_va_list va_list;
+#define va_start(ap, last) __builtin_va_start(ap, last)
+#define va_end(ap)         __builtin_va_end(ap)
 
 // External declarations - will be provided by the target system's C library
 int vsnprintf(char *str, size_t size, const char *format, va_list ap);

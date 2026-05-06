@@ -263,8 +263,7 @@ namespace patchestry::passes {
             auto diag_opts   = new clang::DiagnosticOptions();
             auto diag_ids    = new clang::DiagnosticIDs();
             auto diagnostics = new clang::DiagnosticsEngine(
-                llvm::IntrusiveRefCntPtr< clang::DiagnosticIDs >(diag_ids),
-                llvm::IntrusiveRefCntPtr< clang::DiagnosticOptions >(diag_opts),
+                llvm::IntrusiveRefCntPtr< clang::DiagnosticIDs >(diag_ids), *diag_opts,
                 new patchestry::DiagnosticClient(), true
             );
             ci->setDiagnostics(diagnostics);
@@ -277,11 +276,12 @@ namespace patchestry::passes {
                 std::make_shared< clang::TargetOptions >();
             target_options->Triple = createTargetTriple(lang);
             ci->setTarget(
-                clang::TargetInfo::CreateTargetInfo(ci->getDiagnostics(), target_options)
+                clang::TargetInfo::CreateTargetInfo(ci->getDiagnostics(), *target_options)
             );
 
+            ci->createVirtualFileSystem();
             ci->createFileManager();
-            ci->createSourceManager(ci->getFileManager());
+            ci->createSourceManager();
             auto buffer_or_error = llvm::MemoryBuffer::getFileOrSTDIN(filename);
             if (!buffer_or_error) {
                 LOG(ERROR) << "Failed to open file: " << filename << "\n";

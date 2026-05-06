@@ -228,7 +228,7 @@ namespace patchestry::ast {
         typedef_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(typedef_decl);
 
-        return ctx.getTypedefType(typedef_decl);
+        return ctx.getTypedefType(clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl);
     }
 
     /**
@@ -273,7 +273,7 @@ namespace patchestry::ast {
 
         typedef_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(typedef_decl);
-        return ctx.getTypedefType(typedef_decl);
+        return ctx.getTypedefType(clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl);
     }
 
     /**
@@ -466,7 +466,7 @@ namespace patchestry::ast {
         // Track the missing type definition for completing at later stage
         missing_type_definition.emplace(composite_type.key, decl);
 
-        return ctx.getRecordType(decl);
+        return ctx.getCanonicalTagType(decl);
     }
 
     /**
@@ -526,7 +526,7 @@ namespace patchestry::ast {
 
         enum_decl->completeDefinition(underlying_type, underlying_type, bit_width, 0U);
 
-        return ctx.getEnumType(enum_decl);
+        return ctx.getCanonicalTagType(enum_decl);
     }
 
     /**
@@ -567,7 +567,7 @@ namespace patchestry::ast {
         typedef_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(typedef_decl);
 
-        return ctx.getTypedefType(typedef_decl);
+        return ctx.getTypedefType(clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl);
     }
 
     /**
@@ -614,7 +614,7 @@ namespace patchestry::ast {
         decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(decl);
 
-        return ctx.getRecordType(decl);
+        return ctx.getCanonicalTagType(decl);
     }
 
 } // namespace patchestry::ast

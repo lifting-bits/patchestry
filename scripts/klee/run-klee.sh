@@ -21,7 +21,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-IMAGE_NAME="${KLEE_IMAGE:-ghcr.io/lifting-bits/patchestry-klee-ubuntu-22.04-llvm-20:latest}"
+IMAGE_NAME="${KLEE_IMAGE:-ghcr.io/lifting-bits/patchestry-klee-ubuntu-22.04-llvm-22:latest}"
 
 # ------------------------------------------------------------------
 # Ensure image exists (pull amd64 manifest if missing; do not auto-build)

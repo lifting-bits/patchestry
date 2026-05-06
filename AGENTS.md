@@ -221,7 +221,7 @@ The repository currently registers four top-level LIT/CTest suites:
 | Dependency | Version | Notes |
 |---|---|---|
 | CMake | >= 3.25 | Configure/build presets |
-| LLVM / Clang / MLIR | 20 | ClangIR-enabled build |
+| LLVM / Clang / MLIR | 22 | ClangIR-enabled build |
 | lit | any recent | LLVM integrated test runner |
 | Docker engine | current | Required for Ghidra headless and firmware flows |
 | Ninja | recommended | Faster local builds |
@@ -234,8 +234,7 @@ The current pinned revisions in this repository are:
 
 | Dependency | Pinned revision | Location | Purpose |
 |---|---|---|---|
-| clangir | `ae0e95fb` (`patche-clangir-20`) | `vendor/clangir/src` | LLVM/Clang/MLIR+CIR toolchain when using vendored clang |
-| rellic | `cff5bb7b` (`llvm20`) | `vendor/rellic/src` | AST recovery and decompilation support |
+| llvm-project | `patchir-llvmorg-22.1.4` | `vendor/llvm-project/src` | Patched LLVM/Clang/MLIR+CIR toolchain (trail-of-forks fork) when using vendored clang |
 | glog | `7b134a5c` | `vendor/glog/src` | Structured logging in core tools |
 | gflags | `a738fdf9` | `vendor/gflags/src` | CLI flag parsing |
 | z3 | `8d67feef` | `vendor/z3/src` | SMT solver used in analysis/verification flows |
@@ -301,8 +300,8 @@ The Linux bootstrap gist referenced in `docs/GettingStarted/build.md` is the fas
 If you are not using a prebuilt dev container image, build/install LLVM+ClangIR first:
 
 ```sh
-git clone https://github.com/trail-of-forks/clangir
-cd clangir
+git clone --branch patchir-llvmorg-22.1.4 https://github.com/trail-of-forks/llvm-project
+cd llvm-project
 mkdir build && cd build
 cmake -G Ninja ../llvm \
   -DCMAKE_INSTALL_PREFIX=<install_dir> \
@@ -316,9 +315,9 @@ cmake -G Ninja ../llvm \
 ninja install
 ```
 
-This must be the patched `trail-of-forks/clangir` toolchain (or an equivalent
-install built from the same fork). A stock Homebrew LLVM install is not a
-supported replacement for host-native patchestry builds.
+This must be the patched `trail-of-forks/llvm-project` toolchain (or an
+equivalent install built from the same fork). A stock Homebrew LLVM install is
+not a supported replacement for host-native patchestry builds.
 
 Expected runtime:
 
@@ -354,10 +353,8 @@ The verified macOS host-native path uses the fork's `clang`/`clang++` from
 
 Notes:
 
-- The main patchestry build vendors `gflags`, `glog`, `z3`, and the `rellic`
-  library as part of configure.
-- The vendored `rellic` helper tools are not part of patchestry's validated
-  host-native build path; patchestry only links against the `rellic` library.
+- The main patchestry build vendors `gflags`, `glog`, and `z3` as part of
+  configure.
 
 ### `build.sh` containerized workflow
 

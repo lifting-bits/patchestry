@@ -6,7 +6,7 @@
 // Verify that signed integer types produce signed division (sdiv) in LLVM IR.
 // The is_signed flag on integer types should propagate through to the backend.
 //
-// CIR: cir.func @signed_div_test
+// CIR: cir.func dso_local @signed_div_test
 // CIR: cir.binop(div,
 // LL: define dso_local i32 @signed_div_test
 // LL: sdiv i32

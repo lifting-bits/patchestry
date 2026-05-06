@@ -2,7 +2,7 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
-// CIR: cir.func @float_neg_test
+// CIR: cir.func dso_local @float_neg_test
 // CIR: cir.unary(minus,
 // RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir
 // MLIR: llvm.func @float_neg_test

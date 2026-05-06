@@ -129,7 +129,7 @@ namespace patchestry {
             // `incorrect number of results for callee` at verification
             // for any non-void patch.
             auto patch_func_type = patch_func.getFunctionType();
-            auto patch_call_op   = builder.create< cir::CallOp >(
+            auto patch_call_op   = cir::CallOp::create(builder, 
                 target_op->getLoc(), symbol_ref,
                 patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
                 new_function_args
@@ -188,7 +188,7 @@ namespace patchestry {
             // trip `incorrect number of results for callee` at MLIR
             // verification.
             auto patch_func_type = patch_func.getFunctionType();
-            auto patch_call_op   = builder.create< cir::CallOp >(
+            auto patch_call_op   = cir::CallOp::create(builder, 
                 target_op->getLoc(), symbol_ref,
                 patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
                 function_args
@@ -240,7 +240,7 @@ namespace patchestry {
                 /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
             auto wrap_function_type = wrap_func.getFunctionType();
-            auto wrap_call_op       = builder.create< cir::CallOp >(
+            auto wrap_call_op       = cir::CallOp::create(builder, 
                 loc, wrap_func_ref,
                 wrap_function_type ? wrap_function_type.getReturnType() : mlir::Type(),
                 wrap_call_args
@@ -371,7 +371,9 @@ namespace patchestry {
             // the single op result; multi-result ops are rejected because
             // CIR cannot produce a covering return.
             unsigned patch_num_results = 0;
-            if (patch_func_type && !patch_func_type.isVoid()) {
+            if (patch_func_type
+                && !mlir::isa< cir::VoidType >(patch_func_type.getReturnType()))
+            {
                 patch_num_results = 1;
             }
             if (patch_num_results < op_num_results) {
@@ -392,7 +394,7 @@ namespace patchestry {
                 builder, op, patch_func, patch, call_args,
                 /*entrypoint_func=*/std::nullopt, &writeback_slots
             );
-            auto patch_call_op = builder.create< cir::CallOp >(
+            auto patch_call_op = cir::CallOp::create(builder, 
                 loc, patch_func_ref,
                 patch_func_type ? patch_func_type.getReturnType() : mlir::Type(),
                 call_args
@@ -476,7 +478,7 @@ namespace patchestry {
                             llvm::APInt(int_type.getWidth(), 0), !int_type.isSigned()
                         )
                     );
-                    return builder.create< cir::ConstantOp >(loc, int_type, attr);
+                    return cir::ConstantOp::create(builder, loc, int_type, attr);
                 }
                 if (auto ptr_type = mlir::dyn_cast< cir::PointerType >(type)) {
                     // Canonical null pointer — `ConstPtrAttr` with an empty
@@ -485,22 +487,22 @@ namespace patchestry {
                     // mis-sizes on 32-bit targets).
                     auto null_attr =
                         cir::ConstPtrAttr::get(ctx, ptr_type, mlir::IntegerAttr{});
-                    return builder.create< cir::ConstantOp >(loc, ptr_type, null_attr);
+                    return cir::ConstantOp::create(builder, loc, ptr_type, null_attr);
                 }
                 if (auto bool_type = mlir::dyn_cast< cir::BoolType >(type)) {
                     auto attr = cir::BoolAttr::get(ctx, bool_type, false);
-                    return builder.create< cir::ConstantOp >(loc, bool_type, attr);
+                    return cir::ConstantOp::create(builder, loc, bool_type, attr);
                 }
-                if (mlir::isa< cir::CIRFPTypeInterface >(type)) {
+                if (mlir::isa< cir::FPTypeInterface >(type)) {
                     // Covers cir::SingleType, cir::DoubleType, and any other
                     // floating-point type that implements the CIR FP interface.
                     auto attr = cir::FPAttr::getZero(type);
-                    return builder.create< cir::ConstantOp >(loc, type, attr);
+                    return cir::ConstantOp::create(builder, loc, type, attr);
                 }
-                if (mlir::isa< cir::StructType, cir::ArrayType >(type)) {
+                if (mlir::isa< cir::RecordType, cir::ArrayType >(type)) {
                     // Aggregate zero (`#cir.zero<…>`) for struct/array results.
                     auto attr = cir::ZeroAttr::get(ctx, type);
-                    return builder.create< cir::ConstantOp >(loc, type, attr);
+                    return cir::ConstantOp::create(builder, loc, type, attr);
                 }
                 return nullptr;
             }
@@ -653,7 +655,7 @@ namespace patchestry {
                                 "into the emitted call.\n";
             }
 
-            auto patch_call_op = builder.create< cir::CallOp >(
+            auto patch_call_op = cir::CallOp::create(builder, 
                 enclosing_func->getLoc(), symbol_ref,
                 result_types.empty() ? mlir::Type() : result_types.front(),
                 call_args

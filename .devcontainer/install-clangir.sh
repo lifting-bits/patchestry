@@ -2,9 +2,9 @@
 
 #set -e
 
-CLANGIR_REPO="https://github.com/trail-of-forks/clangir.git"
-CLANGIR_DIR="$HOME/clangir"
-BUILD_DIR="$HOME/clangir-build"
+CLANGIR_REPO="https://github.com/trail-of-forks/llvm-project.git"
+CLANGIR_DIR="$HOME/llvm-project"
+BUILD_DIR="$HOME/llvm-project-build"
 INSTALL_DIR="/usr/local"
 
 # Dependencies doesn't install llvm since it expects
@@ -25,7 +25,7 @@ install_dependencies() {
 
 build_clangir() {    
     echo "Cloning Clangir repository..."
-    git clone --branch patche-clangir-20 "$CLANGIR_REPO" "$CLANGIR_DIR"
+    git clone --branch patchir-llvmorg-22.1.4 "$CLANGIR_REPO" "$CLANGIR_DIR"
 
     echo "Installing Clangir..."
     mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
