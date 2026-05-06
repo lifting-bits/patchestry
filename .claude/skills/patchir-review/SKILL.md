@@ -2,14 +2,12 @@
 name: patchir-review
 description: >
   This skill should be used when the user runs "/patchir-review", asks to
-  "review the PR for this repo", "run the repo PR review", "check a
-  Patchestry PR", "security review this Patchestry PR", "review changed
-  C++/Python/Bash files", "run autonomous PR review", or when
-  .github/workflows/claude-review.yml invokes the skill from CI. It performs a
-  repo-specific review of C/C++, Bash, and Python changes in a pull request,
-  prioritizes correctness and security over style, optionally uses clang-tidy
-  for changed C/C++ files, and posts one inline GitHub comment per confirmed
-  finding.
+  "review the PR for this repo", "run the repo PR review", "run autonomous 
+  PR review", or when .github/workflows/claude-review.yml invokes the skill
+  from CI. It performs a repo-specific review of C/C++, Bash, and Python changes
+  in a pull request, prioritizes correctness and security over style, optionally
+  uses clang-tidy for changed C/C++ files, and posts one inline GitHub comment per
+  confirmed finding.
 ---
 
 # patchir-review: Patchestry PR Review
@@ -53,10 +51,9 @@ Review only executable source files:
 | Bash | `.sh`, `.bash` |
 | Python | `.py`, `.pyi`, `.pyx` |
 
-Skip YAML, JSON, Markdown, CMake/build files, generated artifacts, binary
-outputs, and non-executable test fixtures. Review test code only when the test
-itself contains executable C/C++/Bash/Python logic whose bug can hide or invert
-coverage.
+Skip YAML, JSON, Markdown, generated artifacts, binary outputs, and non-executable
+test fixtures. Review test code only when the test itself contains executable 
+C/C++/Bash/Python logic whose bug can hide or invert coverage.
 
 Run this first:
 
@@ -86,18 +83,22 @@ Classify each finding into exactly one tier.
 
 ## clang-tidy Assist
 
-Use `clang-tidy` as evidence for changed C/C++ files when a compile database is
-available. Prefer repository build databases in this order:
+Use `clang-tidy` as optional evidence for changed C/C++ files only when the
+current checkout already has a compile database. GitHub review jobs often do not
+have a configured build directory, so do not run CMake, build the project, or
+generate `compile_commands.json` during review. Prefer existing compile
+databases in this order:
 
 ```sh
-builds/default/compile_commands.json
 builds/ci/compile_commands.json
+builds/default/compile_commands.json
 compile_commands.json
 ```
 
 Run it only on changed implementation/header files that appear in or can be
-resolved by the compile database. Do not block review if no compile database or
-`clang-tidy` binary is available.
+resolved by an existing compile database. Skip `clang-tidy` if no compile
+database, no matching entry, no repository `.clang-tidy`, or no `clang-tidy`
+binary is available.
 
 Use the repository `.clang-tidy` config when present:
 
@@ -121,16 +122,15 @@ or command execution risk.
 
 **C / C++:**
 - Use-after-free, double-free, dangling reference/view, or returning an address
-  tied to a temporary/local object.
+  or reference tied to a temporary/local object.
 - Buffer overflow, out-of-bounds access, unchecked sentinel index
   (`SIZE_MAX`, `-1`, `npos`), or invalid pointer arithmetic.
-- Null dereference reachable in Release builds, including unchecked
-  `dyn_cast`/`dynamic_cast` results.
+- Reachable null dereference, including unchecked `dyn_cast`/`dynamic_cast` results.
 - Undefined behavior: signed overflow in required arithmetic, invalid shift,
   division by zero, strict-aliasing violation, uninitialized read,
   unsequenced modification, or invalid `const_cast`.
-- Iterator/reference invalidation after container mutation.
-- Incorrect allocator/deallocator pairing or leaked ownership transfer that
+- Iterator or reference invalidation after container mutation.
+- Incorrect allocator or deallocator pairing or leaked ownership transfer bugs that
   can produce a double-free or permanent ownership loss.
 - Infinite loop or unbounded recursion in CFG traversal, graph search,
   decompilation, transform passes, or Ghidra serialization.
@@ -138,65 +138,70 @@ or command execution risk.
   from PR/runtime input.
 
 **Bash:**
-- `eval`, backticks, or `bash -c` on PR-derived or untrusted strings.
-- Unquoted path/input variables where word splitting or globbing can delete,
-  overwrite, or execute the wrong target.
-- `rm -rf` or cleanup paths that can become empty, `/`, the repo root, or a
-  caller-controlled directory.
-- Hardcoded temporary paths with race/symlink exposure; use `mktemp`.
-- `curl | bash`, `wget | sh`, or similar execution of untrusted content.
+- `eval`, backticks, or `bash -c` executed on PR-derived or otherwise
+  untrusted input.
+- Unquoted variables in paths or commands where word splitting or glob
+  expansion can delete, overwrite, or execute the wrong target.
+- `rm -rf` or cleanup paths that can resolve to an empty string, `/`,
+  the repository root, or a caller-controlled directory.
+- Hardcoded temporary paths vulnerable to race conditions or symlink attacks;
+  use `mktemp`.
+- `curl | bash`, `wget | sh`, or similar direct execution of untrusted
+  remote content.
 
 **Python:**
-- `eval`, `exec`, unsafe `pickle`, unsafe YAML loading, or `subprocess` /
-  `os.system` command injection.
-- Path traversal when opening, writing, extracting, or deleting paths built
-  from external input.
-- TOCTOU filesystem checks that guard a security-sensitive operation.
-- `assert` used for security, validation, or bounds checks that must hold under
-  `python -O`.
+- `eval`, `exec`, unsafe `pickle` usage, unsafe YAML deserialization, or
+  command injection through `subprocess`, `os.system`, or shell execution.
+- Path traversal during file open, write, extract, move, or delete operations
+  using externally controlled paths.
+- TOCTOU filesystem checks guarding a security-sensitive operation.
+- `assert` used for security, validation, invariant, or bounds checks that
+  must remain enforced under `python -O`.
 
 ## BUG
 
-Use `BUG` for wrong behavior, missed patching, bad verification results, or
-test/build logic that can silently report success when work failed.
+Use `BUG` for wrong behavior, missed patching, incorrect verification results,
+or test/build logic that can silently report success after a failure.
 
 **Patchestry-specific C / C++:**
 - Incorrect CIR/MLIR operation matching, insertion point, dominance, type,
   attribute, address-space, or symbol handling.
-- Ghidra P-Code deserialization/serialization mismatch, endian/width error,
-  address truncation, varnode identity mix-up, or function/block edge loss.
-- Contract metadata inserted at the wrong operation or dropped during lowering.
-- Patch spec parsing that accepts invalid YAML semantics or rejects valid specs.
-- Diagnostics that report the wrong location, suppress a real error, or let a
-  partially transformed module continue as success.
+- Ghidra P-Code deserialization or serialization mismatches, endian or width
+  errors, address truncation, varnode identity mix-ups, or function/block edge
+  loss.
+- Contract metadata attached to the wrong operation or dropped during lowering.
+- Patch specification parsing that accepts invalid YAML semantics or rejects
+  valid specifications.
+- Diagnostics that report the wrong location, suppress a real error, or allow a
+  partially transformed module to continue as success.
 
 **General C / C++:**
-- Off-by-one, inverted condition, missing error branch, wrong comparator, wrong
-  operator precedence, or accidental fallthrough.
-- Resource leak on an error path for file descriptors, raw allocations, locks,
-  Ghidra/MLIR/LLVM-owned handles, or temporary files.
-- Ignored return/status from operations whose failure changes behavior.
-- Integer overflow/truncation in size, address, offset, or bit-width
-  computation.
-- Incorrect move, copy, lifetime, or ownership transfer that changes behavior.
-- Missing virtual `override` only when it means the intended override is not
-  called.
+- Off-by-one errors, inverted conditions, missing error branches, incorrect
+  comparators, operator precedence bugs, or accidental fallthrough.
+- Resource leaks on error paths involving file descriptors, raw allocations,
+  locks, Ghidra/MLIR/LLVM-owned handles, or temporary files.
+- Ignored return values or status codes where failure changes behavior.
+- Integer overflow or truncation in size, address, offset, or bit-width
+  computations.
+- Incorrect move, copy, lifetime, or ownership transfer semantics that change
+  behavior.
+- Missing virtual `override` only when the intended override is not invoked.
 
 **Bash:**
 - Missing `set -euo pipefail` or unchecked command status in scripts that drive
-  builds, tests, Ghidra, KLEE, firmware examples, or publishing artifacts.
-- Pipeline, subshell, or assignment pattern that hides a failing command.
-- Word-splitting of filenames/paths, especially under `scripts/`, `test/`, or
-  workflow helpers.
+  builds, tests, Ghidra, KLEE, firmware examples, or artifact publishing.
+- Pipelines, subshells, or assignment patterns that hide failing commands.
+- Word splitting or glob expansion issues involving filenames or paths,
+  especially under `scripts/`, `test/`, or workflow helpers.
 - Non-portable shell syntax when the shebang is `/bin/sh`.
 
 **Python:**
-- Mutable default argument, list/dict mutation during iteration, resource leak,
-  broad exception handling that converts failure to success, or `is` used for
-  value comparison.
-- Incorrect JSON/YAML schema interpretation, address/width conversion, path
-  handling, or subprocess status propagation.
-- Test generator or artifact script that can produce stale, incomplete, or
+- Mutable default arguments, mutation during iteration, resource leaks, broad
+  exception handling that converts failure into success, or `is` used for value
+  comparison.
+- Incorrect JSON or YAML schema interpretation, address or width conversion,
+  path handling, or subprocess status propagation.
+- Test generators or artifact scripts that can produce stale, incomplete, or
   misleading outputs.
 
 ## WARNING
