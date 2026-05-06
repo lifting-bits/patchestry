@@ -202,7 +202,7 @@ namespace patchestry::ast {
       private:
         clang::FunctionDecl *get_or_create_intrinsic_decl(
             clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,
-            bool is_variadic = true
+            bool is_variadic = true, clang::QualType first_param_type = clang::QualType()
         );
 
         clang::Expr *build_callexpr_from_function(

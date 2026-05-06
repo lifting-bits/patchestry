@@ -1,0 +1,120 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-rellic-transform=false -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// CIR-NOT: __patchestry_missing
+// CIR-DAG: cir.func @aarch64_atomic_normalized_test
+// CIR-DAG: atomic_fetch_add_acq_rel
+// CIR-DAG: cir.func @x86_atomic_normalized_test
+// CIR-DAG: atomic_fetch_add_seq_cst
+// CIR-NOT: __patchestry_missing
+// LL-NOT: __patchestry_missing
+// LL-DAG: define dso_local i32 @aarch64_atomic_normalized_test
+// LL-DAG: call {{.*}} @atomic_fetch_add_acq_rel
+// LL-DAG: define dso_local i32 @x86_atomic_normalized_test
+// LL-DAG: call {{.*}} @atomic_fetch_add_seq_cst
+// LL-NOT: __patchestry_missing
+{
+  "architecture": "AARCH64",
+  "id": "AARCH64:LE:64:v8A",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "aarch64_atomic_normalized_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int", "type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "delta", "type": "type_int", "kind": "parameter", "index": 1 },
+            "old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000000:0:basic:atomic_op" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "old", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "atomic_op": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_int",
+              "output": { "kind": "temporary", "operation": "old", "type": "type_int" },
+              "target": {
+                "kind": "intrinsic",
+                "function": "__aarch64_ldadd4_acq_rel:t0",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p1" },
+                { "type": "type_ptr_int", "kind": "parameter", "operation": "p0" }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "atomic_op" }]
+            }
+          },
+          "ordered_operations": ["atomic_op", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:10000100": {
+      "name": "x86_atomic_normalized_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int", "type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000100:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "delta", "type": "type_int", "kind": "parameter", "index": 1 },
+            "old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000100:0:basic:atomic_op" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000100:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "old", "br"]
+        },
+        "ram:10000100:0:basic": {
+          "operations": {
+            "atomic_op": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_int",
+              "output": { "kind": "temporary", "operation": "old", "type": "type_int" },
+              "target": {
+                "kind": "intrinsic",
+                "function": "LOCK_XADD:type_int",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p1" },
+                { "type": "type_ptr_int", "kind": "parameter", "operation": "p0" }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "atomic_op" }]
+            }
+          },
+          "ordered_operations": ["atomic_op", "ret"]
+        }
+      },
+      "entry_block": "ram:10000100:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_ptr_int": { "kind": "pointer", "size": 8, "element_type": "type_int" }
+  }
+}
