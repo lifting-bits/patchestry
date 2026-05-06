@@ -55,6 +55,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
         clang::SourceLocation loc
     ) {
+        if (loc.isInvalid()) loc = VirtualLoc(ctx);
         auto varnode_operation = [&](clang::ASTContext &ctx, const Function &function,
                                      const Varnode &vnode) -> clang::Stmt * {
             switch (vnode.kind) {
@@ -103,7 +104,7 @@ namespace patchestry::ast {
         auto *param_decl = function_builder().local_variables.at(*vnode.operation);
         return clang::DeclRefExpr::Create(
             ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), param_decl, false,
-            clang::SourceLocation(), param_decl->getType(), clang::VK_LValue
+            VirtualLoc(ctx), param_decl->getType(), clang::VK_LValue
         );
     }
 
@@ -120,7 +121,7 @@ namespace patchestry::ast {
         auto *var_decl = function_builder().global_var_list.get().at(*vnode.global);
         return clang::DeclRefExpr::Create(
             ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
-            clang::SourceLocation(), var_decl->getType(), clang::VK_LValue
+            VirtualLoc(ctx), var_decl->getType(), clang::VK_LValue
         );
     }
 
@@ -137,7 +138,7 @@ namespace patchestry::ast {
             auto *var_decl = function_builder().local_variables.at(*vnode.operation);
             return clang::DeclRefExpr::Create(
                 ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
-                clang::SourceLocation(), var_decl->getType(), clang::VK_LValue
+                VirtualLoc(ctx), var_decl->getType(), clang::VK_LValue
             );
         }
 
@@ -397,7 +398,7 @@ namespace patchestry::ast {
             ctx,
             *vnode.string_value, // Use the string value directly
             is_wide ? clang::StringLiteralKind::Wide : clang::StringLiteralKind::Ordinary,
-            false, string_array, clang::SourceLocation()
+            false, string_array, VirtualLoc(ctx)
         );
     }
 

@@ -137,7 +137,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto location   = clang::SourceLocation();
+        auto location   = SourceLocation(ctx.getSourceManager(), function.get().key);
         auto *func_decl = clang::FunctionDecl::Create(
             ctx, ctx.getTranslationUnitDecl(), location, location,
             &ctx.Idents.get(c_name), function_type,
@@ -206,6 +206,7 @@ namespace patchestry::ast {
                 ctx, func_decl, location, location, &ctx.Idents.get(*param_op->name),
                 param_type, nullptr, clang::SC_None, nullptr
             );
+            param_decl->setIsUsed();
             parameter_vec.push_back(param_decl);
 
             // If this is for definition
@@ -323,14 +324,15 @@ namespace patchestry::ast {
                 continue;
             }
 
+            auto param_loc = SourceLocation(ctx.getSourceManager(), param_key);
             auto *param_decl = clang::ParmVarDecl::Create(
-                ctx, func_decl, SourceLocation(ctx.getSourceManager(), param_key),
-                SourceLocation(ctx.getSourceManager(), param_key),
+                ctx, func_decl, param_loc, param_loc,
                 &ctx.Idents.get(parameter_name(index++)), param_type,
-                ctx.getTrivialTypeSourceInfo(param_type, clang::SourceLocation()),
+                ctx.getTrivialTypeSourceInfo(param_type, param_loc),
                 clang::SC_None, nullptr
             );
             assert(param_decl != nullptr);
+            param_decl->setIsUsed();
 
             parameter_vec.emplace_back(param_decl);
         }

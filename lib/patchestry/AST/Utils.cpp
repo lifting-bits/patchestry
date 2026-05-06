@@ -31,6 +31,30 @@ namespace patchestry::ast {
         return sm.getLocForStartOfFile(fid);
     }
 
+    clang::SourceLocation VirtualLoc(clang::ASTContext &ctx) {
+        // Idempotent per SourceManager: FileManager::getVirtualFileRef is
+        // a get-or-create on the virtual name, and SourceManager::translateFile
+        // returns the existing FileID for that entry (or invalid on first use).
+        // We avoid a global pointer-keyed cache because SourceManagers come
+        // and go (Passes/Compiler.cpp builds a fresh one per compilation),
+        // a stale cache entry could outlive its owner and the heap may reuse
+        // the same address for a later SM, vending a SourceLocation whose
+        // FileID belongs to a destroyed table.
+        static constexpr llvm::StringLiteral kVirtualName = "<patchestry-virtual>";
+        auto &sm = ctx.getSourceManager();
+        auto &fm = sm.getFileManager();
+
+        auto fe = fm.getVirtualFileRef(
+            kVirtualName, static_cast< int >(kVirtualName.size()), 0
+        );
+        clang::FileID fid = sm.translateFile(&fe.getFileEntry());
+        if (fid.isInvalid()) {
+            sm.overrideFileContents(fe, llvm::MemoryBuffer::getMemBufferCopy(kVirtualName));
+            fid = sm.createFileID(fe, clang::SourceLocation(), clang::SrcMgr::C_User, 0);
+        }
+        return sm.getLocForStartOfFile(fid);
+    }
+
     clang::QualType GetTypeFromSize(
         clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer
     ) {

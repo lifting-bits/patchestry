@@ -22,10 +22,9 @@ namespace patchestry::ast {
 
 namespace detail {
     static clang::CompoundStmt *MakeCompound(
-        clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts,
-        clang::SourceLocation l = clang::SourceLocation(),
-        clang::SourceLocation r = clang::SourceLocation()) {
-        return clang::CompoundStmt::Create(ctx, stmts, clang::FPOptionsOverride(), l, r);
+        clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts) {
+        auto loc = VirtualLoc(ctx);
+        return clang::CompoundStmt::Create(ctx, stmts, clang::FPOptionsOverride(), loc, loc);
     }
 } // namespace detail
 
@@ -74,9 +73,9 @@ namespace detail {
             if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
                 std::string name = gs->getLabel()->getName().str();
                 if (!break_label.empty() && name == break_label)
-                    return new (ctx) clang::BreakStmt(clang::SourceLocation());
+                    return new (ctx) clang::BreakStmt(VirtualLoc(ctx));
                 if (!continue_label.empty() && name == continue_label)
-                    return new (ctx) clang::ContinueStmt(clang::SourceLocation());
+                    return new (ctx) clang::ContinueStmt(VirtualLoc(ctx));
                 return s;
             }
 
@@ -298,7 +297,7 @@ namespace detail {
                             // Scan the entire children vector for the label
                             for (auto *c : children) findLabel(c);
                             if (target_decl) {
-                                auto loc = clang::SourceLocation();
+                                auto loc = VirtualLoc(ctx);
                                 auto *hoisted_goto = new (ctx) clang::GotoStmt(
                                     target_decl, loc, loc);
                                 children.insert(children.begin() + static_cast< long >(i) + 1,
@@ -324,7 +323,7 @@ namespace detail {
 
         // Guarantee a non-null Stmt* for set* methods that require one.
         auto safe = [&](clang::Stmt *r) -> clang::Stmt * {
-            return r ? r : new (ctx) clang::NullStmt(clang::SourceLocation());
+            return r ? r : new (ctx) clang::NullStmt(VirtualLoc(ctx));
         };
 
         if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
@@ -444,7 +443,7 @@ namespace detail {
         }
 
         auto safe = [&](clang::Stmt *r) -> clang::Stmt * {
-            return r ? r : new (ctx) clang::NullStmt(clang::SourceLocation());
+            return r ? r : new (ctx) clang::NullStmt(VirtualLoc(ctx));
         };
 
         if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s)) {
@@ -483,7 +482,7 @@ namespace detail {
                     auto *merged = clang::BinaryOperator::Create(
                         ctx, EnsureRValue(ctx, c1), EnsureRValue(ctx, c2),
                         clang::BO_LOr, ctx.BoolTy, clang::VK_PRValue,
-                        clang::OK_Ordinary, clang::SourceLocation(),
+                        clang::OK_Ordinary, VirtualLoc(ctx),
                         clang::FPOptionsOverride()
                     );
                     llvm::cast< clang::IfStmt >(children[i])->setCond(merged);
@@ -657,7 +656,7 @@ namespace detail {
                                     );
                                     if (b.empty()) {
                                         return new (ctx)
-                                            clang::NullStmt(clang::SourceLocation());
+                                            clang::NullStmt(VirtualLoc(ctx));
                                     }
                                     return detail::MakeCompound(ctx, b);
                                 }
@@ -672,7 +671,7 @@ namespace detail {
                                 return st;
                             }
                             // Reached the goto itself — replace with NullStmt
-                            return new (ctx) clang::NullStmt(clang::SourceLocation());
+                            return new (ctx) clang::NullStmt(VirtualLoc(ctx));
                         };
                         body[i] = strip_tail(body[i]);
                         changed = true;
@@ -790,7 +789,7 @@ namespace detail {
                     if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(st)) {
                         if (gs->getLabel()->getName() == next_label) {
                             sw_changed = true;
-                            return new (ctx) clang::BreakStmt(clang::SourceLocation());
+                            return new (ctx) clang::BreakStmt(VirtualLoc(ctx));
                         }
                         return st;
                     }
