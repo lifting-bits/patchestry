@@ -17,12 +17,7 @@ import sys
 import pexpect
 
 ELF = os.path.normpath(os.path.join(
-    os.path.dirname(__file__), "..", "build", "secpump.elf"))
-if not os.path.isfile(ELF):
-    fallback = os.path.normpath(os.path.join(
-        os.path.dirname(__file__), "..", "..", "output", "secpump-qemu.elf"))
-    if os.path.isfile(fallback):
-        ELF = fallback
+    os.path.dirname(__file__), "..", "..", "output", "secpump-qemu.elf"))
 
 QEMU_CMD = (
     "qemu-system-arm -M mps2-an386 "
@@ -173,8 +168,11 @@ def test_quit(c):
 
 def main():
     if not os.path.isfile(ELF):
-        print(f"secpump.elf not found at {ELF}. Run `make` first.",
-              file=sys.stderr)
+        print(
+            f"{ELF} not found. Build with `firmwares/build.sh` (Docker) "
+            "or `cd firmwares/secpump-qemu && make` (native).",
+            file=sys.stderr,
+        )
         return 2
 
     c = pexpect.spawn(QEMU_CMD, encoding="utf-8", timeout=10)

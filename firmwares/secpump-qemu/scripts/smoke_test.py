@@ -10,7 +10,8 @@ talk to it with pexpect.
 """
 import os, sys, time, pexpect
 
-ELF = os.path.join(os.path.dirname(__file__), "..", "build", "secpump.elf")
+ELF = os.path.normpath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "output", "secpump-qemu.elf"))
 QEMU_CMD = (
     "qemu-system-arm -M mps2-an386 "
     "-display none -serial mon:stdio "

@@ -95,19 +95,18 @@ docker run --rm \
 # Uses a dedicated minimal builder image so the build works natively on
 # Linux amd64/arm64, macOS Intel, and macOS Apple Silicon (the shared
 # firmware-builder image pulls armhf cross packages that fail to install
-# on linux/arm64 hosts).
+# on linux/arm64 hosts). The Makefile writes secpump-qemu.{elf,bin}
+# directly into ../output/, which we bind-mount to the host's
+# firmwares/output/ at the matching layout (../output relative to
+# /work/secpump-qemu == /work/output).
 docker image inspect secpump-builder >/dev/null 2>&1 \
   || docker build -t secpump-builder "${host_script_dir}/secpump-qemu"
 
 docker run --rm \
   -v "${host_script_dir}/secpump-qemu:/work/secpump-qemu" \
-  -v "${host_output_dir}:/output" \
+  -v "${host_output_dir}:/work/output" \
   secpump-builder \
-  -c "cd secpump-qemu && \
-             make clean && \
-             make -j\$(nproc) && \
-             cp build/secpump.elf /output/secpump-qemu.elf && \
-             cp build/secpump.bin /output/secpump-qemu.bin"
+  -c "cd secpump-qemu && make clean && make -j\$(nproc)"
 
 # Build ventilator firmware + GUI
 docker build -t ventilator-builder -f "${script_dir}/Dockerfile.ventilator" "${script_dir}"

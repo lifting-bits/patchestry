@@ -9,12 +9,12 @@ set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-ELF="${script_dir}/build/secpump.elf"
+ELF="${script_dir}/../output/secpump-qemu.elf"
 if [ ! -f "$ELF" ]; then
-  ELF="${script_dir}/../output/secpump-qemu.elf"
-fi
-if [ ! -f "$ELF" ]; then
-  echo "secpump.elf not found. Run ./build-docker.sh first." >&2
+  echo "${ELF} not found." >&2
+  echo "Build it with one of:" >&2
+  echo "  cd $(dirname "${script_dir}") && ./build.sh   # Docker, all firmwares" >&2
+  echo "  cd ${script_dir} && make                       # native arm-none-eabi-gcc" >&2
   exit 1
 fi
 

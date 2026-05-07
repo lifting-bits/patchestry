@@ -1,5 +1,7 @@
 # SecPump QEMU re-host — bare-metal Cortex-M4 build for QEMU mps2-an386.
-# Layout: src/*.c -> build/secpump.elf + build/secpump.bin
+# Layout:
+#   src/*.c           -> $(BUILD_DIR)/*.o            (intermediate)
+#   $(BUILD_DIR)/*.o  -> $(OUTPUT_DIR)/secpump-qemu.elf  + .bin (canonical)
 # License: GPLv3 (inherited from upstream SecPump).
 
 CROSS   ?= arm-none-eabi-
@@ -7,10 +9,14 @@ CC       = $(CROSS)gcc
 OBJCOPY  = $(CROSS)objcopy
 SIZE     = $(CROSS)size
 
-BUILD_DIR := build
-TARGET    := secpump
-ELF       := $(BUILD_DIR)/$(TARGET).elf
-BIN       := $(BUILD_DIR)/$(TARGET).bin
+BUILD_DIR  := build
+# Canonical artifact location for all firmwares in this tree
+# (firmwares/output/). firmwares/build.sh and run_secpump.sh both use it.
+OUTPUT_DIR ?= ../output
+TARGET     := secpump-qemu
+
+ELF       := $(OUTPUT_DIR)/$(TARGET).elf
+BIN       := $(OUTPUT_DIR)/$(TARGET).bin
 MAP       := $(BUILD_DIR)/$(TARGET).map
 LDSCRIPT  := mps2-an386.ld
 
@@ -63,13 +69,16 @@ all: $(ELF) $(BIN) size
 $(BUILD_DIR):
 	@mkdir -p $@
 
+$(OUTPUT_DIR):
+	@mkdir -p $@
+
 $(BUILD_DIR)/%.o: src/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(ELF): $(OBJS) $(LDSCRIPT) | $(BUILD_DIR)
+$(ELF): $(OBJS) $(LDSCRIPT) | $(BUILD_DIR) $(OUTPUT_DIR)
 	$(CC) $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
 
-$(BIN): $(ELF)
+$(BIN): $(ELF) | $(OUTPUT_DIR)
 	$(OBJCOPY) -O binary $< $@
 
 size: $(ELF)
@@ -87,17 +96,20 @@ test: $(ELF)
 debug: $(ELF)
 	$(QEMU) $(QEMU_ARGS) -s -S
 
+# Removes our intermediate dir and our canonical artifacts only — leaves
+# other firmwares' artifacts under $(OUTPUT_DIR) untouched.
 clean:
 	rm -rf $(BUILD_DIR)
+	rm -f $(ELF) $(BIN)
 
 help:
 	@echo "secpump-qemu Makefile targets:"
 	@echo "  all (default)  build $(ELF) and $(BIN)"
-	@echo "  run            qemu-system-arm -M mps2-an386 -nographic -kernel ELF"
+	@echo "  run            qemu-system-arm interactive"
 	@echo "  smoke          ./run_secpump.sh smoke (exploit demo)"
 	@echo "  test           ./run_secpump.sh test  (protocol coverage + exploit)"
 	@echo "  debug          qemu paused, gdb stub on tcp::1234"
 	@echo "  size           print arm-none-eabi-size on the ELF"
-	@echo "  clean          rm -rf $(BUILD_DIR)"
+	@echo "  clean          remove $(BUILD_DIR) and our outputs in $(OUTPUT_DIR)"
 
 -include $(DEPS)

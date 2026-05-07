@@ -11,31 +11,29 @@ attribute-modify dispatch is replaced — with a small UART line parser.
 
 License: **GPLv3** (inherited from SecPump).
 
-## Build & run (native Linux)
+## Build & run
+
+The build produces canonical artifacts at
+`firmwares/output/secpump-qemu.elf` and `firmwares/output/secpump-qemu.bin`
+(alongside the other firmwares' outputs). `run_secpump.sh`, `make run`,
+and the test scripts all read the ELF from there — there is no longer a
+per-firmware `build/` ELF.
+
+### Native (Linux with `arm-none-eabi-gcc`)
 
 ```sh
 sudo apt install gcc-arm-none-eabi qemu-system-arm python3-pexpect
-make             # builds build/secpump.elf and build/secpump.bin
-make run         # qemu-system-arm -M mps2-an386 -nographic -kernel ...
+make             # builds ../output/secpump-qemu.{elf,bin}
+make run         # interactive qemu-system-arm
 make smoke       # exploit demo (destructive — kills QEMU)
 make test        # protocol coverage then exploit demo
 ```
 
-QEMU's UART0 is wired to stdio (multiplexed with the QEMU monitor via
-`-serial mon:stdio`). To exit interactive `make run`, use any of:
-
-- type `Q` at the `secpump>` prompt — clean exit via ARM semihosting
-  (preferred);
-- press `Ctrl-A` then `c` to switch to the QEMU monitor, then `quit`;
-- press `Ctrl-A` then `x` (the QEMU shortcut to terminate).
-
-`make help` lists all build/run targets.
-
-### Docker workflow (Linux, macOS Intel, macOS Apple Silicon)
+### Docker (Linux, macOS Intel, macOS Apple Silicon)
 
 The build needs GNU binutils features (`--gc-sections`, `-Map=`) that macOS
-`ld64` doesn't speak, so the ELF is built inside a dedicated minimal Docker
-image. QEMU runs natively on the host.
+`ld64` doesn't speak, so the ELF is built inside the `secpump-builder`
+Docker image. QEMU runs natively on the host.
 
 ```sh
 # macOS:
@@ -45,22 +43,32 @@ pip3 install pexpect       # only needed for the test scripts
 # Linux:
 sudo apt install qemu-system-arm python3-pexpect
 
-./build-docker.sh          # builds build/secpump.{elf,bin} inside Docker
-./run_secpump.sh                   # qemu-system-arm -nographic, interactive
+cd firmwares
+./build.sh                 # top-level orchestrator: builds ALL firmwares,
+                           #   including secpump-qemu, into firmwares/output/
+
+cd secpump-qemu
+./run_secpump.sh                   # interactive
 ./run_secpump.sh smoke             # exploit demo
 ./run_secpump.sh test              # full protocol coverage + exploit demo
 ./run_secpump.sh debug             # qemu paused, gdb stub on :1234
 ```
 
-`./build-docker.sh` builds the dedicated `secpump-builder` image on first run
-(~150 MB, no `armhf` cross packages, builds natively on `linux/amd64` and
-`linux/arm64` — Apple Silicon needs no `--platform` flag and no Rosetta).
-`./build-docker.sh clean` invokes `make clean` inside the container. Pass
-extra `make` arguments through, e.g. `./build-docker.sh -j8`.
+`firmwares/build.sh` builds the `secpump-builder` image on first run
+(~150 MB, no `armhf` cross packages — builds natively on `linux/amd64` and
+`linux/arm64`, no `--platform` flag and no Rosetta on Apple Silicon).
 
-The top-level orchestrator `firmwares/build.sh` uses the same image and
-copies the artifacts to `firmwares/output/secpump-qemu.elf` and
-`firmwares/output/secpump-qemu.bin`.
+### Exiting interactive QEMU
+
+QEMU's UART0 is wired to stdio (multiplexed with the QEMU monitor via
+`-serial mon:stdio`). To exit, use any of:
+
+- type `Q` at the `secpump>` prompt — clean exit via ARM semihosting
+  (preferred);
+- press `Ctrl-A` then `c` to switch to the QEMU monitor, then `quit`;
+- press `Ctrl-A` then `x` (the QEMU shortcut to terminate).
+
+`make help` lists all build/run targets.
 
 ## Wire protocol
 
@@ -141,9 +149,8 @@ surface are unchanged.
 
 ```
 .
-├── Dockerfile                 # secpump-builder image (Linux + macOS, native arm64)
-├── Makefile                   # bare-metal Cortex-M4 build
-├── build-docker.sh            # build via secpump-builder Docker image
+├── Dockerfile                 # secpump-builder image (used by firmwares/build.sh)
+├── Makefile                   # bare-metal Cortex-M4 build → ../output/secpump-qemu.{elf,bin}
 ├── run_secpump.sh             # local qemu wrapper (run/smoke/test/debug)
 ├── mps2-an386.ld
 ├── inc/
