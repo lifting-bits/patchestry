@@ -1,8 +1,9 @@
 #!/bin/bash
 # Emulate secpump.elf locally with qemu-system-arm (works on macOS).
-# Usage: ./run.sh [run|smoke|debug]
+# Usage: ./run.sh [run|smoke|test|debug]
 #   run   - interactive qemu (-nographic). Exit with Ctrl-A x.
-#   smoke - run scripts/smoke_test.py end-to-end (requires python3 pexpect).
+#   smoke - run scripts/smoke_test.py (exploit demo; destructive).
+#   test  - run tests/test_protocol.py then scripts/smoke_test.py.
 #   debug - qemu paused, gdb stub on tcp::1234 (-s -S).
 set -euo pipefail
 
@@ -28,11 +29,15 @@ case "$mode" in
   smoke)
     exec python3 "${script_dir}/scripts/smoke_test.py"
     ;;
+  test)
+    python3 "${script_dir}/tests/test_protocol.py"
+    exec python3 "${script_dir}/scripts/smoke_test.py"
+    ;;
   debug)
     exec qemu-system-arm -M mps2-an386 -nographic -kernel "$ELF" -s -S
     ;;
   *)
-    echo "usage: $0 [run|smoke|debug]" >&2
+    echo "usage: $0 [run|smoke|test|debug]" >&2
     exit 2
     ;;
 esac

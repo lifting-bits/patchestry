@@ -11,34 +11,49 @@ attribute-modify dispatch is replaced — with a small UART line parser.
 
 License: **GPLv3** (inherited from SecPump).
 
-## Build & run
+## Build & run (native Linux)
 
 ```sh
-sudo apt install gcc-arm-none-eabi qemu-system-arm
-make            # builds build/secpump.elf
-make run        # qemu-system-arm -M mps2-an386 -nographic -kernel ...
+sudo apt install gcc-arm-none-eabi qemu-system-arm python3-pexpect
+make             # builds build/secpump.elf and build/secpump.bin
+make run         # qemu-system-arm -M mps2-an386 -nographic -kernel ...
+make smoke       # exploit demo (destructive — kills QEMU)
+make test        # protocol coverage then exploit demo
 ```
 
-QEMU's UART0 is wired to stdio. To exit: `Ctrl-A` then `x`.
+QEMU's UART0 is wired to stdio. To exit interactive `make run`: `Ctrl-A`
+then `x`. `make help` lists all targets.
 
-### macOS workflow (build in Docker, emulate locally)
+### Docker workflow (Linux, macOS Intel, macOS Apple Silicon)
 
 The build needs GNU binutils features (`--gc-sections`, `-Map=`) that macOS
-`ld64` doesn't speak, so the ELF is built inside the shared `firmware-builder`
+`ld64` doesn't speak, so the ELF is built inside a dedicated minimal Docker
 image. QEMU runs natively on the host.
 
 ```sh
+# macOS:
 brew install qemu          # provides qemu-system-arm
-pip3 install pexpect       # only needed for scripts/smoke_test.py
+pip3 install pexpect       # only needed for the test scripts
 
-./build-docker.sh          # builds build/secpump.elf via Docker
+# Linux:
+sudo apt install qemu-system-arm python3-pexpect
+
+./build-docker.sh          # builds build/secpump.{elf,bin} inside Docker
 ./run.sh                   # qemu-system-arm -nographic, interactive
-./run.sh smoke             # runs scripts/smoke_test.py end-to-end
+./run.sh smoke             # exploit demo
+./run.sh test              # full protocol coverage + exploit demo
 ./run.sh debug             # qemu paused, gdb stub on :1234
 ```
 
-`./build-docker.sh clean` cleans. The Docker image is built on first run.
-Pass extra `make` arguments through, e.g. `./build-docker.sh -j8`.
+`./build-docker.sh` builds the dedicated `secpump-builder` image on first run
+(~150 MB, no `armhf` cross packages, builds natively on `linux/amd64` and
+`linux/arm64` — Apple Silicon needs no `--platform` flag and no Rosetta).
+`./build-docker.sh clean` invokes `make clean` inside the container. Pass
+extra `make` arguments through, e.g. `./build-docker.sh -j8`.
+
+The top-level orchestrator `firmwares/build.sh` uses the same image and
+copies the artifacts to `firmwares/output/secpump-qemu.elf` and
+`firmwares/output/secpump-qemu.bin`.
 
 ## Wire protocol
 
@@ -71,6 +86,25 @@ The script exercises the PID path and then sends 7 `V:41…41` lines. The 7th
 prints `Buffer overflow:`; the firmware then diverges (returns to
 `0x41414141`) and QEMU is killed. That divergence is the proof.
 
+## Tests
+
+Two pexpect-driven scripts cover the firmware. They share QEMU but run in
+separate processes, so the destructive exploit demo doesn't affect the
+non-destructive protocol walkthrough.
+
+| Script | Purpose |
+|---|---|
+| `tests/test_protocol.py` | Walks every wire-protocol command (`?`, `M:0/1/7`, `B:`, `G:` in auto + manual, single `V:`, `V:nothex`, `C`, `C:<bdaddr>`, `D`, `R:M/B/V/Q`, unknown tag, missing colon) on a single QEMU boot. Non-destructive. |
+| `scripts/smoke_test.py` | Exploit demo: PID round-trip, mode/bolus, then 7×`V:` writes that trigger the seeded `MaliciousMemCpy` overflow. Destructive — kills QEMU at the end. |
+
+Run both:
+
+```sh
+./run.sh test     # tests/test_protocol.py then scripts/smoke_test.py
+make test         # equivalent
+./run.sh smoke    # exploit only
+```
+
 ## What was changed vs. upstream
 
 | Upstream component                    | Re-host treatment                                         |
@@ -99,9 +133,10 @@ surface are unchanged.
 
 ```
 .
-├── Makefile
-├── build-docker.sh           # build via firmware-builder Docker image
-├── run.sh                    # local qemu wrapper (run/smoke/debug)
+├── Dockerfile                 # secpump-builder image (Linux + macOS, native arm64)
+├── Makefile                   # bare-metal Cortex-M4 build
+├── build-docker.sh            # build via secpump-builder Docker image
+├── run.sh                     # local qemu wrapper (run/smoke/test/debug)
 ├── mps2-an386.ld
 ├── inc/
 │   ├── InsulinController.h
@@ -115,8 +150,10 @@ surface are unchanged.
 │   ├── main.c                 # UART → shim → upstream dispatch
 │   ├── uart.c                 # CMSDK UART0 + newlib syscall stubs
 │   └── startup.c              # ARMv7-M vector table + Reset_Handler
-└── scripts/
-    └── smoke_test.py          # pexpect-driven end-to-end test
+├── scripts/
+│   └── smoke_test.py          # exploit demo (destructive)
+└── tests/
+    └── test_protocol.py       # full wire-protocol coverage (non-destructive)
 ```
 
 ## Notes for lifting / verification
@@ -133,3 +170,38 @@ lift produces clean output suitable for KLEE harnessing. Suggested
   before the seeded reset; trivial KLEE counterexample at iter 112)
 - `MaliciousMemCpy` — `n ≤ alloc_size(dest)` (the canonical patch is to
   pass and check a `dest_cap` parameter)
+
+## Limitations
+
+- **`-Os` and `-mfloat-abi=soft` are load-bearing for the seeded overflow.**
+  The exploit relies on the saved LR sitting inside `MaliciousMemCpy`'s
+  112-byte clobber window. `-O0`, `-O2`, `-O3`, or hard-float move it and
+  the demo no longer lands. Override `OPTFLAGS` / `ARCHFLAGS` only after
+  re-deriving the offsets.
+- **`-Wl,-u,_printf_float` is required.** The build links newlib-nano
+  (`--specs=nano.specs`); without `_printf_float` the float specifiers in
+  `[G]:%.4f` and `[u]:%.4f` (`InsulinController.c:116,153,164,167`) emit
+  garbage and PID assertions fail. Drop both `--specs=nano.specs` and
+  `-Wl,-u,_printf_float` together if you'd rather pull full newlib (binary
+  grows ~20 KB).
+- **`tests/test_protocol.py` runs sequentially within a single QEMU boot.**
+  Tests share state: `test_pid` and `test_bolus` mutate `OPERATING_MODE` /
+  `BolusConfig`, and `test_vuln_one_write` advances static `Attack_It` to
+  16. There is no firmware reset between cases — reordering can break
+  later assertions.
+- **`R:M | R:B | R:V` produces no firmware output.** `Read_Request_CB`
+  calls `aci_gatt_allow_read`, which is a no-op shim. The protocol test
+  asserts only that the next `secpump>` prompt returns; it cannot verify
+  the read was processed beyond "did not fault".
+- **`scripts/smoke_test.py` is destructive.** After the 7th `V:` write the
+  firmware diverges to `0x41414141` and the test kills QEMU. Do not chain
+  it with non-destructive checks in the same QEMU process; `./run.sh test`
+  runs the protocol test first in a separate process and then the exploit
+  demo.
+- **Two Docker builder images coexist.** secpump uses the dedicated minimal
+  `secpump-builder` image (this directory's `Dockerfile`); the other
+  firmwares (pulseox, bloodlight, ventilator) still use the shared
+  `firmware-builder` image (`firmwares/Dockerfile`). They are not
+  interchangeable.
+- **No CI / LIT integration yet.** Tests run locally via `./run.sh test`
+  (or `make test`) but are not wired into `.github/workflows/ci.yml`.

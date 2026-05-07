@@ -91,11 +91,18 @@ docker run --rm \
              cp -r host/build/fft /output/bloodlight/fft && \
              cp -r host/build/calibrate /output/bloodlight/calibrate"
 
-# Build secpump-qemu firmware (in-tree, no clone needed)
+# Build secpump-qemu firmware (in-tree, no clone needed).
+# Uses a dedicated minimal builder image so the build works natively on
+# Linux amd64/arm64, macOS Intel, and macOS Apple Silicon (the shared
+# firmware-builder image pulls armhf cross packages that fail to install
+# on linux/arm64 hosts).
+docker image inspect secpump-builder >/dev/null 2>&1 \
+  || docker build -t secpump-builder "${host_script_dir}/secpump-qemu"
+
 docker run --rm \
   -v "${host_script_dir}/secpump-qemu:/work/secpump-qemu" \
   -v "${host_output_dir}:/output" \
-  firmware-builder \
+  secpump-builder \
   -c "cd secpump-qemu && \
              make clean && \
              make -j\$(nproc) && \
