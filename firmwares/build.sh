@@ -91,6 +91,17 @@ docker run --rm \
              cp -r host/build/fft /output/bloodlight/fft && \
              cp -r host/build/calibrate /output/bloodlight/calibrate"
 
+# Build secpump-qemu firmware (in-tree, no clone needed)
+docker run --rm \
+  -v "${host_script_dir}/secpump-qemu:/work/secpump-qemu" \
+  -v "${host_output_dir}:/output" \
+  firmware-builder \
+  -c "cd secpump-qemu && \
+             make clean && \
+             make -j\$(nproc) && \
+             cp build/secpump.elf /output/secpump-qemu.elf && \
+             cp build/secpump.bin /output/secpump-qemu.bin"
+
 # Build ventilator firmware + GUI
 docker build -t ventilator-builder -f "${script_dir}/Dockerfile.ventilator" "${script_dir}"
 

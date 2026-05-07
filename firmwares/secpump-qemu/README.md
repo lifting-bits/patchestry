@@ -1,0 +1,135 @@
+# SecPump QEMU re-host (mps2-an386 / Cortex-M4)
+
+A bare-metal port of the **application-level logic** of
+[`r3glisss/SecPump`](https://github.com/r3glisss/SecPump) that runs unmodified
+under `qemu-system-arm`, with no STM32 HAL and no BlueNRG-MS BLE chip.
+
+The PID insulin controller and the deliberately-vulnerable `ProcessVulnReq` /
+`MaliciousMemCpy` chain are taken **verbatim** from
+`SecPump-Vuln/Src/InsulinController.c` and `PumpService.c`. Only the BLE
+attribute-modify dispatch is replaced — with a small UART line parser.
+
+License: **GPLv3** (inherited from SecPump).
+
+## Build & run
+
+```sh
+sudo apt install gcc-arm-none-eabi qemu-system-arm
+make            # builds build/secpump.elf
+make run        # qemu-system-arm -M mps2-an386 -nographic -kernel ...
+```
+
+QEMU's UART0 is wired to stdio. To exit: `Ctrl-A` then `x`.
+
+### macOS workflow (build in Docker, emulate locally)
+
+The build needs GNU binutils features (`--gc-sections`, `-Map=`) that macOS
+`ld64` doesn't speak, so the ELF is built inside the shared `firmware-builder`
+image. QEMU runs natively on the host.
+
+```sh
+brew install qemu          # provides qemu-system-arm
+pip3 install pexpect       # only needed for scripts/smoke_test.py
+
+./build-docker.sh          # builds build/secpump.elf via Docker
+./run.sh                   # qemu-system-arm -nographic, interactive
+./run.sh smoke             # runs scripts/smoke_test.py end-to-end
+./run.sh debug             # qemu paused, gdb stub on :1234
+```
+
+`./build-docker.sh clean` cleans. The Docker image is built on first run.
+Pass extra `make` arguments through, e.g. `./build-docker.sh -j8`.
+
+## Wire protocol
+
+ASCII, line-oriented. One command per line, terminated by CR or LF.
+
+| Command | Meaning                                       | Maps to upstream                |
+|---------|-----------------------------------------------|---------------------------------|
+| `M:0`   | switch to Auto PID mode                       | `ProcessModeReq("0")`           |
+| `M:1`   | switch to Manual bolus mode                   | `ProcessModeReq("1")`           |
+| `B:1.5` | set the manual `BolusConfig` (units of insulin) | `ProcessBolusReq("1.5")`     |
+| `G:200` | inject a glucose sample (mg/dL)               | `InsulinController("200")`      |
+| `V:<32 hex chars>` | write 16 bytes to vuln characteristic | `ProcessVulnReq(att_data)`      |
+| `C` or `C:<12 hex>` | fake LE connection                       | `GAP_ConnectionComplete_CB`     |
+| `D`     | fake LE disconnect                            | `GAP_DisconnectionComplete_CB`  |
+| `R:M | R:B | R:V` | fake GATT read permit on a char     | `Read_Request_CB → aci_gatt_allow_read` |
+| `?`     | reprint banner                                | n/a                             |
+
+## Demonstrating the seeded overflow
+
+`ProcessVulnReq` accumulates `att_data` into a 256-byte global, and after **7**
+writes (16 × 7 = 112 bytes) calls `MaliciousMemCpy(VulnBuffer[4], AttackBuffer, 112)`.
+On a Cortex-M4 build with `-Os -mfloat-abi=soft`, the saved LR sits within the
+112-byte clobber range, so the function returns to controlled bytes.
+
+```sh
+python3 scripts/smoke_test.py     # drives a full session via pexpect
+```
+
+The script exercises the PID path and then sends 7 `V:41…41` lines. The 7th
+prints `Buffer overflow:`; the firmware then diverges (returns to
+`0x41414141`) and QEMU is killed. That divergence is the proof.
+
+## What was changed vs. upstream
+
+| Upstream component                    | Re-host treatment                                         |
+|---------------------------------------|-----------------------------------------------------------|
+| `Src/InsulinController.c`             | **Verbatim.** Only the `#include "InsulinController.h"` is followed by `<string.h>` to satisfy the rehost; PID code is byte-identical. |
+| `Inc/InsulinController.h`             | `#include "main.h"` → `<stdint.h>/<stdio.h>/<stdlib.h>`. Function prototypes unchanged. |
+| `Src/PumpService.c` (entire file: `Add_Pump_Service`, `setConnectable`, `user_notify`, `Attribute_Modified_CB`, `ProcessModeReq`, `ProcessBolusReq`, `ProcessVulnReq`, `MaliciousMemCpy`, GAP CBs) | **Verbatim** in `src/PumpService.c`; only the BlueNRG include chain is replaced by `#include "PumpService.h"` (which pulls in `inc/bluenrg_shim.h`). |
+| `bluenrg_gatt_aci.h` / `bluenrg_gap_aci.h` / `hci.h` / `hci_le.h` etc. | **Stubbed** in `inc/bluenrg_shim.h` + `src/bluenrg_shim.c`: types/constants kept; `aci_gatt_*` / `aci_gap_*` / `hci_*` are no-ops that hand out sequential GATT handles. |
+| BlueNRG SPI radio + HCI transport     | **Removed.** No qemu board models BlueNRG. Replaced by `shim_post_attr_modified()` which synthesizes an `EVT_BLUE_GATT_ATTRIBUTE_MODIFIED` event and hands it to the upstream `user_notify()` dispatcher — same call graph as a real GATT write. |
+| `MX_USART2_UART_Init` (STM32 HAL)     | **Replaced** by CMSDK APB UART0 (`src/uart.c`). |
+| Cube startup + `system_stm32f4xx.c`   | **Replaced** by `src/startup.c` + `mps2-an386.ld`. |
+
+The BlueNRG-driven dispatch chain
+`user_notify → Attribute_Modified_CB → ProcessModeReq | ProcessBolusReq | ProcessVulnReq → MaliciousMemCpy`
+is preserved byte-for-byte from upstream. Each `M:` / `B:` / `V:` UART line
+manufactures the equivalent GATT-write event into that dispatch path. Boot
+prints (`SecPump Service Created. Handle 0x0001`, `MODE Charac handle: 0x0002`,
+…) come from the upstream `printf`s in `Add_Pump_Service`. Glucose samples
+(`G:`) bypass GATT and go directly to `InsulinController`, matching the
+upstream UART2 IRQ path.
+
+The bug semantics, bolus-authority logic, PID, and the GATT input-parsing
+surface are unchanged.
+
+## Layout
+
+```
+.
+├── Makefile
+├── build-docker.sh           # build via firmware-builder Docker image
+├── run.sh                    # local qemu wrapper (run/smoke/debug)
+├── mps2-an386.ld
+├── inc/
+│   ├── InsulinController.h
+│   ├── PumpService.h          # upstream prototypes + extern handles for shim
+│   └── bluenrg_shim.h         # BLE/HCI/GATT type & constant surface
+├── src/
+│   ├── InsulinController.c    # upstream, verbatim except headers
+│   ├── PumpService.c          # upstream verbatim (Add_Pump_Service, user_notify,
+│   │                          #   Attribute_Modified_CB, ProcessXxxReq, etc.)
+│   ├── bluenrg_shim.c         # no-op aci_*/hci_* + shim_post_attr_modified
+│   ├── main.c                 # UART → shim → upstream dispatch
+│   ├── uart.c                 # CMSDK UART0 + newlib syscall stubs
+│   └── startup.c              # ARMv7-M vector table + Reset_Handler
+└── scripts/
+    └── smoke_test.py          # pexpect-driven end-to-end test
+```
+
+## Notes for lifting / verification
+
+This target is small (~38 KB .text) and HAL-free, so a P-Code → CIR → LLVM IR
+lift produces clean output suitable for KLEE harnessing. Suggested
+`!static_contract` annotation sites:
+
+- `InsulinController` — pre: `T_iterator < SAMPLE_TIME` after modulo;
+  post: `op[T_iterator] ∈ [OP_LO, OP_HI]` (anti-windup invariant)
+- `ProcessBolusReq` — `BolusConfig ∈ [0, OP_HI]` (NOT enforced upstream;
+  candidate for a patch verifier)
+- `ProcessVulnReq` — `Attack_It + 16 ≤ sizeof(AttackBuffer)` (violated
+  before the seeded reset; trivial KLEE counterexample at iter 112)
+- `MaliciousMemCpy` — `n ≤ alloc_size(dest)` (the canonical patch is to
+  pass and check a `dest_cap` parameter)
