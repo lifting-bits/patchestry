@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <system_error>
 #include <clang/Basic/TargetInfo.h>
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
@@ -133,6 +134,13 @@ namespace {
         std::string mlir_file;
         unsigned mlir_line = 0;
         unsigned mlir_column = 0;
+        // Callee symbol when the op carries a FlatSymbolRefAttr "callee" (e.g.
+        // cir.call). Used as a fallback to locate the corresponding LLVM
+        // instruction when source-location -> debug-info translation drops the
+        // !dbg attachment (LLVM 22 CIR lowering does not synthesize a
+        // DICompileUnit/DISubprogram, so MLIR locations don't survive as
+        // DILocation on the lowered call).
+        std::string callee_name;
     };
 
     // Helper function to serialize a PredicateAttr to a human-readable string
@@ -309,6 +317,13 @@ namespace {
                 }
             }
 
+            // Capture the callee symbol on call-shaped ops so we can fall back
+            // to name-based correlation when source locations are dropped by
+            // CIR -> LLVM lowering.
+            if (auto callee_attr = op->getAttrOfType< mlir::FlatSymbolRefAttr >("callee")) {
+                metadata.callee_name = callee_attr.getValue().str();
+            }
+
             // Check for patchestry_operation attribute
             if (auto attr = op->getAttrOfType<mlir::StringAttr>("patchestry_operation")) {
                 metadata.patchestry_operation = attr.getValue().str();
@@ -401,6 +416,54 @@ namespace {
 
         unsigned matched_count      = 0;
         unsigned total_instructions = 0;
+        std::set< const OperationMetadata * > attached_entries;
+
+        auto attach_metadata = [&](llvm::Instruction &inst,
+                                   const OperationMetadata *matched_metadata,
+                                   const char *match_kind, llvm::StringRef site_desc) {
+            if (!matched_metadata->patchestry_operation.empty()) {
+                llvm::MDNode *md_node = llvm::MDNode::get(
+                    context,
+                    { llvm::MDString::get(context, "patchestry_operation"),
+                      llvm::MDString::get(
+                          context, matched_metadata->patchestry_operation
+                      ) }
+                );
+                inst.setMetadata("patchestry", md_node);
+                LOG(INFO) << "Attached patchestry_operation metadata '"
+                          << matched_metadata->patchestry_operation
+                          << "' to instruction (" << match_kind << ") at " << site_desc.str()
+                          << "\n";
+            }
+
+            if (!matched_metadata->static_contract.empty()) {
+                llvm::MDNode *contract_node = llvm::MDNode::get(
+                    context,
+                    { llvm::MDString::get(context, "static_contract"),
+                      llvm::MDString::get(context, matched_metadata->static_contract) }
+                );
+                inst.setMetadata("static_contract", contract_node);
+                LOG(INFO) << "Attached static contract metadata to instruction ("
+                          << match_kind << ") at " << site_desc.str()
+                          << "\nContract: " << matched_metadata->static_contract << "\n";
+            }
+
+            llvm::MDNode *mlir_loc_node = llvm::MDNode::get(
+                context,
+                { llvm::MDString::get(context, "mlir_location"),
+                  llvm::MDString::get(context, matched_metadata->mlir_file),
+                  llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+                      llvm::Type::getInt32Ty(context), matched_metadata->mlir_line
+                  )),
+                  llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+                      llvm::Type::getInt32Ty(context), matched_metadata->mlir_column
+                  )) }
+            );
+            inst.setMetadata("mlir_loc", mlir_loc_node);
+
+            attached_entries.insert(matched_metadata);
+            ++matched_count;
+        };
 
         // Iterate through all LLVM instructions
         for (auto &func : module.functions()) {
@@ -438,75 +501,71 @@ namespace {
                     if (it != location_to_metadata.end()) {
                         // Exact match found (file:line:column)
                         matched_metadata = it->second;
-                        LOG(INFO) << "Exact match found for " << llvm_file.str() << ":"
-                                  << llvm_line << ":" << llvm_col << "\n";
                     } else {
                         // Try matching by file and line only (ignore column)
                         for (auto &[loc_key, metadata] : location_to_metadata) {
                             if (loc_key.file == llvm_file.str() && loc_key.line == llvm_line) {
                                 matched_metadata = metadata;
-                                LOG(INFO) << "Line match found for " << llvm_file.str() << ":"
-                                          << llvm_line << "\n";
                                 break;
                             }
                         }
                     }
 
-                    // If we found matching metadata, attach custom patchestry metadata
                     if (matched_metadata) {
-                        if (!matched_metadata->patchestry_operation.empty()) {
-                            llvm::MDNode *md_node = llvm::MDNode::get(
-                                context,
-                                { llvm::MDString::get(context, "patchestry_operation"),
-                                  llvm::MDString::get(
-                                      context, matched_metadata->patchestry_operation
-                                  ) }
-                            );
-                            inst.setMetadata("patchestry", md_node);
-                        }
-
-                        LOG(INFO)
-                            << "Attached patchestry_operation metadata '"
-                            << matched_metadata->patchestry_operation << "' to instruction at "
-                            << llvm_file.str() << ":" << llvm_line << ":" << llvm_col << "\n";
-
-                        if (!matched_metadata->static_contract.empty()) {
-                            llvm::MDNode *contract_node = llvm::MDNode::get(
-                                context,
-                                { llvm::MDString::get(context, "static_contract"),
-                                  llvm::MDString::get(
-                                      context, matched_metadata->static_contract
-                                  ) }
-                            );
-                            inst.setMetadata("static_contract", contract_node);
-
-                            LOG(INFO)
-                                << "Attached static contract metadata to instruction at "
-                                << llvm_file.str() << ":" << llvm_line << ":" << llvm_col
-                                << "\nContract: " << matched_metadata->static_contract << "\n";
-                        }
-
-                        llvm::MDNode *mlir_loc_node = llvm::MDNode::get(
-                            context,
-                            { llvm::MDString::get(context, "mlir_location"),
-                              llvm::MDString::get(context, matched_metadata->mlir_file),
-                              llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
-                                  llvm::Type::getInt32Ty(context), matched_metadata->mlir_line
-                              )),
-                              llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
-                                  llvm::Type::getInt32Ty(context), matched_metadata->mlir_column
-                              )) }
-                        );
-                        inst.setMetadata("mlir_loc", mlir_loc_node);
-
-                        LOG(INFO) << "Attached MLIR location metadata to instruction at "
-                                  << llvm_file.str() << ":" << llvm_line << ":" << llvm_col
-                                  << "\nMLIR location: " << matched_metadata->mlir_file << ":"
-                                  << matched_metadata->mlir_line << ":"
-                                  << matched_metadata->mlir_column << "\n";
-                        matched_count++;
+                        std::string site_desc = llvm_file.str() + ":"
+                            + std::to_string(llvm_line) + ":" + std::to_string(llvm_col);
+                        attach_metadata(inst, matched_metadata, "loc", site_desc);
                     }
                 }
+            }
+        }
+
+        // Fallback: under LLVM 22, CIR -> LLVM lowering does not synthesize
+        // DICompileUnit/DISubprogram, so DILocation metadata is not produced
+        // and inst.getDebugLoc() returns null on every instruction. For
+        // metadata entries that came from a call-shaped op (cir.call carries
+        // a "callee" symbol ref), correlate by callee name and attach to the
+        // first un-attached LLVM call to that callee.
+        for (const auto &metadata : metadata_list) {
+            if (attached_entries.count(&metadata) || metadata.callee_name.empty()) {
+                continue;
+            }
+
+            bool placed = false;
+            for (auto &func : module.functions()) {
+                for (auto &bb : func) {
+                    for (auto &inst : bb) {
+                        auto *call_inst = llvm::dyn_cast< llvm::CallBase >(&inst);
+                        if (!call_inst) {
+                            continue;
+                        }
+                        auto *callee_fn = call_inst->getCalledFunction();
+                        if (!callee_fn || callee_fn->getName() != metadata.callee_name) {
+                            continue;
+                        }
+                        if (call_inst->hasMetadata("patchestry")
+                            || call_inst->hasMetadata("static_contract"))
+                        {
+                            continue;
+                        }
+                        std::string site_desc =
+                            "callee=@" + metadata.callee_name + " in @" + func.getName().str();
+                        attach_metadata(*call_inst, &metadata, "callee-name", site_desc);
+                        placed = true;
+                        break;
+                    }
+                    if (placed) {
+                        break;
+                    }
+                }
+                if (placed) {
+                    break;
+                }
+            }
+
+            if (!placed) {
+                LOG(WARNING) << "Could not place metadata for callee @"
+                             << metadata.callee_name << " (no matching un-attached call site)\n";
             }
         }
 
