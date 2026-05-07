@@ -46,7 +46,14 @@ LDFLAGS   := $(ARCHFLAGS) -T $(LDSCRIPT) \
 LDLIBS    := -lc -lm -lnosys
 
 QEMU      ?= qemu-system-arm
-QEMU_ARGS := -M mps2-an386 -nographic -kernel $(ELF)
+# -display none + -serial mon:stdio multiplexes the QEMU monitor and the
+# guest UART on stdio (Ctrl-A c switches to the monitor where `quit` exits).
+# -semihosting enables BKPT 0xAB so the firmware can self-exit via the
+# 'Q' command (semihosting_exit() in src/main.c).
+QEMU_ARGS := -M mps2-an386 \
+             -display none -serial mon:stdio \
+             -semihosting -semihosting-config enable=on,target=native \
+             -kernel $(ELF)
 
 .PHONY: all clean run smoke test debug size help
 .DEFAULT_GOAL := all

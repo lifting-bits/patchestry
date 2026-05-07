@@ -21,8 +21,15 @@ make smoke       # exploit demo (destructive — kills QEMU)
 make test        # protocol coverage then exploit demo
 ```
 
-QEMU's UART0 is wired to stdio. To exit interactive `make run`: `Ctrl-A`
-then `x`. `make help` lists all targets.
+QEMU's UART0 is wired to stdio (multiplexed with the QEMU monitor via
+`-serial mon:stdio`). To exit interactive `make run`, use any of:
+
+- type `Q` at the `secpump>` prompt — clean exit via ARM semihosting
+  (preferred);
+- press `Ctrl-A` then `c` to switch to the QEMU monitor, then `quit`;
+- press `Ctrl-A` then `x` (the QEMU shortcut to terminate).
+
+`make help` lists all build/run targets.
 
 ### Docker workflow (Linux, macOS Intel, macOS Apple Silicon)
 
@@ -69,6 +76,7 @@ ASCII, line-oriented. One command per line, terminated by CR or LF.
 | `C` or `C:<12 hex>` | fake LE connection                       | `GAP_ConnectionComplete_CB`     |
 | `D`     | fake LE disconnect                            | `GAP_DisconnectionComplete_CB`  |
 | `R:M | R:B | R:V` | fake GATT read permit on a char     | `Read_Request_CB → aci_gatt_allow_read` |
+| `Q`     | exit QEMU cleanly (semihosting `SYS_EXIT`)    | n/a (rehost-only)               |
 | `?`     | reprint banner                                | n/a                             |
 
 ## Demonstrating the seeded overflow
@@ -194,10 +202,15 @@ lift produces clean output suitable for KLEE harnessing. Suggested
   asserts only that the next `secpump>` prompt returns; it cannot verify
   the read was processed beyond "did not fault".
 - **`scripts/smoke_test.py` is destructive.** After the 7th `V:` write the
-  firmware diverges to `0x41414141` and the test kills QEMU. Do not chain
-  it with non-destructive checks in the same QEMU process; `./run.sh test`
-  runs the protocol test first in a separate process and then the exploit
-  demo.
+  firmware diverges to `0x41414141`, so the test cannot use the in-band
+  `Q` quit and falls back to `Ctrl-A x` to terminate QEMU. Do not chain it
+  with non-destructive checks in the same QEMU process; `./run.sh test`
+  runs the protocol test first (clean `Q` exit) in a separate process and
+  then the exploit demo.
+- **`Q` requires `-semihosting`.** All QEMU invocations in this directory
+  pass `-semihosting -semihosting-config enable=on,target=native`. If you
+  invoke `qemu-system-arm` by hand without that flag, `Q` will trigger a
+  HardFault instead of exiting.
 - **Two Docker builder images coexist.** secpump uses the dedicated minimal
   `secpump-builder` image (this directory's `Dockerfile`); the other
   firmwares (pulseox, bloodlight, ventilator) still use the shared

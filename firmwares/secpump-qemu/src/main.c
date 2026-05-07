@@ -24,6 +24,18 @@ extern void uart_putc(char c);
  * BolusConfig are defined in InsulinController.c. */
 uint8_t OPERATING_MODE = 0;        /* 0 = Auto PID, 1 = Manual bolus */
 
+/* Clean exit via ARM semihosting SYS_EXIT. Triggered by the 'Q' command.
+ * Requires QEMU to be invoked with -semihosting; without it BKPT 0xAB will
+ * fault. The default exit reason ADP_Stopped_ApplicationExit (0x20026) makes
+ * QEMU exit with status 0. */
+__attribute__((noreturn))
+static void semihosting_exit(void) {
+    register uint32_t r0 __asm__("r0") = 0x18;     /* SYS_EXIT */
+    register uint32_t r1 __asm__("r1") = 0x20026;  /* ADP_Stopped_ApplicationExit */
+    __asm__ volatile("bkpt 0xAB" : : "r"(r0), "r"(r1) : "memory");
+    for (;;) { /* unreachable when -semihosting is enabled */ }
+}
+
 /* Read one CR/LF-terminated line from UART0 into buf (NUL-terminated). */
 static size_t uart_readline(char *buf, size_t cap) {
     size_t n = 0;
@@ -75,8 +87,10 @@ static void banner(void) {
     printf("   C[:<12 hex>]       fake LE connect (-> GAP_ConnectionComplete_CB)\r\n");
     printf("   D                  fake LE disconnect (-> GAP_DisconnectionComplete_CB)\r\n");
     printf("   R:M | R:B | R:V    fake GATT read permit (-> Read_Request_CB)\r\n");
+    printf("   Q                  exit QEMU cleanly (semihosting)\r\n");
     printf("   ?                  show this banner\r\n");
     printf("============================================================\r\n");
+    printf(" (Ctrl-A then x also exits QEMU; Ctrl-A then c opens the monitor.)\r\n");
 }
 
 int main(void) {
@@ -104,7 +118,12 @@ int main(void) {
         if (n == 0) continue;
 
         if (line[0] == '?') { banner(); continue; }
-        /* Letter-only commands: C (connect, optional bdaddr) and D (disconnect). */
+        /* Letter-only commands: Q (quit), C (connect, optional bdaddr),
+         * D (disconnect). */
+        if (line[0] == 'Q' && (n == 1 || line[1] == '\0')) {
+            printf("[*] Goodbye.\r\n");
+            semihosting_exit();
+        }
         if (line[0] == 'D' && (n == 1 || line[1] == '\0')) {
             shim_post_disconnect();
             continue;

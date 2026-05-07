@@ -21,10 +21,18 @@ fi
 command -v qemu-system-arm >/dev/null \
   || { echo "qemu-system-arm not found. macOS: brew install qemu" >&2; exit 1; }
 
+QEMU_BASE_ARGS=(
+  -M mps2-an386
+  -display none
+  -serial mon:stdio
+  -semihosting -semihosting-config enable=on,target=native
+  -kernel "$ELF"
+)
+
 mode="${1:-run}"
 case "$mode" in
   run)
-    exec qemu-system-arm -M mps2-an386 -nographic -kernel "$ELF"
+    exec qemu-system-arm "${QEMU_BASE_ARGS[@]}"
     ;;
   smoke)
     exec python3 "${script_dir}/scripts/smoke_test.py"
@@ -34,7 +42,7 @@ case "$mode" in
     exec python3 "${script_dir}/scripts/smoke_test.py"
     ;;
   debug)
-    exec qemu-system-arm -M mps2-an386 -nographic -kernel "$ELF" -s -S
+    exec qemu-system-arm "${QEMU_BASE_ARGS[@]}" -s -S
     ;;
   *)
     echo "usage: $0 [run|smoke|test|debug]" >&2

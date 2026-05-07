@@ -11,7 +11,12 @@ talk to it with pexpect.
 import os, sys, time, pexpect
 
 ELF = os.path.join(os.path.dirname(__file__), "..", "build", "secpump.elf")
-QEMU_CMD = f"qemu-system-arm -M mps2-an386 -nographic -kernel {ELF}"
+QEMU_CMD = (
+    "qemu-system-arm -M mps2-an386 "
+    "-display none -serial mon:stdio "
+    "-semihosting -semihosting-config enable=on,target=native "
+    f"-kernel {ELF}"
+)
 
 def main():
     child = pexpect.spawn(QEMU_CMD, encoding="utf-8", timeout=8)

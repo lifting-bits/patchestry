@@ -24,7 +24,12 @@ if not os.path.isfile(ELF):
     if os.path.isfile(fallback):
         ELF = fallback
 
-QEMU_CMD = f"qemu-system-arm -M mps2-an386 -nographic -kernel {ELF}"
+QEMU_CMD = (
+    "qemu-system-arm -M mps2-an386 "
+    "-display none -serial mon:stdio "
+    "-semihosting -semihosting-config enable=on,target=native "
+    f"-kernel {ELF}"
+)
 
 
 def _prompt(c):
@@ -159,6 +164,13 @@ def test_bad_command(c):
     _prompt(c)
 
 
+def test_quit(c):
+    """Q triggers the firmware's semihosting_exit(); QEMU exits with status 0."""
+    c.sendline("Q")
+    c.expect(r"\[\*\] Goodbye\.")
+    c.expect(pexpect.EOF, timeout=5)
+
+
 def main():
     if not os.path.isfile(ELF):
         print(f"secpump.elf not found at {ELF}. Run `make` first.",
@@ -179,17 +191,21 @@ def main():
         test_read_permit(c)
         test_unknown_tag(c)
         test_bad_command(c)
+        test_quit(c)
         print("\n--- all protocol tests passed ---")
         return 0
     finally:
-        try:
-            c.sendcontrol("a")
-            c.send("x")
-            c.expect(pexpect.EOF, timeout=3)
-        except (pexpect.exceptions.TIMEOUT, pexpect.exceptions.EOF, OSError):
-            pass
         if c.isalive():
-            c.terminate(force=True)
+            # test_quit normally ends the process cleanly; this is the bail-out
+            # for a failed assertion before quit had a chance to run.
+            try:
+                c.sendcontrol("a")
+                c.send("x")
+                c.expect(pexpect.EOF, timeout=3)
+            except (pexpect.exceptions.TIMEOUT, pexpect.exceptions.EOF, OSError):
+                pass
+            if c.isalive():
+                c.terminate(force=True)
 
 
 if __name__ == "__main__":
