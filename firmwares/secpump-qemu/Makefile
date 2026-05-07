@@ -79,10 +79,10 @@ run: $(ELF)
 	$(QEMU) $(QEMU_ARGS)
 
 smoke: $(ELF)
-	./run.sh smoke
+	./run_secpump.sh smoke
 
 test: $(ELF)
-	./run.sh test
+	./run_secpump.sh test
 
 debug: $(ELF)
 	$(QEMU) $(QEMU_ARGS) -s -S
@@ -94,8 +94,8 @@ help:
 	@echo "secpump-qemu Makefile targets:"
 	@echo "  all (default)  build $(ELF) and $(BIN)"
 	@echo "  run            qemu-system-arm -M mps2-an386 -nographic -kernel ELF"
-	@echo "  smoke          ./run.sh smoke (exploit demo)"
-	@echo "  test           ./run.sh test  (protocol coverage + exploit)"
+	@echo "  smoke          ./run_secpump.sh smoke (exploit demo)"
+	@echo "  test           ./run_secpump.sh test  (protocol coverage + exploit)"
 	@echo "  debug          qemu paused, gdb stub on tcp::1234"
 	@echo "  size           print arm-none-eabi-size on the ELF"
 	@echo "  clean          rm -rf $(BUILD_DIR)"

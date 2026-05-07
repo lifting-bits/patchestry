@@ -1,6 +1,6 @@
 #!/bin/bash
 # Emulate secpump.elf locally with qemu-system-arm (works on macOS).
-# Usage: ./run.sh [run|smoke|test|debug]
+# Usage: ./run_secpump.sh [run|smoke|test|debug]
 #   run   - interactive qemu (-nographic). Exit with Ctrl-A x.
 #   smoke - run scripts/smoke_test.py (exploit demo; destructive).
 #   test  - run tests/test_protocol.py then scripts/smoke_test.py.

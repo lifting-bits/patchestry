@@ -46,10 +46,10 @@ pip3 install pexpect       # only needed for the test scripts
 sudo apt install qemu-system-arm python3-pexpect
 
 ./build-docker.sh          # builds build/secpump.{elf,bin} inside Docker
-./run.sh                   # qemu-system-arm -nographic, interactive
-./run.sh smoke             # exploit demo
-./run.sh test              # full protocol coverage + exploit demo
-./run.sh debug             # qemu paused, gdb stub on :1234
+./run_secpump.sh                   # qemu-system-arm -nographic, interactive
+./run_secpump.sh smoke             # exploit demo
+./run_secpump.sh test              # full protocol coverage + exploit demo
+./run_secpump.sh debug             # qemu paused, gdb stub on :1234
 ```
 
 `./build-docker.sh` builds the dedicated `secpump-builder` image on first run
@@ -108,9 +108,9 @@ non-destructive protocol walkthrough.
 Run both:
 
 ```sh
-./run.sh test     # tests/test_protocol.py then scripts/smoke_test.py
+./run_secpump.sh test     # tests/test_protocol.py then scripts/smoke_test.py
 make test         # equivalent
-./run.sh smoke    # exploit only
+./run_secpump.sh smoke    # exploit only
 ```
 
 ## What was changed vs. upstream
@@ -144,7 +144,7 @@ surface are unchanged.
 ├── Dockerfile                 # secpump-builder image (Linux + macOS, native arm64)
 ├── Makefile                   # bare-metal Cortex-M4 build
 ├── build-docker.sh            # build via secpump-builder Docker image
-├── run.sh                     # local qemu wrapper (run/smoke/test/debug)
+├── run_secpump.sh             # local qemu wrapper (run/smoke/test/debug)
 ├── mps2-an386.ld
 ├── inc/
 │   ├── InsulinController.h
@@ -204,7 +204,7 @@ lift produces clean output suitable for KLEE harnessing. Suggested
 - **`scripts/smoke_test.py` is destructive.** After the 7th `V:` write the
   firmware diverges to `0x41414141`, so the test cannot use the in-band
   `Q` quit and falls back to `Ctrl-A x` to terminate QEMU. Do not chain it
-  with non-destructive checks in the same QEMU process; `./run.sh test`
+  with non-destructive checks in the same QEMU process; `./run_secpump.sh test`
   runs the protocol test first (clean `Q` exit) in a separate process and
   then the exploit demo.
 - **`Q` requires `-semihosting`.** All QEMU invocations in this directory
@@ -216,5 +216,5 @@ lift produces clean output suitable for KLEE harnessing. Suggested
   firmwares (pulseox, bloodlight, ventilator) still use the shared
   `firmware-builder` image (`firmwares/Dockerfile`). They are not
   interchangeable.
-- **No CI / LIT integration yet.** Tests run locally via `./run.sh test`
+- **No CI / LIT integration yet.** Tests run locally via `./run_secpump.sh test`
   (or `make test`) but are not wired into `.github/workflows/ci.yml`.
