@@ -5,10 +5,11 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include <cstdlib>
 #include <map>
 #include <set>
 #include <system_error>
+#include <vector>
+
 #include <clang/Basic/TargetInfo.h>
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <clang/CIR/LowerToLLVM.h>
@@ -418,6 +419,17 @@ namespace {
         unsigned total_instructions = 0;
         std::set< const OperationMetadata * > attached_entries;
 
+        /*%
+        // metadata nodes
+        %42 = ... , !patchestry !10, !static_contract !11, !mlir_loc !12
+        // patchestry_operation metadata node
+        %10 = !{!"patchestry_operation", !"some_op"}
+        // static_contract metadata node
+        %11 = !{!"static_contract", !"contract text"}
+        // mlir_location metadata node
+        %12 = !{!"mlir_location", !"input.cir", i32 123, i32 45}
+        // instruction
+        */
         auto attach_metadata = [&](llvm::Instruction &inst,
                                    const OperationMetadata *matched_metadata,
                                    const char *match_kind, llvm::StringRef site_desc) {
@@ -524,49 +536,72 @@ namespace {
         // DICompileUnit/DISubprogram, so DILocation metadata is not produced
         // and inst.getDebugLoc() returns null on every instruction. For
         // metadata entries that came from a call-shaped op (cir.call carries
-        // a "callee" symbol ref), correlate by callee name and attach to the
-        // first un-attached LLVM call to that callee.
+        // a "callee" symbol ref), correlate by callee name only when there is
+        // exactly one unmatched metadata entry and one un-attached LLVM call
+        // for that callee.
+        struct CallCandidate
+        {
+            llvm::CallBase *call_inst;
+            std::string function_name;
+        };
+
+        auto has_patch_metadata = [](const llvm::Instruction &inst) {
+            return inst.hasMetadata("patchestry") || inst.hasMetadata("static_contract")
+                || inst.hasMetadata("mlir_loc");
+        };
+
+        std::map< std::string, unsigned > unmatched_metadata_count_by_callee;
         for (const auto &metadata : metadata_list) {
-            if (attached_entries.count(&metadata) || metadata.callee_name.empty()) {
+            if (!attached_entries.count(&metadata) && !metadata.callee_name.empty()) {
+                ++unmatched_metadata_count_by_callee[metadata.callee_name];
+            }
+        }
+
+        std::map< std::string, std::vector< CallCandidate > > unattached_calls_by_callee;
+        for (auto &func : module.functions()) {
+            for (auto &bb : func) {
+                for (auto &inst : bb) {
+                    auto *call_inst = llvm::dyn_cast< llvm::CallBase >(&inst);
+                    if (!call_inst) { continue; }
+
+                    auto *callee_fn = call_inst->getCalledFunction();
+                    if (!callee_fn) { continue; }
+
+                    if (has_patch_metadata(*call_inst)) { continue; }
+
+                    unattached_calls_by_callee[callee_fn->getName().str()].push_back(
+                        { call_inst, func.getName().str() }
+                    );
+                }
+            }
+        }
+
+        for (const auto &metadata : metadata_list) {
+            if (attached_entries.count(&metadata) || metadata.callee_name.empty()) { continue; }
+
+            auto candidates_it = unattached_calls_by_callee.find(metadata.callee_name);
+            if (candidates_it == unattached_calls_by_callee.end()
+                || candidates_it->second.empty())
+            {
+                LOG(WARNING) << "Could not place metadata for callee @"
+                             << metadata.callee_name << " (no matching un-attached call site)\n";
                 continue;
             }
 
-            bool placed = false;
-            for (auto &func : module.functions()) {
-                for (auto &bb : func) {
-                    for (auto &inst : bb) {
-                        auto *call_inst = llvm::dyn_cast< llvm::CallBase >(&inst);
-                        if (!call_inst) {
-                            continue;
-                        }
-                        auto *callee_fn = call_inst->getCalledFunction();
-                        if (!callee_fn || callee_fn->getName() != metadata.callee_name) {
-                            continue;
-                        }
-                        if (call_inst->hasMetadata("patchestry")
-                            || call_inst->hasMetadata("static_contract"))
-                        {
-                            continue;
-                        }
-                        std::string site_desc =
-                            "callee=@" + metadata.callee_name + " in @" + func.getName().str();
-                        attach_metadata(*call_inst, &metadata, "callee-name", site_desc);
-                        placed = true;
-                        break;
-                    }
-                    if (placed) {
-                        break;
-                    }
-                }
-                if (placed) {
-                    break;
-                }
+            const auto metadata_count = unmatched_metadata_count_by_callee[metadata.callee_name];
+            auto &candidates          = candidates_it->second;
+            if (metadata_count != 1 || candidates.size() != 1) {
+                LOG(WARNING) << "Could not place metadata for callee @" << metadata.callee_name
+                             << " (ambiguous callee-name fallback: metadata count: "
+                             << metadata_count << ", call-site count: " << candidates.size()
+                             << ")\n";
+                continue;
             }
 
-            if (!placed) {
-                LOG(WARNING) << "Could not place metadata for callee @"
-                             << metadata.callee_name << " (no matching un-attached call site)\n";
-            }
+            auto &candidate = candidates.front();
+            std::string site_desc =
+                "callee=@" + metadata.callee_name + " in @" + candidate.function_name;
+            attach_metadata(*candidate.call_inst, &metadata, "callee-name", site_desc);
         }
 
         LOG(INFO) << "Embedded metadata on " << matched_count
