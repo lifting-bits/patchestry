@@ -220,30 +220,6 @@ make test         # equivalent
 ./run.sh smoke    # exploit only
 ```
 
-## What was changed vs. upstream
-
-| Upstream component                    | Re-host treatment                                         |
-|---------------------------------------|-----------------------------------------------------------|
-| `Src/InsulinController.c`             | **Verbatim.** Only the `#include "InsulinController.h"` is followed by `<string.h>` to satisfy the rehost; PID code is byte-identical. |
-| `Inc/InsulinController.h`             | `#include "main.h"` → `<stdint.h>/<stdio.h>/<stdlib.h>`. Function prototypes unchanged. |
-| `Src/PumpService.c` (entire file: `Add_Pump_Service`, `setConnectable`, `user_notify`, `Attribute_Modified_CB`, `ProcessModeReq`, `ProcessBolusReq`, `ProcessVulnReq`, `MaliciousMemCpy`, GAP CBs) | **Verbatim** in `src/PumpService.c`; only the BlueNRG include chain is replaced by `#include "PumpService.h"` (which pulls in `inc/bluenrg_shim.h`). |
-| `bluenrg_gatt_aci.h` / `bluenrg_gap_aci.h` / `hci.h` / `hci_le.h` etc. | **Stubbed** in `inc/bluenrg_shim.h` + `src/bluenrg_shim.c`: types/constants kept; `aci_gatt_*` / `aci_gap_*` / `hci_*` are no-ops that hand out sequential GATT handles. |
-| BlueNRG SPI radio + HCI transport     | **Removed.** No qemu board models BlueNRG. Replaced by `shim_post_attr_modified()` which synthesizes an `EVT_BLUE_GATT_ATTRIBUTE_MODIFIED` event and hands it to the upstream `user_notify()` dispatcher — same call graph as a real GATT write. |
-| `MX_USART2_UART_Init` (STM32 HAL)     | **Replaced** by CMSDK APB UART0 (`src/uart.c`). |
-| Cube startup + `system_stm32f4xx.c`   | **Replaced** by `src/startup.c` + `mps2-an386.ld`. |
-
-The BlueNRG-driven dispatch chain
-`user_notify → Attribute_Modified_CB → ProcessModeReq | ProcessBolusReq | ProcessVulnReq → MaliciousMemCpy`
-is preserved byte-for-byte from upstream. Each `M:` / `B:` / `V:` UART line
-manufactures the equivalent GATT-write event into that dispatch path. Boot
-prints (`SecPump Service Created. Handle 0x0001`, `MODE Charac handle: 0x0002`,
-…) come from the upstream `printf`s in `Add_Pump_Service`. Glucose samples
-(`G:`) bypass GATT and go directly to `InsulinController`, matching the
-upstream UART2 IRQ path.
-
-The bug semantics, bolus-authority logic, PID, and the GATT input-parsing
-surface are unchanged.
-
 ## Layout
 
 ```
