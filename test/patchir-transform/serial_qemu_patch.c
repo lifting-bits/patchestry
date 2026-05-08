@@ -1,3 +1,3 @@
 // RUN: true
 
-#include "patches/qemu_serial_patch.c"
+#include "patches/serial_qemu_patch.c"
