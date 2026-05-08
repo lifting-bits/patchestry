@@ -2,15 +2,17 @@
 typedef unsigned char  uint8_t;
 typedef unsigned short uint16_t;
 
-// Per-TU loud-fail: lowers to a single trapping instruction (UDF on ARMv7-M)
-// and never returns. `__builtin_trap` is a compiler intrinsic — no extern
-// symbol — so the lowered patch module stays self-contained for Patcherex2's
-// relocatable link, and the trap routes the CPU into HardFault instead of
-// silently spinning. The patchestry intrinsic library's __patchestry_assert_fail
-// pulls in fprintf/abort and is only suitable for hosted patch targets.
+// Per-TU assert: never returns. `static` keeps it at internal linkage so
+// the lowered patch module is self-contained — Patcherex2's relocatable
+// link does not need to resolve any extern when inserting the patched
+// function into the firmware.
+//
+// The patchestry-embedded clang frontend (lib/patchestry/Passes/Compiler.cpp)
+// rejects `__builtin_trap` with "use of unknown builtin", so we stick with
+// the infinite-loop form that every other patch in this tree uses.
 __attribute__((noreturn))
 static void secpump_assert_fail(void) {
-    __builtin_trap();
+    for (;;) { }                         // halt visibly; no return path.
 }
 
 // SecPump seeded vuln: ProcessVulnReq accumulates 16 bytes per call into a
