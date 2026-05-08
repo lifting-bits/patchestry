@@ -85,7 +85,10 @@ static inline void semihosting_exit(int code) {
 static const uint8_t CTRL_HDR[2] = {0x05, 0x0A};
 static const uint8_t CTRL_FTR[2] = {0x50, 0xA0};
 
-static void serial_control_loop_v0(void) {
+// noinline so the function survives as a standalone symbol — the
+// Vulnerability demo (see README) targets the available() call site here,
+// and patchir-decomp can lift this small function but not main() in full.
+static __attribute__((noinline)) void serial_control_loop_v0(void) {
     if (Serial6.available() < 11) return;  // wait for full frame
 
     // Sync to header.
