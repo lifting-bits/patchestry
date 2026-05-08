@@ -359,7 +359,7 @@ namespace patchestry::ast {
         if (function.get().basic_blocks.empty()) {
             // The canonical forward decl for a no-basic-blocks function (e.g.
             // a Ghidra-exported callee that the decompile request did not
-            // descend into, like emit_before_base in the qemu-serial fixture)
+            // descend into, like emit_before_base in the serial-qemu fixture)
             // is created by the FunctionBuilder constructor and registered in
             // function_list. ASTConsumer skips these via has_basic_blocks(),
             // so reaching here means a caller violated that contract.

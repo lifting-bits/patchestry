@@ -16,7 +16,7 @@ This workflow validates an ARM32 firmware patch end to end:
 
 The implementation lives in:
 
-- `firmwares/qemu-serial/`
+- `firmwares/serial-qemu/`
 - `scripts/test-qemu-firmware-runtime.sh`
 - `scripts/patch-runtime/qemu_firmware_runtime.py`
 
