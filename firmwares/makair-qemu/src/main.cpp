@@ -114,10 +114,13 @@ static __attribute__((noinline)) void serial_control_loop_v0(void) {
                      | ((uint32_t)raw_crc[2] <<  8) |  (uint32_t)raw_crc[3];
     if (got_crc != crc.finalize()) return;  // CRC mismatch — drop silently
 
-    // Heartbeat is setting 0 in upstream `serial_control.h`. The v0 loop
-    // accepts it as proof of liveness; everything else is no-op until the
-    // controller stubs are filled in.
-    (void)setting;
+    // Echo a ControlAck on every CRC-valid frame so the host harness can
+    // verify the parser was actually reached. The synthetic per-tick
+    // sendControlAck(1, 0) emitted by the polling loop is distinct (value=0),
+    // so a ControlAck whose value matches the parsed raw_value uniquely
+    // identifies a frame that traversed this path.
+    uint16_t value = ((uint16_t)raw_value[0] << 8) | (uint16_t)raw_value[1];
+    sendControlAck(setting, value);
 }
 
 // ---- main ----------------------------------------------------------------

@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """Regression test for the HardwareSerial::available() stash-clobber bug.
 
-Drives a CRC-valid Heartbeat into the firmware over UART and asserts the
-upstream Control parser actually reaches its Heartbeat case. The
-unpatched firmware fails this test because available() always returns
-at most 1 (it clobbers the previously-stashed byte every call), so the
-parser's `Serial6.available() >= 11` precondition is never satisfied
-and Control bytes are silently consumed without ever being parsed.
+Drives a CRC-valid Control frame into the firmware and asserts the in-tree
+fast-path parser actually reaches its success handler. The unpatched
+firmware fails this test because available() always returns at most 1
+(it clobbers the previously-stashed byte every call), so the parser's
+`Serial6.available() >= 11` precondition is never satisfied — Control
+bytes are silently consumed without ever being parsed.
 
-The signal we observe is the upstream parser's DBG_DO trace from
-firmwares/repos/makair-firmware/srcs/serial_control.cpp:106-112, which
-prints "Serial control message: setting = N, value = V" on a successful
-parse. That trace is gated on -DDEBUG=1 — see README's Vulnerability
-demo section for the build flag and how the patched ELF is produced.
+The signal we observe is a `sendControlAck(setting, value)` ack emitted
+by the fast-path success handler in src/main.cpp. The host harness sends
+SET_HEARTBEAT with value 0xFFFF, which produces a ControlAck whose
+6-byte (\t setting \t value_hi value_lo \n) signature is distinct from
+the firmware's per-tick synthetic sendControlAck(1, 0).
 
 Pass criteria:
-  - Pre-patch  (build/makair.elf):         no parser trace -> FAIL
-  - Post-patch (build/makair-patched.elf): parser trace -> PASS
+  - Pre-patch  (build/makair.elf):         no parsed-frame ack -> FAIL
+  - Post-patch (build/makair-patched.elf): parsed-frame ack    -> PASS
 
 Usage:
   python3 test_serial_available_fix.py [--patched]
@@ -34,12 +34,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ELF_PRISTINE = os.path.normpath(os.path.join(HERE, "..", "build", "makair.elf"))
 ELF_PATCHED  = os.path.normpath(os.path.join(HERE, "..", "build", "makair-patched.elf"))
 
-PARSER_TRACE = b"Serial control message: setting = 0"
+# ControlAck "tail" signature: \t setting \t value_hi value_lo \n. The frame
+# layout is "\t" then 1 byte setting then "\t" then 2 bytes BE value then
+# "\n", per upstream srcs/telemetry.cpp::sendControlAck.
+def _ack_tail(setting: int, value: int) -> bytes:
+    return bytes([0x09, setting & 0xFF, 0x09,
+                  (value >> 8) & 0xFF, value & 0xFF, 0x0A])
+
+PARSED_ACK_TAIL    = _ack_tail(SET_HEARTBEAT, DISABLE_RPI_WATCHDOG)  # parsed-frame ack
+SYNTHETIC_ACK_TAIL = _ack_tail(SET_HEARTBEAT, 0)                     # per-tick synthetic ack
 
 
 def _run_with_heartbeat(elf: str, wall_seconds: float) -> bytes:
-    """Boot ELF, send a single CRC-valid Heartbeat, capture UART for the
-    requested window, return raw stdout bytes."""
     payload = encode_control(SET_HEARTBEAT, DISABLE_RPI_WATCHDOG)
     proc = subprocess.Popen(
         [
@@ -77,24 +83,34 @@ def main() -> int:
             print("  Run scripts/demo_makair.sh --stage=all --with-patcherex first.",
                   file=sys.stderr)
         else:
-            print("  Run 'make' (with EXTRA_CXXFLAGS=-DDEBUG=1) first.", file=sys.stderr)
+            print("  Run firmwares/makair-qemu/build-docker.sh first.", file=sys.stderr)
         return 2
 
     out = _run_with_heartbeat(elf, 1.5)
 
-    saw_trace = PARSER_TRACE in out
+    saw_parsed    = PARSED_ACK_TAIL in out
+    saw_synthetic = SYNTHETIC_ACK_TAIL in out
+
     if use_patched:
-        assert saw_trace, (
-            f"FAIL: expected parser trace {PARSER_TRACE!r} in patched-ELF UART "
-            f"output but it was absent — did the available() patch land?"
+        assert saw_parsed, (
+            f"FAIL: expected parsed-frame ControlAck tail {PARSED_ACK_TAIL.hex()} "
+            f"in patched-ELF UART output but it was absent — did the available() "
+            f"patch land?"
         )
-        print(f"  patched ELF: parser trace observed -> Heartbeat parsed PASS")
+        print(f"  patched ELF: parsed-frame ControlAck observed -> Heartbeat parsed (PASS)")
     else:
-        assert not saw_trace, (
-            f"FAIL: parser trace {PARSER_TRACE!r} was unexpectedly present in "
-            f"the pristine ELF — bug is no longer reproducing, fixture stale?"
+        assert saw_synthetic, (
+            f"FAIL: even the per-tick synthetic ControlAck "
+            f"{SYNTHETIC_ACK_TAIL.hex()} is missing — fixture broken? "
+            f"(test relies on src/main.cpp's per-tick sendControlAck(1, 0))"
         )
-        print(f"  pristine ELF: parser trace absent -> bug reproduces PASS")
+        assert not saw_parsed, (
+            f"FAIL: parsed-frame ControlAck tail {PARSED_ACK_TAIL.hex()} was "
+            f"unexpectedly present in the pristine ELF — bug is no longer "
+            f"reproducing, fixture stale?"
+        )
+        print(f"  pristine ELF: parsed-frame ack absent (only synthetic ack seen) "
+              f"-> bug reproduces (PASS)")
     return 0
 
 
