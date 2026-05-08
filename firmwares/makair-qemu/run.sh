@@ -3,7 +3,7 @@
 # Usage: ./run.sh [run|smoke|test|debug|patched|patched-test]
 #   run          - interactive qemu with stdio UART. Exit with Ctrl-A x.
 #   smoke        - run tests/test_smoke.py (boot + first BootMessage).
-#   test         - run tests/test_protocol.py (Telemetry + Control surface).
+#   test         - run smoke then tests/test_protocol.py (Telemetry + Control surface).
 #   debug        - qemu paused, gdb stub on tcp::1234 (-s -S).
 #   patched      - boot build/makair-patched.elf interactively.
 #   patched-test - run tests/test_patched_protocol.py against the patched ELF.
@@ -49,6 +49,7 @@ case "$mode" in
     exec python3 "${script_dir}/tests/test_smoke.py"
     ;;
   test)
+    python3 "${script_dir}/tests/test_smoke.py"
     exec python3 "${script_dir}/tests/test_protocol.py"
     ;;
   patched-test)
