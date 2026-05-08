@@ -6,7 +6,12 @@
 # This should be kept in step with decompile-headless.dockerfile. It doesn't inherit from it only
 # because the native Ghidra build takes a long time and we don't need that for test purposes.
 
-FROM eclipse-temurin:21 AS base
+# Pin to Ubuntu 24.04 (noble). The unpinned `eclipse-temurin:21` tag now
+# resolves to Ubuntu 26.04, which ships Python 3.14 — outside Ghidra
+# 11.3.2's supported range (3.9–3.13). The createGhidraStubsWheel task
+# refuses to run on unsupported Python and the docker build fails. Noble
+# ships python3 = 3.12, which is in the allowlist.
+FROM eclipse-temurin:21-noble AS base
 
 # This Dockerfile runs tests for the decompilation / high pcode production part of Patchestry. 
 # On Linux, you can build *from the root of the repo* with:
