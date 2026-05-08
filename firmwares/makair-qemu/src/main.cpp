@@ -61,9 +61,7 @@ extern void sendMassFlowMeterFatalError(void);
 extern void sendInconsistentPressureFatalError(uint16_t);
 extern void sendEolTestSnapshot(TestStep, TestState, char[]);
 
-// rpiWatchdog is a global instance defined in upstream rpi_watchdog.cpp.
-class RpiWatchdog;
-extern class RpiWatchdog rpiWatchdog;
+#include "../includes/rpi_watchdog.h"   // RpiWatchdog + global rpiWatchdog
 
 // Semihosting exit so test scripts can quit QEMU cleanly when sending 'Q'.
 static inline void semihosting_exit(int code) {
@@ -139,6 +137,15 @@ extern "C" int main(void) {
         if ((int32_t)(millis() - next_tick) >= 0) {
             next_tick += 1000u;
             cycle++;
+
+            // Tick the RPi heartbeat watchdog once per second (matching the
+            // upstream main_state_machine.cpp:110 cadence). This drives the
+            // COUNT_DOWN -> SWITCH_OFF_RASPBERRY -> SWITCH_ON_RASPBERRY ->
+            // WAIT_FOR_FIRST_HEARTBEAT state machine, so a host that stops
+            // sending Heartbeat Control frames will eventually trip the
+            // upstream "RPi disconnected" recovery path. Each Heartbeat
+            // received via serial_control.cpp resets the counter.
+            rpiWatchdog.update();
 
             sendDataSnapshot(0, 100, CyclePhases::INHALATION,
                              50, 0, 120, 80, 500, -100);
