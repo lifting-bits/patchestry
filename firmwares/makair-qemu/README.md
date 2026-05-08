@@ -89,6 +89,35 @@ changes framing in a future MakAir release, only that file needs to follow.
 - Heartbeat timeout → `AlarmTrap` "host disconnected"; `rpi_watchdog.cpp`
   is in the link and ticked every second from the QEMU loop.
 
+## Vulnerability demo
+
+A real implementation bug found by review (not seeded), used to exercise
+the Patchestry pipeline end-to-end against C++ class-member targets:
+
+| Bug | Location | Patch |
+|---|---|---|
+| `available()` calls `uart_getc_nonblock()` unconditionally and overwrites `m_uart_id`'s stash bits, so a buffered byte is silently dropped on the next call and the function returns at most 1. Both the in-tree fast path (`serial_control_loop_v0`) and the upstream parser (`serial_control.cpp:66`) gate on `Serial6.available() >= 11`, so neither can ever assemble a Control frame. | `src/arduino_shim.cpp:55` (`HardwareSerial::available`) | `patch__replace__HardwareSerial__available` — mirrors `peek()`'s stash-check guard. |
+
+**Apply** (Patchestry pipeline → patched ELF):
+
+```sh
+TARGET_FUNCTION=HardwareSerial::available \
+    ./scripts/demo_makair.sh --stage=all --with-patcherex
+```
+
+**Validate** — pre-patch the parser never runs; post-patch the upstream
+parser's `DBG_DO` trace ("Serial control message: setting = 0, value = …")
+appears within 1.5 s of feeding a Heartbeat:
+
+```sh
+make EXTRA_CXXFLAGS=-DDEBUG=1                                  # observable build
+python3 tests/test_serial_available_fix.py                     # pristine: bug reproduces
+python3 tests/test_serial_available_fix.py --patched           # patched: parser runs
+```
+
+Sources: `test/patchir-transform/patches/patch_makair_serial_available.c`,
+`makair_security_patches.yaml`, `makair_serial_available.yaml`.
+
 ## Patch + verify (placeholder)
 
 ```sh

@@ -11,6 +11,32 @@ attribute-modify dispatch is replaced — with a small UART line parser.
 
 License: **GPLv3** (inherited from SecPump).
 
+## Vulnerability demo
+
+Two seeded memory-corruption bugs and the patches that neutralise them:
+
+| Bug | Location | Patch |
+|---|---|---|
+| Stack overflow: 112 B `MaliciousMemCpy` into 4 B `VulnBuffer` clobbers saved LR after 7 BLE writes. | `src/PumpService.c:405` (`ProcessVulnReq`) | `patch__replace__ProcessVulnReq` — bounded accumulator, `__builtin_trap()` if `Attack_It` ever escapes the 256 B buffer. |
+| Unbounded `memcpy` with no destination capacity. | `src/PumpService.c:423` (`MaliciousMemCpy`) | `patch__replace__MaliciousMemCpy` — bounds-checked, `__builtin_trap()` when `n > dest_cap`. |
+
+**Apply** (Patchestry pipeline → patched ELF):
+
+```sh
+./scripts/demo_secpump.sh --stage=all --with-patcherex
+```
+
+**Validate** (pre-patch crashes the firmware on the 7th write; post-patch traps cleanly and keeps streaming):
+
+```sh
+./run.sh smoke           # destructive demo against pristine ELF
+./run.sh patched-test    # protocol regression against build/secpump-patched.elf
+```
+
+Sources: `test/patchir-transform/patches/patch_{process_vuln_req,malicious_memcpy}.c`,
+`secpump_security_patches.yaml`, `secpump_{process_vuln_req,malicious_memcpy}.yaml`.
+Walkthrough below in [End-to-end patchestry demo](#end-to-end-patchestry-demo).
+
 ## Build & run (native Linux)
 
 ```sh
