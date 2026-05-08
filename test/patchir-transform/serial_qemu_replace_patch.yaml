@@ -1,18 +1,18 @@
 apiVersion: patchestry.io/v1
 metadata:
-  name: qemu-serial-replace-patch
+  name: serial-qemu-replace-patch
   description: Replace qemu_target_replace inside the QEMU serial firmware fixture
   version: 1.0.0
   author: Codex
   created: '2026-04-22'
   kind: PatchSpec
 target:
-  binary: qemu-serial.elf
+  binary: serial.elf
   arch: ARM:LE:32
 libraries:
-- patches/qemu_serial_patch_library.yaml
+- patches/serial_qemu_patch_library.yaml
 patches:
-- name: qemu_serial_replace_patch
+- name: serial_qemu_replace_patch
   id: QEMU-SERIAL-REPLACE-001
   description: Replace emit_replace_base inside qemu_target_replace
   match:
@@ -22,5 +22,5 @@ patches:
     - qemu_target_replace
   action:
     mode: replace
-    patch: qemu_serial_replace_patch
+    patch: serial_qemu_replace_patch
     arguments: []

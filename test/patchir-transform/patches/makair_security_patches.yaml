@@ -1,0 +1,18 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: makair_security_patches
+  description: Bug-fix replacements for the makair-qemu re-host
+  version: 1.0.0
+  author: Security Team
+  created: '2026-05-08'
+  kind: PatchLibrary
+patch_definitions:
+- name: makair_serial_available_fix
+  description: Replace HardwareSerial::available() with a stash-aware variant that mirrors peek()'s guard, restoring the parser's >= 11 bytes precondition.
+  category: protocol_correctness
+  function_name: patch::replace::HardwareSerial::available
+  code_file: patches/patch_makair_serial_available.c
+  parameters:
+  - name: self
+    type: uint32_t*
+    description: this-pointer; HardwareSerial has a single uint32_t member (m_uart_id) at offset 0

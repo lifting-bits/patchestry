@@ -1,0 +1,59 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: secpump-klee-patches
+  description: SecPump-QEMU patches and static contracts for KLEE verification
+  version: 1.0.0
+  author: Security Team
+  created: '2026-05-07'
+  kind: PatchLibrary
+patch_definitions:
+- name: secpump_bounded_malicious_memcpy
+  description: Replace MaliciousMemCpy with a bounded, loud-failing variant
+  category: memory_safety
+  function_name: patch::replace::MaliciousMemCpy
+  code_file: ../patchir-transform/patches/patch_malicious_memcpy.c
+  parameters:
+  - name: dest
+    type: void*
+    description: Destination buffer
+  - name: src
+    type: void*
+    description: Source buffer
+  - name: n
+    type: size_t
+    description: Bytes requested
+  - name: dest_cap
+    type: size_t
+    description: Caller-declared destination capacity
+- name: secpump_safe_process_vuln_req
+  description: Replace ProcessVulnReq with a self-contained safe accumulator
+  category: memory_safety
+  function_name: patch::replace::ProcessVulnReq
+  code_file: ../patchir-transform/patches/patch_process_vuln_req.c
+  parameters:
+  - name: att_data
+    type: uint8_t*
+    description: Attribute payload
+contract_definitions:
+- name: malicious_memcpy_bound_static
+  description: Enforce n <= dest_cap on MaliciousMemCpy replacement
+  category: memory_safety
+  preconditions:
+  - id: dest_nonnull
+    pred:
+      kind: relation
+      target: arg0
+      relation: ne
+      value: '0'
+  - id: src_nonnull
+    pred:
+      kind: relation
+      target: arg1
+      relation: ne
+      value: '0'
+  - id: n_le_dest_cap
+    pred:
+      kind: relation
+      target: arg2
+      relation: le
+      value: arg3

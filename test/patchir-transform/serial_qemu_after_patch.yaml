@@ -1,18 +1,18 @@
 apiVersion: patchestry.io/v1
 metadata:
-  name: qemu-serial-after-patch
+  name: serial-qemu-after-patch
   description: Insert behavior after qemu_target_after calls emit_after_base
   version: 1.0.0
   author: Codex
   created: '2026-04-22'
   kind: PatchSpec
 target:
-  binary: qemu-serial.elf
+  binary: serial.elf
   arch: ARM:LE:32
 libraries:
-- patches/qemu_serial_patch_library.yaml
+- patches/serial_qemu_patch_library.yaml
 patches:
-- name: qemu_serial_after_patch
+- name: serial_qemu_after_patch
   id: QEMU-SERIAL-AFTER-001
   description: Insert output after emit_after_base in qemu_target_after
   match:
@@ -22,5 +22,5 @@ patches:
     - qemu_target_after
   action:
     mode: apply_after
-    patch: qemu_serial_after_patch
+    patch: serial_qemu_after_patch
     arguments: []

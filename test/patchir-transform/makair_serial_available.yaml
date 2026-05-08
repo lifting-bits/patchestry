@@ -1,0 +1,31 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: makair-serial-available
+  description: Fix HardwareSerial::available() stash-clobber so Control frames can be assembled.
+  version: 1.0.0
+  author: Security Team
+  created: '2026-05-08'
+  kind: PatchSpec
+target:
+  binary: makair.elf
+  arch: ARM:LE:32:Cortex
+libraries:
+- patches/makair_security_patches.yaml
+patches:
+- name: makair_serial_available_replace
+  id: MAKAIR-PATCH-001
+  description: Mirror peek()'s stash-check guard so a buffered byte is not clobbered by the next available() call and the function returns the buffered count instead of always at most 1.
+  match:
+    # Itanium-ABI mangled symbol of HardwareSerial::available(). The Ghidra
+    # FunctionSerializer emits the mangled `_Z...` form whenever one exists
+    # at the function entry (see PcodeSerializer.getMangledName), so the
+    # PatchSpec matcher must spell C++ targets in mangled form.
+    name: _ZN14HardwareSerial9availableEv
+    kind: function
+  action:
+    mode: replace
+    patch: makair_serial_available_fix
+    arguments:
+    - name: self
+      source: operand
+      index: 0

@@ -23,6 +23,7 @@ host_repos_dir="$(translate_to_host_path "${script_dir}/repos")"
 PULSEOX_COMMIT="54ed8ca6bec36cc13db8f6594e3bd9941937922a"
 BLOODLIGHT_COMMIT="fcc0daef9119ab09914b0c523e7d9d93aad36ea4"
 VENTILATOR_COMMIT="c49fb21130de8732908d7a3d8eaf8915239a5735"
+MAKAIR_COMMIT="72d454dcf799b7a33e85f00aef7a2fea4ca5c547"  # tag v4.1.0
 
 # Clone/update repositories if needed
 if [ ! -d "${script_dir}/repos/pulseox-firmware" ]; then
@@ -43,6 +44,19 @@ if [ ! -d "${script_dir}/repos/bloodlight-firmware" ]; then
   git checkout "${BLOODLIGHT_COMMIT}"
   git submodule update --init --recursive
   patch -s -p1 <"${script_dir}/bloodlight-firmware-patch.diff"
+fi
+
+if [ ! -d "${script_dir}/repos/makair-firmware" ]; then
+  git clone --depth 1 https://github.com/makers-for-life/makair-firmware.git \
+    "${script_dir}/repos/makair-firmware"
+  cd "${script_dir}/repos/makair-firmware"
+  git fetch --depth=1 origin "${MAKAIR_COMMIT}"
+  git checkout "${MAKAIR_COMMIT}"
+  git submodule update --init --recursive
+  if [ -f "${script_dir}/makair-firmware-patch.diff" ]; then
+    patch -s -p1 <"${script_dir}/makair-firmware-patch.diff"
+  fi
+  cd "${script_dir}"
 fi
 
 if [ ! -d "${script_dir}/repos/ventilator" ]; then
@@ -90,6 +104,30 @@ docker run --rm \
              cp -r host/build/bloodview /output/bloodlight/bloodview && \
              cp -r host/build/fft /output/bloodlight/fft && \
              cp -r host/build/calibrate /output/bloodlight/calibrate"
+
+# Build secpump-qemu firmware (in-tree, no clone needed).
+# Uses a dedicated minimal builder image so the build works natively on
+# Linux amd64/arm64, macOS Intel, and macOS Apple Silicon (the shared
+# firmware-builder image pulls armhf cross packages that fail to install
+# on linux/arm64 hosts).
+# Use the in-container ${script_dir} for the docker BUILD context — `docker
+# build` reads the context from the CLI's filesystem and streams it to the
+# daemon, so the path must be visible inside this container (where the
+# host workspace is bind-mounted at /workspace). ${host_script_dir} is
+# only correct for daemon-side `-v` mounts (line below) where the daemon
+# itself resolves the path on the host.
+docker image inspect secpump-builder >/dev/null 2>&1 \
+  || docker build -t secpump-builder "${script_dir}/secpump-qemu"
+
+docker run --rm \
+  -v "${host_script_dir}/secpump-qemu:/work/secpump-qemu" \
+  -v "${host_output_dir}:/output" \
+  secpump-builder \
+  -c "cd secpump-qemu && \
+             make clean && \
+             make -j\$(nproc) && \
+             cp build/secpump.elf /output/secpump-qemu.elf && \
+             cp build/secpump.bin /output/secpump-qemu.bin"
 
 # Build ventilator firmware + GUI
 docker build -t ventilator-builder -f "${script_dir}/Dockerfile.ventilator" "${script_dir}"

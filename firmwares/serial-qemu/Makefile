@@ -3,9 +3,9 @@ SHELL := /bin/bash
 LLVM_PREFIX ?= /Users/artem/projects/patchestry/bin
 LD_LLD ?= /opt/homebrew/Cellar/llvm@18/18.1.8/bin/ld.lld
 BUILD_DIR := build
-TARGET := $(BUILD_DIR)/qemu-serial.elf
-MAP := $(BUILD_DIR)/qemu-serial.map
-DISASM := $(BUILD_DIR)/qemu-serial.objdump
+TARGET := $(BUILD_DIR)/serial.elf
+MAP := $(BUILD_DIR)/serial.map
+DISASM := $(BUILD_DIR)/serial.objdump
 
 CLANG := $(LLVM_PREFIX)/clang
 OBJDUMP := $(LLVM_PREFIX)/llvm-objdump

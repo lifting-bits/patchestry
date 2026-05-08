@@ -64,7 +64,7 @@ CASES: tuple[Case, ...] = (
     Case(
         name="before",
         function_name="qemu_target_before",
-        spec_name="qemu_serial_before_patch.yaml",
+        spec_name="serial_qemu_before_patch.yaml",
         expected_lines=(
             "BOOT",
             "PATCH:before",
@@ -78,7 +78,7 @@ CASES: tuple[Case, ...] = (
     Case(
         name="after",
         function_name="qemu_target_after",
-        spec_name="qemu_serial_after_patch.yaml",
+        spec_name="serial_qemu_after_patch.yaml",
         expected_lines=(
             "BOOT",
             "BASE:before",
@@ -92,7 +92,7 @@ CASES: tuple[Case, ...] = (
     Case(
         name="replace",
         function_name="qemu_target_replace",
-        spec_name="qemu_serial_replace_patch.yaml",
+        spec_name="serial_qemu_replace_patch.yaml",
         expected_lines=(
             "BOOT",
             "BASE:before",
@@ -105,7 +105,7 @@ CASES: tuple[Case, ...] = (
     Case(
         name="contract",
         function_name="qemu_target_contract",
-        spec_name="qemu_serial_entry_contract.yaml",
+        spec_name="serial_qemu_entry_contract.yaml",
         expected_lines=(
             "BOOT",
             "BASE:before",
@@ -487,8 +487,8 @@ def main() -> int:
         else (repo_root / "test" / "qemu-firmware-runtime" / "fixtures").resolve()
     )
 
-    firmware_dir = repo_root / "firmwares" / "qemu-serial"
-    firmware_elf = firmware_dir / "build" / "qemu-serial.elf"
+    firmware_dir = repo_root / "firmwares" / "serial-qemu"
+    firmware_elf = firmware_dir / "build" / "serial.elf"
     if not firmware_elf.exists():
         raise RuntimeError(f"Missing firmware ELF at {firmware_elf}. Run the firmware build first.")
 

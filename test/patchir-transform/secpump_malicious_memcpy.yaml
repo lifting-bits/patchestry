@@ -1,0 +1,36 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: secpump-malicious-memcpy
+  description: Replace MaliciousMemCpy with a bounded, loud-failing variant.
+  version: 1.0.0
+  author: Security Team
+  created: '2026-05-07'
+  kind: PatchSpec
+target:
+  binary: secpump.elf
+  arch: ARM:LE:32:Cortex
+libraries:
+- patches/secpump_security_patches.yaml
+patches:
+- name: secpump_malicious_memcpy_replace
+  id: SECPUMP-PATCH-001
+  description: Forward dest/src/n; inject the caller-known dest capacity (4 bytes for the VulnBuffer call site).
+  match:
+    name: MaliciousMemCpy
+    kind: function
+  action:
+    mode: replace
+    patch: secpump_bounded_malicious_memcpy
+    arguments:
+    - name: dest
+      source: operand
+      index: 0
+    - name: src
+      source: operand
+      index: 1
+    - name: n
+      source: operand
+      index: 2
+    - name: dest_cap
+      source: constant
+      value: 4

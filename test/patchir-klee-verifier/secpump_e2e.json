@@ -1,0 +1,105 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t_s1 >> /dev/null 2>&1
+// RUN: %patchir-transform %t_s1.cir --spec %S/secpump_klee_spec.yaml -o %t_s2.cir
+// RUN: %patchir-cir2llvm %t_s2.cir -S -o %t_s3.ll
+// RUN: %patchir-klee-verifier %t_s3.ll --target-function memcpy_caller -S -o %t_harness.ll
+// RUN: %file-check -check-prefix=KLEE %s --input-file %t_harness.ll
+
+// SecPump-QEMU end-to-end smoke test for the patchir-klee-verifier chain.
+// Pipeline: synthetic JSON -> patchir-decomp -> patchir-transform (replaces the
+// MaliciousMemCpy call with patch__replace__MaliciousMemCpy and attaches the
+// dest/src non-null preconditions from secpump_klee_spec.yaml) ->
+// patchir-cir2llvm -> patchir-klee-verifier.
+//
+// The synthesized memcpy_caller stands in for ProcessVulnReq's call site,
+// which currently fails to round-trip patchir-decomp's CIR lowering on the
+// secpump ELF (lifter regression unrelated to this pipeline). Isolating the
+// call site here keeps the verifier-stage smoke test independent of that
+// upstream issue.
+
+// Patched call site: precondition assumes wrap the contracted call, the patch
+// body is materialized (with the loud-failure abort branch), and main()
+// drives memcpy_caller with klee-symbolic inputs.
+//
+// KLEE-LABEL: define void @memcpy_caller(
+// KLEE:       call void @klee_assume(
+// KLEE:       call void @klee_assume(
+// KLEE:       call void @patch__replace__MaliciousMemCpy(
+// KLEE:       define {{.*}} @patch__replace__MaliciousMemCpy(
+// KLEE-LABEL: define i32 @main()
+// KLEE:       call void @__klee_init_globals(
+// KLEE:       call void @memcpy_caller(
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "memcpy_caller",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "inputs": []
+            }
+          },
+          "ordered_operations": ["entry.exit"]
+        },
+        "ram:10000004:0:basic": {
+          "operations": {
+            "ram:10000004:100:0": {
+              "mnemonic": "CALL",
+              "type": "t_void",
+              "output": null,
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000001",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                { "type": "t_voidp",  "kind": "constant", "value": 0 },
+                { "type": "t_voidp",  "kind": "constant", "value": 0 },
+                { "type": "t_size_t", "kind": "constant", "value": 8 }
+              ]
+            },
+            "ram:10000008:101:0": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:10000004:100:0",
+            "ram:10000008:101:0"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "MaliciousMemCpy",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["t_voidp", "t_voidp", "t_size_t"]
+      }
+    }
+  },
+  "types": {
+    "t_void":   { "name": "void",       "size": 0, "kind": "void" },
+    "t_voidp":  { "kind": "pointer", "size": 4, "element_type": "t_void" },
+    "t_size_t": { "name": "unsigned int", "size": 4, "kind": "integer", "is_signed": false }
+  },
+  "globals": {}
+}

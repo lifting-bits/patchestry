@@ -145,7 +145,7 @@ ln -sf "$llvm_prefix/clang" "$patcherex_shim_dir/clang-19"
 ln -sf "$ld_lld" "$patcherex_shim_dir/ld.lld-19"
 export PATH="$patcherex_shim_dir:$PATH"
 
-make -C "$repo_root/firmwares/qemu-serial" clean all \
+make -C "$repo_root/firmwares/serial-qemu" clean all \
   LLVM_PREFIX="$llvm_prefix" \
   LD_LLD="$ld_lld"
 
