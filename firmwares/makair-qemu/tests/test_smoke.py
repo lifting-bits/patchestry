@@ -42,14 +42,6 @@ def main() -> int:
         print(f"makair.elf not found at {ELF}. Run 'make' first.", file=sys.stderr)
         return 2
 
-    proc = subprocess.run(
-        QEMU_CMD,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=3.0,
-        check=False,
-    ) if False else None  # no-op branch; subprocess.run is below.
-
     # Run with a 3 s timeout — the firmware emits BootMessage immediately
     # plus one DataSnapshot per second, so 3 s comfortably covers the bar.
     try:
