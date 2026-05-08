@@ -536,9 +536,11 @@ namespace {
         // DICompileUnit/DISubprogram, so DILocation metadata is not produced
         // and inst.getDebugLoc() returns null on every instruction. For
         // metadata entries that came from a call-shaped op (cir.call carries
-        // a "callee" symbol ref), correlate by callee name only when there is
-        // exactly one unmatched metadata entry and one un-attached LLVM call
-        // for that callee.
+        // a "callee" symbol ref), correlate by callee name. When the number
+        // of unmatched metadata entries for a callee equals the number of
+        // un-attached LLVM call sites to that callee, pair them in walk
+        // order: CIR -> LLVM lowering preserves call op ordering, so the
+        // i-th MLIR call corresponds to the i-th LLVM call.
         struct CallCandidate
         {
             llvm::CallBase *call_inst;
@@ -550,10 +552,11 @@ namespace {
                 || inst.hasMetadata("mlir_loc");
         };
 
-        std::map< std::string, unsigned > unmatched_metadata_count_by_callee;
+        std::map< std::string, std::vector< const OperationMetadata * > >
+            unmatched_metadata_by_callee;
         for (const auto &metadata : metadata_list) {
             if (!attached_entries.count(&metadata) && !metadata.callee_name.empty()) {
-                ++unmatched_metadata_count_by_callee[metadata.callee_name];
+                unmatched_metadata_by_callee[metadata.callee_name].push_back(&metadata);
             }
         }
 
@@ -576,32 +579,30 @@ namespace {
             }
         }
 
-        for (const auto &metadata : metadata_list) {
-            if (attached_entries.count(&metadata) || metadata.callee_name.empty()) { continue; }
-
-            auto candidates_it = unattached_calls_by_callee.find(metadata.callee_name);
+        for (auto &[callee_name, mds] : unmatched_metadata_by_callee) {
+            auto candidates_it = unattached_calls_by_callee.find(callee_name);
             if (candidates_it == unattached_calls_by_callee.end()
                 || candidates_it->second.empty())
             {
-                LOG(WARNING) << "Could not place metadata for callee @"
-                             << metadata.callee_name << " (no matching un-attached call site)\n";
+                LOG(WARNING) << "Could not place metadata for callee @" << callee_name
+                             << " (no matching un-attached call site)\n";
                 continue;
             }
 
-            const auto metadata_count = unmatched_metadata_count_by_callee[metadata.callee_name];
-            auto &candidates          = candidates_it->second;
-            if (metadata_count != 1 || candidates.size() != 1) {
-                LOG(WARNING) << "Could not place metadata for callee @" << metadata.callee_name
-                             << " (ambiguous callee-name fallback: metadata count: "
-                             << metadata_count << ", call-site count: " << candidates.size()
+            auto &candidates = candidates_it->second;
+            if (mds.size() != candidates.size()) {
+                LOG(WARNING) << "Could not place metadata for callee @" << callee_name
+                             << " (mismatched callee-name fallback: metadata count: "
+                             << mds.size() << ", call-site count: " << candidates.size()
                              << ")\n";
                 continue;
             }
 
-            auto &candidate = candidates.front();
-            std::string site_desc =
-                "callee=@" + metadata.callee_name + " in @" + candidate.function_name;
-            attach_metadata(*candidate.call_inst, &metadata, "callee-name", site_desc);
+            for (size_t i = 0; i < mds.size(); ++i) {
+                std::string site_desc =
+                    "callee=@" + callee_name + " in @" + candidates[i].function_name;
+                attach_metadata(*candidates[i].call_inst, mds[i], "callee-name", site_desc);
+            }
         }
 
         LOG(INFO) << "Embedded metadata on " << matched_count
