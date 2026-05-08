@@ -44,8 +44,10 @@ RUN git fetch --depth=1 origin $PULSEOX_COMMIT && \
 COPY firmwares/pulseox-firmware-patch.diff .
 RUN patch -s -p1 < pulseox-firmware-patch.diff && \
     mkdir build && \
-    cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake && \
-    cmake --build build -j$(`nproc`) && \
+    cmake -S . -B build \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+        -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/arm-none-eabi.cmake && \
+    cmake --build build -j"$(nproc)" && \
     cp build/src/firmware.elf /home/user/pulseox-firmware.elf
 # if we end up needing the fw build environment to compare to later, 
 # then undo this
