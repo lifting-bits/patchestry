@@ -294,10 +294,3 @@ lift produces clean output suitable for KLEE harnessing. Suggested
   pass `-semihosting -semihosting-config enable=on,target=native`. If you
   invoke `qemu-system-arm` by hand without that flag, `Q` will trigger a
   HardFault instead of exiting.
-- **Two Docker builder images coexist.** secpump uses the dedicated minimal
-  `secpump-builder` image (this directory's `Dockerfile`); the other
-  firmwares (pulseox, bloodlight, ventilator) still use the shared
-  `firmware-builder` image (`firmwares/Dockerfile`). They are not
-  interchangeable.
-- **No CI / LIT integration yet.** Tests run locally via `./run.sh test`
-  (or `make test`) but are not wired into `.github/workflows/ci.yml`.
