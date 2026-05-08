@@ -259,12 +259,14 @@ namespace patchestry::passes {
             auto &inv_target_opts  = invocation.getTargetOpts();
             inv_target_opts.Triple = llvm::sys::getDefaultTargetTriple();
 
-            // install custom diagnostic client
-            auto diag_opts   = new clang::DiagnosticOptions();
+            // install custom diagnostic client. Under LLVM 22, DiagnosticsEngine
+            // stores DiagnosticOptions by reference, so the options must outlive
+            // the engine. Use the DiagnosticOptions already owned by the
+            // Invocation (held there via shared_ptr) instead of leaking a raw new.
             auto diag_ids    = new clang::DiagnosticIDs();
             auto diagnostics = new clang::DiagnosticsEngine(
-                llvm::IntrusiveRefCntPtr< clang::DiagnosticIDs >(diag_ids), *diag_opts,
-                new patchestry::DiagnosticClient(), true
+                llvm::IntrusiveRefCntPtr< clang::DiagnosticIDs >(diag_ids),
+                ci->getDiagnosticOpts(), new patchestry::DiagnosticClient(), true
             );
             ci->setDiagnostics(diagnostics);
             if (!ci->hasDiagnostics()) {
