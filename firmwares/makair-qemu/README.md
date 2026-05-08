@@ -62,24 +62,41 @@ CRC is IEEE 802.3 CRC-32 (poly `0xEDB88320`). The codec module under
 `tests/_makair_codec.py` encodes/decodes both directions — if upstream
 changes framing in a future MakAir release, only that file needs to follow.
 
-## v0 scope (what runs today)
+## v1 scope (what runs today)
 
 **Telemetry-out (firmware → host):**
 
 - ✅ `BootMessage` — emitted on boot
 - ✅ `DataSnapshot` — periodic (cadence depends on QEMU SysTick / wall clock; see Sharp edges)
-- ⏸ `MachineStateSnapshot`, `AlarmTrap`, `EolSnapshot`, `ControlAck`, `FatalError`, `StoppedMessage` — sender bodies compile in (telemetry.cpp is in the link), but the polling loop does not yet drive them. Adding them is straightforward — call the right `send*` helper from `src/main.cpp` with synthetic state.
+- ✅ Sender bodies for the remaining types (`MachineStateSnapshot`,
+  `AlarmTrap`, `EolSnapshot`, `ControlAck`, `FatalError`, `StoppedMessage`)
+  compile in via the upstream `telemetry.cpp` and are reachable from the
+  upstream `serial_control.cpp` dispatch — adding them to the polling
+  loop in `src/main.cpp` is now a one-liner per message.
 
 **Control-in (host → firmware):**
 
-- ✅ `Heartbeat` (CRC-validated, footer-validated, drop-on-mismatch) via the v0 loop in `src/main.cpp::serial_control_loop_v0`.
-- ⏸ `VentilationMode`, `PEEP`, `PIP`, `CyclesPerMinute`, … (~30 settings) — gated on shimming the upstream `mainController` / `activationController` / `alarmController` / `eolTest` global instances so the upstream `srcs/serial_control.cpp` can join the link.
+- ✅ Upstream `srcs/serial_control.cpp` is in the link. All 30+ settings
+  (`VentilationMode`, `PEEP`, `PIP`, `CyclesPerMinute`, trigger params,
+  alarm thresholds, RPi heartbeat, …) parse + dispatch through the real
+  `mainController` / `alarmController` / `activationController` / `eolTest`
+  global instances. The controller bodies (upstream `main_controller.cpp`,
+  `alarm_controller.cpp`, `activation.cpp`) are linked verbatim; only the
+  hardware-touching layers (HardwareTimer, blower, valve PWM, screen,
+  EEPROM) are stubbed via `inc/Arduino.h` + `src/arduino_shim.cpp` +
+  `src/controller_stubs.cpp`.
+- ✅ Heartbeat fast path remains in `src/main.cpp::serial_control_loop_v0`
+  for the smoke-test scenario where the heavier upstream parser is
+  unavailable.
 
 **Negative paths:**
 
 - ✅ Bad-CRC Heartbeat → silent drop, stream stays alive
-- ⏸ Out-of-range setting → `ControlAck` with error code
-- ⏸ Heartbeat timeout → `AlarmTrap` "host disconnected"
+- ✅ Out-of-range setting → upstream parser path delivers the appropriate
+  `ControlAck` with the error code
+- ⏸ Heartbeat timeout → `AlarmTrap` "host disconnected" — needs the
+  watchdog cycle that the QEMU loop hasn't wired yet (rpi_watchdog.cpp
+  is in the link; just needs a periodic `update()` call)
 
 ## Patch + verify (placeholder)
 

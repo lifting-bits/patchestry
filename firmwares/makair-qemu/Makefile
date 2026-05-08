@@ -32,12 +32,20 @@ SHIM_CXX_SRCS  := $(wildcard src/*.cpp)
 # without dragging in HardwareTimer / blower / valve / screen / EEPROM. This
 # list is the surgical seam between "verbatim upstream" and "QEMU shim".
 #
-# v0 scope: just telemetry.cpp (the firmware->host wire). Upstream
-# serial_control.cpp transitively references mainController/eolTest globals
-# whose stubs aren't landed yet; the QEMU loop handles Heartbeat itself in
-# src/main.cpp::serial_control_loop_v0() until those stubs ship.
+# v1: telemetry.cpp + serial_control.cpp join the link, alongside the
+# controller / activation / alarm-controller / eol-test / rpi-watchdog
+# layers needed to satisfy serial_control's global-instance method calls.
+# Their hardware-touching dependencies (blower, pressure_valve, screen,
+# eeprom, mass_flow_meter, ...) get satisfied by stub TUs under src/.
 UPSTREAM_CXX_SRCS := \
-    $(MAKAIR_SRC)/srcs/telemetry.cpp
+    $(MAKAIR_SRC)/srcs/telemetry.cpp \
+    $(MAKAIR_SRC)/srcs/serial_control.cpp \
+    $(MAKAIR_SRC)/srcs/rpi_watchdog.cpp \
+    $(MAKAIR_SRC)/srcs/alarm.cpp \
+    $(MAKAIR_SRC)/srcs/alarm_controller.cpp \
+    $(MAKAIR_SRC)/srcs/activation.cpp \
+    $(MAKAIR_SRC)/srcs/main_controller.cpp \
+    $(MAKAIR_SRC)/srcs/pressure_utl.cpp
 
 C_OBJS    := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SHIM_C_SRCS))
 CXX_OBJS  := $(patsubst src/%.cpp,$(BUILD_DIR)/%.o,$(SHIM_CXX_SRCS))
@@ -61,8 +69,6 @@ CPPFLAGS  := -Iinc \
              -I$(MAKAIR_SRC)/srcs \
              -I$(MAKAIR_SRC)/includes \
              -DMAKAIR_QEMU=1 \
-             -DSIMULATOR=1 \
-             -DPROVIDE_BLOWER_STUB=1 \
              -D__STDC_FORMAT_MACROS
 
 CFLAGS    := $(ARCHFLAGS) $(OPTFLAGS) $(WARNFLAGS) -std=gnu11 -g \
