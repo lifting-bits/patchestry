@@ -23,6 +23,7 @@ host_repos_dir="$(translate_to_host_path "${script_dir}/repos")"
 PULSEOX_COMMIT="54ed8ca6bec36cc13db8f6594e3bd9941937922a"
 BLOODLIGHT_COMMIT="fcc0daef9119ab09914b0c523e7d9d93aad36ea4"
 VENTILATOR_COMMIT="c49fb21130de8732908d7a3d8eaf8915239a5735"
+MAKAIR_COMMIT="72d454dcf799b7a33e85f00aef7a2fea4ca5c547"  # tag v4.1.0
 
 # Clone/update repositories if needed
 if [ ! -d "${script_dir}/repos/pulseox-firmware" ]; then
@@ -43,6 +44,19 @@ if [ ! -d "${script_dir}/repos/bloodlight-firmware" ]; then
   git checkout "${BLOODLIGHT_COMMIT}"
   git submodule update --init --recursive
   patch -s -p1 <"${script_dir}/bloodlight-firmware-patch.diff"
+fi
+
+if [ ! -d "${script_dir}/repos/makair-firmware" ]; then
+  git clone --depth 1 https://github.com/makers-for-life/makair-firmware.git \
+    "${script_dir}/repos/makair-firmware"
+  cd "${script_dir}/repos/makair-firmware"
+  git fetch --depth=1 origin "${MAKAIR_COMMIT}"
+  git checkout "${MAKAIR_COMMIT}"
+  git submodule update --init --recursive
+  if [ -f "${script_dir}/makair-firmware-patch.diff" ]; then
+    patch -s -p1 <"${script_dir}/makair-firmware-patch.diff"
+  fi
+  cd "${script_dir}"
 fi
 
 if [ ! -d "${script_dir}/repos/ventilator" ]; then
