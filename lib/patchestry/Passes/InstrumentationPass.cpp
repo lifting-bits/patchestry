@@ -1417,8 +1417,43 @@ namespace patchestry::passes {
         // TODO(llvm22): cir::ExtraFuncAttributesAttr was removed in upstream MLIR
         // CIR (LLVM 22). Restore an equivalent mechanism for propagating extra
         // call-site attributes once the upstream replacement is identified.
-        (void) instr_call_op;
-        (void) target_op;
+        //
+        // Until that lands, surface every attribute we are silently failing to
+        // propagate so the gap is visible at test time rather than as an
+        // ABI/semantic mismatch baked into the patched binary.
+        if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(target_op)) {
+            auto callee_name =
+                instr_call_op.getCallee().has_value() ? instr_call_op.getCallee()->str() : std::string("<indirect>");
+            auto report_drop = [&](const std::string &what) {
+                LOG(ERROR) << "Instrumentation call to @" << callee_name << " drops "
+                           << what
+                           << " carried by the original cir.call (TODO(llvm22): "
+                              "restore ExtraFuncAttributesAttr replacement)\n";
+            };
+
+            if (orig_call_op.getNothrow()) {
+                report_drop("`nothrow`");
+            }
+            if (auto se = orig_call_op.getSideEffectAttr();
+                se && se.getValue() != cir::SideEffect::All)
+            {
+                report_drop(
+                    "non-default `side_effect = "
+                    + cir::stringifySideEffect(se.getValue()).str() + "`"
+                );
+            }
+            // Discardable attrs are anything beyond the inherent (callee /
+            // nothrow / side_effect) names. Skip our own markers; anything
+            // else is something the old extra_attrs mechanism would have
+            // copied verbatim.
+            for (const auto &named : orig_call_op->getDiscardableAttrs()) {
+                llvm::StringRef name = named.getName().getValue();
+                if (name.starts_with("patchestry_") || name == "contract.static") {
+                    continue;
+                }
+                report_drop("discardable attribute `" + name.str() + "`");
+            }
+        }
 
         // Add operation-specific attributes for debugging
         instr_call_op->setAttr(
