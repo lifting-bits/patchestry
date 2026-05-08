@@ -90,6 +90,18 @@ def test_boot() -> None:
           f"fw={bm.fw_version!r})")
 
 
+def test_full_telemetry_surface() -> None:
+    """All eight Telemetry tags emitted by the polling loop must appear in
+    the first 2 s of UART output."""
+    out = _run_qemu_with_stdin(b"", 2.5)
+    fs = _frames(out)
+    seen_tags = {bytes(f.tag) for f in fs}
+    expected = {b"B:", b"D:", b"S:", b"O:", b"T:", b"A:", b"L:", b"E:"}
+    missing = expected - seen_tags
+    assert not missing, f"missing Telemetry tags: {missing}; got {seen_tags}"
+    print(f"  test_full_telemetry_surface: {len(seen_tags)}/{len(expected)} tags")
+
+
 def test_data_snapshot_streaming() -> None:
     """At least one DataSnapshot must reach the host before the wall
     timeout. (QEMU mps2-an386's SysTick / wall-clock relationship under
@@ -134,6 +146,7 @@ def main() -> int:
 
     tests = [
         test_boot,
+        test_full_telemetry_surface,
         test_data_snapshot_streaming,
         test_heartbeat_accepted,
         test_heartbeat_bad_crc_dropped,

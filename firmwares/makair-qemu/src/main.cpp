@@ -14,22 +14,56 @@
 
 #include "Arduino.h"
 #include "CRC32.h"
-#include "../includes/cycle.h"   // CyclePhases enum used by sendDataSnapshot
+#include "../includes/cycle.h"             // CyclePhases, VentilationModes
+#include "../includes/alarm.h"             // AlarmPriority
+#include "../includes/alarm_controller.h"  // ALARMS_SIZE
+#include "../includes/end_of_line_test.h"  // TestStep / TestState enums
 
-// Upstream telemetry API — sender prototypes the QEMU loop calls directly.
-// The function bodies live in $(MAKAIR_SRC)/srcs/telemetry.cpp; the build
-// system pulls that .cpp into the link.
+// Upstream telemetry API — full sender list. Bodies live in
+// $(MAKAIR_SRC)/srcs/telemetry.cpp (linked verbatim).
 extern void initTelemetry(void);
 extern void sendBootMessage(void);
-extern void sendDataSnapshot(uint16_t centileValue,
-                             int16_t  pressureValue,
-                             CyclePhases phase,
-                             uint8_t  blowerValvePosition,
-                             uint8_t  patientValvePosition,
-                             uint8_t  blowerRpm,
-                             uint8_t  batteryLevel,
-                             int16_t  inspiratoryFlowValue,
-                             int16_t  expiratoryFlowValue);
+extern void sendDataSnapshot(uint16_t, int16_t, CyclePhases,
+                             uint8_t, uint8_t, uint8_t, uint8_t,
+                             int16_t, int16_t);
+extern void sendStoppedMessage(uint8_t, uint8_t, uint8_t, uint8_t, uint8_t,
+                               bool, uint8_t, bool, uint8_t,
+                               VentilationModes,
+                               uint8_t, uint8_t, uint16_t, uint16_t,
+                               uint8_t, uint8_t, uint8_t, uint8_t,
+                               uint8_t, uint8_t,
+                               uint16_t, uint16_t, uint16_t, uint16_t, uint16_t,
+                               uint8_t, uint16_t, uint16_t,
+                               uint8_t [ALARMS_SIZE], uint16_t,
+                               uint8_t, uint8_t, uint16_t);
+extern void sendMachineStateSnapshot(uint32_t, uint8_t, uint8_t, uint8_t,
+                                     uint8_t, uint16_t, uint16_t, uint16_t,
+                                     uint8_t [ALARMS_SIZE],
+                                     uint16_t, uint8_t, bool, uint8_t,
+                                     uint8_t, bool, uint8_t,
+                                     VentilationModes,
+                                     uint8_t, uint8_t, uint16_t, uint16_t,
+                                     uint8_t, uint8_t, uint8_t, uint8_t,
+                                     uint8_t, uint8_t,
+                                     uint16_t, uint16_t, uint16_t,
+                                     uint16_t, uint16_t, uint8_t,
+                                     uint16_t, uint16_t, uint16_t,
+                                     uint16_t, uint8_t, uint8_t, uint16_t);
+extern void sendAlarmTrap(uint16_t, int16_t, CyclePhases, uint32_t,
+                          uint8_t, AlarmPriority, bool,
+                          uint32_t, uint32_t, uint32_t);
+extern void sendControlAck(uint8_t, uint16_t);
+extern void sendWatchdogRestartFatalError(void);
+extern void sendCalibrationFatalError(int16_t, int16_t, int16_t,
+                                      int16_t, int16_t);
+extern void sendBatteryDeeplyDischargedFatalError(uint16_t);
+extern void sendMassFlowMeterFatalError(void);
+extern void sendInconsistentPressureFatalError(uint16_t);
+extern void sendEolTestSnapshot(TestStep, TestState, char[]);
+
+// rpiWatchdog is a global instance defined in upstream rpi_watchdog.cpp.
+class RpiWatchdog;
+extern class RpiWatchdog rpiWatchdog;
 
 // Semihosting exit so test scripts can quit QEMU cleanly when sending 'Q'.
 static inline void semihosting_exit(int code) {
@@ -91,23 +125,48 @@ extern "C" int main(void) {
     initTelemetry();
     sendBootMessage();
 
-    uint32_t next_snapshot = millis() + 1000u;
+    uint32_t next_tick = millis() + 1000u;
+    uint32_t cycle = 0;
+    uint8_t  alarm_codes[ALARMS_SIZE] = {0};
+    char     eol_msg[] = "OK";
+
     while (true) {
         serial_control_loop_v0();
 
-        // Periodic DataSnapshot every 1 s so the host harness has something
-        // to lock onto. Synthetic values stand in for real ADC readings.
-        if ((int32_t)(millis() - next_snapshot) >= 0) {
-            next_snapshot += 1000u;
-            sendDataSnapshot(/*centile=*/        0,
-                             /*pressure=*/      100,
-                             /*phase=*/         CyclePhases::INHALATION,
-                             /*blowerValve=*/    50,
-                             /*patientValve=*/    0,
-                             /*blowerRpm=*/     120,
-                             /*battery=*/        80,
-                             /*inspFlow=*/      500,
-                             /*expFlow=*/      -100);
+        // Periodic burst once per tick: cycle through every Telemetry sender
+        // so a host harness can lock onto each frame type within a few
+        // seconds. Synthetic values stand in for real sensor readings.
+        if ((int32_t)(millis() - next_tick) >= 0) {
+            next_tick += 1000u;
+            cycle++;
+
+            sendDataSnapshot(0, 100, CyclePhases::INHALATION,
+                             50, 0, 120, 80, 500, -100);
+            sendMachineStateSnapshot(cycle, 65, 30, 5, 20, 6500, 3000, 500,
+                                     alarm_codes, 600, 50, true, 2, 20,
+                                     false, 25, VentilationModes::PC_CMV,
+                                     5, 5, 200, 3000, 30, 60, 30, 60,
+                                     8, 35, 600, 200, 800, 100, 50, 60,
+                                     1500, 1200, 100, 7400, 175, 0, 700);
+            sendControlAck(/*setting=*/1, /*value=*/0);
+            sendStoppedMessage(65, 30, 5, 20, 50, true, 2, false, 25,
+                               VentilationModes::PC_CMV,
+                               5, 5, 200, 3000, 30, 60, 30, 60, 8, 35,
+                               600, 200, 800, 100, 50, 60, 1500, 7400,
+                               alarm_codes, 175, 0, 0, 700);
+            sendAlarmTrap(0, 100, CyclePhases::INHALATION, cycle,
+                          /*alarmCode=*/12, AlarmPriority::ALARM_LOW,
+                          /*triggered=*/true, /*expected=*/100,
+                          /*measured=*/200, /*cyclesSince=*/0);
+            sendEolTestSnapshot(TestStep::START, TestState::STATE_IN_PROGRESS,
+                                eol_msg);
+            // One fatal-error variant per tick so the host sees them all.
+            switch (cycle % 4) {
+            case 0: sendWatchdogRestartFatalError(); break;
+            case 1: sendCalibrationFatalError(0, 0, 0, 0, 0); break;
+            case 2: sendBatteryDeeplyDischargedFatalError(7000); break;
+            case 3: sendMassFlowMeterFatalError(); break;
+            }
         }
     }
     semihosting_exit(0);
