@@ -110,8 +110,14 @@ docker run --rm \
 # Linux amd64/arm64, macOS Intel, and macOS Apple Silicon (the shared
 # firmware-builder image pulls armhf cross packages that fail to install
 # on linux/arm64 hosts).
+# Use the in-container ${script_dir} for the docker BUILD context — `docker
+# build` reads the context from the CLI's filesystem and streams it to the
+# daemon, so the path must be visible inside this container (where the
+# host workspace is bind-mounted at /workspace). ${host_script_dir} is
+# only correct for daemon-side `-v` mounts (line below) where the daemon
+# itself resolves the path on the host.
 docker image inspect secpump-builder >/dev/null 2>&1 \
-  || docker build -t secpump-builder "${host_script_dir}/secpump-qemu"
+  || docker build -t secpump-builder "${script_dir}/secpump-qemu"
 
 docker run --rm \
   -v "${host_script_dir}/secpump-qemu:/work/secpump-qemu" \
