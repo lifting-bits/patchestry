@@ -16,7 +16,11 @@ patches:
   id: MAKAIR-PATCH-001
   description: Mirror peek()'s stash-check guard so a buffered byte is not clobbered by the next available() call and the function returns the buffered count instead of always at most 1.
   match:
-    name: HardwareSerial::available
+    # Itanium-ABI mangled symbol of HardwareSerial::available(). The Ghidra
+    # FunctionSerializer emits the mangled `_Z...` form whenever one exists
+    # at the function entry (see PcodeSerializer.getMangledName), so the
+    # PatchSpec matcher must spell C++ targets in mangled form.
+    name: _ZN14HardwareSerial9availableEv
     kind: function
   action:
     mode: replace
