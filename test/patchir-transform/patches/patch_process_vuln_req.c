@@ -35,7 +35,12 @@ void patch__replace__ProcessVulnReq(uint8_t *att_data) {
     static uint16_t Attack_It = 0;
 
     for (int i = 0; i < 16; ++i, ++Attack_It) {
-        if (Attack_It >= sizeof(AttackBuffer)) {
+        // Explicit cast: under LLVM 22 the CIR frontend skips the usual
+        // integer promotion for `uint16_t >= sizeof(...)` and emits a
+        // `cir.cmp` whose operands have differing types, which fails
+        // verification. Casting both sides to a common width keeps the
+        // semantics identical and survives the new lowering.
+        if ((unsigned int)Attack_It >= (unsigned int)sizeof(AttackBuffer)) {
             secpump_assert_fail();
         }
         AttackBuffer[Attack_It] = att_data[i];

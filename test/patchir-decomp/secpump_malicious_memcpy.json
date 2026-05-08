@@ -6,7 +6,7 @@
 // SecPump-QEMU: lift MaliciousMemCpy from the firmware ELF and confirm the
 // unbounded copy loop survives structuring.
 
-// CIR-LABEL: cir.func @MaliciousMemCpy(
+// CIR-LABEL: cir.func {{.*}}@MaliciousMemCpy(
 // CIR-SAME:    %arg0: !cir.ptr<!void>{{[^,]*}}, %arg1: !cir.ptr<!void>{{[^,]*}}, %arg2: !u32i
 // CIR:         cir.scope
 // CIR:         cir.while
