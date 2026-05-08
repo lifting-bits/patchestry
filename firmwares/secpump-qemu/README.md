@@ -94,6 +94,87 @@ The script exercises the PID path and then sends 7 `V:41…41` lines. The 7th
 prints `Buffer overflow:`; the firmware then diverges (returns to
 `0x41414141`) and QEMU is killed. That divergence is the proof.
 
+## End-to-end patchestry demo
+
+`scripts/demo_secpump.sh` chains every patchestry stage against this firmware
+to produce a patched ELF that refuses the seeded overflow. The two
+vulnerabilities targeted are:
+
+| Function | Location | Patch |
+|---|---|---|
+| `MaliciousMemCpy` | `src/PumpService.c:423` | Replace with a bounded variant (`patch__replace__MaliciousMemCpy`) that aborts loudly on `n > dest_cap`. |
+| `ProcessVulnReq` | `src/PumpService.c:405` | Replace with a self-contained safe accumulator (`patch__replace__ProcessVulnReq`) that never reaches the 4-byte stack target. |
+
+Both patches and the static contracts live alongside the existing patchestry
+fixtures and are reused by both the demo script and the LIT regression suite:
+
+- `test/patchir-transform/patches/patch_malicious_memcpy.c` (patch body)
+- `test/patchir-transform/patches/patch_process_vuln_req.c` (patch body)
+- `test/patchir-transform/patches/secpump_security_patches.yaml` (PatchLibrary)
+- `test/patchir-transform/secpump_malicious_memcpy.yaml`, `secpump_process_vuln_req.yaml` (PatchSpecs)
+- `test/patchir-klee-verifier/secpump_klee_patches.yaml`, `secpump_klee_spec.yaml` (KLEE contract spec)
+
+### Pipeline stages
+
+```
+ELF -> Ghidra headless         -> P-Code JSON
+JSON -> patchir-decomp          -> CIR
+CIR  -> patchir-transform       -> patched CIR + contract metadata
+CIR  -> patchir-cir2llvm        -> LLVM IR
+LL   -> patchir-klee-verifier   -> KLEE harness
+.bc  -> run-klee.sh             -> KLEE state dirs (PASS = zero *.err)
+LL + ELF + Patcherex2           -> secpump-patched.elf
+```
+
+### Quick start
+
+```sh
+# Stop after KLEE verification (default; no Patcherex2 dependency):
+make demo
+# Same, explicit:
+./scripts/demo_secpump.sh --stage=klee
+
+# Full chain incl. ELF instrumentation (requires ../Patcherex2/patche_binary.sh):
+./scripts/demo_secpump.sh --stage=all --with-patcherex
+make test-patched
+
+# Stage flags (cumulative): build < decomp < cir < patch < lower < klee < patche < verify
+./scripts/demo_secpump.sh --stage=lower         # produces patched .ll, no KLEE
+./scripts/demo_secpump.sh --stage=klee --skip-klee  # generate harness, skip KLEE invocation
+```
+
+### Stage-level unit tests (LIT)
+
+The same patch/contract YAMLs feed six LIT fixtures so the existing
+`check-patchestry` target gains coverage of each pipeline stage:
+
+| Stage | Fixture |
+|---|---|
+| patchir-decomp | `test/patchir-decomp/secpump_malicious_memcpy.json`, `secpump_attribute_modified_cb.json` |
+| patchir-transform | `test/patchir-transform/secpump_malicious_memcpy.json`, `secpump_attribute_modified_cb.json` |
+| patchir-klee-verifier | `test/patchir-klee-verifier/secpump_malicious_memcpy.ll`, `secpump_e2e.json` |
+
+Run them via:
+
+```sh
+lit ./builds/default/test -D BUILD_TYPE=Release --filter=secpump -v
+```
+
+### Sharp edges
+
+- **`ProcessVulnReq` lift** — `patchir-decomp -emit-cir` currently asserts on
+  ProcessVulnReq's specific CFG shape (post-commit `ec09a26`); the demo script
+  and LIT tests route around this by lifting `Attribute_Modified_CB` (the
+  caller) instead. The patch C body is self-contained, so the pipeline still
+  exercises the full replace flow.
+- **KLEE harness** — KLEE inside the `patchestry-klee-ubuntu-22.04-llvm-20`
+  container has been observed to segfault in `RaiseAsmPass::runOnInstruction`
+  on the secpump harness shape. The demo loud-fails when KLEE returns
+  non-zero; pass `--skip-klee` to bypass and inspect
+  `build/demo/klee_out/klee-last/messages.txt` if you want to repro.
+- **Patcherex2** — binary patching is gated on `--with-patcherex` /
+  `$PATCHEREX_BIN`, defaults to `../Patcherex2/patche_binary.sh`.
+
 ## Tests
 
 Two pexpect-driven scripts cover the firmware. They share QEMU but run in

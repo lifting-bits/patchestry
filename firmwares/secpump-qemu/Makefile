@@ -55,7 +55,7 @@ QEMU_ARGS := -M mps2-an386 \
              -semihosting -semihosting-config enable=on,target=native \
              -kernel $(ELF)
 
-.PHONY: all clean run smoke test debug size help
+.PHONY: all clean run smoke test debug size help demo demo-clean test-patched
 .DEFAULT_GOAL := all
 
 all: $(ELF) $(BIN) size
@@ -87,6 +87,22 @@ test: $(ELF)
 debug: $(ELF)
 	$(QEMU) $(QEMU_ARGS) -s -S
 
+# End-to-end patchestry demo: ELF -> Ghidra JSON -> CIR -> patched CIR ->
+# LLVM IR -> KLEE harness -> KLEE verify (and optionally Patcherex2 binary
+# patch + patched-protocol regression run with --with-patcherex). See
+# scripts/demo_secpump.sh for stage flags and prerequisites.
+demo: $(ELF)
+	./scripts/demo_secpump.sh --stage=klee
+
+demo-clean:
+	rm -rf $(BUILD_DIR)/demo
+
+# Boot the patched ELF and run the protocol regression + exploit-blocked check.
+# Requires demo --stage=all --with-patcherex to have run first (produces
+# build/secpump-patched.elf via Patcherex2).
+test-patched:
+	./run.sh patched-test
+
 clean:
 	rm -rf $(BUILD_DIR)
 
@@ -98,6 +114,9 @@ help:
 	@echo "  test           ./run.sh test  (protocol coverage + exploit)"
 	@echo "  debug          qemu paused, gdb stub on tcp::1234"
 	@echo "  size           print arm-none-eabi-size on the ELF"
+	@echo "  demo           run patchestry demo through KLEE (no Patcherex2)"
+	@echo "  demo-clean     rm -rf $(BUILD_DIR)/demo"
+	@echo "  test-patched   protocol + exploit-blocked check against secpump-patched.elf"
 	@echo "  clean          rm -rf $(BUILD_DIR)"
 
 -include $(DEPS)

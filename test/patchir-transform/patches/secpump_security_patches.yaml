@@ -1,0 +1,36 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: secpump_security_patches
+  description: Loud-failure replacements for SecPump-QEMU seeded vulns
+  version: 1.0.0
+  author: Security Team
+  created: '2026-05-07'
+  kind: PatchLibrary
+patch_definitions:
+- name: secpump_bounded_malicious_memcpy
+  description: Replace MaliciousMemCpy with a bounded, loud-failing variant
+  category: memory_safety
+  function_name: patch::replace::MaliciousMemCpy
+  code_file: patches/patch_malicious_memcpy.c
+  parameters:
+  - name: dest
+    type: void*
+    description: Destination buffer
+  - name: src
+    type: void*
+    description: Source buffer
+  - name: n
+    type: size_t
+    description: Bytes requested
+  - name: dest_cap
+    type: size_t
+    description: Caller-declared destination capacity
+- name: secpump_safe_process_vuln_req
+  description: Replace ProcessVulnReq with a self-contained safe accumulator
+  category: memory_safety
+  function_name: patch::replace::ProcessVulnReq
+  code_file: patches/patch_process_vuln_req.c
+  parameters:
+  - name: att_data
+    type: uint8_t*
+    description: Attribute payload (16 bytes per call)

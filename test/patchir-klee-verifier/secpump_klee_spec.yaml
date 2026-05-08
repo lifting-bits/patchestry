@@ -1,0 +1,58 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: secpump-klee-spec
+  description: Apply secpump patches and attach the bounds contract for KLEE verification
+  version: 1.0.0
+  author: Security Team
+  created: '2026-05-07'
+  kind: PatchSpec
+target:
+  binary: secpump.elf
+  arch: ARM:LE:32:Cortex
+libraries:
+- secpump_klee_patches.yaml
+patches:
+- name: SECPUMP-PATCH-001
+  id: SECPUMP-PATCH-001
+  description: Replace MaliciousMemCpy with bounded, loud-failing variant
+  match:
+    name: MaliciousMemCpy
+    kind: function
+  action:
+    mode: replace
+    patch: secpump_bounded_malicious_memcpy
+    arguments:
+    - name: dest
+      source: operand
+      index: 0
+    - name: src
+      source: operand
+      index: 1
+    - name: n
+      source: operand
+      index: 2
+    - name: dest_cap
+      source: constant
+      value: 4
+- name: SECPUMP-PATCH-002
+  id: SECPUMP-PATCH-002
+  description: Replace ProcessVulnReq body with self-contained safe accumulator
+  match:
+    name: ProcessVulnReq
+    kind: function
+  action:
+    mode: replace
+    patch: secpump_safe_process_vuln_req
+    arguments:
+    - name: att_data
+      source: operand
+      index: 0
+contracts:
+- name: malicious_memcpy_bound_at_replacement
+  id: SECPUMP-CONTRACT-001
+  description: Verify the bounded variant honors n <= dest_cap and pointer non-null preconditions
+  match:
+    name: patch__replace__MaliciousMemCpy
+  action:
+    mode: apply_before
+    contract: malicious_memcpy_bound_static

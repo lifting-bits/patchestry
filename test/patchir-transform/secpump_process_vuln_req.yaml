@@ -1,0 +1,27 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: secpump-process-vuln-req
+  description: Replace ProcessVulnReq with a self-contained safe accumulator.
+  version: 1.0.0
+  author: Security Team
+  created: '2026-05-07'
+  kind: PatchSpec
+target:
+  binary: secpump.elf
+  arch: ARM:LE:32:Cortex
+libraries:
+- patches/secpump_security_patches.yaml
+patches:
+- name: secpump_process_vuln_req_replace
+  id: SECPUMP-PATCH-002
+  description: Replace the body so the 4-byte stack memcpy is never reached and the accumulation is bounded against safe_buf capacity.
+  match:
+    name: ProcessVulnReq
+    kind: function
+  action:
+    mode: replace
+    patch: secpump_safe_process_vuln_req
+    arguments:
+    - name: att_data
+      source: operand
+      index: 0

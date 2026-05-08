@@ -1,0 +1,94 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -output %t1 >> /dev/null 2>&1
+// RUN: %patchir-transform %t1.cir --spec %S/secpump_malicious_memcpy.yaml -o %t2.cir
+// RUN: %file-check -check-prefix=YAML %s --input-file %t2.cir
+
+// SecPump-QEMU: synthetic caller that invokes MaliciousMemCpy(dest, src, n).
+// patchir-transform should rewrite the call to patch__replace__MaliciousMemCpy
+// passing the original three operands plus the injected dest_cap = 4 literal,
+// and emit the patch body together with the loud-failure stub declaration.
+//
+// The synthesized caller exists because ProcessVulnReq (the only real caller
+// of MaliciousMemCpy in secpump) currently fails to round-trip through
+// patchir-decomp's CIR lowering on this binary; isolating the call site here
+// keeps the patchir-transform unit test independent of that unrelated lift bug.
+
+// YAML: cir.call @patch__replace__MaliciousMemCpy({{.*}}, {{.*}}, {{.*}}, %{{[0-9]+}}) {patchestry_operation = "cir.call"}
+// YAML-NOT: cir.call @MaliciousMemCpy(
+// YAML: cir.func {{.*}}@patch__replace__MaliciousMemCpy(
+// YAML: cir.call @secpump_assert_fail()
+
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "memcpy_caller",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "inputs": []
+            }
+          },
+          "ordered_operations": ["entry.exit"]
+        },
+        "ram:10000004:0:basic": {
+          "operations": {
+            "ram:10000004:100:0": {
+              "mnemonic": "CALL",
+              "type": "t_void",
+              "output": null,
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000001",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                { "type": "t_voidp",  "kind": "constant", "value": 0 },
+                { "type": "t_voidp",  "kind": "constant", "value": 0 },
+                { "type": "t_size_t", "kind": "constant", "value": 8 }
+              ]
+            },
+            "ram:10000008:101:0": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:10000004:100:0",
+            "ram:10000008:101:0"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "MaliciousMemCpy",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["t_voidp", "t_voidp", "t_size_t"]
+      }
+    }
+  },
+  "types": {
+    "t_void":   { "name": "void",       "size": 0, "kind": "void" },
+    "t_voidp":  { "kind": "pointer", "size": 4, "element_type": "t_void" },
+    "t_size_t": { "name": "unsigned int", "size": 4, "kind": "integer", "is_signed": false }
+  },
+  "globals": {}
+}
