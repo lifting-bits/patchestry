@@ -733,6 +733,27 @@ namespace patchestry::ghidra {
             function.entry_block = entry_block->str();
         }
 
+        // Optional: older serializer outputs omit these.
+        if (auto maybe_entry_point = get_string_if_valid(func_obj, "entry_point")) {
+            function.entry_point = *maybe_entry_point;
+        }
+        if (const auto *ranges_arr = func_obj.getArray("address_ranges")) {
+            for (const auto &range_val : *ranges_arr) {
+                if (const auto *range_obj = range_val.getAsObject()) {
+                    AddressRange r;
+                    if (auto s = get_string_if_valid(*range_obj, "start")) {
+                        r.start = *s;
+                    }
+                    if (auto e = get_string_if_valid(*range_obj, "end")) {
+                        r.end = *e;
+                    }
+                    if (!r.start.empty() && !r.end.empty()) {
+                        function.address_ranges.push_back(std::move(r));
+                    }
+                }
+            }
+        }
+
         if (const auto *blocks_array = func_obj.getObject("basic_blocks")) {
             deserialize_blocks(*blocks_array, function.basic_blocks, function.entry_block);
         }

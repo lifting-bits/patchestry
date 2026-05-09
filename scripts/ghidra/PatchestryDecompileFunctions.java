@@ -169,6 +169,12 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     private util.PcodeSerializer.AnalyticalTierMode analyticalMode =
         util.PcodeSerializer.AnalyticalTierMode.AUTO;
 
+    // --repair-function-boundaries (default true)
+    //     Run TailCallAnalysis: detect tail-call sites and split
+    //     Ghidra-merged functions via CreateFunctionCmd. Pass
+    //     --no-repair-function-boundaries to skip the pass entirely.
+    private boolean repairFunctionBoundaries = true;
+
     // Script args with all recognized flags stripped out. The positional
     // command processors (decompileSingleFunction / decompileAllFunctions)
     // index into this rather than getScriptArgs() so flags and positional
@@ -203,6 +209,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         // at the top of the class.
         sanitizeExtraout = true;
         analyticalMode = util.PcodeSerializer.AnalyticalTierMode.AUTO;
+        repairFunctionBoundaries = true;
         positionalArgs = new String[0];
 
         String[] raw = getScriptArgs();
@@ -237,6 +244,19 @@ public class PatchestryDecompileFunctions extends GhidraScript {
                 String value = arg.substring(
                     "--sanitize-extraout-analytical=".length());
                 analyticalMode = parseAnalyticalMode(value);
+                continue;
+            }
+            if (arg.equals("--repair-function-boundaries")) {
+                repairFunctionBoundaries = true;
+                continue;
+            }
+            if (arg.equals("--no-repair-function-boundaries")) {
+                repairFunctionBoundaries = false;
+                continue;
+            }
+            if (arg.startsWith("--repair-function-boundaries=")) {
+                repairFunctionBoundaries = parseBoolFlag(arg,
+                    arg.substring("--repair-function-boundaries=".length()));
                 continue;
             }
             positional.add(arg);
@@ -494,6 +514,19 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
         mgr.startAnalysis(monitor);
         mgr.waitForAnalysis(null, monitor);
+
+        // After Ghidra's analyzers have settled, optionally run the
+        // tail-call pass: detect unconditional branches whose targets are
+        // separate function entries (bepdg-gen issue #99 mis-merge) and
+        // split them via CreateFunctionCmd. Bookmarks + property map are
+        // read by PcodeSerializer to emit boundary_repairs / TAIL_CALL.
+        if (repairFunctionBoundaries) {
+            try {
+                util.tailcall.TailCallAnalysis.run(program, monitor);
+            } catch (Exception e) {
+                println("[tailcall] analysis failed: " + e.getMessage());
+            }
+        }
     }
 
     void runHeadless() throws Exception {

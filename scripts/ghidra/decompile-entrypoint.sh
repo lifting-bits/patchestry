@@ -128,6 +128,12 @@ function parse_args {
             --sanitize-extraout-analytical=*)
                 SCRIPT_EXTRA_ARGS+=("$1")
                 ;;
+            --repair-function-boundaries)
+                SCRIPT_EXTRA_ARGS+=("--repair-function-boundaries")
+                ;;
+            --no-repair-function-boundaries)
+                SCRIPT_EXTRA_ARGS+=("--no-repair-function-boundaries")
+                ;;
             *)
                 die "Invalid option '$1'."
                 ;;

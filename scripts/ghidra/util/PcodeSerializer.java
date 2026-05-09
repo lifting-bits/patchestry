@@ -24,6 +24,7 @@ import ghidra.program.database.symbol.CodeSymbol;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.address.AddressIterator;
+import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.AddressSpace;
@@ -47,6 +48,8 @@ import ghidra.program.model.lang.PrototypeModel;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.lang.RegisterManager;
 
+import ghidra.program.model.listing.Bookmark;
+import ghidra.program.model.listing.BookmarkManager;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.FunctionManager;
@@ -157,6 +160,8 @@ public class PcodeSerializer {
     	public static final int DECLARE_LOCAL_VAR = MIN_CALLOTHER + 1;
     	public static final int DECLARE_TEMP_VAR = MIN_CALLOTHER + 2;
     	public static final int ADDRESS_OF = MIN_CALLOTHER + 3;
+    	// BRANCH lifted by TailCallAnalysis at sites recorded in TailCall.Site.
+    	public static final int TAIL_CALL = MIN_CALLOTHER + 0xF;  // 0x10000F
 
     	// Architecture allowlist for Tier 2 (analytical callee-walk) preservation
     	// analysis in the extraout sanitizer. Tier 1 (declarative, via
@@ -289,6 +294,11 @@ public class PcodeSerializer {
 		// need to replace, and so this mapping allows us to do that without
 		// having to aggressively rewrite things, especially output operands.
 		private Map<PcodeOp, PcodeOp> replacementOperationsMap;
+
+		// TailCallAnalysis findings: site address -> callee entry offset.
+		// Looked up lazily on first BRANCH op.
+		private ghidra.program.model.util.LongPropertyMap tailCallSiteMap;
+		private boolean tailCallSiteMapInitialized = false;
 		
 		// Sometimes we need to arrange for some operations to exist prior to
 		// another one, e.g. if there is a `CALL foo, SP` that decompiles to
@@ -2985,6 +2995,57 @@ public class PcodeSerializer {
 			writer.name("target_block").value(label(currentBlock.getOut(0)));
 		}
 
+		// Emit a TAIL_CALL with the same shape as a regular CALL so
+		// downstream consumers can build a call-graph edge.
+		void serializeTailCallOp(PcodeOp pcodeOp) throws Exception {
+			Address fromAddr = pcodeOp.getSeqnum().getTarget();
+			long targetOffset = tailCallSiteMap.getLong(fromAddr);
+			Address calleeAddr = currentFunction.getFunction()
+				.getEntryPoint().getNewAddress(targetOffset);
+
+			FunctionManager fm = currentProgram.getFunctionManager();
+			Function callee = fm.getFunctionAt(calleeAddr);
+
+			writer.name("has_return_value").value(false);
+			writer.name("target");
+			if (callee != null) {
+				functions.add(callee);
+				writer.beginObject();
+				writer.name("kind").value("function");
+				writer.name("function").value(label(callee));
+				writer.name("is_variadic").value(callee.hasVarArgs());
+				writer.name("is_noreturn").value(callee.hasNoReturn());
+				writer.endObject();
+			} else {
+				// Callee not (yet) a Ghidra function: emit literal address.
+				writer.beginObject();
+				writer.name("kind").value("address");
+				writer.name("address").value(calleeAddr.toString(true));
+				writer.endObject();
+			}
+			writer.name("inputs").beginArray().endArray();
+		}
+
+		private boolean isTailCallSite(PcodeOp pcodeOp) {
+			if (pcodeOp.getOpcode() != PcodeOp.BRANCH) return false;
+			if (!tailCallSiteMapInitialized) {
+				tailCallSiteMap = currentProgram.getUsrPropertyManager()
+					.getLongPropertyMap("TailCall.Site");
+				tailCallSiteMapInitialized = true;
+			}
+			if (tailCallSiteMap == null) return false;
+			Address addr = pcodeOp.getSeqnum().getTarget();
+			return tailCallSiteMap.hasProperty(addr);
+		}
+
+		// Rewrites BRANCH at tail-call sites to "TAIL_CALL".
+		String effectiveMnemonic(PcodeOp pcodeOp) {
+			if (isTailCallSite(pcodeOp)) {
+				return "TAIL_CALL";
+			}
+			return mnemonic(pcodeOp);
+		}
+
 		// Serialize a conditional branch. This records the targeted blocks.
 		//
 		// TODO(pag): How does p-code handle delay slots? Are they separate
@@ -3457,8 +3518,8 @@ public class PcodeSerializer {
 
 		void serializePcodeOp(PcodeOp pcodeOp) throws Exception {
 			writer.beginObject();
-			writer.name("mnemonic").value(mnemonic(pcodeOp));
-			
+			writer.name("mnemonic").value(effectiveMnemonic(pcodeOp));
+
 			switch (pcodeOp.getOpcode()) {
 				case PcodeOp.CALL:
 				case PcodeOp.CALLIND:
@@ -3472,7 +3533,11 @@ public class PcodeSerializer {
 					serializeCondBranchOp(pcodeOp);
 					break;
 				case PcodeOp.BRANCH:
-					serializeBranchOp(pcodeOp);
+					if (isTailCallSite(pcodeOp)) {
+						serializeTailCallOp(pcodeOp);
+					} else {
+						serializeBranchOp(pcodeOp);
+					}
 					break;
 				case PcodeOp.BRANCHIND:
 					serializeBranchIndOp(pcodeOp);
@@ -3763,6 +3828,10 @@ public class PcodeSerializer {
 			writer.name("display_name").value(displayName);
 			writer.name("is_intrinsic").value(false);
 
+			writer.name("entry_point")
+				.value(functionToSerialize.getEntryPoint().toString(true));
+			serializeAddressRanges(functionToSerialize);
+
 			// If we have a high P-Code function, then serialize the blocks.
 			if (highFunction != null) {
 				functionPrototype = highFunction.getFunctionPrototype();
@@ -3846,6 +3915,61 @@ public class PcodeSerializer {
 		
 		String entryBlockLabel() throws Exception {
 			return label(currentFunction) +  Address.SEPARATOR + "entry";
+		}
+
+		// Walk bookmarks recorded by TailCallAnalysis and emit one
+		// boundary_repairs entry per site. Empty when the pass did not run.
+		void serializeBoundaryRepairs() throws Exception {
+			writer.name("boundary_repairs").beginArray();
+			BookmarkManager bm = currentProgram.getBookmarkManager();
+			if (bm != null) {
+				Iterator<Bookmark> it = bm.getBookmarksIterator(
+					ghidra.program.model.listing.BookmarkType.ANALYSIS);
+				while (it.hasNext()) {
+					Bookmark bookmark = it.next();
+					if (!util.tailcall.TailCallAnalysis.BOOKMARK_CATEGORY
+							.equals(bookmark.getCategory())) {
+						continue;
+					}
+					writer.beginObject();
+					writer.name("site").value(bookmark.getAddress().toString(true));
+					Map<String, String> fields = parseBookmarkComment(bookmark.getComment());
+					for (Map.Entry<String, String> e : fields.entrySet()) {
+						writer.name(e.getKey()).value(e.getValue());
+					}
+					writer.endObject();
+				}
+			}
+			writer.endArray();
+		}
+
+		// Parse "k=v k=v" into a map. Values must not contain spaces.
+		private static Map<String, String> parseBookmarkComment(String comment) {
+			Map<String, String> out = new HashMap<>();
+			if (comment == null || comment.isEmpty()) return out;
+			for (String tok : comment.split("\\s+")) {
+				int eq = tok.indexOf('=');
+				if (eq <= 0 || eq == tok.length() - 1) continue;
+				out.put(tok.substring(0, eq), tok.substring(eq + 1));
+			}
+			return out;
+		}
+
+		// Emit {start,end} pairs for every range in the function body.
+		// Contiguous functions yield one entry; non-contiguous ones (after
+		// shrink-wrap or TailCallAnalysis split) yield more.
+		void serializeAddressRanges(Function function) throws Exception {
+			writer.name("address_ranges").beginArray();
+			AddressSetView body = function.getBody();
+			if (body != null && !body.isEmpty()) {
+				for (AddressRange r : body.getAddressRanges()) {
+					writer.beginObject();
+					writer.name("start").value(r.getMinAddress().toString(true));
+					writer.name("end").value(r.getMaxAddress().toString(true));
+					writer.endObject();
+				}
+			}
+			writer.endArray();
 		}
 		
 		// Serialize the global variable declarations.
@@ -4044,6 +4168,9 @@ public class PcodeSerializer {
 			writer.name("architecture").value(this.architecture);
 			writer.name("id").value(this.languageID);
 			writer.name("format").value(currentProgram.getExecutableFormat());
+
+			// TailCallAnalysis findings (empty when pass disabled / no hits).
+			serializeBoundaryRepairs();
 
 			writer.name("functions").beginObject();
 			serializeFunctions();

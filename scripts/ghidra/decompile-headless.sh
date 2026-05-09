@@ -27,6 +27,10 @@ Options:
                                        Control Tier 2 (analytical callee-walk)
                                        preservation analysis. Default: auto
                                        (architecture allowlist).
+      --repair-function-boundaries     Run the TailCallAnalysis pre-pass
+                                       (default on). Pass
+                                       --no-repair-function-boundaries to
+                                       skip the pass.
 
 Environment:
   HOST_WORKSPACE        When running in Docker-in-Docker, set this to the host
@@ -116,6 +120,14 @@ parse_args() {
                 ;;
             --sanitize-extraout-analytical=*)
                 SANITIZER_ARGS+=("$1")
+                shift
+                ;;
+            --repair-function-boundaries)
+                SANITIZER_ARGS+=("--repair-function-boundaries")
+                shift
+                ;;
+            --no-repair-function-boundaries)
+                SANITIZER_ARGS+=("--no-repair-function-boundaries")
                 shift
                 ;;
             *)

@@ -212,6 +212,13 @@ namespace patchestry::ghidra {
         bool is_noreturn;
     };
 
+    // One contiguous range of a function's body.
+    struct AddressRange
+    {
+        std::string start;
+        std::string end;
+    };
+
     struct Function
     {
         std::string name;         // original (possibly mangled) symbol name
@@ -220,6 +227,10 @@ namespace patchestry::ghidra {
         std::string key;
         std::string entry_block;
         std::unordered_map< std::string, BasicBlock > basic_blocks;
+
+        // Optional schema fields; empty on older serializer outputs.
+        std::string entry_point;
+        std::vector< AddressRange > address_ranges;
     };
 
     struct Program
