@@ -210,13 +210,12 @@ public final class TailCallDetector {
     }
 
     private boolean isSingleInstructionThunk(Function f, Instruction last) {
-        long bytes = f.getBody().getNumAddresses();
-        if (bytes <= 0) return false;
-        int minLen = program.getLanguage().getInstructionAlignment();
-        if (minLen <= 0) minLen = 2;
-        long approxInsnCount = (bytes + minLen - 1) / minLen;
-        return approxInsnCount <= rules.thunkInstructionLimit()
-            && f.getEntryPoint().equals(blockStart(last));
+        int limit = rules.thunkInstructionLimit();
+        int count = 0;
+        for (Instruction ignored : listing.getInstructions(f.getBody(), true)) {
+            if (++count > limit) return false;
+        }
+        return count > 0 && f.getEntryPoint().equals(blockStart(last));
     }
 
     private Address blockStart(Instruction last) {

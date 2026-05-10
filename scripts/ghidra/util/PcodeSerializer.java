@@ -4169,13 +4169,10 @@ public class PcodeSerializer {
 			writer.name("id").value(this.languageID);
 			writer.name("format").value(currentProgram.getExecutableFormat());
 
-			// TailCallAnalysis findings (empty when pass disabled / no hits).
-			serializeBoundaryRepairs();
-
 			writer.name("functions").beginObject();
 			serializeFunctions();
 			writer.endObject();  // End of functions.
-			
+
 			writer.name("globals").beginObject();
 			serializeGlobals();
 			writer.endObject();  // End of globals.
@@ -4183,6 +4180,9 @@ public class PcodeSerializer {
 			writer.name("types").beginObject();
 			serializeTypes();
 			writer.endObject();  // End of types.
+
+			// TailCallAnalysis findings (empty when pass disabled / no hits).
+			serializeBoundaryRepairs();
 
 			writer.endObject();
 
