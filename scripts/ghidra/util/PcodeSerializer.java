@@ -3029,8 +3029,10 @@ public class PcodeSerializer {
 		private boolean isTailCallSite(PcodeOp pcodeOp) {
 			if (pcodeOp.getOpcode() != PcodeOp.BRANCH) return false;
 			if (!tailCallSiteMapInitialized) {
-				tailCallSiteMap = currentProgram.getUsrPropertyManager()
-					.getLongPropertyMap("TailCall.Site");
+				ghidra.program.model.util.PropertyMapManager pmm =
+					currentProgram.getUsrPropertyManager();
+				tailCallSiteMap = pmm == null ? null
+					: pmm.getLongPropertyMap(util.tailcall.TailCallAnalysis.SITE_PROPMAP);
 				tailCallSiteMapInitialized = true;
 			}
 			if (tailCallSiteMap == null) return false;
