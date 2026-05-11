@@ -299,7 +299,7 @@ The action fields live under each entry's nested `action:` mapping
 
 | Field | Required | Description | Example |
 |-------|----------|-------------|---------|
-| `mode` | Yes | Patching or contract mode to apply. Shared modes: `apply_before`, `apply_after`. Patch-only modes: `apply_at_entrypoint`, `replace`, `erase` | `"apply_before"` |
+| `mode` | Yes | Patching or contract mode to apply. Shared modes: `apply_before`, `apply_after`. Patch-only modes: `apply_at_entrypoint`, `replace`, `replace_definition`, `erase` | `"apply_before"` |
 | `patch` | Under `patches:` (unless `mode: erase`) | Reference to the patch implementation `name:` in a library | `"usb_endpoint_write_validation_after"` |
 | `contract` | Under `contracts:` | Reference to the static contract `name:` in a library | `"usb_msg_nonnull"` |
 | `arguments` | No | List of arguments to pass to patch function (ignored for contracts) | See [Argument Specification](#argument-specification) |
@@ -647,12 +647,13 @@ Examples:
 
 ## Patch Modes
 
-The specification supports five modes:
+The specification supports six modes:
 
 - `apply_before`: Apply patch or contract before the matched function or operation
 - `apply_after`: Apply patch or contract after the matched function or operation completes
 - `apply_at_entrypoint`: Insert a patch at the entry point of the **caller** function (patches only — see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
 - `replace`: Completely replace the matched function call or operation (patches only)
+- `replace_definition`: Swap the matched function's **body** in place; symbol and signature are preserved, callers stay byte-identical (patches only — see [Replace Definition Mode](#replace-definition-mode))
 - `erase`: Delete the matched op without inserting any patch code (patches only — see [Erase Mode](#erase-mode))
 
 ### Apply Before Mode
@@ -765,6 +766,35 @@ patches:
 Use ERASE for removing debug/logging calls, stripping unused cleanup
 paths, or deleting obsolete instrumentation. For replacing a call with
 a different function, use `replace` instead.
+
+### Replace Definition Mode
+
+`replace_definition` swaps the matched function's body wholesale. The
+symbol and signature are preserved; callers stay byte-identical. Use it
+when callers cannot be lifted, when cooperating patches need shared
+`static` state, or when the change logically belongs at the callee.
+
+The patch function's CIR type must match the target's exactly; mismatches
+are rejected with both types named in the diagnostic. Declarations cannot
+be replaced (there is no body to swap).
+
+```yaml
+patches:
+  - name: "sclv0_state_machine_parser"
+    id: "MAKAIR-BODY-001"
+    match:
+      name: "_ZL22serial_control_loop_v0v"
+      kind: "function"
+    action:
+      mode: "replace_definition"
+      patch: "serial_control_loop_v0_repl"
+```
+
+`arguments:`, `match.captures:`, `match.kind: operation`, `op_kind:`,
+`operand_matches:`, and `context:` are all rejected at parse time — the
+wrapper inherits the callee signature 1:1, so per-site fields have no
+meaning. The swapped target carries a `patchestry_definition_replaced_by`
+attribute naming the patch function.
 
 ### Apply At Entrypoint Mode
 
