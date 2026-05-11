@@ -7,6 +7,7 @@
 
  #include <mlir/IR/Builders.h>
  #include <mlir/IR/Dominance.h>
+ #include <mlir/IR/IRMapping.h>
  #include <mlir/IR/SymbolTable.h>
  
  #include <clang/CIR/Dialect/IR/CIRDialect.h>
@@ -458,6 +459,80 @@ namespace patchestry {
             if (should_inline) {
                 pass.inline_worklists.insert(patch_call_op);
             }
+        }
+
+        void PatchOperationImpl::replaceFunctionDefinition(
+            InstrumentationPass &pass, cir::FuncOp target,
+            const PatchInformation &patch, mlir::ModuleOp patch_module
+        ) {
+            if (!target) {
+                LOG(ERROR) << "Replace definition: target function is null\n";
+                pass.signal_failure();
+                return;
+            }
+            if (!patch.spec.has_value()) {
+                LOG(ERROR) << "Replace definition: patch.spec is empty\n";
+                pass.signal_failure();
+                return;
+            }
+
+            // Refuse declarations: cloning a body into one would silently
+            // promote it to a definition.
+            if (target.getBody().empty()) {
+                LOG(ERROR) << "Replace definition: target '"
+                           << target.getSymName().str()
+                           << "' is a declaration, not a definition. "
+                              "replace_definition only swaps existing bodies.\n";
+                pass.signal_failure();
+                return;
+            }
+
+            auto module = target->getParentOfType< mlir::ModuleOp >();
+            assert(module && "Replace definition: no module found");
+
+            const auto &patch_spec = patch.spec.value();
+            std::string patch_function_name = namifyFunction(patch_spec.function_name);
+
+            auto patch_func = ensurePatchFunctionAvailable(
+                pass, module, patch_module, patch_function_name,
+                "Replace definition"
+            );
+            if (!patch_func) {
+                pass.signal_failure();
+                return;
+            }
+
+            // Signature gate before any IR mutation so a mismatch leaves
+            // target untouched. Diagnostic names both types for the author.
+            auto target_type = target.getFunctionType();
+            auto patch_type  = patch_func.getFunctionType();
+            if (target_type != patch_type) {
+                std::string target_type_str;
+                llvm::raw_string_ostream tos(target_type_str);
+                tos << target_type;
+                std::string patch_type_str;
+                llvm::raw_string_ostream pos(patch_type_str);
+                pos << patch_type;
+                LOG(ERROR) << "Replace definition: signature mismatch — "
+                              "target '"
+                           << target.getSymName().str() << "' has type "
+                           << tos.str() << " but patch '"
+                           << patch_function_name << "' has type "
+                           << pos.str()
+                           << ". replace_definition is strict; the patch "
+                              "must declare the same parameter and return "
+                              "types as the target.\n";
+                pass.signal_failure();
+                return;
+            }
+
+            // cloneInto creates fresh block args; the signature gate above
+            // guarantees their types match the target's declared parameters.
+            target.getBody().getBlocks().clear();
+            mlir::IRMapping mapper;
+            patch_func.getBody().cloneInto(&target.getBody(), mapper);
+
+            pass.set_instrumentation_func_attributes(target, patch_function_name);
         }
 
         namespace {

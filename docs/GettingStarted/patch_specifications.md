@@ -299,7 +299,7 @@ The action fields live under each entry's nested `action:` mapping
 
 | Field | Required | Description | Example |
 |-------|----------|-------------|---------|
-| `mode` | Yes | Patching or contract mode to apply. Shared modes: `apply_before`, `apply_after`. Patch-only modes: `apply_at_entrypoint`, `replace`, `erase` | `"apply_before"` |
+| `mode` | Yes | Patching or contract mode to apply. Shared modes: `apply_before`, `apply_after`. Patch-only modes: `apply_at_entrypoint`, `replace`, `replace_definition`, `erase` | `"apply_before"` |
 | `patch` | Under `patches:` (unless `mode: erase`) | Reference to the patch implementation `name:` in a library | `"usb_endpoint_write_validation_after"` |
 | `contract` | Under `contracts:` | Reference to the static contract `name:` in a library | `"usb_msg_nonnull"` |
 | `arguments` | No | List of arguments to pass to patch function (ignored for contracts) | See [Argument Specification](#argument-specification) |
@@ -647,12 +647,13 @@ Examples:
 
 ## Patch Modes
 
-The specification supports five modes:
+The specification supports six modes:
 
 - `apply_before`: Apply patch or contract before the matched function or operation
 - `apply_after`: Apply patch or contract after the matched function or operation completes
 - `apply_at_entrypoint`: Insert a patch at the entry point of the **caller** function (patches only — see [Apply At Entrypoint Mode](#apply-at-entrypoint-mode))
 - `replace`: Completely replace the matched function call or operation (patches only)
+- `replace_definition`: Swap the matched function's **body** in place; symbol and signature are preserved, callers stay byte-identical (patches only — see [Replace Definition Mode](#replace-definition-mode))
 - `erase`: Delete the matched op without inserting any patch code (patches only — see [Erase Mode](#erase-mode))
 
 ### Apply Before Mode
@@ -765,6 +766,62 @@ patches:
 Use ERASE for removing debug/logging calls, stripping unused cleanup
 paths, or deleting obsolete instrumentation. For replacing a call with
 a different function, use `replace` instead.
+
+### Replace Definition Mode
+
+Where `replace` rewrites individual call sites or operations,
+`replace_definition` swaps the matched function's body wholesale — the
+symbol and signature are preserved, so every caller stays
+byte-identical. The patch function takes over `target`'s
+implementation; callers are not touched.
+
+Use this mode when you want to change *what a function does* rather
+than *what a specific call site invokes*. Common cases:
+
+- Callers cannot be lifted (so call-site `replace` cannot reach them).
+- Cooperating patches need to share `static` state across multiple
+  methods.
+- The transformation logically belongs at the callee, not per call site
+  (e.g., reimplementing a parser, hardening a privileged operation).
+
+The patch function's CIR type must match the target's exactly: same
+parameter types, same return type. Type mismatches are loud failures
+named in the diagnostic so the spec author can fix the patch C source
+without a debugger.
+
+```yaml
+patches:
+  - name: "sclv0_state_machine_parser"
+    id: "MAKAIR-BODY-001"
+    description: "Swap serial_control_loop_v0's body with a state-machine parser"
+    match:
+      name: "_ZL22serial_control_loop_v0v"
+      kind: "function"
+    action:
+      mode: "replace_definition"
+      patch: "serial_control_loop_v0_repl"
+```
+
+**Parser-time validation** rejects fields that have no meaning for a
+whole-definition swap, so misconfiguration surfaces at spec load
+instead of failing silently or deep inside the pass:
+
+| Field | Why it is rejected |
+|---|---|
+| `arguments:` | The wrapper inherits the callee signature 1:1. Use `mode: replace` if you want per-operand plumbing per call site. |
+| `match.captures:` | Captures bind at match sites; there is no site here, only the function definition. |
+| `match.kind: operation` | The operation-kind dispatch has no notion of a function definition to swap. |
+| `op_kind:` | Kinded-generic-op filter is meaningless for a function definition. |
+| `operand_matches:` | Operand filters apply to call sites, not definitions. |
+| `context:` | Caller context is meaningless for a callee-definition swap. Use `mode: replace` to scope by caller. |
+
+The pass also refuses to replace declarations (functions with no body)
+— there is nothing to swap, and silently upgrading a declaration to a
+definition would be a surprising semantic shift.
+
+When the swap completes, the target carries a
+`patchestry_definition_replaced_by` attribute naming the patch function
+so downstream tools can identify body-swapped functions.
 
 ### Apply At Entrypoint Mode
 

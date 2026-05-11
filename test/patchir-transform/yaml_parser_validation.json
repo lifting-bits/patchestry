@@ -109,4 +109,45 @@
 // RUN: not %patchir-yaml-parser %S/op_kind_unsupported_reject.yaml 2>&1 | \
 // RUN:   %file-check -check-prefix=OPKIND_UNSUPPORTED_ERR %s
 // OPKIND_UNSUPPORTED_ERR: 'op_kind:' is only meaningful for 'cir.binop' and 'cir.cmp'
+//
+// `mode: replace_definition` swaps a matched cir.func's body wholesale.
+// The wrapper inherits the callee's signature 1:1, so every match-site /
+// per-operand field is meaningless. Reject the combinations at parse so
+// a misconfiguration surfaces with a clear hint, not a silent no-op
+// transform (no operation-kind dispatch case exists) or a confusing
+// signature-mismatch failure deep in the pass.
+//
+// Minimal valid spec must parse.
+// RUN: %patchir-yaml-parser %S/replace_definition_valid.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=OK %s
+//
+// `arguments:` is forbidden — wrapper inherits signature.
+// RUN: not %patchir-yaml-parser %S/replace_definition_with_arguments_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=REPLACE_DEF_ARGS_ERR %s
+// REPLACE_DEF_ARGS_ERR: replace_definition{{.*}}signature 1:1{{.*}}remove 'arguments:'
+//
+// `match.captures:` is forbidden — captures are bound at match sites.
+// RUN: not %patchir-yaml-parser %S/replace_definition_with_captures_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=REPLACE_DEF_CAPS_ERR %s
+// REPLACE_DEF_CAPS_ERR: replace_definition{{.*}}match.captures
+//
+// `context:` is forbidden — caller context is meaningless for a callee swap.
+// RUN: not %patchir-yaml-parser %S/replace_definition_with_context_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=REPLACE_DEF_CONTEXT_ERR %s
+// REPLACE_DEF_CONTEXT_ERR: replace_definition{{.*}}context
+//
+// `kind: operation` is forbidden — replace_definition needs kind: function.
+// RUN: not %patchir-yaml-parser %S/replace_definition_operation_kind_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=REPLACE_DEF_KIND_ERR %s
+// REPLACE_DEF_KIND_ERR: replace_definition{{.*}}match.kind: function
+//
+// `op_kind:` is forbidden — kinded-generic-op filter is meaningless here.
+// RUN: not %patchir-yaml-parser %S/replace_definition_with_op_kind_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=REPLACE_DEF_OPKIND_ERR %s
+// REPLACE_DEF_OPKIND_ERR: replace_definition{{.*}}op_kind
+//
+// `operand_matches:` is forbidden — operand filters apply to match sites.
+// RUN: not %patchir-yaml-parser %S/replace_definition_with_operand_matches_reject.yaml 2>&1 | \
+// RUN:   %file-check -check-prefix=REPLACE_DEF_OPMATCH_ERR %s
+// REPLACE_DEF_OPMATCH_ERR: replace_definition{{.*}}operand_matches
 {}

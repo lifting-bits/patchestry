@@ -1,0 +1,19 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: replace-definition-with-op-kind-reject
+  kind: PatchSpec
+target:
+  binary: x.bin
+  arch: ARM:LE:32
+libraries:
+- patches/measurement_update_patch.yaml
+patches:
+- name: bogus_replace_definition_with_op_kind
+  id: REPLACE-DEF-OPKIND-FIELD-REJECT-001
+  match:
+    name: cir.binop
+    kind: function
+    op_kind: mul
+  action:
+    mode: replace_definition
+    patch: measurement_update_replace_patch

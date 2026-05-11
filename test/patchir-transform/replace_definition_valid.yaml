@@ -1,0 +1,20 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: replace-definition-valid
+  description: Minimal valid replace_definition spec; parser-only positive test
+  kind: PatchSpec
+target:
+  binary: x.bin
+  arch: ARM:LE:32
+libraries:
+- patches/measurement_update_patch.yaml
+patches:
+- name: minimal_replace_definition
+  id: REPLACE-DEF-VALID-001
+  description: Swap measurement_update's body wholesale
+  match:
+    name: measurement_update
+    kind: function
+  action:
+    mode: replace_definition
+    patch: measurement_update_replace_patch

@@ -101,6 +101,20 @@ namespace patchestry::passes {
          */
         static std::string extract_callee_name(cir::CallOp call_op); // NOLINT
 
+        /**
+         * @brief Matches a `cir::FuncOp`'s definition against a
+         *        `MatchConfig` (name + function-context). Used by
+         *        REPLACE_DEFINITION dispatch, which targets function
+         *        definitions rather than call sites.
+         *
+         * @return true if `func`'s symbol name matches `match.name` and
+         *         `func`'s name satisfies the (possibly empty)
+         *         `function_context` list.
+         */
+        static bool function_definition_matches( // NOLINT
+            cir::FuncOp func, const patch::MatchConfig &match
+        );
+
       private:
         /**
          * @brief Match-only primitive. Internal helper for the capture-populating
