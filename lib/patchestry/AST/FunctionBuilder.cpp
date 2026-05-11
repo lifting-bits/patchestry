@@ -662,9 +662,12 @@ namespace patchestry::ast {
                 return op_builder->create_call(ctx, function, op);
             case Mnemonic::OP_CALLIND:
                 return op_builder->create_callind(ctx, function, op);
-            // Lifted BRANCH; route as CALL so CGraphBuilder picks up the edge.
-            case Mnemonic::OP_TAIL_CALL:
-                return op_builder->create_call(ctx, function, op);
+            case Mnemonic::OP_TAIL_CALL: {
+                auto *enclosing = clang::dyn_cast_or_null< clang::FunctionDecl >(
+                    get_sema_context()
+                );
+                return op_builder->create_tail_call(ctx, function, op, enclosing);
+            }
             case Mnemonic::OP_CALLOTHER:
                 return op_builder->create_callother(ctx, function, op);
             case Mnemonic::OP_USERDEFINED:

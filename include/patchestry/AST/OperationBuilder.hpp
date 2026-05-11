@@ -194,6 +194,11 @@ namespace patchestry::ast {
             const std::string &name
         );
 
+        std::pair< clang::Stmt *, bool > create_tail_call(
+            clang::ASTContext &ctx, const Function &function, const Operation &op,
+            clang::FunctionDecl *enclosing_decl
+        );
+
         // Create a call to __patchestry_missing_<name> with metadata annotation
         std::pair< clang::Stmt *, bool > create_missing_intrinsic_call(
             clang::ASTContext &ctx, const Function &function, const Operation &op,

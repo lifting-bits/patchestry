@@ -130,6 +130,10 @@ parse_args() {
                 SANITIZER_ARGS+=("--no-repair-function-boundaries")
                 shift
                 ;;
+            --repair-function-boundaries=*)
+                SANITIZER_ARGS+=("$1")
+                shift
+                ;;
             *)
                 echo "Unknown option: $1"
                 show_help

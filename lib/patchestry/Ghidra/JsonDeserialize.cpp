@@ -739,18 +739,26 @@ namespace patchestry::ghidra {
         }
         if (const auto *ranges_arr = func_obj.getArray("address_ranges")) {
             for (const auto &range_val : *ranges_arr) {
-                if (const auto *range_obj = range_val.getAsObject()) {
-                    AddressRange r;
-                    if (auto s = get_string_if_valid(*range_obj, "start")) {
-                        r.start = *s;
-                    }
-                    if (auto e = get_string_if_valid(*range_obj, "end")) {
-                        r.end = *e;
-                    }
-                    if (!r.start.empty() && !r.end.empty()) {
-                        function.address_ranges.push_back(std::move(r));
-                    }
+                const auto *range_obj = range_val.getAsObject();
+                if (range_obj == nullptr) {
+                    LOG(WARNING) << "Function '" << function.name
+                                 << "' has a non-object address_ranges entry; dropping.\n";
+                    continue;
                 }
+                AddressRange r;
+                if (auto s = get_string_if_valid(*range_obj, "start")) {
+                    r.start = *s;
+                }
+                if (auto e = get_string_if_valid(*range_obj, "end")) {
+                    r.end = *e;
+                }
+                if (r.start.empty() || r.end.empty()) {
+                    LOG(WARNING) << "Function '" << function.name
+                                 << "' has a malformed address_range (start='"
+                                 << r.start << "' end='" << r.end << "'); dropping.\n";
+                    continue;
+                }
+                function.address_ranges.push_back(std::move(r));
             }
         }
 
@@ -912,6 +920,7 @@ namespace patchestry::ghidra {
             case Mnemonic::OP_CALL:
             case Mnemonic::OP_CALLIND:
             case Mnemonic::OP_CALLOTHER:
+            case Mnemonic::OP_TAIL_CALL:
                 deserialize_call_operation(pcode_obj, operation);
                 break;
             case Mnemonic::OP_CBRANCH:

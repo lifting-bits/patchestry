@@ -1328,7 +1328,10 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_call(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if (!op.target || op.mnemonic != Mnemonic::OP_CALL) {
+        if (!op.target
+            || (op.mnemonic != Mnemonic::OP_CALL
+                && op.mnemonic != Mnemonic::OP_TAIL_CALL))
+        {
             LOG(ERROR) << "Call operation or call target is invalid. key: " << op.key << "\n";
             return {};
         }
@@ -1398,6 +1401,78 @@ namespace patchestry::ast {
                      ctx, call_expr, clang::dyn_cast< clang::Expr >(output_expr), op_loc
                  ),
                  false };
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_tail_call(
+        clang::ASTContext &ctx, const Function &function, const Operation &op,
+        clang::FunctionDecl *enclosing_decl
+    ) {
+        if (!op.target || op.mnemonic != Mnemonic::OP_TAIL_CALL) {
+            LOG(ERROR) << "TAIL_CALL operation or target is invalid. key: "
+                       << op.key << "\n";
+            return {};
+        }
+        if (!op.target->function) {
+            LOG(ERROR) << "TAIL_CALL target missing function. key: " << op.key << "\n";
+            return {};
+        }
+        if (!function_builder().function_list.get().contains(*op.target->function)) {
+            return {};
+        }
+
+        const auto *callee =
+            function_builder().function_list.get().at(*op.target->function);
+
+        // Serializer doesn't recover tail-call args yet; without this guard
+        // missing args would be default-filled with zeros, silently corrupting
+        // data flow.
+        if (callee->getMinRequiredArguments() > op.inputs.size()) {
+            LOG(ERROR) << "TAIL_CALL: callee '" << callee->getNameAsString()
+                       << "' expects " << callee->getMinRequiredArguments()
+                       << " arg(s) but PcodeSerializer recovered "
+                       << op.inputs.size()
+                       << " (tail-call arg recovery NYI). key: " << op.key << "\n";
+            return {};
+        }
+
+        auto op_loc    = SourceLocation(ctx.getSourceManager(), op.key);
+        auto *call_expr = build_callexpr_from_function(ctx, function, op);
+        if (!call_expr) {
+            return {};
+        }
+
+        const auto enclosing_ret = (enclosing_decl != nullptr)
+            ? enclosing_decl->getReturnType()
+            : ctx.VoidTy;
+
+        const bool callee_void     = call_expr->getType()->isVoidType();
+        const bool callee_noreturn = callee->isNoReturn();
+        const bool enclosing_void  = enclosing_ret->isVoidType();
+
+        // No return-value contract can be satisfied here.
+        if (callee_void && !callee_noreturn && !enclosing_void) {
+            LOG(ERROR) << "TAIL_CALL: void non-noreturn callee in non-void enclosing "
+                       << "function '" << enclosing_decl->getNameAsString()
+                       << "'. key: " << op.key << "\n";
+            return {};
+        }
+
+        // Keep the block's last Stmt a bare ReturnStmt (not a CompoundStmt)
+        // so the structurer's goto-to-return rewriting still matches.
+        if (callee_void || callee_noreturn || enclosing_void) {
+            function_builder().pending_materialized.push_back(call_expr);
+            auto *ret_stmt = clang::ReturnStmt::Create(ctx, op_loc, nullptr, nullptr);
+            return { ret_stmt, false };
+        }
+
+        auto *casted = make_cast(ctx, call_expr, enclosing_ret, op_loc);
+        if (casted == nullptr) {
+            LOG(ERROR) << "TAIL_CALL: cannot cast callee return type to "
+                       << "enclosing function's return type. key: " << op.key << "\n";
+            return {};
+        }
+        auto *ret_stmt = clang::ReturnStmt::Create(ctx, op_loc, casted, nullptr);
+        return { ret_stmt, false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_callind(

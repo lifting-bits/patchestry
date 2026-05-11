@@ -76,7 +76,11 @@ public final class TailCallAnalysis {
                 }
 
                 recordBookmark(bm, c, action);
-                if (siteMap != null) siteMap.add(c.from, c.target.getOffset());
+                // Skipped sites have no resolvable Function; serializer would
+                // emit an address-only target the C++ side can't dispatch.
+                if (siteMap != null && !"skipped".equals(action)) {
+                    siteMap.add(c.from, c.target.getOffset());
+                }
             }
         } catch (CancelledException e) {
             commit = false;

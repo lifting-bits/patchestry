@@ -19,7 +19,8 @@ namespace patchestry::ghidra {
 #define X(name) OP_##name, // NOLINT(cppcoreguidelines-macro-usage)
         PCODE_MNEMONICS
 #undef X
-            OP_UNKNOWN
+        // Sentinel pinned out of band from the X-macro values.
+            OP_UNKNOWN = -1
     };
 
     template< typename EnumType, size_t N >
