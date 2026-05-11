@@ -673,12 +673,16 @@ namespace llvm::yaml {
             // wrapper inherits its signature 1:1, so match-site / per-operand
             // knobs are meaningless. Reject at parse for a clear diagnostic.
             if (action_obj.mode == InstrumentationMode::REPLACE_DEFINITION) {
+                // `setError` is first-caller-wins; `return` after each so a
+                // multi-violation spec doesn't chase down the same diagnostic
+                // multiple times and matches the `PatchMatchObject` pattern.
                 if (match_obj.kind != MatchKind::FUNCTION) {
                     io.setError(
                         "'mode: replace_definition' requires 'match.kind: "
                         "function'; the operation-kind dispatch has no "
                         "notion of a function definition to swap."
                     );
+                    return;
                 }
                 if (!action_obj.arguments.empty()) {
                     io.setError(
@@ -687,6 +691,7 @@ namespace llvm::yaml {
                         "'mode: replace' if you want per-operand plumbing "
                         "at each call site instead."
                     );
+                    return;
                 }
                 if (!match_obj.captures.empty()) {
                     io.setError(
@@ -695,6 +700,7 @@ namespace llvm::yaml {
                         "sites and have no meaning for a whole-definition "
                         "swap."
                     );
+                    return;
                 }
                 if (match_obj.op_kind.has_value()) {
                     io.setError(
@@ -702,6 +708,7 @@ namespace llvm::yaml {
                         "'op_kind:'; op_kind filters kinded generic ops and "
                         "is meaningless when matching a function definition."
                     );
+                    return;
                 }
                 if (!match_obj.operand_matches.empty()) {
                     io.setError(
@@ -709,6 +716,7 @@ namespace llvm::yaml {
                         "'operand_matches:'; operand filters apply to "
                         "match sites, not to function definitions."
                     );
+                    return;
                 }
                 if (!match_obj.context.empty()) {
                     io.setError(
@@ -717,6 +725,7 @@ namespace llvm::yaml {
                         "callee-definition swap. Use 'mode: replace' if you "
                         "want to scope rewriting by caller."
                     );
+                    return;
                 }
             }
         }

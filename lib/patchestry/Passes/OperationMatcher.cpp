@@ -612,9 +612,9 @@ namespace patchestry::passes {
     bool OperationMatcher::function_definition_matches(
         cir::FuncOp func, const patch::MatchConfig &match
     ) {
+        // Kind guard is defensive (current callers already filter on
+        // MatchKind::FUNCTION) and mirrors patch_action_matches_function_call.
         if (match.name.empty() || match.kind != MatchKind::FUNCTION) {
-            LOG(DEBUG)
-                << "function_definition_matches: match.name empty or kind != FUNCTION\n";
             return false;
         }
         if (!matches_pattern(func.getSymName().str(), match.name)) {
