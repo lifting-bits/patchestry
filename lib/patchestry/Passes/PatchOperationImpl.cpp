@@ -532,6 +532,13 @@ namespace patchestry {
             mlir::IRMapping mapper;
             patch_func.getBody().cloneInto(&target.getBody(), mapper);
 
+            // The patch func's body has been donated to target and it has no
+            // remaining callers; demote to internal so downstream globaldce
+            // can strip it. `merge_module_symbol` already does this for the
+            // first-merge path; the explicit call covers the already-present
+            // path and documents intent.
+            patch_func.setLinkage(cir::GlobalLinkageKind::InternalLinkage);
+
             pass.set_instrumentation_func_attributes(target, patch_function_name);
         }
 

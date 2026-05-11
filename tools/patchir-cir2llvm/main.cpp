@@ -15,12 +15,15 @@
 #include <llvm/IR/DIBuilder.h>
 #include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/PassManager.h>
+#include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/InitLLVM.h>
 #include <llvm/Support/LogicalResult.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Transforms/IPO/GlobalDCE.h>
 #include <mlir/Dialect/LLVMIR/Transforms/Passes.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/MLIRContext.h>
@@ -573,6 +576,27 @@ int main(int argc, char **argv) {
     if (!llvm_module) {
         LOG(ERROR) << "Failed to lower cir to llvm\n";
         return EXIT_FAILURE;
+    }
+
+    // Strip dead internal-linkage globals (notably the patch FuncOps that
+    // `mode: replace_definition` donates a body from, and any patch funcs
+    // left unused after `inline-patches`). External-linkage symbols are
+    // preserved so caller-visible entry points stay intact.
+    {
+        llvm::LoopAnalysisManager lam;
+        llvm::FunctionAnalysisManager fam;
+        llvm::CGSCCAnalysisManager cgam;
+        llvm::ModuleAnalysisManager mam;
+        llvm::PassBuilder pb;
+        pb.registerModuleAnalyses(mam);
+        pb.registerCGSCCAnalyses(cgam);
+        pb.registerFunctionAnalyses(fam);
+        pb.registerLoopAnalyses(lam);
+        pb.crossRegisterProxies(lam, fam, cgam, mam);
+
+        llvm::ModulePassManager mpm;
+        mpm.addPass(llvm::GlobalDCEPass());
+        mpm.run(*llvm_module, mam);
     }
 
     // Embed collected string attributes as debug information in LLVM IR
