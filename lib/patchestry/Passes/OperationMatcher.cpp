@@ -609,6 +609,20 @@ namespace patchestry::passes {
         return "";
     }
 
+    bool OperationMatcher::function_definition_matches(
+        cir::FuncOp func, const patch::MatchConfig &match
+    ) {
+        // Kind guard is defensive (current callers already filter on
+        // MatchKind::FUNCTION) and mirrors patch_action_matches_function_call.
+        if (match.name.empty() || match.kind != MatchKind::FUNCTION) {
+            return false;
+        }
+        if (!matches_pattern(func.getSymName().str(), match.name)) {
+            return false;
+        }
+        return matches_function_context(func, match.function_context);
+    }
+
     bool
     OperationMatcher::matches_pattern(const std::string &text, const std::string &pattern) {
         // If no pattern, match all (this is intentionally different from matches_operation_name

@@ -512,6 +512,35 @@ namespace patchestry::passes {
         if (match.kind == MatchKind::FUNCTION) {
             // Apply to function calls
             for (auto func : function_worklist) {
+                // REPLACE_DEFINITION targets the cir.func definition, not
+                // its call sites — short-circuit the per-call walk.
+                if (action.mode == InstrumentationMode::REPLACE_DEFINITION) {
+                    if (!OperationMatcher::function_definition_matches(
+                            func, match
+                        ))
+                    {
+                        continue;
+                    }
+
+                    auto patch_module = load_code_module(
+                        *func->getContext(), *patch_to_apply.spec->patch_module
+                    );
+                    if (!patch_module) {
+                        LOG(ERROR)
+                            << "Failed to load patch module for function: "
+                            << func.getSymName().str() << "\n";
+                        continue;
+                    }
+
+                    LOG(INFO) << "Replacing definition of '"
+                              << func.getSymName().str() << "' with patch '"
+                              << patch_to_apply.spec->name << "'\n";
+                    PatchOperationImpl::replaceFunctionDefinition(
+                        *this, func, patch_to_apply, patch_module.get()
+                    );
+                    continue;
+                }
+
                 // ERASE collects matched ops first, then erases after walk
                 // to avoid invalidating walk iterators.
                 llvm::SmallVector< mlir::Operation *, 8 > to_erase;
@@ -1429,6 +1458,15 @@ namespace patchestry::passes {
         instr_call_op->setAttr(
             "patchestry_operation",
             mlir::StringAttr::get(target_op->getContext(), target_op->getName().getStringRef())
+        );
+    }
+
+    void InstrumentationPass::set_instrumentation_func_attributes(
+        cir::FuncOp target, llvm::StringRef patch_function_name
+    ) {
+        target->setAttr(
+            "patchestry_definition_replaced_by",
+            mlir::StringAttr::get(target->getContext(), patch_function_name)
         );
     }
 
