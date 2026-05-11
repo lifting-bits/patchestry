@@ -531,6 +531,27 @@ namespace {
         }
         return llvm::success();
     }
+
+    // Strip dead internal-linkage globals (notably the patch FuncOps that
+    // `mode: replace_definition` donates a body from, and any patch funcs
+    // left unused after `inline-patches`). External-linkage symbols are
+    // preserved so caller-visible entry points stay intact.
+    void stripDeadInternalGlobals(llvm::Module &module) {
+        llvm::LoopAnalysisManager lam;
+        llvm::FunctionAnalysisManager fam;
+        llvm::CGSCCAnalysisManager cgam;
+        llvm::ModuleAnalysisManager mam;
+        llvm::PassBuilder pb;
+        pb.registerModuleAnalyses(mam);
+        pb.registerCGSCCAnalyses(cgam);
+        pb.registerFunctionAnalyses(fam);
+        pb.registerLoopAnalyses(lam);
+        pb.crossRegisterProxies(lam, fam, cgam, mam);
+
+        llvm::ModulePassManager mpm;
+        mpm.addPass(llvm::GlobalDCEPass());
+        mpm.run(module, mam);
+    }
 } // namespace
 
 // Main function for the patchir-cir2llvm tool
@@ -578,26 +599,7 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    // Strip dead internal-linkage globals (notably the patch FuncOps that
-    // `mode: replace_definition` donates a body from, and any patch funcs
-    // left unused after `inline-patches`). External-linkage symbols are
-    // preserved so caller-visible entry points stay intact.
-    {
-        llvm::LoopAnalysisManager lam;
-        llvm::FunctionAnalysisManager fam;
-        llvm::CGSCCAnalysisManager cgam;
-        llvm::ModuleAnalysisManager mam;
-        llvm::PassBuilder pb;
-        pb.registerModuleAnalyses(mam);
-        pb.registerCGSCCAnalyses(cgam);
-        pb.registerFunctionAnalyses(fam);
-        pb.registerLoopAnalyses(lam);
-        pb.crossRegisterProxies(lam, fam, cgam, mam);
-
-        llvm::ModulePassManager mpm;
-        mpm.addPass(llvm::GlobalDCEPass());
-        mpm.run(*llvm_module, mam);
-    }
+    stripDeadInternalGlobals(*llvm_module);
 
     // Embed collected string attributes as debug information in LLVM IR
     LOG(INFO) << "Embedding string attributes as debug information\n";
