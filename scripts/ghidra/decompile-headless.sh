@@ -14,7 +14,14 @@ Options:
   -h, --help                           Show this help message and exit
   -i, --input                          Path to the input file
   -f, --function                       Name of the function to decompile
+                                       (with --c-source, may also be an
+                                       address e.g. 0x0000f69c, including
+                                       any address inside the function body)
   -l, --list-functions                 List all functions from input file
+      --c-source                       Emit Ghidra's plain-C decompilation
+                                       for the function selected by --function
+                                       (debugging aid; output is a .c file,
+                                       not JSON). Requires --function.
   -o, --output                         Path to the output file where results will be saved
   -v, --verbose                        Enable verbose output
   -t, --interactive                    Start Docker container in interactive mode
@@ -42,6 +49,8 @@ Examples:
   ./decompile-headless.sh --input /path/to/file --list-functions --output /path/to/output.json // List all functions from binary
   ./decompile-headless.sh --input /path/to/file --function bl_usb__send_message \\
       --output /tmp/out.json --sanitize-extraout
+  ./decompile-headless.sh --input /path/to/file --c-source --function FUN_0000f69c \\
+      --output /tmp/FUN_0000f69c.c // Ghidra C decompilation of one function
 EOF
 }
 
@@ -76,6 +85,10 @@ parse_args() {
                 ;;
             -l|--list-functions)
                 LIST_FUNCTIONS="true"
+                shift
+                ;;
+            --c-source)
+                C_SOURCE="true"
                 shift
                 ;;
             -o|--output)
@@ -214,7 +227,16 @@ build_docker_command() {
     fi
 
     local ARGS=
-    if [  -n "$LIST_FUNCTIONS" ]; then
+    if [ -n "$C_SOURCE" ]; then
+        if [ -z "$FUNCTION_NAME" ]; then
+            echo "Error: --c-source requires --function"
+            exit 1
+        fi
+        if file "$INPUT_PATH" | grep -q "Mach-O"; then
+            FUNCTION_NAME="_$FUNCTION_NAME"
+        fi
+        ARGS="--command decompile-c --function \"$FUNCTION_NAME\" $ARGS"
+    elif [  -n "$LIST_FUNCTIONS" ]; then
         ARGS="--command list-functions $ARGS"
     elif [ -n "$FUNCTION_NAME" ]; then
         if file "$INPUT_PATH" | grep -q "Mach-O"; then
