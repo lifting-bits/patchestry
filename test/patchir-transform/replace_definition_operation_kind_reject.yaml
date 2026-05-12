@@ -1,0 +1,18 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: replace-definition-operation-kind-reject
+  kind: PatchSpec
+target:
+  binary: x.bin
+  arch: ARM:LE:32
+libraries:
+- patches/measurement_update_patch.yaml
+patches:
+- name: bogus_replace_definition_operation_kind
+  id: REPLACE-DEF-OPKIND-REJECT-001
+  match:
+    name: cir.call
+    kind: operation
+  action:
+    mode: replace_definition
+    patch: measurement_update_replace_patch

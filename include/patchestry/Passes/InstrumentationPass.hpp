@@ -433,6 +433,16 @@ namespace patchestry::passes { // NOLINT
         void set_instrumentation_call_attributes(
             cir::CallOp instr_call_op, mlir::Operation *target_op
         );
+
+        /**
+         * @brief Marks `target` as having had its definition replaced by
+         *        the patch function, so downstream tools can identify
+         *        body-swapped functions. Counterpart to
+         *        `set_instrumentation_call_attributes` for body replace.
+         */
+        void set_instrumentation_func_attributes(
+            cir::FuncOp target, llvm::StringRef patch_function_name
+        );
     };
 
 } // namespace patchestry::passes

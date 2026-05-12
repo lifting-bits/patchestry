@@ -132,6 +132,29 @@ namespace patchestry::passes {
         );
 
         /**
+         * @brief Replaces the body region of the matched `cir.func`
+         *        with the body of the patch function, leaving every
+         *        caller and the symbol/signature of `target` untouched.
+         *
+         * The patch function's type must match `target.getFunctionType()`
+         * exactly (strict signature gate); on mismatch the pass signals
+         * failure and `target` is left unchanged. The target must be a
+         * definition, not a declaration. The patch FuncOp remains in
+         * the module as a private definition after replacement
+         * (parity with `replaceCallWithPatch`).
+         *
+         * @param pass The instrumentation pass instance
+         * @param target The `cir.func` whose body will be replaced
+         * @param patch The patch information containing the patch
+         *              function details
+         * @param patch_module The module containing the patch function
+         */
+        static void replaceFunctionDefinition(
+            InstrumentationPass &pass, cir::FuncOp target,
+            const PatchInformation &patch, mlir::ModuleOp patch_module
+        );
+
+        /**
          * @brief Erases the target operation without inserting any patch.
          *
          * Used by ERASE mode. If the op has live result uses, each used

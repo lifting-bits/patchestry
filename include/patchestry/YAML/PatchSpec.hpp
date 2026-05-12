@@ -106,6 +106,8 @@ namespace patchestry::passes {
                     return "REPLACE";
                 case InstrumentationMode::ERASE:
                     return "ERASE";
+                case InstrumentationMode::REPLACE_DEFINITION:
+                    return "REPLACE_DEFINITION";
             }
             return "UNKNOWN";
         }
@@ -268,10 +270,13 @@ namespace llvm::yaml {
         if (mode_str == "Erase" || mode_str == "erase") {
             return InstrumentationMode::ERASE;
         }
+        if (mode_str == "ReplaceDefinition" || mode_str == "replace_definition") {
+            return InstrumentationMode::REPLACE_DEFINITION;
+        }
         io.setError(
             "Unknown patch mode: '" + mode_str
             + "'. Valid modes: ApplyBefore, ApplyAfter, "
-              "ApplyAtEntrypoint, Replace, Erase"
+              "ApplyAtEntrypoint, Replace, Erase, ReplaceDefinition"
         );
         return InstrumentationMode::NONE;
     }
@@ -661,6 +666,66 @@ namespace llvm::yaml {
                         );
                         break;
                     }
+                }
+            }
+
+            // `replace_definition` swaps the callee's body wholesale; the
+            // wrapper inherits its signature 1:1, so match-site / per-operand
+            // knobs are meaningless. Reject at parse for a clear diagnostic.
+            if (action_obj.mode == InstrumentationMode::REPLACE_DEFINITION) {
+                // `setError` is first-caller-wins; `return` after each so a
+                // multi-violation spec doesn't chase down the same diagnostic
+                // multiple times and matches the `PatchMatchObject` pattern.
+                if (match_obj.kind != MatchKind::FUNCTION) {
+                    io.setError(
+                        "'mode: replace_definition' requires 'match.kind: "
+                        "function'; the operation-kind dispatch has no "
+                        "notion of a function definition to swap."
+                    );
+                    return;
+                }
+                if (!action_obj.arguments.empty()) {
+                    io.setError(
+                        "'mode: replace_definition' inherits the matched "
+                        "function's signature 1:1; remove 'arguments:'. Use "
+                        "'mode: replace' if you want per-operand plumbing "
+                        "at each call site instead."
+                    );
+                    return;
+                }
+                if (!match_obj.captures.empty()) {
+                    io.setError(
+                        "'mode: replace_definition' does not accept "
+                        "'match.captures'; captures are bound at match "
+                        "sites and have no meaning for a whole-definition "
+                        "swap."
+                    );
+                    return;
+                }
+                if (match_obj.op_kind.has_value()) {
+                    io.setError(
+                        "'mode: replace_definition' does not accept "
+                        "'op_kind:'; op_kind filters kinded generic ops and "
+                        "is meaningless when matching a function definition."
+                    );
+                    return;
+                }
+                if (!match_obj.operand_matches.empty()) {
+                    io.setError(
+                        "'mode: replace_definition' does not accept "
+                        "'operand_matches:'; operand filters apply to "
+                        "match sites, not to function definitions."
+                    );
+                    return;
+                }
+                if (!match_obj.context.empty()) {
+                    io.setError(
+                        "'mode: replace_definition' does not accept "
+                        "'context:'; caller context is meaningless for a "
+                        "callee-definition swap. Use 'mode: replace' if you "
+                        "want to scope rewriting by caller."
+                    );
+                    return;
                 }
             }
         }

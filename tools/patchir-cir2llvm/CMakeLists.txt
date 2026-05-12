@@ -21,6 +21,8 @@ target_link_libraries(patchir-cir2llvm
         MLIROpenMPToLLVMIRTranslation
         MLIRPtrToLLVMIRTranslation
         MLIRContracts
+        LLVMipo
+        LLVMPasses
 )
 
 if(PATCHESTRY_INSTALL)
