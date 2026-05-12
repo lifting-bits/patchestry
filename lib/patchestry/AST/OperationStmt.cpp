@@ -1447,7 +1447,7 @@ namespace patchestry::ast {
         if (!op.target || op.mnemonic != Mnemonic::OP_TAIL_CALL) {
             LOG(ERROR) << "TAIL_CALL operation or target is invalid. key: "
                        << op.key << "\n";
-            return {};
+            return emit_fallback_return();
         }
         if (!op.target->function) {
             LOG(ERROR) << "TAIL_CALL target missing function. key: " << op.key << "\n";
