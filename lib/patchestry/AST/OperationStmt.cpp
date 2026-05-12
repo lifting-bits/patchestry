@@ -3597,20 +3597,13 @@ namespace patchestry::ast {
 
         // Build descriptive function name: __patchestry_missing_<original_name>
         std::string func_name = "__patchestry_missing_" + original_name;
+        (void) original_label; // debug metadata is currently dropped (see below)
 
         // Determine return type
         clang::QualType ret_type = ctx.VoidTy;
         if (op.output) {
             ret_type = get_varnode_type(ctx, *op.output);
         }
-
-        // Build metadata annotation string with useful debugging info
-        // Format: "intrinsic:<label> addr:<key> ret:<type> args:<count>"
-        std::string annotation = "intrinsic:" + original_label + " addr:" + op.key;
-        if (op.type) {
-            annotation += " ret:" + *op.type;
-        }
-        annotation += " args:" + std::to_string(op.inputs.size());
 
         // Check cache for existing declaration
         auto cache_it = intrinsic_decls.find(func_name);
@@ -3658,10 +3651,13 @@ namespace patchestry::ast {
             }
             fn_decl->setParams(param_decls);
 
-            // Add AnnotateAttr with metadata for debugging
-            fn_decl->addAttr(clang::AnnotateAttr::Create(
-                ctx, annotation, nullptr, 0, clang::SourceRange()
-            ));
+            // Skip AnnotateAttr emission: ClangIR codegen on LLVM 22 errors
+            // with "Not Yet Implemented: deferredAnnotations" when a function
+            // declaration carries an AnnotateAttr, and the error aborts
+            // emission of every TU function visited afterwards. The metadata
+            // was only used for human debugging and has no in-tree consumer,
+            // so dropping it is the safe interim fix until ClangIR implements
+            // the deferred-annotation codegen path.
 
             // Add to translation unit and cache
             ctx.getTranslationUnitDecl()->addDecl(fn_decl);
