@@ -173,6 +173,16 @@ namespace patchestry::ast {
             }
         }
 
+        // Propagate prototype noreturn so isNoReturn() agrees with Ghidra.
+        if (function.get().prototype.is_noreturn) {
+            if (auto *nr_attr = clang::NoReturnAttr::Create(
+                    ctx, func_decl->getSourceRange()
+                ))
+            {
+                func_decl->addAttr(nr_attr);
+            }
+        }
+
         auto parameters     = getParameters(function);
         auto num_parameters = function.get().prototype.parameters.size();
         if (parameters.size() != num_parameters) {
@@ -662,6 +672,12 @@ namespace patchestry::ast {
                 return op_builder->create_call(ctx, function, op);
             case Mnemonic::OP_CALLIND:
                 return op_builder->create_callind(ctx, function, op);
+            case Mnemonic::OP_TAIL_CALL: {
+                auto *enclosing = clang::dyn_cast_or_null< clang::FunctionDecl >(
+                    get_sema_context()
+                );
+                return op_builder->create_tail_call(ctx, function, op, enclosing);
+            }
             case Mnemonic::OP_CALLOTHER:
                 return op_builder->create_callother(ctx, function, op);
             case Mnemonic::OP_USERDEFINED:

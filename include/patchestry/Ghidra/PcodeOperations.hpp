@@ -148,6 +148,8 @@ namespace patchestry::ghidra {
         std::optional< std::string > operation;
         std::optional< std::string > global;   // For CALLIND global var targets
         std::optional< std::string > type_key; // Type of the target
+        // Literal address for kind:"address" targets (unresolved callee).
+        std::optional< std::string > address;
         bool is_noreturn;
     };
 
@@ -212,6 +214,13 @@ namespace patchestry::ghidra {
         bool is_noreturn;
     };
 
+    // One contiguous range of a function's body.
+    struct AddressRange
+    {
+        std::string start;
+        std::string end;
+    };
+
     struct Function
     {
         std::string name;         // original (possibly mangled) symbol name
@@ -220,6 +229,10 @@ namespace patchestry::ghidra {
         std::string key;
         std::string entry_block;
         std::unordered_map< std::string, BasicBlock > basic_blocks;
+
+        // Optional schema fields; empty on older serializer outputs.
+        std::string entry_point;
+        std::vector< AddressRange > address_ranges;
     };
 
     struct Program

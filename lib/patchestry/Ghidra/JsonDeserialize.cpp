@@ -733,6 +733,35 @@ namespace patchestry::ghidra {
             function.entry_block = entry_block->str();
         }
 
+        // Optional: older serializer outputs omit these.
+        if (auto maybe_entry_point = get_string_if_valid(func_obj, "entry_point")) {
+            function.entry_point = *maybe_entry_point;
+        }
+        if (const auto *ranges_arr = func_obj.getArray("address_ranges")) {
+            for (const auto &range_val : *ranges_arr) {
+                const auto *range_obj = range_val.getAsObject();
+                if (range_obj == nullptr) {
+                    LOG(WARNING) << "Function '" << function.name
+                                 << "' has a non-object address_ranges entry; dropping.\n";
+                    continue;
+                }
+                AddressRange r;
+                if (auto s = get_string_if_valid(*range_obj, "start")) {
+                    r.start = *s;
+                }
+                if (auto e = get_string_if_valid(*range_obj, "end")) {
+                    r.end = *e;
+                }
+                if (r.start.empty() || r.end.empty()) {
+                    LOG(WARNING) << "Function '" << function.name
+                                 << "' has a malformed address_range (start='"
+                                 << r.start << "' end='" << r.end << "'); dropping.\n";
+                    continue;
+                }
+                function.address_ranges.push_back(std::move(r));
+            }
+        }
+
         if (const auto *blocks_array = func_obj.getObject("basic_blocks")) {
             deserialize_blocks(*blocks_array, function.basic_blocks, function.entry_block);
         }
@@ -771,6 +800,12 @@ namespace patchestry::ghidra {
         auto type_key = maybe_target->getString("type");
         if (type_key.has_value() && !type_key->empty()) {
             target.type_key = type_key->str();
+        }
+
+        // TAIL_CALL kind:"address": preserve address for AnnotateAttr.
+        auto address = maybe_target->getString("address");
+        if (address.has_value() && !address->empty()) {
+            target.address = address->str();
         }
 
         target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
@@ -891,6 +926,7 @@ namespace patchestry::ghidra {
             case Mnemonic::OP_CALL:
             case Mnemonic::OP_CALLIND:
             case Mnemonic::OP_CALLOTHER:
+            case Mnemonic::OP_TAIL_CALL:
                 deserialize_call_operation(pcode_obj, operation);
                 break;
             case Mnemonic::OP_CBRANCH:

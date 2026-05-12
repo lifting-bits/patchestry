@@ -78,4 +78,5 @@
         X(DECLARE_TEMPORARY) \
         X(ADDRESS_OF) \
         X(POPCOUNT) \
-        X(LZCOUNT)
+        X(LZCOUNT) \
+        X(TAIL_CALL)

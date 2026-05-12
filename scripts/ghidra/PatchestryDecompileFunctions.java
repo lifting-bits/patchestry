@@ -169,6 +169,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     private util.PcodeSerializer.AnalyticalTierMode analyticalMode =
         util.PcodeSerializer.AnalyticalTierMode.AUTO;
 
+    // --[no-]repair-function-boundaries (default on): run TailCallAnalysis.
+    private boolean repairFunctionBoundaries = true;
+
     // Script args with all recognized flags stripped out. The positional
     // command processors (decompileSingleFunction / decompileAllFunctions)
     // index into this rather than getScriptArgs() so flags and positional
@@ -203,6 +206,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         // at the top of the class.
         sanitizeExtraout = true;
         analyticalMode = util.PcodeSerializer.AnalyticalTierMode.AUTO;
+        repairFunctionBoundaries = true;
         positionalArgs = new String[0];
 
         String[] raw = getScriptArgs();
@@ -237,6 +241,19 @@ public class PatchestryDecompileFunctions extends GhidraScript {
                 String value = arg.substring(
                     "--sanitize-extraout-analytical=".length());
                 analyticalMode = parseAnalyticalMode(value);
+                continue;
+            }
+            if (arg.equals("--repair-function-boundaries")) {
+                repairFunctionBoundaries = true;
+                continue;
+            }
+            if (arg.equals("--no-repair-function-boundaries")) {
+                repairFunctionBoundaries = false;
+                continue;
+            }
+            if (arg.startsWith("--repair-function-boundaries=")) {
+                repairFunctionBoundaries = parseBoolFlag(arg,
+                    arg.substring("--repair-function-boundaries=".length()));
                 continue;
             }
             positional.add(arg);
@@ -332,6 +349,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             sanitizeExtraout,
             analyticalMode
         );
+        serializer.setRepairFunctionBoundaries(repairFunctionBoundaries);
         serializer.serialize();
     }
 
@@ -494,6 +512,16 @@ public class PatchestryDecompileFunctions extends GhidraScript {
 
         mgr.startAnalysis(monitor);
         mgr.waitForAnalysis(null, monitor);
+
+        // Detect tail-calls, split merged functions; PcodeSerializer
+        // reads the resulting bookmarks + property map.
+        if (repairFunctionBoundaries) {
+            try {
+                util.tailcall.TailCallAnalysis.run(program, monitor);
+            } catch (Exception e) {
+                println("[tailcall] analysis failed: " + e.getMessage());
+            }
+        }
     }
 
     void runHeadless() throws Exception {

@@ -54,6 +54,12 @@ Options:
       Tier 2 on any architecture; 'off' disables Tier 2 even on allowlisted
       architectures. Default: auto.
 
+  --repair-function-boundaries[=<on|off>]
+      Run the TailCallAnalysis pre-pass to split functions that were
+      merged by Ghidra's call-reference analyzer. Default: on. Pass
+      --no-repair-function-boundaries (or --repair-function-boundaries=off)
+      to disable. Forwarded to PatchestryDecompileFunctions.
+
 Examples:
   ./decompile-entrypoint.sh --input /path/to/file --command list-functions --output /path/to/output.json
   ./decompile-entrypoint.sh --input /path/to/file --command decompile --function main --output /path/to/output.json
@@ -126,6 +132,15 @@ function parse_args {
                 fi
                 ;;
             --sanitize-extraout-analytical=*)
+                SCRIPT_EXTRA_ARGS+=("$1")
+                ;;
+            --repair-function-boundaries)
+                SCRIPT_EXTRA_ARGS+=("--repair-function-boundaries")
+                ;;
+            --no-repair-function-boundaries)
+                SCRIPT_EXTRA_ARGS+=("--no-repair-function-boundaries")
+                ;;
+            --repair-function-boundaries=*)
                 SCRIPT_EXTRA_ARGS+=("$1")
                 ;;
             *)
