@@ -1,0 +1,77 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// Issue #223 regression: pin the post-fix JSON contract from
+// PcodeSerializer.chooseEmittedType — value-carrying varnodes co-emit
+// `type` and `size`, and the emitted type's width matches `size`.
+//
+// Pre-fix, PIECE inputs in this position could carry an umbrella
+// `type` (e.g. `struct sockaddr[2]`, 32 bytes) for a 4-byte varnode.
+// patchir-decomp's PIECE lowering would feed that into
+// `(record) << int | int`, Sema would reject, and the resulting null
+// Expr would hit `clang::dyn_cast<>(nullptr)` and abort.
+//
+// This fixture uses the new shape: 2-byte halves typed `undefined2`
+// (width-matching) merged into a 4-byte `undefined4` result.
+// FileCheck pins (a) the consumer accepts the co-emitted type+size,
+// and (b) PIECE lowers to shift|or without abort.
+//
+// CIR: cir.func dso_local @umbrella_piece_test
+// LL: define {{.*}} @umbrella_piece_test
+// LL: shl i32
+// LL: or i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "umbrella_piece_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_u32",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_u16", "type_u16"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p_hi": { "mnemonic": "DECLARE_PARAMETER", "name": "hi", "type": "type_u16", "kind": "parameter", "index": 0 },
+            "p_lo": { "mnemonic": "DECLARE_PARAMETER", "name": "lo", "type": "type_u16", "kind": "parameter", "index": 1 },
+            "local_merged": { "mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "merged", "type": "type_u32" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p_hi", "p_lo", "local_merged", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "piece_op": {
+              "mnemonic": "PIECE",
+              "type": "type_u32",
+              "output": { "kind": "local", "operation": "local_merged" },
+              "inputs": [
+                { "type": "type_u16", "kind": "parameter", "operation": "p_hi", "size": 2 },
+                { "type": "type_u16", "kind": "parameter", "operation": "p_lo", "size": 2 }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_u32", "kind": "local", "operation": "local_merged" }]
+            }
+          },
+          "ordered_operations": ["piece_op", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_u16": { "name": "unsigned short", "size": 2, "kind": "integer", "is_signed": false },
+    "type_u32": { "name": "unsigned int", "size": 4, "kind": "integer", "is_signed": false }
+  }
+}
