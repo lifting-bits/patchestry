@@ -3,15 +3,15 @@
 
 // RUN: %patchir-transform %t1.cir --spec %S/bl_usb__send_message_before_patch.yaml -o %t2.cir
 // RUN: %file-check -vv -check-prefix=BEFORE %s --input-file %t2.cir
-// BEFORE: cir.call @patch__before__usbd_ep_write_packet(%{{[0-9]+}}, %{{[0-9]+}}) {patchestry_operation = "cir.call"} : (!cir.ptr<!void>, !cir.ptr<!void>) -> () extra(#fn_attr)
-// BEFORE: cir.call @patch__before__usb_state_check(%{{[0-9]+}}, %{{[0-9]+}}) {patchestry_operation = "cir.call"} : (!cir.ptr<!ty_usb_device>, !cir.ptr<!void>) -> () extra(#fn_attr)
-// BEFORE: %{{[0-9]+}} = cir.call @usbd_ep_write_packet(%{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}) : (!cir.ptr<!ty__usbd_device>, !u8i, !cir.ptr<!void>, !u16i) -> !u16i extra(#fn_attr)
+// BEFORE: cir.call @patch__before__usbd_ep_write_packet(%{{[0-9]+}}, %{{[0-9]+}}) {patchestry_operation = "cir.call"} : (!cir.ptr<!void>, !cir.ptr<!void>) -> ()
+// BEFORE: cir.call @patch__before__usb_state_check(%{{[0-9]+}}, %{{[0-9]+}}) {patchestry_operation = "cir.call"} : (!cir.ptr<!rec_usb_device>, !cir.ptr<!void>) -> ()
+// BEFORE: %{{[0-9]+}} = cir.call @usbd_ep_write_packet(%{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}) : (!cir.ptr<!rec__usbd_device>, !u8i, !cir.ptr<!void>, !u16i) -> !u16i
 
 
 // RUN: %patchir-transform %t1.cir --spec %S/bl_usb__send_message_after_patch.yaml -o %t3.cir
 // RUN: %file-check -vv -check-prefix=AFTER %s --input-file %t3.cir
-// AFTER: %{{[0-9]+}} = cir.call @usbd_ep_write_packet(%{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}) : (!cir.ptr<!ty__usbd_device>, !u8i, !cir.ptr<!void>, !u16i) -> !u16i extra(#fn_attr)
-// AFTER: cir.call @patch__after__usbd_ep_write_packet(%{{[0-9]+}}) {patchestry_operation = "cir.call"} : (!u32i) -> () extra(#fn_attr)
+// AFTER: %{{[0-9]+}} = cir.call @usbd_ep_write_packet(%{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}) : (!cir.ptr<!rec__usbd_device>, !u8i, !cir.ptr<!void>, !u16i) -> !u16i
+// AFTER: cir.call @patch__after__usbd_ep_write_packet(%{{[0-9]+}}) {patchestry_operation = "cir.call"} : (!u32i) -> ()
 
 // RUN: %patchir-transform %t1.cir --spec %S/bl_usb__send_message_before_update_patch.yaml -o %t3.cir
 // RUN: %file-check -vv -check-prefix=UPDATE %s --input-file %t3.cir
@@ -24,7 +24,7 @@
 // entry block rather than at the matched call site.
 // RUN: %patchir-transform %t1.cir --spec %S/entrypoint_patch.yaml -o %t4.cir
 // RUN: %file-check -vv -check-prefix=PATCH_ENTRY %s --input-file %t4.cir
-// PATCH_ENTRY: cir.func @bl_usb__send_message
+// PATCH_ENTRY: cir.func dso_local @bl_usb__send_message
 // PATCH_ENTRY: cir.call @patch__entrypoint__message_entry_check({{.*}}) {{.*}}patchestry_operation = "cir.call"
 
 // Layered test: run the entrypoint patch, then apply the static contract
@@ -42,7 +42,7 @@
 // RUN: %patchir-transform %t1.cir --spec %S/inline_patches_entrypoint.yaml -o %t6.cir
 // RUN: %file-check -vv -check-prefix=INLINE_ENTRY %s --input-file %t6.cir
 // INLINE_ENTRY-NOT: patch__entrypoint__message_entry_check
-// INLINE_ENTRY: cir.func @bl_usb__send_message
+// INLINE_ENTRY: cir.func dso_local @bl_usb__send_message
 // INLINE_ENTRY: cir.call @patch_assert_fail
 
 // apply_at_entrypoint + source: operand + is_reference: true — regression
@@ -55,11 +55,11 @@
 // %0 reading the pre-patch value.
 // RUN: %patchir-transform %t1.cir --spec %S/entrypoint_patch_operand_ref.yaml -o %t7.cir
 // RUN: %file-check -vv -check-prefix=PATCH_REF_ENTRY %s --input-file %t7.cir
-// PATCH_REF_ENTRY-LABEL: cir.func @bl_usb__send_message
-// PATCH_REF_ENTRY: [[MSG_ALLOCA:%[0-9]+]] = cir.alloca !cir.ptr<!ty_bl_msg_data>, !cir.ptr<!cir.ptr<!ty_bl_msg_data>>, ["msg"
+// PATCH_REF_ENTRY-LABEL: cir.func dso_local @bl_usb__send_message
+// PATCH_REF_ENTRY: [[MSG_ALLOCA:%[0-9]+]] = cir.alloca !cir.ptr<!rec_bl_msg_data>, !cir.ptr<!cir.ptr<!rec_bl_msg_data>>, ["msg"
 // PATCH_REF_ENTRY: cir.store %arg0, [[MSG_ALLOCA]]
 // PATCH_REF_ENTRY-NOT: cir.alloca {{.*}}"arg_ref"
-// PATCH_REF_ENTRY: [[REF_CAST:%[0-9]+]] = cir.cast(bitcast, [[MSG_ALLOCA]] {{.*}}), !cir.ptr<!cir.ptr<!void>>
+// PATCH_REF_ENTRY: [[REF_CAST:%[0-9]+]] = cir.cast bitcast [[MSG_ALLOCA]] {{.*}} -> !cir.ptr<!cir.ptr<!void>>
 // PATCH_REF_ENTRY: cir.call @patch__entrypoint__message_entry_refmut([[REF_CAST]]) {{.*}}patchestry_operation = "cir.call"
 
 

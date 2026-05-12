@@ -1,6 +1,6 @@
 
 # Building
-We mostly rely on a build container, but some dependencies are still needed outside that container: our fork of [LLVM20](https://github.com/trail-of-forks/clangir), a local copy of `lld`, and LLVM [LIT](https://llvm.org/docs/CommandGuide/lit.html).
+We mostly rely on a build container, but some dependencies are still needed outside that container: our fork of [LLVM 22](https://github.com/trail-of-forks/llvm-project) (branch `patchir-llvmorg-22.1.4`), a local copy of `lld`, and LLVM [LIT](https://llvm.org/docs/CommandGuide/lit.html).
 
 From a fresh checkout, initialize vendored sources first:
 ```sh
@@ -62,9 +62,10 @@ See also: [Development](#development)
 
 The targets list of `"host;AArch64;ARM;X86"` is intentional (to always build host arch, AArch64, ARM, and x86), even if host arch is almost certainly either AArch64 or X86.
 
-This must be the patched `trail-of-forks/clangir` toolchain, or an equivalent
-install built from the same fork. A stock Homebrew `llvm` or `llvm@20` install
-is not a supported substitute for host-native patchestry builds.
+This must be the patched `trail-of-forks/llvm-project` toolchain (branch
+`patchir-llvmorg-22.1.4`), or an equivalent install built from the same fork.
+A stock Homebrew `llvm` or `llvm@22` install is not a supported substitute
+for host-native patchestry builds.
 
 > **Container vs host-native:** The
 > [`.devcontainer/README-HOST-BUILD.md`](.devcontainer/README-HOST-BUILD.md)

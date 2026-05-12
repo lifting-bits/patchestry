@@ -93,7 +93,7 @@ FindAndSelectClangCompiler()
 #
 # LLVM & MLIR & Clang
 #
-find_package(LLVM 20 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+find_package(LLVM 22.1 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 
@@ -101,12 +101,12 @@ include(TableGen)
 include(AddLLVM)
 include(HandleLLVMOptions)
 
-find_package(MLIR 20 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+find_package(MLIR 22.1 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 include(AddMLIR)
 
-find_package(Clang 20 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
+find_package(Clang 22.1 CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
 
 
@@ -120,15 +120,6 @@ message(STATUS "Using Z3Config.cmake in ${Z3_DIR} and Z3 headers in ${PE_VENDOR_
 
 find_package(gflags CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
 find_package(glog CONFIG REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
-
-if(PE_USE_RELLIC)
-  find_package(rellic REQUIRED HINTS "${PE_VENDOR_INSTALL_DIR}")
-  message(STATUS "Using RellicConfig.cmake in: ${rellic_DIR}")
-  get_target_property(RELLIC_INCLUDE_DIRS rellic::rellic INTERFACE_INCLUDE_DIRECTORIES)
-else()
-  set(RELLIC_INCLUDE_DIRS "")
-  message(STATUS "RELLIC disabled (PE_USE_RELLIC=OFF)")
-endif()
 
 include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
 include_directories(SYSTEM ${MLIR_INCLUDE_DIRS})
@@ -183,10 +174,6 @@ target_include_directories(patchestry_settings INTERFACE
   $<BUILD_INTERFACE:${PATCHESTRY_BINARY_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-
-if(PE_USE_RELLIC)
-  target_compile_definitions(patchestry_settings INTERFACE PATCHESTRY_ENABLE_RELLIC=1)
-endif()
 
 include(compiler_warnings)
 set_project_warnings(patchestry_settings)

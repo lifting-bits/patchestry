@@ -21,12 +21,12 @@
 // body is materialized (with the loud-failure abort branch), and main()
 // drives memcpy_caller with klee-symbolic inputs.
 //
-// KLEE-LABEL: define void @memcpy_caller(
+// KLEE-LABEL: define {{.*}}void @memcpy_caller(
 // KLEE:       call void @klee_assume(
 // KLEE:       call void @klee_assume(
 // KLEE:       call void @patch__replace__MaliciousMemCpy(
 // KLEE:       define {{.*}} @patch__replace__MaliciousMemCpy(
-// KLEE-LABEL: define i32 @main()
+// KLEE-LABEL: define {{.*}}i32 @main()
 // KLEE:       call void @__klee_init_globals(
 // KLEE:       call void @memcpy_caller(
 {

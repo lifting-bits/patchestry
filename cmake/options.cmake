@@ -23,5 +23,4 @@ option(PE_USE_VENDORED_Z3 "Set to OFF to disable default building of Z3 as a ven
 option(PE_USE_VENDORED_GLOG "Set to OFF to disable default building of Google glog as a vendored library." ON)
 option(PE_USE_VENDORED_GFLAGS "Set to OFF to disable default building of gflags as a vendored library." ON)
 option(PE_USE_VENDORED_CLANG "Set to OFF to disable default building of Clang/LLVM as a vendored library." OFF)
-option(PE_USE_RELLIC "Set to ON to build and link the vendored RELLIC decompiler library." OFF)
 option(PE_ENABLE_EXAMPLE_FIRMWARE_E2E "Enable the opt-in example firmware end-to-end validation target." OFF)

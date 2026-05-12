@@ -13,15 +13,12 @@
 #include <vector>
 
 #include <clang/AST/ASTContext.h>
-#include <clang/CIR/CIRGenerator.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <llvm/Support/VirtualFileSystem.h>
 #include <mlir/IR/BuiltinOps.h>
-
-#include <llvm/Support/VirtualFileSystem.h>
-
-#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/MLIRContext.h>
+
+#include <clang/CIR/CIRGenerator.h>
 
 #include <patchestry/Util/Options.hpp>
 
@@ -60,10 +57,6 @@ namespace patchestry::codegen {
 
         // Emit CIR representation from ASTContext
         std::optional< mlir::ModuleOp > lower_ast_to_mlir(clang::ASTContext &ctx);
-
-        // Emit LLVM IR representation from ASTContext
-        std::unique_ptr< llvm::Module >
-        lower_ast_to_llvm(clang::ASTContext &ctx, llvm::LLVMContext &llvm_ctx);
 
       private:
         void emit_cir(clang::ASTContext &ctx, const patchestry::Options &options);

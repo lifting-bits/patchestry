@@ -131,7 +131,7 @@ namespace patchestry::passes {
                 return TypeCategory::Array;
             }
             if (mlir::isa< cir::ComplexType >(ty)) {
-                auto elem_ty = mlir::cast< cir::ComplexType >(ty).getElementTy();
+                auto elem_ty = mlir::cast< cir::ComplexType >(ty).getElementType();
                 if (mlir::isa< cir::SingleType >(elem_ty)) {
                     return TypeCategory::ComplexFloat;
                 }
@@ -756,7 +756,7 @@ namespace patchestry::passes {
         }
 
         auto cast_op =
-            builder.create< cir::CastOp >(call_op->getLoc(), target_type, cast_kind, value);
+            cir::CastOp::create(builder, call_op->getLoc(), target_type, cast_kind, value);
         auto results = cast_op->getResults();
         if (results.empty()) {
             LOG(ERROR) << "Cast operation produced no results\n";
@@ -778,10 +778,16 @@ namespace patchestry::passes {
                 static_cast< int64_t >(layout.getTypeABIAlignment(value.getType()))
             );
         }
-        auto addr_op = builder.create< cir::AllocaOp >(
+        auto addr_op = cir::AllocaOp::create(builder, 
             call_op->getLoc(), addr_type, value.getType(), "arg_ref", abi_align
         );
-        builder.create< cir::StoreOp >(call_op->getLoc(), value, addr_op.getResult());
+        cir::StoreOp::create(
+            builder, call_op->getLoc(), value, addr_op.getResult(),
+            /*is_volatile=*/mlir::UnitAttr{},
+            /*alignment=*/mlir::IntegerAttr{},
+            /*sync_scope=*/cir::SyncScopeKindAttr{},
+            /*mem_order=*/cir::MemOrderAttr{}
+        );
         return addr_op.getResult();
     }
 
@@ -940,10 +946,9 @@ namespace patchestry::passes {
             }
             mlir::Value slot = it->second;
 
-            auto load_op = builder.create< cir::LoadOp >(
+            auto load_op = cir::LoadOp::create(builder, 
                 old_arg.getLoc(), slot, /*isDeref=*/true, /*isVolatile=*/false,
-                /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
-                /*tbaa=*/mlir::ArrayAttr{}
+                /*alignment=*/mlir::IntegerAttr{}, /*sync_scope=*/cir::SyncScopeKindAttr{}, /*mem_order=*/cir::MemOrderAttr{}
             );
 
             auto cast_value =
@@ -1114,10 +1119,9 @@ namespace patchestry::passes {
                 create_cast_if_needed(builder, call_op, variable_reference, patch_arg_type)
             );
         } else {
-            auto load_op = builder.create< cir::LoadOp >(
+            auto load_op = cir::LoadOp::create(builder, 
                 call_op->getLoc(), variable_reference, /*isDeref=*/true, /*isVolatile=*/false,
-                /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
-                /*tbaa=*/mlir::ArrayAttr{}
+                /*alignment=*/mlir::IntegerAttr{}, /*sync_scope=*/cir::SyncScopeKindAttr{}, /*mem_order=*/cir::MemOrderAttr{}
             );
             call_args.push_back(
                 create_cast_if_needed(builder, call_op, load_op, patch_arg_type)
@@ -1148,10 +1152,9 @@ namespace patchestry::passes {
                 create_cast_if_needed(builder, call_op, symbol_reference, patch_arg_type)
             );
         } else {
-            auto load_op = builder.create< cir::LoadOp >(
+            auto load_op = cir::LoadOp::create(builder, 
                 call_op->getLoc(), symbol_reference, /*isDeref=*/true, /*isVolatile=*/false,
-                /*alignment=*/mlir::IntegerAttr{}, /*mem_order=*/cir::MemOrderAttr{},
-                /*tbaa=*/mlir::ArrayAttr{}
+                /*alignment=*/mlir::IntegerAttr{}, /*sync_scope=*/cir::SyncScopeKindAttr{}, /*mem_order=*/cir::MemOrderAttr{}
             );
             call_args.push_back(
                 create_cast_if_needed(builder, call_op, load_op, patch_arg_type)
@@ -1301,7 +1304,7 @@ namespace patchestry::passes {
                         llvm::APInt(int_type.getWidth(), static_cast< uint64_t >(int_val)), int_type.isSigned()
                     )
                 );
-                return builder.create< cir::ConstantOp >(call_op->getLoc(), int_type, attr);
+                return cir::ConstantOp::create(builder, call_op->getLoc(), int_type, attr);
             } catch (const std::exception &e) {
                 LOG(ERROR) << "Failed to parse integer constant '" << value << "': " << e.what()
                            << "\n";
@@ -1318,8 +1321,8 @@ namespace patchestry::passes {
                     llvm::APSInt(llvm::APInt(int_type.getWidth(), ptr_val), int_type.isSigned())
                 );
                 auto int_const =
-                    builder.create< cir::ConstantOp >(call_op->getLoc(), int_type, int_attr);
-                return builder.create< cir::CastOp >(
+                    cir::ConstantOp::create(builder, call_op->getLoc(), int_type, int_attr);
+                return cir::CastOp::create(builder, 
                     call_op->getLoc(), ptr_type, cir::CastKind::int_to_ptr, int_const
                 );
             } catch (const std::exception &e) {
@@ -1402,12 +1405,12 @@ namespace patchestry::passes {
         if (auto global_op = module.lookupSymbol< cir::GlobalOp >(symbol_name)) {
             auto global_type = global_op.getSymType();
             if (auto global_ptr_type = mlir::dyn_cast< cir::PointerType >(global_type)) {
-                return builder.create< cir::GetGlobalOp >(
+                return cir::GetGlobalOp::create(builder, 
                     call_op->getLoc(), global_ptr_type, symbol_name
                 );
             } else {
                 auto ptr_type = cir::PointerType::get(builder.getContext(), global_type);
-                return builder.create< cir::GetGlobalOp >(
+                return cir::GetGlobalOp::create(builder, 
                     call_op->getLoc(), ptr_type, symbol_name
                 );
             }
@@ -1418,7 +1421,7 @@ namespace patchestry::passes {
             auto func_type     = func_op.getFunctionType();
             auto func_ptr_type = cir::PointerType::get(builder.getContext(), func_type);
             auto symbol_ref = mlir::FlatSymbolRefAttr::get(builder.getContext(), symbol_name);
-            return builder.create< cir::GetGlobalOp >(
+            return cir::GetGlobalOp::create(builder, 
                 call_op->getLoc(), func_ptr_type, symbol_ref
             );
         }
@@ -1440,18 +1443,45 @@ namespace patchestry::passes {
     void InstrumentationPass::set_instrumentation_call_attributes(
         cir::CallOp instr_call_op, mlir::Operation *target_op
     ) {
+        // TODO(llvm22): cir::ExtraFuncAttributesAttr was removed in upstream MLIR
+        // CIR (LLVM 22). Restore an equivalent mechanism for propagating extra
+        // call-site attributes once the upstream replacement is identified.
+        //
+        // Until that lands, surface every attribute we are silently failing to
+        // propagate so the gap is visible at test time rather than as an
+        // ABI/semantic mismatch baked into the patched binary.
         if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(target_op)) {
-            // For CallOp operations, preserve the original extra attributes
-            instr_call_op->setAttr("extra_attrs", orig_call_op.getExtraAttrs());
-        } else {
-            // For non-CallOp operations, create empty extra attributes
-            mlir::NamedAttrList empty;
-            instr_call_op->setAttr(
-                "extra_attrs",
-                cir::ExtraFuncAttributesAttr::get(
-                    target_op->getContext(), empty.getDictionary(target_op->getContext())
-                )
-            );
+            auto callee_name =
+                instr_call_op.getCallee().has_value() ? instr_call_op.getCallee()->str() : std::string("<indirect>");
+            auto report_drop = [&](const std::string &what) {
+                LOG(ERROR) << "Instrumentation call to @" << callee_name << " drops "
+                           << what
+                           << " carried by the original cir.call (TODO(llvm22): "
+                              "restore ExtraFuncAttributesAttr replacement)\n";
+            };
+
+            if (orig_call_op.getNothrow()) {
+                report_drop("`nothrow`");
+            }
+            if (auto se = orig_call_op.getSideEffectAttr();
+                se && se.getValue() != cir::SideEffect::All)
+            {
+                report_drop(
+                    "non-default `side_effect = "
+                    + cir::stringifySideEffect(se.getValue()).str() + "`"
+                );
+            }
+            // Discardable attrs are anything beyond the inherent (callee /
+            // nothrow / side_effect) names. Skip our own markers; anything
+            // else is something the old extra_attrs mechanism would have
+            // copied verbatim.
+            for (const auto &named : orig_call_op->getDiscardableAttrs()) {
+                llvm::StringRef name = named.getName().getValue();
+                if (name.starts_with("patchestry_") || name == "contract.static") {
+                    continue;
+                }
+                report_drop("discardable attribute `" + name.str() + "`");
+            }
         }
 
         // Add operation-specific attributes for debugging
@@ -1942,7 +1972,7 @@ namespace patchestry::passes {
                     static_cast< int64_t >(layout.getTypeABIAlignment(cr.getType()))
                 );
                 auto addr_type = cir::PointerType::get(builder.getContext(), cr.getType());
-                auto slot = alloca_builder.create< cir::AllocaOp >(
+                auto slot = cir::AllocaOp::create(alloca_builder, 
                     loc, addr_type, cr.getType(), "inline_ret", align
                 );
                 result_slots.push_back(slot.getResult());
@@ -1955,7 +1985,13 @@ namespace patchestry::passes {
 
             if (unify_via_alloca) {
                 for (auto [slot, val] : llvm::zip(result_slots, ret.getOperands())) {
-                    rb.create< cir::StoreOp >(ret_loc, val, slot);
+                    cir::StoreOp::create(
+                        rb, ret_loc, val, slot,
+                        /*is_volatile=*/mlir::UnitAttr{},
+                        /*alignment=*/mlir::IntegerAttr{},
+                        /*sync_scope=*/cir::SyncScopeKindAttr{},
+                        /*mem_order=*/cir::MemOrderAttr{}
+                    );
                 }
             } else if (!call_results.empty()) {
                 // Single-return + non-void: RAUW directly with the
@@ -1964,14 +2000,20 @@ namespace patchestry::passes {
                     cr.replaceAllUsesWith(val);
                 }
             }
-            rb.create< cir::BrOp >(ret_loc, split_block);
+            cir::BrOp::create(rb, ret_loc, split_block);
             ret.erase();
         }
 
         if (unify_via_alloca) {
             mlir::OpBuilder load_builder(split_block, split_block->begin());
             for (auto [cr, slot] : llvm::zip(call_results, result_slots)) {
-                auto loaded = load_builder.create< cir::LoadOp >(loc, cr.getType(), slot);
+                auto loaded = cir::LoadOp::create(
+                    load_builder, loc, cr.getType(), slot,
+                    /*isDeref=*/false, /*isVolatile=*/false,
+                    /*alignment=*/mlir::IntegerAttr{},
+                    /*sync_scope=*/cir::SyncScopeKindAttr{},
+                    /*mem_order=*/cir::MemOrderAttr{}
+                );
                 cr.replaceAllUsesWith(loaded.getResult());
             }
         }
@@ -1987,7 +2029,7 @@ namespace patchestry::passes {
         // takes no args here — callee function params are already
         // registered in `mapper`, so ops cloned into the cloned entry
         // reference call operands directly via mapper substitution.
-        builder.create< cir::BrOp >(loc, callee_entry_block);
+        cir::BrOp::create(builder, loc, callee_entry_block);
 
         // Remove the original call. The callee itself is left in place —
         // the same patch symbol may be referenced by other call ops still

@@ -3,7 +3,7 @@
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // CIR: cir.const_array<"hello %s
-// CIR: cir.func @string_literal_test
+// CIR: cir.func dso_local @string_literal_test
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // LL: define dso_local i32 @string_literal_test
 // RUN: %file-check -vv -check-prefix=CCHECK %s --input-file %t.c

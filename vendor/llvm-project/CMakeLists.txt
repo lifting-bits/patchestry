@@ -16,7 +16,7 @@ if(NOT EXISTS "${src_dir}/llvm/CMakeLists.txt")
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 
   execute_process(
-    COMMAND "${GIT_EXECUTABLE}" submodule set-branch --branch patche-clangir-20 vendor/clangir/src
+    COMMAND "${GIT_EXECUTABLE}" submodule set-branch --branch patchir-llvmorg-22.1.4 vendor/llvm-project/src
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
 endif()
 

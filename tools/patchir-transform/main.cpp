@@ -10,6 +10,8 @@
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/InitLLVM.h>
+#include <mlir/Dialect/DLTI/DLTI.h>
+#include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/LLVMIR/Transforms/Passes.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/Operation.h>

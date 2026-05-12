@@ -8,7 +8,7 @@
 // handler-bus structuring keeps every callee reachable so the patchir-transform
 // stage has a stable call site to match against.
 
-// CIR-LABEL: cir.func @Attribute_Modified_CB(
+// CIR-LABEL: cir.func {{.*}}@Attribute_Modified_CB(
 // CIR:         cir.call @ProcessModeReq(
 // CIR:         cir.call @ProcessBolusReq(
 // CIR:         cir.call @ProcessVulnReq(

@@ -76,11 +76,6 @@ namespace {
         "verbose", llvm::cl::desc("Enable debug logs"), llvm::cl::init(false)
     ); // NOLINT(cert-err58-cpp)
 
-    const llvm::cl::opt< bool > use_rellic_transform( // NOLINT(cert-err58-cpp)
-        "use-rellic-transform", llvm::cl::desc("Enable rellic decompilation transform"),
-        llvm::cl::init(false)
-    ); // NOLINT(cert-err58-cpp)
-
     const llvm::cl::opt< bool > print_tu( // NOLINT(cert-err58-cpp)
         "print-tu", llvm::cl::desc("Pretty print translation unit"), llvm::cl::init(false)
     );
@@ -109,7 +104,6 @@ namespace {
             .emit_asm                   = emit_asm.getValue(),
             .emit_obj                   = emit_obj.getValue(),
             .verbose                    = verbose.getValue(),
-            .use_rellic_transform       = use_rellic_transform.getValue(),
             .use_structuring_pass       = use_structuring_pass.getValue(),
             .output_file                = output_filename.getValue(),
             .input_file                 = input_filename.getValue(),
@@ -170,7 +164,7 @@ namespace {
     void createSourceManager(clang::CompilerInstance &ci) {
         // Create file manager and setup source manager
         ci.createFileManager();
-        ci.createSourceManager(ci.getFileManager());
+        ci.createSourceManager();
 
         // get source manager and setup main_file_id for the source manager
         auto &sm = ci.getSourceManager();
@@ -325,8 +319,8 @@ int main(int argc, char **argv) {
     clang::TargetOptions &inv_target_opts = invocation.getTargetOpts();
     inv_target_opts.Triple                = llvm::sys::getDefaultTargetTriple();
 
-    ci.createDiagnostics(*llvm::vfs::getRealFileSystem());
-    ci.getDiagnostics().setClient(new patchestry::DiagnosticClient());
+    ci.createVirtualFileSystem();
+    ci.createDiagnostics(new patchestry::DiagnosticClient(), /*ShouldOwnClient=*/true);
     if (!ci.hasDiagnostics()) {
         LOG(ERROR) << "Failed to initialize diagnostics.\n";
         return EXIT_FAILURE;
@@ -337,7 +331,7 @@ int main(int argc, char **argv) {
     std::shared_ptr< clang::TargetOptions > target_options =
         std::make_shared< clang::TargetOptions >();
     target_options->Triple = createTargetTriple(*program->arch, *program->lang);
-    ci.setTarget(clang::TargetInfo::CreateTargetInfo(ci.getDiagnostics(), target_options));
+    ci.setTarget(clang::TargetInfo::CreateTargetInfo(ci.getDiagnostics(), *target_options));
 
     setCodegenOptions(ci);
 

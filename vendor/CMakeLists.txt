@@ -23,9 +23,5 @@ if(PE_USE_VENDORED_Z3)
 endif()
 
 if(PE_USE_VENDORED_CLANG)
-    add_subdirectory(clangir)
-endif()
-
-if(PE_USE_RELLIC)
-    add_subdirectory(rellic)  # Depends on glog and clangir (if vendored)
+    add_subdirectory(llvm-project)
 endif()

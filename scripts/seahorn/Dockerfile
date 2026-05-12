@@ -1,18 +1,21 @@
-# Build SeaHorn on top of the patchestry LLVM-20 dev image.
+# Build SeaHorn on top of the patchestry LLVM dev image.
 #
-#   docker build -t seahorn:dev20 -f analysis/seahorn/Dockerfile .
+#   docker build -t seahorn:dev -f analysis/seahorn/Dockerfile .
 #
-# The base image already provides LLVM 20, Clang 20, lld, CMake and Ninja.
-# This Dockerfile layers SeaHorn's extra runtime/build dependencies (z3,
-# yices2, boost, gmp/mpfr, graphviz) and compiles SeaHorn from
-# trail-of-forks/seahorn (dev20 branch) using the in-tree LLVM toolchain.
+# The base image provides LLVM, Clang, lld, CMake and Ninja matching the
+# LLVM_VERSION build-arg (default 22). This Dockerfile layers SeaHorn's
+# extra runtime/build dependencies (z3, yices2, boost, gmp/mpfr, graphviz)
+# and compiles SeaHorn from trail-of-forks/seahorn at SEAHORN_REF using
+# the in-tree LLVM toolchain.
 
 ARG IMAGE_VERSION=22.04
-ARG LLVM_VERSION=20
+ARG LLVM_VERSION=22
 ARG SEAHORN_REPO=https://github.com/trail-of-forks/seahorn.git
-# Commit pin for trail-of-forks/seahorn dev20. Bump intentionally; the
-# branch tip is mutable, so the pin is what makes the image reproducible.
-# Accepts any git-resolvable ref (commit SHA, branch, or tag).
+# Commit pin for trail-of-forks/seahorn. Bump intentionally; the branch
+# tip is mutable, so the pin is what makes the image reproducible.
+# Accepts any git-resolvable ref (commit SHA, branch, or tag). The default
+# below targets the dev20 lineage; override SEAHORN_REF when bumping to a
+# SeaHorn build that links against LLVM 22.
 ARG SEAHORN_REF=0f5ad78bc6a9d0ed5340b1ed19996151b27f54cf
 ARG BUILD_TYPE=RelWithDebInfo
 

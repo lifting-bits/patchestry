@@ -2,12 +2,12 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
-// CIR-DAG: cir.func @int_eq_test
-// CIR-DAG: cir.func @int_ne_test
-// CIR-DAG: cir.func @int_lt_test
-// CIR-DAG: cir.func @int_le_test
-// CIR-DAG: cir.func @int_slt_test
-// CIR-DAG: cir.func @int_sle_test
+// CIR-DAG: cir.func dso_local @int_eq_test
+// CIR-DAG: cir.func dso_local @int_ne_test
+// CIR-DAG: cir.func dso_local @int_lt_test
+// CIR-DAG: cir.func dso_local @int_le_test
+// CIR-DAG: cir.func dso_local @int_slt_test
+// CIR-DAG: cir.func dso_local @int_sle_test
 // CIR-DAG: cir.cmp(eq,
 // CIR-DAG: cir.cmp(ne,
 // CIR-DAG: cir.cmp(lt,

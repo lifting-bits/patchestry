@@ -1,16 +1,24 @@
 # KLEE Docker image for running symbolic execution harnesses
-# Built from https://github.com/trail-of-forks/klee/tree/llvm20
+# Built from trail-of-forks/klee at KLEE_BRANCH/KLEE_REF (defaults below).
 #
-# Base image: patchestry dev container with LLVM 20 pre-installed
-# Platform:   linux/amd64 only (CI builds for amd64)
+# Base image: patchestry dev container at LLVM_VERSION (default 22).
+# Platform:   linux/amd64 only (CI builds for amd64).
 #
 # Usage:
 #   docker build --platform linux/amd64 -t patchestry/klee:latest -f scripts/klee/Dockerfile scripts/klee
 #   docker run --rm --platform linux/amd64 -v /path/to/harness:/work patchestry/klee:latest \
 #       --input /work/harness.c --output /work/results
+#
+# The KLEE branch/commit defaults below target the llvm20 lineage of
+# trail-of-forks/klee. Override KLEE_BRANCH and KLEE_REF (and bump
+# LLVM_VERSION) when the upstream fork lands a klee build that links
+# against LLVM 22.
 
 ARG IMAGE_VERSION=22.04
-ARG LLVM_VERSION=20
+ARG LLVM_VERSION=22
+ARG KLEE_REPO=https://github.com/trail-of-forks/klee.git
+ARG KLEE_BRANCH=llvm20
+ARG KLEE_REF=4006851f09af391a368578fd4644d236e36d77b7
 ARG TARGETPLATFORM=linux/amd64
 
 # ============================================================
@@ -19,6 +27,9 @@ ARG TARGETPLATFORM=linux/amd64
 FROM --platform=$TARGETPLATFORM ghcr.io/lifting-bits/patchestry-ubuntu-${IMAGE_VERSION}-llvm-${LLVM_VERSION}-dev:latest AS builder
 
 ARG LLVM_VERSION
+ARG KLEE_REPO
+ARG KLEE_BRANCH
+ARG KLEE_REF
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LLVM_VERSION=${LLVM_VERSION}
 ENV CMAKE_PREFIX_PATH="/usr/local/;/usr/local/lib/cmake/mlir/;/usr/local/lib/cmake/clang/;/usr/local/lib/cmake/llvm/"
@@ -102,9 +113,8 @@ ENV LIBRARY_PATH="/opt/minisat/lib:/opt/stp/lib:/opt/z3/lib"
 # Copy patches applied during KLEE build
 COPY patches/ /tmp/klee-patches/
 
-RUN git clone --branch llvm20 \
-        https://github.com/trail-of-forks/klee.git /tmp/klee \
-    && cd /tmp/klee && git checkout 4006851f09af391a368578fd4644d236e36d77b7 \
+RUN git clone --branch "${KLEE_BRANCH}" "${KLEE_REPO}" /tmp/klee \
+    && cd /tmp/klee && git checkout "${KLEE_REF}" \
     && git apply /tmp/klee-patches/raise-asm-guard-tri.patch \
     && mkdir build && cd build \
     && cmake -G Ninja \

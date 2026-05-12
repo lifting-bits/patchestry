@@ -2,9 +2,9 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
-// CIR-DAG: cir.func @int_sdiv_test
-// CIR-DAG: cir.func @int_srem_test
-// CIR-DAG: cir.func @int_2comp_test
+// CIR-DAG: cir.func dso_local @int_sdiv_test
+// CIR-DAG: cir.func dso_local @int_srem_test
+// CIR-DAG: cir.func dso_local @int_2comp_test
 // CIR-DAG: cir.binop(div,
 // CIR-DAG: cir.binop(rem,
 // CIR-DAG: cir.unary(minus,

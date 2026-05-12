@@ -24,7 +24,7 @@ namespace patchestry::codegen {
       public:
         explicit PassManagerBuilder(mlir::MLIRContext *context) : mctx(context) {
             pm = std::make_unique< mlir::PassManager >(context);
-            pm->addPass(mlir::createFlattenCFGPass());
+            pm->addPass(mlir::createCIRFlattenCFGPass());
             pm->addPass(mlir::createCIRSimplifyPass());
         }
 

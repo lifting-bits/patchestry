@@ -2,8 +2,8 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
-// CIR: cir.func @subpiece_test
-// CIR: cir.cast(integral,
+// CIR: cir.func dso_local @subpiece_test
+// CIR: cir.cast integral
 // LL: define dso_local i8 @subpiece_test
 // LL: trunc i32
 {

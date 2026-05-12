@@ -2,10 +2,10 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
-// CIR-DAG: cir.func @popcount_test
-// CIR-DAG: cir.func @lzcount_test
-// CIR-DAG: cir.bit.popcount(
-// CIR-DAG: cir.bit.clz(
+// CIR-DAG: cir.func dso_local @popcount_test
+// CIR-DAG: cir.func dso_local @lzcount_test
+// CIR-DAG: cir.popcount
+// CIR-DAG: cir.clz
 // LL-DAG: define dso_local i32 @popcount_test
 // LL-DAG: define dso_local i32 @lzcount_test
 // LL-DAG: call i32 @llvm.ctpop.i32

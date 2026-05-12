@@ -2,11 +2,11 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
-// CIR-DAG: cir.func @bool_neg_test
-// CIR-DAG: cir.func @bool_or_test
-// CIR-DAG: cir.func @bool_and_test
+// CIR-DAG: cir.func dso_local @bool_neg_test
+// CIR-DAG: cir.func dso_local @bool_or_test
+// CIR-DAG: cir.func dso_local @bool_and_test
 // CIR-DAG: cir.unary(not,
-// CIR-DAG: cir.cast(bool_to_int,
+// CIR-DAG: cir.cast bool_to_int
 // LL-DAG: define {{.*}} @bool_neg_test
 // LL-DAG: define {{.*}} @bool_or_test
 // LL-DAG: define {{.*}} @bool_and_test

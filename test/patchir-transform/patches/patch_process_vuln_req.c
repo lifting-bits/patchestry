@@ -1,6 +1,7 @@
 // RUN: true
 typedef unsigned char  uint8_t;
 typedef unsigned short uint16_t;
+typedef __SIZE_TYPE__  size_t;   // tracks the triple patchestry compiles the patch under
 
 // Per-TU assert: never returns. `static` keeps it at internal linkage so
 // the lowered patch module is self-contained — Patcherex2's relocatable
@@ -35,7 +36,12 @@ void patch__replace__ProcessVulnReq(uint8_t *att_data) {
     static uint16_t Attack_It = 0;
 
     for (int i = 0; i < 16; ++i, ++Attack_It) {
-        if (Attack_It >= sizeof(AttackBuffer)) {
+        // Cast LHS to size_t so both operands have exactly sizeof's
+        // native type. The earlier `(unsigned int)` workaround folded
+        // to a no-op on this triple (size_t == unsigned int) and let
+        // CIR re-derive the operand types, producing a cir.cmp with
+        // mismatched widths under LLVM 22.
+        if ((size_t)Attack_It >= sizeof(AttackBuffer)) {
             secpump_assert_fail();
         }
         AttackBuffer[Attack_It] = att_data[i];

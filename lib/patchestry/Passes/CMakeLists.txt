@@ -15,7 +15,6 @@ add_library(patchestry_passes STATIC
 set(CLANG_IR_LIBS
   clangCIR
   clangCIRLoweringDirectToLLVM
-  clangCIRLoweringThroughMLIR
 )
 
 target_link_libraries(patchestry_passes
@@ -29,15 +28,16 @@ target_link_libraries(patchestry_passes
         MLIRPass
         MLIRParser
         MLIRTransforms
+        MLIRRegisterAllDialects
         MLIRGPUToLLVMIRTranslation
-        MLIRAMXToLLVMIRTranslation
         MLIRSPIRVToLLVMIRTranslation
         MLIRArmNeonToLLVMIRTranslation
         MLIRArmSVEToLLVMIRTranslation
         MLIRArmSMEToLLVMIRTranslation
         MLIRVCIXToLLVMIRTranslation
-        MLIRX86VectorToLLVMIRTranslation
         MLIROpenACCToLLVMIRTranslation
+        MLIROpenMPToLLVMIRTranslation
+        MLIRPtrToLLVMIRTranslation
         MLIRExecutionEngine
         ${CLANG_IR_LIBS}
 )

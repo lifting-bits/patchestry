@@ -259,13 +259,14 @@ namespace patchestry::passes {
             auto &inv_target_opts  = invocation.getTargetOpts();
             inv_target_opts.Triple = llvm::sys::getDefaultTargetTriple();
 
-            // install custom diagnostic client
-            auto diag_opts   = new clang::DiagnosticOptions();
+            // install custom diagnostic client. Under LLVM 22, DiagnosticsEngine
+            // stores DiagnosticOptions by reference, so the options must outlive
+            // the engine. Use the DiagnosticOptions already owned by the
+            // Invocation (held there via shared_ptr) instead of leaking a raw new.
             auto diag_ids    = new clang::DiagnosticIDs();
             auto diagnostics = new clang::DiagnosticsEngine(
                 llvm::IntrusiveRefCntPtr< clang::DiagnosticIDs >(diag_ids),
-                llvm::IntrusiveRefCntPtr< clang::DiagnosticOptions >(diag_opts),
-                new patchestry::DiagnosticClient(), true
+                ci->getDiagnosticOpts(), new patchestry::DiagnosticClient(), true
             );
             ci->setDiagnostics(diagnostics);
             if (!ci->hasDiagnostics()) {
@@ -277,11 +278,12 @@ namespace patchestry::passes {
                 std::make_shared< clang::TargetOptions >();
             target_options->Triple = createTargetTriple(lang);
             ci->setTarget(
-                clang::TargetInfo::CreateTargetInfo(ci->getDiagnostics(), target_options)
+                clang::TargetInfo::CreateTargetInfo(ci->getDiagnostics(), *target_options)
             );
 
+            ci->createVirtualFileSystem();
             ci->createFileManager();
-            ci->createSourceManager(ci->getFileManager());
+            ci->createSourceManager();
             auto buffer_or_error = llvm::MemoryBuffer::getFileOrSTDIN(filename);
             if (!buffer_or_error) {
                 LOG(ERROR) << "Failed to open file: " << filename << "\n";

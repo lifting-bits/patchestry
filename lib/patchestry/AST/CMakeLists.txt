@@ -30,10 +30,3 @@ target_link_libraries(patchestry_ast
     patchestry_settings
     glog::glog
 )
-
-if(PE_USE_RELLIC)
-  target_include_directories(patchestry_ast
-    PRIVATE
-      "$<BUILD_INTERFACE:${RELLIC_INCLUDE_DIRS}>"
-  )
-endif()

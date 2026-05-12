@@ -13,7 +13,7 @@
 // RUN: grep -c "patchestry_operation = \"cir.binop\"" %t3.cir | %file-check -vv -check-prefix=MUL_N %s
 // MUL_N: 1
 // RUN: %file-check -vv -check-prefix=MUL_FN %s --input-file %t3.cir
-// MUL_FN-LABEL: cir.func @int_mult_test
+// MUL_FN-LABEL: cir.func dso_local @int_mult_test
 // MUL_FN: cir.call @patch__replace__int_mul({{.*}}) {patchestry_operation = "cir.binop"}
 //
 // op_kind: "add" — only int_add_test's binop is replaced.
@@ -21,7 +21,7 @@
 // RUN: grep -c "patchestry_operation = \"cir.binop\"" %t4.cir | %file-check -vv -check-prefix=ADD_N %s
 // ADD_N: 1
 // RUN: %file-check -vv -check-prefix=ADD_FN %s --input-file %t4.cir
-// ADD_FN-LABEL: cir.func @int_add_test
+// ADD_FN-LABEL: cir.func dso_local @int_add_test
 // ADD_FN: cir.call @patch__replace__int_mul({{.*}}) {patchestry_operation = "cir.binop"}
 //
 // `captures: - result: 0` on the Mul binop, apply_after a probe that
@@ -30,7 +30,7 @@
 // result via %[[R]] and asserts the patch call receives it.
 // RUN: %patchir-transform %t1.cir --spec %S/capture_binop_result.yaml -o %t5.cir
 // RUN: %file-check -vv -check-prefix=CAP_RESULT %s --input-file %t5.cir
-// CAP_RESULT-LABEL: cir.func @int_mult_test
+// CAP_RESULT-LABEL: cir.func dso_local @int_mult_test
 // CAP_RESULT: %[[R:[0-9]+]] = cir.binop(mul
 // CAP_RESULT-NEXT: cir.call @patch__after__int_probe(%[[R]]) {patchestry_operation = "cir.binop"}
 {

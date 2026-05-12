@@ -19,7 +19,7 @@
 // the call is removed and its result replaced with a zero constant.
 // RUN: %patchir-transform %t1.cir --spec %S/erase_call_with_return.yaml -o %t5.cir
 // RUN: %file-check -vv -check-prefix=ERASE_RET %s --input-file %t5.cir
-// ERASE_RET: cir.func @create_port
+// ERASE_RET: cir.func dso_local @create_port
 // ERASE_RET-NOT: cir.call @sprintf
 //
 {
