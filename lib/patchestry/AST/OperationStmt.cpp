@@ -195,7 +195,31 @@ namespace patchestry::ast {
             return fn_decl;
         }
 
+        // Bind a Stmt* to an Expr*, logging and returning nullptr on
+        // null/non-Expr. Avoids `clang::dyn_cast<>(nullptr)`, which asserts.
+        // Use the `AS_EXPR_OR_NULL` macro at call sites — it captures
+        // `__FUNCTION__` at the caller, which a default argument cannot.
+        inline clang::Expr *as_expr_or_null(
+            clang::Stmt *stmt, const char *op_label, const std::string &key
+        ) {
+            if (!stmt) {
+                LOG(ERROR) << op_label << ": varnode produced null Stmt. key: " << key;
+                return nullptr;
+            }
+            auto *expr = clang::dyn_cast< clang::Expr >(stmt);
+            if (!expr) {
+                LOG(ERROR) << op_label << ": varnode is not an Expr. key: " << key;
+                return nullptr;
+            }
+            return expr;
+        }
+
     } // namespace
+
+// Caller-context wrapper: `__FUNCTION__` expands at the call site so the
+// log line names the enclosing OpBuilder::create_*, which is impossible
+// to achieve with a default argument (it would name as_expr_or_null itself).
+#define AS_EXPR_OR_NULL(stmt, key) as_expr_or_null((stmt), __FUNCTION__, (key))
 
     /**
      * Performs an implicit and explicit cast of an expression to a specified type,
@@ -586,10 +610,8 @@ namespace patchestry::ast {
         }
 
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs.front()));
-        if (input_expr == nullptr) {
-            LOG(ERROR) << "Failed to create input expression for copy operaion. key: " << op.key
-                       << "\n";
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs.front()), op.key);
+        if (!input_expr) {
             return { nullptr, false };
         }
 
@@ -600,10 +622,8 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
-        if (output_expr == nullptr) {
-            LOG(ERROR) << "Failed to create output expression for copy operaion. key: "
-                       << op.key << "\n";
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
             return { nullptr, false };
         }
 
@@ -624,10 +644,8 @@ namespace patchestry::ast {
 
         auto merge_to_next = !op.output.has_value();
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
-        if (input_expr == nullptr) {
-            LOG(ERROR) << "Skipping, load operation with invalid expression. key: " << op.key
-                       << "\n";
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        if (!input_expr) {
             return { nullptr, false };
         }
 
@@ -650,7 +668,10 @@ namespace patchestry::ast {
                 return { result_expr, true };
             }
             auto *output_expr =
-                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+                AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            if (!output_expr) {
+                return { nullptr, false };
+            }
             return { create_assign_operation(ctx, result_expr, output_expr, op_loc), false };
         }
 
@@ -694,7 +715,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return { nullptr, false };
+        }
 
         return { create_assign_operation(
                      ctx, result_expr, output_expr,
@@ -714,10 +738,12 @@ namespace patchestry::ast {
         if (op.inputs.size() == 2) {
             auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
             auto *lhs_expr =
-                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
-
+                AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
             auto *rhs_expr =
-                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+                AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[1]), op.key);
+            if (!lhs_expr || !rhs_expr) {
+                return {};
+            }
 
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
@@ -727,9 +753,8 @@ namespace patchestry::ast {
                 if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
                     lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
                 }
-                auto deref_result = sema().CreateBuiltinUnaryOp(
-                    op_loc, clang::UO_Deref, clang::dyn_cast< clang::Expr >(lhs_expr)
-                );
+                auto deref_result =
+                    sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
                 assert(!deref_result.isInvalid());
                 deref_expr = deref_result.getAs< clang::Expr >();
             }
@@ -741,17 +766,13 @@ namespace patchestry::ast {
         //               input1 = pointer, input2 = value to store.
         // Semantic: *input1 = input2;  (same as the 2-input case, just different slot indices)
         if (op.inputs.size() >= 3) {
-            auto op_loc    = SourceLocation(ctx.getSourceManager(), op.key);
-            auto *lhs_expr = clang::dyn_cast< clang::Expr >(
-                create_varnode(ctx, function, op.inputs[1])
-            );
-            auto *rhs_expr = clang::dyn_cast< clang::Expr >(
-                create_varnode(ctx, function, op.inputs[2])
-            );
+            auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
+            auto *lhs_expr =
+                AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[1]), op.key);
+            auto *rhs_expr =
+                AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[2]), op.key);
             if (!lhs_expr || !rhs_expr) {
-                 LOG(ERROR) << "Failed to create LHS or RHS expression for 3-input store operation. key: "
-                           << op.key << "\n";
-                 return {};
+                return {};
             }
 
             // Cancel *(&expr) from PTRADD's &base[index].
@@ -805,10 +826,8 @@ namespace patchestry::ast {
         // such case treat it as branch instruction.
         auto loc = SourceLocation(ctx.getSourceManager(), op.key);
         auto *condition_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.condition));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.condition), op.key);
         if (!condition_expr) {
-            LOG(ERROR) << "Failed to create condition expression for cbranch. key: " << op.key
-                       << "\n";
             return {};
         }
 
@@ -840,7 +859,7 @@ namespace patchestry::ast {
         return std::make_pair(
             clang::IfStmt::Create(
                 ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr,
-                clang::dyn_cast< clang::Expr >(condition_expr), condition_expr->getBeginLoc(),
+                condition_expr, condition_expr->getBeginLoc(),
                 taken_stmt->getBeginLoc(), taken_stmt, not_taken_stmt->getBeginLoc(),
                 not_taken_stmt
             ),
@@ -858,9 +877,8 @@ namespace patchestry::ast {
         }
 
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
-        if (input_expr == nullptr) {
-            LOG(ERROR) << "BRANCHIND: failed to create input expression. key: " << op.key << "\n";
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        if (!input_expr) {
             return {};
         }
         auto loc       = SourceLocation(ctx.getSourceManager(), op.key);
@@ -883,15 +901,13 @@ namespace patchestry::ast {
             clang::Expr *disc = nullptr;
             if (op.inputs[0].kind == Varnode::VARNODE_LOCAL
                 || op.inputs[0].kind == Varnode::VARNODE_PARAM) {
-                disc = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+                disc = AS_EXPR_OR_NULL(
+                    create_varnode(ctx, function, op.inputs[0]), op.key);
             } else if (op.switch_input.has_value()) {
-                disc = clang::dyn_cast< clang::Expr >(
-                    create_varnode(ctx, function, *op.switch_input)
-                );
+                disc = AS_EXPR_OR_NULL(
+                    create_varnode(ctx, function, *op.switch_input), op.key);
             }
-            if (disc == nullptr) {
-                LOG(ERROR) << "BRANCHIND: failed to resolve switch discriminant. key: " << op.key
-                           << "\n";
+            if (!disc) {
                 return {};
             }
             // C promotes switch conditions to at least int width.  If the
@@ -1371,8 +1387,11 @@ namespace patchestry::ast {
             std::vector< clang::Expr * > arguments;
             for (const auto &input : op.inputs) {
                 auto *arg_expr =
-                    clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
-                arguments.push_back(clang::dyn_cast< clang::Expr >(arg_expr));
+                    AS_EXPR_OR_NULL(create_varnode(ctx, function, input), op.key);
+                if (!arg_expr) {
+                    return {};
+                }
+                arguments.push_back(arg_expr);
             }
 
             auto operation = operationFromKey(function, *op.target->operation);
@@ -1392,12 +1411,12 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
 
-        return { create_assign_operation(
-                     ctx, call_expr, clang::dyn_cast< clang::Expr >(output_expr), op_loc
-                 ),
-                 false };
+        return { create_assign_operation(ctx, call_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_tail_call(
@@ -1655,8 +1674,8 @@ namespace patchestry::ast {
         std::vector< clang::Expr * > arguments;
         for (const auto &input : op.inputs) {
             auto *arg_expr =
-                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
-            if (arg_expr != nullptr) {
+                AS_EXPR_OR_NULL(create_varnode(ctx, function, input), op.key);
+            if (arg_expr) {
                 arguments.push_back(arg_expr);
             }
         }
@@ -1679,7 +1698,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
         return { create_assign_operation(ctx, call_expr, output_expr, op_loc), false };
     }
 
@@ -1737,8 +1759,8 @@ namespace patchestry::ast {
         std::vector< clang::Expr * > args;
         for (const auto &input : op.inputs) {
             auto *arg_expr =
-                clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
-            if (arg_expr != nullptr) {
+                AS_EXPR_OR_NULL(create_varnode(ctx, function, input), op.key);
+            if (arg_expr) {
                 args.push_back(arg_expr);
             }
         }
@@ -1770,7 +1792,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
         return { create_assign_operation(ctx, call_expr, output_expr, op_loc), false };
     }
 
@@ -1861,12 +1886,16 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto *input0_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
-        auto *input1_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+        auto *input0_stmt = create_varnode(ctx, function, op.inputs[0]);
+        auto *input1_stmt = create_varnode(ctx, function, op.inputs[1]);
+        if (!input0_stmt || !input1_stmt) {
+            LOG(ERROR) << "PIECE: input varnode produced null Stmt. key: " << op.key;
+            return {};
+        }
+        auto *input0_expr = clang::dyn_cast< clang::Expr >(input0_stmt);
+        auto *input1_expr = clang::dyn_cast< clang::Expr >(input1_stmt);
         if (!input0_expr || !input1_expr) {
-            LOG(ERROR) << "Failed to create PIECE input expression. key: " << op.key;
+            LOG(ERROR) << "PIECE: input varnode is not an Expr. key: " << op.key;
             return {};
         }
         auto location = SourceLocation(ctx.getSourceManager(), op.key);
@@ -1881,15 +1910,28 @@ namespace patchestry::ast {
             clang::Expr *result_expr = input1_expr;
             if (!ctx.hasSameUnqualifiedType(result_expr->getType(), type_it->second)) {
                 result_expr = make_reinterpret_cast(ctx, result_expr, type_it->second, location);
+                if (!result_expr) {
+                    LOG(ERROR) << "PIECE: reinterpret-cast yielded null Expr. key: "
+                               << op.key;
+                    return {};
+                }
             }
             if (merge_to_next) {
                 return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
             }
-            auto *output_expr = create_varnode(ctx, function, *op.output);
-            return { create_assign_operation(
-                         ctx, result_expr,
-                         clang::dyn_cast< clang::Expr >(output_expr), location
-                     ),
+            auto *output_stmt = create_varnode(ctx, function, *op.output);
+            if (!output_stmt) {
+                LOG(ERROR) << "PIECE: record-type output varnode produced null Stmt. key: "
+                           << op.key;
+                return {};
+            }
+            auto *output_expr = clang::dyn_cast< clang::Expr >(output_stmt);
+            if (!output_expr) {
+                LOG(ERROR) << "PIECE: record-type output varnode is not an Expr. key: "
+                           << op.key;
+                return {};
+            }
+            return { create_assign_operation(ctx, result_expr, output_expr, location),
                      false };
         }
 
@@ -1938,33 +1980,49 @@ namespace patchestry::ast {
                 ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), low_width), ctx.IntTy, location
             );
             auto shifted_high_result = sema().CreateBuiltinBinOp(
-                location, clang::BO_Shl, input0_expr,
-                clang::dyn_cast< clang::Expr >(shift_value)
+                location, clang::BO_Shl, input0_expr, shift_value
             );
             if (shifted_high_result.isInvalid()) {
                 LOG(ERROR) << "PIECE Operation invalid shifted high result.\n";
                 return {};
             }
             high_expr = shifted_high_result.getAs< clang::Expr >();
+            if (!high_expr) {
+                LOG(ERROR) << "PIECE: shifted high result yielded null Expr. key: "
+                           << op.key;
+                return {};
+            }
         }
 
         auto or_result = sema().CreateBuiltinBinOp(
-            location, clang::BO_Or, high_expr,
-            clang::dyn_cast< clang::Expr >(input1_expr)
+            location, clang::BO_Or, high_expr, input1_expr
         );
         if (or_result.isInvalid()) {
             LOG(ERROR) << "PIECE Operation invalid OR result. key: " << op.key;
             return {};
         }
-
-        if (merge_to_next) {
-            return std::make_pair(or_result.getAs< clang::Expr >(), merge_to_next);
+        auto *or_expr = or_result.getAs< clang::Expr >();
+        if (!or_expr) {
+            LOG(ERROR) << "PIECE: OR result yielded null Expr. key: " << op.key;
+            return {};
         }
 
-        auto *output_expr = create_varnode(ctx, function, *op.output);
+        if (merge_to_next) {
+            return std::make_pair(or_expr, merge_to_next);
+        }
+
+        auto *output_stmt = create_varnode(ctx, function, *op.output);
+        if (!output_stmt) {
+            LOG(ERROR) << "PIECE: output varnode produced null Stmt. key: " << op.key;
+            return {};
+        }
+        auto *output_expr = clang::dyn_cast< clang::Expr >(output_stmt);
+        if (!output_expr) {
+            LOG(ERROR) << "PIECE: output varnode is not an Expr. key: " << op.key;
+            return {};
+        }
         return { create_assign_operation(
-                     ctx, or_result.getAs< clang::Expr >(),
-                     clang::dyn_cast< clang::Expr >(output_expr),
+                     ctx, or_expr, output_expr,
                      SourceLocation(ctx.getSourceManager(), op.key)
                  ),
                  false };
@@ -1994,10 +2052,14 @@ namespace patchestry::ast {
         uint32_t byte_offset = op.inputs[1].value.value_or(0);
         unsigned shift_bits  = byte_offset * 8;
 
-        auto *expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        auto *input_stmt = create_varnode(ctx, function, op.inputs[0]);
+        if (!input_stmt) {
+            LOG(ERROR) << "SUBPIECE: input varnode produced null Stmt. key: " << op.key;
+            return {};
+        }
+        auto *expr = clang::dyn_cast< clang::Expr >(input_stmt);
         if (!expr) {
-            LOG(ERROR) << "Failed to create SUBPIECE input expression. key: " << op.key;
+            LOG(ERROR) << "SUBPIECE: input varnode is not an Expr. key: " << op.key;
             return {};
         }
         // Record (struct/union) types cannot participate in bitwise shift/mask
@@ -2007,20 +2069,41 @@ namespace patchestry::ast {
             clang::Expr *result_expr = expr;
             if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
                 result_expr = make_reinterpret_cast(ctx, expr, op_type, op_location);
+                if (!result_expr) {
+                    LOG(ERROR) << "SUBPIECE: reinterpret-cast yielded null Expr. key: "
+                               << op.key;
+                    return std::make_pair(nullptr, false);
+                }
             }
             if (merge_to_next) {
                 return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
             }
-            auto *out_expr  = create_varnode(ctx, function, *op.output);
+            auto *out_stmt_in = create_varnode(ctx, function, *op.output);
+            if (!out_stmt_in) {
+                LOG(ERROR) << "SUBPIECE: record-type output varnode produced null Stmt. key: "
+                           << op.key;
+                return std::make_pair(nullptr, false);
+            }
+            auto *out_expr = clang::dyn_cast< clang::Expr >(out_stmt_in);
+            if (!out_expr) {
+                LOG(ERROR) << "SUBPIECE: record-type output varnode is not an Expr. key: "
+                           << op.key;
+                return std::make_pair(nullptr, false);
+            }
             auto out_result = sema().CreateBuiltinBinOp(
-                op_location, clang::BO_Assign,
-                clang::dyn_cast< clang::Expr >(out_expr), result_expr
+                op_location, clang::BO_Assign, out_expr, result_expr
             );
             if (out_result.isInvalid()) {
                 LOG(ERROR) << "SUBPIECE record-type output assignment failed. key: " << op.key;
                 return std::make_pair(nullptr, false);
             }
-            return std::make_pair(out_result.getAs< clang::Stmt >(), merge_to_next);
+            auto *out_stmt = out_result.getAs< clang::Stmt >();
+            if (!out_stmt) {
+                LOG(ERROR) << "SUBPIECE: record-type output assignment yielded null Stmt. key: "
+                           << op.key;
+                return std::make_pair(nullptr, false);
+            }
+            return std::make_pair(out_stmt, merge_to_next);
         }
 
         if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
@@ -2074,6 +2157,11 @@ namespace patchestry::ast {
                 return std::make_pair(nullptr, false);
             }
             result_expr = shifted_result.getAs< clang::Expr >();
+            if (!result_expr) {
+                LOG(ERROR) << "SUBPIECE: shifted result yielded null Expr. key: "
+                           << op.key;
+                return std::make_pair(nullptr, false);
+            }
         }
 
         // Apply a bit-mask to extract only the output-sized bits.
@@ -2089,8 +2177,7 @@ namespace patchestry::ast {
                 clang::ParenExpr(op_location, op_location, result_expr);
 
             auto result = sema().CreateBuiltinBinOp(
-                op_location, clang::BO_And, paren_expr,
-                clang::dyn_cast< clang::Expr >(mask)
+                op_location, clang::BO_And, paren_expr, mask
             );
 
             if (result.isInvalid()) {
@@ -2099,6 +2186,11 @@ namespace patchestry::ast {
             }
 
             result_expr = result.getAs< clang::Expr >();
+            if (!result_expr) {
+                LOG(ERROR) << "SUBPIECE: AND-mask result yielded null Expr. key: "
+                           << op.key;
+                return std::make_pair(nullptr, false);
+            }
         }
 
         result_expr =
@@ -2108,9 +2200,18 @@ namespace patchestry::ast {
             return std::make_pair(result_expr, merge_to_next);
         }
 
-        auto *out_expr  = create_varnode(ctx, function, *op.output);
+        auto *out_stmt_in = create_varnode(ctx, function, *op.output);
+        if (!out_stmt_in) {
+            LOG(ERROR) << "SUBPIECE: output varnode produced null Stmt. key: " << op.key;
+            return std::make_pair(nullptr, false);
+        }
+        auto *out_expr = clang::dyn_cast< clang::Expr >(out_stmt_in);
+        if (!out_expr) {
+            LOG(ERROR) << "SUBPIECE: output varnode is not an Expr. key: " << op.key;
+            return std::make_pair(nullptr, false);
+        }
         auto out_result = sema().CreateBuiltinBinOp(
-            op_location, clang::BO_Assign, clang::dyn_cast< clang::Expr >(out_expr), result_expr
+            op_location, clang::BO_Assign, out_expr, result_expr
         );
 
         if (out_result.isInvalid()) {
@@ -2118,7 +2219,13 @@ namespace patchestry::ast {
             return std::make_pair(nullptr, false);
         }
 
-        return std::make_pair(out_result.getAs< clang::Stmt >(), merge_to_next);
+        auto *out_stmt = out_result.getAs< clang::Stmt >();
+        if (!out_stmt) {
+            LOG(ERROR) << "SUBPIECE: output assignment yielded null Stmt. key: "
+                       << op.key;
+            return std::make_pair(nullptr, false);
+        }
+        return std::make_pair(out_stmt, merge_to_next);
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_zext(
@@ -2133,7 +2240,10 @@ namespace patchestry::ast {
         auto merge_to_next = !op.output.has_value();
         auto op_loc        = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        if (!input_expr) {
+            return {};
+        }
 
         auto target_type_opt = lookup_op_type(op);
         if (!target_type_opt) {
@@ -2161,7 +2271,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
 
         return { create_assign_operation(ctx, input_expr, output_expr, op_loc), false };
     }
@@ -2179,7 +2292,10 @@ namespace patchestry::ast {
         auto op_loc        = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        if (!input_expr) {
+            return {};
+        }
 
         auto target_type_opt = lookup_op_type(op);
         if (!target_type_opt) {
@@ -2196,8 +2312,7 @@ namespace patchestry::ast {
             auto result = sema().BuildCStyleCastExpr(
                 SourceLocation(ctx.getSourceManager(), op.key),
                 ctx.getTrivialTypeSourceInfo(target_type),
-                SourceLocation(ctx.getSourceManager(), op.key),
-                clang::dyn_cast< clang::Expr >(input_expr)
+                SourceLocation(ctx.getSourceManager(), op.key), input_expr
             );
 
             input_expr = result.getAs< clang::Expr >();
@@ -2210,7 +2325,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
 
         return { create_assign_operation(ctx, input_expr, output_expr, op_loc), false };
     }
@@ -2226,9 +2344,12 @@ namespace patchestry::ast {
 
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input0 =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
         auto *input1 =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[1]), op.key);
+        if (!input0 || !input1) {
+            return {};
+        }
 
         auto sum =
             sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_Add, input0, input1);
@@ -2244,7 +2365,10 @@ namespace patchestry::ast {
         }
 
         auto *output =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output) {
+            return {};
+        }
 
         return { create_assign_operation(ctx, carry.getAs< clang::Expr >(), output, op_loc),
                  false };
@@ -2261,9 +2385,12 @@ namespace patchestry::ast {
 
         auto op_loc  = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input0 =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
         auto *input1 =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[1]), op.key);
+        if (!input0 || !input1) {
+            return {};
+        }
 
         // Compute sum = input0 + input1
         auto sum =
@@ -2317,7 +2444,10 @@ namespace patchestry::ast {
         }
 
         auto *output =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output) {
+            return {};
+        }
 
         return { create_assign_operation(ctx, scarry.getAs< clang::Expr >(), output, op_loc),
                  false };
@@ -2334,9 +2464,12 @@ namespace patchestry::ast {
 
         auto op_loc  = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input0 =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
         auto *input1 =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[1]), op.key);
+        if (!input0 || !input1) {
+            return {};
+        }
 
         // Compute diff = input0 - input1
         auto diff =
@@ -2382,7 +2515,10 @@ namespace patchestry::ast {
         }
 
         auto *output =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output) {
+            return {};
+        }
 
         return { create_assign_operation(ctx, sborrow.getAs< clang::Expr >(), output, op_loc),
                  false };
@@ -2407,7 +2543,10 @@ namespace patchestry::ast {
 
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        if (!input_expr) {
+            return {};
+        }
 
         // Coerce record (struct/union) operands to integers for C operators.
         input_expr = coerce_record_to_integer(ctx, input_expr, op_loc);
@@ -2423,7 +2562,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
 
         return { create_assign_operation(
                      ctx, unary_operation.getAs< clang::Expr >(), output_expr, op_loc
@@ -2443,8 +2585,13 @@ namespace patchestry::ast {
 
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
-        auto *lhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
-        auto *rhs = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+        auto *lhs =
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        auto *rhs =
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[1]), op.key);
+        if (!lhs || !rhs) {
+            return {};
+        }
 
         // Coerce record (struct/union) operands to integers so that C
         // arithmetic and bitwise operators are valid.
@@ -2502,7 +2649,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
 
         return {
             create_assign_operation(ctx, result.getAs< clang::Expr >(), output_expr, op_loc),
@@ -2635,7 +2785,10 @@ namespace patchestry::ast {
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        if (!input_expr) {
+            return {};
+        }
 
         std::vector args = { input_expr };
         auto *call_expr = create_builtin_call(ctx, sema(), id, args, op_loc);
@@ -2645,7 +2798,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
         return { create_assign_operation(ctx, call_expr, output_expr), false };
     }
 
@@ -2667,7 +2823,10 @@ namespace patchestry::ast {
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        if (!input_expr) {
+            return {};
+        }
 
         if (!input_expr->isPRValue()) {
             input_expr = make_implicit_cast(
@@ -2682,7 +2841,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
 
         return { create_assign_operation(ctx, cast_expr, output_expr, op_loc), false };
     }
@@ -2709,7 +2871,10 @@ namespace patchestry::ast {
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        if (!input_expr) {
+            return {};
+        }
 
         auto nan_check =
             sema().BuildBinOp(sema().getCurScope(), op_loc, clang::BO_NE, input_expr, nan_expr);
@@ -2719,7 +2884,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
 
         return { create_assign_operation(ctx, nan_check.get(), output_expr, op_loc), false };
     }
@@ -2743,7 +2911,10 @@ namespace patchestry::ast {
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        if (!input_expr) {
+            return {};
+        }
 
         if (!input_expr->isPRValue()) {
             input_expr = make_implicit_cast(
@@ -2757,7 +2928,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
 
         return { create_assign_operation(ctx, cast_expr, output_expr, op_loc), false };
     }
@@ -2782,7 +2956,10 @@ namespace patchestry::ast {
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        if (!input_expr) {
+            return { nullptr, false };
+        }
 
         auto implicit_cast_result = sema().PerformImplicitConversion(
             input_expr, op_type, clang::AssignmentAction::Converting
@@ -2796,7 +2973,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return { nullptr, false };
+        }
 
         return { create_assign_operation(ctx, implicit_cast, output_expr, op_loc), false };
     }
@@ -2899,8 +3079,11 @@ namespace patchestry::ast {
 
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
 
-        auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0], op_loc));
+        auto *input_expr = AS_EXPR_OR_NULL(
+            create_varnode(ctx, function, op.inputs[0], op_loc), op.key);
+        if (!input_expr) {
+            return { nullptr, false };
+        }
 
         clang::Expr *ptr_expr = nullptr;
 
@@ -2913,9 +3096,11 @@ namespace patchestry::ast {
                     .get();
             ptr_expr = make_cast(ctx, addrof_expr, op_type, op_loc);
         } else {
-            auto *byte_offset = clang::dyn_cast< clang::Expr >(
-                create_varnode(ctx, function, op.inputs[1], op_loc)
-            );
+            auto *byte_offset = AS_EXPR_OR_NULL(
+                create_varnode(ctx, function, op.inputs[1], op_loc), op.key);
+            if (!byte_offset) {
+                return { nullptr, false };
+            }
 
             auto add_result = sema().CreateBuiltinBinOp(
                 op_loc, clang::BO_Add, make_cast(ctx, input_expr, op_type, op_loc), byte_offset
@@ -2929,7 +3114,10 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return { nullptr, false };
+        }
         return { create_assign_operation(ctx, ptr_expr, output_expr, op_loc), false };
     }
 
@@ -2946,11 +3134,14 @@ namespace patchestry::ast {
         auto op_loc        = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *base =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
         auto *index =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[1]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[1]), op.key);
         auto *scale =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[2]));
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[2]), op.key);
+        if (!base || !index || !scale) {
+            return { nullptr, false };
+        }
 
         // When the base is a pointer type and the scale matches sizeof(*base),
         // emit &base[index] (array subscript) instead of raw arithmetic.
@@ -3038,8 +3229,16 @@ namespace patchestry::ast {
         }
 
         auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
-        auto *input_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, op.inputs[0]));
+        auto *input_stmt    = create_varnode(ctx, function, op.inputs[0]);
+        if (!input_stmt) {
+            LOG(ERROR) << "CAST: input varnode produced null Stmt. key: " << op.key;
+            return {};
+        }
+        auto *input_expr = clang::dyn_cast< clang::Expr >(input_stmt);
+        if (!input_expr) {
+            LOG(ERROR) << "CAST: input varnode is not an Expr. key: " << op.key;
+            return {};
+        }
 
         if (!op.output && ctx.hasSameUnqualifiedType(op_type, input_expr->getType())) {
             return { input_expr, true };
@@ -3057,14 +3256,25 @@ namespace patchestry::ast {
         };
 
         auto *cast = make_cast_expr(ctx, input_expr, op_type, op_loc);
-        assert(cast != nullptr && "failed to create vast expression");
+        if (!cast) {
+            LOG(ERROR) << "CAST: failed to create cast expression. key: " << op.key;
+            return {};
+        }
 
         if (!op.output) {
             return { cast, true };
         }
 
-        auto *output_expr =
-            clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        auto *output_stmt = create_varnode(ctx, function, *op.output);
+        if (!output_stmt) {
+            LOG(ERROR) << "CAST: output varnode produced null Stmt. key: " << op.key;
+            return {};
+        }
+        auto *output_expr = clang::dyn_cast< clang::Expr >(output_stmt);
+        if (!output_expr) {
+            LOG(ERROR) << "CAST: output varnode is not an Expr. key: " << op.key;
+            return {};
+        }
 
         return { create_assign_operation(ctx, cast, output_expr, op_loc), false };
     }
@@ -3196,8 +3406,9 @@ namespace patchestry::ast {
         // Build arguments from inputs
         std::vector< clang::Expr * > args;
         for (const auto &input : op.inputs) {
-            auto *e = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
-            if (e != nullptr) {
+            auto *e =
+                AS_EXPR_OR_NULL(create_varnode(ctx, function, input), op.key);
+            if (e) {
                 args.push_back(e);
             }
         }
@@ -3222,7 +3433,11 @@ namespace patchestry::ast {
         }
 
         // Assign result to output
-        auto *out = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        auto *out =
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!out) {
+            return {};
+        }
         return { create_assign_operation(ctx, call_expr, out, op_loc), false };
     }
 
@@ -3308,8 +3523,9 @@ namespace patchestry::ast {
         // Build arguments from inputs
         std::vector< clang::Expr * > args;
         for (const auto &input : op.inputs) {
-            auto *e = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, input));
-            if (e != nullptr) {
+            auto *e = AS_EXPR_OR_NULL(
+                create_varnode(ctx, function, input), op.key);
+            if (e) {
                 args.push_back(e);
             }
         }
@@ -3345,7 +3561,11 @@ namespace patchestry::ast {
         }
 
         // Assign result to output
-        auto *out = clang::dyn_cast< clang::Expr >(create_varnode(ctx, function, *op.output));
+        auto *out = AS_EXPR_OR_NULL(
+            create_varnode(ctx, function, *op.output), op.key);
+        if (!out) {
+            return {};
+        }
         return { create_assign_operation(ctx, call_expr, out, op_loc), false };
     }
 

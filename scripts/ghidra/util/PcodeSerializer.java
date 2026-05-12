@@ -601,13 +601,172 @@ public class PcodeSerializer {
 				return VoidDataType.dataType;
 			}
 
-			HighVariable highVariable = returnValueVarnode.getHigh();
-			if (highVariable != null) {
-				return highVariable.getDataType();
+			// Route through chooseEmittedType so an umbrella HighVariable
+			// wider than the varnode produces a width-truthful type (#223).
+			return chooseEmittedType(returnValueVarnode, returnValueVarnode.getHigh());
+		}
+
+		// Varnode-truthful type selection (#223). HighVariable.getDataType()
+		// is the declared type of the storage the analyzer grouped this
+		// varnode into and can be wider than the varnode itself (umbrella
+		// case). Emitting it verbatim makes downstream lowering coerce a
+		// narrow value to a wider record type, which clang Sema rejects.
+		// chooseEmittedType prefers the declared type when widths match,
+		// then walks its layout for a same-width subcomponent, else falls
+		// back to a sized integer surrogate. Used only at value-carrying
+		// emit sites; declaration sites keep the declared type.
+
+		// Walk a composite type to find the narrowest subcomponent matching
+		// the given byte offset and width. Returns null when no exact match
+		// exists.
+		private static DataType componentAt(DataType type, int offset, int size) {
+			if (type == null || offset < 0 || size <= 0) {
+				return null;
 			}
-		
-			assert false;
-			return Undefined.getUndefinedDataType(returnValueVarnode.getSize());
+			if (type instanceof TypeDef) {
+				return componentAt(((TypeDef) type).getBaseDataType(), offset, size);
+			}
+			// BitFieldDataType.getLength() is storage bytes, not bit width.
+			if (type instanceof BitFieldDataType) {
+				return null;
+			}
+			if (type instanceof Structure) {
+				DataTypeComponent c = ((Structure) type).getComponentContaining(offset);
+				if (c == null) {
+					return null;
+				}
+				int rel = offset - c.getOffset();
+				if (rel == 0 && c.getLength() == size) {
+					return c.getDataType();
+				}
+				return componentAt(c.getDataType(), rel, size);
+			}
+			if (type instanceof Union) {
+				// Members all start at offset 0; only pick when offset == 0
+				// and exactly one member has the requested width.
+				if (offset != 0) {
+					return null;
+				}
+				DataType match = null;
+				for (DataTypeComponent c : ((Union) type).getComponents()) {
+					if (c.getLength() == size) {
+						if (match != null) {
+							return null; // ambiguous
+						}
+						match = c.getDataType();
+					}
+				}
+				return match;
+			}
+			if (type instanceof Array) {
+				Array a = (Array) type;
+				int elem = a.getElementLength();
+				if (elem <= 0) {
+					return null;
+				}
+				int idx = offset / elem;
+				if (idx < 0 || idx >= a.getNumElements()) {
+					return null;
+				}
+				int rel = offset % elem;
+				if (rel == 0 && size == elem) {
+					return a.getDataType();
+				}
+				return componentAt(a.getDataType(), rel, size);
+			}
+			// Scalar base case: a non-zero offset would start mid-scalar.
+			if (offset == 0 && type.getLength() == size) {
+				return type;
+			}
+			return null;
+		}
+
+		// Byte offset of varnode v inside hv's backing storage, or -1 when
+		// the varnode isn't anchored in that storage (unique-space
+		// intermediates, split storage, cross-space addresses).
+		// HighVariable.getOffset() is the offset of `hv` inside its parent —
+		// the wrong direction — so we compute the offset directly.
+		private static int offsetWithin(Varnode v, HighVariable hv) {
+			if (v == null || hv == null) {
+				return -1;
+			}
+			HighSymbol sym = hv.getSymbol();
+			if (sym == null) {
+				return -1;
+			}
+			VariableStorage st = sym.getStorage();
+			if (st == null || st.isUnassignedStorage()) {
+				return -1;
+			}
+			// Split storage (e.g. 64-bit value in a register pair): the
+			// linear offset from getMinAddress() doesn't map to the type's
+			// component layout.
+			Varnode[] svns = st.getVarnodes();
+			if (svns != null && svns.length > 1) {
+				return -1;
+			}
+			Address base = st.getMinAddress();
+			Address va = v.getAddress();
+			if (base == null || va == null) {
+				return -1;
+			}
+			if (!base.getAddressSpace().equals(va.getAddressSpace())) {
+				return -1;
+			}
+			try {
+				long off = va.subtract(base);
+				if (off < 0 || off > Integer.MAX_VALUE) {
+					return -1;
+				}
+				return (int) off;
+			} catch (Exception e) {
+				return -1;
+			}
+		}
+
+		// Bit-width-faithful surrogate when no structural narrowing applies.
+		// Returns null when no DataType of exactly `bytes` bytes exists.
+		private static DataType sizedSurrogate(int bytes, DataTypeManager dtm) {
+			if (bytes <= 0) {
+				return null;
+			}
+			if (bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8) {
+				return Undefined.getUndefinedDataType(bytes);
+			}
+			// AbstractIntegerDataType can return a nearest-match (or null)
+			// for non-power-of-two widths; verify length before accepting.
+			DataType wider = AbstractIntegerDataType.getUnsignedDataType(bytes, dtm);
+			if (wider != null && wider.getLength() == bytes) {
+				return wider;
+			}
+			return null;
+		}
+
+		// Pick the most precise non-null DataType to label a varnode with.
+		// Uses the declared type when widths match, else walks the layout
+		// for a same-width subcomponent, else a sized integer surrogate.
+		// Last-resort DefaultDataType (1 byte) keeps `size` authoritative
+		// rather than re-emitting the wrong-width declared type.
+		private DataType chooseEmittedType(Varnode v, HighVariable hv) {
+			DataType chosen = (hv == null) ? null : hv.getDataType();
+			int varBytes = v.getSize();
+			if (chosen != null && chosen.getLength() == varBytes) {
+				return chosen;
+			}
+			if (chosen != null) {
+				int offsetInContainer = offsetWithin(v, hv);
+				if (offsetInContainer >= 0) {
+					DataType narrowed = componentAt(chosen, offsetInContainer, varBytes);
+					if (narrowed != null && narrowed.getLength() == varBytes) {
+						return narrowed;
+					}
+				}
+			}
+			DataType surrogate = sizedSurrogate(varBytes, currentProgram.getDataTypeManager());
+			if (surrogate != null) {
+				return surrogate;
+			}
+			return DefaultDataType.dataType;
 		}
 
 		Address getAddress(PcodeOp pcodeOp) throws Exception {
@@ -1072,7 +1231,8 @@ public class PcodeSerializer {
 					nodeDefPcodeOp = highVariable.getRepresentative().getDef();
 				}
 
-				writer.name("type").value(label(highVariable.getDataType()));
+				writer.name("type").value(label(chooseEmittedType(node, highVariable)));
+				writer.name("size").value(node.getSize());
 			} else {
 				writer.name("size").value(node.getSize());
 			}
@@ -2625,7 +2785,8 @@ public class PcodeSerializer {
 
 			HighVariable outputHighVariable = variableOf(output);
 			if (outputHighVariable != null) {
-				writer.name("type").value(label(outputHighVariable.getDataType()));
+				writer.name("type").value(label(chooseEmittedType(output, outputHighVariable)));
+				writer.name("size").value(output.getSize());
 			} else {
 				writer.name("size").value(output.getSize());
 			}
