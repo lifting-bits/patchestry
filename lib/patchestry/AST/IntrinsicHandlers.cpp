@@ -86,6 +86,8 @@ namespace patchestry::ast {
         }
 
         std::string strip_return_type_suffix(std::string_view label) {
+            // Primary path: Ghidra's current JSON serialization uses a colon to
+            // attach the return-type id, so "name:t0" or "name:int" strips cleanly.
             auto colon_pos = label.rfind(':');
             if (colon_pos != std::string_view::npos) {
                 auto suffix = label.substr(colon_pos + 1);
@@ -94,6 +96,14 @@ namespace patchestry::ast {
                 }
             }
 
+            // Legacy/fallback path: older or alternative emitters glue the type
+            // onto the userop name with an underscore (for example
+            // "atomic_load_int"). The scan only matches the trailing segment
+            // against the type_suffixes table, so a userop whose final
+            // underscore-delimited word *coincides* with a type keyword (e.g.
+            // a hypothetical "LOCK_LOAD_INT" where "INT" is part of the
+            // operation name) will be incorrectly truncated. Callers that emit
+            // such names should use the colon form to disambiguate.
             for (auto underscore_pos = label.rfind('_');
                  underscore_pos != std::string_view::npos;
                  underscore_pos = underscore_pos == 0 ? std::string_view::npos
@@ -213,13 +223,58 @@ namespace patchestry::ast {
             return "atomic_" + std::string(canonical_op) + "_seq_cst";
         }
 
-        std::string normalize_intrinsic_name(std::string_view name) {
-            if (auto normalized = normalize_aarch64_atomic_intrinsic(name)) {
-                return *normalized;
+        using ArchAtomicNormalizer = std::optional< std::string > (*)(std::string_view);
+
+        struct ArchNormalizerEntry
+        {
+            std::string_view arch_key; // matched case-insensitively
+            ArchAtomicNormalizer normalize;
+        };
+
+        // Architecture-keyed dispatch table. Adding a new architecture is a
+        // matter of writing one normalizer function and registering it here;
+        // there is no per-call-site dispatch to edit.
+        constexpr std::array< ArchNormalizerEntry, 5 > arch_normalizers = { {
+            { "aarch64", normalize_aarch64_atomic_intrinsic },
+            { "arm64",   normalize_aarch64_atomic_intrinsic },
+            { "x86",     normalize_x86_lock_atomic_intrinsic },
+            { "x86_64",  normalize_x86_lock_atomic_intrinsic },
+            { "x86-64",  normalize_x86_lock_atomic_intrinsic },
+        } };
+
+        ArchAtomicNormalizer find_arch_normalizer(std::string_view arch) {
+            if (arch.empty()) {
+                return nullptr;
+            }
+            auto arch_lower = to_lower_ascii(arch);
+            for (const auto &entry : arch_normalizers) {
+                if (arch_lower == entry.arch_key) {
+                    return entry.normalize;
+                }
+            }
+            return nullptr;
+        }
+
+        std::string
+        normalize_intrinsic_name(std::string_view arch, std::string_view name) {
+            // Preferred path: arch is known, so route directly to the matching
+            // normalizer. Names that do not match any registered userop for that
+            // arch fall through unchanged.
+            if (auto *normalize = find_arch_normalizer(arch)) {
+                if (auto normalized = normalize(name)) {
+                    return *normalized;
+                }
+                return std::string(name);
             }
 
-            if (auto normalized = normalize_x86_lock_atomic_intrinsic(name)) {
-                return *normalized;
+            // Fallback for inputs that lack an architecture tag (e.g. legacy JSON
+            // or test fixtures): try every registered normalizer in order. The
+            // userop name spaces are disjoint (each normalizer checks a distinct
+            // prefix), so order does not change semantics.
+            for (const auto &entry : arch_normalizers) {
+                if (auto normalized = entry.normalize(name)) {
+                    return *normalized;
+                }
             }
 
             return std::string(name);
@@ -354,8 +409,8 @@ namespace patchestry::ast {
 
     } // anonymous namespace
 
-    std::string parse_intrinsic_name(std::string_view label) {
-        return normalize_intrinsic_name(strip_return_type_suffix(label));
+    std::string parse_intrinsic_name(std::string_view arch, std::string_view label) {
+        return normalize_intrinsic_name(arch, strip_return_type_suffix(label));
     }
 
     const std::unordered_map< std::string, IntrinsicHandler > &get_intrinsic_handlers() {

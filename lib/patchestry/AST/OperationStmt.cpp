@@ -1824,7 +1824,7 @@ namespace patchestry::ast {
         }
 
         const auto &label = *op.target->function;
-        auto name         = parse_intrinsic_name(label);
+        auto name         = parse_intrinsic_name(function_builder().program_arch(), label);
 
         // Look up specific handler
         const auto &handlers = get_intrinsic_handlers();
@@ -3456,10 +3456,17 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,
         bool is_variadic, clang::QualType first_param_type
     ) {
-        // Check cache first
+        // Cache key encodes everything that affects the FunctionDecl identity:
+        // name, return type, and (for variadic prototypes) the type of the
+        // synthesized fixed parameter. Without the return type, the same
+        // intrinsic called in both void and valued contexts (e.g. as a
+        // statement and as an expression) would collide and the second call
+        // would reuse a wrong-return-type FunctionDecl.
         std::string cache_key = name;
+        cache_key += "|ret:";
+        cache_key += return_type.getCanonicalType().getAsString();
         if (is_variadic) {
-            cache_key += ":";
+            cache_key += "|param0:";
             cache_key += first_param_type.isNull()
                              ? std::string("void *")
                              : first_param_type.getCanonicalType().getAsString();

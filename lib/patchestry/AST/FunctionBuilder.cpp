@@ -84,13 +84,14 @@ namespace patchestry::ast {
     FunctionBuilder::FunctionBuilder(
         clang::CompilerInstance &ci, const Function &function, TypeBuilder &type_builder,
         std::unordered_map< std::string, clang::FunctionDecl * > &functions,
-        std::unordered_map< std::string, clang::VarDecl * > &globals
+        std::unordered_map< std::string, clang::VarDecl * > &globals, std::string program_arch
     )
         : prev_decl(nullptr)
         , cii(ci)
         , function(function)
         , type_builder(type_builder)
         , op_builder(nullptr)
+        , arch(std::move(program_arch))
         , function_list(functions)
         , global_var_list(globals)
         , local_variables({}) {

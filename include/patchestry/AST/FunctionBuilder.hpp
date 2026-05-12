@@ -36,7 +36,8 @@ namespace patchestry::ast {
         FunctionBuilder(
             clang::CompilerInstance &ci, const Function &function, TypeBuilder &type_builder,
             std::unordered_map< std::string, clang::FunctionDecl * > &functions,
-            std::unordered_map< std::string, clang::VarDecl * > &globals
+            std::unordered_map< std::string, clang::VarDecl * > &globals,
+            std::string program_arch = {}
         );
 
         // copy operations
@@ -115,6 +116,11 @@ namespace patchestry::ast {
         /// Access to the ghidra::Function for CGraph building.
         const Function &get_function() const { return function.get(); }
 
+        /// Architecture identifier from the source Program (e.g. "AARCH64",
+        /// "x86"). Empty if unavailable. Used by intrinsic-name normalization
+        /// to dispatch arch-specific handlers without prefix sniffing.
+        const std::string &program_arch() const { return arch; }
+
         /// Access to labels_declaration for CGraph building.
         const std::unordered_map<std::string, clang::LabelDecl *> &
         get_labels() const { return labels_declaration; }
@@ -161,6 +167,7 @@ namespace patchestry::ast {
         std::reference_wrapper< const Function > function;
         std::reference_wrapper< TypeBuilder > type_builder;
         std::shared_ptr< OpBuilder > op_builder;
+        std::string arch;
 
         std::reference_wrapper< std::unordered_map< std::string, clang::FunctionDecl * > >
             function_list;

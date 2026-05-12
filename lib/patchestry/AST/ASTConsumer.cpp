@@ -68,10 +68,11 @@ namespace patchestry::ast {
             // (handled by FunctionBuilder's constructor).
             // ---------------------------------------------------------------
             std::vector<std::shared_ptr<FunctionBuilder>> func_builders;
+            const auto &program_arch = get_program().arch.value_or(std::string{});
             for (const auto &[key, function] : get_program().serialized_functions) {
                 auto builder = std::make_shared<FunctionBuilder>(
                     ci, function, *type_builder, function_declarations,
-                    global_variable_declarations
+                    global_variable_declarations, program_arch
                 );
                 builder->InitializeOpBuilder();
                 func_builders.emplace_back(std::move(builder));
