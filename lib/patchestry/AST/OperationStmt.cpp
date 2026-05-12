@@ -480,6 +480,27 @@ namespace patchestry::ast {
         clang::QualType input_type  = input_expr->getType();
         clang::QualType output_type = output_expr->getType();
 
+        // Refuse scalar/pointer → array assignments. make_cast would route
+        // these through make_reinterpret_cast, producing `*(T(*)[N])&temp`
+        // (a 32-byte array lvalue backed by a 4-byte temporary, say). The
+        // subsequent element-wise copy in create_array_assignment_operation
+        // would then read past the end of that temporary — UB at runtime,
+        // and emits unsound C. This shape arises when Ghidra's variable
+        // analyzer assigns an umbrella array type to a DECLARE_LOCAL whose
+        // actual writes are narrower (issue #223 / FUN_0000f69c). Routing
+        // the value through a width-correct shadow local is follow-up work;
+        // drop the write loudly rather than synthesize a miscompile.
+        const bool output_is_array = output_type->isArrayType();
+        const bool input_is_array  = input_type->isArrayType();
+        if (output_is_array && !input_is_array
+            && !ctx.hasSameUnqualifiedType(input_type, output_type)) {
+            LOG(ERROR) << "create_assign_operation: refusing "
+                       << input_type.getAsString() << " → "
+                       << output_type.getAsString()
+                       << " (scalar→array would reinterpret past temp end)";
+            return nullptr;
+        }
+
         // Handle exact type match: no cast required
         if (ctx.hasSameUnqualifiedType(input_type, output_type)) {
             // Array types are not directly assignable in C; use element-wise copy
