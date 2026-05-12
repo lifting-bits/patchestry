@@ -72,6 +72,7 @@ COPY --chown=user:user domain/ domain/
 COPY --chown=user:user util/ util/
 COPY --chown=user:user PatchestryDecompileFunctions.java .
 COPY --chown=user:user PatchestryListFunctions.java .
+COPY --chown=user:user PatchestryDecompileCFunction.java .
 COPY --chown=user:user build.gradle .
 # since we have a class structure, we need to externally trigger the Ghidra build
 RUN gradle build
