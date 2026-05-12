@@ -802,6 +802,12 @@ namespace patchestry::ghidra {
             target.type_key = type_key->str();
         }
 
+        // TAIL_CALL kind:"address": preserve address for AnnotateAttr.
+        auto address = maybe_target->getString("address");
+        if (address.has_value() && !address->empty()) {
+            target.address = address->str();
+        }
+
         target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
         op.target           = std::move(target);
         op.has_return_value = call_obj.getBoolean("has_return_value").value_or(false);

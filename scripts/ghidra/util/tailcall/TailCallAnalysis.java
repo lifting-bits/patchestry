@@ -11,36 +11,49 @@ import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressSet;
 
+import ghidra.program.model.listing.Bookmark;
 import ghidra.program.model.listing.BookmarkManager;
 import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Program;
 
-import ghidra.program.model.util.LongPropertyMap;
 import ghidra.program.model.util.PropertyMapManager;
+import ghidra.program.model.util.StringPropertyMap;
 
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.Iterator;
 import java.util.List;
 
-// Detects tail-call sites and splits Ghidra-merged functions by promoting
-// their targets to function entries via CreateFunctionCmd. Findings are
-// recorded as Bookmarks (category "TailCallAnalysis") and a LongPropertyMap
-// "TailCall.Site" (instruction address -> callee entry offset) read by
-// PcodeSerializer to lift BRANCH ops to TAIL_CALL.
+// Detect tail-call sites and split merged functions via CreateFunctionCmd.
+// Findings: Bookmark category "TailCallAnalysis" + StringPropertyMap
+// "TailCall.SiteAddr" (branch address -> callee Address.toString(true)).
 public final class TailCallAnalysis {
 
     public static final String BOOKMARK_CATEGORY = "TailCallAnalysis";
-    public static final String SITE_PROPMAP = "TailCall.Site";
+    public static final String SITE_PROPMAP = "TailCall.SiteAddr";
+    // Legacy LongPropertyMap name; cleared on migration.
+    private static final String LEGACY_SITE_PROPMAP = "TailCall.Site";
 
     public static void run(Program program, TaskMonitor monitor) throws CancelledException {
         if (program == null) return;
         TailCallProcessorRules rules = TailCallProcessorRules.lookup(program.getLanguage());
         if (rules == null) return;
+
+        // Drop stale state from prior runs (siteMap/bookmarks are
+        // append-only otherwise).
+        int clearTx = program.startTransaction("TailCallAnalysis clear");
+        try {
+            clearPriorState(program);
+        } finally {
+            program.endTransaction(clearTx, true);
+        }
 
         TailCallDetector detector = new TailCallDetector(program, rules, monitor);
         List<TailCallDetector.Candidate> candidates = detector.detect();
@@ -54,7 +67,7 @@ public final class TailCallAnalysis {
         boolean commit = true;
         try {
             BookmarkManager bm = program.getBookmarkManager();
-            LongPropertyMap siteMap = ensureSiteMap(program);
+            StringPropertyMap siteMap = ensureSiteMap(program);
 
             for (TailCallDetector.Candidate c : candidates) {
                 if (monitor.isCancelled()) throw new CancelledException();
@@ -76,10 +89,10 @@ public final class TailCallAnalysis {
                 }
 
                 recordBookmark(bm, c, action);
-                // Skipped sites have no resolvable Function; serializer would
-                // emit an address-only target the C++ side can't dispatch.
+                // Skip "skipped" sites. toString(true) keeps the space
+                // prefix so cross-space callees re-resolve correctly.
                 if (siteMap != null && !"skipped".equals(action)) {
-                    siteMap.add(c.from, c.target.getOffset());
+                    siteMap.add(c.from, c.target.toString(true));
                 }
             }
         } catch (CancelledException e) {
@@ -122,15 +135,53 @@ public final class TailCallAnalysis {
         }
     }
 
-    private static LongPropertyMap ensureSiteMap(Program program) {
+    // Drain siteMap entries + remove TailCallAnalysis bookmarks.
+    private static void clearPriorState(Program program) {
+        PropertyMapManager pmm = program.getUsrPropertyManager();
+        if (pmm != null) {
+            // Drop legacy LongPropertyMap so StringPropertyMap creates clean.
+            try {
+                pmm.removePropertyMap(LEGACY_SITE_PROPMAP);
+            } catch (Exception e) {
+                // legacy map absent / removal unsupported — non-fatal
+            }
+            StringPropertyMap existing = pmm.getStringPropertyMap(SITE_PROPMAP);
+            if (existing != null) {
+                for (AddressRange r : program.getMemory().getAddressRanges()) {
+                    try {
+                        existing.removeRange(r.getMinAddress(), r.getMaxAddress());
+                    } catch (Exception e) {
+                        // non-fatal: new entries overwrite at matching addresses
+                    }
+                }
+            }
+        }
+
+        BookmarkManager bm = program.getBookmarkManager();
+        if (bm != null) {
+            Iterator<Bookmark> it = bm.getBookmarksIterator(BookmarkType.ANALYSIS);
+            List<Bookmark> toRemove = new ArrayList<>();
+            while (it.hasNext()) {
+                Bookmark bookmark = it.next();
+                if (BOOKMARK_CATEGORY.equals(bookmark.getCategory())) {
+                    toRemove.add(bookmark);
+                }
+            }
+            for (Bookmark b : toRemove) {
+                bm.removeBookmark(b);
+            }
+        }
+    }
+
+    private static StringPropertyMap ensureSiteMap(Program program) {
         PropertyMapManager pmm = program.getUsrPropertyManager();
         if (pmm == null) return null;
-        LongPropertyMap existing = pmm.getLongPropertyMap(SITE_PROPMAP);
+        StringPropertyMap existing = pmm.getStringPropertyMap(SITE_PROPMAP);
         if (existing != null) return existing;
         try {
-            return pmm.createLongPropertyMap(SITE_PROPMAP);
+            return pmm.createStringPropertyMap(SITE_PROPMAP);
         } catch (Exception e) {
-            return pmm.getLongPropertyMap(SITE_PROPMAP);
+            return pmm.getStringPropertyMap(SITE_PROPMAP);
         }
     }
 

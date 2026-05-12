@@ -166,7 +166,8 @@ namespace patchestry::ast {
             const auto &op = block.operations.at(last_key);
             using M = ghidra::Mnemonic;
             if (op.mnemonic == M::OP_BRANCH || op.mnemonic == M::OP_CBRANCH
-                || op.mnemonic == M::OP_BRANCHIND || op.mnemonic == M::OP_RETURN) {
+                || op.mnemonic == M::OP_BRANCHIND || op.mnemonic == M::OP_RETURN
+                || op.mnemonic == M::OP_TAIL_CALL) {
                 return &op;
             }
             return nullptr;
@@ -392,11 +393,9 @@ namespace patchestry::ast {
                     }
                 }
 
-            } else if (term->mnemonic == M::OP_RETURN) {
-                // Return: no outgoing edges.
-                // The corresponding ReturnStmt has already been emitted into
-                // node.stmts by create_block_stmts, so there is nothing to do
-                // here other than leave the successor list empty.
+            } else if (term->mnemonic == M::OP_RETURN
+                       || term->mnemonic == M::OP_TAIL_CALL) {
+                // No outgoing edges; ReturnStmt already in node.stmts.
             }
         }
 

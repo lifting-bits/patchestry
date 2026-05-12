@@ -160,8 +160,8 @@ public class PcodeSerializer {
     	public static final int DECLARE_LOCAL_VAR = MIN_CALLOTHER + 1;
     	public static final int DECLARE_TEMP_VAR = MIN_CALLOTHER + 2;
     	public static final int ADDRESS_OF = MIN_CALLOTHER + 3;
-    	// BRANCH lifted by TailCallAnalysis at sites recorded in TailCall.Site.
-    	public static final int TAIL_CALL = MIN_CALLOTHER + 0xF;  // 0x10000F
+		// BRANCH lifted by TailCallAnalysis at sites recorded in TailCall.Site.
+		public static final int TAIL_CALL = MIN_CALLOTHER + 0xF;  // 0x10000F
 
     	// Architecture allowlist for Tier 2 (analytical callee-walk) preservation
     	// analysis in the extraout sanitizer. Tier 1 (declarative, via
@@ -295,10 +295,14 @@ public class PcodeSerializer {
 		// having to aggressively rewrite things, especially output operands.
 		private Map<PcodeOp, PcodeOp> replacementOperationsMap;
 
-		// TailCallAnalysis findings: site address -> callee entry offset.
-		// Looked up lazily on first BRANCH op.
-		private ghidra.program.model.util.LongPropertyMap tailCallSiteMap;
+		// branch address -> callee Address.toString(true). Space-qualified
+		// string preserves overlay/EXTERNAL/harvard spaces.
+		private ghidra.program.model.util.StringPropertyMap tailCallSiteMap;
 		private boolean tailCallSiteMapInitialized = false;
+
+		// Mirrors --[no-]repair-function-boundaries: suppresses TAIL_CALL
+		// rewrites and boundary_repairs even if prior state survives.
+		private boolean repairFunctionBoundaries = true;
 		
 		// Sometimes we need to arrange for some operations to exist prior to
 		// another one, e.g. if there is a `CALL foo, SP` that decompiles to
@@ -422,6 +426,11 @@ public class PcodeSerializer {
 					+ ", analytical_mode=" + analyticalMode
 					+ ", tier2_enabled=" + tier2Enabled);
 			}
+		}
+
+		// See --[no-]repair-function-boundaries.
+		public void setRepairFunctionBoundaries(boolean enabled) {
+			this.repairFunctionBoundaries = enabled;
 		}
 
 		// Resolve the effective Tier 2 enablement from the CLI mode and the
@@ -2995,16 +3004,16 @@ public class PcodeSerializer {
 			writer.name("target_block").value(label(currentBlock.getOut(0)));
 		}
 
-		// Emit a TAIL_CALL with the same shape as a regular CALL so
-		// downstream consumers can build a call-graph edge.
+		// Same shape as a regular CALL so downstream can build call-graph edges.
 		void serializeTailCallOp(PcodeOp pcodeOp) throws Exception {
 			Address fromAddr = pcodeOp.getSeqnum().getTarget();
-			long targetOffset = tailCallSiteMap.getLong(fromAddr);
-			Address calleeAddr = currentFunction.getFunction()
-				.getEntryPoint().getNewAddress(targetOffset);
+			String targetStr = tailCallSiteMap.getString(fromAddr);
+			// AddressFactory.getAddress preserves the original space.
+			Address calleeAddr = (targetStr == null) ? null
+				: currentProgram.getAddressFactory().getAddress(targetStr);
 
 			FunctionManager fm = currentProgram.getFunctionManager();
-			Function callee = fm.getFunctionAt(calleeAddr);
+			Function callee = (calleeAddr == null) ? null : fm.getFunctionAt(calleeAddr);
 
 			writer.name("has_return_value").value(false);
 			writer.name("target");
@@ -3017,22 +3026,75 @@ public class PcodeSerializer {
 				writer.name("is_noreturn").value(callee.hasNoReturn());
 				writer.endObject();
 			} else {
-				// Callee not (yet) a Ghidra function: emit literal address.
+				// Unresolved: literal address; C++ side emits placeholder.
 				writer.beginObject();
 				writer.name("kind").value("address");
-				writer.name("address").value(calleeAddr.toString(true));
+				writer.name("address").value(
+					calleeAddr != null ? calleeAddr.toString(true)
+					                   : (targetStr != null ? targetStr : "?"));
 				writer.endObject();
 			}
-			writer.name("inputs").beginArray().endArray();
+
+			// Match each callee param storage to the caller's HighSymbol at
+			// the branch site; bail (empty inputs) if any param misses so the
+			// C++ side emits the missing-args placeholder.
+			writer.name("inputs").beginArray();
+			if (callee != null) {
+				Varnode[] recovered = recoverTailCallInputs(callee, fromAddr);
+				if (recovered != null) {
+					for (Varnode v : recovered) {
+						serializeInput(pcodeOp, v);
+					}
+				}
+			}
+			writer.endArray();
+		}
+
+		// All-or-nothing recovery: returns null on any unresolved param so
+		// the C++ side falls back loudly rather than emitting a misaligned
+		// positional arg list.
+		private Varnode[] recoverTailCallInputs(Function callee, Address branchAddr) {
+			// Variadic callees: bail. getParameters() returns fixed params
+			// only; iterating would silently drop the varargs.
+			// TODO: probe ABI parameter slots past the fixed-arg boundary
+			// (mirror Hex-Rays analyze_calls / BN MLIL parameter inference).
+			if (callee.hasVarArgs()) return null;
+
+			Parameter[] params = callee.getParameters();
+			if (params.length == 0) return new Varnode[0];
+			if (currentFunction == null) return null;
+
+			LocalSymbolMap symbols = currentFunction.getLocalSymbolMap();
+			if (symbols == null) return null;
+
+			Varnode[] result = new Varnode[params.length];
+			for (int i = 0; i < params.length; ++i) {
+				VariableStorage storage = params[i].getVariableStorage();
+				if (storage == null
+						|| storage == VariableStorage.BAD_STORAGE
+						|| storage == VariableStorage.UNASSIGNED_STORAGE
+						|| storage == VariableStorage.VOID_STORAGE) {
+					return null;
+				}
+				HighSymbol sym = symbols.findLocal(storage, branchAddr);
+				if (sym == null) return null;
+				HighVariable hv = sym.getHighVariable();
+				if (hv == null) return null;
+				Varnode rep = hv.getRepresentative();
+				if (rep == null) return null;
+				result[i] = rep;
+			}
+			return result;
 		}
 
 		private boolean isTailCallSite(PcodeOp pcodeOp) {
+			if (!repairFunctionBoundaries) return false;
 			if (pcodeOp.getOpcode() != PcodeOp.BRANCH) return false;
 			if (!tailCallSiteMapInitialized) {
 				ghidra.program.model.util.PropertyMapManager pmm =
 					currentProgram.getUsrPropertyManager();
 				tailCallSiteMap = pmm == null ? null
-					: pmm.getLongPropertyMap(util.tailcall.TailCallAnalysis.SITE_PROPMAP);
+					: pmm.getStringPropertyMap(util.tailcall.TailCallAnalysis.SITE_PROPMAP);
 				tailCallSiteMapInitialized = true;
 			}
 			if (tailCallSiteMap == null) return false;
@@ -3919,11 +3981,12 @@ public class PcodeSerializer {
 			return label(currentFunction) +  Address.SEPARATOR + "entry";
 		}
 
-		// Walk bookmarks recorded by TailCallAnalysis and emit one
-		// boundary_repairs entry per site. Empty when the pass did not run.
+		// Emit boundary_repairs entries from TailCallAnalysis bookmarks.
 		void serializeBoundaryRepairs() throws Exception {
 			writer.name("boundary_repairs").beginArray();
-			BookmarkManager bm = currentProgram.getBookmarkManager();
+			// Gate on the flag so stale bookmarks don't leak from prior runs.
+			BookmarkManager bm = repairFunctionBoundaries
+				? currentProgram.getBookmarkManager() : null;
 			if (bm != null) {
 				Iterator<Bookmark> it = bm.getBookmarksIterator(
 					ghidra.program.model.listing.BookmarkType.ANALYSIS);
@@ -3957,9 +4020,7 @@ public class PcodeSerializer {
 			return out;
 		}
 
-		// Emit {start,end} pairs for every range in the function body.
-		// Contiguous functions yield one entry; non-contiguous ones (after
-		// shrink-wrap or TailCallAnalysis split) yield more.
+		// Emit {start,end} pairs for each contiguous body range.
 		void serializeAddressRanges(Function function) throws Exception {
 			writer.name("address_ranges").beginArray();
 			AddressSetView body = function.getBody();

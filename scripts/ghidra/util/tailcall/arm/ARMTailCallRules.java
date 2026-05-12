@@ -28,13 +28,22 @@ public final class ARMTailCallRules implements TailCallProcessorRules {
         String m = first.getMnemonicString();
         if (m == null) return false;
 
-        if (m.equalsIgnoreCase("stmdb") || m.equalsIgnoreCase("stmfd")
-                || m.equalsIgnoreCase("push")) {
+        // push: base implicit. stmdb/stmfd: explicit base — require sp.
+        if (m.equalsIgnoreCase("push")) {
             return operandsContainsRegister(first, "lr")
                 || operandsContainsRegister(first, "r14");
         }
+        if (m.equalsIgnoreCase("stmdb") || m.equalsIgnoreCase("stmfd")) {
+            boolean baseIsSp = firstOperandIs(first, "sp");
+            boolean spillsLr = operandsContainsRegister(first, "lr")
+                || operandsContainsRegister(first, "r14");
+            return baseIsSp && spillsLr;
+        }
         if (m.equalsIgnoreCase("sub")) {
-            return firstOperandIs(first, "sp") && hasImmediateOperand(first);
+            // `sub sp, rN, #imm` is a context-save / longjmp shim.
+            return firstOperandIs(first, "sp")
+                && operandReferencesRegister(first, 1, "sp")
+                && hasImmediateOperand(first);
         }
         if (m.equalsIgnoreCase("mov")) {
             return firstOperandIs(first, "r12")
@@ -64,6 +73,18 @@ public final class ARMTailCallRules implements TailCallProcessorRules {
     private static boolean firstOperandIs(Instruction ins, String regName) {
         if (ins.getNumOperands() == 0) return false;
         for (Object obj : ins.getOpObjects(0)) {
+            if (obj instanceof Register
+                    && ((Register) obj).getName().equalsIgnoreCase(regName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean operandReferencesRegister(
+            Instruction ins, int opIdx, String regName) {
+        if (opIdx < 0 || opIdx >= ins.getNumOperands()) return false;
+        for (Object obj : ins.getOpObjects(opIdx)) {
             if (obj instanceof Register
                     && ((Register) obj).getName().equalsIgnoreCase(regName)) {
                 return true;

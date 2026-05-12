@@ -8,12 +8,12 @@
 package util.tailcall.ppc;
 
 import ghidra.program.model.lang.Language;
+import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Instruction;
 
 import util.tailcall.TailCallProcessorRules;
 
-// PowerPC (32 / 64). Recognised prologue shapes: mflr, stwu, stdu,
-// stw / std (LR spill).
+// PowerPC (32/64). Prologue shapes: mflr | stwu/stdu/stw/std on r1 (sp).
 public final class PowerPCTailCallRules implements TailCallProcessorRules {
 
     public PowerPCTailCallRules(Language lang) { /* unused */ }
@@ -24,11 +24,14 @@ public final class PowerPCTailCallRules implements TailCallProcessorRules {
         String m = first.getMnemonicString();
         if (m == null) return false;
         String lower = m.toLowerCase();
-        return lower.equals("mflr")
-            || lower.equals("stwu")
-            || lower.equals("stdu")
-            || lower.equals("stw")
-            || lower.equals("std");
+        // Strong (not perfectly unambiguous) entry signal.
+        if (lower.equals("mflr")) return true;
+        // Generic stw/std to non-r1 bases aren't prologues.
+        if (lower.equals("stwu") || lower.equals("stdu")
+                || lower.equals("stw") || lower.equals("std")) {
+            return operandReferencesRegister(first, 1, "r1");
+        }
+        return false;
     }
 
     @Override
@@ -36,4 +39,16 @@ public final class PowerPCTailCallRules implements TailCallProcessorRules {
 
     @Override
     public int thunkInstructionLimit() { return 2; }
+
+    private static boolean operandReferencesRegister(
+            Instruction ins, int opIdx, String regName) {
+        if (opIdx < 0 || opIdx >= ins.getNumOperands()) return false;
+        for (Object obj : ins.getOpObjects(opIdx)) {
+            if (obj instanceof Register
+                    && ((Register) obj).getName().equalsIgnoreCase(regName)) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

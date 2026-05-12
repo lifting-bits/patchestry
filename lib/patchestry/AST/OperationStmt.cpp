@@ -1328,10 +1328,7 @@ namespace patchestry::ast {
     std::pair< clang::Stmt *, bool > OpBuilder::create_call(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
-        if (!op.target
-            || (op.mnemonic != Mnemonic::OP_CALL
-                && op.mnemonic != Mnemonic::OP_TAIL_CALL))
-        {
+        if (!op.target || op.mnemonic != Mnemonic::OP_CALL) {
             LOG(ERROR) << "Call operation or call target is invalid. key: " << op.key << "\n";
             return {};
         }
@@ -1407,6 +1404,46 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op,
         clang::FunctionDecl *enclosing_decl
     ) {
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
+
+        // Shared fallback: __patchestry_missing_tailcall_unresolved() +
+        // `return (T)0;` (or bare `return;` for void enclosing). One
+        // intrinsic per unresolved tail-call; AnnotateAttr carries
+        // op.key and (when known) the original target address.
+        auto emit_fallback_return = [&]() -> std::pair< clang::Stmt *, bool > {
+            std::string label = "tail_call_unresolved";
+            if (op.target.has_value() && op.target->address.has_value()) {
+                label += " addr=" + *op.target->address;
+            }
+            auto [marker_stmt, _] = create_missing_intrinsic_call(
+                ctx, function, op, "tailcall_unresolved", label
+            );
+            if (marker_stmt != nullptr) {
+                function_builder().pending_materialized.push_back(marker_stmt);
+            }
+
+            clang::Expr *ret_expr = nullptr;
+            const auto enclosing_ret = (enclosing_decl != nullptr)
+                ? enclosing_decl->getReturnType()
+                : ctx.VoidTy;
+            if (!enclosing_ret->isVoidType()) {
+                auto *zero = clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
+                );
+                auto cast_result = sema().BuildCStyleCastExpr(
+                    op_loc, ctx.getTrivialTypeSourceInfo(enclosing_ret),
+                    op_loc, zero
+                );
+                if (!cast_result.isInvalid()) {
+                    ret_expr = cast_result.getAs< clang::Expr >();
+                }
+            }
+            auto *ret_stmt = clang::ReturnStmt::Create(
+                ctx, op_loc, ret_expr, nullptr
+            );
+            return { ret_stmt, false };
+        };
+
         if (!op.target || op.mnemonic != Mnemonic::OP_TAIL_CALL) {
             LOG(ERROR) << "TAIL_CALL operation or target is invalid. key: "
                        << op.key << "\n";
@@ -1414,31 +1451,56 @@ namespace patchestry::ast {
         }
         if (!op.target->function) {
             LOG(ERROR) << "TAIL_CALL target missing function. key: " << op.key << "\n";
-            return {};
+            return emit_fallback_return();
         }
         if (!function_builder().function_list.get().contains(*op.target->function)) {
-            return {};
+            return emit_fallback_return();
         }
 
         const auto *callee =
             function_builder().function_list.get().at(*op.target->function);
 
-        // Serializer doesn't recover tail-call args yet; without this guard
-        // missing args would be default-filled with zeros, silently corrupting
-        // data flow.
+        // Args not recovered: default-filling with zeros would silently
+        // corrupt data flow, so emit __patchestry_missing_<callee> +
+        // cast-zero return instead.
         if (callee->getMinRequiredArguments() > op.inputs.size()) {
             LOG(ERROR) << "TAIL_CALL: callee '" << callee->getNameAsString()
                        << "' expects " << callee->getMinRequiredArguments()
                        << " arg(s) but PcodeSerializer recovered "
                        << op.inputs.size()
                        << " (tail-call arg recovery NYI). key: " << op.key << "\n";
-            return {};
+
+            auto [missing_stmt, _] = create_missing_intrinsic_call(
+                ctx, function, op, callee->getNameAsString(),
+                "tail_call_" + callee->getNameAsString()
+            );
+            if (missing_stmt != nullptr) {
+                function_builder().pending_materialized.push_back(missing_stmt);
+            }
+
+            clang::Expr *ret_expr = nullptr;
+            const auto enclosing_ret = (enclosing_decl != nullptr)
+                ? enclosing_decl->getReturnType()
+                : ctx.VoidTy;
+            if (!enclosing_ret->isVoidType()) {
+                auto *zero = clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
+                );
+                auto cast_result = sema().BuildCStyleCastExpr(
+                    op_loc, ctx.getTrivialTypeSourceInfo(enclosing_ret),
+                    op_loc, zero
+                );
+                if (!cast_result.isInvalid()) {
+                    ret_expr = cast_result.getAs< clang::Expr >();
+                }
+            }
+            auto *ret_stmt = clang::ReturnStmt::Create(ctx, op_loc, ret_expr, nullptr);
+            return { ret_stmt, false };
         }
 
-        auto op_loc    = SourceLocation(ctx.getSourceManager(), op.key);
         auto *call_expr = build_callexpr_from_function(ctx, function, op);
         if (!call_expr) {
-            return {};
+            return emit_fallback_return();
         }
 
         const auto enclosing_ret = (enclosing_decl != nullptr)
@@ -1446,7 +1508,9 @@ namespace patchestry::ast {
             : ctx.VoidTy;
 
         const bool callee_void     = call_expr->getType()->isVoidType();
-        const bool callee_noreturn = callee->isNoReturn();
+        // FunctionDecl attr or call-site flag — either source authoritative.
+        const bool callee_noreturn = callee->isNoReturn()
+            || (op.target.has_value() && op.target->is_noreturn);
         const bool enclosing_void  = enclosing_ret->isVoidType();
 
         // No return-value contract can be satisfied here.
@@ -1454,14 +1518,29 @@ namespace patchestry::ast {
             LOG(ERROR) << "TAIL_CALL: void non-noreturn callee in non-void enclosing "
                        << "function '" << enclosing_decl->getNameAsString()
                        << "'. key: " << op.key << "\n";
-            return {};
+            return emit_fallback_return();
         }
 
-        // Keep the block's last Stmt a bare ReturnStmt (not a CompoundStmt)
-        // so the structurer's goto-to-return rewriting still matches.
+        // Bare ReturnStmt (not CompoundStmt) keeps the structurer's
+        // goto-to-return rewrite matching; non-void enclosing needs (T)0
+        // to satisfy CIR even though textually unreachable after noreturn.
         if (callee_void || callee_noreturn || enclosing_void) {
             function_builder().pending_materialized.push_back(call_expr);
-            auto *ret_stmt = clang::ReturnStmt::Create(ctx, op_loc, nullptr, nullptr);
+
+            clang::Expr *ret_expr = nullptr;
+            if (!enclosing_void) {
+                auto *zero = clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
+                );
+                auto cast_result = sema().BuildCStyleCastExpr(
+                    op_loc, ctx.getTrivialTypeSourceInfo(enclosing_ret),
+                    op_loc, zero
+                );
+                if (!cast_result.isInvalid()) {
+                    ret_expr = cast_result.getAs< clang::Expr >();
+                }
+            }
+            auto *ret_stmt = clang::ReturnStmt::Create(ctx, op_loc, ret_expr, nullptr);
             return { ret_stmt, false };
         }
 
@@ -1469,7 +1548,7 @@ namespace patchestry::ast {
         if (casted == nullptr) {
             LOG(ERROR) << "TAIL_CALL: cannot cast callee return type to "
                        << "enclosing function's return type. key: " << op.key << "\n";
-            return {};
+            return emit_fallback_return();
         }
         auto *ret_stmt = clang::ReturnStmt::Create(ctx, op_loc, casted, nullptr);
         return { ret_stmt, false };

@@ -29,13 +29,37 @@ public final class AArch64TailCallRules implements TailCallProcessorRules {
         String m = first.getMnemonicString();
         if (m == null) return false;
 
-        if (m.equalsIgnoreCase("bti")) return true;
-        if (m.toLowerCase().startsWith("pac")) return true;
+        // `bti c` / `bti jc`: entry. `bti j`: mid-function pad.
+        // Conservative accept if Ghidra's hint encoding is unparseable.
+        if (m.equalsIgnoreCase("bti")) {
+            if (first.getNumOperands() == 0) return true;
+            String hint;
+            try {
+                hint = first.getDefaultOperandRepresentation(0);
+            } catch (Exception e) {
+                return true;
+            }
+            if (hint == null) return true;
+            String h = hint.toLowerCase().trim();
+            return h.equals("c") || h.equals("jc");
+        }
+        // Only LR-signing PAC variants are reliable prologue markers.
+        String lower = m.toLowerCase();
+        if (lower.equals("paciasp") || lower.equals("pacibsp")
+                || lower.equals("pacia1716") || lower.equals("pacib1716")) {
+            return true;
+        }
         if (m.equalsIgnoreCase("stp")) {
-            return operandReferencesRegister(first, 2, "sp");
+            // Prologue stp: sp base AND at least one callee-saved reg.
+            if (!operandReferencesRegister(first, 2, "sp")) return false;
+            return spilledRegisterIsCalleeSaved(first, 0)
+                || spilledRegisterIsCalleeSaved(first, 1);
         }
         if (m.equalsIgnoreCase("sub")) {
-            return firstOperandIs(first, "sp") && hasImmediateOperand(first);
+            // `sub sp, xN, #imm` is a context-save shim.
+            return firstOperandIs(first, "sp")
+                && operandReferencesRegister(first, 1, "sp")
+                && hasImmediateOperand(first);
         }
         return false;
     }
@@ -64,6 +88,42 @@ public final class AArch64TailCallRules implements TailCallProcessorRules {
             if (obj instanceof Register
                     && ((Register) obj).getName().equalsIgnoreCase(regName)) {
                 return true;
+            }
+        }
+        return false;
+    }
+
+    // AAPCS64 callee-saved: x19-x28, x29 (fp), x30 (lr), d8-d15.
+    private static boolean spilledRegisterIsCalleeSaved(
+            Instruction ins, int opIdx) {
+        if (opIdx < 0 || opIdx >= ins.getNumOperands()) return false;
+        for (Object obj : ins.getOpObjects(opIdx)) {
+            if (!(obj instanceof Register)) continue;
+            String n = ((Register) obj).getName().toLowerCase();
+            // FP/LR (x29/x30) — the canonical prologue pair.
+            if (n.equals("x29") || n.equals("x30")
+                    || n.equals("fp") || n.equals("lr")
+                    || n.equals("w29") || n.equals("w30")) {
+                return true;
+            }
+            // x19-x28 (and w-aliases) — additional callee-saved GPRs.
+            if (n.length() >= 3
+                    && (n.charAt(0) == 'x' || n.charAt(0) == 'w')) {
+                try {
+                    int idx = Integer.parseInt(n.substring(1));
+                    if (idx >= 19 && idx <= 28) return true;
+                } catch (NumberFormatException e) {
+                    // fall through
+                }
+            }
+            // d8-d15 — callee-saved FP regs (lower 64 bits).
+            if (n.length() >= 2 && n.charAt(0) == 'd') {
+                try {
+                    int idx = Integer.parseInt(n.substring(1));
+                    if (idx >= 8 && idx <= 15) return true;
+                } catch (NumberFormatException e) {
+                    // fall through
+                }
             }
         }
         return false;

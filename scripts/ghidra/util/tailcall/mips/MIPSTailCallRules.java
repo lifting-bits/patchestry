@@ -26,10 +26,15 @@ public final class MIPSTailCallRules implements TailCallProcessorRules {
         if (m == null) return false;
         String lower = m.toLowerCase();
         if (lower.equals("addiu") || lower.equals("daddiu")) {
-            return firstOperandIs(first, "sp") && hasNegativeImmediateOperand(first);
+            // `addiu sp, aN, -N` is a makecontext shim, not a prologue.
+            return firstOperandIs(first, "sp")
+                && operandReferencesRegister(first, 1, "sp")
+                && hasNegativeImmediateOperand(first);
         }
         if (lower.equals("sw") || lower.equals("sd")) {
-            return operandReferencesRegister(first, 0, "ra");
+            // RA spill must be to (sp); `sw ra, 0(a0)` is a setjmp shim.
+            return operandReferencesRegister(first, 0, "ra")
+                && operandReferencesRegister(first, 1, "sp");
         }
         return false;
     }

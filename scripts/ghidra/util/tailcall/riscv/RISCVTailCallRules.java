@@ -27,13 +27,25 @@ public final class RISCVTailCallRules implements TailCallProcessorRules {
         if (m == null) return false;
         String lower = m.toLowerCase();
         if (lower.equals("cm.push")) return true;
-        if (lower.equals("addi") || lower.equals("c.addi") || lower.equals("c.addi16sp")) {
+        // Compressed addi: encoding pins rd == rs1.
+        if (lower.equals("c.addi") || lower.equals("c.addi16sp")) {
             return firstOperandIs(first, "sp") && hasNegativeImmediateOperand(first);
         }
-        if (lower.equals("sw") || lower.equals("sd")
-                || lower.equals("c.sw") || lower.equals("c.sd")
-                || lower.equals("c.swsp") || lower.equals("c.sdsp")) {
+        // Plain addi: require operand 1 (rs) to be sp.
+        if (lower.equals("addi")) {
+            return firstOperandIs(first, "sp")
+                && operandReferencesRegister(first, 1, "sp")
+                && hasNegativeImmediateOperand(first);
+        }
+        // SP-implicit compressed variants.
+        if (lower.equals("c.swsp") || lower.equals("c.sdsp")) {
             return operandReferencesRegister(first, 0, "ra");
+        }
+        // Explicit-base: ra source AND sp base.
+        if (lower.equals("sw") || lower.equals("sd")
+                || lower.equals("c.sw") || lower.equals("c.sd")) {
+            return operandReferencesRegister(first, 0, "ra")
+                && operandReferencesRegister(first, 1, "sp");
         }
         return false;
     }

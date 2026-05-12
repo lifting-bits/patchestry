@@ -169,10 +169,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     private util.PcodeSerializer.AnalyticalTierMode analyticalMode =
         util.PcodeSerializer.AnalyticalTierMode.AUTO;
 
-    // --repair-function-boundaries (default true)
-    //     Run TailCallAnalysis: detect tail-call sites and split
-    //     Ghidra-merged functions via CreateFunctionCmd. Pass
-    //     --no-repair-function-boundaries to skip the pass entirely.
+    // --[no-]repair-function-boundaries (default on): run TailCallAnalysis.
     private boolean repairFunctionBoundaries = true;
 
     // Script args with all recognized flags stripped out. The positional
@@ -352,6 +349,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             sanitizeExtraout,
             analyticalMode
         );
+        serializer.setRepairFunctionBoundaries(repairFunctionBoundaries);
         serializer.serialize();
     }
 
@@ -515,11 +513,8 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         mgr.startAnalysis(monitor);
         mgr.waitForAnalysis(null, monitor);
 
-        // After Ghidra's analyzers have settled, optionally run the
-        // tail-call pass: detect unconditional branches whose targets are
-        // separate function entries (bepdg-gen issue #99 mis-merge) and
-        // split them via CreateFunctionCmd. Bookmarks + property map are
-        // read by PcodeSerializer to emit boundary_repairs / TAIL_CALL.
+        // Detect tail-calls, split merged functions; PcodeSerializer
+        // reads the resulting bookmarks + property map.
         if (repairFunctionBoundaries) {
             try {
                 util.tailcall.TailCallAnalysis.run(program, monitor);

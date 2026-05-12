@@ -148,6 +148,8 @@ namespace patchestry::ghidra {
         std::optional< std::string > operation;
         std::optional< std::string > global;   // For CALLIND global var targets
         std::optional< std::string > type_key; // Type of the target
+        // Literal address for kind:"address" targets (unresolved callee).
+        std::optional< std::string > address;
         bool is_noreturn;
     };
 

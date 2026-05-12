@@ -173,6 +173,16 @@ namespace patchestry::ast {
             }
         }
 
+        // Propagate prototype noreturn so isNoReturn() agrees with Ghidra.
+        if (function.get().prototype.is_noreturn) {
+            if (auto *nr_attr = clang::NoReturnAttr::Create(
+                    ctx, func_decl->getSourceRange()
+                ))
+            {
+                func_decl->addAttr(nr_attr);
+            }
+        }
+
         auto parameters     = getParameters(function);
         auto num_parameters = function.get().prototype.parameters.size();
         if (parameters.size() != num_parameters) {
