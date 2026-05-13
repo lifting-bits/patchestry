@@ -4459,12 +4459,22 @@ public class PcodeSerializer {
 			writer.endArray();
 		}
 		
-		// Serialize the global variable declarations.
+		// Skip entries at function-entry addresses — emitting both as
+		// function and global trips the lifter's CIRGen FuncOp assertion (#226).
 		void serializeGlobals() throws Exception {
+			FunctionManager fm = currentProgram.getFunctionManager();
+			int emittedGlobals = 0;
+			int skippedFnEntryCollisions = 0;
+
 			for (Map.Entry<Address, HighVariable> entry : seenGlobalsMap.entrySet()) {
 				Address address = entry.getKey();
 				HighVariable globalHighVariable = entry.getValue();
-				
+
+				if (fm.getFunctionAt(address) != null) {
+					skippedFnEntryCollisions++;
+					continue;
+				}
+
 				// Try to get the global's name.
 				String globalVariableName = globalHighVariable.getName();
 				if (globalVariableName == null || (globalVariableName.equals("UNNAMED") && globalHighVariable.getOffset() == -1)) {
@@ -4484,11 +4494,18 @@ public class PcodeSerializer {
 				writer.name("size").value(Integer.toString(globalHighVariable.getSize()));
 				writer.name("type").value(label(globalHighVariable.getDataType()));
 				writer.endObject();
+				emittedGlobals++;
 			}
 
 			for (Map.Entry<Address, Data> entry : seenDataMap.entrySet()) {
 				Address address = entry.getKey();
 				Data datavar = entry.getValue();
+
+				if (fm.getFunctionAt(address) != null) {
+					skippedFnEntryCollisions++;
+					continue;
+				}
+
 				String name = datavar.getDefaultLabelPrefix(null) + "_"
 					+ SymbolUtilities.replaceInvalidChars(datavar.getDefaultValueRepresentation(), false)
 					+ "_" + datavar.getMinAddress().toString();
@@ -4498,11 +4515,12 @@ public class PcodeSerializer {
 				writer.name("size").value(Integer.toString(datavar.getDataType().getLength()));
 				writer.name("type").value(label(datavar.getDataType()));
 				writer.endObject();
-
-
+				emittedGlobals++;
 			}
 
-			System.out.println("Total serialized globals: " + Integer.toString(seenGlobalsMap.size()));
+			System.out.println("Total serialized globals: " + Integer.toString(emittedGlobals)
+				+ " (skipped " + Integer.toString(skippedFnEntryCollisions)
+				+ " function-entry collisions; see #226)");
 		}
 
 		// Don't try to decompile some functions.
