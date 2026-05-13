@@ -168,10 +168,16 @@ namespace patchestry::ast {
             clang::Builtin::ID id
         );
 
-        // Methods exposed for CALLOTHER intrinsic handlers
+        // Methods exposed for CALLOTHER intrinsic handlers.
+        //
+        // narrow_to_size_hint: when false, suppresses the
+        // resolution-time aggregate-to-integer narrowing (#225).  Pass
+        // false from callers whose op needs the raw storage lvalue
+        // (e.g. ADDRESS_OF).
         clang::Stmt *create_varnode(
             clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-            clang::SourceLocation loc = clang::SourceLocation()
+            clang::SourceLocation loc      = clang::SourceLocation(),
+            bool narrow_to_size_hint       = true
         );
 
         clang::QualType get_varnode_type(clang::ASTContext &ctx, const Varnode &vnode);
@@ -237,6 +243,16 @@ namespace patchestry::ast {
 
         clang::Expr *coerce_record_to_integer(
             clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc
+        );
+
+        // Narrow an aggregate lvalue to an integer access (#225).  Tries
+        // `expr[0]` when target_bytes matches the array's element width,
+        // else `*(uintN_t*)&expr` at target_bytes (or the aggregate's
+        // full size when target_bytes == 0).  Returns nullptr when
+        // neither path is sound — caller should refuse loudly.
+        clang::Expr *narrow_aggregate_to_integer(
+            clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc,
+            unsigned target_bytes = 0
         );
 
         /// Materialize a non-void call result into a temporary variable.

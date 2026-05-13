@@ -393,6 +393,71 @@ namespace patchestry::ast {
         return deref_expr.getAs< clang::Expr >();
     }
 
+    clang::Expr *OpBuilder::narrow_aggregate_to_integer(
+        clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc,
+        unsigned target_bytes
+    ) {
+        if (!expr) {
+            return nullptr;
+        }
+        auto from_type = expr->getType();
+        if (!from_type->isRecordType() && !from_type->isArrayType()) {
+            return nullptr;
+        }
+
+        auto storage_bits = static_cast< unsigned >(ctx.getTypeSize(from_type));
+
+        // Prefer `expr[0]` over a whole-aggregate reinterpret when the
+        // target width is exactly one element.  Require the array to have
+        // at least one element so the literal `0` index is in-bounds.
+        if (target_bytes != 0 && from_type->isArrayType()) {
+            if (const auto *array_type = ctx.getAsArrayType(from_type)) {
+                auto elem_type = array_type->getElementType();
+                auto elem_bits = static_cast< unsigned >(ctx.getTypeSize(elem_type));
+                if (elem_type->isIntegerType() && elem_bits == target_bytes * 8u
+                    && elem_bits > 0 && storage_bits >= elem_bits)
+                {
+                    auto *zero = clang::IntegerLiteral::Create(
+                        ctx,
+                        llvm::APInt(ctx.getIntWidth(ctx.IntTy), 0),
+                        ctx.IntTy, loc);
+                    auto subscript = sema().CreateBuiltinArraySubscriptExpr(
+                        expr, loc, zero, loc);
+                    if (!subscript.isInvalid()) {
+                        return subscript.getAs< clang::Expr >();
+                    }
+                }
+            }
+        }
+
+        // Reinterpret-cast fallback at `target_bytes` (or the aggregate's
+        // full size when target_bytes == 0).  Refuse when the requested
+        // width exceeds the storage — `*(uintN_t*)&arr` would over-read
+        // past the aggregate.  Caller should loud-refuse instead.
+        auto size_bits = (target_bytes != 0)
+            ? target_bytes * 8u
+            : storage_bits;
+        if (storage_bits > 0 && size_bits > storage_bits) {
+            return nullptr;
+        }
+        clang::QualType int_type;
+        switch (size_bits) {
+            case 8:   int_type = ctx.UnsignedCharTy; break;
+            case 16:  int_type = ctx.UnsignedShortTy; break;
+            case 32:  int_type = ctx.UnsignedIntTy; break;
+            case 64:  int_type = ctx.UnsignedLongLongTy; break;
+            case 128:
+                if (!ctx.UnsignedInt128Ty.isNull()) {
+                    int_type = ctx.UnsignedInt128Ty;
+                    break;
+                }
+                [[fallthrough]];
+            default:
+                return nullptr;
+        }
+        return make_reinterpret_cast(ctx, expr, int_type, loc);
+    }
+
     // Coerce a record (struct/union) typed expression to an unsigned integer of
     // the same byte size so that it can participate in C arithmetic / bitwise
     // operations.  Returns the expression unchanged if it is not a record type.
@@ -480,20 +545,44 @@ namespace patchestry::ast {
         clang::QualType input_type  = input_expr->getType();
         clang::QualType output_type = output_expr->getType();
 
-        // Refuse scalar/pointer → array assignments. make_cast would route
-        // these through make_reinterpret_cast, producing `*(T(*)[N])&temp`
-        // (a 32-byte array lvalue backed by a 4-byte temporary, say). The
-        // subsequent element-wise copy in create_array_assignment_operation
-        // would then read past the end of that temporary — UB at runtime,
-        // and emits unsound C. This shape arises when Ghidra's variable
-        // analyzer assigns an umbrella array type to a DECLARE_LOCAL whose
-        // actual writes are narrower (issue #223 / FUN_0000f69c). Routing
-        // the value through a width-correct shadow local is follow-up work;
-        // drop the write loudly rather than synthesize a miscompile.
+        // Scalar → array: make_cast would route through make_reinterpret_cast
+        // and emit `*(T(*)[N])&temp = ...` — element-wise copy off a temp
+        // backed by a narrower scalar, UB at runtime.  Issue #223
+        // (FUN_0000f69c) and #225's widened-buffer case.  When the input
+        // width matches one element of the output array, prefer
+        // `arr[0] = input`; otherwise refuse loudly.
         const bool output_is_array = output_type->isArrayType();
         const bool input_is_array  = input_type->isArrayType();
         if (output_is_array && !input_is_array
             && !ctx.hasSameUnqualifiedType(input_type, output_type)) {
+            if (const auto *array_type = ctx.getAsArrayType(output_type)) {
+                auto elem_type = array_type->getElementType();
+                auto elem_bits = ctx.getTypeSize(elem_type);
+                if (elem_type->isIntegerType() && input_type->isIntegerType()
+                    && elem_bits == ctx.getTypeSize(input_type)
+                    && elem_bits > 0
+                    && ctx.getTypeSize(output_type) >= elem_bits)
+                {
+                    auto *zero = clang::IntegerLiteral::Create(
+                        ctx,
+                        llvm::APInt(ctx.getIntWidth(ctx.IntTy), 0),
+                        ctx.IntTy, loc);
+                    auto subscript = sema().CreateBuiltinArraySubscriptExpr(
+                        output_expr, loc, zero, loc);
+                    if (!subscript.isInvalid()) {
+                        auto *narrow_out = subscript.getAs< clang::Expr >();
+                        auto *cast_input = make_cast(
+                            ctx, input_expr, narrow_out->getType(), loc);
+                        if (cast_input) {
+                            auto assign = sema().CreateBuiltinBinOp(
+                                loc, clang::BO_Assign, narrow_out, cast_input);
+                            if (!assign.isInvalid()) {
+                                return assign.getAs< clang::Stmt >();
+                            }
+                        }
+                    }
+                }
+            }
             LOG(ERROR) << "create_assign_operation: refusing "
                        << input_type.getAsString() << " → "
                        << output_type.getAsString()
@@ -2563,8 +2652,12 @@ namespace patchestry::ast {
         }
 
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
-        auto *input_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
+        // ADDRESS_OF wants the raw storage lvalue (#225); narrowing first
+        // would emit `&*(T*)&arr` instead of `&arr`.
+        bool narrow_input = (kind != clang::UO_AddrOf);
+        auto *input_expr = AS_EXPR_OR_NULL(
+            create_varnode(ctx, function, op.inputs[0], {}, narrow_input),
+            op.key);
         if (!input_expr) {
             return {};
         }
