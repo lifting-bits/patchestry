@@ -402,10 +402,18 @@ namespace patchestry::ast {
             // literal of the matching byte width; the binop's per-operand
             // coerce_record_to_integer pass narrows the other operand to the
             // same integer so the comparison type-checks (issue #230).
-            unsigned size_bits = vnode.size > 0
-                ? vnode.size * 8U
-                : static_cast< unsigned >(ctx.getTypeSize(vnode_type));
-            if (size_bits == 0U) size_bits = 8U;
+            //
+            // Prefer vnode.size (always populated from the JSON) over
+            // ctx.getTypeSize() because the latter asserts on incomplete
+            // forward-declared records — which is exactly the type class that
+            // hits this branch in practice (Ghidra strips fields).
+            unsigned size_bits = 8U;
+            if (vnode.size > 0) {
+                size_bits = vnode.size * 8U;
+            } else if (!vnode_type->isIncompleteType()) {
+                auto t = static_cast< unsigned >(ctx.getTypeSize(vnode_type));
+                if (t > 0U) size_bits = t;
+            }
             clang::QualType int_type;
             if (size_bits <= 8U)         int_type = ctx.UnsignedCharTy;
             else if (size_bits <= 16U)   int_type = ctx.UnsignedShortTy;
@@ -417,8 +425,19 @@ namespace patchestry::ast {
                 return {};
             }
             unsigned bit_width = ctx.getIntWidth(int_type);
+            auto value = *vnode.value;
+            // APInt(bit_width, value) silently truncates value modulo 2^bit_width.
+            // For the common INT_NOTEQUAL-vs-0 case the truncated value is still
+            // 0, but if Ghidra ever emits a record constant whose value exceeds
+            // the storage width, the comparison sentinel would change quietly.
+            if (bit_width < 64U && (value >> bit_width) != 0U) {
+                LOG(WARNING) << "create_constant: record-typed value "
+                             << value << " exceeds " << bit_width
+                             << "-bit width; truncating. key: "
+                             << vnode.type_key << "\n";
+            }
             return new (ctx) clang::IntegerLiteral(
-                ctx, llvm::APInt(bit_width, *vnode.value), int_type, location
+                ctx, llvm::APInt(bit_width, value), int_type, location
             );
         }
 
