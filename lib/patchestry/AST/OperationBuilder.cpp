@@ -53,7 +53,7 @@ namespace patchestry::ast {
 
     clang::Stmt *OpBuilder::create_varnode(
         clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-        clang::SourceLocation loc
+        clang::SourceLocation loc, bool narrow_to_size_hint
     ) {
         if (loc.isInvalid()) loc = VirtualLoc(ctx);
         auto varnode_operation = [&](clang::ASTContext &ctx, const Function &function,
@@ -82,13 +82,32 @@ namespace patchestry::ast {
             return nullptr;
         };
 
-        if (auto *expr = varnode_operation(ctx, function, vnode)) {
-            return expr;
+        auto *result = varnode_operation(ctx, function, vnode);
+        if (!result) {
+            (void) loc;
+            return {};
         }
 
-        (void) loc;
+        // Per-varnode-truthful narrowing (#225): aggregate storage + a
+        // width hint always narrows here, so every consumer sees a
+        // correctly-typed Expr.  Output varnodes (vnode.size == 0)
+        // inherit their width from the parent op's type and narrow on
+        // the write side in create_assign_operation.  ADDRESS_OF passes
+        // narrow_to_size_hint=false so `&arr` doesn't become `&*(T*)&arr`.
+        if (narrow_to_size_hint && vnode.size > 0) {
+            if (auto *expr = clang::dyn_cast< clang::Expr >(result)) {
+                auto storage_type = expr->getType();
+                if (storage_type->isArrayType() || storage_type->isRecordType()) {
+                    auto *narrowed = narrow_aggregate_to_integer(
+                        ctx, expr, loc, vnode.size);
+                    if (narrowed) {
+                        return narrowed;
+                    }
+                }
+            }
+        }
 
-        return {};
+        return result;
     }
 
     clang::Stmt *OpBuilder::create_parameter(clang::ASTContext &ctx, const Varnode &vnode) {

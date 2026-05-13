@@ -93,6 +93,7 @@ import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.data.AbstractFloatDataType;
 import ghidra.program.model.data.AbstractIntegerDataType;
 import ghidra.program.model.data.Array;
+import ghidra.program.model.data.ArrayDataType;
 import ghidra.program.model.data.ArrayStringable;
 import ghidra.program.model.data.BooleanDataType;
 import ghidra.program.model.data.BuiltIn;
@@ -108,6 +109,7 @@ import ghidra.program.model.data.Pointer;
 import ghidra.program.model.data.Structure;
 import ghidra.program.model.data.TypeDef;
 import ghidra.program.model.data.Undefined;
+import ghidra.program.model.data.UnsignedCharDataType;
 import ghidra.program.model.data.Union;
 import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.data.WideCharDataType;
@@ -142,10 +144,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
@@ -767,6 +769,260 @@ public class PcodeSerializer {
 				return surrogate;
 			}
 			return DefaultDataType.dataType;
+		}
+
+		// Stack-local size widening (#225).  Ghidra can mistype a wide
+		// stack buffer as a narrow scalar/array when no op directly reads
+		// the wide form.  inferLocalSizesFromCalls records a lower-bound
+		// byte size from buffer-shaped calls; widenedTypeFor applies it to
+		// DECLARE_LOCAL when defensive guards allow.  Only widens — never
+		// narrows.
+		private Map<HighSymbol, Integer> inferredLocalSizes;
+
+		// Buffer-shaped libc/POSIX ABIs.  Each int[] is {bufArgIdx...,
+		// sizeArgIdx} (0-based positional, last element = size).
+		// memcpy/memmove/strncpy/strlcpy list both dst and src — same
+		// length bound covers both.  fread is omitted: `n * size` makes a
+		// constant-only bound brittle.
+		private static final Map<String, int[]> BUFFER_SHAPED_CALLS;
+		private static final int MAX_INFERRED_LOCAL_BYTES = 16 * 1024 * 1024;
+		private static final int RESOLVE_BUFFER_MAX_DEPTH = 16;
+		static {
+			Map<String, int[]> m = new HashMap<>();
+			m.put("memset",    new int[]{0, 2});
+			m.put("memcpy",    new int[]{0, 1, 2});
+			m.put("memmove",   new int[]{0, 1, 2});
+			m.put("bzero",     new int[]{0, 1});
+			m.put("recv",      new int[]{1, 2});
+			m.put("recvfrom",  new int[]{1, 2});
+			m.put("read",      new int[]{1, 2});
+			m.put("pread",     new int[]{1, 2});
+			m.put("strncpy",   new int[]{0, 1, 2});
+			m.put("strlcpy",   new int[]{0, 1, 2});
+			m.put("send",      new int[]{1, 2});
+			m.put("sendto",    new int[]{1, 2});
+			m.put("write",     new int[]{1, 2});
+			BUFFER_SHAPED_CALLS = Collections.unmodifiableMap(m);
+		}
+
+		// Underscore strip handles `_memset` static-build forms; thunk walk
+		// handles PLT stubs.
+		private static int[] bufferShapeFor(Function callee) {
+			if (callee == null) return null;
+			if (callee.isThunk()) {
+				Function resolved = callee.getThunkedFunction(true);
+				if (resolved != null) callee = resolved;
+			}
+			String name = callee.getName();
+			if (name == null) return null;
+			int[] shape = BUFFER_SHAPED_CALLS.get(name);
+			if (shape != null) return shape;
+			if (name.startsWith("_")) {
+				return BUFFER_SHAPED_CALLS.get(name.substring(1));
+			}
+			return null;
+		}
+
+		// Returns -1 when no constant can be recovered.
+		private long readConstantInt(Varnode v) {
+			if (v == null) return -1;
+			if (v.isConstant()) return v.getOffset();
+			PcodeOp def = v.getDef();
+			if (def != null && def.getOpcode() == PcodeOp.COPY) {
+				Varnode src = def.getInput(0);
+				if (src != null && src.isConstant()) {
+					return src.getOffset();
+				}
+			}
+			return -1;
+		}
+
+		// Resolve a pointer-typed Varnode back to the stack HighSymbol it
+		// addresses.  Handles `PTRSUB SP, off` and our synthetic
+		// CALLOTHER `ADDRESS_OF`; tolerates one-level COPY pass-through.
+		// Returns null on interior pointers (`&local + N`) — we don't
+		// know whether the call's size bounds the full slot or only the
+		// suffix, so refuse to widen on that evidence.
+		private HighSymbol resolveBufferLocal(Varnode v) {
+			return resolveBufferLocal(v, 0);
+		}
+
+		private HighSymbol resolveBufferLocal(Varnode v, int depth) {
+			if (v == null || currentFunction == null) return null;
+			if (depth >= RESOLVE_BUFFER_MAX_DEPTH) return null;
+			PcodeOp def = v.getDef();
+			if (def == null) return null;
+			if (def.getOpcode() == PcodeOp.COPY) {
+				return resolveBufferLocal(def.getInput(0), depth + 1);
+			}
+			if (def.getOpcode() == PcodeOp.CALLOTHER
+					&& def.getNumInputs() >= 2
+					&& def.getInput(0).getOffset() == ADDRESS_OF) {
+				Varnode inner = def.getInput(1);
+				if (inner != null) {
+					HighVariable hv = inner.getHigh();
+					if (hv != null) {
+						HighSymbol sym = hv.getSymbol();
+						if (sym != null && !sym.isParameter() && !sym.isGlobal()) {
+							return sym;
+						}
+					}
+				}
+				return null;
+			}
+			if (def.getOpcode() == PcodeOp.PTRSUB && def.getNumInputs() == 2) {
+				Varnode base = def.getInput(0);
+				Varnode off = def.getInput(1);
+				if (base == null || off == null || !off.isConstant()
+						|| !base.isRegister()) {
+					return null;
+				}
+				Register reg = language.getRegister(base.getAddress(), 0);
+				if (reg == null || !reg.equals(stackPointer)) {
+					return null;
+				}
+				int stackOff = (int) off.getOffset();
+				Function fn = currentFunction.getFunction();
+				Variable lowVar = fn.getStackFrame().getVariableContaining(stackOff);
+				if (lowVar == null || lowVar.getStackOffset() != stackOff) {
+					return null;
+				}
+				return currentFunction.getLocalSymbolMap().findLocal(
+					lowVar.getVariableStorage(),
+					def.getSeqnum().getTarget());
+			}
+			return null;
+		}
+
+		// Pre-pass invoked from serializeFunction before pcode blocks
+		// are walked.  +1 on positional indices skips input[0]=callee.
+		private void inferLocalSizesFromCalls() {
+			inferredLocalSizes = new HashMap<>();
+			if (currentFunction == null) return;
+			String funcName = currentFunction.getFunction().getName();
+			for (PcodeBlockBasic block : currentFunction.getBasicBlocks()) {
+				Iterator<PcodeOp> it = block.getIterator();
+				while (it.hasNext()) {
+					PcodeOp op = it.next();
+					if (op.getOpcode() != PcodeOp.CALL) continue;
+					Function callee = resolveDirectCallee(op);
+					int[] shape = bufferShapeFor(callee);
+					if (shape == null || shape.length < 2) continue;
+					int sizePos = shape[shape.length - 1] + 1;
+					int maxPos = sizePos;
+					for (int i = 0; i < shape.length - 1; i++) {
+						int bp = shape[i] + 1;
+						if (bp > maxPos) maxPos = bp;
+					}
+					if (op.getNumInputs() <= maxPos) continue;
+					long size = readConstantInt(op.getInput(sizePos));
+					if (size <= 0 || size > MAX_INFERRED_LOCAL_BYTES) continue;
+					int sz = (int) size;
+					for (int i = 0; i < shape.length - 1; i++) {
+						int bufPos = shape[i] + 1;
+						HighSymbol local = resolveBufferLocal(op.getInput(bufPos));
+						if (local == null) continue;
+						Integer prev = inferredLocalSizes.get(local);
+						if (prev != null && prev >= sz) continue;
+						inferredLocalSizes.put(local, sz);
+						System.out.println("[stack-widen] " + funcName
+							+ ": local '" + local.getName()
+							+ "' lower-bound >= " + sz
+							+ " bytes (via " + callee.getName()
+							+ " arg " + shape[i] + ")");
+					}
+				}
+			}
+		}
+
+		// On refusal the local keeps Ghidra's declared type; downstream
+		// the memset / recv / memcpy then appears as a visibly OOB
+		// write/read on the narrow buffer — the signal verifiers want.
+		private DataType widenedTypeFor(HighSymbol sym, DataType declared) {
+			if (sym == null || declared == null) return declared;
+			Integer inferred = (inferredLocalSizes == null)
+				? null : inferredLocalSizes.get(sym);
+			if (inferred == null) return declared;
+			int declLen = declared.getLength();
+			if (declLen <= 0 || declLen >= inferred) return declared;
+
+			// Sibling-view guard: Ghidra sometimes shares one HighSymbol
+			// across multiple HighVariables of different widths (e.g. a
+			// 1-byte view named `local_0` for an arr[0] read into the
+			// same slot named `local_4018`).  Only widen the canonical
+			// declaration whose width matches the symbol's own type.
+			DataType symType = sym.getDataType();
+			if (symType == null || symType.getLength() != declLen) {
+				return declared;
+			}
+
+			Function fn = currentFunction.getFunction();
+			VariableStorage symStorage = sym.getStorage();
+			if (symStorage == null || symStorage.isUnassignedStorage()
+					|| !symStorage.isStackStorage()) {
+				return declared;
+			}
+			int symOff = symStorage.getStackOffset();
+			StackFrame frame = fn.getStackFrame();
+
+			// Defensive: only widen local-area symbols (negative offsets
+			// on descending stacks).  Parameter / red-zone slots have
+			// ABI-declared widths; the widening heuristic targets recv /
+			// memset on stack locals.
+			if (symOff >= 0) {
+				return declared;
+			}
+
+			// Frame-budget guard: widening past SP into the caller
+			// frame means the size hint is implausible.
+			if ((long) symOff + inferred > 0L) {
+				System.out.println("[stack-widen] " + fn.getName()
+					+ ": refusing widen of '" + sym.getName()
+					+ "' to " + inferred
+					+ " bytes — exceeds frame budget (offset "
+					+ symOff + ", frame size "
+					+ frame.getFrameSize() + ")");
+				return declared;
+			}
+
+			// Overlap guard: if Ghidra placed other named locals in the
+			// would-be widened range, respect that split.  Refusing keeps
+			// the sub-locals consistent and surfaces the OOB call on the
+			// narrow type instead.  Skip the variable backed by `sym`'s
+			// own storage to avoid self-overlap.
+			Variable[] stackVars = frame.getStackVariables();
+			if (stackVars != null) {
+				long widenStart = symOff;
+				long widenEnd = (long) symOff + inferred;
+				for (Variable other : stackVars) {
+					if (other == null) continue;
+					VariableStorage otherStorage = other.getVariableStorage();
+					if (otherStorage != null && otherStorage.equals(symStorage)) {
+						continue;
+					}
+					int oOff = other.getStackOffset();
+					int oLen = (other.getDataType() != null)
+						? other.getDataType().getLength()
+						: other.getLength();
+					if (oLen <= 0) continue;
+					if (oOff < widenEnd && (long) oOff + oLen > widenStart) {
+						System.out.println("[stack-widen] " + fn.getName()
+							+ ": refusing widen of '" + sym.getName()
+							+ "' to " + inferred
+							+ " bytes — would overlap declared '"
+							+ other.getName() + "' at offset "
+							+ oOff + " (" + oLen + " B)");
+						return declared;
+					}
+				}
+			}
+
+			System.out.println("[stack-widen] " + fn.getName()
+				+ ": widening '" + sym.getName() + "' from "
+				+ declared.getName() + " (" + declLen + " B) to "
+				+ "unsigned char[" + inferred + "]");
+			return new ArrayDataType(UnsignedCharDataType.dataType, inferred,
+				UnsignedCharDataType.dataType.getLength());
 		}
 
 		Address getAddress(PcodeOp pcodeOp) throws Exception {
@@ -3597,7 +3853,8 @@ public class PcodeSerializer {
 					baseName = baseName + "_" + Integer.toString(shadowVarCounter++);
 				}
 				writer.name("name").value(baseName);
-				writer.name("type").value(label(highSymbol.getDataType()));
+				writer.name("type").value(
+					label(widenedTypeFor(highSymbol, highSymbol.getDataType())));
 			} else {
 				String baseName = resolveVariableName(highVariableOfPcodeOp.getName());
 				if (isShadow) {
@@ -3608,7 +3865,9 @@ public class PcodeSerializer {
 				if (isShadow) {
 					writer.name("size").value(declSize);
 				} else {
-					writer.name("type").value(label(highVariableOfPcodeOp.getDataType()));
+					writer.name("type").value(
+						label(widenedTypeFor(highSymbol,
+							highVariableOfPcodeOp.getDataType())));
 				}
 			}
 		}
@@ -4072,11 +4331,15 @@ public class PcodeSerializer {
 				writer.endObject();  // End `type`.
 
 				if (shouldVisitPcode && fixUpMissingLocalVariables(highFunction, numberOfParams)) {
-					
+
 					String entryLabel = null;
 					PcodeBlockBasic firstPcodeBasicBlock = null;
 					currentFunction = highFunction;
 					jumpTableIndex = new HashMap<>();
+
+					// #225: must run before any pcode op is emitted so
+					// serializeDeclareLocalVar can consult the hints.
+					inferLocalSizesFromCalls();
 
 					// Pre-index BRANCHIND ops by their target address in a single
 					// pass over all blocks, then resolve each JumpTable in O(1).
