@@ -2428,10 +2428,29 @@ namespace patchestry::ast {
         auto target_type = *target_type_opt;
 
         if (input_expr->getType()->isPointerType()) {
-            // Same clang-22 assertion path as INT_ZEXT — see issue #224.
+            // A single C-style (target_type)ptr lowers to ptrtoint+zext, which
+            // is correct for INT_ZEXT but wrong for INT_SEXT: a high pointer
+            // value like 0x80000000 must sign-extend to 0xFFFFFFFF80000000,
+            // not 0x0000000080000000.  Route through intptr_t so the widening
+            // step sees a signed source and emits sext instead of zext:
+            //   (target_type)(intptr_t)(uintptr_t)ptr
+            auto uintptr_ty = ctx.getUIntPtrType();
+            auto intptr_ty  = ctx.getIntPtrType();
+            input_expr = make_explicit_cast(ctx, input_expr, uintptr_ty, op_loc);
+            if (!input_expr) {
+                LOG(ERROR) << "INT_SEXT: failed to cast pointer input to uintptr_t. key: "
+                           << op.key << "\n";
+                return {};
+            }
+            input_expr = make_explicit_cast(ctx, input_expr, intptr_ty, op_loc);
+            if (!input_expr) {
+                LOG(ERROR) << "INT_SEXT: failed to retype uintptr_t to intptr_t. key: "
+                           << op.key << "\n";
+                return {};
+            }
             input_expr = make_explicit_cast(ctx, input_expr, target_type, op_loc);
             if (!input_expr) {
-                LOG(ERROR) << "INT_SEXT: failed to cast pointer input to "
+                LOG(ERROR) << "INT_SEXT: failed to widen intptr_t to "
                            << target_type.getAsString() << ". key: " << op.key << "\n";
                 return {};
             }
