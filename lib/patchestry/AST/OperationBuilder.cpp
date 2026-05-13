@@ -103,6 +103,14 @@ namespace patchestry::ast {
                     if (narrowed) {
                         return narrowed;
                     }
+                    // Falling back to the unnarrowed aggregate; a downstream
+                    // INT_ZEXT/INT_SEXT/CAST will surface as an indistinguishable
+                    // Sema assertion if this width is what the lifter needs.
+                    LOG(WARNING) << "narrow_aggregate_to_integer refused:"
+                                 << " storage=" << storage_type.getAsString()
+                                 << " size=" << vnode.size
+                                 << " op=" << (vnode.operation ? *vnode.operation : "<none>")
+                                 << "\n";
                 }
             }
         }
