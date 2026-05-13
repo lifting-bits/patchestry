@@ -430,7 +430,7 @@ namespace patchestry::ast {
             // For the common INT_NOTEQUAL-vs-0 case the truncated value is still
             // 0, but if Ghidra ever emits a record constant whose value exceeds
             // the storage width, the comparison sentinel would change quietly.
-            if (bit_width < 64U && (value >> bit_width) != 0U) {
+            if (bit_width < 64U && (static_cast< uint64_t >(value) >> bit_width) != 0U) {
                 LOG(WARNING) << "create_constant: record-typed value "
                              << value << " exceeds " << bit_width
                              << "-bit width; truncating. key: "
