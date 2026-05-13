@@ -98,9 +98,16 @@ namespace patchestry::ast {
                     ctx, value, false, param_type, VirtualLoc(ctx)
                 );
             } else if (param_type->isPointerType()) {
-                return new (ctx) clang::IntegerLiteral(
-                    ctx, llvm::APInt(ctx.getIntWidth(param_type), 0), param_type,
+                // IntegerLiteral asserts on non-integer types; emit (T*)0 as
+                // CK_NullToPointer over an int-typed 0 instead.  #226.
+                auto *zero = new (ctx) clang::IntegerLiteral(
+                    ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), 0), ctx.IntTy,
                     VirtualLoc(ctx)
+                );
+                return clang::ImplicitCastExpr::Create(
+                    ctx, param_type, clang::CK_NullToPointer, zero,
+                    /*BasePath=*/nullptr, clang::VK_PRValue,
+                    clang::FPOptionsOverride()
                 );
             } else if (param_type->isBooleanType()) {
                 return new (ctx)

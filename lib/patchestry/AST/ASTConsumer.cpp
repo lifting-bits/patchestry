@@ -322,9 +322,20 @@ namespace patchestry::ast {
     void PcodeASTConsumer::create_globals(
         clang::ASTContext &ctx, VariableMap &serialized_variables
     ) {
+        const auto &fns = get_program().serialized_functions;
         for (auto &[key, variable] : serialized_variables) {
             if (variable.name.empty() || variable.type.empty()) {
                 continue;
+            }
+
+            // Stale JSON without the #226 producer fix would trip CIRGen's
+            // FuncOp assertion deep in vendor code — refuse loudly here.
+            if (fns.find(key) != fns.end()) {
+                LOG_FATAL("create_globals: global '{0}' at {1} collides with a "
+                          "function entry of the same address — pcode.json is "
+                          "malformed.  Regenerate it with a PcodeSerializer "
+                          "that includes the #226 fix.",
+                          variable.name, key);
             }
 
             auto var_type       = type_builder->GetSerializedType(variable.type);

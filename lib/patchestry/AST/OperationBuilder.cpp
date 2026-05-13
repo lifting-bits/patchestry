@@ -141,15 +141,26 @@ namespace patchestry::ast {
             return {};
         }
 
-        if (!function_builder().global_var_list.get().contains(*vnode.global)) {
-            return {};
+        if (function_builder().global_var_list.get().contains(*vnode.global)) {
+            auto *var_decl = function_builder().global_var_list.get().at(*vnode.global);
+            return clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
+                VirtualLoc(ctx), var_decl->getType(), clang::VK_LValue
+            );
         }
 
-        auto *var_decl = function_builder().global_var_list.get().at(*vnode.global);
-        return clang::DeclRefExpr::Create(
-            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
-            VirtualLoc(ctx), var_decl->getType(), clang::VK_LValue
-        );
+        // #226: producer strips globals at function-entry addresses but ops
+        // can still reference them via kind:"global"; resolve as function.
+        if (function_builder().function_list.get().contains(*vnode.global)) {
+            auto *fn_decl = function_builder().function_list.get().at(*vnode.global);
+            auto location = SourceLocation(ctx.getSourceManager(), *vnode.global);
+            return clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), location, fn_decl, false,
+                location, fn_decl->getType(), clang::VK_PRValue
+            );
+        }
+
+        return {};
     }
 
     clang::Stmt *OpBuilder::create_temporary(
