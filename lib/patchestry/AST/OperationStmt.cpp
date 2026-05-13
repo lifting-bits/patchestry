@@ -393,6 +393,32 @@ namespace patchestry::ast {
         return deref_expr.getAs< clang::Expr >();
     }
 
+    clang::Expr *OpBuilder::cast_pointer_to_int(
+        clang::ASTContext &ctx, clang::Expr *ptr, clang::QualType target,
+        clang::SourceLocation loc, PtrToIntExtension kind, std::string_view op_key
+    ) {
+        if (kind == PtrToIntExtension::Zero) {
+            // (target)ptr lowers to ptrtoint+zext — matches INT_ZEXT.
+            auto *r = make_explicit_cast(ctx, ptr, target, loc);
+            if (!r) {
+                LOG(ERROR) << "cast_pointer_to_int (zext): failed to cast to "
+                           << target.getAsString() << ". key: " << op_key << "\n";
+            }
+            return r;
+        }
+        // (target)(intptr_t)(uintptr_t)ptr — forces sext at the widening
+        // step.  A single (target)ptr would lower as ptrtoint+zext.
+        auto *r = make_explicit_cast(ctx, ptr, ctx.getUIntPtrType(), loc);
+        if (r) r = make_explicit_cast(ctx, r, ctx.getIntPtrType(), loc);
+        if (r) r = make_explicit_cast(ctx, r, target, loc);
+        if (!r) {
+            LOG(ERROR) << "cast_pointer_to_int (sext): failed to cast through "
+                          "intptr_t to " << target.getAsString()
+                       << ". key: " << op_key << "\n";
+        }
+        return r;
+    }
+
     clang::Expr *OpBuilder::narrow_aggregate_to_integer(
         clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc,
         unsigned target_bytes
@@ -2362,15 +2388,12 @@ namespace patchestry::ast {
         auto target_type = *target_type_opt;
 
         if (input_expr->getType()->isPointerType()) {
-            // PerformImplicitConversion asserts inside clang 22 (SemaExprCXX.cpp:4681,
-            // `Diagnosed && "failed to diagnose bad conversion"`) for pointer→int
-            // before it can return Invalid, so the BuildCStyleCastExpr fallback
-            // below would never run.  Route pointer inputs straight to the
-            // explicit cast.  See issue #224.
-            input_expr = make_explicit_cast(ctx, input_expr, target_type, op_loc);
+            // PerformImplicitConversion asserts inside clang 22 (SemaExprCXX.cpp:4681)
+            // for pointer→int before returning Invalid, so the
+            // BuildCStyleCastExpr fallback below would never run.  See #224.
+            input_expr = cast_pointer_to_int(ctx, input_expr, target_type, op_loc,
+                                             PtrToIntExtension::Zero, op.key);
             if (!input_expr) {
-                LOG(ERROR) << "INT_ZEXT: failed to cast pointer input to "
-                           << target_type.getAsString() << ". key: " << op.key << "\n";
                 return {};
             }
         } else {
@@ -2428,30 +2451,11 @@ namespace patchestry::ast {
         auto target_type = *target_type_opt;
 
         if (input_expr->getType()->isPointerType()) {
-            // A single C-style (target_type)ptr lowers to ptrtoint+zext, which
-            // is correct for INT_ZEXT but wrong for INT_SEXT: a high pointer
-            // value like 0x80000000 must sign-extend to 0xFFFFFFFF80000000,
-            // not 0x0000000080000000.  Route through intptr_t so the widening
-            // step sees a signed source and emits sext instead of zext:
-            //   (target_type)(intptr_t)(uintptr_t)ptr
-            auto uintptr_ty = ctx.getUIntPtrType();
-            auto intptr_ty  = ctx.getIntPtrType();
-            input_expr = make_explicit_cast(ctx, input_expr, uintptr_ty, op_loc);
+            // Sign-extension over a pointer requires the intptr_t intermediate;
+            // a single (target)ptr lowers as ptrtoint+zext.  See #224 follow-up.
+            input_expr = cast_pointer_to_int(ctx, input_expr, target_type, op_loc,
+                                             PtrToIntExtension::Sign, op.key);
             if (!input_expr) {
-                LOG(ERROR) << "INT_SEXT: failed to cast pointer input to uintptr_t. key: "
-                           << op.key << "\n";
-                return {};
-            }
-            input_expr = make_explicit_cast(ctx, input_expr, intptr_ty, op_loc);
-            if (!input_expr) {
-                LOG(ERROR) << "INT_SEXT: failed to retype uintptr_t to intptr_t. key: "
-                           << op.key << "\n";
-                return {};
-            }
-            input_expr = make_explicit_cast(ctx, input_expr, target_type, op_loc);
-            if (!input_expr) {
-                LOG(ERROR) << "INT_SEXT: failed to widen intptr_t to "
-                           << target_type.getAsString() << ". key: " << op.key << "\n";
                 return {};
             }
         } else {
