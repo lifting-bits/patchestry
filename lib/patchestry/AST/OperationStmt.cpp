@@ -2361,19 +2361,33 @@ namespace patchestry::ast {
         }
         auto target_type = *target_type_opt;
 
-        auto implicit_result = sema().PerformImplicitConversion(
-            input_expr, target_type, clang::AssignmentAction::Converting, true
-        );
-
-        if (implicit_result.isInvalid()) {
-            // If fail to perform implcit cast perform explicit cast
-            auto result = sema().BuildCStyleCastExpr(
-                op_loc, ctx.getTrivialTypeSourceInfo(target_type), op_loc, input_expr
+        if (input_expr->getType()->isPointerType()) {
+            // PerformImplicitConversion asserts inside clang 22 (SemaExprCXX.cpp:4681,
+            // `Diagnosed && "failed to diagnose bad conversion"`) for pointer→int
+            // before it can return Invalid, so the BuildCStyleCastExpr fallback
+            // below would never run.  Route pointer inputs straight to the
+            // explicit cast.  See issue #224.
+            input_expr = make_explicit_cast(ctx, input_expr, target_type, op_loc);
+            if (!input_expr) {
+                LOG(ERROR) << "INT_ZEXT: failed to cast pointer input to "
+                           << target_type.getAsString() << ". key: " << op.key << "\n";
+                return {};
+            }
+        } else {
+            auto implicit_result = sema().PerformImplicitConversion(
+                input_expr, target_type, clang::AssignmentAction::Converting, true
             );
 
-            input_expr = result.getAs< clang::Expr >();
-        } else {
-            input_expr = implicit_result.getAs< clang::Expr >();
+            if (implicit_result.isInvalid()) {
+                // If fail to perform implcit cast perform explicit cast
+                auto result = sema().BuildCStyleCastExpr(
+                    op_loc, ctx.getTrivialTypeSourceInfo(target_type), op_loc, input_expr
+                );
+
+                input_expr = result.getAs< clang::Expr >();
+            } else {
+                input_expr = implicit_result.getAs< clang::Expr >();
+            }
         }
 
         if (merge_to_next) {
@@ -2413,21 +2427,31 @@ namespace patchestry::ast {
         }
         auto target_type = *target_type_opt;
 
-        auto implicit_result = sema().PerformImplicitConversion(
-            input_expr, target_type, clang::AssignmentAction::Converting, true
-        );
-
-        if (implicit_result.isInvalid()) {
-            // If fail to perform implcit cast perform explicit cast
-            auto result = sema().BuildCStyleCastExpr(
-                SourceLocation(ctx.getSourceManager(), op.key),
-                ctx.getTrivialTypeSourceInfo(target_type),
-                SourceLocation(ctx.getSourceManager(), op.key), input_expr
+        if (input_expr->getType()->isPointerType()) {
+            // Same clang-22 assertion path as INT_ZEXT — see issue #224.
+            input_expr = make_explicit_cast(ctx, input_expr, target_type, op_loc);
+            if (!input_expr) {
+                LOG(ERROR) << "INT_SEXT: failed to cast pointer input to "
+                           << target_type.getAsString() << ". key: " << op.key << "\n";
+                return {};
+            }
+        } else {
+            auto implicit_result = sema().PerformImplicitConversion(
+                input_expr, target_type, clang::AssignmentAction::Converting, true
             );
 
-            input_expr = result.getAs< clang::Expr >();
-        } else {
-            input_expr = implicit_result.getAs< clang::Expr >();
+            if (implicit_result.isInvalid()) {
+                // If fail to perform implcit cast perform explicit cast
+                auto result = sema().BuildCStyleCastExpr(
+                    SourceLocation(ctx.getSourceManager(), op.key),
+                    ctx.getTrivialTypeSourceInfo(target_type),
+                    SourceLocation(ctx.getSourceManager(), op.key), input_expr
+                );
+
+                input_expr = result.getAs< clang::Expr >();
+            } else {
+                input_expr = implicit_result.getAs< clang::Expr >();
+            }
         }
 
         if (merge_to_next) {
