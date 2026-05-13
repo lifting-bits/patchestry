@@ -395,6 +395,36 @@ namespace patchestry::ast {
             return clang::FloatingLiteral::Create(ctx, float_value, true, vnode_type, location);
         }
 
+        if (vnode_type->isRecordType()) {
+            // Record-typed constant (Ghidra emits these for sentinel comparisons
+            // against opaque or empty-fields struct varnodes, e.g. INT_NOTEQUAL
+            // <struct CodedInputStream>, 0).  Emit a sized unsigned integer
+            // literal of the matching byte width; the binop's per-operand
+            // coerce_record_to_integer pass narrows the other operand to the
+            // same integer so the comparison type-checks (issue #230).
+            unsigned size_bits = vnode.size > 0
+                ? vnode.size * 8U
+                : static_cast< unsigned >(ctx.getTypeSize(vnode_type));
+            if (size_bits == 0U) size_bits = 8U;
+            clang::QualType int_type;
+            if (size_bits <= 8U)         int_type = ctx.UnsignedCharTy;
+            else if (size_bits <= 16U)   int_type = ctx.UnsignedShortTy;
+            else if (size_bits <= 32U)   int_type = ctx.UnsignedIntTy;
+            else if (size_bits <= 64U)   int_type = ctx.UnsignedLongLongTy;
+            else {
+                LOG(ERROR) << "create_constant: record-typed constant too wide ("
+                           << size_bits << " bits) for integer-literal substitution\n";
+                return {};
+            }
+            unsigned bit_width = ctx.getIntWidth(int_type);
+            return new (ctx) clang::IntegerLiteral(
+                ctx, llvm::APInt(bit_width, *vnode.value), int_type, location
+            );
+        }
+
+        LOG(ERROR) << "create_constant: unsupported constant type '"
+                   << vnode_type.getAsString() << "' for key " << vnode.type_key
+                   << "\n";
         return {};
     }
 
