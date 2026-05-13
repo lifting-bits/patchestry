@@ -246,7 +246,7 @@ namespace patchestry::ast {
         // follow-up).  A single (target)ptr lowers as ptrtoint+zext in
         // CIRGen; for sign-extension we route through intptr_t so the
         // widening step sees a signed source and emits sext.
-        enum class PtrToIntExtension { Zero, Sign };
+        enum class PtrToIntExtension { kZero, kSign };
         clang::Expr *cast_pointer_to_int(
             clang::ASTContext &ctx, clang::Expr *ptr, clang::QualType target,
             clang::SourceLocation loc, PtrToIntExtension kind,

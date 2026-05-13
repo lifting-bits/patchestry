@@ -397,26 +397,34 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, clang::Expr *ptr, clang::QualType target,
         clang::SourceLocation loc, PtrToIntExtension kind, std::string_view op_key
     ) {
-        if (kind == PtrToIntExtension::Zero) {
-            // (target)ptr lowers to ptrtoint+zext — matches INT_ZEXT.
-            auto *r = make_explicit_cast(ctx, ptr, target, loc);
-            if (!r) {
-                LOG(ERROR) << "cast_pointer_to_int (zext): failed to cast to "
-                           << target.getAsString() << ". key: " << op_key << "\n";
+        assert(ptr != nullptr && ptr->getType()->isPointerType()
+               && "cast_pointer_to_int: requires a non-null pointer-typed expression");
+
+        switch (kind) {
+            case PtrToIntExtension::kZero: {
+                // (target)ptr lowers to ptrtoint+zext — matches INT_ZEXT.
+                auto *r = make_explicit_cast(ctx, ptr, target, loc);
+                if (!r) {
+                    LOG(ERROR) << "cast_pointer_to_int (zext): failed to cast to "
+                               << target.getAsString() << ". key: " << op_key << "\n";
+                }
+                return r;
             }
-            return r;
+            case PtrToIntExtension::kSign: {
+                // (target)(intptr_t)(uintptr_t)ptr — forces sext at the widening
+                // step.  A single (target)ptr would lower as ptrtoint+zext.
+                auto *r = make_explicit_cast(ctx, ptr, ctx.getUIntPtrType(), loc);
+                if (r) r = make_explicit_cast(ctx, r, ctx.getIntPtrType(), loc);
+                if (r) r = make_explicit_cast(ctx, r, target, loc);
+                if (!r) {
+                    LOG(ERROR) << "cast_pointer_to_int (sext): failed to cast through "
+                                  "intptr_t to " << target.getAsString()
+                               << ". key: " << op_key << "\n";
+                }
+                return r;
+            }
         }
-        // (target)(intptr_t)(uintptr_t)ptr — forces sext at the widening
-        // step.  A single (target)ptr would lower as ptrtoint+zext.
-        auto *r = make_explicit_cast(ctx, ptr, ctx.getUIntPtrType(), loc);
-        if (r) r = make_explicit_cast(ctx, r, ctx.getIntPtrType(), loc);
-        if (r) r = make_explicit_cast(ctx, r, target, loc);
-        if (!r) {
-            LOG(ERROR) << "cast_pointer_to_int (sext): failed to cast through "
-                          "intptr_t to " << target.getAsString()
-                       << ". key: " << op_key << "\n";
-        }
-        return r;
+        LOG_FATAL("cast_pointer_to_int: unhandled PtrToIntExtension value");
     }
 
     clang::Expr *OpBuilder::narrow_aggregate_to_integer(
@@ -2392,7 +2400,7 @@ namespace patchestry::ast {
             // for pointer→int before returning Invalid, so the
             // BuildCStyleCastExpr fallback below would never run.  See #224.
             input_expr = cast_pointer_to_int(ctx, input_expr, target_type, op_loc,
-                                             PtrToIntExtension::Zero, op.key);
+                                             PtrToIntExtension::kZero, op.key);
             if (!input_expr) {
                 return {};
             }
@@ -2454,7 +2462,7 @@ namespace patchestry::ast {
             // Sign-extension over a pointer requires the intptr_t intermediate;
             // a single (target)ptr lowers as ptrtoint+zext.  See #224 follow-up.
             input_expr = cast_pointer_to_int(ctx, input_expr, target_type, op_loc,
-                                             PtrToIntExtension::Sign, op.key);
+                                             PtrToIntExtension::kSign, op.key);
             if (!input_expr) {
                 return {};
             }
