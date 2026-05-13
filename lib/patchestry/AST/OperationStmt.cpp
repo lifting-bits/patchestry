@@ -3482,9 +3482,16 @@ namespace patchestry::ast {
                     clang::dyn_cast< clang::Stmt >(typed_err), false
                 );
             }
-            return std::make_pair(
-                create_assign_operation(ctx, typed_err, out, op_loc), false
-            );
+            auto *assign = create_assign_operation(ctx, typed_err, out, op_loc);
+            if (!assign) {
+                // create_assign_operation rejected the write (e.g. scalar→array
+                // refusal from #227). Don't drop the marker — emit the bare
+                // typed_err as a side-effect statement.
+                return std::make_pair(
+                    clang::dyn_cast< clang::Stmt >(typed_err), false
+                );
+            }
+            return std::make_pair(assign, false);
         };
 
         if (!op.type.has_value()) {
@@ -3875,7 +3882,7 @@ namespace patchestry::ast {
 
         const std::size_t array_size = reason.size() + 1;
         auto reason_ty = ctx.getConstantArrayType(
-            ctx.CharTy.withConst(), llvm::APInt(32, array_size), nullptr,
+            ctx.CharTy.withConst(), llvm::APInt(64, array_size), nullptr,
             clang::ArraySizeModifier::Normal, 0
         );
         auto *reason_lit = clang::StringLiteral::Create(
@@ -3888,11 +3895,12 @@ namespace patchestry::ast {
         );
         std::vector< clang::Expr * > args{ reason_lit };
         auto call = sema().BuildCallExpr(nullptr, fn_ref, loc, args, loc);
-        if (call.isInvalid()) {
-            LOG(ERROR) << "Failed to build __patchestry_error call for reason: "
-                       << reason << "\n";
-            return nullptr;
-        }
+        // Args (one StringLiteral) and signature (long long(const char *)) are
+        // entirely lifter-controlled; Sema rejecting this is an invariant
+        // violation, not a data-driven failure.
+        LOG_FATAL_IF(call.isInvalid(),
+            "emit_patchestry_error: Sema rejected the call (reason=\"{0}\")",
+            reason);
         return call.getAs< clang::Expr >();
     }
 
