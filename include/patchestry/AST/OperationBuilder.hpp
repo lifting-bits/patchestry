@@ -8,6 +8,7 @@
 #pragma once
 
 #include <functional>
+#include <string_view>
 #include <unordered_set>
 
 #include <clang/AST/ASTContext.h>
@@ -239,6 +240,17 @@ namespace patchestry::ast {
         clang::Expr *make_reinterpret_cast(
             clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
             clang::SourceLocation loc
+        );
+
+        // Pointer→integer cast with explicit extension semantics (#224
+        // follow-up).  A single (target)ptr lowers as ptrtoint+zext in
+        // CIRGen; for sign-extension we route through intptr_t so the
+        // widening step sees a signed source and emits sext.
+        enum class PtrToIntExtension { kZero, kSign };
+        clang::Expr *cast_pointer_to_int(
+            clang::ASTContext &ctx, clang::Expr *ptr, clang::QualType target,
+            clang::SourceLocation loc, PtrToIntExtension kind,
+            std::string_view op_key
         );
 
         clang::Expr *coerce_record_to_integer(
