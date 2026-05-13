@@ -63,6 +63,7 @@ namespace patchestry::ast {
 
         std::unordered_map< std::string, clang::FunctionDecl * > function_declarations;
         std::unordered_map< std::string, clang::VarDecl * > global_variable_declarations;
+        std::unordered_map< std::string, clang::FunctionDecl * > intrinsic_declarations;
     };
 
 } // namespace patchestry::ast

@@ -84,7 +84,8 @@ namespace patchestry::ast {
     FunctionBuilder::FunctionBuilder(
         clang::CompilerInstance &ci, const Function &function, TypeBuilder &type_builder,
         std::unordered_map< std::string, clang::FunctionDecl * > &functions,
-        std::unordered_map< std::string, clang::VarDecl * > &globals
+        std::unordered_map< std::string, clang::VarDecl * > &globals,
+        std::unordered_map< std::string, clang::FunctionDecl * > &intrinsics
     )
         : prev_decl(nullptr)
         , cii(ci)
@@ -93,6 +94,7 @@ namespace patchestry::ast {
         , op_builder(nullptr)
         , function_list(functions)
         , global_var_list(globals)
+        , intrinsic_list(intrinsics)
         , local_variables({}) {
         if (!function.key.empty()) {
             if (auto *function_decl = create_declaration(
