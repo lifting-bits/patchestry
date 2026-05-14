@@ -579,16 +579,51 @@ namespace patchestry::ast {
         // the rule-supplied SNode may not include the representative's
         // own label.  Wrap it now so goto targets remain valid.
         //
-        // Check recursively: the label might be inside an SSeq child
-        // (e.g., after the explicit-goto pass wrapped the node).
+        // Check recursively across every SNode kind that can contain
+        // an SLabel definition: SSeq children, SIfThenElse branches,
+        // loop bodies, SSwitch cases, and SLabel.Body.  Without the
+        // deep walk we end up double-wrapping labels that the
+        // structuring rules already emitted inside structured
+        // constructs, producing duplicate clang::LabelDecl definitions
+        // and breaking Clang AST emission on fixtures whose absorbed
+        // nodes carry SLabels embedded inside if/while/switch bodies.
         auto has_label = [](const SNode *sn, std::string_view name) -> bool {
+            std::function<bool(const clang::Stmt *)> has_clang_label =
+                [&](const clang::Stmt *s) -> bool {
+                if (!s) return false;
+                if (auto *ls = llvm::dyn_cast<clang::LabelStmt>(s)) {
+                    if (ls->getDecl()
+                        && std::string_view(ls->getDecl()->getName()) == name)
+                        return true;
+                }
+                for (const auto *c : s->children())
+                    if (has_clang_label(c)) return true;
+                return false;
+            };
             std::function<bool(const SNode *)> check = [&](const SNode *n) -> bool {
                 if (!n) return false;
                 if (auto *lbl = n->dyn_cast<SLabel>())
                     return lbl->Name() == name || check(lbl->Body());
+                if (auto *blk = n->dyn_cast<SBlock>()) {
+                    if (blk->Label() == name) return true;
+                    for (const auto *s : blk->Stmts())
+                        if (has_clang_label(s)) return true;
+                    return false;
+                }
                 if (auto *seq = n->dyn_cast<SSeq>()) {
                     for (auto *c : seq->Children())
                         if (check(c)) return true;
+                    return false;
+                }
+                if (auto *ite = n->dyn_cast<SIfThenElse>())
+                    return check(ite->ThenBranch()) || check(ite->ElseBranch());
+                if (auto *w = n->dyn_cast<SWhile>()) return check(w->Body());
+                if (auto *dw = n->dyn_cast<SDoWhile>()) return check(dw->Body());
+                if (auto *f = n->dyn_cast<SFor>()) return check(f->Body());
+                if (auto *sw = n->dyn_cast<SSwitch>()) {
+                    for (auto &c : sw->Cases())
+                        if (check(c.body)) return true;
+                    return check(sw->DefaultBody());
                 }
                 return false;
             };
@@ -602,6 +637,163 @@ namespace patchestry::ast {
             if (has_label(node.structured, node.original_label)) continue;
             node.structured = factory_.Make<SLabel>(
                 factory_.Intern(node.original_label), node.structured);
+        }
+
+        // Preserve labels for nodes absorbed via `CGraph::IdentifyInternal`
+        // (the structuring-rule collapse path; `MergeConditionalForwarders`
+        // does not enter this branch because it has a single B).  When a
+        // rule folds a component { rep, B, C, ... } into rep, the
+        // structured SNode it supplies is rep's content, but B/C/... still
+        // own non-empty `original_label`s that may be the target of gotos
+        // elsewhere in the function.  Without a corresponding SLabel
+        // somewhere in the tree, those gotos go dangling and trip
+        // VerifyGotoLabelPairing at the end of DuplicateSwitchCaseTargets
+        // (P1a — cve_2018_18732 `ram_000c9b58_229_basic`, cve_2022_39173
+        // `ram_000868cc_74_basic`).
+        //
+        // Walk every collapsed node, chase its representative chain to an
+        // active node, and wrap the rep's structured form with an SLabel
+        // carrying the absorbed node's name when not already present.
+        // Position-wise the label lands at the *top* of rep's structured
+        // form rather than where the absorbed node's content was sliced
+        // in.  That is semantically imperfect for any external goto that
+        // targeted the middle of the now-collapsed component, but the
+        // structuring contract is "enter at rep, exit through external
+        // succs" — so such gotos were already pointing into the interior
+        // of a structured block, which is itself a structuring-rule
+        // precondition violation and a separate concern.  The wrap keeps
+        // the lifter from crashing the assert and surfaces the situation
+        // via the residual SLabel in the emitted output.
+        // Build a function-global set of label names already defined
+        // anywhere in any active node's structured form (SLabel SNodes,
+        // SBlock::Label() fields, and clang::LabelStmt inside SBlock
+        // stmts).  The per-rep `has_label` check below is local and
+        // misses labels that the structuring rules embedded inside a
+        // *different* active node's tree -- adding another SLabel for
+        // the same name would emit a duplicate clang::LabelStmt at AST
+        // emission and trip CIRGen's `mapBlockAddress: already mapped`
+        // assert on fixtures like decode_basic_field.
+        std::unordered_set<std::string_view> globally_defined;
+        std::function<void(const clang::Stmt *)> walk_clang =
+            [&](const clang::Stmt *s) {
+            if (!s) return;
+            if (auto *ls = llvm::dyn_cast<clang::LabelStmt>(s)) {
+                if (ls->getDecl())
+                    globally_defined.insert(ls->getDecl()->getName());
+            }
+            for (const auto *c : s->children()) walk_clang(c);
+        };
+        std::function<void(const SNode *)> walk_snode = [&](const SNode *n) {
+            if (!n) return;
+            if (auto *lbl = n->dyn_cast<SLabel>()) {
+                globally_defined.insert(lbl->Name());
+                walk_snode(lbl->Body());
+                return;
+            }
+            if (auto *blk = n->dyn_cast<SBlock>()) {
+                if (!blk->Label().empty())
+                    globally_defined.insert(blk->Label());
+                for (const auto *s : blk->Stmts()) walk_clang(s);
+                return;
+            }
+            if (auto *seq = n->dyn_cast<SSeq>()) {
+                for (const auto *c : seq->Children()) walk_snode(c);
+                return;
+            }
+            if (auto *ite = n->dyn_cast<SIfThenElse>()) {
+                walk_snode(ite->ThenBranch());
+                walk_snode(ite->ElseBranch());
+                return;
+            }
+            if (auto *w = n->dyn_cast<SWhile>()) { walk_snode(w->Body()); return; }
+            if (auto *dw = n->dyn_cast<SDoWhile>()) { walk_snode(dw->Body()); return; }
+            if (auto *f = n->dyn_cast<SFor>()) { walk_snode(f->Body()); return; }
+            if (auto *sw = n->dyn_cast<SSwitch>()) {
+                for (const auto &c : sw->Cases()) walk_snode(c.body);
+                walk_snode(sw->DefaultBody());
+                return;
+            }
+        };
+        for (auto &node : graph_.nodes) {
+            if (node.IsCollapsed()) continue;
+            walk_snode(node.structured);
+        }
+
+        // Collect every goto reference in the tree -- both SGoto SNodes
+        // and clang::GotoStmt embedded inside SBlock contents.  Only
+        // labels that are *actually targeted* by a goto need
+        // preservation; wrapping every collapsed label produces
+        // duplicate LabelStmts when the function also takes a label's
+        // address (e.g., computed-goto via BRANCHIND), tripping
+        // CIRGen's `mapBlockAddress: already mapped` assert on
+        // fixtures like decode_basic_field.
+        std::unordered_set<std::string_view> goto_targets;
+        std::function<void(const clang::Stmt *)> walk_clang_goto =
+            [&](const clang::Stmt *s) {
+            if (!s) return;
+            if (auto *gs = llvm::dyn_cast<clang::GotoStmt>(s)) {
+                if (gs->getLabel())
+                    goto_targets.insert(gs->getLabel()->getName());
+            }
+            for (const auto *c : s->children()) walk_clang_goto(c);
+        };
+        std::function<void(const SNode *)> walk_goto = [&](const SNode *n) {
+            if (!n) return;
+            if (auto *g = n->dyn_cast<SGoto>()) {
+                goto_targets.insert(g->Target());
+                return;
+            }
+            if (auto *blk = n->dyn_cast<SBlock>()) {
+                for (const auto *s : blk->Stmts()) walk_clang_goto(s);
+                return;
+            }
+            if (auto *seq = n->dyn_cast<SSeq>()) {
+                for (const auto *c : seq->Children()) walk_goto(c);
+                return;
+            }
+            if (auto *ite = n->dyn_cast<SIfThenElse>()) {
+                walk_goto(ite->ThenBranch());
+                walk_goto(ite->ElseBranch());
+                return;
+            }
+            if (auto *w = n->dyn_cast<SWhile>()) { walk_goto(w->Body()); return; }
+            if (auto *dw = n->dyn_cast<SDoWhile>()) { walk_goto(dw->Body()); return; }
+            if (auto *f = n->dyn_cast<SFor>()) { walk_goto(f->Body()); return; }
+            if (auto *sw = n->dyn_cast<SSwitch>()) {
+                for (const auto &c : sw->Cases()) walk_goto(c.body);
+                walk_goto(sw->DefaultBody());
+                return;
+            }
+            if (auto *lbl = n->dyn_cast<SLabel>()) {
+                walk_goto(lbl->Body());
+                return;
+            }
+        };
+        for (auto &node : graph_.nodes) {
+            if (node.IsCollapsed()) continue;
+            walk_goto(node.structured);
+        }
+
+        for (auto &node : graph_.nodes) {
+            if (!node.IsCollapsed()) continue;
+            if (node.original_label.empty()) continue;
+            // Wrap only when a goto actually targets this label AND no
+            // other SLabel/SBlock-Label/LabelStmt already defines it.
+            if (!goto_targets.count(node.original_label)) continue;
+            if (globally_defined.count(node.original_label)) continue;
+            size_t rep_id = node.collapsed_into;
+            while (rep_id != CNode::kNone
+                   && graph_.nodes[rep_id].IsCollapsed()) {
+                rep_id = graph_.nodes[rep_id].collapsed_into;
+            }
+            if (rep_id == CNode::kNone) continue;
+            auto &rep = graph_.nodes[rep_id];
+            if (!rep.structured) continue;
+            rep.structured = factory_.Make<SLabel>(
+                factory_.Intern(node.original_label), rep.structured);
+            // Record the newly-defined label so subsequent collapsed
+            // siblings sharing the same name don't double-wrap.
+            globally_defined.insert(node.original_label);
         }
     }
 
