@@ -1907,13 +1907,13 @@ namespace patchestry::ast {
         }
 
         const auto &label = *op.target->function;
-        auto name         = parse_intrinsic_name(label);
+        auto name         = parse_intrinsic_name(function_builder().program_arch(), label);
 
         // Look up specific handler
         const auto &handlers = get_intrinsic_handlers();
         auto it              = handlers.find(name);
         if (it != handlers.end()) {
-            return it->second(*this, ctx, function, op);
+            return it->second(*this, ctx, function, op, name);
         }
 
         // Fallback: use __patchestry_missing_<name> for unrecognized intrinsics
@@ -3613,10 +3613,25 @@ namespace patchestry::ast {
 
     clang::FunctionDecl *OpBuilder::get_or_create_intrinsic_decl(
         clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,
-        bool is_variadic
+        bool is_variadic, clang::QualType first_param_type
     ) {
-        // Check cache first
-        auto it = intrinsic_decls().find(name);
+        // Cache key encodes everything that affects the FunctionDecl identity:
+        // name, return type, and (for variadic prototypes) the type of the
+        // synthesized fixed parameter. Without the return type, the same
+        // intrinsic called in both void and valued contexts (e.g. as a
+        // statement and as an expression) would collide and the second call
+        // would reuse a wrong-return-type FunctionDecl.
+        std::string cache_key = name;
+        cache_key += "|ret:";
+        cache_key += return_type.getCanonicalType().getAsString();
+        if (is_variadic) {
+            cache_key += "|param0:";
+            cache_key += first_param_type.isNull()
+                             ? std::string("void *")
+                             : first_param_type.getCanonicalType().getAsString();
+        }
+
+        auto it = intrinsic_decls().find(cache_key);
         if (it != intrinsic_decls().end()) {
             return it->second;
         }
@@ -3632,10 +3647,13 @@ namespace patchestry::ast {
 
         llvm::SmallVector<clang::QualType, 1> param_types;
         if (is_variadic) {
-            // Use a generic void * parameter to satisfy the "at least one fixed
-            // parameter" requirement for variadic functions.
-            auto void_ptr_ty = ctx.getPointerType(ctx.VoidTy);
-            param_types.push_back(void_ptr_ty);
+            // Variadic prototypes need at least one fixed parameter for CIR/LLVM
+            // lowering. Use the first real argument's type when available so
+            // processor userops are not forced through an unrelated void *.
+            if (first_param_type.isNull()) {
+                first_param_type = ctx.getPointerType(ctx.VoidTy);
+            }
+            param_types.push_back(first_param_type);
         }
 
         auto func_type = ctx.getFunctionType(return_type, param_types, epi);
@@ -3649,11 +3667,23 @@ namespace patchestry::ast {
             return nullptr;
         }
 
+        // Create ParmVarDecls so Sema can inspect fixed parameters while
+        // performing call conversions.
+        std::vector< clang::ParmVarDecl * > param_decls;
+        param_decls.reserve(param_types.size());
+        for (auto param_type : param_types) {
+            auto *param = clang::ParmVarDecl::Create(
+                ctx, func_decl, loc, loc, nullptr, param_type, nullptr, clang::SC_None, nullptr
+            );
+            param_decls.push_back(param);
+        }
+        func_decl->setParams(param_decls);
+
         // Add to translation unit
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
         // Cache it
-        intrinsic_decls()[name] = func_decl;
+        intrinsic_decls()[cache_key] = func_decl;
         return func_decl;
     }
 
@@ -3669,13 +3699,6 @@ namespace patchestry::ast {
             ret_type = get_varnode_type(ctx, *op.output);
         }
 
-        // Get or create function declaration
-        auto *fn_decl = get_or_create_intrinsic_decl(ctx, name, ret_type, true);
-        if (fn_decl == nullptr) {
-            LOG(ERROR) << "Failed to get intrinsic declaration. key: " << op.key << "\n";
-            return {};
-        }
-
         // Build arguments from inputs
         std::vector< clang::Expr * > args;
         for (const auto &input : op.inputs) {
@@ -3684,6 +3707,17 @@ namespace patchestry::ast {
             if (e) {
                 args.push_back(e);
             }
+        }
+
+        // Get or create function declaration
+        clang::QualType first_param_type;
+        if (!args.empty()) {
+            first_param_type = args.front()->getType();
+        }
+        auto *fn_decl = get_or_create_intrinsic_decl(ctx, name, ret_type, true, first_param_type);
+        if (fn_decl == nullptr) {
+            LOG(ERROR) << "Failed to get intrinsic declaration. key: " << op.key << "\n";
+            return {};
         }
 
         // Build call expression
@@ -3722,6 +3756,7 @@ namespace patchestry::ast {
 
         // Build descriptive function name: __patchestry_missing_<original_name>
         std::string func_name = "__patchestry_missing_" + original_name;
+        (void) original_label; // debug metadata is currently dropped (see below)
 
         // Determine return type
         clang::QualType ret_type = ctx.VoidTy;
@@ -3729,16 +3764,16 @@ namespace patchestry::ast {
             ret_type = get_varnode_type(ctx, *op.output);
         }
 
-        // Build metadata annotation string with useful debugging info
-        // Format: "intrinsic:<label> addr:<key> ret:<type> args:<count>"
-        std::string annotation = "intrinsic:" + original_label + " addr:" + op.key;
-        if (op.type) {
-            annotation += " ret:" + *op.type;
-        }
-        annotation += " args:" + std::to_string(op.inputs.size());
+        // Cache key must encode the return type so a void-context call and
+        // a valued-context call of the same userop do not collide on the
+        // cached FunctionDecl (see get_or_create_intrinsic_decl for the
+        // canonical statement of this invariant).
+        std::string cache_key = func_name;
+        cache_key += "|ret:";
+        cache_key += ret_type.getCanonicalType().getAsString();
 
         // Check cache for existing declaration
-        auto cache_it = intrinsic_decls().find(func_name);
+        auto cache_it = intrinsic_decls().find(cache_key);
         clang::FunctionDecl *fn_decl = nullptr;
 
         if (cache_it != intrinsic_decls().end()) {
@@ -3783,14 +3818,17 @@ namespace patchestry::ast {
             }
             fn_decl->setParams(param_decls);
 
-            // Add AnnotateAttr with metadata for debugging
-            fn_decl->addAttr(clang::AnnotateAttr::Create(
-                ctx, annotation, nullptr, 0, clang::SourceRange()
-            ));
+            // Skip AnnotateAttr emission: ClangIR codegen on LLVM 22 errors
+            // with "Not Yet Implemented: deferredAnnotations" when a function
+            // declaration carries an AnnotateAttr, and the error aborts
+            // emission of every TU function visited afterwards. The metadata
+            // was only used for human debugging and has no in-tree consumer,
+            // so dropping it is the safe interim fix until ClangIR implements
+            // the deferred-annotation codegen path.
 
             // Add to translation unit and cache
             ctx.getTranslationUnitDecl()->addDecl(fn_decl);
-            intrinsic_decls()[func_name] = fn_decl;
+            intrinsic_decls()[cache_key] = fn_decl;
         }
 
         // Build arguments from inputs

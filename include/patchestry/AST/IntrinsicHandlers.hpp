@@ -21,7 +21,7 @@ namespace patchestry::ast {
 namespace patchestry::ghidra {
     struct Function;
     struct Operation;
-}
+} // namespace patchestry::ghidra
 
 namespace clang {
     class ASTContext;
@@ -31,13 +31,18 @@ namespace patchestry::ast {
 
     // Handler function signature for CALLOTHER intrinsics
     using IntrinsicHandler = std::pair< clang::Stmt *, bool > (*)(
-        OpBuilder &, clang::ASTContext &, const ghidra::Function &, const ghidra::Operation &
+        OpBuilder &, clang::ASTContext &, const ghidra::Function &, const ghidra::Operation &,
+        const std::string &
     );
 
     // Returns the map of intrinsic name -> handler function
     const std::unordered_map< std::string, IntrinsicHandler > &get_intrinsic_handlers();
 
     // Parse intrinsic name from label (strips type suffix like _void, _int, _uint8_t)
-    std::string parse_intrinsic_name(std::string_view label);
+    // and applies arch-specific normalization (e.g. AArch64 ldadd -> atomic_fetch_add_*).
+    // When `arch` is empty or unrecognized, every registered arch normalizer is tried
+    // in turn to preserve backward compatibility with inputs that lack an architecture
+    // tag.
+    std::string parse_intrinsic_name(std::string_view arch, std::string_view label);
 
 } // namespace patchestry::ast
