@@ -415,9 +415,23 @@ namespace patchestry::ast {
         const CGraph &g, const std::vector<size_t> & /*body*/,
         const std::vector<LoopBody *> &looporder
     ) {
+        // Walk a candidate container chain to test whether assigning
+        // `lb->immed_container = this` would close a cycle.  In
+        // irreducible CFGs two loops can mutually contain each other's
+        // head; without this guard the depth-walk below loops forever.
+        auto chain_reaches = [&](LoopBody *start, LoopBody *target) {
+            size_t guard = 0;
+            for (LoopBody *c = start; c != nullptr; c = c->immed_container) {
+                if (c == target) return true;
+                if (++guard > looporder.size() + 1) return true;
+            }
+            return false;
+        };
+
         for (LoopBody *lb : looporder) {
             if (lb == this) continue;
             if (!g.Node(lb->head).mark) continue;
+            if (chain_reaches(this, lb)) continue;
 
             if (lb->immed_container == nullptr) {
                 lb->immed_container = this;
@@ -479,10 +493,25 @@ namespace patchestry::ast {
             ClearMarks(g, body);
         }
 
+        // Compute nesting depth via container-chain walk.  The chain is
+        // guaranteed acyclic by LabelContainments, but cap iterations at
+        // looporder.size() as a defensive safety net: a cycle here would
+        // turn the loop into an infinite spin (observed on irreducible
+        // CFGs before the LabelContainments cycle guard landed).
+        const size_t depth_max = looporder.size();
         for (LoopBody *lb : looporder) {
             int d = 0;
-            for (LoopBody *c = lb->immed_container; c != nullptr; c = c->immed_container) {
+            size_t guard = 0;
+            for (LoopBody *c = lb->immed_container; c != nullptr;
+                 c = c->immed_container) {
                 ++d;
+                if (++guard > depth_max) {
+                    LOG(ERROR) << "LabelLoops: cyclic immed_container chain"
+                                  " detected (head="
+                               << lb->head << ", cap=" << depth_max
+                               << "); truncating depth.";
+                    break;
+                }
             }
             lb->depth = d;
         }
