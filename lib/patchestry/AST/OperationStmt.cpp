@@ -3863,13 +3863,45 @@ namespace patchestry::ast {
     ) {
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
-        // Build descriptive function name: __patchestry_missing_<original_name>
-        std::string func_name = "__patchestry_missing_" + original_name;
-
-        // Determine return type
+        // Determine return type.
+        //
+        // Preference order:
+        //   1. op.output present  → the declared output varnode type.
+        //   2. op.output absent but op.type set → the op-declared
+        //      return type.  Without this branch, output-less
+        //      CALLOTHERs that carry a declared `op.type` (e.g.
+        //      `stringdata:t5`) lose it here, the synthetic intrinsic
+        //      is declared as returning void, and any downstream
+        //      consumer of the temporary varnode for that op reads a
+        //      void `CallExpr` where the declared type was a pointer.
+        //      Sema then rejects with "passing 'void' to parameter of
+        //      incompatible type ...".
+        //   3. Otherwise: void.
         clang::QualType ret_type = ctx.VoidTy;
+        bool ret_from_op_type = false;
         if (op.output) {
             ret_type = get_varnode_type(ctx, *op.output);
+        } else if (op.type
+                   && type_builder().GetSerializedTypes().contains(*op.type)) {
+            auto t = type_builder().GetSerializedType(*op.type);
+            if (!t.isNull()) {
+                ret_type = t;
+                ret_from_op_type = true;
+            }
+        }
+
+        // Build descriptive function name: __patchestry_missing_<original_name>.
+        // When the return type is taken from `op.type` (i.e., the
+        // output-less branch above fired), bake that type key into the
+        // identifier so two CALLOTHERs that share an `original_name`
+        // but declare different `op.type`s map to distinct
+        // FunctionDecls.  A single C identifier cannot have two
+        // different return types; without the discriminator the cache
+        // would silently hand the second op the first op's signature,
+        // miscompiling its downstream consumers.
+        std::string func_name = "__patchestry_missing_" + original_name;
+        if (ret_from_op_type) {
+            func_name += "_ret_" + *op.type;
         }
 
         // Build metadata annotation string with useful debugging info
