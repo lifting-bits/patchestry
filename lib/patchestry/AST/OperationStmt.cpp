@@ -3792,7 +3792,8 @@ namespace patchestry::ast {
         auto *fn_ref = clang::DeclRefExpr::Create(
             ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
             callee, false, op_loc,
-            ctx.getPointerType(callee->getType()), clang::VK_PRValue
+            callee, false, op_loc,
+            callee->getType(), clang::VK_LValue
         );
 
         std::vector< clang::Expr * > args;
