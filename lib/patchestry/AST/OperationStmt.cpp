@@ -88,17 +88,53 @@ namespace patchestry::ast {
             }
 
             auto param_type = param->getType();
+            // Bool must be checked before isIntegerType() -- _Bool's
+            // isIntegerType() is true, so the integer branch below
+            // would otherwise build an IntegerLiteral typed `_Bool`,
+            // which StmtPrinter::VisitIntegerLiteral's BuiltinType
+            // switch does not handle (it hits the
+            // `llvm_unreachable("Unexpected type for integer
+            // literal!")` default at StmtPrinter.cpp:1492).
+            if (param_type->isBooleanType()) {
+                return new (ctx)
+                    clang::CXXBoolLiteralExpr(false, param_type, VirtualLoc(ctx));
+            }
             if (param_type->isIntegerType()) {
+                // Enums also match isIntegerType().  Build the literal
+                // with the enum's underlying *BuiltinType* integer (which
+                // is what StmtPrinter's switch expects), then wrap with
+                // a C-style cast back to the enum so the call site
+                // type-checks.  Same pattern as create_constant's enum
+                // branch (OperationBuilder.cpp:280-294).
+                if (param_type->isEnumeralType()) {
+                    auto underlying = param_type->castAs< clang::EnumType >()
+                                          ->getDecl()->getIntegerType();
+                    auto *literal = new (ctx) clang::IntegerLiteral(
+                        ctx,
+                        llvm::APInt(ctx.getIntWidth(underlying), 0),
+                        underlying, VirtualLoc(ctx)
+                    );
+                    // ImplicitCastExpr keeps the call-site type as the
+                    // enum but the printable literal stays a builtin int
+                    // -- StmtPrinter's switch handles only builtin ints.
+                    return clang::ImplicitCastExpr::Create(
+                        ctx, param_type, clang::CK_IntegralCast, literal,
+                        /*BasePath=*/nullptr, clang::VK_PRValue,
+                        clang::FPOptionsOverride()
+                    );
+                }
                 return new (ctx) clang::IntegerLiteral(
                     ctx, llvm::APInt(ctx.getIntWidth(param_type), 0), param_type,
                     VirtualLoc(ctx)
                 );
-            } else if (param_type->isFloatingType()) {
+            }
+            if (param_type->isFloatingType()) {
                 llvm::APFloat value(llvm::APFloat::IEEEsingle(), "0.0");
                 return clang::FloatingLiteral::Create(
                     ctx, value, false, param_type, VirtualLoc(ctx)
                 );
-            } else if (param_type->isPointerType()) {
+            }
+            if (param_type->isPointerType()) {
                 // IntegerLiteral asserts on non-integer types; emit (T*)0 as
                 // CK_NullToPointer over an int-typed 0 instead.  #226.
                 auto *zero = new (ctx) clang::IntegerLiteral(
@@ -110,13 +146,10 @@ namespace patchestry::ast {
                     /*BasePath=*/nullptr, clang::VK_PRValue,
                     clang::FPOptionsOverride()
                 );
-            } else if (param_type->isBooleanType()) {
-                return new (ctx)
-                    clang::CXXBoolLiteralExpr(true, param_type, VirtualLoc(ctx));
-            } else {
-                LOG(ERROR) << "Failed to create default value for paramer\n";
-                return nullptr;
             }
+            LOG(ERROR) << "Failed to create default value for parameter of type '"
+                       << param_type.getAsString() << "'\n";
+            return nullptr;
         }
 
         /**
