@@ -5,6 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <utility>
@@ -1510,27 +1511,68 @@ namespace patchestry::ast {
         clang::Expr *call_expr = nullptr;
 
         if (op.target->function) {
+            clang::QualType ret_type;
+
             if (!function_builder().function_list.get().contains(*op.target->function)) {
-                return {};
+                std::string callee_id = *op.target->function;
+                std::replace(callee_id.begin(), callee_id.end(), ':', '_');
+                std::string reason = "missing_call_" + callee_id;
+
+                LOG(ERROR) << "CALL: callee '" << *op.target->function
+                           << "' not in function_list — emitting "
+                              "__patchestry_error(\""
+                           << reason << "\"). key: " << op.key << "\n";
+
+                auto *err_expr = emit_patchestry_error(ctx, reason, op_loc);
+                if (!err_expr) {
+                    return {};
+                }
+
+                clang::QualType site_ret;
+                if (op.has_return_value.value_or(false) && op.type) {
+                    auto t = type_builder().GetSerializedType(*op.type);
+                    if (!t.isNull() && !t->isVoidType()) {
+                        site_ret = t;
+                    }
+                }
+
+                if (site_ret.isNull()) {
+                    return std::make_pair(
+                        clang::dyn_cast< clang::Stmt >(err_expr), false
+                    );
+                }
+
+                call_expr = make_explicit_cast(ctx, err_expr, site_ret, op_loc);
+                if (!call_expr) {
+                    LOG(ERROR) << "CALL: failed to cast __patchestry_error to "
+                               << site_ret.getAsString() << ". key: " << op.key
+                               << "\n";
+                    return std::make_pair(
+                        clang::dyn_cast< clang::Stmt >(err_expr), false
+                    );
+                }
+                ret_type = site_ret;
+            } else {
+                const auto &callee =
+                    function_builder().function_list.get().at(*op.target->function);
+
+                call_expr = build_callexpr_from_function(ctx, function, op);
+                if (!call_expr) {
+                    LOG(ERROR) << "Failed to create call expression for '"
+                               << callee->getNameAsString() << "'. key: " << op.key << "\n";
+                    return {};
+                }
+                ret_type = callee->getReturnType();
             }
 
-            const auto &callee =
-                function_builder().function_list.get().at(*op.target->function);
-
-            call_expr = build_callexpr_from_function(ctx, function, op);
-            if (!call_expr) {
-                LOG(ERROR) << "Failed to create call expression for '"
-                           << callee->getNameAsString() << "'. key: " << op.key << "\n";
-                return {};
-            }
-            if (callee->getReturnType()->isVoidType()) {
+            if (ret_type->isVoidType()) {
                 return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
             }
             if (!op.output) {
                 // Non-void return but no explicit output varnode.
                 // Materialize into a temp var to avoid duplicate call output.
                 return materialize_call_return(
-                    ctx, call_expr, callee->getReturnType(), op, op_loc);
+                    ctx, call_expr, ret_type, op, op_loc);
             }
 
         } else if (op.target->operation) {
@@ -3397,23 +3439,79 @@ namespace patchestry::ast {
             return {};
         }
 
-        auto op_type = type_builder().GetSerializedType(*op.type);
-        if (op_type.isNull()) {
-            LOG(ERROR) << "Operation type does not exist in serialized list. key: " << op.key
-                       << "\n";
-            return {};
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
+
+        clang::QualType op_type;
+        if (op.type.has_value()) {
+            op_type = type_builder().GetSerializedType(*op.type);
         }
 
-        auto op_loc         = SourceLocation(ctx.getSourceManager(), op.key);
+        auto emit_cast_error = [&](const char *reason)
+            -> std::pair< clang::Stmt *, bool >
+        {
+            const std::string err_reason = std::string("missing_cast:") + reason;
+            LOG(ERROR) << "CAST: " << reason << ", emitting __patchestry_error(\""
+                       << err_reason << "\"). key: " << op.key;
+            auto *err_expr = emit_patchestry_error(ctx, err_reason, op_loc);
+            if (!err_expr) {
+                return {};
+            }
+            clang::Expr *typed_err = nullptr;
+            if (!op_type.isNull()) {
+                typed_err = make_explicit_cast(ctx, err_expr, op_type, op_loc);
+            }
+            // No typed cast (op_type null, or cast rejected for
+            // array/record/function targets): emit the bare marker.
+            // Skipping the output assignment avoids re-triggering the
+            // same rejection in create_assign_operation, which would
+            // silently drop the result.
+            if (!typed_err) {
+                return std::make_pair(
+                    clang::dyn_cast< clang::Stmt >(err_expr), false
+                );
+            }
+            if (!op.output) {
+                return std::make_pair(
+                    clang::dyn_cast< clang::Stmt >(typed_err), false
+                );
+            }
+            auto *out = AS_EXPR_OR_NULL(
+                create_varnode(ctx, function, *op.output), op.key);
+            if (!out) {
+                return std::make_pair(
+                    clang::dyn_cast< clang::Stmt >(typed_err), false
+                );
+            }
+            auto *assign = create_assign_operation(ctx, typed_err, out, op_loc);
+            if (!assign) {
+                // create_assign_operation rejected the write (e.g. scalar→array
+                // refusal from #227). Don't drop the marker — emit the bare
+                // typed_err as a side-effect statement.
+                return std::make_pair(
+                    clang::dyn_cast< clang::Stmt >(typed_err), false
+                );
+            }
+            return std::make_pair(assign, false);
+        };
+
+        if (!op.type.has_value()) {
+            return emit_cast_error("op.type missing");
+        }
+        if (op_type.isNull()) {
+            return emit_cast_error("op.type unresolved in serialized list");
+        }
+
         auto *input_stmt    = create_varnode(ctx, function, op.inputs[0]);
         if (!input_stmt) {
-            LOG(ERROR) << "CAST: input varnode produced null Stmt. key: " << op.key;
-            return {};
+            return emit_cast_error("input varnode produced null Stmt");
         }
         auto *input_expr = clang::dyn_cast< clang::Expr >(input_stmt);
         if (!input_expr) {
-            LOG(ERROR) << "CAST: input varnode is not an Expr. key: " << op.key;
-            return {};
+            return emit_cast_error("input varnode is not an Expr");
+        }
+        if (input_expr->getType()->isVoidType()) {
+            // (T)<void expr> is invalid C; Sema would silently reject.
+            return emit_cast_error("input expression has void type");
         }
 
         if (!op.output && ctx.hasSameUnqualifiedType(op_type, input_expr->getType())) {
@@ -3433,8 +3531,7 @@ namespace patchestry::ast {
 
         auto *cast = make_cast_expr(ctx, input_expr, op_type, op_loc);
         if (!cast) {
-            LOG(ERROR) << "CAST: failed to create cast expression. key: " << op.key;
-            return {};
+            return emit_cast_error("failed to create cast expression");
         }
 
         if (!op.output) {
@@ -3519,8 +3616,8 @@ namespace patchestry::ast {
         bool is_variadic
     ) {
         // Check cache first
-        auto it = intrinsic_decls.find(name);
-        if (it != intrinsic_decls.end()) {
+        auto it = intrinsic_decls().find(name);
+        if (it != intrinsic_decls().end()) {
             return it->second;
         }
 
@@ -3556,7 +3653,7 @@ namespace patchestry::ast {
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
         // Cache it
-        intrinsic_decls[name] = func_decl;
+        intrinsic_decls()[name] = func_decl;
         return func_decl;
     }
 
@@ -3641,10 +3738,10 @@ namespace patchestry::ast {
         annotation += " args:" + std::to_string(op.inputs.size());
 
         // Check cache for existing declaration
-        auto cache_it = intrinsic_decls.find(func_name);
+        auto cache_it = intrinsic_decls().find(func_name);
         clang::FunctionDecl *fn_decl = nullptr;
 
-        if (cache_it != intrinsic_decls.end()) {
+        if (cache_it != intrinsic_decls().end()) {
             fn_decl = cache_it->second;
         } else {
             // Build param types from inputs; use non-variadic to satisfy "prototyped
@@ -3693,7 +3790,7 @@ namespace patchestry::ast {
 
             // Add to translation unit and cache
             ctx.getTranslationUnitDecl()->addDecl(fn_decl);
-            intrinsic_decls[func_name] = fn_decl;
+            intrinsic_decls()[func_name] = fn_decl;
         }
 
         // Build arguments from inputs
@@ -3743,6 +3840,68 @@ namespace patchestry::ast {
             return {};
         }
         return { create_assign_operation(ctx, call_expr, out, op_loc), false };
+    }
+
+    clang::Expr *OpBuilder::emit_patchestry_error(
+        clang::ASTContext &ctx, const std::string &reason, clang::SourceLocation loc
+    ) {
+        if (loc.isInvalid()) loc = VirtualLoc(ctx);
+
+        const std::string func_name = "__patchestry_error";
+        auto it = intrinsic_decls().find(func_name);
+        clang::FunctionDecl *fn_decl =
+            (it != intrinsic_decls().end()) ? it->second : nullptr;
+        if (!fn_decl) {
+            auto cstr_ty = ctx.getPointerType(ctx.CharTy.withConst());
+            clang::FunctionProtoType::ExtProtoInfo epi;
+            epi.Variadic = false;
+            llvm::SmallVector< clang::QualType, 1 > param_tys{ cstr_ty };
+            auto func_ty = ctx.getFunctionType(ctx.LongLongTy, param_tys, epi);
+
+            fn_decl = clang::FunctionDecl::Create(
+                ctx, ctx.getTranslationUnitDecl(), VirtualLoc(ctx),
+                VirtualLoc(ctx), &ctx.Idents.get(func_name), func_ty,
+                ctx.getTrivialTypeSourceInfo(func_ty), clang::SC_Extern
+            );
+            if (!fn_decl) {
+                LOG(ERROR) << "Failed to declare __patchestry_error\n";
+                return nullptr;
+            }
+
+            auto *param = clang::ParmVarDecl::Create(
+                ctx, fn_decl, VirtualLoc(ctx), VirtualLoc(ctx), nullptr,
+                cstr_ty, nullptr, clang::SC_None, nullptr
+            );
+            param->setIsUsed();
+            std::vector< clang::ParmVarDecl * > params{ param };
+            fn_decl->setParams(params);
+
+            ctx.getTranslationUnitDecl()->addDecl(fn_decl);
+            intrinsic_decls()[func_name] = fn_decl;
+        }
+
+        const std::size_t array_size = reason.size() + 1;
+        auto reason_ty = ctx.getConstantArrayType(
+            ctx.CharTy.withConst(), llvm::APInt(64, array_size), nullptr,
+            clang::ArraySizeModifier::Normal, 0
+        );
+        auto *reason_lit = clang::StringLiteral::Create(
+            ctx, reason, clang::StringLiteralKind::Ordinary, false, reason_ty, loc
+        );
+
+        auto *fn_ref = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+            fn_decl, false, loc, fn_decl->getType(), clang::VK_LValue
+        );
+        std::vector< clang::Expr * > args{ reason_lit };
+        auto call = sema().BuildCallExpr(nullptr, fn_ref, loc, args, loc);
+        // Args (one StringLiteral) and signature (long long(const char *)) are
+        // entirely lifter-controlled; Sema rejecting this is an invariant
+        // violation, not a data-driven failure.
+        LOG_FATAL_IF(call.isInvalid(),
+            "emit_patchestry_error: Sema rejected the call (reason=\"{0}\")",
+            reason);
+        return call.getAs< clang::Expr >();
     }
 
 } // namespace patchestry::ast
