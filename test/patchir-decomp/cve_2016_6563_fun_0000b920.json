@@ -4,28 +4,11 @@
 // RUN: test -e %t.cir
 // RUN: %file-check -vv -check-prefix=LIFTED %s --input-file %t.c
 //
-// CVE-2016-6563 / FUN_0000b920 regression.  Pre-fix this lift crashed
-// in three different places depending on which earlier fix you had:
-//
-//   1) CFGStructure::WrapWithPriorContent double-wrapped the loop
-//      header label, producing two LabelStmts that share one
-//      LabelDecl and tripping CIRGen's mapBlockAddress assertion
-//      ("attempting to map a blockaddress info that is already
-//      mapped", CIRGenModule.cpp).
-//
-//   2) ClangEmitterCleanup::ProcessCompound's Pattern 2 only stripped
-//      `else goto L;` when the else arm WAS a GotoStmt — it missed
-//      `else { stmts; goto L; }` followed by `L:`, so the
-//      redundant goto stayed in the emitted C.
-//
-//   3) OpBuilder::make_cast routed a non-fnptr->fnptr conversion
-//      through CK_BitCast as an ImplicitCastExpr around the callee,
-//      which CIRGen::emitCallee rejects ("unexpected implicit cast on
-//      function pointers", CIRGenExpr.cpp).
-//
-// The lift now succeeds end-to-end: a .cir file is produced, the
-// indirect call appears with an explicit C-style cast on the callee,
-// and no duplicate label statements remain in the pretty-printed C.
+// CVE-2016-6563 / FUN_0000b920 regression for issue #236.  Three
+// independent bugs each aborted CIR codegen pre-fix: duplicate
+// loop-header SLabel (mapBlockAddress assert), trailing goto in
+// `else { stmts; goto L; }` not stripped, and ImplicitCastExpr
+// <BitCast> on a function-pointer callee (emitCallee assert).
 //
 // LIFTED:      while (local_14 < param_3)
 // LIFTED:      (void (*)(signed char *, undefined4 *))(undefined *)param_1

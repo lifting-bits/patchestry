@@ -793,11 +793,9 @@ namespace patchestry::ast {
             result = seq;
         }
         if (!a.original_label.empty()) {
-            // Avoid double-wrapping when a.structured already begins
-            // with an SLabel of the same name (e.g., loop rules emit
-            // SLabel(header_label, SWhile(...)) as the representative's
-            // structured form).  Walk past leading SSeq/SLabel layers
-            // to see if the label is already exposed at the head.
+            // Skip the wrap if `result` already exposes the label at
+            // its head; loop rules emit SLabel(name, SWhile(...)) and
+            // a second wrap would produce duplicate LabelStmts.
             std::function<bool(const SNode *)> head_has_label =
                 [&](const SNode *n) -> bool {
                     if (!n) return false;

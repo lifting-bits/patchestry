@@ -571,21 +571,11 @@ namespace detail {
             return s; // leaf: GotoStmt, IfStmt, etc.
         }
 
-        /// Check if an IfStmt has an arm that targets `target`.
-        /// Returns: 0=no match, 1=else arm matches, 2=then arm matches.
-        ///
-        /// Arm 1 (else) matches when the else's *deepest trailing*
-        /// stmt is `goto target`.  That covers both `else goto L;`
-        /// and `else { stmts; goto L; }`, because the arm==1 handler
-        /// strips just the trailing goto and preserves the rest of
-        /// the else body.
-        ///
-        /// Arm 2 (then) only matches when the then arm IS exactly
-        /// `goto target`.  The arm==2 handler discards the whole then
-        /// arm (the transformation is `if(c) goto L; else S; L: →
-        /// if(!c) S`), so allowing a deep-trailing match would
-        /// silently drop any statements preceding the goto inside
-        /// `then`.  Keep the trigger strict.
+        /// Returns 0/1/2 = no match / else arm / then arm.  Arm 1
+        /// matches the else's deepest trailing goto (handler strips
+        /// just that goto).  Arm 2 only matches when then IS the
+        /// goto — the handler discards the whole then arm, so a deep
+        /// match here would drop preceding stmts.
         int IfStmtGotoArm(clang::IfStmt *ifs, llvm::StringRef target) {
             if (!ifs) {
                 return 0;
@@ -601,12 +591,10 @@ namespace detail {
             return 0;
         }
 
-        /// Rebuild `st` with the unique trailing `goto target` stripped.
-        /// Walks through CompoundStmt (last child) and LabelStmt
-        /// (sub-stmt); when the trailing stmt is the matching goto,
-        /// it is dropped.  Empty CompoundStmts and LabelStmts whose
-        /// sub-stmt vanished are replaced with NullStmt so downstream
-        /// can continue to inspect them as statements.
+        /// Strip the trailing `goto target` from `st`, walking through
+        /// the last child of nested CompoundStmts and LabelStmt
+        /// sub-stmts.  Returns NullStmt when the stripped stmt itself
+        /// is the matching goto.
         clang::Stmt *StripTrailingGoto(
             clang::ASTContext &ctx, clang::Stmt *st, llvm::StringRef target
         ) {
@@ -731,21 +719,14 @@ namespace detail {
                         break;
                     }
 
-                    // Pattern 2: deepest trailing is IfStmt with goto arm
+                    // Pattern 2: deepest trailing is IfStmt with goto arm.
+                    // Arm 1: strip trailing goto from else; drop the else
+                    //   if it collapses to NullStmt.
+                    // Arm 2: drop the then arm and flip to `if(!c) else`
+                    //   (safe because IfStmtGotoArm requires then to be
+                    //   exactly the goto — see its docstring).
                     if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(deep)) {
                         int arm = IfStmtGotoArm(ifs, next_label);
-
-                        // Arm == 1 (else's deepest trailing stmt is the
-                        // goto): strip just the trailing goto from the
-                        // else arm.  If the arm collapses to an empty
-                        // NullStmt, drop the else entirely.
-                        //
-                        // Arm == 2 (then arm IS exactly `goto L`, else
-                        // has body): flip to `if(!c) else_body` and
-                        // discard the now-redundant then arm.  The
-                        // strict-direct-goto trigger on arm 2 (see
-                        // IfStmtGotoArm) ensures the then arm contains
-                        // no preceding statements that would be lost.
                         clang::IfStmt *new_if = nullptr;
                         if (arm == 1) {
                             auto *new_else = StripTrailingGoto(
