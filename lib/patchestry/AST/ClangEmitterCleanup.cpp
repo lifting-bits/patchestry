@@ -571,21 +571,65 @@ namespace detail {
             return s; // leaf: GotoStmt, IfStmt, etc.
         }
 
-        /// Check if an IfStmt has a goto to `target` in one of its arms.
-        /// Returns: 0=no match, 1=else arm matches, 2=then arm matches.
+        /// Check if an IfStmt has an arm whose deepest trailing stmt
+        /// is a goto to `target`.  Returns: 0=no match, 1=else arm
+        /// matches, 2=then arm matches.  Walks through CompoundStmt
+        /// (last child) and LabelStmt (sub-stmt) to find the trailing
+        /// stmt, so `else { local_14 = 0U; goto L; }` matches as well
+        /// as the simpler `else goto L`.
         int IfStmtGotoArm(clang::IfStmt *ifs, llvm::StringRef target) {
             if (!ifs) {
                 return 0;
             }
-            auto et = GotoElimGetTarget(ifs->getElse());
+            auto et = GotoElimGetTarget(DeepTrailingStmt(ifs->getElse()));
             if (!et.empty() && et == target) {
                 return 1;
             }
-            auto tt = GotoElimGetTarget(ifs->getThen());
+            auto tt = GotoElimGetTarget(DeepTrailingStmt(ifs->getThen()));
             if (!tt.empty() && tt == target && ifs->getElse()) {
                 return 2;
             }
             return 0;
+        }
+
+        /// Rebuild `st` with the unique trailing `goto target` stripped.
+        /// Walks through CompoundStmt (last child) and LabelStmt
+        /// (sub-stmt); when the trailing stmt is the matching goto,
+        /// it is dropped.  Empty CompoundStmts and LabelStmts whose
+        /// sub-stmt vanished are replaced with NullStmt so downstream
+        /// can continue to inspect them as statements.
+        clang::Stmt *StripTrailingGoto(
+            clang::ASTContext &ctx, clang::Stmt *st, llvm::StringRef target
+        ) {
+            if (!st) {
+                return st;
+            }
+            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(st)) {
+                if (gs->getLabel()->getName() == target) {
+                    return new (ctx) clang::NullStmt(VirtualLoc(ctx));
+                }
+                return st;
+            }
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(st)) {
+                if (cs->body_empty()) {
+                    return st;
+                }
+                std::vector< clang::Stmt * > b(cs->body_begin(), cs->body_end());
+                auto *last_stripped = StripTrailingGoto(ctx, b.back(), target);
+                if (llvm::isa< clang::NullStmt >(last_stripped)
+                    && llvm::isa< clang::GotoStmt >(b.back()))
+                {
+                    b.pop_back();
+                } else {
+                    b.back() = last_stripped;
+                }
+                return detail::MakeCompound(ctx, b);
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(st)) {
+                ls->setSubStmt(StripTrailingGoto(ctx, ls->getSubStmt(), target));
+                return st;
+            }
+            return st;
         }
 
         /// Recursively check whether stmt tree contains any LabelStmt.
@@ -681,50 +725,37 @@ namespace detail {
                     // Pattern 2: deepest trailing is IfStmt with goto arm
                     if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(deep)) {
                         int arm = IfStmtGotoArm(ifs, next_label);
+
+                        // Strip the trailing goto from the matched arm.
+                        // For arm == 1 (else): if the arm collapses to an
+                        // empty NullStmt, drop the else entirely.  For
+                        // arm == 2 (then ends in goto L; else has body),
+                        // flip to `if(!c) else_body` and discard the
+                        // now-redundant then arm.
+                        clang::IfStmt *new_if = nullptr;
                         if (arm == 1) {
-                            // else goto L; L: → drop else
-                            auto loc     = ifs->getIfLoc();
-                            auto *new_if = clang::IfStmt::Create(
-                                ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr,
-                                ifs->getCond(), loc, loc, ifs->getThen(), loc, nullptr
-                            );
-                            if (deep == body[i]) {
-                                body[i] = new_if;
-                            } else {
-                                std::function< clang::Stmt *(clang::Stmt *) > replace_deep;
-                                replace_deep = [&](clang::Stmt *st) -> clang::Stmt * {
-                                    if (auto *inner =
-                                            llvm::dyn_cast< clang::CompoundStmt >(st)) {
-                                        std::vector< clang::Stmt * > b(
-                                            inner->body_begin(), inner->body_end()
-                                        );
-                                        if (!b.empty()
-                                            && DeepTrailingStmt(b.back()) == deep)
-                                        {
-                                            b.back() = replace_deep(b.back());
-                                        }
-                                        return detail::MakeCompound(ctx, b);
-                                    }
-                                    if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(st))
-                                    {
-                                        ls->setSubStmt(replace_deep(ls->getSubStmt()));
-                                        return st;
-                                    }
-                                    return new_if;
-                                };
-                                body[i] = replace_deep(body[i]);
+                            auto *new_else = StripTrailingGoto(
+                                ctx, ifs->getElse(), next_label);
+                            auto loc = ifs->getIfLoc();
+                            if (llvm::isa< clang::NullStmt >(new_else)) {
+                                new_else = nullptr;
                             }
-                            changed = true;
-                            break;
-                        }
-                        if (arm == 2) {
-                            // if(c) goto L; else S; L: → if(!c) S
-                            auto *neg    = NegateExpr(ctx, ifs->getCond());
-                            auto loc     = ifs->getIfLoc();
-                            auto *new_if = clang::IfStmt::Create(
-                                ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr,
-                                neg, loc, loc, ifs->getElse(), loc, nullptr
+                            new_if = clang::IfStmt::Create(
+                                ctx, loc, clang::IfStatementKind::Ordinary,
+                                nullptr, nullptr, ifs->getCond(), loc, loc,
+                                ifs->getThen(), loc, new_else
                             );
+                        } else if (arm == 2) {
+                            auto *neg = NegateExpr(ctx, ifs->getCond());
+                            auto loc  = ifs->getIfLoc();
+                            new_if    = clang::IfStmt::Create(
+                                ctx, loc, clang::IfStatementKind::Ordinary,
+                                nullptr, nullptr, neg, loc, loc,
+                                ifs->getElse(), loc, nullptr
+                            );
+                        }
+
+                        if (new_if) {
                             if (deep == body[i]) {
                                 body[i] = new_if;
                             } else {

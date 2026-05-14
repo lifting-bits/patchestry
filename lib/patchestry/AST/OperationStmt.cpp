@@ -247,6 +247,21 @@ namespace patchestry::ast {
             return expr;
         }
 
+        // Casting to a function pointer must go through an explicit C-style
+        // cast.  An ImplicitCastExpr<BitCast> wrapping a callee triggers
+        // CIRGen's emitCallee assertion ("unexpected implicit cast on
+        // function pointers") because emitCallee only accepts
+        // CK_LValueToRValue / CK_FunctionToPointerDecay / CK_BuiltinFnToFnPtr
+        // as implicit casts on a callee.  Routing through make_explicit_cast
+        // produces a CStyleCastExpr that emitCallee handles via the
+        // indirect-call path.
+        if (to_type->isPointerType()
+            && to_type->getPointeeType()->isFunctionType())
+        {
+            auto *cast_expr = make_explicit_cast(ctx, expr, to_type, loc);
+            if (cast_expr) return cast_expr;
+        }
+
         // When casting from an array type (e.g. string literal const char[N]) to a
         // pointer type, apply array-to-pointer decay first.
         if (from_type->isArrayType() && to_type->isPointerType()) {

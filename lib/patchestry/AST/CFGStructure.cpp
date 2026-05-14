@@ -793,8 +793,26 @@ namespace patchestry::ast {
             result = seq;
         }
         if (!a.original_label.empty()) {
-            result = factory_.Make<SLabel>(
-                factory_.Intern(a.original_label), result);
+            // Avoid double-wrapping when a.structured already begins
+            // with an SLabel of the same name (e.g., loop rules emit
+            // SLabel(header_label, SWhile(...)) as the representative's
+            // structured form).  Walk past leading SSeq/SLabel layers
+            // to see if the label is already exposed at the head.
+            std::function<bool(const SNode *)> head_has_label =
+                [&](const SNode *n) -> bool {
+                    if (!n) return false;
+                    if (auto *lbl = n->dyn_cast<SLabel>())
+                        return lbl->Name() == a.original_label;
+                    if (auto *seq = n->dyn_cast<SSeq>()) {
+                        if (seq->Size() == 0) return false;
+                        return head_has_label((*seq)[0]);
+                    }
+                    return false;
+                };
+            if (!head_has_label(result)) {
+                result = factory_.Make<SLabel>(
+                    factory_.Intern(a.original_label), result);
+            }
         }
         return result;
     }
