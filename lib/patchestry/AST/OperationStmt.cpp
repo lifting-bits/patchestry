@@ -3631,8 +3631,8 @@ namespace patchestry::ast {
                              : first_param_type.getCanonicalType().getAsString();
         }
 
-        auto it = intrinsic_decls.find(cache_key);
-        if (it != intrinsic_decls.end()) {
+        auto it = intrinsic_decls().find(cache_key);
+        if (it != intrinsic_decls().end()) {
             return it->second;
         }
 
@@ -3683,7 +3683,7 @@ namespace patchestry::ast {
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
 
         // Cache it
-        intrinsic_decls[cache_key] = func_decl;
+        intrinsic_decls()[cache_key] = func_decl;
         return func_decl;
     }
 
