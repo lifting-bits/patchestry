@@ -3764,8 +3764,16 @@ namespace patchestry::ast {
             ret_type = get_varnode_type(ctx, *op.output);
         }
 
+        // Cache key must encode the return type so a void-context call and
+        // a valued-context call of the same userop do not collide on the
+        // cached FunctionDecl (see get_or_create_intrinsic_decl for the
+        // canonical statement of this invariant).
+        std::string cache_key = func_name;
+        cache_key += "|ret:";
+        cache_key += ret_type.getCanonicalType().getAsString();
+
         // Check cache for existing declaration
-        auto cache_it = intrinsic_decls().find(func_name);
+        auto cache_it = intrinsic_decls().find(cache_key);
         clang::FunctionDecl *fn_decl = nullptr;
 
         if (cache_it != intrinsic_decls().end()) {
@@ -3820,7 +3828,7 @@ namespace patchestry::ast {
 
             // Add to translation unit and cache
             ctx.getTranslationUnitDecl()->addDecl(fn_decl);
-            intrinsic_decls()[func_name] = fn_decl;
+            intrinsic_decls()[cache_key] = fn_decl;
         }
 
         // Build arguments from inputs
