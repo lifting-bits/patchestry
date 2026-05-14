@@ -3411,11 +3411,31 @@ namespace patchestry::ast {
         auto input_type = input_expr->getType();
         if (input_type->isPointerType() && input_type->getPointeeType()->isRecordType()) {
             auto *mem_expr = make_member_expr(ctx, input_expr, *op.inputs[1].value);
-            auto *addrof_expr =
-                sema()
-                    .BuildUnaryOp(sema().getCurScope(), op_loc, clang::UO_AddrOf, mem_expr)
-                    .get();
-            ptr_expr = make_cast(ctx, addrof_expr, op_type, op_loc);
+            if (!mem_expr) {
+                LOG(ERROR) << "create_ptrsub: failed to build member"
+                              " expression for record-typed base. key: "
+                           << op.key << "\n";
+                return { nullptr, false };
+            }
+            // `make_member_expr` returns either a real MemberExpr
+            // (lvalue) on success, or a byte-offset pointer expression
+            // `(T*)((char*)base + offset)` (rvalue) on its missing-
+            // field fallback.  `&rvalue` is rejected by Sema with
+            // "cannot take the address of an rvalue", so only apply
+            // UO_AddrOf when the result is an lvalue.  When it isn't,
+            // the fallback already produced the pointer we need.
+            clang::Expr *addr_expr = nullptr;
+            if (mem_expr->isLValue()) {
+                auto built = sema().BuildUnaryOp(
+                    sema().getCurScope(), op_loc, clang::UO_AddrOf, mem_expr);
+                if (built.isUsable()) {
+                    addr_expr = built.get();
+                }
+            }
+            if (!addr_expr) {
+                addr_expr = mem_expr;
+            }
+            ptr_expr = make_cast(ctx, addr_expr, op_type, op_loc);
         } else {
             auto *byte_offset = AS_EXPR_OR_NULL(
                 create_varnode(ctx, function, op.inputs[1], op_loc), op.key);
