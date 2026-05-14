@@ -98,9 +98,16 @@ namespace patchestry::ast {
                     ctx, value, false, param_type, VirtualLoc(ctx)
                 );
             } else if (param_type->isPointerType()) {
-                return new (ctx) clang::IntegerLiteral(
-                    ctx, llvm::APInt(ctx.getIntWidth(param_type), 0), param_type,
+                // IntegerLiteral asserts on non-integer types; emit (T*)0 as
+                // CK_NullToPointer over an int-typed 0 instead.  #226.
+                auto *zero = new (ctx) clang::IntegerLiteral(
+                    ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), 0), ctx.IntTy,
                     VirtualLoc(ctx)
+                );
+                return clang::ImplicitCastExpr::Create(
+                    ctx, param_type, clang::CK_NullToPointer, zero,
+                    /*BasePath=*/nullptr, clang::VK_PRValue,
+                    clang::FPOptionsOverride()
                 );
             } else if (param_type->isBooleanType()) {
                 return new (ctx)
@@ -391,6 +398,40 @@ namespace patchestry::ast {
         }
 
         return deref_expr.getAs< clang::Expr >();
+    }
+
+    clang::Expr *OpBuilder::cast_pointer_to_int(
+        clang::ASTContext &ctx, clang::Expr *ptr, clang::QualType target,
+        clang::SourceLocation loc, PtrToIntExtension kind, std::string_view op_key
+    ) {
+        assert(ptr != nullptr && ptr->getType()->isPointerType()
+               && "cast_pointer_to_int: requires a non-null pointer-typed expression");
+
+        switch (kind) {
+            case PtrToIntExtension::kZero: {
+                // (target)ptr lowers to ptrtoint+zext — matches INT_ZEXT.
+                auto *r = make_explicit_cast(ctx, ptr, target, loc);
+                if (!r) {
+                    LOG(ERROR) << "cast_pointer_to_int (zext): failed to cast to "
+                               << target.getAsString() << ". key: " << op_key << "\n";
+                }
+                return r;
+            }
+            case PtrToIntExtension::kSign: {
+                // (target)(intptr_t)(uintptr_t)ptr — forces sext at the widening
+                // step.  A single (target)ptr would lower as ptrtoint+zext.
+                auto *r = make_explicit_cast(ctx, ptr, ctx.getUIntPtrType(), loc);
+                if (r) r = make_explicit_cast(ctx, r, ctx.getIntPtrType(), loc);
+                if (r) r = make_explicit_cast(ctx, r, target, loc);
+                if (!r) {
+                    LOG(ERROR) << "cast_pointer_to_int (sext): failed to cast through "
+                                  "intptr_t to " << target.getAsString()
+                               << ". key: " << op_key << "\n";
+                }
+                return r;
+            }
+        }
+        LOG_FATAL("cast_pointer_to_int: unhandled PtrToIntExtension value");
     }
 
     clang::Expr *OpBuilder::narrow_aggregate_to_integer(
@@ -2361,19 +2402,30 @@ namespace patchestry::ast {
         }
         auto target_type = *target_type_opt;
 
-        auto implicit_result = sema().PerformImplicitConversion(
-            input_expr, target_type, clang::AssignmentAction::Converting, true
-        );
-
-        if (implicit_result.isInvalid()) {
-            // If fail to perform implcit cast perform explicit cast
-            auto result = sema().BuildCStyleCastExpr(
-                op_loc, ctx.getTrivialTypeSourceInfo(target_type), op_loc, input_expr
+        if (input_expr->getType()->isPointerType()) {
+            // PerformImplicitConversion asserts inside clang 22 (SemaExprCXX.cpp:4681)
+            // for pointer→int before returning Invalid, so the
+            // BuildCStyleCastExpr fallback below would never run.  See #224.
+            input_expr = cast_pointer_to_int(ctx, input_expr, target_type, op_loc,
+                                             PtrToIntExtension::kZero, op.key);
+            if (!input_expr) {
+                return {};
+            }
+        } else {
+            auto implicit_result = sema().PerformImplicitConversion(
+                input_expr, target_type, clang::AssignmentAction::Converting, true
             );
 
-            input_expr = result.getAs< clang::Expr >();
-        } else {
-            input_expr = implicit_result.getAs< clang::Expr >();
+            if (implicit_result.isInvalid()) {
+                // If fail to perform implcit cast perform explicit cast
+                auto result = sema().BuildCStyleCastExpr(
+                    op_loc, ctx.getTrivialTypeSourceInfo(target_type), op_loc, input_expr
+                );
+
+                input_expr = result.getAs< clang::Expr >();
+            } else {
+                input_expr = implicit_result.getAs< clang::Expr >();
+            }
         }
 
         if (merge_to_next) {
@@ -2413,21 +2465,31 @@ namespace patchestry::ast {
         }
         auto target_type = *target_type_opt;
 
-        auto implicit_result = sema().PerformImplicitConversion(
-            input_expr, target_type, clang::AssignmentAction::Converting, true
-        );
-
-        if (implicit_result.isInvalid()) {
-            // If fail to perform implcit cast perform explicit cast
-            auto result = sema().BuildCStyleCastExpr(
-                SourceLocation(ctx.getSourceManager(), op.key),
-                ctx.getTrivialTypeSourceInfo(target_type),
-                SourceLocation(ctx.getSourceManager(), op.key), input_expr
+        if (input_expr->getType()->isPointerType()) {
+            // Sign-extension over a pointer requires the intptr_t intermediate;
+            // a single (target)ptr lowers as ptrtoint+zext.  See #224 follow-up.
+            input_expr = cast_pointer_to_int(ctx, input_expr, target_type, op_loc,
+                                             PtrToIntExtension::kSign, op.key);
+            if (!input_expr) {
+                return {};
+            }
+        } else {
+            auto implicit_result = sema().PerformImplicitConversion(
+                input_expr, target_type, clang::AssignmentAction::Converting, true
             );
 
-            input_expr = result.getAs< clang::Expr >();
-        } else {
-            input_expr = implicit_result.getAs< clang::Expr >();
+            if (implicit_result.isInvalid()) {
+                // If fail to perform implcit cast perform explicit cast
+                auto result = sema().BuildCStyleCastExpr(
+                    SourceLocation(ctx.getSourceManager(), op.key),
+                    ctx.getTrivialTypeSourceInfo(target_type),
+                    SourceLocation(ctx.getSourceManager(), op.key), input_expr
+                );
+
+                input_expr = result.getAs< clang::Expr >();
+            } else {
+                input_expr = implicit_result.getAs< clang::Expr >();
+            }
         }
 
         if (merge_to_next) {
