@@ -72,7 +72,7 @@ namespace patchestry::ast {
             for (const auto &[key, function] : get_program().serialized_functions) {
                 auto builder = std::make_shared<FunctionBuilder>(
                     ci, function, *type_builder, function_declarations,
-                    global_variable_declarations, program_arch
+                    global_variable_declarations, intrinsic_declarations, program_arch
                 );
                 builder->InitializeOpBuilder();
                 func_builders.emplace_back(std::move(builder));

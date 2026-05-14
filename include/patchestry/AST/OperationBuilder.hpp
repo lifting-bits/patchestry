@@ -212,6 +212,13 @@ namespace patchestry::ast {
             const std::string &original_name, const std::string &original_label
         );
 
+        // Build `__patchestry_error("reason")`. Return type is `long long`
+        // so the caller can cast to any scalar/pointer at the use site.
+        clang::Expr *emit_patchestry_error(
+            clang::ASTContext &ctx, const std::string &reason,
+            clang::SourceLocation loc
+        );
+
       private:
         clang::FunctionDecl *get_or_create_intrinsic_decl(
             clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,
@@ -311,11 +318,11 @@ namespace patchestry::ast {
 
         FunctionBuilder &function_builder(void) { return *builder; }
 
+        std::unordered_map< std::string, clang::FunctionDecl * > &
+        intrinsic_decls(void) { return builder->intrinsic_list.get(); }
+
         std::reference_wrapper< const clang::ASTContext > context;
         std::shared_ptr< FunctionBuilder > builder;
-
-        // Cache for intrinsic function declarations
-        std::unordered_map< std::string, clang::FunctionDecl * > intrinsic_decls;
 
         // Cycle detection for create_temporary forward-reference resolution
         std::unordered_set< std::string > resolving_temporaries;

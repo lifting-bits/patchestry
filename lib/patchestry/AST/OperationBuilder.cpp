@@ -395,6 +395,55 @@ namespace patchestry::ast {
             return clang::FloatingLiteral::Create(ctx, float_value, true, vnode_type, location);
         }
 
+        if (vnode_type->isRecordType()) {
+            // Record-typed constant (Ghidra emits these for sentinel comparisons
+            // against opaque or empty-fields struct varnodes, e.g. INT_NOTEQUAL
+            // <struct CodedInputStream>, 0).  Emit a sized unsigned integer
+            // literal of the matching byte width; the binop's per-operand
+            // coerce_record_to_integer pass narrows the other operand to the
+            // same integer so the comparison type-checks (issue #230).
+            //
+            // Prefer vnode.size (always populated from the JSON) over
+            // ctx.getTypeSize() because the latter asserts on incomplete
+            // forward-declared records — which is exactly the type class that
+            // hits this branch in practice (Ghidra strips fields).
+            unsigned size_bits = 8U;
+            if (vnode.size > 0) {
+                size_bits = vnode.size * 8U;
+            } else if (!vnode_type->isIncompleteType()) {
+                auto t = static_cast< unsigned >(ctx.getTypeSize(vnode_type));
+                if (t > 0U) size_bits = t;
+            }
+            clang::QualType int_type;
+            if (size_bits <= 8U)         int_type = ctx.UnsignedCharTy;
+            else if (size_bits <= 16U)   int_type = ctx.UnsignedShortTy;
+            else if (size_bits <= 32U)   int_type = ctx.UnsignedIntTy;
+            else if (size_bits <= 64U)   int_type = ctx.UnsignedLongLongTy;
+            else {
+                LOG(ERROR) << "create_constant: record-typed constant too wide ("
+                           << size_bits << " bits) for integer-literal substitution\n";
+                return {};
+            }
+            unsigned bit_width = ctx.getIntWidth(int_type);
+            auto value = *vnode.value;
+            // APInt(bit_width, value) silently truncates value modulo 2^bit_width.
+            // For the common INT_NOTEQUAL-vs-0 case the truncated value is still
+            // 0, but if Ghidra ever emits a record constant whose value exceeds
+            // the storage width, the comparison sentinel would change quietly.
+            if (bit_width < 64U && (static_cast< uint64_t >(value) >> bit_width) != 0U) {
+                LOG(WARNING) << "create_constant: record-typed value "
+                             << value << " exceeds " << bit_width
+                             << "-bit width; truncating. key: "
+                             << vnode.type_key << "\n";
+            }
+            return new (ctx) clang::IntegerLiteral(
+                ctx, llvm::APInt(bit_width, value), int_type, location
+            );
+        }
+
+        LOG(ERROR) << "create_constant: unsupported constant type '"
+                   << vnode_type.getAsString() << "' for key " << vnode.type_key
+                   << "\n";
         return {};
     }
 
