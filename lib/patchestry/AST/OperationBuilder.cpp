@@ -495,23 +495,62 @@ namespace patchestry::ast {
      *
      * If the `Varnode` has a valid `type_key`, the type is fetched from `type_builder`.
      * Otherwise, a fallback type is derived using the `size` of the `Varnode` as an
-     * unsigned integer.
+     * unsigned integer.  Incomplete record types (forward-declared or zero-field
+     * structs from Ghidra) are substituted with an integer of the same byte width
+     * so downstream Clang APIs that recursively lay out the type do not assert.
      *
      * @param ctx Reference to the `clang::ASTContext`.
      * @param vnode The `Varnode` containing `type_key` and `size` information.
-     * @return The resolved `clang::QualType`, or an empty type if `type_key` and `size` are
-     * invalid.
+     * @return A non-null `clang::QualType`.  When neither `type_key` nor `size` is
+     * valid, returns `ctx.IntTy` as a recovery sentinel and logs the failure.
      *
-     * @note Logs an error if both `type_key` is empty and `size` is 0.
+     * @note This function never returns a null `QualType`; callers may use the
+     * returned type directly without a `isNull()` guard.
      */
     clang::QualType OpBuilder::get_varnode_type(clang::ASTContext &ctx, const Varnode &vnode) {
+        // No type_key and no size: nothing to recover from.  Return ctx.IntTy
+        // (matches GetTypeFromSize's own null fallback) so downstream Clang APIs
+        // do not assert on a null QualType.  The only call path that reaches
+        // here is a Ghidra-side serializer that produced a varnode without
+        // either `type` or `size`, which is itself a producer-side bug worth
+        // logging loudly.
         if (vnode.type_key.empty() && vnode.size == 0U) {
-            LOG(ERROR) << "Varnode with empty or invalid type key.\n";
-            return {};
+            LOG(ERROR) << "get_varnode_type: varnode has neither type_key nor "
+                          "size; falling back to int.\n";
+            return ctx.IntTy;
         }
 
         if (type_builder().GetSerializedTypes().contains(vnode.type_key)) {
-            return type_builder().GetSerializedType(vnode.type_key);
+            clang::QualType resolved = type_builder().GetSerializedType(vnode.type_key);
+
+            // Incomplete (forward-declared / zero-field) RecordDecls cannot be
+            // handed to Clang APIs that recursively lay out the type --
+            // getTypeInfo, getTypeSize, Sema member-access actions, or
+            // getASTRecordLayout itself.  Substitute an integer of matching
+            // byte width: same recipe #230 uses for record-typed constants,
+            // and it pairs with narrow_aggregate_to_integer /
+            // coerce_record_to_integer at the consumer side.
+            if (!resolved.isNull() && resolved->isRecordType()) {
+                const auto *rt = resolved->getAs< clang::RecordType >();
+                if (rt != nullptr && rt->getDecl() != nullptr
+                    && !rt->getDecl()->isCompleteDefinition()) {
+                    unsigned size_bits = vnode.size > 0U ? vnode.size * 8U : 32U;
+                    LOG(ERROR) << "get_varnode_type: type '" << vnode.type_key
+                               << "' is an incomplete record; substituting "
+                               << size_bits << "-bit unsigned integer.\n";
+                    return GetTypeFromSize(
+                        ctx, size_bits, /*is_signed=*/false, /*is_integer=*/true
+                    );
+                }
+            }
+
+            if (resolved.isNull()) {
+                LOG(ERROR) << "get_varnode_type: type '" << vnode.type_key
+                           << "' resolved to null QualType; falling back to int.\n";
+                return ctx.IntTy;
+            }
+
+            return resolved;
         }
 
         return GetTypeFromSize(ctx, vnode.size, /*is_signed=*/false, /*is_integer=*/true);
