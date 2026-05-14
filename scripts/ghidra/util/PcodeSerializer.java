@@ -4116,9 +4116,7 @@ public class PcodeSerializer {
 					// scalar to a RAM address.
 					try {
 						long off = ((Scalar) v).getUnsignedValue();
-						Address derived = currentProgram.getAddressFactory()
-							.getDefaultAddressSpace().getAddress(off);
-						s = idx.get(derived);
+						s = idx.get(ramSpace.getAddress(off));
 					} catch (AddressOutOfBoundsException e) {
 						s = null;
 					}
