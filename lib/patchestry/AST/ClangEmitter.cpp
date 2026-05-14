@@ -267,8 +267,18 @@ namespace patchestry::ast {
             }
 
             clang::Stmt *EmitLabel(const SLabel *l) {
-                auto *label_decl = GetOrCreateLabel(l->Name());
-                emitted_labels_.insert(std::string(l->Name()));
+                std::string name(l->Name());
+                if (!emitted_labels_.insert(name).second) {
+                    LOG(ERROR) << "ClangEmitter: duplicate SLabel '" << name
+                               << "' in function '"
+                               << (fn_ ? fn_->getNameAsString() : std::string("<?>"))
+                               << "'; dropping label wrapper (keeping body) to"
+                                  " avoid CIRGen mapBlockAddress assert.";
+                    return l->Body() ? Emit(l->Body())
+                                     : static_cast<clang::Stmt *>(
+                                           new (ctx_) clang::NullStmt(Loc()));
+                }
+                auto *label_decl = GetOrCreateLabel(name);
                 auto *sub = l->Body() ? Emit(l->Body()) : new (ctx_) clang::NullStmt(Loc());
                 return new (ctx_) clang::LabelStmt(Loc(), label_decl, sub);
             }
