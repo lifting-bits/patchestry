@@ -55,6 +55,17 @@ namespace patchestry::ast {
         return sm.getLocForStartOfFile(fid);
     }
 
+    llvm::APInt MakeAPInt(unsigned bit_width, uint64_t value) {
+        if (bit_width == 0U) {
+            bit_width = 1U;
+        }
+        if (bit_width < 64U) {
+            uint64_t mask = (static_cast< uint64_t >(1) << bit_width) - 1U;
+            value &= mask;
+        }
+        return llvm::APInt(bit_width, value);
+    }
+
     clang::QualType GetTypeFromSize(
         clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer
     ) {

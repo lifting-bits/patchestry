@@ -787,7 +787,7 @@ namespace patchestry::ast {
                               .BuildBinOp(
                                   sema().getCurScope(), loc, clang::BO_LT, index_ref,
                                   clang::IntegerLiteral::Create(
-                                      ctx, llvm::APInt(32, num_elements), ctx.IntTy, loc
+                                      ctx, MakeAPInt(32, num_elements), ctx.IntTy, loc
                                   )
                               )
                               .get();
@@ -1193,7 +1193,7 @@ namespace patchestry::ast {
             auto create_case = [&](const SwitchCase &sc) -> clang::CaseStmt * {
                 auto *case_val = clang::IntegerLiteral::Create(
                     ctx,
-                    llvm::APInt(disc_width, static_cast< uint64_t >(sc.value), /*isSigned=*/true),
+                    MakeAPInt(disc_width, static_cast< uint64_t >(sc.value)),
                     disc_type, loc
                 );
                 auto *case_stmt =
@@ -1353,7 +1353,7 @@ namespace patchestry::ast {
                     continue;
                 }
                 auto *case_val = clang::IntegerLiteral::Create(
-                    ctx, llvm::APInt(disc_width, *maybe_addr), disc_type, loc
+                    ctx, MakeAPInt(disc_width, *maybe_addr), disc_type, loc
                 );
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);

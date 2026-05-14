@@ -15,6 +15,7 @@
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
+#include <llvm/ADT/APInt.h>
 
 namespace patchestry::ast {
 
@@ -58,6 +59,18 @@ namespace patchestry::ast {
 
     clang::QualType
     GetTypeFromSize(clang::ASTContext &ctx, unsigned bit_size, bool is_signed, bool is_integer);
+
+    /// Construct an `llvm::APInt(bit_width, value)` that tolerates a
+    /// `value` whose high bits exceed `bit_width`.  The plain
+    /// `llvm::APInt(bit_width, value)` constructor asserts via
+    /// `isUIntN(BitWidth, val)` when value bits beyond `bit_width` are
+    /// set.  Ghidra emits constants in their full 64-bit form, and
+    /// the patchestry pipeline reduces them to the literal's declared
+    /// width at the call site -- this helper does the mask so the
+    /// constructor stays inside the assertion's precondition.  The
+    /// stored bit pattern matches the historical silent-truncate
+    /// behaviour (`value & ((1ULL << bit_width) - 1)`).
+    llvm::APInt MakeAPInt(unsigned bit_width, uint64_t value);
 
     std::string LabelNameFromKey(std::string key);
 

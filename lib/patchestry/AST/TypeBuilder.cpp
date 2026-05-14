@@ -511,13 +511,13 @@ namespace patchestry::ast {
         for (const auto &c : constants) {
             auto *val = clang::IntegerLiteral::Create(
                 ctx,
-                llvm::APInt(bit_width, static_cast< uint64_t >(c.value), /*isSigned=*/true),
+                MakeAPInt(bit_width, static_cast< uint64_t >(c.value)),
                 underlying_type, loc
             );
             auto *ecd = clang::EnumConstantDecl::Create(
                 ctx, enum_decl, loc, &ctx.Idents.get(c.name), underlying_type, val,
                 llvm::APSInt(
-                    llvm::APInt(bit_width, static_cast< uint64_t >(c.value), /*isSigned=*/true),
+                    MakeAPInt(bit_width, static_cast< uint64_t >(c.value)),
                     /*isUnsigned=*/false
                 )
             );

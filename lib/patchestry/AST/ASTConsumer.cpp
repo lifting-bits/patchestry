@@ -232,9 +232,8 @@ namespace patchestry::ast {
                                 } else {
                                     auto *val = clang::IntegerLiteral::Create(
                                         ctx,
-                                        llvm::APInt(case_width,
-                                                    static_cast<uint64_t>(sc.value),
-                                                    true),
+                                        MakeAPInt(case_width,
+                                                  static_cast<uint64_t>(sc.value)),
                                         case_type, VirtualLoc(ctx));
                                     SNode *body = nullptr;
                                     if (sc.succ_index < node.succs.size()) {
