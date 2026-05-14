@@ -479,6 +479,17 @@ namespace patchestry::ast {
         if (!from_type->isRecordType() && !from_type->isArrayType()) {
             return nullptr;
         }
+        // Guard against incomplete records reaching ctx.getTypeSize,
+        // which would trip getASTRecordLayout's "Cannot get layout of
+        // forward declarations!" assert.  The Ghidra producer can
+        // register zero-fields RecordDecls
+        // (JsonDeserialize.cpp:367 "No fields found in composite type
+        // object") that downstream locals carry as their declared
+        // type; refusal here lets the caller fall through to its
+        // loud-failure marker path.
+        if (from_type->isIncompleteType()) {
+            return nullptr;
+        }
 
         auto storage_bits = static_cast< unsigned >(ctx.getTypeSize(from_type));
 
@@ -488,6 +499,9 @@ namespace patchestry::ast {
         if (target_bytes != 0 && from_type->isArrayType()) {
             if (const auto *array_type = ctx.getAsArrayType(from_type)) {
                 auto elem_type = array_type->getElementType();
+                if (elem_type->isIncompleteType()) {
+                    return nullptr;
+                }
                 auto elem_bits = static_cast< unsigned >(ctx.getTypeSize(elem_type));
                 if (elem_type->isIntegerType() && elem_bits == target_bytes * 8u
                     && elem_bits > 0 && storage_bits >= elem_bits)
@@ -540,6 +554,13 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc
     ) {
         if (!expr || !expr->getType()->isRecordType()) {
+            return expr;
+        }
+        // Forward-declared / zero-fields RecordDecls from the Ghidra
+        // type registry have no layout; getTypeSize would trip
+        // getASTRecordLayout.  Leave the expression unchanged so the
+        // caller falls through to its own handling.
+        if (expr->getType()->isIncompleteType()) {
             return expr;
         }
         auto size_bits = ctx.getTypeSize(expr->getType());
@@ -632,6 +653,20 @@ namespace patchestry::ast {
             && !ctx.hasSameUnqualifiedType(input_type, output_type)) {
             if (const auto *array_type = ctx.getAsArrayType(output_type)) {
                 auto elem_type = array_type->getElementType();
+                // Skip the element-subscript synthesis entirely if any
+                // participating type is incomplete -- getTypeSize on an
+                // incomplete record would trip getASTRecordLayout
+                // (urn_iontorrent_cpp).  Fall through to the loud
+                // refusal at the bottom of this block instead.
+                if (elem_type->isIncompleteType()
+                    || input_type->isIncompleteType()
+                    || output_type->isIncompleteType()) {
+                    LOG(ERROR) << "create_assign_operation: refusing "
+                               << input_type.getAsString() << " → "
+                               << output_type.getAsString()
+                               << " (one operand has incomplete-record type)";
+                    return nullptr;
+                }
                 auto elem_bits = ctx.getTypeSize(elem_type);
                 if (elem_type->isIntegerType() && input_type->isIntegerType()
                     && elem_bits == ctx.getTypeSize(input_type)
@@ -716,6 +751,17 @@ namespace patchestry::ast {
 
         auto to_type      = output_expr->getType();
         auto *elem_type   = to_type->getPointeeOrArrayElementType();
+        // Refuse the array-element copy loop when any participating
+        // type is incomplete -- ctx.getTypeSize would otherwise trip
+        // getASTRecordLayout on a forward-declared record element.
+        if (to_type->isIncompleteType()
+            || (elem_type && clang::QualType(elem_type, 0)->isIncompleteType())) {
+            LOG(ERROR) << "create_array_assignment_operation: refusing "
+                       << input_expr->getType().getAsString() << " → "
+                       << to_type.getAsString()
+                       << " (incomplete-record element type)";
+            return nullptr;
+        }
         auto num_elements = ctx.getTypeSize(to_type) / ctx.getTypeSize(elem_type);
         clang::SmallVector< clang::Stmt *, 4 > body;
 
@@ -3416,6 +3462,26 @@ namespace patchestry::ast {
             AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[2]), op.key);
         if (!base || !index || !scale) {
             return { nullptr, false };
+        }
+
+        // If `base` points at an incomplete record (forward-declared
+        // or zero-fields struct from the Ghidra type registry), every
+        // downstream layout query -- getTypeSizeInChars below, Sema's
+        // CreateBuiltinArraySubscriptExpr and BO_Add pointer-arith
+        // checks -- would trip `getASTRecordLayout: Cannot get layout
+        // of forward declarations!`.  Reinterpret as char* so the
+        // arithmetic is byte-wise; the scale_matches path then no
+        // longer applies and we always go through the explicit-add
+        // fallback, which is the semantically-correct choice for an
+        // opaque pointer anyway.
+        if (base->getType()->isPointerType()
+            && base->getType()->getPointeeType()->isIncompleteType()) {
+            base = make_reinterpret_cast(
+                ctx, base, ctx.getPointerType(ctx.CharTy), op_loc
+            );
+            if (!base) {
+                return { nullptr, false };
+            }
         }
 
         // When the base is a pointer type and the scale matches sizeof(*base),
