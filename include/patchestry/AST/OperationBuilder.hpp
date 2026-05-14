@@ -219,6 +219,16 @@ namespace patchestry::ast {
             clang::SourceLocation loc
         );
 
+        // Emit `__patchestry_error("missing_<op_kind>:<reason>")`, cast it
+        // to op.type (when known), and either return it as a side-effect
+        // statement (no output) or assign it to op.output. Loud-failure
+        // pattern for op handlers that would otherwise silently return {}
+        // on a null input (generalization of issue #229's CAST handling).
+        std::pair< clang::Stmt *, bool > emit_op_error_marker(
+            clang::ASTContext &ctx, const Function &function, const Operation &op,
+            const std::string &op_kind, const std::string &reason
+        );
+
       private:
         clang::FunctionDecl *get_or_create_intrinsic_decl(
             clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,

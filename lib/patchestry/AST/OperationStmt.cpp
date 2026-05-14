@@ -764,7 +764,8 @@ namespace patchestry::ast {
         auto *input_expr =
             AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs.front()), op.key);
         if (!input_expr) {
-            return { nullptr, false };
+            return emit_op_error_marker(
+                ctx, function, op, "copy", "input varnode produced null Stmt");
         }
 
         if (!op.output) {
@@ -776,7 +777,8 @@ namespace patchestry::ast {
         auto *output_expr =
             AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
         if (!output_expr) {
-            return { nullptr, false };
+            return emit_op_error_marker(
+                ctx, function, op, "copy", "output varnode produced null Stmt");
         }
 
         return { create_assign_operation(
@@ -798,7 +800,8 @@ namespace patchestry::ast {
         auto *input_expr =
             AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[0]), op.key);
         if (!input_expr) {
-            return { nullptr, false };
+            return emit_op_error_marker(
+                ctx, function, op, "load", "input varnode produced null Stmt");
         }
 
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
@@ -894,7 +897,11 @@ namespace patchestry::ast {
             auto *rhs_expr =
                 AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[1]), op.key);
             if (!lhs_expr || !rhs_expr) {
-                return {};
+                return emit_op_error_marker(
+                    ctx, function, op, "store",
+                    !lhs_expr ? "address varnode produced null Stmt"
+                              : "value varnode produced null Stmt"
+                );
             }
 
             // Cancel *(&expr) from PTRADD's &base[index].
@@ -907,7 +914,12 @@ namespace patchestry::ast {
                 }
                 auto deref_result =
                     sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
-                assert(!deref_result.isInvalid());
+                if (deref_result.isInvalid()) {
+                    return emit_op_error_marker(
+                        ctx, function, op, "store",
+                        "Sema rejected dereference of address"
+                    );
+                }
                 deref_expr = deref_result.getAs< clang::Expr >();
             }
 
@@ -924,7 +936,11 @@ namespace patchestry::ast {
             auto *rhs_expr =
                 AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[2]), op.key);
             if (!lhs_expr || !rhs_expr) {
-                return {};
+                return emit_op_error_marker(
+                    ctx, function, op, "store",
+                    !lhs_expr ? "address varnode produced null Stmt"
+                              : "value varnode produced null Stmt"
+                );
             }
 
             // Cancel *(&expr) from PTRADD's &base[index].
@@ -936,8 +952,10 @@ namespace patchestry::ast {
                 auto deref_result =
                     sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
                 if (deref_result.isInvalid()) {
-                    LOG(ERROR) << "Failed to create deref expression for STORE. key: " << op.key;
-                    return {};
+                    return emit_op_error_marker(
+                        ctx, function, op, "store",
+                        "Sema rejected dereference of address"
+                    );
                 }
                 deref_expr = deref_result.getAs< clang::Expr >();
             }
@@ -2763,7 +2781,8 @@ namespace patchestry::ast {
             create_varnode(ctx, function, op.inputs[0], {}, narrow_input),
             op.key);
         if (!input_expr) {
-            return {};
+            return emit_op_error_marker(
+                ctx, function, op, "unary_op", "input varnode produced null Stmt");
         }
 
         // Coerce record (struct/union) operands to integers for C operators.
@@ -2771,8 +2790,8 @@ namespace patchestry::ast {
 
         auto unary_operation = sema().CreateBuiltinUnaryOp(op_loc, kind, input_expr);
         if (unary_operation.isInvalid()) {
-            LOG(ERROR) << "Unary operation failed on operand. key: " << op.key << "\n";
-            return std::make_pair(nullptr, false);
+            return emit_op_error_marker(
+                ctx, function, op, "unary_op", "Sema rejected operand");
         }
 
         if (!op.output.has_value()) {
@@ -2782,7 +2801,8 @@ namespace patchestry::ast {
         auto *output_expr =
             AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
         if (!output_expr) {
-            return {};
+            return emit_op_error_marker(
+                ctx, function, op, "unary_op", "output varnode produced null Stmt");
         }
 
         return { create_assign_operation(
@@ -2808,7 +2828,11 @@ namespace patchestry::ast {
         auto *rhs =
             AS_EXPR_OR_NULL(create_varnode(ctx, function, op.inputs[1]), op.key);
         if (!lhs || !rhs) {
-            return {};
+            return emit_op_error_marker(
+                ctx, function, op, "binary_op",
+                !lhs ? "lhs varnode produced null Stmt"
+                     : "rhs varnode produced null Stmt"
+            );
         }
 
         // Coerce record (struct/union) operands to integers so that C
@@ -3902,6 +3926,59 @@ namespace patchestry::ast {
             "emit_patchestry_error: Sema rejected the call (reason=\"{0}\")",
             reason);
         return call.getAs< clang::Expr >();
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::emit_op_error_marker(
+        clang::ASTContext &ctx, const Function &function, const Operation &op,
+        const std::string &op_kind, const std::string &reason
+    ) {
+        auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
+        const std::string err_reason = "missing_" + op_kind + ":" + reason;
+        LOG(ERROR) << op_kind << ": " << reason
+                   << ", emitting __patchestry_error(\""
+                   << err_reason << "\"). key: " << op.key << "\n";
+
+        auto *err_expr = emit_patchestry_error(ctx, err_reason, op_loc);
+        if (!err_expr) {
+            return {};
+        }
+
+        // Try to cast the long-long marker to op.type so downstream consumers
+        // see a typed value. Cast may fail for array/record/function targets;
+        // in that case fall back to the bare marker as a side-effect stmt
+        // (and skip the output assignment so create_assign_operation doesn't
+        // re-trigger the same rejection and silently drop the result).
+        clang::Expr *typed_err = nullptr;
+        if (op.type.has_value()) {
+            auto t = type_builder().GetSerializedType(*op.type);
+            if (!t.isNull() && !t->isVoidType()) {
+                typed_err = make_explicit_cast(ctx, err_expr, t, op_loc);
+            }
+        }
+        if (!typed_err) {
+            return std::make_pair(
+                clang::dyn_cast< clang::Stmt >(err_expr), false
+            );
+        }
+        if (!op.output) {
+            return std::make_pair(
+                clang::dyn_cast< clang::Stmt >(typed_err), false
+            );
+        }
+        auto *out = AS_EXPR_OR_NULL(
+            create_varnode(ctx, function, *op.output), op.key);
+        if (!out) {
+            return std::make_pair(
+                clang::dyn_cast< clang::Stmt >(typed_err), false
+            );
+        }
+        auto *assign = create_assign_operation(ctx, typed_err, out, op_loc);
+        if (!assign) {
+            return std::make_pair(
+                clang::dyn_cast< clang::Stmt >(typed_err), false
+            );
+        }
+        return std::make_pair(assign, false);
     }
 
 } // namespace patchestry::ast
