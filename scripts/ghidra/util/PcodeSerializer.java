@@ -91,6 +91,8 @@ import ghidra.program.model.pcode.SequenceNumber;
 import ghidra.program.model.pcode.SymbolEntry;
 import ghidra.program.model.pcode.Varnode;
 
+import ghidra.program.model.scalar.Scalar;
+
 import ghidra.program.model.data.AbstractFloatDataType;
 import ghidra.program.model.data.AbstractIntegerDataType;
 import ghidra.program.model.data.Array;
@@ -223,6 +225,11 @@ public class PcodeSerializer {
 
 		// Lazy; see getDefinedStringIndex / resolveStringFromDefinedDataScan.
 		private TreeMap<Address, String> definedStringIndex;
+
+		// Tier-(c) cache keyed by function entry address; value is the
+		// unique reachable string or null (computed-as-ambiguous).
+		// containsKey() distinguishes "computed" from "not yet".
+		private Map<Address, String> uniqueStringPerFunction;
 
 		// Maps a canonical type key (category + name + length + UID) to a
 		// collision-free type ID. Uses an incremental counter instead of
@@ -4054,23 +4061,37 @@ public class PcodeSerializer {
 			Function f = currentProgram.getFunctionManager()
 				.getFunctionContaining(opAddr);
 			if (f == null) return null;
+			return uniqueStringForFunction(f, listing, idx);
+		}
+
+		private String uniqueStringForFunction(
+				Function f, Listing listing, TreeMap<Address, String> idx) {
+			if (uniqueStringPerFunction == null) {
+				uniqueStringPerFunction = new HashMap<>();
+			}
+			Address entry = f.getEntryPoint();
+			if (uniqueStringPerFunction.containsKey(entry)) {
+				return uniqueStringPerFunction.get(entry);
+			}
 			String unique = null;
 			InstructionIterator iter = listing.getInstructions(
 				f.getBody(), true);
 			while (iter.hasNext()) {
-				Instruction other = iter.next();
-				int nn = other.getNumOperands();
+				Instruction insn = iter.next();
+				int nn = insn.getNumOperands();
 				for (int j = 0; j < nn; ++j) {
 					String s = pickStringFromOperandRefs(
-						listing, idx, other.getOperandReferences(j));
+						listing, idx, insn.getOperandReferences(j));
 					if (s == null) continue;
 					if (unique == null) {
 						unique = s;
 					} else if (!unique.equals(s)) {
+						uniqueStringPerFunction.put(entry, null);
 						return null;  // ambiguous
 					}
 				}
 			}
+			uniqueStringPerFunction.put(entry, unique);
 			return unique;
 		}
 
@@ -4087,8 +4108,21 @@ public class PcodeSerializer {
 				Data d = listing.getDataAt(dst);
 				if (d == null) continue;
 				Object v = d.getValue();
-				if (!(v instanceof Address)) continue;
-				s = idx.get((Address) v);
+				if (v instanceof Address) {
+					s = idx.get((Address) v);
+				} else if (v instanceof Scalar) {
+					// Cortex-M literal-pool slots are often marked as
+					// plain dword rather than pointer; coerce the
+					// scalar to a RAM address.
+					try {
+						long off = ((Scalar) v).getUnsignedValue();
+						Address derived = currentProgram.getAddressFactory()
+							.getDefaultAddressSpace().getAddress(off);
+						s = idx.get(derived);
+					} catch (AddressOutOfBoundsException e) {
+						s = null;
+					}
+				}
 				if (s != null) return s;
 			}
 			return null;

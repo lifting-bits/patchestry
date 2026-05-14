@@ -3773,14 +3773,21 @@ namespace patchestry::ast {
     OpBuilder::build_intrinsic_call_against_registered(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
+        if (!op.target || !op.target->function) {
+            LOG(ERROR) << "build_intrinsic_call_against_registered: missing "
+                       << "target. key: " << op.key << "\n";
+            return {};
+        }
         const auto &label = *op.target->function;
-        auto *callee     = function_builder().function_list.get().at(label);
-        if (callee == nullptr) {
-            LOG(ERROR) << "Registered intrinsic decl is null for '" << label
+        auto      &fns    = function_builder().function_list.get();
+        auto       it     = fns.find(label);
+        if (it == fns.end() || it->second == nullptr) {
+            LOG(ERROR) << "Registered intrinsic decl missing for '" << label
                        << "'. key: " << op.key << "\n";
             return {};
         }
-        auto op_loc      = SourceLocation(ctx.getSourceManager(), op.key);
+        auto *callee = it->second;
+        auto  op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
         auto *fn_ref = clang::DeclRefExpr::Create(
             ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
@@ -3789,12 +3796,17 @@ namespace patchestry::ast {
         );
 
         std::vector< clang::Expr * > args;
-        for (const auto &input : op.inputs) {
+        args.reserve(op.inputs.size());
+        for (size_t i = 0; i < op.inputs.size(); ++i) {
             auto *e = AS_EXPR_OR_NULL(
-                create_varnode(ctx, function, input), op.key);
-            if (e) {
-                args.push_back(e);
+                create_varnode(ctx, function, op.inputs[i]), op.key);
+            if (!e) {
+                LOG(ERROR) << "Failed to create varnode for intrinsic call "
+                           << "argument " << i << " of '" << label
+                           << "'. key: " << op.key << "\n";
+                return {};
             }
+            args.push_back(e);
         }
 
         auto result = sema().BuildCallExpr(nullptr, fn_ref, op_loc, args, op_loc);
