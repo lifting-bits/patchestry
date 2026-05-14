@@ -793,8 +793,24 @@ namespace patchestry::ast {
             result = seq;
         }
         if (!a.original_label.empty()) {
-            result = factory_.Make<SLabel>(
-                factory_.Intern(a.original_label), result);
+            // Skip the wrap if `result` already exposes the label at
+            // its head; loop rules emit SLabel(name, SWhile(...)) and
+            // a second wrap would produce duplicate LabelStmts.
+            std::function<bool(const SNode *)> head_has_label =
+                [&](const SNode *n) -> bool {
+                    if (!n) return false;
+                    if (auto *lbl = n->dyn_cast<SLabel>())
+                        return lbl->Name() == a.original_label;
+                    if (auto *seq = n->dyn_cast<SSeq>()) {
+                        if (seq->Size() == 0) return false;
+                        return head_has_label((*seq)[0]);
+                    }
+                    return false;
+                };
+            if (!head_has_label(result)) {
+                result = factory_.Make<SLabel>(
+                    factory_.Intern(a.original_label), result);
+            }
         }
         return result;
     }

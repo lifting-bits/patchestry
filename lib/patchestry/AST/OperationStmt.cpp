@@ -247,6 +247,15 @@ namespace patchestry::ast {
             return expr;
         }
 
+        // CIRGen's emitCallee rejects implicit BitCast on a callee;
+        // emit an explicit CStyleCastExpr instead.
+        if (to_type->isPointerType()
+            && to_type->getPointeeType()->isFunctionType())
+        {
+            auto *cast_expr = make_explicit_cast(ctx, expr, to_type, loc);
+            if (cast_expr) return cast_expr;
+        }
+
         // When casting from an array type (e.g. string literal const char[N]) to a
         // pointer type, apply array-to-pointer decay first.
         if (from_type->isArrayType() && to_type->isPointerType()) {
