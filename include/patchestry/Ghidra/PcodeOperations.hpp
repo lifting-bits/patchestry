@@ -178,6 +178,11 @@ namespace patchestry::ghidra {
         std::optional< OperationTarget > target;
         std::optional< bool > has_return_value;
 
+        // CALLOTHER BUILTIN_STRINGDATA: literal string the op produces,
+        // resolved by the Ghidra serialiser from the instruction's data
+        // references.  Consumed by handle_stringdata.
+        std::optional< std::string > string_value;
+
         // Branch Operation
         std::optional< std::string > target_block;
 

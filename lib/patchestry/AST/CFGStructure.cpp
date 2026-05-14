@@ -3226,18 +3226,16 @@ namespace patchestry::ast {
         return any_changed;
     }
 
-    // ---------------------------------------------------------------
-    // AbsorbFallthroughIntoElse
-    //
-    // When an SIfThenElse(cond, body, null) — if-then with no else —
-    // is immediately followed by an SLabel sibling with zero goto
-    // references, the label is only reached by fallthrough from the
-    // if's false path.  Move the label body into the else branch to
-    // prevent spurious fallthrough that overwrites values set inside
-    // the then-body.
-    // ---------------------------------------------------------------
+    // AbsorbFallthroughIntoElse: if SIfThenElse(cond, body, null) is
+    // followed by an SLabel with 0 goto refs and the then-body always
+    // terminates, move the label body into the else.  Without the
+    // terminates guard, both paths reach the label and absorbing it
+    // diverts the then-path past the trailing continuation.
 
     namespace {
+
+        // Forward declaration — defined in InlineCrossScopeSingleRef namespace.
+        bool SNodeAlwaysTerminates(SNode *node);
 
         /// Chase through SLabel/SSeq nesting to find the deepest
         /// trailing SIfThenElse that has no else branch.
@@ -3292,9 +3290,8 @@ namespace patchestry::ast {
 
                 auto rc = refs.find(lbl->Name());
                 if (rc != refs.end() && rc->second > 0) continue;
+                if (!SNodeAlwaysTerminates(ite->ThenBranch())) continue;
 
-                // Label has 0 goto refs — only reached by fallthrough.
-                // Move its body into the else branch.
                 SNode *else_body = lbl->Body();
                 ite->SetElseBranch(else_body);
 

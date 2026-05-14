@@ -201,6 +201,15 @@ namespace patchestry::ast {
             const std::string &name
         );
 
+        // Build a call against the FunctionDecl the Ghidra serialiser
+        // registered for `op.target->function` in the JSON `functions`
+        // table.  Preferred over create_missing_intrinsic_call when the
+        // intrinsic is known: variadic signature absorbs any arg-type
+        // mismatches without synthesising a parallel placeholder.
+        std::pair< clang::Stmt *, bool > build_intrinsic_call_against_registered(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
         std::pair< clang::Stmt *, bool > create_tail_call(
             clang::ASTContext &ctx, const Function &function, const Operation &op,
             clang::FunctionDecl *enclosing_decl

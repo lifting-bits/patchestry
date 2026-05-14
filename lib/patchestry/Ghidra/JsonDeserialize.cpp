@@ -811,6 +811,13 @@ namespace patchestry::ghidra {
         target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
         op.target           = std::move(target);
         op.has_return_value = call_obj.getBoolean("has_return_value").value_or(false);
+
+        // CALLOTHER BUILTIN_STRINGDATA may carry the resolved string
+        // literal alongside the target — pick it up if present.
+        auto str_val = call_obj.getString("string_value");
+        if (str_val.has_value() && !str_val->empty()) {
+            op.string_value = str_val->str();
+        }
     }
 
     void JsonParser::deserialize_branch_operation(const JsonObject &branch_obj, Operation &op) {
