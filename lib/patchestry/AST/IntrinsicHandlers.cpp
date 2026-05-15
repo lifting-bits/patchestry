@@ -407,6 +407,34 @@ namespace patchestry::ast {
             }
         }
 
+        // Emit op.string_value as a StringLiteral decayed to `const char *`;
+        // returning merge_to_next=true so it caches in operation_stmts and
+        // downstream temporary references pick it up. Falls back to the
+        // registered-decl call when the serialiser couldn't resolve the literal.
+        std::pair< clang::Stmt *, bool > handle_stringdata(
+            OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
+            const ghidra::Operation &op, const std::string &name
+        ) {
+            (void) name;
+            if (!op.string_value || op.string_value->empty()) {
+                return b.build_intrinsic_call_against_registered(ctx, fn, op);
+            }
+            auto op_loc     = SourceLocation(ctx.getSourceManager(), op.key);
+            auto char_type  = ctx.CharTy.withConst();
+            auto array_size = op.string_value->size() + 1; // null terminator
+            auto array_type = ctx.getConstantArrayType(
+                char_type, llvm::APInt(32, array_size), nullptr,
+                clang::ArraySizeModifier::Normal, 0);
+            auto *lit = clang::StringLiteral::Create(
+                ctx, *op.string_value,
+                clang::StringLiteralKind::Ordinary, /*Pascal=*/false,
+                array_type, op_loc);
+
+            auto ptr_type = ctx.getPointerType(char_type);
+            auto *decayed = b.make_cast(ctx, lit, ptr_type, op_loc);
+            return { decayed ? decayed : lit, true };
+        }
+
     } // anonymous namespace
 
     std::string parse_intrinsic_name(std::string_view arch, std::string_view label) {
@@ -421,6 +449,7 @@ namespace patchestry::ast {
                 {  "builtin_memcpy", handle_builtin_memcpy },
                 { "builtin_strncpy", handle_builtin_memcpy }, // Same impl as memcpy
                 { "builtin_wcsncpy", handle_builtin_memcpy },
+                {      "stringdata",     handle_stringdata },
             };
 
             add_atomic_intrinsic_handlers(result, "fetch_add");

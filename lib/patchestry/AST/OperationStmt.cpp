@@ -1918,17 +1918,23 @@ namespace patchestry::ast {
         const auto &label = *op.target->function;
         auto name         = parse_intrinsic_name(function_builder().program_arch(), label);
 
-        // Look up specific handler
+        // Custom-semantics handlers (volatile_read → *(volatile T*)addr
+        // deref, etc.) take precedence so they can rewrite the op
+        // instead of building a call.
         const auto &handlers = get_intrinsic_handlers();
         auto it              = handlers.find(name);
         if (it != handlers.end()) {
             return it->second(*this, ctx, function, op, name);
         }
 
-        // Fallback: use __patchestry_missing_<name> for unrecognized intrinsics
-        // This includes cases where the decompiler couldn't determine the actual intrinsic name
-        // (e.g., "stringdata" is a placeholder name)
-        // The function declaration includes an AnnotateAttr with metadata for debugging
+        // Generic intrinsic: emit a direct call against the
+        // FunctionDecl the Ghidra serialiser registered for this
+        // intrinsic.  Variadic decl absorbs arg-type adjustments.
+        if (function_builder().function_list.get().contains(label)) {
+            return build_intrinsic_call_against_registered(ctx, function, op);
+        }
+
+        // Truly unknown: synthesise an annotated placeholder.
         return create_missing_intrinsic_call(ctx, function, op, name, label);
     }
 
@@ -3702,10 +3708,16 @@ namespace patchestry::ast {
     ) {
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
-        // Determine return type
+        // Determine return type.  Prefer the typed output, fall back to
+        // op.type for ops whose value flows through a temporary reference
+        // rather than a named output (default-void otherwise corrupts
+        // every downstream consumer).
         clang::QualType ret_type = ctx.VoidTy;
         if (op.output) {
             ret_type = get_varnode_type(ctx, *op.output);
+        } else if (op.type) {
+            auto t = type_builder().GetSerializedType(*op.type);
+            if (!t.isNull()) ret_type = t;
         }
 
         // Build arguments from inputs
@@ -3757,6 +3769,96 @@ namespace patchestry::ast {
         return { create_assign_operation(ctx, call_expr, out, op_loc), false };
     }
 
+    std::pair< clang::Stmt *, bool >
+    OpBuilder::build_intrinsic_call_against_registered(
+        clang::ASTContext &ctx, const Function &function, const Operation &op
+    ) {
+        if (!op.target || !op.target->function) {
+            LOG(ERROR) << "build_intrinsic_call_against_registered: missing "
+                       << "target. key: " << op.key << "\n";
+            return {};
+        }
+        const auto &label = *op.target->function;
+        auto      &fns    = function_builder().function_list.get();
+        auto       it     = fns.find(label);
+        if (it == fns.end() || it->second == nullptr) {
+            LOG(ERROR) << "Registered intrinsic decl missing for '" << label
+                       << "'. key: " << op.key << "\n";
+            return {};
+        }
+        auto *callee = it->second;
+        auto  op_loc = SourceLocation(ctx.getSourceManager(), op.key);
+
+        auto *fn_ref = clang::DeclRefExpr::Create(
+            ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+            callee, false, op_loc,
+            callee->getType(), clang::VK_LValue
+        );
+
+        std::vector< clang::Expr * > args;
+        args.reserve(op.inputs.size());
+        for (size_t i = 0; i < op.inputs.size(); ++i) {
+            auto *e = AS_EXPR_OR_NULL(
+                create_varnode(ctx, function, op.inputs[i]), op.key);
+            if (!e) {
+                LOG(ERROR) << "Failed to create varnode for intrinsic call "
+                           << "argument " << i << " of '" << label
+                           << "'. key: " << op.key << "\n";
+                return {};
+            }
+            args.push_back(e);
+        }
+
+        auto result = sema().BuildCallExpr(nullptr, fn_ref, op_loc, args, op_loc);
+        if (result.isInvalid()) {
+            LOG(ERROR) << "Failed to build intrinsic call against registered "
+                       << "decl '" << label << "'. key: " << op.key << "\n";
+            return {};
+        }
+        auto *call_expr = result.getAs< clang::Expr >();
+
+        if (op.output) {
+            auto *out = AS_EXPR_OR_NULL(
+                create_varnode(ctx, function, *op.output), op.key);
+            if (!out) {
+                return {};
+            }
+            return { create_assign_operation(ctx, call_expr, out, op_loc), false };
+        }
+
+        // No named output but non-void return: materialize via __call_ret_N
+        // and cache a fresh DeclRefExpr so downstream uses don't share the
+        // CallExpr* across parents. materialize_call_return can't be reused
+        // — it gates on op.has_return_value, which Ghidra doesn't set on
+        // CALLOTHER intrinsics.
+        auto ret_type = callee->getReturnType();
+        if (!ret_type->isVoidType()) {
+            auto var_name = "__call_ret_"
+                + std::to_string(function_builder().call_ret_counter++);
+            auto *var_decl = create_variable_decl(
+                ctx, sema().CurContext, var_name, ret_type, op_loc);
+            var_decl->setIsUsed();
+            sema().CurContext->addDecl(var_decl);
+
+            auto *decl_stmt = create_decl_stmt(ctx, var_decl, op_loc);
+            function_builder().pending_materialized.push_back(decl_stmt);
+
+            auto *ref_lhs = clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+                var_decl, false, op_loc, ret_type, clang::VK_LValue);
+            auto *assign = create_assign_operation(
+                ctx, call_expr, ref_lhs, op_loc);
+
+            auto *ref_cached = clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+                var_decl, false, op_loc, ret_type, clang::VK_LValue);
+            function_builder().operation_stmts.emplace(op.key, ref_cached);
+
+            return { assign, false };
+        }
+        return { call_expr, false };
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_missing_intrinsic_call(
         clang::ASTContext &ctx, const Function &function, const Operation &op,
         const std::string &original_name, const std::string &original_label
@@ -3767,10 +3869,15 @@ namespace patchestry::ast {
         std::string func_name = "__patchestry_missing_" + original_name;
         (void) original_label; // debug metadata is currently dropped (see below)
 
-        // Determine return type
+        // Determine return type.  Prefer the typed output, fall back to
+        // op.type for ops whose value flows through a temporary reference
+        // rather than a named output.
         clang::QualType ret_type = ctx.VoidTy;
         if (op.output) {
             ret_type = get_varnode_type(ctx, *op.output);
+        } else if (op.type) {
+            auto t = type_builder().GetSerializedType(*op.type);
+            if (!t.isNull()) ret_type = t;
         }
 
         // Cache key must encode the return type so a void-context call and

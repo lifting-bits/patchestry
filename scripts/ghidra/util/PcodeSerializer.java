@@ -50,6 +50,7 @@ import ghidra.program.model.lang.RegisterManager;
 
 import ghidra.program.model.listing.Bookmark;
 import ghidra.program.model.listing.BookmarkManager;
+import ghidra.program.model.listing.DataIterator;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.FunctionManager;
@@ -89,6 +90,8 @@ import ghidra.program.model.pcode.JumpTable;
 import ghidra.program.model.pcode.SequenceNumber;
 import ghidra.program.model.pcode.SymbolEntry;
 import ghidra.program.model.pcode.Varnode;
+
+import ghidra.program.model.scalar.Scalar;
 
 import ghidra.program.model.data.AbstractFloatDataType;
 import ghidra.program.model.data.AbstractIntegerDataType;
@@ -219,6 +222,14 @@ public class PcodeSerializer {
 
 		// The seen data
 		private Map<Address, Data> seenDataMap;
+
+		// Lazy; see getDefinedStringIndex / resolveStringFromDefinedDataScan.
+		private TreeMap<Address, String> definedStringIndex;
+
+		// Tier-(c) cache keyed by function entry address; value is the
+		// unique reachable string or null (computed-as-ambiguous).
+		// containsKey() distinguishes "computed" from "not yet".
+		private Map<Address, String> uniqueStringPerFunction;
 
 		// Maps a canonical type key (category + name + length + UID) to a
 		// collision-free type ID. Uses an incremental counter instead of
@@ -1387,6 +1398,25 @@ public class PcodeSerializer {
 			return null;
 		}
 
+		// When a "global" HighVariable's address is actually a function
+		// entry, emit a function reference instead of a dangling global.
+		// serializeGlobals drops function-entry-collision globals (per
+		// #226's CIRGen FuncOp assertion fix); without this rewrite, the
+		// varnode would point at a global that the JSON never defines.
+		// Returns true when a function reference was emitted; the caller
+		// should otherwise fall through to its usual "global" branch.
+		boolean tryEmitFunctionRef(Address addr) throws Exception {
+			if (addr == null) return false;
+			Function fn = currentProgram.getFunctionManager().getFunctionAt(addr);
+			if (fn == null) return false;
+			// serializeFunctions deduplicates via seenFunctions, so a
+			// repeat add is harmless.
+			functions.add(fn);
+			writer.name("kind").value("function");
+			writer.name("function").value(label(fn));
+			return true;
+		}
+
 		Address makeGlobalFromData(Data data) throws Exception {
 			if (data == null) {
 				return null;
@@ -1551,10 +1581,14 @@ public class PcodeSerializer {
 					writer.name("kind").value("temporary");
 					writer.name("operation").value(label(nodeDefPcodeOp));
 					break;
-				case GLOBAL:
-					writer.name("kind").value("global");
-					writer.name("global").value(label(addressOfGlobal(highVariable)));
+				case GLOBAL: {
+					Address globalAddr = addressOfGlobal(highVariable);
+					if (!tryEmitFunctionRef(globalAddr)) {
+						writer.name("kind").value("global");
+						writer.name("global").value(label(globalAddr));
+					}
 					break;
+				}
 				case FUNCTION:
 					writer.name("kind").value("function");
 					writer.name("function").value(label(highVariable.getHighFunction()));
@@ -3075,8 +3109,11 @@ public class PcodeSerializer {
 				writer.name("kind").value("temporary");
 				writer.name("operation").value(label(getOrCreateLocalVariable(outputHighVariable, pcodeOp)));
 			} else if (klass == VariableClassification.GLOBAL) {
-				writer.name("kind").value("global");
-				writer.name("global").value(label(addressOfGlobal(outputHighVariable)));
+				Address globalAddr = addressOfGlobal(outputHighVariable);
+				if (!tryEmitFunctionRef(globalAddr)) {
+					writer.name("kind").value("global");
+					writer.name("global").value(label(globalAddr));
+				}
 			} else {
 				assert false;
 			}
@@ -3924,20 +3961,195 @@ public class PcodeSerializer {
 		// Serialize a `CALLOTHER` as a call to an intrinsic.
 		void serializeIntrinsicCallOp(PcodeOp pcodeOp) throws Exception {
 			serializeOutput(pcodeOp);
-			
+
 			writer.name("target").beginObject();
 			writer.name("kind").value("intrinsic");
 			writer.name("function").value(intrinsicLabel(pcodeOp));
 			writer.name("is_variadic").value(true);
 			writer.name("is_noreturn").value(false);
 			writer.endObject();  // End of `target`.
-			
-			writer.name("inputs").beginArray();			
+
+			// For BUILTIN_STRINGDATA, look up the actual string literal
+			// from the instruction's data references so patchestry can
+			// emit it as a clang::StringLiteral instead of an opaque call.
+			if ((int) pcodeOp.getInput(0).getOffset() == BUILTIN_STRINGDATA) {
+				String literal = resolveStringDataLiteral(pcodeOp);
+				if (literal != null) {
+					writer.name("string_value").value(literal);
+				}
+			}
+
+			writer.name("inputs").beginArray();
 			Varnode[] inputs = pcodeOp.getInputs();
 			for (int i = 1; i < inputs.length; ++i) {
 				serializeInput(pcodeOp, inputs[i]);
 			}
 			writer.endArray();
+		}
+
+		// Resolve the literal that a BUILTIN_STRINGDATA pcode loads.
+		// Four fallbacks, in order: refs-from, operand refs, raw read at
+		// the input varnode's constant address, defined-string index.
+		String resolveStringDataLiteral(PcodeOp pcodeOp) {
+			try {
+				Address opAddr = pcodeOp.getSeqnum().getTarget();
+				if (opAddr == null) return null;
+				Listing listing = currentProgram.getListing();
+
+				Reference[] refs = currentProgram.getReferenceManager()
+					.getReferencesFrom(opAddr);
+				String hit = stringAtFirstDataRef(listing, refs);
+				if (hit != null) return hit;
+
+				Instruction insn = listing.getInstructionAt(opAddr);
+				if (insn != null) {
+					int n = insn.getNumOperands();
+					for (int i = 0; i < n; ++i) {
+						hit = stringAtFirstDataRef(
+							listing, insn.getOperandReferences(i));
+						if (hit != null) return hit;
+					}
+				}
+
+				if (pcodeOp.getNumInputs() >= 2) {
+					Varnode in = pcodeOp.getInput(1);
+					if (in != null) {
+						DataType charPtr = currentProgram.getDataTypeManager()
+							.getPointer(new CharDataType());
+						String raw = apiUtil.findNullTerminatedString(
+							in.getAddress(), (Pointer) charPtr);
+						if (raw != null) return raw;
+					}
+				}
+
+				hit = resolveStringFromDefinedDataScan(opAddr);
+				if (hit != null) return hit;
+			} catch (Exception e) {
+				// Recovery is best-effort; no partial JSON.
+			}
+			return null;
+		}
+
+		String stringAtFirstDataRef(Listing listing, Reference[] refs) {
+			if (refs == null) return null;
+			for (Reference r : refs) {
+				if (!r.getReferenceType().isData()) continue;
+				Address dataAddr = r.getToAddress();
+				if (dataAddr == null) continue;
+				Data d = listing.getDataAt(dataAddr);
+				if (d != null && d.hasStringValue()) {
+					Object v = d.getValue();
+					if (v != null) return v.toString();
+				}
+			}
+			return null;
+		}
+
+		private TreeMap<Address, String> getDefinedStringIndex() {
+			if (definedStringIndex != null) {
+				return definedStringIndex;
+			}
+			definedStringIndex = new TreeMap<>();
+			Listing listing = currentProgram.getListing();
+			DataIterator it = listing.getDefinedData(true);
+			while (it.hasNext()) {
+				Data d = it.next();
+				if (d == null || !d.hasStringValue()) continue;
+				Object v = d.getValue();
+				if (v == null) continue;
+				definedStringIndex.put(d.getAddress(), v.toString());
+			}
+			return definedStringIndex;
+		}
+
+		// Three tiers: (a) operand ref hits a string Data directly,
+		// (b) operand ref → pointer Data → string Data (literal-pool
+		// indirection), (c) function-wide uniqueness — return only if
+		// exactly one distinct string is reachable from this function;
+		// ambiguity returns null rather than guessing.
+		String resolveStringFromDefinedDataScan(Address opAddr) {
+			TreeMap<Address, String> idx = getDefinedStringIndex();
+			if (idx.isEmpty()) return null;
+			Listing listing = currentProgram.getListing();
+			Instruction insn = listing.getInstructionAt(opAddr);
+
+			// (a) and (b)
+			if (insn != null) {
+				int n = insn.getNumOperands();
+				for (int i = 0; i < n; ++i) {
+					String s = pickStringFromOperandRefs(
+						listing, idx, insn.getOperandReferences(i));
+					if (s != null) return s;
+				}
+			}
+
+			// (c)
+			Function f = currentProgram.getFunctionManager()
+				.getFunctionContaining(opAddr);
+			if (f == null) return null;
+			return uniqueStringForFunction(f, listing, idx);
+		}
+
+		private String uniqueStringForFunction(
+				Function f, Listing listing, TreeMap<Address, String> idx) {
+			if (uniqueStringPerFunction == null) {
+				uniqueStringPerFunction = new HashMap<>();
+			}
+			Address entry = f.getEntryPoint();
+			if (uniqueStringPerFunction.containsKey(entry)) {
+				return uniqueStringPerFunction.get(entry);
+			}
+			String unique = null;
+			InstructionIterator iter = listing.getInstructions(
+				f.getBody(), true);
+			while (iter.hasNext()) {
+				Instruction insn = iter.next();
+				int nn = insn.getNumOperands();
+				for (int j = 0; j < nn; ++j) {
+					String s = pickStringFromOperandRefs(
+						listing, idx, insn.getOperandReferences(j));
+					if (s == null) continue;
+					if (unique == null) {
+						unique = s;
+					} else if (!unique.equals(s)) {
+						uniqueStringPerFunction.put(entry, null);
+						return null;  // ambiguous
+					}
+				}
+			}
+			uniqueStringPerFunction.put(entry, unique);
+			return unique;
+		}
+
+		String pickStringFromOperandRefs(
+				Listing listing,
+				TreeMap<Address, String> idx,
+				Reference[] refs) {
+			if (refs == null) return null;
+			for (Reference r : refs) {
+				Address dst = r.getToAddress();
+				if (dst == null) continue;
+				String s = idx.get(dst);
+				if (s != null) return s;
+				Data d = listing.getDataAt(dst);
+				if (d == null) continue;
+				Object v = d.getValue();
+				if (v instanceof Address) {
+					s = idx.get((Address) v);
+				} else if (v instanceof Scalar) {
+					// Cortex-M literal-pool slots are often marked as
+					// plain dword rather than pointer; coerce the
+					// scalar to a RAM address.
+					try {
+						long off = ((Scalar) v).getUnsignedValue();
+						s = idx.get(ramSpace.getAddress(off));
+					} catch (AddressOutOfBoundsException e) {
+						s = null;
+					}
+				}
+				if (s != null) return s;
+			}
+			return null;
 		}
 
 		// Serialize a `CALLOTHER`. The first input operand is a constant
