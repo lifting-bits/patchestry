@@ -1398,6 +1398,25 @@ public class PcodeSerializer {
 			return null;
 		}
 
+		// When a "global" HighVariable's address is actually a function
+		// entry, emit a function reference instead of a dangling global.
+		// serializeGlobals drops function-entry-collision globals (per
+		// #226's CIRGen FuncOp assertion fix); without this rewrite, the
+		// varnode would point at a global that the JSON never defines.
+		// Returns true when a function reference was emitted; the caller
+		// should otherwise fall through to its usual "global" branch.
+		boolean tryEmitFunctionRef(Address addr) throws Exception {
+			if (addr == null) return false;
+			Function fn = currentProgram.getFunctionManager().getFunctionAt(addr);
+			if (fn == null) return false;
+			// serializeFunctions deduplicates via seenFunctions, so a
+			// repeat add is harmless.
+			functions.add(fn);
+			writer.name("kind").value("function");
+			writer.name("function").value(label(fn));
+			return true;
+		}
+
 		Address makeGlobalFromData(Data data) throws Exception {
 			if (data == null) {
 				return null;
@@ -1562,10 +1581,14 @@ public class PcodeSerializer {
 					writer.name("kind").value("temporary");
 					writer.name("operation").value(label(nodeDefPcodeOp));
 					break;
-				case GLOBAL:
-					writer.name("kind").value("global");
-					writer.name("global").value(label(addressOfGlobal(highVariable)));
+				case GLOBAL: {
+					Address globalAddr = addressOfGlobal(highVariable);
+					if (!tryEmitFunctionRef(globalAddr)) {
+						writer.name("kind").value("global");
+						writer.name("global").value(label(globalAddr));
+					}
 					break;
+				}
 				case FUNCTION:
 					writer.name("kind").value("function");
 					writer.name("function").value(label(highVariable.getHighFunction()));
@@ -3086,8 +3109,11 @@ public class PcodeSerializer {
 				writer.name("kind").value("temporary");
 				writer.name("operation").value(label(getOrCreateLocalVariable(outputHighVariable, pcodeOp)));
 			} else if (klass == VariableClassification.GLOBAL) {
-				writer.name("kind").value("global");
-				writer.name("global").value(label(addressOfGlobal(outputHighVariable)));
+				Address globalAddr = addressOfGlobal(outputHighVariable);
+				if (!tryEmitFunctionRef(globalAddr)) {
+					writer.name("kind").value("global");
+					writer.name("global").value(label(globalAddr));
+				}
 			} else {
 				assert false;
 			}
