@@ -2784,14 +2784,28 @@ namespace patchestry::ast {
         // Coerce record (struct/union) operands to integers for C operators.
         input_expr = coerce_record_to_integer(ctx, input_expr, op_loc);
 
-        auto unary_operation = sema().CreateBuiltinUnaryOp(op_loc, kind, input_expr);
-        if (unary_operation.isInvalid()) {
-            LOG(ERROR) << "Unary operation failed on operand. key: " << op.key << "\n";
-            return std::make_pair(nullptr, false);
+        clang::Expr *result_expr = nullptr;
+        // ADDRESS_OF on an array varnode should produce pointer-to-element
+        // (matching Ghidra's `T*` output type), not pointer-to-array.  Apply
+        // array-to-pointer decay rather than `&arr` (which yields `T(*)[N]`
+        // and breaks indirect-call argument passing where Sema won't decay).
+        if (kind == clang::UO_AddrOf && input_expr->getType()->isArrayType()) {
+            auto decayed_type = ctx.getDecayedType(input_expr->getType());
+            result_expr = make_implicit_cast(
+                ctx, input_expr, decayed_type, clang::CastKind::CK_ArrayToPointerDecay
+            );
+        }
+        if (result_expr == nullptr) {
+            auto unary_operation = sema().CreateBuiltinUnaryOp(op_loc, kind, input_expr);
+            if (unary_operation.isInvalid()) {
+                LOG(ERROR) << "Unary operation failed on operand. key: " << op.key << "\n";
+                return std::make_pair(nullptr, false);
+            }
+            result_expr = unary_operation.getAs< clang::Expr >();
         }
 
         if (!op.output.has_value()) {
-            return { unary_operation.getAs< clang::Stmt >(), true };
+            return { result_expr, true };
         }
 
         auto *output_expr =
@@ -2800,10 +2814,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        return { create_assign_operation(
-                     ctx, unary_operation.getAs< clang::Expr >(), output_expr, op_loc
-                 ),
-                 false };
+        return { create_assign_operation(ctx, result_expr, output_expr, op_loc), false };
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_binary_operation(
@@ -3224,6 +3235,22 @@ namespace patchestry::ast {
         }
         if (loc.isInvalid()) loc = VirtualLoc(ctx);
 
+        // (&E)->field  ==>  E.field : when the base is the address of a
+        // record lvalue, access the member with `.` on that lvalue
+        // directly.  PTRSUB/PTRADD chains otherwise stack &/-> pairs that
+        // print as &&&… and re-parse with the wrong operator precedence.
+        clang::Expr *dot_base = nullptr;
+        if (auto *uo =
+                clang::dyn_cast< clang::UnaryOperator >(base->IgnoreParenImpCasts()))
+        {
+            if (uo->getOpcode() == clang::UO_AddrOf
+                && uo->getSubExpr()->getType()->isRecordType()
+                && uo->getSubExpr()->isLValue())
+            {
+                dot_base = uo->getSubExpr();
+            }
+        }
+
         auto find_field_decl = [&](clang::ASTContext &ctx, clang::RecordDecl *decl,
                                    unsigned int target_offset) -> clang::FieldDecl * {
             if (decl == nullptr || !decl->isCompleteDefinition()) {
@@ -3286,8 +3313,9 @@ namespace patchestry::ast {
 
         clang::DeclarationNameInfo member_name_info(field->getDeclName(), loc);
         return sema().BuildMemberExpr(
-            convert_rvalue(ctx, base), true, loc, clang::NestedNameSpecifierLoc(),
-            VirtualLoc(ctx), field,
+            dot_base ? dot_base : convert_rvalue(ctx, base),
+            /*IsArrow=*/dot_base == nullptr, loc, clang::NestedNameSpecifierLoc(),
+            /*TemplateKWLoc=*/clang::SourceLocation(), field,
             clang::DeclAccessPair::make(field, clang::AS_public), false, member_name_info,
             field->getType(), clang::VK_LValue, clang::OK_Ordinary
         );
@@ -3323,11 +3351,27 @@ namespace patchestry::ast {
         auto input_type = input_expr->getType();
         if (input_type->isPointerType() && input_type->getPointeeType()->isRecordType()) {
             auto *mem_expr = make_member_expr(ctx, input_expr, *op.inputs[1].value);
-            auto *addrof_expr =
-                sema()
-                    .BuildUnaryOp(sema().getCurScope(), op_loc, clang::UO_AddrOf, mem_expr)
-                    .get();
-            ptr_expr = make_cast(ctx, addrof_expr, op_type, op_loc);
+            if (mem_expr == nullptr) {
+                LOG(ERROR) << "PTRSUB failed to build member access. key: " << op.key << "\n";
+                return { nullptr, false };
+            }
+            // For an array-typed member, decay to pointer-to-element rather
+            // than taking &member (which yields T(*)[N] and forces a bitcast
+            // that prints as a spurious extra &).
+            clang::Expr *field_ptr = nullptr;
+            if (mem_expr->getType()->isArrayType()) {
+                field_ptr = make_implicit_cast(
+                    ctx, mem_expr, ctx.getDecayedType(mem_expr->getType()),
+                    clang::CastKind::CK_ArrayToPointerDecay
+                );
+            }
+            if (field_ptr == nullptr) {
+                field_ptr =
+                    sema()
+                        .BuildUnaryOp(sema().getCurScope(), op_loc, clang::UO_AddrOf, mem_expr)
+                        .get();
+            }
+            ptr_expr = make_cast(ctx, field_ptr, op_type, op_loc);
         } else {
             auto *byte_offset = AS_EXPR_OR_NULL(
                 create_varnode(ctx, function, op.inputs[1], op_loc), op.key);
