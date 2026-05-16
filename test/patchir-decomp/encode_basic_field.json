@@ -1,6 +1,32 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// C-LABEL: unsigned long encode_basic_field
+// C-NOT: goto ram_00128120_114_basic
+// C-NOT: goto ram_00128504_120_basic
+// C-NOT: goto ram_00128494_20_basic
+// C-NOT: goto ram_001284ec_17_basic
+// C-NOT: ram_00128120_114_basic:
+// C-NOT: ram_00128504_120_basic:
+// C-NOT: ram_00128494_20_basic:
+// C-NOT: ram_001284ec_17_basic:
+// C: pcVar7 = "invalid field descriptor";
+// C-NOT: goto ram_00128120_114_basic
+// C: stack_chk_fail(puVar4, pcVar7, uVar6);
+// C-NOT: goto ram_00128120_114_basic
+// C-NOT: goto ram_00128504_120_basic
+// C-NOT: goto ram_00128494_20_basic
+// C-NOT: goto ram_001284ec_17_basic
+// C-NOT: ram_00128120_114_basic:
+// C-NOT: ram_00128504_120_basic:
+// C-NOT: ram_00128494_20_basic:
+// C-NOT: ram_001284ec_17_basic:
+// C: if (cVar3 == 0) {
+// C: pcVar7 = (signed char *)param_1[4L];
+// C: } else {
+// C: param_1[3L] = uVar6 + 1UL;
+// C: pcVar7 = &__stack_chk_guard;
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // CIR: cir.func dso_local @encode_basic_field
 // RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir

@@ -14,11 +14,16 @@
 #include <limits>
 #include <list>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <clang/AST/Expr.h>
+
+namespace patchestry::ghidra {
+    struct Function;
+}
 
 namespace patchestry::ast {
 
@@ -28,6 +33,12 @@ namespace patchestry::ast {
         size_t succ_index;        // index into CNode::succs[] for this case target
         bool has_exit = false;    // whether P-Code marked this case as having a break/exit
         bool is_default = false;  // true for the default/fallback arm
+    };
+
+    struct CSourceEdge {
+        std::string from_key;
+        std::string to_key;
+        std::string reason;
     };
 
     // -----------------------------------------------------------------------
@@ -45,14 +56,17 @@ namespace patchestry::ast {
         static constexpr size_t kNone = std::numeric_limits<size_t>::max();
 
         size_t id;                          // node index in CGraph::nodes
+        std::string source_key;             // original P-Code basic block key
         std::vector<size_t> succs;          // outgoing edges (by CNode id)
         std::vector<size_t> preds;          // incoming edges (by CNode id)
 
         // Edge properties (indexed same as succs)
         std::vector<uint32_t> edge_flags;
 
-        // The SNode produced when this node is collapsed (null = leaf)
-        SNode *structured = nullptr;
+        // The structured SNode sequence produced when this node is
+        // collapsed (empty = leaf).  A "sequence" is a std::vector<SNode*>
+        // since the SSeq node kind was removed.
+        std::vector< SNode * > structured;
 
         // Leaf payload: statements from the original basic block
         std::string label;                      // mutable label (cleared after SLabel wrapping)
@@ -60,6 +74,26 @@ namespace patchestry::ast {
         std::vector<clang::Stmt *> stmts;
         clang::Expr *branch_cond = nullptr;
         bool is_conditional = false;
+
+        enum class RegionKind : uint8_t {
+            kUnknown,
+            kAcyclic,
+            kLoop,
+            kSwitch,
+            kIrreducible,
+        };
+
+        struct BranchRoles {
+            size_t merge = kNone;
+            size_t body = kNone;
+            size_t exit = kNone;
+            bool normalized = false;
+            bool swapped = false;
+            bool condition_negated = false;
+        };
+
+        RegionKind region_kind = RegionKind::kUnknown;
+        BranchRoles branch_roles;
 
         /// Terminal control-flow stmt (goto/if-goto/switch) popped by
         /// edge construction.  Stored separately from content stmts
@@ -137,10 +171,45 @@ namespace patchestry::ast {
         }
     };
 
+    struct CGraphValidationReport {
+        size_t node_count = 0;
+        size_t active_nodes = 0;
+        size_t edge_count = 0;
+        size_t conditional_nodes = 0;
+        size_t switch_nodes = 0;
+        size_t collapsed_nodes = 0;
+        size_t input_edges = 0;
+        size_t emitted_edges = 0;
+        size_t input_blocks = 0;
+        size_t emitted_blocks = 0;
+        size_t input_switches = 0;
+        size_t emitted_switches = 0;
+        size_t input_cases = 0;
+        size_t emitted_cases = 0;
+        size_t normalized_conditions = 0;
+        size_t branch_swaps = 0;
+        size_t condition_negations = 0;
+        size_t irreducible_regions = 0;
+        std::vector<std::string> missing_blocks;
+        std::vector<std::string> extra_blocks;
+        std::vector<std::string> missing_edges;
+        std::vector<std::string> extra_edges;
+        std::vector<std::string> duplicated_edges;
+        std::vector<std::string> missing_switches;
+        std::vector<std::string> extra_switches;
+        std::vector<std::string> missing_cases;
+        std::vector<std::string> extra_cases;
+        std::vector<std::string> duplicated_cases;
+        std::vector<std::string> diagnostics;
+
+        bool ok() const { return diagnostics.empty(); }
+    };
+
     /// The flow graph — single graph type used for both CFG representation
     /// and in-place structuring.  Replaces the Cfg→CGraph two-step pipeline.
     struct CGraph {
         std::vector<CNode> nodes;
+        std::vector<CSourceEdge> source_edges;
         size_t entry = 0;
 
         /// Active (uncollapsed) node ids
@@ -183,7 +252,8 @@ namespace patchestry::ast {
         /// collapsed but their stmts/labels remain accessible.
         /// Returns the representative node id.
         size_t IdentifyInternal(const std::vector<size_t> &ids,
-                                CNode::BlockType type, SNode *snode);
+                                CNode::BlockType type,
+                                std::vector< SNode * > snodes);
     };
 
     class FunctionBuilder;
@@ -191,6 +261,13 @@ namespace patchestry::ast {
     /// Build CGraph directly from P-Code JSON via FunctionBuilder.
     /// This is the structural path: JSON → CGraph (no intermediate Clang AST gotos).
     CGraph BuildCGraph(FunctionBuilder &builder, clang::ASTContext &ctx);
+
+    /// Verify structural invariants at the JSON -> CGraph boundary and
+    /// after graph rewrites: node ids, edge flag cardinality, predecessor /
+    /// successor symmetry, collapsed representatives, and switch case target
+    /// indexes.
+    CGraphValidationReport ValidateCGraph(const CGraph &g,
+                                          const ghidra::Function *source = nullptr);
 
     /// Detect back-edges using DFS and mark them in the graph.
     void MarkBackEdges(CGraph &g);

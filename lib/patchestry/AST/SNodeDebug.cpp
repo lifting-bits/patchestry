@@ -24,22 +24,13 @@ namespace patchestry::ast {
                     os << "\\n" << lbl->Name();
                 } else if (auto *g = node->dyn_cast< SGoto >()) {
                     os << "\\n-> " << g->Target();
-                } else if (auto *blk = node->dyn_cast< SBlock >()) {
-                    os << "\\n(" << blk->Size() << " stmts)";
-                    if (!blk->Label().empty()) os << "\\nlabel: " << blk->Label();
+                } else if (node->dyn_cast< SStmt >()) {
+                    os << "\\n(stmt)";
                 }
 
                 os << "\"];\n";
 
                 switch (node->Kind()) {
-                case SNodeKind::kSeq: {
-                    auto *seq = node->as< SSeq >();
-                    for (const auto *child : seq->Children()) {
-                        unsigned cid = Emit(child);
-                        os << "  n" << id << " -> n" << cid << ";\n";
-                    }
-                    break;
-                }
                 case SNodeKind::kIfThenElse: {
                     auto *ite = node->as< SIfThenElse >();
                     if (ite->ThenBranch()) {
@@ -79,8 +70,8 @@ namespace patchestry::ast {
                 case SNodeKind::kSwitch: {
                     auto *sw = node->as< SSwitch >();
                     for (size_t i = 0; i < sw->Cases().size(); ++i) {
-                        if (sw->Cases()[i].body) {
-                            unsigned cid = Emit(sw->Cases()[i].body);
+                        if (auto *b = sw->Cases()[i].body()) {
+                            unsigned cid = Emit(b);
                             os << "  n" << id << " -> n" << cid
                                << " [label=\"case " << i << "\"];\n";
                         }

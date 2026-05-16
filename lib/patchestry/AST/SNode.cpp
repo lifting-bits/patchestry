@@ -13,8 +13,7 @@ namespace patchestry::ast {
 
     const char *SNode::KindName(SNodeKind k) {
         switch (k) {
-            case SNodeKind::kSeq:         return "Seq";
-            case SNodeKind::kBlock:       return "Block";
+            case SNodeKind::kStmt:        return "Stmt";
             case SNodeKind::kIfThenElse:return "IfThenElse";
             case SNodeKind::kWhile:       return "While";
             case SNodeKind::kDoWhile:    return "DoWhile";
@@ -39,51 +38,41 @@ namespace patchestry::ast {
         DumpChildren(os, indent);
     }
 
-    void SSeq::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
-        for (const auto *child : children_) {
-            child->Dump(os, indent + 1);
-        }
-    }
-
-    void SBlock::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
-        if (!label_.empty()) {
-            PrintIndent(os, indent + 1);
-            os << "label: " << label_ << "\n";
-        }
+    void SStmt::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
         PrintIndent(os, indent + 1);
-        os << "stmts: " << stmts_.size() << "\n";
+        os << "stmt: " << (stmt_ ? "<stmt>" : "null") << "\n";
     }
 
     void SIfThenElse::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
         PrintIndent(os, indent + 1);
         os << "cond: <expr>\n";
-        if (then_) {
+        if (!then_.empty()) {
             PrintIndent(os, indent + 1);
             os << "then:\n";
-            then_->Dump(os, indent + 2);
+            for (const auto *c : then_) if (c) c->Dump(os, indent + 2);
         }
-        if (else_) {
+        if (!else_.empty()) {
             PrintIndent(os, indent + 1);
             os << "else:\n";
-            else_->Dump(os, indent + 2);
+            for (const auto *c : else_) if (c) c->Dump(os, indent + 2);
         }
     }
 
     void SWhile::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
         PrintIndent(os, indent + 1);
         os << "cond: <expr>\n";
-        if (body_) {
+        if (!body_.empty()) {
             PrintIndent(os, indent + 1);
             os << "body:\n";
-            body_->Dump(os, indent + 2);
+            for (const auto *c : body_) if (c) c->Dump(os, indent + 2);
         }
     }
 
     void SDoWhile::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
-        if (body_) {
+        if (!body_.empty()) {
             PrintIndent(os, indent + 1);
             os << "body:\n";
-            body_->Dump(os, indent + 2);
+            for (const auto *c : body_) if (c) c->Dump(os, indent + 2);
         }
         PrintIndent(os, indent + 1);
         os << "cond: <expr>\n";
@@ -96,10 +85,10 @@ namespace patchestry::ast {
         os << "cond: " << (cond_ ? "<expr>" : "null") << "\n";
         PrintIndent(os, indent + 1);
         os << "inc: " << (inc_ ? "<expr>" : "null") << "\n";
-        if (body_) {
+        if (!body_.empty()) {
             PrintIndent(os, indent + 1);
             os << "body:\n";
-            body_->Dump(os, indent + 2);
+            for (const auto *c : body_) if (c) c->Dump(os, indent + 2);
         }
     }
 
@@ -109,23 +98,37 @@ namespace patchestry::ast {
         for (size_t i = 0; i < cases_.size(); ++i) {
             PrintIndent(os, indent + 1);
             os << "case " << i << ":\n";
-            if (cases_[i].body) {
-                cases_[i].body->Dump(os, indent + 2);
-            }
+            for (const auto *c : cases_[i].body_list)
+                if (c) c->Dump(os, indent + 2);
         }
-        if (default_) {
+        if (!default_.empty()) {
             PrintIndent(os, indent + 1);
             os << "default:\n";
-            default_->Dump(os, indent + 2);
+            for (const auto *c : default_) if (c) c->Dump(os, indent + 2);
         }
     }
 
     void SLabel::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
         PrintIndent(os, indent + 1);
         os << "name: " << name_ << "\n";
-        if (body_) {
-            body_->Dump(os, indent + 1);
+        for (const auto *c : body_) if (c) c->Dump(os, indent + 1);
+    }
+
+    // ---------------------------------------------------------------
+    // SNodeFactory::MakeSeq — normalize a child sequence.
+    //
+    // Since the SSeq node kind was removed, a "sequence" is just a
+    // std::vector<SNode*>.  MakeSeq drops nullptr children and returns
+    // the resulting vector; callers store it directly into a body
+    // slot, into CNode::structured, or pass it to IdentifyInternal.
+    // ---------------------------------------------------------------
+    std::vector< SNode * > SNodeFactory::MakeSeq(std::vector< SNode * > children) {
+        std::vector< SNode * > out;
+        out.reserve(children.size());
+        for (SNode *c : children) {
+            if (c) out.push_back(c);
         }
+        return out;
     }
 
 } // namespace patchestry::ast

@@ -1,12 +1,50 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -emit-llvm -print-tu -output %t.repeat >> /dev/null 2>&1
+// RUN: diff -u %t.c %t.repeat.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
 // FN: cir.func dso_local @decode_basic_field(
 // CIR-DAG: @decode_basic_field
 // CIR-DAG: @pb_decode_bool
 // CIR-DAG: @pb_decode_varint
 // CIR-DAG: cir.switch
+// C-LABEL: unsigned int decode_basic_field(
+// C: if (param_2 == 5) {
+// C-NEXT: uVar2 = pb_decode_fixed32
+// C-NEXT: return uVar2;
+// C: } else if (param_2 == 255) {
+// C-NEXT: uVar2 = pb_decode_fixed32
+// C-NEXT: return uVar2;
+// C-NOT: goto ram_08006596_50_basic
+// C-NOT: ram_08006596_50_basic:
+// C: if (param_2 == 1) {
+// C-NEXT: uVar2 = pb_decode_fixed64
+// C-NEXT: return uVar2;
+// C: } else if (param_2 == 255) {
+// C-NEXT: uVar2 = pb_decode_fixed64
+// C-NEXT: return uVar2;
+// C-NOT: goto ram_080065ae_47_basic
+// C-NOT: ram_080065ae_47_basic:
+// C: pcVar5 = "wrong wire type";
+// C-NEXT: break;
+// C-NOT: goto ram_08006460_81_basic
+// C-NOT: ram_08006460_81_basic:
+// C: pcVar5 = "integer too large";
+// C-NEXT: if (pcVar8 == (void *)0U)
+// C-NEXT: pcVar8 = pcVar5;
+// C-NEXT: param_1[3] = (int)pcVar8;
+// C-NEXT: return 0U;
+// C-NOT: goto ram_080064ca_78_basic
+// C-NOT: ram_080064ca_78_basic:
+// C-NOT: goto ram_08006464_82_basic
+// C-NOT: ram_08006464_82_basic:
+// C: pcVar5 = "invalid data_size";
+// C-NEXT: if (pcVar8 == (void *)0U)
+// C-NEXT: pcVar8 = pcVar5;
+// C-NEXT: param_1[3] = (int)pcVar8;
+// C-NEXT: return 0U;
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
 // RUN: %gen-call-checks %t.json > %t.call.checks
 // RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir

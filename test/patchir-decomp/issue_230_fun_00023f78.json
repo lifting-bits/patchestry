@@ -1,5 +1,5 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -print-tu -output %t > %t.stdout 2> %t.stderr
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -print-tu -output %t > %t.stdout 2> %t.stderr
 // RUN: test -e %t.c
 // RUN: test -e %t.cir
 // RUN: %file-check -vv -check-prefix=LIFTED %s --input-file %t.c

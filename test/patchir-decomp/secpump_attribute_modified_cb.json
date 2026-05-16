@@ -1,5 +1,5 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -output %t >> /dev/null 2>&1
 // RUN: test -e %t.cir
 // RUN: %file-check -check-prefix=CIR %s --input-file %t.cir
 

@@ -9,8 +9,10 @@
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
@@ -139,6 +141,31 @@ namespace patchestry::ast {
             set_sema_context(prev);
         }
 
+        /// Verify that each operation-associated Clang node produced by this
+        /// builder is still reachable from the final emitted function body.
+        /// This is a migration guard for structuring changes: payload nodes
+        /// may move or be nested, but they must not disappear silently.
+        bool VerifyNoNodeLoss(const clang::FunctionDecl *fn) const;
+
+        struct SourceId {
+            std::string stable_id;
+            std::string block_key;
+            std::string operation_key;
+            bool has_payload_carrier = false;
+        };
+
+        struct SourceVerificationReport {
+            std::vector<std::string> input_ops;
+            std::vector<std::string> emitted_ops;
+            std::vector<std::string> missing_ops;
+            std::vector<std::string> duplicated_ops;
+            std::unordered_map<std::string, unsigned> emitted_counts;
+            std::unordered_map<std::string, unsigned> cloned_counts;
+        };
+
+        SourceVerificationReport
+        BuildSourceVerificationReport(const clang::FunctionDecl *fn) const;
+
       private:
         void create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl);
 
@@ -149,6 +176,15 @@ namespace patchestry::ast {
         /// with the initializer expression inlined at the use site.
         static void InlineSingleUseTemps(clang::ASTContext &ctx,
                                          std::vector<clang::Stmt *> &stmts);
+
+        void RegisterSourceBlock(const std::string &block_key);
+        void RegisterSourceOperation(const std::string &block_key,
+                                     const Operation &op,
+                                     bool has_payload_carrier);
+        void TrackOperationStmt(const std::string &block_key,
+                                const Operation &op,
+                                clang::Stmt *stmt,
+                                bool primary = true);
 
         void set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
 
@@ -180,6 +216,16 @@ namespace patchestry::ast {
         std::unordered_map< std::string, clang::VarDecl * > local_variables;
         std::unordered_map< std::string, clang::LabelDecl * > labels_declaration;
         std::unordered_map< std::string, clang::Stmt * > operation_stmts;
+
+        // Source identity tracking for structuring verification.  The
+        // coverage map may include secondary carrier nodes, such as a
+        // DeclStmt initializer that survives if the declaration is inlined.
+        std::unordered_map< std::string, std::string > source_block_ids;
+        std::unordered_map< std::string, SourceId > source_ops;
+        std::unordered_map< const clang::Stmt *, std::unordered_set<std::string> >
+            source_coverage_nodes;
+        std::unordered_map< const clang::Stmt *, std::unordered_set<std::string> >
+            source_primary_nodes;
 
         // Tracks how many times each local variable name has been declared so
         // that duplicates (e.g. multiple "UNNAMED" vars) get unique suffixes.

@@ -11,8 +11,10 @@
 #include <memory>
 #include <sstream>
 #include <stack>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Attr.h>
@@ -407,6 +409,8 @@ namespace patchestry::ast {
 
     std::vector<clang::Stmt *>
     FunctionBuilder::create_block_stmts(clang::ASTContext &ctx, const BasicBlock &block) {
+        RegisterSourceBlock(block.key);
+
         if (block.ordered_operations.empty()) {
             return {};
         }
@@ -420,6 +424,8 @@ namespace patchestry::ast {
             }
 
             const auto &operation = block.operations.at(operation_key);
+            RegisterSourceOperation(block.key, operation,
+                                    /*has_payload_carrier=*/false);
 
             // Skip branch terminals — these become edges in the CGraph.
             // RETURN is NOT skipped: it produces a ReturnStmt that must
@@ -437,11 +443,13 @@ namespace patchestry::ast {
 
             if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
                 for (auto *pending : pending_materialized) {
+                    TrackOperationStmt(block.key, operation, pending);
                     stmt_vec.push_back(pending);
                 }
                 pending_materialized.clear();
                 operation_stmts.emplace(operation.key, stmt);
                 if (!should_merge_to_next) {
+                    TrackOperationStmt(block.key, operation, stmt);
                     stmt_vec.push_back(stmt);
                 }
             } else {
@@ -455,6 +463,202 @@ namespace patchestry::ast {
 
         InlineSingleUseTemps(ctx, stmt_vec);
         return stmt_vec;
+    }
+
+    void FunctionBuilder::RegisterSourceBlock(const std::string &block_key) {
+        if (block_key.empty()) return;
+
+        std::string stable_id = function.get().key;
+        stable_id += "::block::";
+        stable_id += block_key;
+        source_block_ids.try_emplace(block_key, std::move(stable_id));
+    }
+
+    void FunctionBuilder::RegisterSourceOperation(
+        const std::string &block_key,
+        const Operation &op,
+        bool has_payload_carrier
+    ) {
+        if (op.key.empty()) return;
+
+        RegisterSourceBlock(block_key);
+
+        std::string stable_id = function.get().key;
+        stable_id += "::op::";
+        stable_id += block_key;
+        stable_id += "::";
+        stable_id += op.key;
+
+        auto [it, inserted] = source_ops.try_emplace(
+            op.key,
+            SourceId{std::move(stable_id), block_key, op.key,
+                     has_payload_carrier});
+        if (!inserted && has_payload_carrier)
+            it->second.has_payload_carrier = true;
+    }
+
+    void FunctionBuilder::TrackOperationStmt(
+        const std::string &block_key,
+        const Operation &op,
+        clang::Stmt *stmt,
+        bool primary
+    ) {
+        if (!stmt) return;
+
+        RegisterSourceOperation(block_key, op,
+                                /*has_payload_carrier=*/true);
+        source_coverage_nodes[stmt].insert(op.key);
+        if (primary)
+            source_primary_nodes[stmt].insert(op.key);
+
+        // InlineSingleUseTemps may remove a DeclStmt and splice its
+        // initializer into the following statement.  Treat the initializer
+        // as a secondary carrier for the declaration operation so coverage
+        // survives that local AST rewrite without reporting a false loss.
+        if (auto *decl_stmt = llvm::dyn_cast<clang::DeclStmt>(stmt)) {
+            if (decl_stmt->isSingleDecl()) {
+                if (auto *var = llvm::dyn_cast<clang::VarDecl>(
+                        decl_stmt->getSingleDecl())) {
+                    if (auto *init = var->getInit())
+                        TrackOperationStmt(block_key, op, init,
+                                           /*primary=*/false);
+                }
+            }
+        }
+    }
+
+    namespace {
+
+        void CollectSourceCoverage(
+            const clang::Stmt *stmt,
+            const std::unordered_map<
+                const clang::Stmt *,
+                std::unordered_set<std::string>> &coverage_nodes,
+            const std::unordered_map<
+                const clang::Stmt *,
+                std::unordered_set<std::string>> &primary_nodes,
+            std::unordered_set<std::string> &covered_ops,
+            std::unordered_map<std::string, unsigned> &primary_visits
+        ) {
+            if (!stmt) return;
+
+            if (auto it = coverage_nodes.find(stmt);
+                it != coverage_nodes.end()) {
+                for (const auto &op_key : it->second)
+                    covered_ops.insert(op_key);
+            }
+            if (auto it = primary_nodes.find(stmt);
+                it != primary_nodes.end()) {
+                for (const auto &op_key : it->second)
+                    ++primary_visits[op_key];
+            }
+
+            if (auto *decl_stmt = llvm::dyn_cast<clang::DeclStmt>(stmt)) {
+                for (const clang::Decl *decl : decl_stmt->decls()) {
+                    if (auto *var = llvm::dyn_cast<clang::VarDecl>(decl))
+                        CollectSourceCoverage(var->getInit(), coverage_nodes,
+                                              primary_nodes, covered_ops,
+                                              primary_visits);
+                }
+            }
+
+            for (const clang::Stmt *child : stmt->children())
+                CollectSourceCoverage(child, coverage_nodes, primary_nodes,
+                                      covered_ops, primary_visits);
+        }
+
+    } // anonymous namespace
+
+    FunctionBuilder::SourceVerificationReport
+    FunctionBuilder::BuildSourceVerificationReport(
+        const clang::FunctionDecl *fn
+    ) const {
+        SourceVerificationReport report;
+        for (const auto &[op_key, id] : source_ops) {
+            if (id.has_payload_carrier)
+                report.input_ops.push_back(op_key);
+        }
+        std::sort(report.input_ops.begin(), report.input_ops.end());
+
+        if (!fn || !fn->hasBody()) {
+            report.missing_ops = report.input_ops;
+            return report;
+        }
+
+        std::unordered_set<std::string> covered_ops;
+        std::unordered_map<std::string, unsigned> primary_visits;
+        CollectSourceCoverage(fn->getBody(), source_coverage_nodes,
+                              source_primary_nodes, covered_ops,
+                              primary_visits);
+
+        for (const auto &op_key : report.input_ops) {
+            if (covered_ops.contains(op_key))
+                report.emitted_ops.push_back(op_key);
+            else
+                report.missing_ops.push_back(op_key);
+        }
+        std::sort(report.emitted_ops.begin(), report.emitted_ops.end());
+        std::sort(report.missing_ops.begin(), report.missing_ops.end());
+
+        for (const auto &[op_key, count] : primary_visits) {
+            if (!source_ops.contains(op_key)
+                || !source_ops.at(op_key).has_payload_carrier)
+                continue;
+
+            report.emitted_counts[op_key] = count;
+            if (count > 1) {
+                report.duplicated_ops.push_back(op_key);
+                report.cloned_counts[op_key] = count - 1;
+            }
+        }
+        std::sort(report.duplicated_ops.begin(),
+                  report.duplicated_ops.end());
+        return report;
+    }
+
+    bool FunctionBuilder::VerifyNoNodeLoss(const clang::FunctionDecl *fn) const {
+        auto report = BuildSourceVerificationReport(fn);
+
+        if (report.missing_ops.empty()) {
+            if (!report.duplicated_ops.empty()) {
+                LOG(INFO) << "VerifyNoNodeLoss: function " << GetCName()
+                          << " input_ops=" << report.input_ops.size()
+                          << " emitted_ops=" << report.emitted_ops.size()
+                          << " missing_ops=0"
+                          << " duplicated_ops="
+                          << report.duplicated_ops.size()
+                          << " cloned_carrier_occurrences="
+                          << [&]() {
+                                 unsigned total = 0;
+                                 for (const auto &[_, count] :
+                                      report.cloned_counts)
+                                     total += count;
+                                 return total;
+                             }()
+                          << "\n";
+            }
+            return true;
+        }
+
+        LOG(ERROR) << "VerifyNoNodeLoss: function " << GetCName()
+                   << " input_ops=" << report.input_ops.size()
+                   << " emitted_ops=" << report.emitted_ops.size()
+                   << " missing_ops=" << report.missing_ops.size()
+                   << " duplicated_ops=" << report.duplicated_ops.size()
+                   << "\n";
+        constexpr size_t kMaxReport = 20;
+        for (size_t i = 0;
+             i < std::min(report.missing_ops.size(), kMaxReport); ++i) {
+            const auto &op_key = report.missing_ops[i];
+            const auto &info = source_ops.at(op_key);
+            LOG(ERROR) << "  missing op " << info.operation_key
+                       << " from block " << info.block_key
+                       << " source_id=" << info.stable_id << "\n";
+        }
+        if (report.missing_ops.size() > kMaxReport)
+            LOG(ERROR) << "  ... " << (report.missing_ops.size() - kMaxReport)
+                       << " more missing operation node(s)\n";
+        return false;
     }
 
     clang::Expr *FunctionBuilder::create_branch_condition(

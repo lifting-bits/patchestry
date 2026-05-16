@@ -20,6 +20,7 @@ namespace patchestry {
         bool emit_obj             = false;
         bool verbose              = false;
         bool use_structuring_pass = false;
+        bool verify_no_node_loss  = false;
 
         std::string output_file;
         std::string input_file;
