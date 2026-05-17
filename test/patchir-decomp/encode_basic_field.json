@@ -22,11 +22,10 @@
 // C-NOT: ram_00128504_120_basic:
 // C-NOT: ram_00128494_20_basic:
 // C-NOT: ram_001284ec_17_basic:
-// C: if (cVar3 == 0) {
-// C: pcVar7 = (signed char *)param_1[4L];
-// C: } else {
-// C: param_1[3L] = uVar6 + 1UL;
+// C: if (cVar3 != 0) {
+// C: param_1[3L] = uVar6 + 4UL;
 // C: pcVar7 = &__stack_chk_guard;
+// C: pcVar7 = (signed char *)param_1[4L];
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // CIR: cir.func dso_local @encode_basic_field
 // RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir

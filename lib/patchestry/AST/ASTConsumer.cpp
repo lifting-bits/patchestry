@@ -437,6 +437,14 @@ namespace patchestry::ast {
                     + std::to_string(emitted)
                 );
             };
+            auto require_at_most = [&](std::string_view field, size_t expected, size_t emitted) {
+                if (emitted <= expected) { return; }
+                report.diagnostics.push_back(
+                    std::string("control shape growth for ") + std::string(field)
+                    + ": expected at most " + std::to_string(expected) + ", emitted "
+                    + std::to_string(emitted)
+                );
+            };
             auto require_at_least = [&](std::string_view field, size_t expected,
                                         size_t emitted) {
                 if (emitted >= expected) { return; }
@@ -447,8 +455,10 @@ namespace patchestry::ast {
                 );
             };
 
-            require_equal("labels", report.expected.labels, report.emitted.labels);
-            require_equal("gotos", report.expected.gotos, report.emitted.gotos);
+            // Structuring and pretty-print cleanup intentionally remove labels
+            // and gotos.  Growth is suspicious, but reduction is expected.
+            require_at_most("labels", report.expected.labels, report.emitted.labels);
+            require_at_most("gotos", report.expected.gotos, report.emitted.gotos);
             require_equal("switches", report.expected.switches, report.emitted.switches);
             require_equal("cases", report.expected.cases, report.emitted.cases);
             require_equal("defaults", report.expected.defaults, report.emitted.defaults);

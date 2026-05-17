@@ -13,13 +13,13 @@
 // C-NEXT: uVar4 = 255U;
 // C-NOT: goto ram_0800e748_8_basic;
 // C-NOT: ram_0800e748_8_basic:
-// C: if ((unsigned int)uStack_1c & 2130706432U != 0U && -1 < (int)uVar6 || uVar4 != uVar1 || 63U < uVar7)
+// C: if (((unsigned int)uStack_1c & 2130706432U) != 0U && -1 < (int)uVar6 || uVar4 != uVar1 || 63U < uVar7)
 // C-NEXT: pcVar5 = (signed char *)param_1[3];
 // C: pcVar5 = "varint overflow";
 // C: return iVar2;
 // C-NOT: 63U < uVar7 || uVar4 != uVar1 || 63U < uVar7
 // C: if (uVar7 == 28U) {
-// C-NEXT: if ((unsigned int)uStack_1c & 1879048192U != 0U && uVar1 & 120U != 120U)
+// C-NEXT: if (((unsigned int)uStack_1c & 1879048192U) != 0U && (uVar1 & 120U) != 120U)
 // C-NEXT: pcVar5 = (signed char *)param_1[3];
 // C-NEXT: if (pcVar5 == (void *)0U)
 // C-NEXT: pcVar5 = "varint overflow";
