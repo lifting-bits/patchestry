@@ -5487,6 +5487,27 @@ namespace patchestry::ast {
             return options;
         }
 
+        SRewriteProfitabilityOptions CloneProfitabilityOptions(
+            SRewriteLegalityOptions legality_options,
+            size_t max_payload_origins = 64
+        ) {
+            SRewriteProfitabilityOptions options;
+            options.legality_options = legality_options;
+            options.max_clone_payload_origins = max_payload_origins;
+            return options;
+        }
+
+        SRewriteProfitabilityOptions SingleRefMoveProfitabilityOptions(
+            SRewriteLegalityOptions legality_options
+        ) {
+            SRewriteProfitabilityOptions options;
+            options.legality_options = legality_options;
+            options.single_reference = true;
+            options.source_has_fallthrough = false;
+            options.preserves_region_ownership = true;
+            return options;
+        }
+
         size_t CountCloneStmts(const SNode *node);
 
         /// Count approximate clang::Stmt-equivalent size of a sequence.
@@ -5527,7 +5548,11 @@ namespace patchestry::ast {
         /// SFor (loops would be duplicated, changing complexity).
         bool SubtreeIsSafeToClone(const SNode *node) {
             if (!node) return true;
-            if (!CanCloneSNodePayloads(*node, NonCallCloneOptions())) return false;
+            if (!ShouldApplySNodeRewrite(
+                    *node,
+                    SRewriteAction::Clone,
+                    CloneProfitabilityOptions(NonCallCloneOptions())))
+                return false;
             if (auto *st = node->dyn_cast<SStmt>()) {
                 // Reject an SStmt that defines a label (cloning would
                 // duplicate the definition) or contains a call (cloning
@@ -5717,7 +5742,11 @@ namespace patchestry::ast {
 
             if (!SeqAlwaysTerminates(tail)) return {};
             if (CountCloneSeq(tail) > kMaxCloneStmts) return {};
-            if (!CanCloneSNodePayloads(tail, NonCallCloneOptions())) return {};
+            if (!ShouldApplySNodeRewrite(
+                    tail,
+                    SRewriteAction::Clone,
+                    CloneProfitabilityOptions(NonCallCloneOptions())))
+                return {};
             for (auto *c : tail)
                 if (!SubtreeIsSafeToClone(c)) return {};
             return CloneSeq(tail, factory);
@@ -6435,7 +6464,10 @@ namespace patchestry::ast {
                 if (!ExtractMovableFallthroughTail(
                         seq, target_idx, join_idx, target_body))
                     continue;
-                if (!CanMoveSNodePayloads(target_body, SideEffectingMoveOptions()))
+                if (!ShouldApplySNodeRewrite(
+                        target_body,
+                        SRewriteAction::Move,
+                        SingleRefMoveProfitabilityOptions(SideEffectingMoveOptions())))
                     continue;
 
                 if (auto *guard_if = seq[i]->dyn_cast<SIfThenElse>()) {
@@ -6724,7 +6756,10 @@ namespace patchestry::ast {
             for (SNode *child : body)
                 if (!snode_safe(child))
                     return false;
-            return CanCloneSNodePayloads(body, NonCallCloneOptions());
+            return ShouldApplySNodeRewrite(
+                body,
+                SRewriteAction::Clone,
+                CloneProfitabilityOptions(NonCallCloneOptions()));
         }
 
         std::string_view SingleGotoTargetSeq(const std::vector<SNode *> &body) {
@@ -7280,7 +7315,11 @@ namespace patchestry::ast {
             if (!CollectLabelTailForStackGuardClone(
                     target_label, labels, tail))
                 return {};
-            if (!CanCloneSNodePayloads(tail, CallCloneOptions())) return {};
+            if (!ShouldApplySNodeRewrite(
+                    tail,
+                    SRewriteAction::Clone,
+                    CloneProfitabilityOptions(CallCloneOptions())))
+                return {};
 
             std::vector<SNode *> clone =
                 CloneStackGuardSeqDroppingLabels(tail, factory);
@@ -7554,7 +7593,11 @@ namespace patchestry::ast {
             if (SeqHasGoto(clone)) return {};
             if (SeqHasBreakContinue(clone)) return {};
             if (CountCloneSeq(clone) > kMaxCloneStmts) return {};
-            if (!CanCloneSNodePayloads(clone, CallCloneOptions())) return {};
+            if (!ShouldApplySNodeRewrite(
+                    clone,
+                    SRewriteAction::Clone,
+                    CloneProfitabilityOptions(CallCloneOptions())))
+                return {};
             return clone;
         }
 
@@ -7675,7 +7718,11 @@ namespace patchestry::ast {
             if (SeqHasBreakContinue(body)) return false;
             if (SeqHasLocalLiveIns(body)) return false;
             if (CountCloneSeq(body) > kMaxCloneStmts) return false;
-            if (!CanCloneSNodePayloads(body, NonCallCloneOptions())) return false;
+            if (!ShouldApplySNodeRewrite(
+                    body,
+                    SRewriteAction::Clone,
+                    CloneProfitabilityOptions(NonCallCloneOptions())))
+                return false;
             for (SNode *child : body)
                 if (!SubtreeIsSafeToClone(child))
                     return false;
@@ -7829,7 +7876,10 @@ namespace patchestry::ast {
             if (SeqHasGoto(body)) return false;
             if (SeqHasBreakContinue(body)) return false;
             if (CountCloneSeq(body) > kMaxCloneStmts) return false;
-            if (!CanMoveSNodePayloads(body, SideEffectingMoveOptions()))
+            if (!ShouldApplySNodeRewrite(
+                    body,
+                    SRewriteAction::Move,
+                    SingleRefMoveProfitabilityOptions(SideEffectingMoveOptions())))
                 return false;
 
             std::function<bool(const SNode *)> safe_node =
@@ -8155,7 +8205,11 @@ namespace patchestry::ast {
             if (SeqHasGoto(body)) return false;
             if (SeqHasBreak(body)) return false;
             if (CountCloneSeq(body) > kMaxCloneStmts) return false;
-            if (!CanCloneSNodePayloads(body, NonCallCloneOptions())) return false;
+            if (!ShouldApplySNodeRewrite(
+                    body,
+                    SRewriteAction::Clone,
+                    CloneProfitabilityOptions(NonCallCloneOptions())))
+                return false;
             for (SNode *child : body)
                 if (!SubtreeIsSafeToClone(child))
                     return false;

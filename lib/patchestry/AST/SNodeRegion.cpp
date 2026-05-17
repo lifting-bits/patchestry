@@ -256,8 +256,26 @@ namespace patchestry::ast {
                     return "move";
                 case SRewriteAction::Clone:
                     return "clone";
+                case SRewriteAction::Hoist:
+                    return "hoist";
+                case SRewriteAction::Sink:
+                    return "sink";
             }
             return "unknown";
+        }
+
+        SRewriteDecision DecisionForAction(SRewriteAction action) {
+            switch (action) {
+                case SRewriteAction::Move:
+                    return SRewriteDecision::Move;
+                case SRewriteAction::Clone:
+                    return SRewriteDecision::Clone;
+                case SRewriteAction::Hoist:
+                    return SRewriteDecision::Hoist;
+                case SRewriteAction::Sink:
+                    return SRewriteDecision::Sink;
+            }
+            return SRewriteDecision::LeaveGoto;
         }
 
         bool OriginPermittedByOptions(
@@ -281,6 +299,21 @@ namespace patchestry::ast {
                 && origin.movable;
         }
 
+        bool OriginCanRewrite(
+            const StmtOrigin &origin, SRewriteAction action,
+            const SRewriteLegalityOptions &options
+        ) {
+            switch (action) {
+                case SRewriteAction::Clone:
+                    return OriginCanClone(origin, options);
+                case SRewriteAction::Move:
+                case SRewriteAction::Hoist:
+                case SRewriteAction::Sink:
+                    return OriginCanMove(origin, options);
+            }
+            return false;
+        }
+
         std::string DescribeRewriteRejection(SRewriteAction action, const StmtOrigin &origin) {
             return std::string("cannot ") + SRewriteActionName(action) + " payload operation "
                 + StmtOriginKey(origin) + " kind=" + PayloadKindName(origin.kind) + " movable="
@@ -298,8 +331,7 @@ namespace patchestry::ast {
             if (!origin.primary || !IsPayloadCarrierKind(origin.kind)) { return; }
 
             ++report.payload_origins;
-            bool allowed = action == SRewriteAction::Clone ? OriginCanClone(origin, options)
-                                                           : OriginCanMove(origin, options);
+            bool allowed = OriginCanRewrite(origin, action, options);
             if (allowed) { return; }
 
             ++report.rejected_payload_origins;
@@ -316,6 +348,72 @@ namespace patchestry::ast {
             node.for_each_child([&](SNode *child) {
                 if (child) { ValidateNodeRewriteLegality(*child, action, options, report); }
             });
+        }
+
+        void AddProfitabilityDiagnostic(
+            SRewriteProfitabilityReport &report, const std::string &diagnostic
+        ) {
+            report.diagnostics.push_back(diagnostic);
+        }
+
+        SRewriteProfitabilityReport BuildProfitabilityReport(
+            const SRewriteLegalityReport &legality, SRewriteAction action,
+            const SRewriteProfitabilityOptions &options
+        ) {
+            SRewriteProfitabilityReport report;
+            report.requested_action = action;
+            report.payload_origins  = legality.payload_origins;
+
+            if (!legality.ok()) {
+                report.diagnostics = legality.diagnostics;
+                return report;
+            }
+
+            switch (action) {
+                case SRewriteAction::Clone:
+                    if (legality.payload_origins > options.max_clone_payload_origins) {
+                        AddProfitabilityDiagnostic(
+                            report,
+                            "clone payload origin count "
+                                + std::to_string(legality.payload_origins) + " exceeds budget "
+                                + std::to_string(options.max_clone_payload_origins)
+                        );
+                        return report;
+                    }
+                    report.decision = SRewriteDecision::Clone;
+                    return report;
+
+                case SRewriteAction::Move:
+                    if (!options.single_reference) {
+                        AddProfitabilityDiagnostic(
+                            report, "move requires a single reference to the source region"
+                        );
+                        return report;
+                    }
+                    if (options.source_has_fallthrough) {
+                        AddProfitabilityDiagnostic(
+                            report, "move source is still reachable by fallthrough"
+                        );
+                        return report;
+                    }
+                    report.decision = SRewriteDecision::Move;
+                    return report;
+
+                case SRewriteAction::Hoist:
+                case SRewriteAction::Sink:
+                    if (!options.preserves_region_ownership) {
+                        AddProfitabilityDiagnostic(
+                            report,
+                            std::string(SRewriteActionName(action))
+                                + " requires preserved region ownership"
+                        );
+                        return report;
+                    }
+                    report.decision = DecisionForAction(action);
+                    return report;
+            }
+
+            return report;
         }
 
     } // namespace
@@ -528,6 +626,34 @@ namespace patchestry::ast {
         const std::vector< SNode * > &seq, const SRewriteLegalityOptions &options
     ) {
         return ValidateSNodeRewriteLegality(seq, SRewriteAction::Move, options).ok();
+    }
+
+    SRewriteProfitabilityReport EvaluateSNodeRewriteProfitability(
+        const SNode &node, SRewriteAction action, const SRewriteProfitabilityOptions &options
+    ) {
+        auto legality = ValidateSNodeRewriteLegality(node, action, options.legality_options);
+        return BuildProfitabilityReport(legality, action, options);
+    }
+
+    SRewriteProfitabilityReport EvaluateSNodeRewriteProfitability(
+        const std::vector< SNode * > &seq, SRewriteAction action,
+        const SRewriteProfitabilityOptions &options
+    ) {
+        auto legality = ValidateSNodeRewriteLegality(seq, action, options.legality_options);
+        return BuildProfitabilityReport(legality, action, options);
+    }
+
+    bool ShouldApplySNodeRewrite(
+        const SNode &node, SRewriteAction action, const SRewriteProfitabilityOptions &options
+    ) {
+        return EvaluateSNodeRewriteProfitability(node, action, options).profitable();
+    }
+
+    bool ShouldApplySNodeRewrite(
+        const std::vector< SNode * > &seq, SRewriteAction action,
+        const SRewriteProfitabilityOptions &options
+    ) {
+        return EvaluateSNodeRewriteProfitability(seq, action, options).profitable();
     }
 
 } // namespace patchestry::ast

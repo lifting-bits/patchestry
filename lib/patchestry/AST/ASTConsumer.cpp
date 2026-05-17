@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <functional>
 #include <memory>
 #include <string_view>
 #include <unordered_map>
@@ -201,6 +202,106 @@ namespace patchestry::ast {
             const FunctionBuilder &builder, const std::vector< SNode * > &root
         ) {
             for (SNode *node : root) { AnnotateSNodeOrigins(builder, node); }
+        }
+
+        SNode *CloneSNodeForTransaction(const SNode *node, SNodeFactory &factory);
+
+        std::vector< SNode * >
+        CloneSNodeSeqForTransaction(const std::vector< SNode * > &seq, SNodeFactory &factory) {
+            std::vector< SNode * > out;
+            out.reserve(seq.size());
+            for (const SNode *node : seq) {
+                if (auto *clone = CloneSNodeForTransaction(node, factory)) {
+                    out.push_back(clone);
+                }
+            }
+            return out;
+        }
+
+        SNode *CopySNodeTransactionOrigins(SNode *clone, const SNode *src) {
+            if (clone && src) { clone->SetOrigins(src->Origins()); }
+            return clone;
+        }
+
+        SNode *CloneSNodeForTransaction(const SNode *node, SNodeFactory &factory) {
+            if (!node) { return nullptr; }
+
+            if (const auto *stmt = node->dyn_cast< SStmt >()) {
+                return CopySNodeTransactionOrigins(factory.Make< SStmt >(stmt->Stmt()), node);
+            }
+            if (const auto *ite = node->dyn_cast< SIfThenElse >()) {
+                return CopySNodeTransactionOrigins(
+                    factory.Make< SIfThenElse >(
+                        ite->Cond(), CloneSNodeSeqForTransaction(ite->ThenList(), factory),
+                        CloneSNodeSeqForTransaction(ite->ElseList(), factory)
+                    ),
+                    node
+                );
+            }
+            if (const auto *while_node = node->dyn_cast< SWhile >()) {
+                auto *clone = factory.Make< SWhile >(
+                    while_node->Cond(),
+                    CloneSNodeSeqForTransaction(while_node->BodyList(), factory)
+                );
+                clone->SetHeaderLabel(while_node->HeaderLabel());
+                clone->SetExitLabel(while_node->ExitLabel());
+                return CopySNodeTransactionOrigins(clone, node);
+            }
+            if (const auto *do_node = node->dyn_cast< SDoWhile >()) {
+                auto *clone = factory.Make< SDoWhile >(
+                    CloneSNodeSeqForTransaction(do_node->BodyList(), factory), do_node->Cond()
+                );
+                clone->SetHeaderLabel(do_node->HeaderLabel());
+                clone->SetExitLabel(do_node->ExitLabel());
+                return CopySNodeTransactionOrigins(clone, node);
+            }
+            if (const auto *for_node = node->dyn_cast< SFor >()) {
+                auto *clone = factory.Make< SFor >(
+                    for_node->Init(), for_node->Cond(), for_node->Inc(),
+                    CloneSNodeSeqForTransaction(for_node->BodyList(), factory)
+                );
+                clone->SetHeaderLabel(for_node->HeaderLabel());
+                clone->SetExitLabel(for_node->ExitLabel());
+                return CopySNodeTransactionOrigins(clone, node);
+            }
+            if (const auto *switch_node = node->dyn_cast< SSwitch >()) {
+                auto *clone = factory.Make< SSwitch >(switch_node->Discriminant());
+                for (const auto &case_node : switch_node->Cases()) {
+                    clone->AddCase(
+                        case_node.value,
+                        CloneSNodeSeqForTransaction(case_node.body_list, factory)
+                    );
+                }
+                clone->SetDefaultBody(
+                    CloneSNodeSeqForTransaction(switch_node->DefaultBodyList(), factory)
+                );
+                return CopySNodeTransactionOrigins(clone, node);
+            }
+            if (const auto *go = node->dyn_cast< SGoto >()) {
+                return CopySNodeTransactionOrigins(
+                    factory.Make< SGoto >(factory.Intern(go->Target())), node
+                );
+            }
+            if (const auto *label = node->dyn_cast< SLabel >()) {
+                return CopySNodeTransactionOrigins(
+                    factory.Make< SLabel >(
+                        factory.Intern(label->Name()),
+                        CloneSNodeSeqForTransaction(label->BodyList(), factory)
+                    ),
+                    node
+                );
+            }
+            if (const auto *br = node->dyn_cast< SBreak >()) {
+                return CopySNodeTransactionOrigins(factory.Make< SBreak >(br->Depth()), node);
+            }
+            if (node->dyn_cast< SContinue >()) {
+                return CopySNodeTransactionOrigins(factory.Make< SContinue >(), node);
+            }
+            if (const auto *ret = node->dyn_cast< SReturn >()) {
+                return CopySNodeTransactionOrigins(factory.Make< SReturn >(ret->Value()), node);
+            }
+
+            return nullptr;
         }
 
         void CountPayloadOrigins(
@@ -480,6 +581,120 @@ namespace patchestry::ast {
                 LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxLegalityDiagnostics)
                            << " more SNode region legality diagnostic(s)\n";
             }
+        }
+
+        bool ValidateSNodeRewriteTransaction(
+            const CGraph &flow_graph, const std::vector< SNode * > &root,
+            const FunctionBuilder &builder, std::string_view fn_name, std::string_view pass_name
+        ) {
+            auto ownership_report = ValidateSNodePayloadOwnership(flow_graph, root, builder);
+            if (!ownership_report.ok()) {
+                LOG(ERROR) << "SNode rewrite transaction failed in " << pass_name << " for "
+                           << fn_name << "\n";
+                LogSNodeOwnershipFailure(fn_name, ownership_report);
+                return false;
+            }
+
+            auto region_graph  = BuildSNodeRegionGraph(root);
+            auto region_report = ValidateSNodeRegionGraph(region_graph);
+            if (!region_report.ok()) {
+                LOG(ERROR) << "SNode rewrite transaction failed in " << pass_name << " for "
+                           << fn_name << "\n";
+                LogSNodeRegionFailure(fn_name, region_report);
+                return false;
+            }
+
+            return true;
+        }
+
+        template< typename RewriteFn >
+        bool RunSNodeRewriteTransaction(
+            std::vector< SNode * > &root, SNodeFactory &factory, const CGraph &flow_graph,
+            const FunctionBuilder &builder, std::string_view fn_name,
+            std::string_view pass_name, bool verify, RewriteFn rewrite
+        ) {
+            if (!verify) { return rewrite(); }
+
+            std::vector< SNode * > snapshot = CloneSNodeSeqForTransaction(root, factory);
+            bool changed                    = rewrite();
+            if (!changed) { return false; }
+
+            AnnotateSNodeOrigins(builder, root);
+            if (ValidateSNodeRewriteTransaction(flow_graph, root, builder, fn_name, pass_name))
+            {
+                return true;
+            }
+
+            LOG(WARNING) << "Rolling back structuring cleanup pass " << pass_name << " for "
+                         << fn_name << " after transaction validation failure\n";
+            root = std::move(snapshot);
+            AnnotateSNodeOrigins(builder, root);
+            return false;
+        }
+
+        struct SNodeCleanupPass
+        {
+            std::string_view name;
+            SRewriteDecision rewrite_decision = SRewriteDecision::LeaveGoto;
+            std::function< bool() > rewrite;
+        };
+
+        struct SNodeCleanupScheduleReport
+        {
+            size_t passes_run                       = 0;
+            size_t changed_passes                   = 0;
+            size_t changed_profitable_rewrite_passes = 0;
+
+            bool changed() const { return changed_passes != 0; }
+        };
+
+        bool IsProfitableRewriteDecision(SRewriteDecision decision) {
+            return decision != SRewriteDecision::LeaveGoto;
+        }
+
+        template< typename RewriteFn >
+        SNodeCleanupPass MakeSNodeCleanupPass(
+            std::string_view name, SRewriteDecision rewrite_decision, RewriteFn rewrite
+        ) {
+            SNodeCleanupPass pass;
+            pass.name             = name;
+            pass.rewrite_decision = rewrite_decision;
+            pass.rewrite          = rewrite;
+            return pass;
+        }
+
+        template< typename RunCleanupFn >
+        SNodeCleanupScheduleReport RunSNodeCleanupSchedule(
+            const std::vector< SNodeCleanupPass > &passes, RunCleanupFn &&run_cleanup
+        ) {
+            SNodeCleanupScheduleReport report;
+            for (const auto &pass : passes) {
+                ++report.passes_run;
+                bool changed = run_cleanup(pass.name, pass.rewrite);
+                if (!changed) { continue; }
+
+                ++report.changed_passes;
+                if (IsProfitableRewriteDecision(pass.rewrite_decision)) {
+                    ++report.changed_profitable_rewrite_passes;
+                }
+            }
+            return report;
+        }
+
+        template< typename MakePassesFn, typename RunCleanupFn >
+        SNodeCleanupScheduleReport RunSNodeCleanupFixedPoint(
+            MakePassesFn &&make_passes, RunCleanupFn &&run_cleanup, int max_iterations
+        ) {
+            SNodeCleanupScheduleReport total;
+            for (int pass = 0; pass < max_iterations; ++pass) {
+                auto iteration = RunSNodeCleanupSchedule(make_passes(), run_cleanup);
+                total.passes_run += iteration.passes_run;
+                total.changed_passes += iteration.changed_passes;
+                total.changed_profitable_rewrite_passes +=
+                    iteration.changed_profitable_rewrite_passes;
+                if (!iteration.changed()) { break; }
+            }
+            return total;
         }
 
         struct ControlShapeSummary
@@ -923,124 +1138,228 @@ namespace patchestry::ast {
                     if (!root_body.empty()) {
                         have_structured = true;
                         AnnotateSNodeOrigins(*builder, root_body);
+                        auto run_cleanup = [&](std::string_view pass_name, auto rewrite) {
+                            return RunSNodeRewriteTransaction(
+                                root_body, factory, flow_graph, *builder, fn_name, pass_name,
+                                options.verify_no_node_loss, rewrite
+                            );
+                        };
 
-                        // Post-pass: replace goto→break/continue for loop labels.
-                        ConvertGotoToBreakContinue(root_body, factory);
+                        auto make_control_cleanup_passes = [&]() {
+                            std::vector< SNodeCleanupPass > passes;
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "ConvertGotoToBreakContinue", SRewriteDecision::LeaveGoto,
+                                [&]() { return ConvertGotoToBreakContinue(root_body, factory); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "ConvertGotoToReturn", SRewriteDecision::LeaveGoto,
+                                [&]() { return ConvertGotoToReturn(root_body, factory, ctx); }
+                            ));
+                            return passes;
+                        };
 
-                        // Post-pass: replace goto→return patterns.
-                        ConvertGotoToReturn(root_body, factory, ctx);
+                        auto make_profitable_rewrite_passes = [&]() {
+                            std::vector< SNodeCleanupPass > passes;
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "DuplicateSwitchCaseTargets", SRewriteDecision::Clone,
+                                [&]() { return DuplicateSwitchCaseTargets(root_body, factory); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "FoldSwitchLocalCaseTargets", SRewriteDecision::Move,
+                                [&]() {
+                                    return FoldSwitchLocalCaseTargets(
+                                        root_body, factory, ctx
+                                    );
+                                }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "DuplicateSmallTerminatingTargets", SRewriteDecision::Clone,
+                                [&]() {
+                                    return DuplicateSmallTerminatingTargets(root_body, factory);
+                                }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "DuplicateSmallEpilogueTargets", SRewriteDecision::Clone,
+                                [&]() {
+                                    return DuplicateSmallEpilogueTargets(
+                                        root_body, factory, ctx
+                                    );
+                                }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "DuplicateSwitchFallthroughTargets", SRewriteDecision::Clone,
+                                [&]() {
+                                    return DuplicateSwitchFallthroughTargets(
+                                        root_body, factory, ctx
+                                    );
+                                }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "DuplicateLoopContinueTargets", SRewriteDecision::Clone,
+                                [&]() {
+                                    return DuplicateLoopContinueTargets(
+                                        root_body, factory, ctx
+                                    );
+                                }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "FoldGuardedFallthroughTargets", SRewriteDecision::Move,
+                                [&]() {
+                                    return FoldGuardedFallthroughTargets(
+                                        root_body, factory, ctx
+                                    );
+                                }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "RepairCrossScopeLabelEntries", SRewriteDecision::Clone,
+                                [&]() {
+                                    return RepairCrossScopeLabelEntries(
+                                        root_body, factory, ctx
+                                    );
+                                }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "DuplicateStackGuardReturnTargets", SRewriteDecision::Clone,
+                                [&]() {
+                                    return DuplicateStackGuardReturnTargets(
+                                        root_body, factory, ctx
+                                    );
+                                }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "DuplicateCleanupReturnTargets", SRewriteDecision::Clone,
+                                [&]() {
+                                    return DuplicateCleanupReturnTargets(
+                                        root_body, factory, ctx
+                                    );
+                                }
+                            ));
+                            return passes;
+                        };
 
-                        // Post-pass: duplicate small label targets into
-                        // switch case arms that end in `goto L`, making
-                        // switches goto-free (including goto-into-switch).
-                        DuplicateSwitchCaseTargets(root_body, factory);
+                        auto make_structural_cleanup_passes = [&]() {
+                            std::vector< SNodeCleanupPass > passes;
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "SimplifyEmptyControlFlow", SRewriteDecision::LeaveGoto,
+                                [&]() { return SimplifyEmptyControlFlow(root_body, ctx); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "CollapsePassThroughLabels", SRewriteDecision::LeaveGoto,
+                                [&]() { return CollapsePassThroughLabels(root_body, factory); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "MergeRedundantGotoGuards", SRewriteDecision::LeaveGoto,
+                                [&]() {
+                                    return MergeRedundantGotoGuards(root_body, factory, ctx);
+                                }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "InlineResidualGotos", SRewriteDecision::Move,
+                                [&]() { return InlineResidualGotos(root_body, factory); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "InlineCrossScopeSingleRef", SRewriteDecision::Move,
+                                [&]() { return InlineCrossScopeSingleRef(root_body, factory); }
+                            ));
+                            return passes;
+                        };
 
-                        // Post-pass: move single-ref switch-local label
-                        // targets into case arms when cloning would duplicate
-                        // call sites.
-                        FoldSwitchLocalCaseTargets(root_body, factory, ctx);
+                        auto make_scope_cleanup_passes = [&]() {
+                            std::vector< SNodeCleanupPass > passes;
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "AbsorbFallthroughIntoElse", SRewriteDecision::LeaveGoto,
+                                [&]() { return AbsorbFallthroughIntoElse(root_body, factory); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "ScopeifyIfGotos", SRewriteDecision::LeaveGoto,
+                                [&]() { return ScopeifyIfGotos(root_body, factory, ctx); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "EliminateGotoToNextLabel", SRewriteDecision::LeaveGoto,
+                                [&]() {
+                                    return EliminateGotoToNextLabel(root_body, factory, ctx);
+                                }
+                            ));
+                            return passes;
+                        };
 
-                        // Post-pass: duplicate small terminating label targets
-                        // at ordinary residual goto sites.
-                        DuplicateSmallTerminatingTargets(root_body, factory);
+                        auto make_final_cleanup_passes = [&]() {
+                            std::vector< SNodeCleanupPass > passes;
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "RemoveDeadSSeqChildren", SRewriteDecision::LeaveGoto,
+                                [&]() { return RemoveDeadSSeqChildren(root_body); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "RemoveUnreferencedLabels", SRewriteDecision::LeaveGoto,
+                                [&]() { return RemoveUnreferencedLabels(root_body, factory); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "SimplifyEmptyControlFlow", SRewriteDecision::LeaveGoto,
+                                [&]() { return SimplifyEmptyControlFlow(root_body, ctx); }
+                            ));
+                            return passes;
+                        };
 
-                        // Post-pass: duplicate small producer->error-epilogue
-                        // targets when the epilogue inputs are available.
-                        DuplicateSmallEpilogueTargets(root_body, factory, ctx);
+                        auto make_initial_cleanup_schedule = [&]() {
+                            std::vector< SNodeCleanupPass > passes = make_control_cleanup_passes();
+                            auto rewrite_passes = make_profitable_rewrite_passes();
+                            passes.insert(
+                                passes.end(), rewrite_passes.begin(), rewrite_passes.end()
+                            );
+                            auto cleanup_passes = make_structural_cleanup_passes();
+                            passes.insert(
+                                passes.end(), cleanup_passes.begin(), cleanup_passes.end()
+                            );
+                            return passes;
+                        };
 
-                        // Post-pass: duplicate switch-local fallthrough label
-                        // tails into case arms as body + explicit break.
-                        DuplicateSwitchFallthroughTargets(root_body, factory, ctx);
+                        auto make_fixed_point_cleanup_schedule = [&]() {
+                            std::vector< SNodeCleanupPass > passes;
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "SimplifyEmptyControlFlow", SRewriteDecision::LeaveGoto,
+                                [&]() { return SimplifyEmptyControlFlow(root_body, ctx); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "CollapsePassThroughLabels", SRewriteDecision::LeaveGoto,
+                                [&]() { return CollapsePassThroughLabels(root_body, factory); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "MergeRedundantGotoGuards", SRewriteDecision::LeaveGoto,
+                                [&]() {
+                                    return MergeRedundantGotoGuards(root_body, factory, ctx);
+                                }
+                            ));
+                            auto control_passes = make_control_cleanup_passes();
+                            passes.insert(
+                                passes.end(), control_passes.begin(), control_passes.end()
+                            );
+                            auto rewrite_passes = make_profitable_rewrite_passes();
+                            passes.insert(
+                                passes.end(), rewrite_passes.begin(), rewrite_passes.end()
+                            );
+                            auto scope_passes = make_scope_cleanup_passes();
+                            passes.insert(passes.end(), scope_passes.begin(), scope_passes.end());
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "InlineResidualGotos", SRewriteDecision::Move,
+                                [&]() { return InlineResidualGotos(root_body, factory); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "InlineCrossScopeSingleRef", SRewriteDecision::Move,
+                                [&]() { return InlineCrossScopeSingleRef(root_body, factory); }
+                            ));
+                            passes.push_back(MakeSNodeCleanupPass(
+                                "RemoveUnreferencedLabels", SRewriteDecision::LeaveGoto,
+                                [&]() { return RemoveUnreferencedLabels(root_body, factory); }
+                            ));
+                            return passes;
+                        };
 
-                        // Post-pass: duplicate loop-local latch/continue tails
-                        // into gotos that target the same loop's tail label.
-                        DuplicateLoopContinueTargets(root_body, factory, ctx);
-
-                        // Post-pass: move guarded single-ref fallthrough
-                        // labels into the guard when all other exits reach
-                        // the next join label.
-                        FoldGuardedFallthroughTargets(root_body, factory, ctx);
-
-                        // Post-pass: repair gotos that enter nested if/else
-                        // labels by duplicating small entry bodies and
-                        // scoping the skipped region under the guard.
-                        RepairCrossScopeLabelEntries(root_body, factory, ctx);
-
-                        // Post-pass: duplicate compiler-generated stack-guard
-                        // return epilogues with stack_chk_fail failure arms.
-                        DuplicateStackGuardReturnTargets(root_body, factory, ctx);
-
-                        // Post-pass: duplicate small cleanup/logging return
-                        // chains with whitelisted call side effects.
-                        DuplicateCleanupReturnTargets(root_body, factory, ctx);
-
-                        // Post-pass: collapse label-only pass-throughs
-                        // before liveness-based label cleanup.
-                        SimplifyEmptyControlFlow(root_body, ctx);
-                        CollapsePassThroughLabels(root_body, factory);
-                        MergeRedundantGotoGuards(root_body, factory, ctx);
-
-                        // Post-pass: inline residual goto-to-label pairs
-                        // where the label is only referenced once.
-                        InlineResidualGotos(root_body, factory);
-
-                        // Post-pass: cross-scope single-ref goto inliner.
-                        // Moves terminating label bodies into their sole
-                        // goto site when no fallthrough reaches the label.
-                        InlineCrossScopeSingleRef(root_body, factory);
-
-                        // Post-pass: eliminate gotos to immediately
-                        // following labels.  Iterates with the inliners
-                        // for cascading cleanup, bounded by
-                        // kMaxGotoEliminationPasses.
-                        for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
-                            bool did_empty   = SimplifyEmptyControlFlow(root_body, ctx);
-                            bool did_forward = CollapsePassThroughLabels(root_body, factory);
-                            bool did_merge  = MergeRedundantGotoGuards(root_body, factory, ctx);
-                            bool did_return = ConvertGotoToReturn(root_body, factory, ctx);
-                            bool did_dup    = DuplicateSwitchCaseTargets(root_body, factory);
-                            bool did_switch_local =
-                                FoldSwitchLocalCaseTargets(root_body, factory, ctx);
-                            bool did_small_dup =
-                                DuplicateSmallTerminatingTargets(root_body, factory);
-                            bool did_epilogue_dup =
-                                DuplicateSmallEpilogueTargets(root_body, factory, ctx);
-                            bool did_switch_fallthrough_dup =
-                                DuplicateSwitchFallthroughTargets(root_body, factory, ctx);
-                            bool did_loop_continue_dup =
-                                DuplicateLoopContinueTargets(root_body, factory, ctx);
-                            bool did_guarded_fallthrough =
-                                FoldGuardedFallthroughTargets(root_body, factory, ctx);
-                            bool did_cross_entry =
-                                RepairCrossScopeLabelEntries(root_body, factory, ctx);
-                            bool did_stack_guard_dup =
-                                DuplicateStackGuardReturnTargets(root_body, factory, ctx);
-                            bool did_cleanup_dup =
-                                DuplicateCleanupReturnTargets(root_body, factory, ctx);
-                            bool did_absorb = AbsorbFallthroughIntoElse(root_body, factory);
-                            bool did_scope  = ScopeifyIfGotos(root_body, factory, ctx);
-                            bool did_elim   = EliminateGotoToNextLabel(root_body, factory, ctx);
-                            bool did_inline = InlineResidualGotos(root_body, factory);
-                            bool did_cross  = InlineCrossScopeSingleRef(root_body, factory);
-                            bool did_labels = RemoveUnreferencedLabels(root_body, factory);
-                            if (!did_empty && !did_forward && !did_merge && !did_return
-                                && !did_dup && !did_switch_local && !did_small_dup
-                                && !did_epilogue_dup && !did_switch_fallthrough_dup
-                                && !did_stack_guard_dup && !did_loop_continue_dup
-                                && !did_guarded_fallthrough && !did_cross_entry
-                                && !did_cleanup_dup && !did_absorb && !did_scope && !did_elim
-                                && !did_inline && !did_cross && !did_labels)
-                            {
-                                break;
-                            }
-                        }
-
-                        // Post-pass: remove unreachable children after
-                        // terminating siblings (dead code from block
-                        // sequencing).
-                        RemoveDeadSSeqChildren(root_body);
-                        RemoveUnreferencedLabels(root_body, factory);
-                        SimplifyEmptyControlFlow(root_body, ctx);
+                        RunSNodeCleanupSchedule(make_initial_cleanup_schedule(), run_cleanup);
+                        RunSNodeCleanupFixedPoint(
+                            make_fixed_point_cleanup_schedule, run_cleanup,
+                            kMaxGotoEliminationPasses
+                        );
+                        RunSNodeCleanupSchedule(make_final_cleanup_passes(), run_cleanup);
 
                         if (options.verify_no_node_loss) {
                             AnnotateSNodeOrigins(*builder, root_body);

@@ -83,6 +83,16 @@ namespace patchestry::ast {
     enum class SRewriteAction {
         Move,
         Clone,
+        Hoist,
+        Sink,
+    };
+
+    enum class SRewriteDecision {
+        LeaveGoto,
+        Move,
+        Clone,
+        Hoist,
+        Sink,
     };
 
     struct SRewriteLegalityOptions
@@ -101,6 +111,25 @@ namespace patchestry::ast {
         std::vector< std::string > diagnostics;
 
         bool ok() const { return diagnostics.empty(); }
+    };
+
+    struct SRewriteProfitabilityOptions
+    {
+        SRewriteLegalityOptions legality_options;
+        size_t max_clone_payload_origins = 64;
+        bool single_reference            = false;
+        bool source_has_fallthrough      = true;
+        bool preserves_region_ownership  = false;
+    };
+
+    struct SRewriteProfitabilityReport
+    {
+        SRewriteAction requested_action = SRewriteAction::Move;
+        SRewriteDecision decision       = SRewriteDecision::LeaveGoto;
+        size_t payload_origins          = 0;
+        std::vector< std::string > diagnostics;
+
+        bool profitable() const { return decision != SRewriteDecision::LeaveGoto; }
     };
 
     /// Build a region graph from SNode body-list ownership.  Raw Clang
@@ -139,6 +168,26 @@ namespace patchestry::ast {
 
     bool CanMoveSNodePayloads(
         const std::vector< SNode * > &seq, const SRewriteLegalityOptions &options = {}
+    );
+
+    SRewriteProfitabilityReport EvaluateSNodeRewriteProfitability(
+        const SNode &node, SRewriteAction action,
+        const SRewriteProfitabilityOptions &options = {}
+    );
+
+    SRewriteProfitabilityReport EvaluateSNodeRewriteProfitability(
+        const std::vector< SNode * > &seq, SRewriteAction action,
+        const SRewriteProfitabilityOptions &options = {}
+    );
+
+    bool ShouldApplySNodeRewrite(
+        const SNode &node, SRewriteAction action,
+        const SRewriteProfitabilityOptions &options = {}
+    );
+
+    bool ShouldApplySNodeRewrite(
+        const std::vector< SNode * > &seq, SRewriteAction action,
+        const SRewriteProfitabilityOptions &options = {}
     );
 
 } // namespace patchestry::ast
