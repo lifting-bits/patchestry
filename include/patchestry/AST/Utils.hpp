@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -62,6 +64,11 @@ namespace patchestry::ast {
     std::string LabelNameFromKey(std::string key);
 
     std::string SanitizeKeyToIdent(std::string_view key);
+
+    /// Parse a P-Code basic-block key of the form "ram:HEXADDR:NUM:suffix"
+    /// and return HEXADDR as a uint64.  Returns std::nullopt when the key is
+    /// malformed (missing fields, empty/non-hex address, out of range).
+    std::optional< uint64_t > ParseBlockAddress(const std::string &key);
 
     clang::CastKind GetCastKind(
         clang::ASTContext &ctx, const clang::QualType &from_type, const clang::QualType &to_type

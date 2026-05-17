@@ -23,6 +23,8 @@
 
 namespace patchestry::ghidra {
     struct Function;
+    struct BasicBlock;
+    struct Operation;
 }
 
 namespace patchestry::ast {
@@ -257,6 +259,14 @@ namespace patchestry::ast {
     };
 
     class FunctionBuilder;
+
+    /// Find the terminal operation (BRANCH/CBRANCH/BRANCHIND/RETURN/TAIL_CALL)
+    /// in a block.  Assumes the terminal is the last entry in ordered_operations,
+    /// which holds for P-Code serialization (Ghidra always places the branch
+    /// last).  If non-terminal ops follow the branch, the terminal won't be
+    /// found and the block is treated as a fallthrough.  Returns nullptr when
+    /// the block has no terminal.
+    const ghidra::Operation *FindSourceTerminal(const ghidra::BasicBlock &block);
 
     /// Build CGraph directly from P-Code JSON via FunctionBuilder.
     /// This is the structural path: JSON → CGraph (no intermediate Clang AST gotos).

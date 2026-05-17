@@ -38,6 +38,7 @@
 #include <patchestry/AST/OperationBuilder.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
+#include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/Pcode.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
 #include <patchestry/Util/Log.hpp>
@@ -1221,27 +1222,6 @@ namespace patchestry::ast {
 
         // Priority 2: successor_blocks only — address-based switch (existing logic).
         if (!op.successor_blocks.empty()) {
-            // Helper: parse "ram:HEXADDR:NUM:basic" → HEXADDR as uint64.
-            auto parse_block_addr = [](const std::string &key) -> std::optional< uint64_t > {
-                auto p1 = key.find(':');
-                if (p1 == std::string::npos) {
-                    return std::nullopt;
-                }
-                auto p2 = key.find(':', p1 + 1U);
-                if (p2 == std::string::npos) {
-                    return std::nullopt;
-                }
-                const auto hex_str = key.substr(p1 + 1U, p2 - p1 - 1U);
-                if (hex_str.empty()) {
-                    return std::nullopt;
-                }
-                try {
-                    return std::stoull(hex_str, nullptr, 16);
-                } catch (...) {
-                    return std::nullopt;
-                }
-            };
-
             const auto disc_type = ctx.getUIntPtrType();
             auto *disc_expr      = input_expr;
             if (!ctx.hasSameUnqualifiedType(disc_expr->getType(), disc_type)) {
@@ -1260,7 +1240,7 @@ namespace patchestry::ast {
                 if (!function_builder().labels_declaration.contains(block_key)) {
                     continue;
                 }
-                auto maybe_addr = parse_block_addr(block_key);
+                auto maybe_addr = ParseBlockAddress(block_key);
                 if (!maybe_addr) {
                     continue;
                 }

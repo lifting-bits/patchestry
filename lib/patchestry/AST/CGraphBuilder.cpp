@@ -147,39 +147,6 @@ namespace patchestry::ast {
             return post_order;
         }
 
-        /// Parse "ram:HEXADDR:NUM:basic" → HEXADDR as uint64.
-        std::optional< uint64_t > parse_block_addr(const std::string &key) {
-            auto p1 = key.find(':');
-            if (p1 == std::string::npos) { return std::nullopt; }
-            auto p2 = key.find(':', p1 + 1);
-            if (p2 == std::string::npos) { return std::nullopt; }
-            auto hex_str = key.substr(p1 + 1, p2 - p1 - 1);
-            if (hex_str.empty()) { return std::nullopt; }
-            try {
-                return std::stoull(hex_str, nullptr, 16);
-            } catch (...) { return std::nullopt; }
-        }
-
-        /// Find the terminal operation (BRANCH/CBRANCH/BRANCHIND/RETURN) in a block.
-        /// Assumes the terminal is the last entry in ordered_operations, which
-        /// holds for P-Code serialization (Ghidra always places the branch last).
-        /// If non-terminal ops follow the branch, the terminal won't be found
-        /// and the block will be treated as a fallthrough.
-        const ghidra::Operation *find_terminal_op(const ghidra::BasicBlock &block) {
-            if (block.ordered_operations.empty()) { return nullptr; }
-            const auto &last_key = block.ordered_operations.back();
-            if (!block.operations.contains(last_key)) { return nullptr; }
-            const auto &op = block.operations.at(last_key);
-            using M        = ghidra::Mnemonic;
-            if (op.mnemonic == M::OP_BRANCH || op.mnemonic == M::OP_CBRANCH
-                || op.mnemonic == M::OP_BRANCHIND || op.mnemonic == M::OP_RETURN
-                || op.mnemonic == M::OP_TAIL_CALL)
-            {
-                return &op;
-            }
-            return nullptr;
-        }
-
         void add_source_edge(
             CGraph &g, CNode &node, const std::string &from_key, const std::string &to_key,
             size_t target_id, const char *reason
@@ -227,7 +194,7 @@ namespace patchestry::ast {
             node.stmts = builder.create_block_stmts(ctx, block);
 
             // Process terminal operation to determine edges
-            const auto *term = find_terminal_op(block);
+            const auto *term = FindSourceTerminal(block);
             if (!term) {
                 // No terminal: fallthrough to next block in RPO
                 if (i + 1 < rpo.size()) {
@@ -405,7 +372,7 @@ namespace patchestry::ast {
                             );
                         }
                         // Parse block address from key for case value
-                        auto addr = parse_block_addr(block_key);
+                        auto addr = ParseBlockAddress(block_key);
                         if (!addr) { continue; }
 
                         size_t succ_idx = 0;

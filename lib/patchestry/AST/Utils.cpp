@@ -93,6 +93,26 @@ namespace patchestry::ast {
         return result;
     }
 
+    std::optional< uint64_t > ParseBlockAddress(const std::string &key) {
+        auto p1 = key.find(':');
+        if (p1 == std::string::npos) {
+            return std::nullopt;
+        }
+        auto p2 = key.find(':', p1 + 1);
+        if (p2 == std::string::npos) {
+            return std::nullopt;
+        }
+        auto hex_str = key.substr(p1 + 1, p2 - p1 - 1);
+        if (hex_str.empty()) {
+            return std::nullopt;
+        }
+        try {
+            return std::stoull(hex_str, nullptr, 16);
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
     clang::CastKind GetCastKind(
         clang::ASTContext &ctx, const clang::QualType &from_type, const clang::QualType &to_type
     ) {

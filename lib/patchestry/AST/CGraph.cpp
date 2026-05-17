@@ -6,6 +6,7 @@
  */
 
 #include <patchestry/AST/CGraph.hpp>
+#include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
 #include <patchestry/Util/Log.hpp>
@@ -64,39 +65,6 @@ namespace patchestry::ast {
             os << " -> " << target_block
                << " exit=" << (has_exit ? "true" : "false");
             return os.str();
-        }
-
-        std::optional<uint64_t> ParseBlockAddress(const std::string &key) {
-            auto p1 = key.find(':');
-            if (p1 == std::string::npos) return std::nullopt;
-            auto p2 = key.find(':', p1 + 1);
-            if (p2 == std::string::npos) return std::nullopt;
-            auto hex = key.substr(p1 + 1, p2 - p1 - 1);
-            if (hex.empty()) return std::nullopt;
-            try {
-                return std::stoull(hex, nullptr, 16);
-            } catch (const std::invalid_argument &) {
-                return std::nullopt;
-            } catch (const std::out_of_range &) {
-                return std::nullopt;
-            }
-        }
-
-        const ghidra::Operation *
-        FindSourceTerminal(const ghidra::BasicBlock &block) {
-            if (block.ordered_operations.empty()) return nullptr;
-            const auto &last_key = block.ordered_operations.back();
-            if (!block.operations.contains(last_key)) return nullptr;
-
-            const auto &op = block.operations.at(last_key);
-            using M = ghidra::Mnemonic;
-            if (op.mnemonic == M::OP_BRANCH || op.mnemonic == M::OP_CBRANCH
-                || op.mnemonic == M::OP_BRANCHIND
-                || op.mnemonic == M::OP_RETURN
-                || op.mnemonic == M::OP_TAIL_CALL) {
-                return &op;
-            }
-            return nullptr;
         }
 
         void AppendSourceSuccs(const ghidra::Function &function,
@@ -382,6 +350,25 @@ namespace patchestry::ast {
         }
 
     } // namespace
+
+    const ghidra::Operation *FindSourceTerminal(const ghidra::BasicBlock &block) {
+        if (block.ordered_operations.empty()) {
+            return nullptr;
+        }
+        const auto &last_key = block.ordered_operations.back();
+        if (!block.operations.contains(last_key)) {
+            return nullptr;
+        }
+        const auto &op = block.operations.at(last_key);
+        using M        = ghidra::Mnemonic;
+        if (op.mnemonic == M::OP_BRANCH || op.mnemonic == M::OP_CBRANCH
+            || op.mnemonic == M::OP_BRANCHIND || op.mnemonic == M::OP_RETURN
+            || op.mnemonic == M::OP_TAIL_CALL)
+        {
+            return &op;
+        }
+        return nullptr;
+    }
 
     CGraphValidationReport ValidateCGraph(
         const CGraph &g,
