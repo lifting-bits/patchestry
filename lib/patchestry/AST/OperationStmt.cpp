@@ -2785,12 +2785,10 @@ namespace patchestry::ast {
         input_expr = coerce_record_to_integer(ctx, input_expr, op_loc);
 
         clang::Expr *result_expr = nullptr;
-        // ADDRESS_OF on an array varnode should produce pointer-to-element
-        // (matching Ghidra's `T*` output type), not pointer-to-array.  Apply
-        // array-to-pointer decay rather than `&arr` (which yields `T(*)[N]`
-        // and breaks indirect-call argument passing where Sema won't decay).
+        // ADDRESS_OF on an array decays to pointer-to-element (Ghidra's `T*`
+        // op type); `&arr` would yield `T(*)[N]` and break call-arg passing.
         if (kind == clang::UO_AddrOf && input_expr->getType()->isArrayType()) {
-            auto decayed_type = ctx.getDecayedType(input_expr->getType());
+            auto decayed_type = ctx.getArrayDecayedType(input_expr->getType());
             result_expr = make_implicit_cast(
                 ctx, input_expr, decayed_type, clang::CastKind::CK_ArrayToPointerDecay
             );
@@ -3235,10 +3233,8 @@ namespace patchestry::ast {
         }
         if (loc.isInvalid()) loc = VirtualLoc(ctx);
 
-        // (&E)->field  ==>  E.field : when the base is the address of a
-        // record lvalue, access the member with `.` on that lvalue
-        // directly.  PTRSUB/PTRADD chains otherwise stack &/-> pairs that
-        // print as &&&… and re-parse with the wrong operator precedence.
+        // (&E)->field ==> E.field when the base is the address of a record
+        // lvalue; otherwise PTRSUB chains stack &/-> pairs that print as &&&.
         clang::Expr *dot_base = nullptr;
         if (auto *uo =
                 clang::dyn_cast< clang::UnaryOperator >(base->IgnoreParenImpCasts()))
@@ -3355,13 +3351,12 @@ namespace patchestry::ast {
                 LOG(ERROR) << "PTRSUB failed to build member access. key: " << op.key << "\n";
                 return { nullptr, false };
             }
-            // For an array-typed member, decay to pointer-to-element rather
-            // than taking &member (which yields T(*)[N] and forces a bitcast
-            // that prints as a spurious extra &).
+            // Array-typed member: decay to pointer-to-element, not `&member`
+            // (which yields T(*)[N] and prints a spurious extra `&`).
             clang::Expr *field_ptr = nullptr;
             if (mem_expr->getType()->isArrayType()) {
                 field_ptr = make_implicit_cast(
-                    ctx, mem_expr, ctx.getDecayedType(mem_expr->getType()),
+                    ctx, mem_expr, ctx.getArrayDecayedType(mem_expr->getType()),
                     clang::CastKind::CK_ArrayToPointerDecay
                 );
             }
