@@ -6,6 +6,7 @@
  */
 
 #include <patchestry/AST/CFGStructure.hpp>
+#include <patchestry/AST/SNodeRegion.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Util/Log.hpp>
 
@@ -5461,6 +5462,31 @@ namespace patchestry::ast {
         // unbounded tail-duplication optimizer.
         constexpr size_t kMaxGeneralCloneTotal = 64;
 
+        SRewriteLegalityOptions SideEffectingMoveOptions() {
+            SRewriteLegalityOptions options;
+            options.allow_calls = true;
+            options.allow_stores = true;
+            options.allow_volatile = true;
+            return options;
+        }
+
+        SRewriteLegalityOptions CallCloneOptions() {
+            SRewriteLegalityOptions options;
+            options.allow_calls = true;
+            options.allow_stores = true;
+            options.allow_volatile = true;
+            options.allow_internal_control = true;
+            return options;
+        }
+
+        SRewriteLegalityOptions NonCallCloneOptions() {
+            SRewriteLegalityOptions options;
+            options.allow_stores = true;
+            options.allow_volatile = true;
+            options.allow_internal_control = true;
+            return options;
+        }
+
         size_t CountCloneStmts(const SNode *node);
 
         /// Count approximate clang::Stmt-equivalent size of a sequence.
@@ -5501,6 +5527,7 @@ namespace patchestry::ast {
         /// SFor (loops would be duplicated, changing complexity).
         bool SubtreeIsSafeToClone(const SNode *node) {
             if (!node) return true;
+            if (!CanCloneSNodePayloads(*node, NonCallCloneOptions())) return false;
             if (auto *st = node->dyn_cast<SStmt>()) {
                 // Reject an SStmt that defines a label (cloning would
                 // duplicate the definition) or contains a call (cloning
@@ -5549,18 +5576,25 @@ namespace patchestry::ast {
             return out;
         }
 
+        SNode *CopyOrigins(SNode *clone, const SNode *src) {
+            if (clone && src) clone->SetOrigins(src->Origins());
+            return clone;
+        }
+
         /// Deep-clone a subtree.  Pre-condition: SubtreeIsSafeToClone(src).
         /// clang::Stmt* pointers are shared — clang::Stmt has no single
         /// parent, so aliasing the same stmt in two SStmt nodes is legal.
         SNode *CloneSNode(SNode *src, SNodeFactory &factory) {
             if (!src) return nullptr;
             if (auto *st = src->dyn_cast<SStmt>())
-                return factory.Make<SStmt>(st->Stmt());
+                return CopyOrigins(factory.Make<SStmt>(st->Stmt()), src);
             if (auto *ite = src->dyn_cast<SIfThenElse>()) {
-                return factory.Make<SIfThenElse>(
-                    ite->Cond(),
-                    CloneSeq(ite->ThenList(), factory),
-                    CloneSeq(ite->ElseList(), factory));
+                return CopyOrigins(
+                    factory.Make<SIfThenElse>(
+                        ite->Cond(),
+                        CloneSeq(ite->ThenList(), factory),
+                        CloneSeq(ite->ElseList(), factory)),
+                    src);
             }
             if (auto *sw = src->dyn_cast<SSwitch>()) {
                 auto *out = factory.Make<SSwitch>(sw->Discriminant());
@@ -5569,16 +5603,17 @@ namespace patchestry::ast {
                 if (!sw->DefaultBodyList().empty())
                     out->SetDefaultBody(
                         CloneSeq(sw->DefaultBodyList(), factory));
-                return out;
+                return CopyOrigins(out, src);
             }
             if (auto *g = src->dyn_cast<SGoto>())
-                return factory.Make<SGoto>(factory.Intern(g->Target()));
+                return CopyOrigins(
+                    factory.Make<SGoto>(factory.Intern(g->Target())), src);
             if (auto *br = src->dyn_cast<SBreak>())
-                return factory.Make<SBreak>(br->Depth());
+                return CopyOrigins(factory.Make<SBreak>(br->Depth()), src);
             if (src->dyn_cast<SContinue>())
-                return factory.Make<SContinue>();
+                return CopyOrigins(factory.Make<SContinue>(), src);
             if (auto *ret = src->dyn_cast<SReturn>())
-                return factory.Make<SReturn>(ret->Value());
+                return CopyOrigins(factory.Make<SReturn>(ret->Value()), src);
             return nullptr;
         }
 
@@ -5682,6 +5717,7 @@ namespace patchestry::ast {
 
             if (!SeqAlwaysTerminates(tail)) return {};
             if (CountCloneSeq(tail) > kMaxCloneStmts) return {};
+            if (!CanCloneSNodePayloads(tail, NonCallCloneOptions())) return {};
             for (auto *c : tail)
                 if (!SubtreeIsSafeToClone(c)) return {};
             return CloneSeq(tail, factory);
@@ -6399,6 +6435,8 @@ namespace patchestry::ast {
                 if (!ExtractMovableFallthroughTail(
                         seq, target_idx, join_idx, target_body))
                     continue;
+                if (!CanMoveSNodePayloads(target_body, SideEffectingMoveOptions()))
+                    continue;
 
                 if (auto *guard_if = seq[i]->dyn_cast<SIfThenElse>()) {
                     std::vector<clang::Expr *> target_terms;
@@ -6686,7 +6724,7 @@ namespace patchestry::ast {
             for (SNode *child : body)
                 if (!snode_safe(child))
                     return false;
-            return true;
+            return CanCloneSNodePayloads(body, NonCallCloneOptions());
         }
 
         std::string_view SingleGotoTargetSeq(const std::vector<SNode *> &body) {
@@ -7214,7 +7252,7 @@ namespace patchestry::ast {
                 if (auto *label = llvm::dyn_cast_or_null<clang::LabelStmt>(
                         body))
                     body = label->getSubStmt();
-                return body ? factory.Make<SStmt>(body) : nullptr;
+                return body ? CopyOrigins(factory.Make<SStmt>(body), src) : nullptr;
             }
             if (auto *ite = src->dyn_cast<SIfThenElse>()) {
                 std::vector<SNode *> then_body =
@@ -7223,11 +7261,13 @@ namespace patchestry::ast {
                 std::vector<SNode *> else_body =
                     CloneStackGuardSeqDroppingLabels(
                         ite->ElseList(), factory);
-                return factory.Make<SIfThenElse>(
-                    ite->Cond(), std::move(then_body), std::move(else_body));
+                return CopyOrigins(
+                    factory.Make<SIfThenElse>(
+                        ite->Cond(), std::move(then_body), std::move(else_body)),
+                    src);
             }
             if (auto *ret = src->dyn_cast<SReturn>())
-                return factory.Make<SReturn>(ret->Value());
+                return CopyOrigins(factory.Make<SReturn>(ret->Value()), src);
             return nullptr;
         }
 
@@ -7240,6 +7280,7 @@ namespace patchestry::ast {
             if (!CollectLabelTailForStackGuardClone(
                     target_label, labels, tail))
                 return {};
+            if (!CanCloneSNodePayloads(tail, CallCloneOptions())) return {};
 
             std::vector<SNode *> clone =
                 CloneStackGuardSeqDroppingLabels(tail, factory);
@@ -7426,9 +7467,9 @@ namespace patchestry::ast {
         SNode *CloneCleanupNode(SNode *src, SNodeFactory &factory) {
             if (!src) return nullptr;
             if (auto *stmt = src->dyn_cast<SStmt>())
-                return factory.Make<SStmt>(stmt->Stmt());
+                return CopyOrigins(factory.Make<SStmt>(stmt->Stmt()), src);
             if (auto *ret = src->dyn_cast<SReturn>())
-                return factory.Make<SReturn>(ret->Value());
+                return CopyOrigins(factory.Make<SReturn>(ret->Value()), src);
             return nullptr;
         }
 
@@ -7513,6 +7554,7 @@ namespace patchestry::ast {
             if (SeqHasGoto(clone)) return {};
             if (SeqHasBreakContinue(clone)) return {};
             if (CountCloneSeq(clone) > kMaxCloneStmts) return {};
+            if (!CanCloneSNodePayloads(clone, CallCloneOptions())) return {};
             return clone;
         }
 
@@ -7633,6 +7675,7 @@ namespace patchestry::ast {
             if (SeqHasBreakContinue(body)) return false;
             if (SeqHasLocalLiveIns(body)) return false;
             if (CountCloneSeq(body) > kMaxCloneStmts) return false;
+            if (!CanCloneSNodePayloads(body, NonCallCloneOptions())) return false;
             for (SNode *child : body)
                 if (!SubtreeIsSafeToClone(child))
                     return false;
@@ -7786,6 +7829,8 @@ namespace patchestry::ast {
             if (SeqHasGoto(body)) return false;
             if (SeqHasBreakContinue(body)) return false;
             if (CountCloneSeq(body) > kMaxCloneStmts) return false;
+            if (!CanMoveSNodePayloads(body, SideEffectingMoveOptions()))
+                return false;
 
             std::function<bool(const SNode *)> safe_node =
                 [&](const SNode *node) -> bool {
@@ -8110,6 +8155,7 @@ namespace patchestry::ast {
             if (SeqHasGoto(body)) return false;
             if (SeqHasBreak(body)) return false;
             if (CountCloneSeq(body) > kMaxCloneStmts) return false;
+            if (!CanCloneSNodePayloads(body, NonCallCloneOptions())) return false;
             for (SNode *child : body)
                 if (!SubtreeIsSafeToClone(child))
                     return false;

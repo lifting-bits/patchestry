@@ -461,6 +461,27 @@ namespace patchestry::ast {
             }
         }
 
+        void LogSNodeRegionLegalityFailure(
+            std::string_view fn_name, const SRegionLegalityReport &report
+        ) {
+            LOG(ERROR) << "SNode region legality verification failed for " << fn_name
+                       << " owned_ops=" << report.owned_ops
+                       << " cloned_owned_ops=" << report.cloned_owned_ops
+                       << " cross_region_cloned_ops=" << report.cross_region_cloned_ops
+                       << " illegal_cloned_ops=" << report.illegal_cloned_ops
+                       << " diagnostics=" << report.diagnostics.size() << "\n";
+            constexpr size_t kMaxLegalityDiagnostics = 20;
+            for (size_t i = 0; i < std::min(report.diagnostics.size(), kMaxLegalityDiagnostics);
+                 ++i)
+            {
+                LOG(ERROR) << "  " << report.diagnostics[i] << "\n";
+            }
+            if (report.diagnostics.size() > kMaxLegalityDiagnostics) {
+                LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxLegalityDiagnostics)
+                           << " more SNode region legality diagnostic(s)\n";
+            }
+        }
+
         struct ControlShapeSummary
         {
             size_t labels    = 0;
@@ -1036,6 +1057,13 @@ namespace patchestry::ast {
                             if (!region_report.ok()) {
                                 LogSNodeRegionFailure(fn_name, region_report);
                                 LOG(FATAL) << "SNode region ownership verification failed for "
+                                           << fn_name << "\n";
+                            }
+
+                            auto legality_report = ValidateSNodeRegionLegality(region_graph);
+                            if (!legality_report.ok()) {
+                                LogSNodeRegionLegalityFailure(fn_name, legality_report);
+                                LOG(FATAL) << "SNode region legality verification failed for "
                                            << fn_name << "\n";
                             }
 

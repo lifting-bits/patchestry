@@ -47,6 +47,7 @@ namespace patchestry::ast {
         size_t opaque_compound_payloads = 0;
         std::unordered_map< std::string, unsigned > direct_owned_ops;
         std::unordered_map< std::string, unsigned > subtree_owned_ops;
+        std::vector< StmtOrigin > direct_origins;
     };
 
     struct SRegionGraph
@@ -68,6 +69,40 @@ namespace patchestry::ast {
         bool ok() const { return diagnostics.empty(); }
     };
 
+    struct SRegionLegalityReport
+    {
+        size_t owned_ops               = 0;
+        size_t cloned_owned_ops        = 0;
+        size_t cross_region_cloned_ops = 0;
+        size_t illegal_cloned_ops      = 0;
+        std::vector< std::string > diagnostics;
+
+        bool ok() const { return diagnostics.empty(); }
+    };
+
+    enum class SRewriteAction {
+        Move,
+        Clone,
+    };
+
+    struct SRewriteLegalityOptions
+    {
+        bool allow_calls            = false;
+        bool allow_stores           = false;
+        bool allow_volatile         = false;
+        bool allow_internal_control = false;
+    };
+
+    struct SRewriteLegalityReport
+    {
+        SRewriteAction action           = SRewriteAction::Move;
+        size_t payload_origins          = 0;
+        size_t rejected_payload_origins = 0;
+        std::vector< std::string > diagnostics;
+
+        bool ok() const { return diagnostics.empty(); }
+    };
+
     /// Build a region graph from SNode body-list ownership.  Raw Clang
     /// CompoundStmt payloads inside SStmt remain opaque payload atoms; they are
     /// counted but not converted into structured regions.
@@ -76,5 +111,34 @@ namespace patchestry::ast {
     /// Validate parent/child consistency and ownership aggregation for the
     /// SNode region graph.
     SRegionValidationReport ValidateSNodeRegionGraph(const SRegionGraph &graph);
+
+    /// Validate movement legality for payloads placed by structuring cleanup.
+    /// A payload operation may appear in multiple regions only when every
+    /// placement is explicitly marked cloneable by source-origin metadata.
+    SRegionLegalityReport ValidateSNodeRegionLegality(const SRegionGraph &graph);
+
+    /// Validate whether a cleanup pass may move or clone a payload-carrying
+    /// SNode subtree.  This is a local preflight check used before mutating
+    /// structured regions; the post-pass region verifier remains authoritative.
+    SRewriteLegalityReport ValidateSNodeRewriteLegality(
+        const SNode &node, SRewriteAction action, const SRewriteLegalityOptions &options = {}
+    );
+
+    SRewriteLegalityReport ValidateSNodeRewriteLegality(
+        const std::vector< SNode * > &seq, SRewriteAction action,
+        const SRewriteLegalityOptions &options = {}
+    );
+
+    bool CanCloneSNodePayloads(const SNode &node, const SRewriteLegalityOptions &options = {});
+
+    bool CanCloneSNodePayloads(
+        const std::vector< SNode * > &seq, const SRewriteLegalityOptions &options = {}
+    );
+
+    bool CanMoveSNodePayloads(const SNode &node, const SRewriteLegalityOptions &options = {});
+
+    bool CanMoveSNodePayloads(
+        const std::vector< SNode * > &seq, const SRewriteLegalityOptions &options = {}
+    );
 
 } // namespace patchestry::ast

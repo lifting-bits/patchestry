@@ -50,11 +50,13 @@ namespace patchestry::ast {
         }
 
         void AddPayloadOrigins(
-            const SNode &node, std::unordered_map< std::string, unsigned > &counts
+            const SNode &node, std::unordered_map< std::string, unsigned > &counts,
+            std::vector< StmtOrigin > &origins
         ) {
             for (const auto &origin : node.Origins()) {
                 if (!origin.primary || !IsPayloadCarrierKind(origin.kind)) { continue; }
                 ++counts[StmtOriginKey(origin)];
+                origins.push_back(origin);
             }
         }
 
@@ -80,6 +82,7 @@ namespace patchestry::ast {
                     0,
                     0,
                     0,
+                    {},
                     {},
                     {},
                 }
@@ -109,7 +112,7 @@ namespace patchestry::ast {
             ++region.direct_snodes;
             ++region.subtree_snodes;
             if (HasOpaqueCompoundPayload(node)) { ++region.opaque_compound_payloads; }
-            AddPayloadOrigins(*node, region.direct_owned_ops);
+            AddPayloadOrigins(*node, region.direct_owned_ops, region.direct_origins);
 
             if (auto *label = node->dyn_cast< SLabel >()) {
                 BuildRegionForSeq(
@@ -191,6 +194,128 @@ namespace patchestry::ast {
                     graph.regions[child_id].opaque_compound_payloads;
             }
             return region.subtree_owned_ops;
+        }
+
+        struct SOwnedOpPlacement
+        {
+            size_t region = SRegionNode::kNone;
+            StmtOrigin origin;
+        };
+
+        std::string FormatBool(bool value) { return value ? "true" : "false"; }
+
+        std::string FormatRegions(const std::vector< SOwnedOpPlacement > &placements) {
+            std::vector< size_t > regions;
+            regions.reserve(placements.size());
+            for (const auto &placement : placements) { regions.push_back(placement.region); }
+            std::sort(regions.begin(), regions.end());
+            regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
+
+            std::string result;
+            for (size_t i = 0; i < regions.size(); ++i) {
+                if (i != 0) { result += ","; }
+                result += std::to_string(regions[i]);
+            }
+            return result;
+        }
+
+        bool HasMultipleRegions(const std::vector< SOwnedOpPlacement > &placements) {
+            if (placements.empty()) { return false; }
+            size_t first_region = placements.front().region;
+            return std::any_of(
+                placements.begin(), placements.end(), [&](const SOwnedOpPlacement &placement) {
+                    return placement.region != first_region;
+                }
+            );
+        }
+
+        const StmtOrigin *
+        FirstNonCloneableOrigin(const std::vector< SOwnedOpPlacement > &placements) {
+            for (const auto &placement : placements) {
+                if (!placement.origin.cloneable) { return &placement.origin; }
+            }
+            return nullptr;
+        }
+
+        std::string DescribeIllegalClone(
+            const std::string &op_key, const std::vector< SOwnedOpPlacement > &placements,
+            const StmtOrigin &origin
+        ) {
+            return "illegal cross-region cloned payload operation " + op_key + " kind="
+                + PayloadKindName(origin.kind) + " regions=" + FormatRegions(placements)
+                + " movable=" + FormatBool(origin.movable) + " cloneable="
+                + FormatBool(origin.cloneable) + " may_call=" + FormatBool(origin.may_call)
+                + " may_store=" + FormatBool(origin.may_store)
+                + " may_volatile=" + FormatBool(origin.may_volatile)
+                + " contains_internal_control=" + FormatBool(origin.contains_internal_control);
+        }
+
+        const char *SRewriteActionName(SRewriteAction action) {
+            switch (action) {
+                case SRewriteAction::Move:
+                    return "move";
+                case SRewriteAction::Clone:
+                    return "clone";
+            }
+            return "unknown";
+        }
+
+        bool OriginPermittedByOptions(
+            const StmtOrigin &origin, const SRewriteLegalityOptions &options
+        ) {
+            if (origin.may_call && !options.allow_calls) { return false; }
+            if (origin.may_store && !options.allow_stores) { return false; }
+            if (origin.may_volatile && !options.allow_volatile) { return false; }
+            if (origin.contains_internal_control && !options.allow_internal_control) {
+                return false;
+            }
+            return true;
+        }
+
+        bool OriginCanMove(const StmtOrigin &origin, const SRewriteLegalityOptions &options) {
+            return origin.movable && OriginPermittedByOptions(origin, options);
+        }
+
+        bool OriginCanClone(const StmtOrigin &origin, const SRewriteLegalityOptions &options) {
+            return (origin.cloneable || OriginPermittedByOptions(origin, options))
+                && origin.movable;
+        }
+
+        std::string DescribeRewriteRejection(SRewriteAction action, const StmtOrigin &origin) {
+            return std::string("cannot ") + SRewriteActionName(action) + " payload operation "
+                + StmtOriginKey(origin) + " kind=" + PayloadKindName(origin.kind) + " movable="
+                + FormatBool(origin.movable) + " cloneable=" + FormatBool(origin.cloneable)
+                + " may_call=" + FormatBool(origin.may_call)
+                + " may_store=" + FormatBool(origin.may_store)
+                + " may_volatile=" + FormatBool(origin.may_volatile)
+                + " contains_internal_control=" + FormatBool(origin.contains_internal_control);
+        }
+
+        void ValidateOriginRewriteLegality(
+            const StmtOrigin &origin, SRewriteAction action,
+            const SRewriteLegalityOptions &options, SRewriteLegalityReport &report
+        ) {
+            if (!origin.primary || !IsPayloadCarrierKind(origin.kind)) { return; }
+
+            ++report.payload_origins;
+            bool allowed = action == SRewriteAction::Clone ? OriginCanClone(origin, options)
+                                                           : OriginCanMove(origin, options);
+            if (allowed) { return; }
+
+            ++report.rejected_payload_origins;
+            AddDiagnostic(report.diagnostics, DescribeRewriteRejection(action, origin));
+        }
+
+        void ValidateNodeRewriteLegality(
+            const SNode &node, SRewriteAction action, const SRewriteLegalityOptions &options,
+            SRewriteLegalityReport &report
+        ) {
+            for (const auto &origin : node.Origins()) {
+                ValidateOriginRewriteLegality(origin, action, options, report);
+            }
+            node.for_each_child([&](SNode *child) {
+                if (child) { ValidateNodeRewriteLegality(*child, action, options, report); }
+            });
         }
 
     } // namespace
@@ -323,6 +448,86 @@ namespace patchestry::ast {
         }
         report.opaque_compound_payloads = graph.regions[graph.root].opaque_compound_payloads;
         return report;
+    }
+
+    SRegionLegalityReport ValidateSNodeRegionLegality(const SRegionGraph &graph) {
+        SRegionLegalityReport report;
+
+        if (graph.empty()) {
+            AddDiagnostic(report.diagnostics, "region graph is empty");
+            return report;
+        }
+
+        std::unordered_map< std::string, std::vector< SOwnedOpPlacement > > placements_by_op;
+        for (const auto &region : graph.regions) {
+            for (const auto &origin : region.direct_origins) {
+                ++report.owned_ops;
+                placements_by_op[StmtOriginKey(origin)].push_back(
+                    SOwnedOpPlacement{ region.id, origin }
+                );
+            }
+        }
+
+        for (const auto &[op_key, placements] : placements_by_op) {
+            if (placements.size() <= 1) { continue; }
+
+            ++report.cloned_owned_ops;
+            if (!HasMultipleRegions(placements)) { continue; }
+
+            ++report.cross_region_cloned_ops;
+            if (const StmtOrigin *non_cloneable = FirstNonCloneableOrigin(placements)) {
+                ++report.illegal_cloned_ops;
+                AddDiagnostic(
+                    report.diagnostics, DescribeIllegalClone(op_key, placements, *non_cloneable)
+                );
+            }
+        }
+
+        std::sort(report.diagnostics.begin(), report.diagnostics.end());
+        return report;
+    }
+
+    SRewriteLegalityReport ValidateSNodeRewriteLegality(
+        const SNode &node, SRewriteAction action, const SRewriteLegalityOptions &options
+    ) {
+        SRewriteLegalityReport report;
+        report.action = action;
+        ValidateNodeRewriteLegality(node, action, options, report);
+        std::sort(report.diagnostics.begin(), report.diagnostics.end());
+        return report;
+    }
+
+    SRewriteLegalityReport ValidateSNodeRewriteLegality(
+        const std::vector< SNode * > &seq, SRewriteAction action,
+        const SRewriteLegalityOptions &options
+    ) {
+        SRewriteLegalityReport report;
+        report.action = action;
+        for (const SNode *node : seq) {
+            if (node) { ValidateNodeRewriteLegality(*node, action, options, report); }
+        }
+        std::sort(report.diagnostics.begin(), report.diagnostics.end());
+        return report;
+    }
+
+    bool CanCloneSNodePayloads(const SNode &node, const SRewriteLegalityOptions &options) {
+        return ValidateSNodeRewriteLegality(node, SRewriteAction::Clone, options).ok();
+    }
+
+    bool CanCloneSNodePayloads(
+        const std::vector< SNode * > &seq, const SRewriteLegalityOptions &options
+    ) {
+        return ValidateSNodeRewriteLegality(seq, SRewriteAction::Clone, options).ok();
+    }
+
+    bool CanMoveSNodePayloads(const SNode &node, const SRewriteLegalityOptions &options) {
+        return ValidateSNodeRewriteLegality(node, SRewriteAction::Move, options).ok();
+    }
+
+    bool CanMoveSNodePayloads(
+        const std::vector< SNode * > &seq, const SRewriteLegalityOptions &options
+    ) {
+        return ValidateSNodeRewriteLegality(seq, SRewriteAction::Move, options).ok();
     }
 
 } // namespace patchestry::ast
