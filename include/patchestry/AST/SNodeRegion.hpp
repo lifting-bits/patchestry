@@ -132,14 +132,23 @@ namespace patchestry::ast {
         bool profitable() const { return decision != SRewriteDecision::LeaveGoto; }
     };
 
+    enum class SRewriteCandidateKind {
+        Region,
+        AdjacentGotoLabelInline,
+    };
+
     struct SRewriteCandidate
     {
         size_t id                         = 0;
+        SRewriteCandidateKind kind        = SRewriteCandidateKind::Region;
         SRegionKind region_kind           = SRegionKind::Root;
         std::string region_name;
         const SNode *owner                = nullptr;
         SRewriteAction action             = SRewriteAction::Move;
         SRewriteDecision decision         = SRewriteDecision::LeaveGoto;
+        std::string target_label;
+        size_t source_index               = 0;
+        size_t target_index               = 0;
         size_t payload_origins            = 0;
         size_t estimated_cost             = 1;
         size_t estimated_benefit          = 0;
@@ -168,6 +177,8 @@ namespace patchestry::ast {
         size_t hoist_candidates      = 0;
         size_t sink_candidates       = 0;
         size_t leave_goto_candidates = 0;
+        size_t exact_site_candidates = 0;
+        size_t adjacent_goto_inline_candidates = 0;
         size_t payload_origins       = 0;
         std::vector< SRewriteCandidate > candidate_list;
     };

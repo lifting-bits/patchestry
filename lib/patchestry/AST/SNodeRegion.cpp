@@ -720,7 +720,81 @@ namespace patchestry::ast {
                     break;
             }
 
+            if (candidate.kind != SRewriteCandidateKind::Region) {
+                ++report.exact_site_candidates;
+            }
+            if (candidate.kind == SRewriteCandidateKind::AdjacentGotoLabelInline) {
+                ++report.adjacent_goto_inline_candidates;
+            }
+
             report.candidate_list.push_back(std::move(candidate));
+        }
+
+        void CollectCandidateClangGotoRefs(
+            const clang::Stmt *stmt, std::unordered_map< std::string, unsigned > &refs
+        ) {
+            if (!stmt) { return; }
+            if (const auto *go = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                ++refs[go->getLabel()->getName().str()];
+                return;
+            }
+            for (const clang::Stmt *child : stmt->children()) {
+                CollectCandidateClangGotoRefs(child, refs);
+            }
+        }
+
+        void CollectCandidateGotoRefs(
+            const SNode *node, std::unordered_map< std::string, unsigned > &refs
+        ) {
+            if (!node) { return; }
+            if (const auto *go = node->dyn_cast< SGoto >()) {
+                ++refs[std::string(go->Target())];
+                return;
+            }
+            if (const auto *stmt = node->dyn_cast< SStmt >()) {
+                CollectCandidateClangGotoRefs(stmt->Stmt(), refs);
+                return;
+            }
+            node->for_each_child([&](SNode *child) {
+                CollectCandidateGotoRefs(child, refs);
+            });
+        }
+
+        std::unordered_map< std::string, unsigned >
+        CollectCandidateGotoRefs(const std::vector< SNode * > &root) {
+            std::unordered_map< std::string, unsigned > refs;
+            for (const SNode *node : root) { CollectCandidateGotoRefs(node, refs); }
+            return refs;
+        }
+
+        void ExtractAdjacentGotoInlineCandidatesForSeq(
+            const std::vector< SNode * > &seq, SRegionKind region_kind,
+            std::string_view region_name, const SNode *owner,
+            const std::unordered_map< std::string, unsigned > &refs,
+            SRewriteCandidateReport &report
+        ) {
+            for (size_t i = 0; i + 1 < seq.size(); ++i) {
+                const auto *go    = seq[i] ? seq[i]->dyn_cast< SGoto >() : nullptr;
+                const auto *label = seq[i + 1] ? seq[i + 1]->dyn_cast< SLabel >() : nullptr;
+                if (!go || !label || go->Target() != label->Name()) { continue; }
+
+                auto ref_it = refs.find(std::string(go->Target()));
+                if (ref_it == refs.end() || ref_it->second != 1) { continue; }
+
+                SRewriteCandidate candidate;
+                candidate.kind              = SRewriteCandidateKind::AdjacentGotoLabelInline;
+                candidate.region_kind       = region_kind;
+                candidate.region_name       = std::string(region_name);
+                candidate.owner             = owner;
+                candidate.action            = SRewriteAction::Move;
+                candidate.decision          = SRewriteDecision::Move;
+                candidate.target_label      = std::string(go->Target());
+                candidate.source_index      = i;
+                candidate.target_index      = i + 1;
+                candidate.estimated_cost    = 1;
+                candidate.estimated_benefit = 1;
+                AddCandidateToReport(report, std::move(candidate));
+            }
         }
 
         void ExtractRewriteCandidateForAction(
@@ -755,11 +829,13 @@ namespace patchestry::ast {
             const std::vector< SNode * > &seq, SRegionKind region_kind,
             std::string_view region_name, const SNode *owner,
             const SRewriteCandidateExtractionOptions &options,
+            const std::unordered_map< std::string, unsigned > &refs,
             SRewriteCandidateReport &report
         );
 
         void ExtractRewriteCandidatesForNode(
             const SNode *node, const SRewriteCandidateExtractionOptions &options,
+            const std::unordered_map< std::string, unsigned > &refs,
             SRewriteCandidateReport &report
         ) {
             if (!node) { return; }
@@ -767,18 +843,20 @@ namespace patchestry::ast {
             if (const auto *label = node->dyn_cast< SLabel >()) {
                 ExtractRewriteCandidatesForSeq(
                     label->BodyList(), SRegionKind::LabelBody, label->Name(), node, options,
-                    report
+                    refs, report
                 );
                 return;
             }
 
             if (const auto *if_node = node->dyn_cast< SIfThenElse >()) {
                 ExtractRewriteCandidatesForSeq(
-                    if_node->ThenList(), SRegionKind::IfThen, "then", node, options, report
+                    if_node->ThenList(), SRegionKind::IfThen, "then", node, options, refs,
+                    report
                 );
                 if (!if_node->ElseList().empty()) {
                     ExtractRewriteCandidatesForSeq(
-                        if_node->ElseList(), SRegionKind::IfElse, "else", node, options, report
+                        if_node->ElseList(), SRegionKind::IfElse, "else", node, options, refs,
+                        report
                     );
                 }
                 return;
@@ -787,7 +865,7 @@ namespace patchestry::ast {
             if (const auto *while_node = node->dyn_cast< SWhile >()) {
                 ExtractRewriteCandidatesForSeq(
                     while_node->BodyList(), SRegionKind::WhileBody, "while", node, options,
-                    report
+                    refs, report
                 );
                 return;
             }
@@ -795,14 +873,15 @@ namespace patchestry::ast {
             if (const auto *do_node = node->dyn_cast< SDoWhile >()) {
                 ExtractRewriteCandidatesForSeq(
                     do_node->BodyList(), SRegionKind::DoWhileBody, "do_while", node, options,
-                    report
+                    refs, report
                 );
                 return;
             }
 
             if (const auto *for_node = node->dyn_cast< SFor >()) {
                 ExtractRewriteCandidatesForSeq(
-                    for_node->BodyList(), SRegionKind::ForBody, "for", node, options, report
+                    for_node->BodyList(), SRegionKind::ForBody, "for", node, options, refs,
+                    report
                 );
                 return;
             }
@@ -812,13 +891,13 @@ namespace patchestry::ast {
                 for (const auto &case_node : switch_node->Cases()) {
                     ExtractRewriteCandidatesForSeq(
                         case_node.body_list, SRegionKind::SwitchCase,
-                        "case_" + std::to_string(case_index++), node, options, report
+                        "case_" + std::to_string(case_index++), node, options, refs, report
                     );
                 }
                 if (!switch_node->DefaultBodyList().empty()) {
                     ExtractRewriteCandidatesForSeq(
                         switch_node->DefaultBodyList(), SRegionKind::SwitchDefault, "default",
-                        node, options, report
+                        node, options, refs, report
                     );
                 }
             }
@@ -828,9 +907,13 @@ namespace patchestry::ast {
             const std::vector< SNode * > &seq, SRegionKind region_kind,
             std::string_view region_name, const SNode *owner,
             const SRewriteCandidateExtractionOptions &options,
+            const std::unordered_map< std::string, unsigned > &refs,
             SRewriteCandidateReport &report
         ) {
             ++report.regions;
+            ExtractAdjacentGotoInlineCandidatesForSeq(
+                seq, region_kind, region_name, owner, refs, report
+            );
             ExtractRewriteCandidateForAction(
                 seq, region_kind, region_name, owner, SRewriteAction::Clone,
                 options.clone_options, options, report
@@ -851,7 +934,7 @@ namespace patchestry::ast {
             }
 
             for (const SNode *node : seq) {
-                ExtractRewriteCandidatesForNode(node, options, report);
+                ExtractRewriteCandidatesForNode(node, options, refs, report);
             }
         }
 
@@ -862,7 +945,10 @@ namespace patchestry::ast {
         const SRewriteCandidateExtractionOptions &options
     ) {
         SRewriteCandidateReport report;
-        ExtractRewriteCandidatesForSeq(root, SRegionKind::Root, "root", nullptr, options, report);
+        auto refs = CollectCandidateGotoRefs(root);
+        ExtractRewriteCandidatesForSeq(
+            root, SRegionKind::Root, "root", nullptr, options, refs, report
+        );
         return report;
     }
 

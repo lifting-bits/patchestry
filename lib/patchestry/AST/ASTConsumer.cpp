@@ -762,6 +762,16 @@ namespace patchestry::ast {
             return score;
         }
 
+        size_t CountRewriteCandidatesForKind(
+            const SRewriteCandidateReport &report, SRewriteCandidateKind kind
+        ) {
+            size_t count = 0;
+            for (const auto &candidate : report.candidate_list) {
+                if (candidate.kind == kind) { ++count; }
+            }
+            return count;
+        }
+
         template< typename RewriteFn >
         void AddCandidateDrivenCleanupPass(
             std::vector< SNodeCleanupPass > &passes, const SRewriteCandidateReport &candidates,
@@ -775,6 +785,132 @@ namespace patchestry::ast {
                 /*estimated_benefit=*/1,
                 /*estimated_cost=*/1, score.count
             ));
+        }
+
+        void CountCandidateExecutorClangGotoRefs(
+            const clang::Stmt *stmt, std::unordered_map< std::string, unsigned > &refs
+        ) {
+            if (!stmt) { return; }
+            if (const auto *go = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                ++refs[go->getLabel()->getName().str()];
+                return;
+            }
+            for (const clang::Stmt *child : stmt->children()) {
+                CountCandidateExecutorClangGotoRefs(child, refs);
+            }
+        }
+
+        void CountCandidateExecutorGotoRefs(
+            const SNode *node, std::unordered_map< std::string, unsigned > &refs
+        ) {
+            if (!node) { return; }
+            if (const auto *go = node->dyn_cast< SGoto >()) {
+                ++refs[std::string(go->Target())];
+                return;
+            }
+            if (const auto *stmt = node->dyn_cast< SStmt >()) {
+                CountCandidateExecutorClangGotoRefs(stmt->Stmt(), refs);
+                return;
+            }
+            node->for_each_child([&](SNode *child) {
+                CountCandidateExecutorGotoRefs(child, refs);
+            });
+        }
+
+        std::unordered_map< std::string, unsigned >
+        CountCandidateExecutorGotoRefs(const std::vector< SNode * > &root) {
+            std::unordered_map< std::string, unsigned > refs;
+            for (const SNode *node : root) { CountCandidateExecutorGotoRefs(node, refs); }
+            return refs;
+        }
+
+        template< typename Fn >
+        void ForEachCandidateExecutorBodyList(SNode *node, Fn &&fn) {
+            if (!node) { return; }
+            if (auto *label = node->dyn_cast< SLabel >()) {
+                fn(label->BodyList());
+                return;
+            }
+            if (auto *if_node = node->dyn_cast< SIfThenElse >()) {
+                fn(if_node->ThenList());
+                fn(if_node->ElseList());
+                return;
+            }
+            if (auto *while_node = node->dyn_cast< SWhile >()) {
+                fn(while_node->BodyList());
+                return;
+            }
+            if (auto *do_node = node->dyn_cast< SDoWhile >()) {
+                fn(do_node->BodyList());
+                return;
+            }
+            if (auto *for_node = node->dyn_cast< SFor >()) {
+                fn(for_node->BodyList());
+                return;
+            }
+            if (auto *switch_node = node->dyn_cast< SSwitch >()) {
+                for (auto &case_node : switch_node->Cases()) { fn(case_node.body_list); }
+                fn(switch_node->DefaultBodyList());
+            }
+        }
+
+        bool ForEachCandidateExecutorSeqPostOrder(
+            std::vector< SNode * > &seq,
+            const std::function< bool(std::vector< SNode * > &) > &worker
+        ) {
+            bool changed = false;
+            for (SNode *node : seq) {
+                ForEachCandidateExecutorBodyList(node, [&](std::vector< SNode * > &body) {
+                    if (ForEachCandidateExecutorSeqPostOrder(body, worker)) {
+                        changed = true;
+                    }
+                });
+            }
+            if (worker(seq)) { changed = true; }
+            return changed;
+        }
+
+        bool InlineAdjacentGotoLabelCandidatesInSeq(
+            std::vector< SNode * > &seq,
+            const std::unordered_map< std::string, unsigned > &refs
+        ) {
+            bool changed = false;
+            for (size_t i = 0; i + 1 < seq.size();) {
+                auto *go    = seq[i] ? seq[i]->dyn_cast< SGoto >() : nullptr;
+                auto *label = seq[i + 1] ? seq[i + 1]->dyn_cast< SLabel >() : nullptr;
+                if (!go || !label || go->Target() != label->Name()) {
+                    ++i;
+                    continue;
+                }
+
+                auto ref_it = refs.find(std::string(go->Target()));
+                if (ref_it == refs.end() || ref_it->second != 1) {
+                    ++i;
+                    continue;
+                }
+
+                std::vector< SNode * > replacement = label->BodyList();
+                seq.erase(
+                    seq.begin() + static_cast< ptrdiff_t >(i),
+                    seq.begin() + static_cast< ptrdiff_t >(i + 2)
+                );
+                seq.insert(
+                    seq.begin() + static_cast< ptrdiff_t >(i), replacement.begin(),
+                    replacement.end()
+                );
+                i += replacement.size();
+                changed = true;
+            }
+            return changed;
+        }
+
+        bool InlineAdjacentGotoLabelCandidates(std::vector< SNode * > &root) {
+            auto refs = CountCandidateExecutorGotoRefs(root);
+            return ForEachCandidateExecutorSeqPostOrder(
+                root, [&](std::vector< SNode * > &seq) {
+                    return InlineAdjacentGotoLabelCandidatesInSeq(seq, refs);
+                }
+            );
         }
 
         struct ControlShapeSummary
@@ -1331,6 +1467,10 @@ namespace patchestry::ast {
                         };
 
                         auto make_structural_cleanup_passes = [&]() {
+                            auto candidates = ExtractSNodeRewriteCandidates(root_body);
+                            size_t adjacent_inline_candidates = CountRewriteCandidatesForKind(
+                                candidates, SRewriteCandidateKind::AdjacentGotoLabelInline
+                            );
                             std::vector< SNodeCleanupPass > passes;
                             passes.push_back(MakeSNodeCleanupPass(
                                 "SimplifyEmptyControlFlow", SRewriteDecision::LeaveGoto,
@@ -1346,6 +1486,16 @@ namespace patchestry::ast {
                                     return MergeRedundantGotoGuards(root_body, factory, ctx);
                                 }
                             ));
+                            if (adjacent_inline_candidates != 0) {
+                                passes.push_back(MakeSNodeCleanupPass(
+                                    "InlineAdjacentGotoLabelCandidates",
+                                    SRewriteDecision::Move,
+                                    [&]() { return InlineAdjacentGotoLabelCandidates(root_body); },
+                                    /*priority=*/0,
+                                    /*estimated_benefit=*/1,
+                                    /*estimated_cost=*/1, adjacent_inline_candidates
+                                ));
+                            }
                             passes.push_back(MakeSNodeCleanupPass(
                                 "InlineResidualGotos", SRewriteDecision::Move,
                                 [&]() { return InlineResidualGotos(root_body, factory); }
@@ -1408,6 +1558,10 @@ namespace patchestry::ast {
 
                         auto make_fixed_point_cleanup_schedule = [&]() {
                             std::vector< SNodeCleanupPass > passes;
+                            auto exact_candidates = ExtractSNodeRewriteCandidates(root_body);
+                            size_t adjacent_inline_candidates = CountRewriteCandidatesForKind(
+                                exact_candidates, SRewriteCandidateKind::AdjacentGotoLabelInline
+                            );
                             passes.push_back(MakeSNodeCleanupPass(
                                 "SimplifyEmptyControlFlow", SRewriteDecision::LeaveGoto,
                                 [&]() { return SimplifyEmptyControlFlow(root_body, ctx); }
@@ -1422,6 +1576,16 @@ namespace patchestry::ast {
                                     return MergeRedundantGotoGuards(root_body, factory, ctx);
                                 }
                             ));
+                            if (adjacent_inline_candidates != 0) {
+                                passes.push_back(MakeSNodeCleanupPass(
+                                    "InlineAdjacentGotoLabelCandidates",
+                                    SRewriteDecision::Move,
+                                    [&]() { return InlineAdjacentGotoLabelCandidates(root_body); },
+                                    /*priority=*/0,
+                                    /*estimated_benefit=*/1,
+                                    /*estimated_cost=*/1, adjacent_inline_candidates
+                                ));
+                            }
                             auto control_passes = make_control_cleanup_passes();
                             passes.insert(
                                 passes.end(), control_passes.begin(), control_passes.end()
@@ -1564,7 +1728,12 @@ namespace patchestry::ast {
                                  << " rewrite_sink_candidates="
                                  << rewrite_candidate_report.sink_candidates
                                  << " rewrite_leave_goto_candidates="
-                                 << rewrite_candidate_report.leave_goto_candidates << "\n";
+                                 << rewrite_candidate_report.leave_goto_candidates
+                                 << " rewrite_exact_site_candidates="
+                                 << rewrite_candidate_report.exact_site_candidates
+                                 << " rewrite_adjacent_goto_inline_candidates="
+                                 << rewrite_candidate_report.adjacent_goto_inline_candidates
+                                 << "\n";
                 }
 
                 if (options.verify_no_node_loss && have_structured) {

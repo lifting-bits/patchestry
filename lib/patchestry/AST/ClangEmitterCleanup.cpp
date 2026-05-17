@@ -1305,9 +1305,9 @@ namespace patchestry::ast {
                 child = FoldExternalTargetContinuations(ctx, child, target, folded);
             }
 
-            bool changed = true;
-            while (changed) {
-                changed = false;
+            bool local_changed = true;
+            while (local_changed) {
+                local_changed = false;
                 for (size_t i = 0; i + 1 < body.size(); ++i) {
                     const unsigned target_gotos = CountGotosToTargetName(body[i], target);
                     if (target_gotos == 0 || CountAllGotos(body[i]) != target_gotos) {
@@ -1338,7 +1338,7 @@ namespace patchestry::ast {
                                 body.begin() + static_cast< ptrdiff_t >(i + 1), body.end()
                             );
                             ++folded;
-                            changed = true;
+                            local_changed = true;
                             break;
                         }
                     }
@@ -1358,7 +1358,7 @@ namespace patchestry::ast {
                     body[i] = rewritten;
                     body.erase(body.begin() + static_cast< ptrdiff_t >(i + 1), body.end());
                     ++folded;
-                    changed = true;
+                    local_changed = true;
                     break;
                 }
             }
@@ -1582,9 +1582,9 @@ namespace patchestry::ast {
             for (auto *&child : body) { child = EliminateGotoToNextLabel(ctx, child, live); }
 
             // Then: find goto-to-next-label patterns
-            bool changed = true;
-            while (changed) {
-                changed = false;
+            bool local_changed = true;
+            while (local_changed) {
+                local_changed = false;
                 for (size_t i = 0; i + 1 < body.size(); ++i) {
                     size_t next_idx = i + 1;
                     while (next_idx < body.size()
@@ -1607,7 +1607,7 @@ namespace patchestry::ast {
                         // Simple case: body[i] IS the goto
                         if (deep == body[i]) {
                             body.erase(body.begin() + static_cast< ptrdiff_t >(i));
-                            changed = true;
+                            local_changed = true;
                             break;
                         }
                         // Otherwise: rebuild without the trailing goto.
@@ -1639,7 +1639,7 @@ namespace patchestry::ast {
                             return new (ctx) clang::NullStmt(VirtualLoc(ctx));
                         };
                         body[i] = strip_tail(body[i]);
-                        changed = true;
+                        local_changed = true;
                         break;
                     }
 
@@ -1657,7 +1657,7 @@ namespace patchestry::ast {
                             } else {
                                 body[i] = ReplaceTrailingDeepStmt(ctx, body[i], deep, new_if);
                             }
-                            changed = true;
+                            local_changed = true;
                             break;
                         }
 
@@ -1672,7 +1672,7 @@ namespace patchestry::ast {
                                     body[i] = ReplaceTrailingDeepStmt(
                                         ctx, body[i], nested_if, new_nested
                                     );
-                                    changed = true;
+                                    local_changed = true;
                                     break;
                                 }
                             }
@@ -1685,7 +1685,7 @@ namespace patchestry::ast {
                     );
                     if (folded_external != 0) {
                         body[i] = external_folded;
-                        changed = true;
+                        local_changed = true;
                         break;
                     }
 
@@ -1695,7 +1695,7 @@ namespace patchestry::ast {
                     );
                     if (moved != 0) {
                         body[i] = moved_tail;
-                        changed = true;
+                        local_changed = true;
                         break;
                     }
 
@@ -1705,7 +1705,7 @@ namespace patchestry::ast {
                     );
                     if (stripped != 0) {
                         body[i] = rewritten;
-                        changed = true;
+                        local_changed = true;
                         break;
                     }
                 }
@@ -1734,11 +1734,11 @@ namespace patchestry::ast {
                             ctx, body, dispatch_idx, label_idx, next_label
                         ))
                     {
-                        changed = true;
+                        local_changed = true;
                         break;
                     }
                 }
-                if (changed) { break; }
+                if (local_changed) { break; }
 
                 std::vector< clang::Stmt * > tail_pair = {
                     body[label_idx - 2],
@@ -1747,7 +1747,7 @@ namespace patchestry::ast {
                 if (TryMoveTailContinuationIntoDispatch(ctx, tail_pair, next_label, live)) {
                     body[label_idx - 2] = tail_pair.front();
                     body.erase(body.begin() + static_cast< ptrdiff_t >(label_idx - 1));
-                    changed = true;
+                    local_changed = true;
                     break;
                 }
             }
@@ -1798,7 +1798,7 @@ namespace patchestry::ast {
 
                 if (sw_changed) {
                     sw->setBody(detail::MakeCompound(ctx, sw_stmts));
-                    changed = true;
+                    local_changed = true;
                 }
             }
 
@@ -3923,6 +3923,23 @@ namespace patchestry::ast {
             return StmtFromSeq(ctx, cloned);
         }
 
+        clang::Stmt *CloneGotoFreeSeqAsStmt(
+            clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts,
+            clang::LabelDecl *trailing_goto
+        ) {
+            std::vector< clang::Stmt * > cloned;
+            for (clang::Stmt *stmt : stmts) {
+                clang::Stmt *copy = CloneGotoFreeStmt(ctx, stmt);
+                if (!copy) { return nullptr; }
+                AppendStmtSequence(copy, cloned);
+            }
+            if (trailing_goto) {
+                auto loc = VirtualLoc(ctx);
+                cloned.push_back(new (ctx) clang::GotoStmt(trailing_goto, loc, loc));
+            }
+            return StmtFromSeq(ctx, cloned);
+        }
+
         clang::Stmt *ReplaceGotoWithClonedJoinTail(
             clang::ASTContext &ctx, clang::Stmt *stmt, clang::LabelDecl *target,
             clang::LabelDecl *join, const std::vector< clang::Stmt * > &tail,
@@ -4270,6 +4287,811 @@ namespace patchestry::ast {
             return detail::MakeCompound(ctx, body);
         }
 
+        bool CleanupStmtHasCleanupLikeCall(clang::Stmt *stmt) {
+            if (!stmt) { return false; }
+            if (auto *call = llvm::dyn_cast< clang::CallExpr >(stmt)) {
+                if (const auto *callee = call->getDirectCallee()) {
+                    std::string name = callee->getNameAsString();
+                    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) {
+                        return static_cast< char >(std::tolower(ch));
+                    });
+                    if (name.find("dealloc") != std::string::npos
+                        || name.find("delete") != std::string::npos
+                        || name.find("dtor") != std::string::npos
+                        || name.find("unref") != std::string::npos
+                        || name.find("free") != std::string::npos)
+                    {
+                        return true;
+                    }
+                }
+            }
+            for (clang::Stmt *child : stmt->children()) {
+                if (CleanupStmtHasCleanupLikeCall(child)) { return true; }
+            }
+            return false;
+        }
+
+        bool CleanupSeqHasCleanupLikeCall(const std::vector< clang::Stmt * > &stmts) {
+            for (clang::Stmt *stmt : stmts) {
+                if (CleanupStmtHasCleanupLikeCall(stmt)) { return true; }
+            }
+            return false;
+        }
+
+        bool StmtHasCallExpr(clang::Stmt *stmt) {
+            if (!stmt) { return false; }
+            if (llvm::isa< clang::CallExpr >(stmt)) { return true; }
+            for (clang::Stmt *child : stmt->children()) {
+                if (StmtHasCallExpr(child)) { return true; }
+            }
+            return false;
+        }
+
+        bool SeqHasCallExpr(const std::vector< clang::Stmt * > &stmts) {
+            for (clang::Stmt *stmt : stmts) {
+                if (StmtHasCallExpr(stmt)) { return true; }
+            }
+            return false;
+        }
+
+        bool StmtHasUnsafeGuardedJoinMoveControl(clang::Stmt *stmt) {
+            if (!stmt) { return false; }
+            if (llvm::isa< clang::LabelStmt >(stmt) || llvm::isa< clang::GotoStmt >(stmt)
+                || llvm::isa< clang::SwitchStmt >(stmt) || llvm::isa< clang::WhileStmt >(stmt)
+                || llvm::isa< clang::DoStmt >(stmt) || llvm::isa< clang::ForStmt >(stmt)
+                || llvm::isa< clang::CaseStmt >(stmt) || llvm::isa< clang::DefaultStmt >(stmt)
+                || llvm::isa< clang::DeclStmt >(stmt))
+            {
+                return true;
+            }
+            for (clang::Stmt *child : stmt->children()) {
+                if (StmtHasUnsafeGuardedJoinMoveControl(child)) { return true; }
+            }
+            return false;
+        }
+
+        bool SeqHasUnsafeGuardedJoinMoveControl(
+            const std::vector< clang::Stmt * > &stmts
+        ) {
+            for (clang::Stmt *stmt : stmts) {
+                if (StmtHasUnsafeGuardedJoinMoveControl(stmt)) { return true; }
+            }
+            return false;
+        }
+
+        bool IsSyntheticScopeJoinLabel(clang::LabelDecl *label) {
+            return label && label->getName().starts_with("__patchestry_scope_join");
+        }
+
+        clang::Stmt *ReplaceGotoWithClonedCleanupThenJoin(
+            clang::ASTContext &ctx, clang::Stmt *stmt, clang::LabelDecl *cleanup_label,
+            clang::LabelDecl *join_label, const std::vector< clang::Stmt * > &cleanup_stmts,
+            unsigned &replaced, bool &failed
+        ) {
+            if (!stmt || failed) { return stmt; }
+            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                if (gs->getLabel() != cleanup_label) { return stmt; }
+                clang::Stmt *replacement =
+                    CloneStraightLineSeqAsStmt(ctx, cleanup_stmts, join_label);
+                if (!replacement) {
+                    failed = true;
+                    return stmt;
+                }
+                ++replaced;
+                return replacement;
+            }
+
+            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                std::vector< clang::Stmt * > children;
+                unsigned before = replaced;
+                for (clang::Stmt *child : compound->body()) {
+                    children.push_back(ReplaceGotoWithClonedCleanupThenJoin(
+                        ctx, child, cleanup_label, join_label, cleanup_stmts, replaced, failed
+                    ));
+                    if (failed) { return stmt; }
+                }
+                return replaced != before ? detail::MakeCompound(ctx, children) : stmt;
+            }
+
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                ifs->setThen(ReplaceGotoWithClonedCleanupThenJoin(
+                    ctx, ifs->getThen(), cleanup_label, join_label, cleanup_stmts, replaced,
+                    failed
+                ));
+                if (failed) { return stmt; }
+                if (ifs->getElse()) {
+                    ifs->setElse(ReplaceGotoWithClonedCleanupThenJoin(
+                        ctx, ifs->getElse(), cleanup_label, join_label, cleanup_stmts, replaced,
+                        failed
+                    ));
+                }
+                return stmt;
+            }
+
+            if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                label->setSubStmt(ReplaceGotoWithClonedCleanupThenJoin(
+                    ctx, label->getSubStmt(), cleanup_label, join_label, cleanup_stmts, replaced,
+                    failed
+                ));
+                return label;
+            }
+
+            // Do not clone cleanup logic into nested loop/switch scopes; a
+            // goto there may have different structured-control ownership.
+            if (llvm::isa< clang::SwitchStmt >(stmt) || llvm::isa< clang::WhileStmt >(stmt)
+                || llvm::isa< clang::DoStmt >(stmt) || llvm::isa< clang::ForStmt >(stmt))
+            {
+                return stmt;
+            }
+
+            return stmt;
+        }
+
+        clang::Stmt *ReplaceGotoWithClonedGotoFreeThenJoin(
+            clang::ASTContext &ctx, clang::Stmt *stmt, clang::LabelDecl *target_label,
+            clang::LabelDecl *join_label, const std::vector< clang::Stmt * > &target_stmts,
+            unsigned &replaced, bool &failed
+        ) {
+            if (!stmt || failed) { return stmt; }
+            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                if (gs->getLabel() != target_label) { return stmt; }
+                clang::Stmt *replacement =
+                    CloneGotoFreeSeqAsStmt(ctx, target_stmts, join_label);
+                if (!replacement) {
+                    failed = true;
+                    return stmt;
+                }
+                ++replaced;
+                return replacement;
+            }
+
+            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                std::vector< clang::Stmt * > children;
+                unsigned before = replaced;
+                for (clang::Stmt *child : compound->body()) {
+                    children.push_back(ReplaceGotoWithClonedGotoFreeThenJoin(
+                        ctx, child, target_label, join_label, target_stmts, replaced, failed
+                    ));
+                    if (failed) { return stmt; }
+                }
+                return replaced != before ? detail::MakeCompound(ctx, children) : stmt;
+            }
+
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                ifs->setThen(ReplaceGotoWithClonedGotoFreeThenJoin(
+                    ctx, ifs->getThen(), target_label, join_label, target_stmts, replaced,
+                    failed
+                ));
+                if (failed) { return stmt; }
+                if (ifs->getElse()) {
+                    ifs->setElse(ReplaceGotoWithClonedGotoFreeThenJoin(
+                        ctx, ifs->getElse(), target_label, join_label, target_stmts, replaced,
+                        failed
+                    ));
+                }
+                return stmt;
+            }
+
+            if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                label->setSubStmt(ReplaceGotoWithClonedGotoFreeThenJoin(
+                    ctx, label->getSubStmt(), target_label, join_label, target_stmts,
+                    replaced, failed
+                ));
+                return label;
+            }
+
+            if (llvm::isa< clang::SwitchStmt >(stmt) || llvm::isa< clang::WhileStmt >(stmt)
+                || llvm::isa< clang::DoStmt >(stmt) || llvm::isa< clang::ForStmt >(stmt)
+                || llvm::isa< clang::CaseStmt >(stmt) || llvm::isa< clang::DefaultStmt >(stmt))
+            {
+                return stmt;
+            }
+
+            return stmt;
+        }
+
+        clang::Stmt *CloneCleanupLabelBeforeJoinGotos(
+            clang::ASTContext &ctx, clang::Stmt *stmt,
+            const std::unordered_map< clang::LabelDecl *, unsigned > &refs, bool &changed
+        ) {
+            if (!stmt) { return stmt; }
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                ifs->setThen(CloneCleanupLabelBeforeJoinGotos(ctx, ifs->getThen(), refs, changed));
+                if (ifs->getElse()) {
+                    ifs->setElse(
+                        CloneCleanupLabelBeforeJoinGotos(ctx, ifs->getElse(), refs, changed)
+                    );
+                }
+                return ifs;
+            }
+            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                ws->setBody(CloneCleanupLabelBeforeJoinGotos(ctx, ws->getBody(), refs, changed));
+                return ws;
+            }
+            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                ds->setBody(CloneCleanupLabelBeforeJoinGotos(ctx, ds->getBody(), refs, changed));
+                return ds;
+            }
+            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                fs->setBody(CloneCleanupLabelBeforeJoinGotos(ctx, fs->getBody(), refs, changed));
+                return fs;
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                ls->setSubStmt(
+                    CloneCleanupLabelBeforeJoinGotos(ctx, ls->getSubStmt(), refs, changed)
+                );
+                return ls;
+            }
+            if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
+                sw->setBody(CloneCleanupLabelBeforeJoinGotos(ctx, sw->getBody(), refs, changed));
+                return sw;
+            }
+
+            auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt);
+            if (!compound) { return stmt; }
+
+            std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
+            for (clang::Stmt *&child : body) {
+                bool child_changed = false;
+                child              = CloneCleanupLabelBeforeJoinGotos(ctx, child, refs, child_changed);
+                if (child_changed) { changed = true; }
+            }
+
+            bool body_changed  = changed;
+            bool local_changed = true;
+            while (local_changed) {
+                local_changed = false;
+                for (size_t label_idx = 0; label_idx + 1 < body.size(); ++label_idx) {
+                    clang::LabelDecl *cleanup_label = LeadingLabelDecl(body[label_idx]);
+                    if (!cleanup_label) { continue; }
+                    auto ref_it = refs.find(cleanup_label);
+                    if (ref_it == refs.end() || ref_it->second == 0
+                        || ref_it->second > kMaxClonedTailUses)
+                    {
+                        continue;
+                    }
+
+                    LocalLabelBlock cleanup_block;
+                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, cleanup_block)) {
+                        continue;
+                    }
+                    if (cleanup_block.end >= body.size()) { continue; }
+                    clang::LabelDecl *join_label = LeadingLabelDecl(body[cleanup_block.end]);
+                    if (!join_label || join_label == cleanup_label) { continue; }
+                    if (cleanup_block.stmts.size() > kMaxTerminalPrefixStmts) { continue; }
+                    if (!CleanupSeqHasCleanupLikeCall(cleanup_block.stmts)) { continue; }
+                    if (SeqEndsWithTerminator(ctx, cleanup_block.stmts)) { continue; }
+                    if (!StraightLineContinuationSeqIsSafe(cleanup_block.stmts)) { continue; }
+
+                    unsigned replaced = 0;
+                    bool failed       = false;
+                    for (size_t i = 0; i < cleanup_block.begin; ++i) {
+                        body[i] = ReplaceGotoWithClonedCleanupThenJoin(
+                            ctx, body[i], cleanup_label, join_label, cleanup_block.stmts,
+                            replaced, failed
+                        );
+                        if (failed) { break; }
+                    }
+                    if (failed || replaced != ref_it->second) { continue; }
+
+                    body.erase(
+                        body.begin() + static_cast< ptrdiff_t >(cleanup_block.begin),
+                        body.begin() + static_cast< ptrdiff_t >(cleanup_block.end)
+                    );
+                    changed      = true;
+                    body_changed = true;
+                    local_changed = true;
+                    break;
+                }
+            }
+
+            return body_changed ? detail::MakeCompound(ctx, body) : stmt;
+        }
+
+        clang::Stmt *CloneSmallStraightLineLabelBeforeJoinGotos(
+            clang::ASTContext &ctx, clang::Stmt *stmt,
+            const std::unordered_map< clang::LabelDecl *, unsigned > &refs, bool &changed
+        ) {
+            if (!stmt) { return stmt; }
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                ifs->setThen(
+                    CloneSmallStraightLineLabelBeforeJoinGotos(ctx, ifs->getThen(), refs, changed)
+                );
+                if (ifs->getElse()) {
+                    ifs->setElse(CloneSmallStraightLineLabelBeforeJoinGotos(
+                        ctx, ifs->getElse(), refs, changed
+                    ));
+                }
+                return ifs;
+            }
+            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                ws->setBody(
+                    CloneSmallStraightLineLabelBeforeJoinGotos(ctx, ws->getBody(), refs, changed)
+                );
+                return ws;
+            }
+            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                ds->setBody(
+                    CloneSmallStraightLineLabelBeforeJoinGotos(ctx, ds->getBody(), refs, changed)
+                );
+                return ds;
+            }
+            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                fs->setBody(
+                    CloneSmallStraightLineLabelBeforeJoinGotos(ctx, fs->getBody(), refs, changed)
+                );
+                return fs;
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                ls->setSubStmt(CloneSmallStraightLineLabelBeforeJoinGotos(
+                    ctx, ls->getSubStmt(), refs, changed
+                ));
+                return ls;
+            }
+            if (llvm::isa< clang::SwitchStmt >(stmt) || llvm::isa< clang::CaseStmt >(stmt)
+                || llvm::isa< clang::DefaultStmt >(stmt))
+            {
+                return stmt;
+            }
+
+            auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt);
+            if (!compound) { return stmt; }
+
+            std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
+            for (clang::Stmt *&child : body) {
+                bool child_changed = false;
+                child = CloneSmallStraightLineLabelBeforeJoinGotos(ctx, child, refs, child_changed);
+                if (child_changed) { changed = true; }
+            }
+
+            bool body_changed  = changed;
+            bool local_changed = true;
+            while (local_changed) {
+                local_changed = false;
+                for (size_t label_idx = 0; label_idx + 1 < body.size(); ++label_idx) {
+                    clang::LabelDecl *target_label = LeadingLabelDecl(body[label_idx]);
+                    if (!target_label) { continue; }
+                    auto ref_it = refs.find(target_label);
+                    if (ref_it == refs.end() || ref_it->second == 0
+                        || ref_it->second > kMaxClonedTailUses)
+                    {
+                        continue;
+                    }
+
+                    LocalLabelBlock target_block;
+                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, target_block)) {
+                        continue;
+                    }
+                    if (target_block.end >= body.size()) { continue; }
+                    clang::LabelDecl *join_label = LeadingLabelDecl(body[target_block.end]);
+                    if (!join_label || join_label == target_label) { continue; }
+
+                    if (target_block.stmts.size() > kMaxConditionalFallthroughBodyStmts) {
+                        continue;
+                    }
+                    if (SeqEndsWithTerminator(ctx, target_block.stmts)) { continue; }
+                    if (!StraightLineContinuationSeqIsSafe(target_block.stmts)) { continue; }
+                    if (SeqHasCallExpr(target_block.stmts)) { continue; }
+
+                    unsigned replaced = 0;
+                    bool failed       = false;
+                    for (size_t i = 0; i < target_block.begin; ++i) {
+                        body[i] = ReplaceGotoWithClonedCleanupThenJoin(
+                            ctx, body[i], target_label, join_label, target_block.stmts,
+                            replaced, failed
+                        );
+                        if (failed) { break; }
+                    }
+                    if (failed || replaced != ref_it->second) { continue; }
+
+                    body.erase(
+                        body.begin() + static_cast< ptrdiff_t >(target_block.begin),
+                        body.begin() + static_cast< ptrdiff_t >(target_block.end)
+                    );
+                    changed       = true;
+                    body_changed  = true;
+                    local_changed = true;
+                    break;
+                }
+            }
+
+            return body_changed ? detail::MakeCompound(ctx, body) : stmt;
+        }
+
+        clang::Stmt *CloneFallthroughLabelBeforeSyntheticJoinGotos(
+            clang::ASTContext &ctx, clang::Stmt *stmt,
+            const std::unordered_map< clang::LabelDecl *, unsigned > &refs, bool &changed
+        ) {
+            if (!stmt) { return stmt; }
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                ifs->setThen(CloneFallthroughLabelBeforeSyntheticJoinGotos(
+                    ctx, ifs->getThen(), refs, changed
+                ));
+                if (ifs->getElse()) {
+                    ifs->setElse(CloneFallthroughLabelBeforeSyntheticJoinGotos(
+                        ctx, ifs->getElse(), refs, changed
+                    ));
+                }
+                return ifs;
+            }
+            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                ws->setBody(CloneFallthroughLabelBeforeSyntheticJoinGotos(
+                    ctx, ws->getBody(), refs, changed
+                ));
+                return ws;
+            }
+            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                ds->setBody(CloneFallthroughLabelBeforeSyntheticJoinGotos(
+                    ctx, ds->getBody(), refs, changed
+                ));
+                return ds;
+            }
+            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                fs->setBody(CloneFallthroughLabelBeforeSyntheticJoinGotos(
+                    ctx, fs->getBody(), refs, changed
+                ));
+                return fs;
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                ls->setSubStmt(CloneFallthroughLabelBeforeSyntheticJoinGotos(
+                    ctx, ls->getSubStmt(), refs, changed
+                ));
+                return ls;
+            }
+            if (llvm::isa< clang::SwitchStmt >(stmt) || llvm::isa< clang::CaseStmt >(stmt)
+                || llvm::isa< clang::DefaultStmt >(stmt))
+            {
+                return stmt;
+            }
+
+            auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt);
+            if (!compound) { return stmt; }
+
+            std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
+            for (clang::Stmt *&child : body) {
+                bool child_changed = false;
+                child = CloneFallthroughLabelBeforeSyntheticJoinGotos(
+                    ctx, child, refs, child_changed
+                );
+                if (child_changed) { changed = true; }
+            }
+
+            bool body_changed  = changed;
+            bool local_changed = true;
+            while (local_changed) {
+                local_changed = false;
+                for (size_t label_idx = 1; label_idx + 1 < body.size(); ++label_idx) {
+                    clang::LabelDecl *target_label = LeadingLabelDecl(body[label_idx]);
+                    if (!target_label) { continue; }
+                    if (LabelHasNoFallthroughPredecessor(body, label_idx)) { continue; }
+
+                    auto ref_it = refs.find(target_label);
+                    if (ref_it == refs.end() || ref_it->second == 0
+                        || ref_it->second > kMaxClonedTailUses)
+                    {
+                        continue;
+                    }
+
+                    LocalLabelBlock target_block;
+                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, target_block)) {
+                        continue;
+                    }
+                    if (target_block.end >= body.size()) { continue; }
+                    clang::LabelDecl *join_label = LeadingLabelDecl(body[target_block.end]);
+                    if (!IsSyntheticScopeJoinLabel(join_label)) { continue; }
+                    if (target_block.stmts.empty()
+                        || target_block.stmts.size() > kMaxTerminalPrefixStmts)
+                    {
+                        continue;
+                    }
+                    if (SeqEndsWithTerminator(ctx, target_block.stmts)) { continue; }
+                    if (SeqHasUnsafeStructure(
+                            target_block.stmts, /*allow_goto=*/false,
+                            /*allow_return=*/false
+                        ))
+                    {
+                        continue;
+                    }
+
+                    unsigned replaced = 0;
+                    bool failed       = false;
+                    for (size_t i = 0; i < target_block.begin; ++i) {
+                        body[i] = ReplaceGotoWithClonedGotoFreeThenJoin(
+                            ctx, body[i], target_label, join_label, target_block.stmts,
+                            replaced, failed
+                        );
+                        if (failed) { break; }
+                    }
+                    if (failed || replaced != ref_it->second) { continue; }
+
+                    changed       = true;
+                    body_changed  = true;
+                    local_changed = true;
+                    break;
+                }
+            }
+
+            return body_changed ? detail::MakeCompound(ctx, body) : stmt;
+        }
+
+        bool TryFoldThreeGuardJoinAt(
+            clang::ASTContext &ctx, std::vector< clang::Stmt * > &body, size_t guard_idx,
+            const std::unordered_map< clang::LabelDecl *, unsigned > &refs
+        ) {
+            if (guard_idx + 3 >= body.size()) { return false; }
+
+            auto *skip_guard = llvm::dyn_cast< clang::IfStmt >(body[guard_idx]);
+            auto *alt_guard  = llvm::dyn_cast< clang::IfStmt >(body[guard_idx + 1]);
+            auto *join_guard = llvm::dyn_cast< clang::IfStmt >(body[guard_idx + 2]);
+            if (!skip_guard || !alt_guard || !join_guard) { return false; }
+            if (skip_guard->getElse() || alt_guard->getElse() || join_guard->getElse()
+                || skip_guard->getInit() || alt_guard->getInit() || join_guard->getInit()
+                || skip_guard->getConditionVariable() || alt_guard->getConditionVariable()
+                || join_guard->getConditionVariable())
+            {
+                return false;
+            }
+
+            clang::GotoStmt *skip_goto = SingleGotoStmt(skip_guard->getThen());
+            clang::GotoStmt *alt_goto  = SingleGotoStmt(alt_guard->getThen());
+            clang::GotoStmt *join_goto = SingleGotoStmt(join_guard->getThen());
+            if (!skip_goto || !alt_goto || !join_goto) { return false; }
+
+            clang::LabelDecl *join_label = skip_goto->getLabel();
+            clang::LabelDecl *alt_label  = alt_goto->getLabel();
+            if (!join_label || !alt_label || join_goto->getLabel() != join_label
+                || join_label == alt_label)
+            {
+                return false;
+            }
+
+            auto alt_ref = refs.find(alt_label);
+            auto join_ref = refs.find(join_label);
+            if (alt_ref == refs.end() || alt_ref->second != 1
+                || join_ref == refs.end() || join_ref->second != 2)
+            {
+                return false;
+            }
+
+            LocalLabelBlock alt_block;
+            if (!FindLabelBlockByDecl(ctx, body, alt_label, alt_block)) { return false; }
+            if (alt_block.begin <= guard_idx + 2) { return false; }
+            if (alt_block.stmts.empty() || alt_block.stmts.size() > kMaxTerminalPrefixStmts) {
+                return false;
+            }
+
+            if (alt_block.end >= body.size()) { return false; }
+            if (LeadingLabelDecl(body[alt_block.end]) != join_label) { return false; }
+
+            std::vector< clang::Stmt * > normal_region(
+                body.begin() + static_cast< ptrdiff_t >(guard_idx + 3),
+                body.begin() + static_cast< ptrdiff_t >(alt_block.begin)
+            );
+            if (normal_region.empty() || !SeqEndsWithTerminator(ctx, normal_region)) {
+                return false;
+            }
+            if (SeqHasUnsafeGuardedJoinMoveControl(normal_region)
+                || SeqHasUnsafeGuardedJoinMoveControl(alt_block.stmts))
+            {
+                return false;
+            }
+            if (SeqEndsWithTerminator(ctx, alt_block.stmts)) { return false; }
+
+            auto loc = skip_guard->getIfLoc();
+            auto *normal_if = clang::IfStmt::Create(
+                ctx, join_guard->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr,
+                nullptr, NegateExpr(ctx, join_guard->getCond()), join_guard->getLParenLoc(),
+                join_guard->getRParenLoc(), StmtFromSeq(ctx, normal_region)
+            );
+            auto *alt_if = clang::IfStmt::Create(
+                ctx, alt_guard->getIfLoc(), clang::IfStatementKind::Ordinary, nullptr,
+                nullptr, alt_guard->getCond(), alt_guard->getLParenLoc(),
+                alt_guard->getRParenLoc(), StmtFromSeq(ctx, alt_block.stmts),
+                alt_guard->getElseLoc(), normal_if
+            );
+            auto *outer_if = clang::IfStmt::Create(
+                ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                NegateExpr(ctx, skip_guard->getCond()), skip_guard->getLParenLoc(),
+                skip_guard->getRParenLoc(), alt_if
+            );
+
+            body.erase(
+                body.begin() + static_cast< ptrdiff_t >(guard_idx),
+                body.begin() + static_cast< ptrdiff_t >(alt_block.end)
+            );
+            body.insert(body.begin() + static_cast< ptrdiff_t >(guard_idx), outer_if);
+            return true;
+        }
+
+        bool StripRegionTrailingGotoToJoin(
+            clang::ASTContext &ctx, const std::vector< clang::Stmt * > &region,
+            clang::LabelDecl *join_label, std::vector< clang::Stmt * > &stripped
+        ) {
+            if (region.empty() || !join_label) { return false; }
+            clang::GotoStmt *join_goto = llvm::dyn_cast_or_null< clang::GotoStmt >(
+                DeepTrailingStmt(StmtFromSeq(ctx, region))
+            );
+            if (!join_goto || join_goto->getLabel() != join_label) { return false; }
+
+            clang::Stmt *stripped_stmt =
+                StripTrailingGoto(ctx, StmtFromSeq(ctx, region), join_label->getName());
+            stripped.clear();
+            AppendStmtSequence(stripped_stmt, stripped);
+            return !SeqHasUnsafeGuardedJoinMoveControl(stripped);
+        }
+
+        bool TryFoldIfGotoAltThenJoinAt(
+            clang::ASTContext &ctx, std::vector< clang::Stmt * > &body, size_t if_idx,
+            const std::unordered_map< clang::LabelDecl *, unsigned > &refs
+        ) {
+            if (if_idx + 2 >= body.size()) { return false; }
+            auto *ifs = llvm::dyn_cast< clang::IfStmt >(body[if_idx]);
+            if (!ifs || ifs->getElse() || ifs->getInit() || ifs->getConditionVariable()) {
+                return false;
+            }
+
+            clang::GotoStmt *alt_goto = SingleGotoStmt(ifs->getThen());
+            if (!alt_goto || !alt_goto->getLabel()) { return false; }
+            clang::LabelDecl *alt_label = alt_goto->getLabel();
+            auto alt_ref                = refs.find(alt_label);
+            if (alt_ref == refs.end() || alt_ref->second != 1) { return false; }
+
+            LocalLabelBlock alt_block;
+            if (!FindLabelBlockByDecl(ctx, body, alt_label, alt_block)) { return false; }
+            if (alt_block.begin <= if_idx + 1 || alt_block.end >= body.size()) {
+                return false;
+            }
+
+            clang::LabelDecl *join_label = LeadingLabelDecl(body[alt_block.end]);
+            if (!IsSyntheticScopeJoinLabel(join_label)) { return false; }
+            if (alt_block.stmts.empty() || alt_block.stmts.size() > kMaxTerminalPrefixStmts) {
+                return false;
+            }
+            if (SeqHasUnsafeGuardedJoinMoveControl(alt_block.stmts)) { return false; }
+            if (SeqEndsWithTerminator(ctx, alt_block.stmts)) { return false; }
+
+            std::vector< clang::Stmt * > false_region(
+                body.begin() + static_cast< ptrdiff_t >(if_idx + 1),
+                body.begin() + static_cast< ptrdiff_t >(alt_block.begin)
+            );
+            std::vector< clang::Stmt * > false_stripped;
+            if (!StripRegionTrailingGotoToJoin(ctx, false_region, join_label, false_stripped)) {
+                return false;
+            }
+
+            auto loc = ifs->getIfLoc();
+            auto *new_if = clang::IfStmt::Create(
+                ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr, ifs->getCond(),
+                ifs->getLParenLoc(), ifs->getRParenLoc(), StmtFromSeq(ctx, alt_block.stmts),
+                ifs->getElseLoc(), StmtFromSeq(ctx, false_stripped)
+            );
+
+            body.erase(
+                body.begin() + static_cast< ptrdiff_t >(if_idx),
+                body.begin() + static_cast< ptrdiff_t >(alt_block.end)
+            );
+            body.insert(body.begin() + static_cast< ptrdiff_t >(if_idx), new_if);
+            return true;
+        }
+
+        bool TryFoldIfThenJoinElseAltAt(
+            clang::ASTContext &ctx, std::vector< clang::Stmt * > &body, size_t if_idx
+        ) {
+            if (if_idx + 1 >= body.size()) { return false; }
+            auto *ifs = llvm::dyn_cast< clang::IfStmt >(body[if_idx]);
+            if (!ifs || ifs->getElse() || ifs->getInit() || ifs->getConditionVariable()) {
+                return false;
+            }
+
+            clang::LabelDecl *alt_label = LeadingLabelDecl(body[if_idx + 1]);
+            if (!alt_label) { return false; }
+            LocalLabelBlock alt_block;
+            if (!ExtractLocalLabelBlock(ctx, body, if_idx + 1, alt_block)) { return false; }
+            if (alt_block.end >= body.size()) { return false; }
+
+            clang::LabelDecl *join_label = LeadingLabelDecl(body[alt_block.end]);
+            if (!IsSyntheticScopeJoinLabel(join_label)) { return false; }
+            if (alt_block.stmts.empty() || alt_block.stmts.size() > kMaxTerminalPrefixStmts) {
+                return false;
+            }
+            if (SeqHasUnsafeGuardedJoinMoveControl(alt_block.stmts)) { return false; }
+            if (SeqEndsWithTerminator(ctx, alt_block.stmts)) { return false; }
+
+            std::vector< clang::Stmt * > then_region;
+            AppendStmtSequence(ifs->getThen(), then_region);
+            std::vector< clang::Stmt * > then_stripped;
+            if (GotoElimGetTarget(DeepTrailingStmt(ifs->getThen())) != join_label->getName()) {
+                return false;
+            }
+            clang::Stmt *stripped_then =
+                StripTrailingGoto(ctx, ifs->getThen(), join_label->getName());
+            then_stripped.clear();
+            AppendStmtSequence(stripped_then, then_stripped);
+            if (SeqHasUnsafeGuardedJoinMoveControl(then_stripped)) { return false; }
+
+            auto loc = ifs->getIfLoc();
+            auto *new_if = clang::IfStmt::Create(
+                ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr, ifs->getCond(),
+                ifs->getLParenLoc(), ifs->getRParenLoc(), StmtFromSeq(ctx, then_stripped),
+                ifs->getElseLoc(), StmtFromSeq(ctx, alt_block.stmts)
+            );
+
+            body.erase(
+                body.begin() + static_cast< ptrdiff_t >(if_idx),
+                body.begin() + static_cast< ptrdiff_t >(alt_block.end)
+            );
+            body.insert(body.begin() + static_cast< ptrdiff_t >(if_idx), new_if);
+            return true;
+        }
+
+        clang::Stmt *FoldGuardedJoinLabelChains(
+            clang::ASTContext &ctx, clang::Stmt *stmt,
+            const std::unordered_map< clang::LabelDecl *, unsigned > &refs, bool &changed
+        ) {
+            if (!stmt) { return stmt; }
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                ifs->setThen(
+                    FoldGuardedJoinLabelChains(ctx, ifs->getThen(), refs, changed)
+                );
+                if (ifs->getElse()) {
+                    ifs->setElse(
+                        FoldGuardedJoinLabelChains(ctx, ifs->getElse(), refs, changed)
+                    );
+                }
+                return ifs;
+            }
+            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                ws->setBody(FoldGuardedJoinLabelChains(ctx, ws->getBody(), refs, changed));
+                return ws;
+            }
+            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                ds->setBody(FoldGuardedJoinLabelChains(ctx, ds->getBody(), refs, changed));
+                return ds;
+            }
+            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                fs->setBody(FoldGuardedJoinLabelChains(ctx, fs->getBody(), refs, changed));
+                return fs;
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                ls->setSubStmt(
+                    FoldGuardedJoinLabelChains(ctx, ls->getSubStmt(), refs, changed)
+                );
+                return ls;
+            }
+            if (llvm::isa< clang::SwitchStmt >(stmt) || llvm::isa< clang::CaseStmt >(stmt)
+                || llvm::isa< clang::DefaultStmt >(stmt))
+            {
+                return stmt;
+            }
+
+            auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt);
+            if (!compound) { return stmt; }
+
+            std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
+            for (clang::Stmt *&child : body) {
+                child = FoldGuardedJoinLabelChains(ctx, child, refs, changed);
+            }
+
+            bool body_changed  = changed;
+            bool local_changed = true;
+            while (local_changed) {
+                local_changed = false;
+                for (size_t i = 0; i < body.size(); ++i) {
+                    if (TryFoldThreeGuardJoinAt(ctx, body, i, refs)
+                        || TryFoldIfGotoAltThenJoinAt(ctx, body, i, refs)
+                        || TryFoldIfThenJoinElseAltAt(ctx, body, i))
+                    {
+                        changed       = true;
+                        body_changed  = true;
+                        local_changed = true;
+                        break;
+                    }
+                }
+            }
+
+            return body_changed ? detail::MakeCompound(ctx, body) : stmt;
+        }
+
         clang::Stmt *FoldCrossCompoundIfLabelDiamonds(
             clang::ASTContext &ctx, clang::Stmt *stmt,
             const std::unordered_map< clang::LabelDecl *, unsigned > &refs
@@ -4366,6 +5188,387 @@ namespace patchestry::ast {
                     body.begin() + static_cast< ptrdiff_t >(alt_block.end)
                 );
                 return detail::MakeCompound(ctx, body);
+            }
+
+            return detail::MakeCompound(ctx, body);
+        }
+
+        struct DispatchGuard
+        {
+            clang::IfStmt *ifs       = nullptr;
+            clang::LabelDecl *target = nullptr;
+        };
+
+        clang::Stmt *BuildDispatchGuardChain(
+            clang::ASTContext &ctx, const std::vector< DispatchGuard > &guards,
+            const std::unordered_map< clang::LabelDecl *, std::vector< clang::Stmt * > > &arms,
+            clang::Stmt *default_stmt
+        ) {
+            clang::Stmt *tail = default_stmt;
+            for (size_t i = guards.size(); i != 0; --i) {
+                const DispatchGuard &guard = guards[i - 1];
+                auto arm_it                = arms.find(guard.target);
+                if (arm_it == arms.end()) { return nullptr; }
+                auto loc = guard.ifs->getIfLoc();
+                tail     = clang::IfStmt::Create(
+                    ctx, loc, clang::IfStatementKind::Ordinary, nullptr, nullptr,
+                    guard.ifs->getCond(), loc, loc, StmtFromSeq(ctx, arm_it->second), loc, tail
+                );
+            }
+            return tail;
+        }
+
+        bool TryFoldCompoundDispatchChainAt(
+            clang::ASTContext &ctx, std::vector< clang::Stmt * > &body, size_t guard_idx,
+            const std::unordered_map< clang::LabelDecl *, unsigned > &refs
+        ) {
+            std::vector< DispatchGuard > candidate_guards;
+            size_t cursor = guard_idx;
+            while (cursor < body.size()) {
+                auto *ifs = llvm::dyn_cast< clang::IfStmt >(body[cursor]);
+                if (!ifs || ifs->getElse() || ifs->getInit() || ifs->getConditionVariable()) {
+                    break;
+                }
+                clang::GotoStmt *go = SingleGotoStmt(ifs->getThen());
+                if (!go || !go->getLabel()) { break; }
+                candidate_guards.push_back({ ifs, go->getLabel() });
+                ++cursor;
+            }
+            if (candidate_guards.size() < 2) { return false; }
+
+            auto try_prefix = [&](size_t guard_count) -> bool {
+                std::vector< DispatchGuard > guards(
+                    candidate_guards.begin(),
+                    candidate_guards.begin() + static_cast< ptrdiff_t >(guard_count)
+                );
+                std::unordered_map< clang::LabelDecl *, unsigned > guard_refs;
+                for (const DispatchGuard &guard : guards) { ++guard_refs[guard.target]; }
+
+                for (const auto &[label, count] : guard_refs) {
+                    auto ref_it = refs.find(label);
+                    if (ref_it == refs.end() || ref_it->second != count) {
+                        return false;
+                    }
+                }
+
+                size_t default_start = guard_idx + guard_count;
+                if (default_start >= body.size()) {
+                    return false;
+                }
+
+                std::unordered_map< clang::LabelDecl *, LocalLabelBlock > target_blocks;
+                size_t first_label_idx = body.size();
+                size_t join_idx        = 0;
+                for (const DispatchGuard &guard : guards) {
+                    if (target_blocks.count(guard.target) != 0) { continue; }
+                    LocalLabelBlock block;
+                    if (!FindLabelBlockByDecl(ctx, body, guard.target, block)) {
+                        return false;
+                    }
+                    if (block.begin <= default_start) {
+                        return false;
+                    }
+                    first_label_idx = std::min(first_label_idx, block.begin);
+                    join_idx        = std::max(join_idx, block.end);
+                    target_blocks.emplace(guard.target, block);
+                }
+                if (first_label_idx == body.size() || join_idx >= body.size()) {
+                    return false;
+                }
+
+                for (size_t i = default_start; i < first_label_idx; ++i) {
+                    if (LeadingLabelDecl(body[i])) {
+                        return false;
+                    }
+                }
+                for (size_t i = first_label_idx; i < join_idx; ++i) {
+                    clang::LabelDecl *decl = LeadingLabelDecl(body[i]);
+                    if (!decl) { continue; }
+                    if (target_blocks.find(decl) == target_blocks.end()) {
+                        return false;
+                    }
+                }
+
+                clang::LabelDecl *join_label = LeadingLabelDecl(body[join_idx]);
+                if (!join_label) {
+                    return false;
+                }
+
+                std::unordered_map< clang::LabelDecl *, std::vector< clang::Stmt * > > arms;
+                unsigned stripped_join_gotos = 0;
+                for (const DispatchGuard &guard : guards) {
+                    const LocalLabelBlock &block = target_blocks.find(guard.target)->second;
+                    std::vector< clang::Stmt * > stmts = block.stmts;
+                    if (stmts.empty() || stmts.size() > kMaxTerminalPrefixStmts) {
+                        return false;
+                    }
+
+                    clang::GotoStmt *tail_go = llvm::dyn_cast_or_null< clang::GotoStmt >(
+                        DeepTrailingStmt(StmtFromSeq(ctx, stmts))
+                    );
+                    if (tail_go && tail_go->getLabel() == join_label) {
+                        clang::Stmt *stripped =
+                            StripTrailingGoto(ctx, StmtFromSeq(ctx, stmts), join_label->getName());
+                        stmts.clear();
+                        AppendStmtSequence(stripped, stmts);
+                        ++stripped_join_gotos;
+                    } else if (block.end != join_idx) {
+                        return false;
+                    }
+
+                    if (SeqHasUnsafeStructure(
+                            stmts, /*allow_goto=*/false, /*allow_return=*/false
+                        ))
+                    {
+                        return false;
+                    }
+                    arms.emplace(guard.target, std::move(stmts));
+                }
+                if (stripped_join_gotos == 0) {
+                    return false;
+                }
+
+                std::vector< clang::Stmt * > default_region(
+                    body.begin() + static_cast< ptrdiff_t >(default_start),
+                    body.begin() + static_cast< ptrdiff_t >(first_label_idx)
+                );
+                if (default_region.empty()) {
+                    return false;
+                }
+                if (SeqHasUnsafeStructure(
+                        default_region, /*allow_goto=*/true, /*allow_return=*/true
+                    ))
+                {
+                    return false;
+                }
+
+                clang::Stmt *replacement =
+                    BuildDispatchGuardChain(ctx, guards, arms, StmtFromSeq(ctx, default_region));
+                if (!replacement) { return false; }
+
+                body.erase(
+                    body.begin() + static_cast< ptrdiff_t >(guard_idx),
+                    body.begin() + static_cast< ptrdiff_t >(join_idx)
+                );
+                body.insert(body.begin() + static_cast< ptrdiff_t >(guard_idx), replacement);
+                return true;
+            };
+
+            for (size_t guard_count = candidate_guards.size(); guard_count >= 2; --guard_count) {
+                if (try_prefix(guard_count)) { return true; }
+                if (guard_count == 2) { break; }
+            }
+            return false;
+        }
+
+        bool TryFoldCrossCompoundDispatchArmAt(
+            clang::ASTContext &ctx, std::vector< clang::Stmt * > &parent_body,
+            size_t carrier_idx, clang::Stmt *&arm,
+            const std::unordered_map< clang::LabelDecl *, unsigned > &refs
+        ) {
+            auto *compound = llvm::dyn_cast_or_null< clang::CompoundStmt >(arm);
+            if (!compound || carrier_idx + 1 >= parent_body.size()) { return false; }
+
+            std::vector< clang::Stmt * > arm_body(
+                compound->body_begin(), compound->body_end()
+            );
+            for (size_t guard_idx = 0; guard_idx + 1 < arm_body.size(); ++guard_idx) {
+                std::vector< DispatchGuard > candidate_guards;
+                size_t cursor = guard_idx;
+                while (cursor < arm_body.size()) {
+                    auto *ifs = llvm::dyn_cast< clang::IfStmt >(arm_body[cursor]);
+                    if (!ifs || ifs->getElse() || ifs->getInit()
+                        || ifs->getConditionVariable())
+                    {
+                        break;
+                    }
+                    clang::GotoStmt *go = SingleGotoStmt(ifs->getThen());
+                    if (!go || !go->getLabel()) { break; }
+                    candidate_guards.push_back({ ifs, go->getLabel() });
+                    ++cursor;
+                }
+                if (candidate_guards.size() < 2) { continue; }
+
+                auto try_prefix = [&](size_t guard_count) -> bool {
+                    std::vector< DispatchGuard > guards(
+                        candidate_guards.begin(),
+                        candidate_guards.begin() + static_cast< ptrdiff_t >(guard_count)
+                    );
+                    std::unordered_map< clang::LabelDecl *, unsigned > guard_refs;
+                    for (const DispatchGuard &guard : guards) { ++guard_refs[guard.target]; }
+                    for (const auto &[label, count] : guard_refs) {
+                        auto ref_it = refs.find(label);
+                        if (ref_it == refs.end() || ref_it->second != count) {
+                            return false;
+                        }
+                    }
+
+                    size_t default_start = guard_idx + guard_count;
+                    if (default_start >= arm_body.size()) { return false; }
+
+                    std::unordered_map< clang::LabelDecl *, LocalLabelBlock > target_blocks;
+                    size_t first_label_idx = parent_body.size();
+                    size_t join_idx        = 0;
+                    for (const DispatchGuard &guard : guards) {
+                        if (target_blocks.count(guard.target) != 0) { continue; }
+                        LocalLabelBlock block;
+                        if (!FindLabelBlockByDecl(ctx, parent_body, guard.target, block)) {
+                            return false;
+                        }
+                        if (block.begin <= carrier_idx) { return false; }
+                        first_label_idx = std::min(first_label_idx, block.begin);
+                        join_idx        = std::max(join_idx, block.end);
+                        target_blocks.emplace(guard.target, block);
+                    }
+                    if (first_label_idx != carrier_idx + 1 || join_idx >= parent_body.size()) {
+                        return false;
+                    }
+                    for (size_t i = first_label_idx; i < join_idx; ++i) {
+                        clang::LabelDecl *decl = LeadingLabelDecl(parent_body[i]);
+                        if (!decl) { continue; }
+                        if (target_blocks.find(decl) == target_blocks.end()) { return false; }
+                    }
+
+                    clang::LabelDecl *join_label = LeadingLabelDecl(parent_body[join_idx]);
+                    if (!join_label) { return false; }
+
+                    std::unordered_map< clang::LabelDecl *, std::vector< clang::Stmt * > > arms;
+                    unsigned stripped_join_gotos = 0;
+                    for (const DispatchGuard &guard : guards) {
+                        const LocalLabelBlock &block = target_blocks.find(guard.target)->second;
+                        std::vector< clang::Stmt * > stmts = block.stmts;
+                        if (stmts.empty() || stmts.size() > kMaxTerminalPrefixStmts) {
+                            return false;
+                        }
+
+                        clang::GotoStmt *tail_go =
+                            llvm::dyn_cast_or_null< clang::GotoStmt >(
+                                DeepTrailingStmt(StmtFromSeq(ctx, stmts))
+                            );
+                        if (tail_go && tail_go->getLabel() == join_label) {
+                            clang::Stmt *stripped = StripTrailingGoto(
+                                ctx, StmtFromSeq(ctx, stmts), join_label->getName()
+                            );
+                            stmts.clear();
+                            AppendStmtSequence(stripped, stmts);
+                            ++stripped_join_gotos;
+                        } else if (block.end != join_idx) {
+                            return false;
+                        }
+                        if (SeqHasUnsafeStructure(
+                                stmts, /*allow_goto=*/false, /*allow_return=*/false
+                            ))
+                        {
+                            return false;
+                        }
+                        arms.emplace(guard.target, std::move(stmts));
+                    }
+                    if (stripped_join_gotos == 0) { return false; }
+
+                    std::vector< clang::Stmt * > default_region(
+                        arm_body.begin() + static_cast< ptrdiff_t >(default_start),
+                        arm_body.end()
+                    );
+                    if (default_region.empty()) { return false; }
+                    if (SeqHasUnsafeStructure(
+                            default_region, /*allow_goto=*/true, /*allow_return=*/true
+                        ))
+                    {
+                        return false;
+                    }
+
+                    clang::Stmt *replacement = BuildDispatchGuardChain(
+                        ctx, guards, arms, StmtFromSeq(ctx, default_region)
+                    );
+                    if (!replacement) { return false; }
+
+                    std::vector< clang::Stmt * > new_arm(
+                        arm_body.begin(), arm_body.begin() + static_cast< ptrdiff_t >(guard_idx)
+                    );
+                    new_arm.push_back(replacement);
+                    arm = StmtFromSeq(ctx, new_arm);
+
+                    parent_body.erase(
+                        parent_body.begin() + static_cast< ptrdiff_t >(first_label_idx),
+                        parent_body.begin() + static_cast< ptrdiff_t >(join_idx)
+                    );
+                    return true;
+                };
+
+                for (size_t guard_count = candidate_guards.size(); guard_count >= 2; --guard_count)
+                {
+                    if (try_prefix(guard_count)) { return true; }
+                    if (guard_count == 2) { break; }
+                }
+            }
+            return false;
+        }
+
+        clang::Stmt *FoldCrossCompoundDispatchChains(
+            clang::ASTContext &ctx, clang::Stmt *stmt,
+            const std::unordered_map< clang::LabelDecl *, unsigned > &refs
+        ) {
+            if (!stmt) { return stmt; }
+
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                ifs->setThen(FoldCrossCompoundDispatchChains(ctx, ifs->getThen(), refs));
+                if (ifs->getElse()) {
+                    ifs->setElse(FoldCrossCompoundDispatchChains(ctx, ifs->getElse(), refs));
+                }
+                return ifs;
+            }
+            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                ws->setBody(FoldCrossCompoundDispatchChains(ctx, ws->getBody(), refs));
+                return ws;
+            }
+            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                ds->setBody(FoldCrossCompoundDispatchChains(ctx, ds->getBody(), refs));
+                return ds;
+            }
+            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                fs->setBody(FoldCrossCompoundDispatchChains(ctx, fs->getBody(), refs));
+                return fs;
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                ls->setSubStmt(FoldCrossCompoundDispatchChains(ctx, ls->getSubStmt(), refs));
+                return ls;
+            }
+            if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
+                sw->setBody(FoldCrossCompoundDispatchChains(ctx, sw->getBody(), refs));
+                return sw;
+            }
+
+            auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt);
+            if (!compound) { return stmt; }
+
+            std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
+            for (clang::Stmt *&child : body) {
+                child = FoldCrossCompoundDispatchChains(ctx, child, refs);
+            }
+
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (size_t i = 0; i < body.size(); ++i) {
+                    if (TryFoldCompoundDispatchChainAt(ctx, body, i, refs)) {
+                        changed = true;
+                        break;
+                    }
+                    if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(body[i])) {
+                        clang::Stmt *then_arm = ifs->getThen();
+                        if (TryFoldCrossCompoundDispatchArmAt(ctx, body, i, then_arm, refs)) {
+                            ifs->setThen(then_arm);
+                            changed = true;
+                            break;
+                        }
+                        clang::Stmt *else_arm = ifs->getElse();
+                        if (TryFoldCrossCompoundDispatchArmAt(ctx, body, i, else_arm, refs)) {
+                            ifs->setElse(else_arm);
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
             }
 
             return detail::MakeCompound(ctx, body);
@@ -6140,6 +7343,11 @@ namespace patchestry::ast {
 
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
+        body = FoldCrossCompoundDispatchChains(ctx, fn->getBody(), refs);
+        if (body) { fn->setBody(body); }
+
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
         body = CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
         if (body) { fn->setBody(body); }
 
@@ -6151,6 +7359,11 @@ namespace patchestry::ast {
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
         body = FoldForwardSingleRefLabelRegions(ctx, fn->getBody(), refs);
+        if (body) { fn->setBody(body); }
+
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
+        body = FoldCrossCompoundDispatchChains(ctx, fn->getBody(), refs);
         if (body) { fn->setBody(body); }
 
         refs.clear();
@@ -6204,11 +7417,146 @@ namespace patchestry::ast {
         body = AttachEmptyLabelsToFollowingStmt(ctx, fn->getBody());
         if (body) { fn->setBody(body); }
 
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
+        body = FoldLocalGotoDiamonds(ctx, fn->getBody(), refs);
+        if (body) { fn->setBody(body); }
+
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
+        body = FoldCrossCompoundIfLabelDiamonds(ctx, fn->getBody(), refs);
+        if (body) { fn->setBody(body); }
+
         if (!ContainsSwitchStmt(fn->getBody())) {
             refs.clear();
             CountGotoDeclRefs(fn->getBody(), refs);
             body = CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
             if (body) { fn->setBody(body); }
+
+            goto_targets.clear();
+            seen.clear();
+            CollectGotoTargets(fn->getBody(), goto_targets, seen);
+            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
+            if (body) { fn->setBody(body); }
+
+            body = RemoveEmptyBlocks(ctx, fn->getBody());
+            if (body) { fn->setBody(body); }
+        }
+
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
+        bool cloned_fallthrough_join = false;
+        body = CloneFallthroughLabelBeforeSyntheticJoinGotos(
+            ctx, fn->getBody(), refs, cloned_fallthrough_join
+        );
+        if (body) { fn->setBody(body); }
+
+        if (cloned_fallthrough_join) {
+            refs.clear();
+            CountGotoDeclRefs(fn->getBody(), refs);
+            body = FoldLocalGotoDiamonds(ctx, fn->getBody(), refs);
+            if (body) { fn->setBody(body); }
+
+            for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                goto_targets.clear();
+                seen.clear();
+                CollectGotoTargets(fn->getBody(), goto_targets, seen);
+                body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
+                if (body) {
+                    fn->setBody(body);
+                } else {
+                    break;
+                }
+            }
+
+            goto_targets.clear();
+            seen.clear();
+            CollectGotoTargets(fn->getBody(), goto_targets, seen);
+            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
+            if (body) { fn->setBody(body); }
+
+            body = RemoveEmptyBlocks(ctx, fn->getBody());
+            if (body) { fn->setBody(body); }
+        }
+
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
+        bool folded_guarded_join = false;
+        body = FoldGuardedJoinLabelChains(ctx, fn->getBody(), refs, folded_guarded_join);
+        if (body) { fn->setBody(body); }
+
+        if (folded_guarded_join) {
+            for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                goto_targets.clear();
+                seen.clear();
+                CollectGotoTargets(fn->getBody(), goto_targets, seen);
+                body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
+                if (body) {
+                    fn->setBody(body);
+                } else {
+                    break;
+                }
+            }
+
+            goto_targets.clear();
+            seen.clear();
+            CollectGotoTargets(fn->getBody(), goto_targets, seen);
+            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
+            if (body) { fn->setBody(body); }
+
+            body = RemoveEmptyBlocks(ctx, fn->getBody());
+            if (body) { fn->setBody(body); }
+        }
+
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
+        bool cloned_small_join = false;
+        body = CloneSmallStraightLineLabelBeforeJoinGotos(
+            ctx, fn->getBody(), refs, cloned_small_join
+        );
+        if (body) { fn->setBody(body); }
+
+        if (cloned_small_join) {
+            for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                goto_targets.clear();
+                seen.clear();
+                CollectGotoTargets(fn->getBody(), goto_targets, seen);
+                body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
+                if (body) {
+                    fn->setBody(body);
+                } else {
+                    break;
+                }
+            }
+
+            goto_targets.clear();
+            seen.clear();
+            CollectGotoTargets(fn->getBody(), goto_targets, seen);
+            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
+            if (body) { fn->setBody(body); }
+
+            body = RemoveEmptyBlocks(ctx, fn->getBody());
+            if (body) { fn->setBody(body); }
+        }
+
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
+        bool cloned_cleanup_join = false;
+        body = CloneCleanupLabelBeforeJoinGotos(ctx, fn->getBody(), refs, cloned_cleanup_join);
+        if (body) { fn->setBody(body); }
+
+        if (cloned_cleanup_join) {
+            for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                goto_targets.clear();
+                seen.clear();
+                CollectGotoTargets(fn->getBody(), goto_targets, seen);
+                body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
+                if (body) {
+                    fn->setBody(body);
+                } else {
+                    break;
+                }
+            }
 
             goto_targets.clear();
             seen.clear();
