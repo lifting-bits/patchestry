@@ -14,6 +14,7 @@
 #include <clang/AST/Stmt.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace patchestry::ast {
@@ -41,7 +42,10 @@ namespace patchestry::ast {
     // Post-emission cleanup for prettier C output.
     // Flattens nested CompoundStmts and pushes LabelStmts inside
     // CompoundStmt bodies. Only call for patchir-decomp path.
-    void CleanupPrettyPrint(clang::FunctionDecl *fn, clang::ASTContext &ctx);
+    void CleanupPrettyPrint(
+        clang::FunctionDecl *fn, clang::ASTContext &ctx, bool report_cleanup = false,
+        std::string_view function_name = {}
+    );
 
     struct ClangEmissionValidationReport
     {

@@ -13,6 +13,7 @@
 #include <cctype>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -23,6 +24,7 @@
 #include <clang/AST/Stmt.h>
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/StringRef.h>
 #include <llvm/Support/raw_ostream.h>
 
 namespace patchestry::ast {
@@ -3923,23 +3925,6 @@ namespace patchestry::ast {
             return StmtFromSeq(ctx, cloned);
         }
 
-        clang::Stmt *CloneGotoFreeSeqAsStmt(
-            clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts,
-            clang::LabelDecl *trailing_goto
-        ) {
-            std::vector< clang::Stmt * > cloned;
-            for (clang::Stmt *stmt : stmts) {
-                clang::Stmt *copy = CloneGotoFreeStmt(ctx, stmt);
-                if (!copy) { return nullptr; }
-                AppendStmtSequence(copy, cloned);
-            }
-            if (trailing_goto) {
-                auto loc = VirtualLoc(ctx);
-                cloned.push_back(new (ctx) clang::GotoStmt(trailing_goto, loc, loc));
-            }
-            return StmtFromSeq(ctx, cloned);
-        }
-
         clang::Stmt *ReplaceGotoWithClonedJoinTail(
             clang::ASTContext &ctx, clang::Stmt *stmt, clang::LabelDecl *target,
             clang::LabelDecl *join, const std::vector< clang::Stmt * > &tail,
@@ -4427,69 +4412,6 @@ namespace patchestry::ast {
             return stmt;
         }
 
-        clang::Stmt *ReplaceGotoWithClonedGotoFreeThenJoin(
-            clang::ASTContext &ctx, clang::Stmt *stmt, clang::LabelDecl *target_label,
-            clang::LabelDecl *join_label, const std::vector< clang::Stmt * > &target_stmts,
-            unsigned &replaced, bool &failed
-        ) {
-            if (!stmt || failed) { return stmt; }
-            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
-                if (gs->getLabel() != target_label) { return stmt; }
-                clang::Stmt *replacement =
-                    CloneGotoFreeSeqAsStmt(ctx, target_stmts, join_label);
-                if (!replacement) {
-                    failed = true;
-                    return stmt;
-                }
-                ++replaced;
-                return replacement;
-            }
-
-            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
-                std::vector< clang::Stmt * > children;
-                unsigned before = replaced;
-                for (clang::Stmt *child : compound->body()) {
-                    children.push_back(ReplaceGotoWithClonedGotoFreeThenJoin(
-                        ctx, child, target_label, join_label, target_stmts, replaced, failed
-                    ));
-                    if (failed) { return stmt; }
-                }
-                return replaced != before ? detail::MakeCompound(ctx, children) : stmt;
-            }
-
-            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(ReplaceGotoWithClonedGotoFreeThenJoin(
-                    ctx, ifs->getThen(), target_label, join_label, target_stmts, replaced,
-                    failed
-                ));
-                if (failed) { return stmt; }
-                if (ifs->getElse()) {
-                    ifs->setElse(ReplaceGotoWithClonedGotoFreeThenJoin(
-                        ctx, ifs->getElse(), target_label, join_label, target_stmts, replaced,
-                        failed
-                    ));
-                }
-                return stmt;
-            }
-
-            if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                label->setSubStmt(ReplaceGotoWithClonedGotoFreeThenJoin(
-                    ctx, label->getSubStmt(), target_label, join_label, target_stmts,
-                    replaced, failed
-                ));
-                return label;
-            }
-
-            if (llvm::isa< clang::SwitchStmt >(stmt) || llvm::isa< clang::WhileStmt >(stmt)
-                || llvm::isa< clang::DoStmt >(stmt) || llvm::isa< clang::ForStmt >(stmt)
-                || llvm::isa< clang::CaseStmt >(stmt) || llvm::isa< clang::DefaultStmt >(stmt))
-            {
-                return stmt;
-            }
-
-            return stmt;
-        }
-
         clang::Stmt *CloneCleanupLabelBeforeJoinGotos(
             clang::ASTContext &ctx, clang::Stmt *stmt,
             const std::unordered_map< clang::LabelDecl *, unsigned > &refs, bool &changed
@@ -4688,122 +4610,6 @@ namespace patchestry::ast {
                         body.begin() + static_cast< ptrdiff_t >(target_block.begin),
                         body.begin() + static_cast< ptrdiff_t >(target_block.end)
                     );
-                    changed       = true;
-                    body_changed  = true;
-                    local_changed = true;
-                    break;
-                }
-            }
-
-            return body_changed ? detail::MakeCompound(ctx, body) : stmt;
-        }
-
-        clang::Stmt *CloneFallthroughLabelBeforeSyntheticJoinGotos(
-            clang::ASTContext &ctx, clang::Stmt *stmt,
-            const std::unordered_map< clang::LabelDecl *, unsigned > &refs, bool &changed
-        ) {
-            if (!stmt) { return stmt; }
-            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(CloneFallthroughLabelBeforeSyntheticJoinGotos(
-                    ctx, ifs->getThen(), refs, changed
-                ));
-                if (ifs->getElse()) {
-                    ifs->setElse(CloneFallthroughLabelBeforeSyntheticJoinGotos(
-                        ctx, ifs->getElse(), refs, changed
-                    ));
-                }
-                return ifs;
-            }
-            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
-                ws->setBody(CloneFallthroughLabelBeforeSyntheticJoinGotos(
-                    ctx, ws->getBody(), refs, changed
-                ));
-                return ws;
-            }
-            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
-                ds->setBody(CloneFallthroughLabelBeforeSyntheticJoinGotos(
-                    ctx, ds->getBody(), refs, changed
-                ));
-                return ds;
-            }
-            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
-                fs->setBody(CloneFallthroughLabelBeforeSyntheticJoinGotos(
-                    ctx, fs->getBody(), refs, changed
-                ));
-                return fs;
-            }
-            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                ls->setSubStmt(CloneFallthroughLabelBeforeSyntheticJoinGotos(
-                    ctx, ls->getSubStmt(), refs, changed
-                ));
-                return ls;
-            }
-            if (llvm::isa< clang::SwitchStmt >(stmt) || llvm::isa< clang::CaseStmt >(stmt)
-                || llvm::isa< clang::DefaultStmt >(stmt))
-            {
-                return stmt;
-            }
-
-            auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt);
-            if (!compound) { return stmt; }
-
-            std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
-            for (clang::Stmt *&child : body) {
-                bool child_changed = false;
-                child = CloneFallthroughLabelBeforeSyntheticJoinGotos(
-                    ctx, child, refs, child_changed
-                );
-                if (child_changed) { changed = true; }
-            }
-
-            bool body_changed  = changed;
-            bool local_changed = true;
-            while (local_changed) {
-                local_changed = false;
-                for (size_t label_idx = 1; label_idx + 1 < body.size(); ++label_idx) {
-                    clang::LabelDecl *target_label = LeadingLabelDecl(body[label_idx]);
-                    if (!target_label) { continue; }
-                    if (LabelHasNoFallthroughPredecessor(body, label_idx)) { continue; }
-
-                    auto ref_it = refs.find(target_label);
-                    if (ref_it == refs.end() || ref_it->second == 0
-                        || ref_it->second > kMaxClonedTailUses)
-                    {
-                        continue;
-                    }
-
-                    LocalLabelBlock target_block;
-                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, target_block)) {
-                        continue;
-                    }
-                    if (target_block.end >= body.size()) { continue; }
-                    clang::LabelDecl *join_label = LeadingLabelDecl(body[target_block.end]);
-                    if (!IsSyntheticScopeJoinLabel(join_label)) { continue; }
-                    if (target_block.stmts.empty()
-                        || target_block.stmts.size() > kMaxTerminalPrefixStmts)
-                    {
-                        continue;
-                    }
-                    if (SeqEndsWithTerminator(ctx, target_block.stmts)) { continue; }
-                    if (SeqHasUnsafeStructure(
-                            target_block.stmts, /*allow_goto=*/false,
-                            /*allow_return=*/false
-                        ))
-                    {
-                        continue;
-                    }
-
-                    unsigned replaced = 0;
-                    bool failed       = false;
-                    for (size_t i = 0; i < target_block.begin; ++i) {
-                        body[i] = ReplaceGotoWithClonedGotoFreeThenJoin(
-                            ctx, body[i], target_label, join_label, target_block.stmts,
-                            replaced, failed
-                        );
-                        if (failed) { break; }
-                    }
-                    if (failed || replaced != ref_it->second) { continue; }
-
                     changed       = true;
                     body_changed  = true;
                     local_changed = true;
@@ -7149,97 +6955,182 @@ namespace patchestry::ast {
             for (auto *child : s->children()) { NormalizeConditions(ctx, child); }
         }
 
+        struct ClangCleanupMetrics
+        {
+            size_t gotos       = 0;
+            size_t labels      = 0;
+            size_t dangling    = 0;
+            size_t cross_scope = 0;
+        };
+
+        ClangCleanupMetrics MeasureClangCleanup(clang::Stmt *stmt) {
+            ClangCleanupMetrics metrics;
+
+            std::unordered_map< clang::LabelDecl *, unsigned > refs;
+            CountGotoDeclRefs(stmt, refs);
+            for (const auto &[label, count] : refs) {
+                (void)label;
+                metrics.gotos += count;
+            }
+
+            std::unordered_set< clang::LabelDecl * > defined;
+            CollectDefinedLabels(stmt, defined);
+            metrics.labels = defined.size();
+
+            for (const auto &[label, count] : refs) {
+                if (!defined.contains(label)) { metrics.dangling += count; }
+            }
+
+            metrics.cross_scope = CollectCrossScopeGotoTargets(stmt).size();
+            return metrics;
+        }
+
+        llvm::StringRef CleanupReportName(std::string_view name) {
+            if (name.empty()) { return "<unknown>"; }
+            return llvm::StringRef(name.data(), name.size());
+        }
+
     } // anonymous namespace
 
-    void CleanupPrettyPrint(clang::FunctionDecl *fn, clang::ASTContext &ctx) {
+    void CleanupPrettyPrint(
+        clang::FunctionDecl *fn, clang::ASTContext &ctx, bool report_cleanup,
+        std::string_view function_name
+    ) {
         if (!fn || !fn->hasBody()) { return; }
+        auto initial_metrics = MeasureClangCleanup(fn->getBody());
         auto *body = CleanupStmtTree(ctx, fn->getBody());
         if (body) { fn->setBody(body); }
 
-        // Eliminate gotos to immediately following labels.  Iterates
-        // to handle cascading patterns.
-        for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+        auto apply_body = [&](clang::Stmt *next) {
+            if (next) { fn->setBody(next); }
+        };
+        auto run_with_refs = [&](const auto &rewrite) {
+            std::unordered_map< clang::LabelDecl *, unsigned > refs;
+            CountGotoDeclRefs(fn->getBody(), refs);
+            apply_body(rewrite(refs));
+        };
+        auto run_goto_to_next_label_fixed_point = [&]() {
+            for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                std::unordered_set< clang::LabelDecl * > goto_targets;
+                std::unordered_set< clang::Stmt * > seen;
+                CollectGotoTargets(fn->getBody(), goto_targets, seen);
+                body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
+                if (body) {
+                    fn->setBody(body);
+                } else {
+                    break;
+                }
+            }
+        };
+        auto run_goto_to_next_label_once = [&]() {
             std::unordered_set< clang::LabelDecl * > goto_targets;
             std::unordered_set< clang::Stmt * > seen;
             CollectGotoTargets(fn->getBody(), goto_targets, seen);
             body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
-            if (body) {
-                fn->setBody(body);
-            } else {
-                break;
-            }
-        }
+            if (body) { fn->setBody(body); }
+        };
+        auto run_remove_dead_labels = [&]() {
+            std::unordered_set< clang::LabelDecl * > goto_targets;
+            std::unordered_set< clang::Stmt * > seen;
+            CollectGotoTargets(fn->getBody(), goto_targets, seen);
+            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
+            if (body) { fn->setBody(body); }
+        };
+        auto run_remove_empty_blocks = [&]() {
+            body = RemoveEmptyBlocks(ctx, fn->getBody());
+            if (body) { fn->setBody(body); }
+        };
+        auto run_late_join_fixups = [&]() {
+            run_goto_to_next_label_fixed_point();
+            run_remove_dead_labels();
+            run_remove_empty_blocks();
+        };
+
+        // Eliminate gotos to immediately following labels.  Iterates
+        // to handle cascading patterns.
+        run_goto_to_next_label_fixed_point();
 
         // Scope creation + goto-to-next-label cascade.  ScopeifyIfGotos
         // converts if(c) goto L; stmts; L: → if(!c) { stmts; }, which
         // may create new goto-to-next-label adjacencies, so iterate.
+        std::vector< std::function< void() > > fixed_point_cleanup_schedule = {
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return RepairCrossScopeLabelEntries(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() { apply_body(HoistCrossScopeLabelEntries(ctx, fn, fn->getBody())); },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return FoldClangSwitchLocalCaseTargets(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return ScopeifyIfGotos(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return FoldConditionalFallthroughChains(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() { apply_body(ConvertImmediateLoopExitGotosToBreak(ctx, fn->getBody())); },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return PromoteLocalBackwardGotoLoops(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return FoldLocalGotoDiamonds(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return FoldCrossCompoundIfLabelDiamonds(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return CloneNoFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return FoldForwardSingleRefLabelRegions(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return SinkCommonTerminalEpilogues(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return CloneNoFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
+                });
+            },
+            [&]() { run_goto_to_next_label_once(); },
+            [&]() {
+                run_with_refs([&](const auto &refs) {
+                    return FoldClangSwitchLocalCaseTargets(ctx, fn->getBody(), refs);
+                });
+            },
+        };
         for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
             auto *prev = fn->getBody();
-            std::unordered_map< clang::LabelDecl *, unsigned > refs;
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = RepairCrossScopeLabelEntries(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            body = HoistCrossScopeLabelEntries(ctx, fn, fn->getBody());
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = FoldClangSwitchLocalCaseTargets(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = ScopeifyIfGotos(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = FoldConditionalFallthroughChains(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            body = ConvertImmediateLoopExitGotosToBreak(ctx, fn->getBody());
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = PromoteLocalBackwardGotoLoops(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = FoldLocalGotoDiamonds(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = FoldCrossCompoundIfLabelDiamonds(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = CloneNoFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = FoldForwardSingleRefLabelRegions(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = SinkCommonTerminalEpilogues(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = CloneNoFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-            std::unordered_set< clang::LabelDecl * > goto_targets;
-            std::unordered_set< clang::Stmt * > seen;
-            CollectGotoTargets(fn->getBody(), goto_targets, seen);
-            body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
-            if (body) { fn->setBody(body); }
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = FoldClangSwitchLocalCaseTargets(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
+            for (const auto &step : fixed_point_cleanup_schedule) { step(); }
             if (fn->getBody() == prev) { break; }
         }
 
@@ -7445,67 +7336,12 @@ namespace patchestry::ast {
 
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
-        bool cloned_fallthrough_join = false;
-        body = CloneFallthroughLabelBeforeSyntheticJoinGotos(
-            ctx, fn->getBody(), refs, cloned_fallthrough_join
-        );
-        if (body) { fn->setBody(body); }
-
-        if (cloned_fallthrough_join) {
-            refs.clear();
-            CountGotoDeclRefs(fn->getBody(), refs);
-            body = FoldLocalGotoDiamonds(ctx, fn->getBody(), refs);
-            if (body) { fn->setBody(body); }
-
-            for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
-                goto_targets.clear();
-                seen.clear();
-                CollectGotoTargets(fn->getBody(), goto_targets, seen);
-                body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
-                if (body) {
-                    fn->setBody(body);
-                } else {
-                    break;
-                }
-            }
-
-            goto_targets.clear();
-            seen.clear();
-            CollectGotoTargets(fn->getBody(), goto_targets, seen);
-            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-            if (body) { fn->setBody(body); }
-
-            body = RemoveEmptyBlocks(ctx, fn->getBody());
-            if (body) { fn->setBody(body); }
-        }
-
-        refs.clear();
-        CountGotoDeclRefs(fn->getBody(), refs);
         bool folded_guarded_join = false;
         body = FoldGuardedJoinLabelChains(ctx, fn->getBody(), refs, folded_guarded_join);
         if (body) { fn->setBody(body); }
 
         if (folded_guarded_join) {
-            for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
-                goto_targets.clear();
-                seen.clear();
-                CollectGotoTargets(fn->getBody(), goto_targets, seen);
-                body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
-                if (body) {
-                    fn->setBody(body);
-                } else {
-                    break;
-                }
-            }
-
-            goto_targets.clear();
-            seen.clear();
-            CollectGotoTargets(fn->getBody(), goto_targets, seen);
-            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-            if (body) { fn->setBody(body); }
-
-            body = RemoveEmptyBlocks(ctx, fn->getBody());
-            if (body) { fn->setBody(body); }
+            run_late_join_fixups();
         }
 
         refs.clear();
@@ -7517,26 +7353,7 @@ namespace patchestry::ast {
         if (body) { fn->setBody(body); }
 
         if (cloned_small_join) {
-            for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
-                goto_targets.clear();
-                seen.clear();
-                CollectGotoTargets(fn->getBody(), goto_targets, seen);
-                body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
-                if (body) {
-                    fn->setBody(body);
-                } else {
-                    break;
-                }
-            }
-
-            goto_targets.clear();
-            seen.clear();
-            CollectGotoTargets(fn->getBody(), goto_targets, seen);
-            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-            if (body) { fn->setBody(body); }
-
-            body = RemoveEmptyBlocks(ctx, fn->getBody());
-            if (body) { fn->setBody(body); }
+            run_late_join_fixups();
         }
 
         refs.clear();
@@ -7546,32 +7363,27 @@ namespace patchestry::ast {
         if (body) { fn->setBody(body); }
 
         if (cloned_cleanup_join) {
-            for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
-                goto_targets.clear();
-                seen.clear();
-                CollectGotoTargets(fn->getBody(), goto_targets, seen);
-                body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
-                if (body) {
-                    fn->setBody(body);
-                } else {
-                    break;
-                }
-            }
-
-            goto_targets.clear();
-            seen.clear();
-            CollectGotoTargets(fn->getBody(), goto_targets, seen);
-            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-            if (body) { fn->setBody(body); }
-
-            body = RemoveEmptyBlocks(ctx, fn->getBody());
-            if (body) { fn->setBody(body); }
+            run_late_join_fixups();
         }
 
         // Cosmetic: fold double negations and `!(a OP b)` comparisons in
         // if/while/do/for conditions.  Runs last — purely a readability
         // pass, no effect on goto/label structure.
         NormalizeConditions(ctx, fn->getBody());
+
+        if (report_cleanup) {
+            auto final_metrics = MeasureClangCleanup(fn->getBody());
+            llvm::errs() << "CLANG_CLEANUP_SUMMARY function="
+                         << CleanupReportName(function_name)
+                         << " initial_gotos=" << initial_metrics.gotos
+                         << " final_gotos=" << final_metrics.gotos
+                         << " initial_labels=" << initial_metrics.labels
+                         << " final_labels=" << final_metrics.labels
+                         << " initial_dangling=" << initial_metrics.dangling
+                         << " final_dangling=" << final_metrics.dangling
+                         << " initial_cross_scope=" << initial_metrics.cross_scope
+                         << " final_cross_scope=" << final_metrics.cross_scope << "\n";
+        }
     }
 
 } // namespace patchestry::ast

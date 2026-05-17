@@ -1,5 +1,7 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -structuring-improvement-report -emit-cir -emit-mlir -emit-llvm -print-tu -output %t.report > %t.report.stdout 2> %t.report.stderr
+// RUN: diff -u %t.c %t.report.c
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
 // C-LABEL: unsigned long encode_basic_field

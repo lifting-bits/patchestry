@@ -2,6 +2,8 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -emit-llvm -print-tu -output %t.repeat >> /dev/null 2>&1
 // RUN: diff -u %t.c %t.repeat.c
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -structuring-improvement-report -emit-cir -emit-llvm -print-tu -output %t.report > %t.report.stdout 2> %t.report.stderr
+// RUN: diff -u %t.c %t.report.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=C %s --input-file %t.c

@@ -4,6 +4,8 @@
 // RUN: test -e %t.cir
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -print-tu -output %t.repeat > %t.repeat.stdout 2> %t.repeat.stderr
 // RUN: diff -u %t.c %t.repeat.c
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -structuring-improvement-report -emit-cir -print-tu -output %t.report > %t.report.stdout 2> %t.report.stderr
+// RUN: diff -u %t.c %t.report.c
 // RUN: %file-check -vv -check-prefix=LIFTED %s --input-file %t.c
 //
 // CVE-2016-6563 / FUN_0000b920 regression for issue #236.  Three
