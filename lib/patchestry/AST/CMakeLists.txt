@@ -11,7 +11,6 @@ add_library(patchestry_ast STATIC
   TypeBuilder.cpp
   Utils.cpp
   SNode.cpp
-  SNodeDebug.cpp
   SNodeRegion.cpp
   ClangEmitter.cpp
   ClangEmitterCleanup.cpp

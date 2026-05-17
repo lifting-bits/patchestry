@@ -47,8 +47,6 @@ namespace patchestry::ast {
       private:
         void set_sema_context(clang::DeclContext *dc);
 
-        void write_to_file(void);
-
         void create_globals(clang::ASTContext &ctx, VariableMap &serialized_variables);
 
         Program &get_program(void) const { return program; }

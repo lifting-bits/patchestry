@@ -1840,8 +1840,6 @@ namespace patchestry::ast {
 
     void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
 
-    void PcodeASTConsumer::write_to_file(void) {}
-
     void PcodeASTConsumer::create_globals(
         clang::ASTContext &ctx, VariableMap &serialized_variables
     ) {
