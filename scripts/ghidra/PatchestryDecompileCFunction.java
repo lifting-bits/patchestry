@@ -129,7 +129,7 @@ public class PatchestryDecompileCFunction extends GhidraScript {
             if (addrStr.startsWith("0x") || addrStr.startsWith("0X")) {
                 addrStr = addrStr.substring(2);
             }
-            addr = addrFactory.getDefaultAddressSpace().getAddress(addrStr);
+            addr = addrFactory.getAddress(addrStr);
         } catch (Exception ignored) {
             // Not an address; fall through.
         }
