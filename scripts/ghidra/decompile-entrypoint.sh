@@ -340,6 +340,13 @@ function run_decompile_c {
         guess_architecture="-processor ${ARCHITECTURE}"
     fi
 
+    # Ghidra's analyzeHeadless exits 0 even when a postScript throws, so the
+    # $? check below is necessary but not sufficient. PatchestryDecompileCFunction
+    # writes the output file only on success; remove any stale or pre-created
+    # (empty) file first so that a non-empty file afterwards is a reliable
+    # success signal.
+    rm -f "${OUTPUT_FILE}"
+
     ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
         -readOnly \
         -deleteProject \
@@ -349,9 +356,14 @@ function run_decompile_c {
         -postScript "PatchestryDecompileCFunction" \
         ${FUNCTION_NAME} \
         ${OUTPUT_FILE}
+    local status=$?
 
-    if [ $? -ne 0 ]; then
+    if [ $status -ne 0 ]; then
         die "Decompilation to C failed"
+    fi
+
+    if [ ! -s "${OUTPUT_FILE}" ]; then
+        die "Decompilation to C produced no output; PatchestryDecompileCFunction failed (see Ghidra log above)."
     fi
 }
 

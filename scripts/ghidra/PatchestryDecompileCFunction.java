@@ -13,6 +13,10 @@
  * what Ghidra's own decompiler produced for the same body so you can
  * compare expectations.
  *
+ * The output is preceded by C declarations for every type the function
+ * references (return type, parameters, locals, and their transitive
+ * dependencies), so the emitted .c is self-contained for inspection.
+ *
  * Usage (headless): single positional arg form, mirrors
  *   PatchestryDecompileFunctions single mode.
  *
@@ -34,9 +38,15 @@ import ghidra.app.decompiler.component.DecompilerUtils;
 
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
+import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.DataTypeWriter;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
+import ghidra.program.model.listing.Parameter;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.pcode.HighSymbol;
+import ghidra.program.model.pcode.LocalSymbolMap;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolTable;
 import ghidra.program.model.symbol.SymbolType;
@@ -44,6 +54,11 @@ import ghidra.program.model.symbol.SymbolType;
 import java.io.BufferedWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 public class PatchestryDecompileCFunction extends GhidraScript {
 
@@ -159,13 +174,79 @@ public class PatchestryDecompileCFunction extends GhidraScript {
             + "enclosing-function, symbol/label, namespace path.");
     }
 
+    // Collect the data types the function references at the surface: its
+    // return type, parameters, and decompiler-recovered locals. DataTypeWriter
+    // expands these transitively (struct fields, pointee types, typedef
+    // targets), so seeding it with the top-level types is sufficient.
+    private List<DataType> collectReferencedTypes(Function fn, DecompileResults results) {
+        // LinkedHashSet: dedup while keeping a stable, reproducible order.
+        Set<DataType> seeds = new LinkedHashSet<>();
+
+        DataType returnType = fn.getReturnType();
+        if (returnType != null) {
+            seeds.add(returnType);
+        }
+        for (Parameter param : fn.getParameters()) {
+            DataType paramType = param.getDataType();
+            if (paramType != null) {
+                seeds.add(paramType);
+            }
+        }
+
+        // Locals come from the decompiler's HighFunction, which is available
+        // because openDecompiler() enables toggleSyntaxTree(true). It may
+        // still be null if the syntax tree failed to build — emit the body
+        // anyway in that case.
+        HighFunction highFn = results.getHighFunction();
+        if (highFn != null) {
+            LocalSymbolMap localSymbols = highFn.getLocalSymbolMap();
+            Iterator<HighSymbol> it = localSymbols.getSymbols();
+            while (it.hasNext()) {
+                DataType localType = it.next().getDataType();
+                if (localType != null) {
+                    seeds.add(localType);
+                }
+            }
+        }
+
+        return new ArrayList<>(seeds);
+    }
+
+    // Emit C declarations for `types` (and their transitive dependencies) as a
+    // preamble ahead of the function body. DataTypeWriter orders dependencies
+    // before dependents and flushes the writer itself; it never closes the
+    // underlying Writer, so the caller's try-with-resources keeps ownership.
+    // Type emission is best-effort: a failure here must not suppress the C
+    // body, which is the primary debugging artifact.
+    private void writeTypeDefinitions(BufferedWriter writer, List<DataType> types) {
+        if (types.isEmpty()) {
+            return;
+        }
+        try {
+            // Write the marker before constructing DataTypeWriter: its
+            // constructor immediately emits the standard builtin typedefs,
+            // so the marker must precede it to head the whole type block.
+            writer.write("// --- referenced type definitions ---\n");
+            DataTypeWriter typeWriter =
+                new DataTypeWriter(currentProgram.getDataTypeManager(), writer);
+            // throwExceptionOnInvalidType=false: skip a malformed type rather
+            // than aborting the whole preamble.
+            typeWriter.write(types, monitor, false);
+            writer.write('\n');
+        } catch (Exception e) {
+            println("Warning: failed to emit type definitions for "
+                + "decompile-c output: " + e.getMessage());
+        }
+    }
+
     private String renderHeader(Function fn) {
         StringBuilder sb = new StringBuilder();
         sb.append("// function:  ").append(fn.getName(true)).append('\n');
         sb.append("// entry:     ").append(fn.getEntryPoint()).append('\n');
         sb.append("// signature: ").append(fn.getSignature()).append('\n');
         sb.append("// arch:      ").append(getLanguageID()).append('\n');
-        sb.append("// (decompiled by Ghidra DecompInterface for debugging)\n");
+        sb.append("// (decompiled by Ghidra DecompInterface for debugging;\n");
+        sb.append("//  referenced type definitions are emitted below)\n");
         return sb.toString();
     }
 
@@ -199,8 +280,11 @@ public class PatchestryDecompileCFunction extends GhidraScript {
                 throw new RuntimeException(
                     "Ghidra produced no C output for " + fn.getName(true));
             }
+            List<DataType> referencedTypes = collectReferencedTypes(fn, results);
             try (BufferedWriter writer = Files.newBufferedWriter(outputPath)) {
                 writer.write(renderHeader(fn));
+                writer.write('\n');
+                writeTypeDefinitions(writer, referencedTypes);
                 writer.write(cSource);
                 if (!cSource.endsWith("\n")) {
                     writer.write('\n');

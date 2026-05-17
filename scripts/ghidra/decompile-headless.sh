@@ -232,8 +232,16 @@ build_docker_command() {
             echo "Error: --c-source requires --function"
             exit 1
         fi
+        # --c-source also accepts an address (0x...) or a Ghidra auto-name
+        # (FUN_...) in addition to a real C symbol. Only a C symbol gets the
+        # Mach-O leading-underscore treatment; addresses and FUN_ names must be
+        # passed through verbatim so PatchestryDecompileCFunction can resolve
+        # them (prefixing them with '_' yields an unresolvable target).
         if file "$INPUT_PATH" | grep -q "Mach-O"; then
-            FUNCTION_NAME="_$FUNCTION_NAME"
+            case "$FUNCTION_NAME" in
+                0x*|0X*|FUN_*) ;;
+                *) FUNCTION_NAME="_$FUNCTION_NAME" ;;
+            esac
         fi
         ARGS="--command decompile-c --function \"$FUNCTION_NAME\" $ARGS"
     elif [  -n "$LIST_FUNCTIONS" ]; then
