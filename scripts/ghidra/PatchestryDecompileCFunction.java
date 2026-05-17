@@ -219,9 +219,6 @@ public class PatchestryDecompileCFunction extends GhidraScript {
     // Type emission is best-effort: a failure here must not suppress the C
     // body, which is the primary debugging artifact.
     private void writeTypeDefinitions(BufferedWriter writer, List<DataType> types) {
-        if (types.isEmpty()) {
-            return;
-        }
         try {
             // Write the marker before constructing DataTypeWriter: its
             // constructor immediately emits the standard builtin typedefs,

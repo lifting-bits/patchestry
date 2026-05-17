@@ -342,10 +342,12 @@ function run_decompile_c {
 
     # Ghidra's analyzeHeadless exits 0 even when a postScript throws, so the
     # $? check below is necessary but not sufficient. PatchestryDecompileCFunction
-    # writes the output file only on success; remove any stale or pre-created
-    # (empty) file first so that a non-empty file afterwards is a reliable
-    # success signal.
-    rm -f "${OUTPUT_FILE}"
+    # writes the output file only on success; truncate any stale or pre-created
+    # file first so that a non-empty file afterwards is a reliable success
+    # signal. Truncation (not unlink) is required: OUTPUT_FILE may be a Docker
+    # bind-mounted single file, which cannot be removed (EBUSY) but can be
+    # truncated in place.
+    : > "${OUTPUT_FILE}" 2>/dev/null || true
 
     ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
         -readOnly \
