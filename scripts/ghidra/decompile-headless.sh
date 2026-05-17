@@ -14,7 +14,14 @@ Options:
   -h, --help                           Show this help message and exit
   -i, --input                          Path to the input file
   -f, --function                       Name of the function to decompile
+                                       (with --c-source, may also be an
+                                       address e.g. 0x0000f69c, including
+                                       any address inside the function body)
   -l, --list-functions                 List all functions from input file
+      --c-source                       Emit Ghidra's plain-C decompilation
+                                       for the function selected by --function
+                                       (debugging aid; output is a .c file,
+                                       not JSON). Requires --function.
   -o, --output                         Path to the output file where results will be saved
   -v, --verbose                        Enable verbose output
   -t, --interactive                    Start Docker container in interactive mode
@@ -42,6 +49,8 @@ Examples:
   ./decompile-headless.sh --input /path/to/file --list-functions --output /path/to/output.json // List all functions from binary
   ./decompile-headless.sh --input /path/to/file --function bl_usb__send_message \\
       --output /tmp/out.json --sanitize-extraout
+  ./decompile-headless.sh --input /path/to/file --c-source --function FUN_0000f69c \\
+      --output /tmp/FUN_0000f69c.c // Ghidra C decompilation of one function
 EOF
 }
 
@@ -76,6 +85,10 @@ parse_args() {
                 ;;
             -l|--list-functions)
                 LIST_FUNCTIONS="true"
+                shift
+                ;;
+            --c-source)
+                C_SOURCE="true"
                 shift
                 ;;
             -o|--output)
@@ -203,54 +216,83 @@ validate_paths() {
     fi
 }
 
+# Assemble the `docker run` invocation in the DOCKER_CMD array rather than a
+# string. The array is executed directly as "${DOCKER_CMD[@]}", so no element
+# is ever re-parsed by a shell — a FUNCTION_NAME or path containing shell
+# metacharacters ($(...), backticks, ';') is passed through as inert data
+# instead of being evaluated. (Building a string and running it with `eval`
+# would execute such metacharacters on the caller's machine.)
 build_docker_command() {
-    CI=""
+    DOCKER_CMD=(docker run --rm)
+
     if [ -n "$CI_OUTPUT_FOLDER" ]; then
         # Translate to host path for Docker-in-Docker scenarios
-        local HOST_CI_OUTPUT_FOLDER=$(translate_to_host_path "$CI_OUTPUT_FOLDER")
+        local HOST_CI_OUTPUT_FOLDER
+        HOST_CI_OUTPUT_FOLDER=$(translate_to_host_path "$CI_OUTPUT_FOLDER")
         # Make directory writable by container user (for DinD scenarios)
         chmod 1777 "$CI_OUTPUT_FOLDER" 2>/dev/null || true
-        CI="-v $HOST_CI_OUTPUT_FOLDER:/mnt/output:rw"
+        DOCKER_CMD+=(-v "$HOST_CI_OUTPUT_FOLDER:/mnt/output:rw")
     fi
 
-    local ARGS=
-    if [  -n "$LIST_FUNCTIONS" ]; then
-        ARGS="--command list-functions $ARGS"
+    # Build the entrypoint script arguments (command mode, function, flags).
+    local SCRIPT_ARGS=()
+    if [ -n "$C_SOURCE" ]; then
+        if [ -z "$FUNCTION_NAME" ]; then
+            echo "Error: --c-source requires --function"
+            exit 1
+        fi
+        # --c-source also accepts an address (0x...) or a Ghidra auto-name
+        # (FUN_...) in addition to a real C symbol. Only a C symbol gets the
+        # Mach-O leading-underscore treatment; addresses and FUN_ names must be
+        # passed through verbatim so PatchestryDecompileCFunction can resolve
+        # them (prefixing them with '_' yields an unresolvable target).
+        if file "$INPUT_PATH" | grep -q "Mach-O"; then
+            case "$FUNCTION_NAME" in
+                0x*|0X*|FUN_*) ;;
+                *) FUNCTION_NAME="_$FUNCTION_NAME" ;;
+            esac
+        fi
+        SCRIPT_ARGS=(--command decompile-c --function "$FUNCTION_NAME")
+    elif [ -n "$LIST_FUNCTIONS" ]; then
+        SCRIPT_ARGS=(--command list-functions)
     elif [ -n "$FUNCTION_NAME" ]; then
         if file "$INPUT_PATH" | grep -q "Mach-O"; then
             FUNCTION_NAME="_$FUNCTION_NAME"
         fi
-        ARGS="--command decompile --function \"$FUNCTION_NAME\" $ARGS"
+        SCRIPT_ARGS=(--command decompile --function "$FUNCTION_NAME")
     else
-        ARGS="--command decompile-all $ARGS"
+        SCRIPT_ARGS=(--command decompile-all)
     fi
 
-    # Append sanitizer flags (quoted individually so values survive eval).
-    for extra in "${SANITIZER_ARGS[@]}"; do
-        ARGS="$ARGS \"$extra\""
-    done
+    # Sanitizer flags are forwarded verbatim.
+    SCRIPT_ARGS+=("${SANITIZER_ARGS[@]}")
 
     if [ -n "$CI_OUTPUT_FOLDER" ]; then
-        INPUT_PATH=$(basename "$INPUT_PATH")
-        OUTPUT_PATH=$(basename "$OUTPUT_PATH")
-        RUN="docker run --rm \
-            $CI \
-            trailofbits/patchestry-decompilation:latest \
-            --input /mnt/output/$INPUT_PATH \
-            $ARGS --output /mnt/output/$OUTPUT_PATH"
-        echo "CMD: ${RUN}"
-
+        local input_base output_base
+        input_base=$(basename "$INPUT_PATH")
+        output_base=$(basename "$OUTPUT_PATH")
+        DOCKER_CMD+=(
+            trailofbits/patchestry-decompilation:latest
+            --input "/mnt/output/$input_base"
+            "${SCRIPT_ARGS[@]}"
+            --output "/mnt/output/$output_base"
+        )
+        echo "CMD: ${DOCKER_CMD[*]}"
     else
-        RUN="docker run --rm \
-            -v \"$INPUT_PATH:/input.o\" \
-            -v \"$OUTPUT_PATH:/output.json\" \
-            trailofbits/patchestry-decompilation:latest"
+        DOCKER_CMD+=(
+            -v "$INPUT_PATH:/input.o"
+            -v "$OUTPUT_PATH:/output.json"
+            trailofbits/patchestry-decompilation:latest
+        )
 
         if [ "$INTERACTIVE" = true ]; then
-            RUN="${RUN} --entrypoint /bin/bash"
+            DOCKER_CMD+=(--entrypoint /bin/bash)
         else
-            RUN="${RUN} --input /input.o \
-                ${ARGS} --output /output.json"
+            DOCKER_CMD+=(
+                --input /input.o
+                "${SCRIPT_ARGS[@]}"
+                --output /output.json
+            )
         fi
     fi
 }
@@ -275,10 +317,10 @@ main() {
 
     if [ "$VERBOSE" = true ]; then
         echo "Running Docker container with the following command:"
-        echo "$RUN"
+        echo "${DOCKER_CMD[*]}"
     fi
 
-    eval "$RUN"
+    "${DOCKER_CMD[@]}"
 }
 
 main "$@"

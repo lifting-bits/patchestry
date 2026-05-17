@@ -35,9 +35,14 @@ Options:
     - list-functions: List all functions in the binary.
     - decompile: Decompile a single function.
     - decompile-all: Decompile all functions in the binary.
+    - decompile-c: Emit Ghidra's plain-C decompilation for a single function
+      (debugging companion to 'decompile'; output is a .c file, not JSON).
 
   --function <FUNCTION_NAME>
-      Decompile a specific function to extract pcode. This option is required when using the 'decompile' command.
+      Decompile a specific function to extract pcode. This option is required
+      when using the 'decompile' or 'decompile-c' command. For 'decompile-c'
+      this may also be an address (e.g. 0x0000f69c) — including any address
+      inside the function body, which will resolve to the enclosing function.
 
   --output <OUTPUT_FILE>
       Specify the output file to write the results.
@@ -163,6 +168,10 @@ function validate_args {
 
     if [[ "$COMMAND" == "decompile" && -z "$FUNCTION_NAME" ]]; then
         die "--function is required when --command decompile is specified."
+    fi
+
+    if [[ "$COMMAND" == "decompile-c" && -z "$FUNCTION_NAME" ]]; then
+        die "--function is required when --command decompile-c is specified."
     fi
 
     if [[ -z "$OUTPUT_FILE" ]]; then
@@ -321,6 +330,45 @@ function run_list_functions {
     fi
 }
 
+# Run the C-source companion script. Mirrors run_decompile_single but
+# targets PatchestryDecompileCFunction, which writes plain C (not JSON).
+function run_decompile_c {
+    echo "Running Ghidra headless script to decompile '$FUNCTION_NAME' to C..."
+
+    local guess_architecture=""
+    if [[ -n "$ARCHITECTURE" ]]; then
+        guess_architecture="-processor ${ARCHITECTURE}"
+    fi
+
+    # Ghidra's analyzeHeadless exits 0 even when a postScript throws, so the
+    # $? check below is necessary but not sufficient. PatchestryDecompileCFunction
+    # writes the output file only on success; truncate any stale or pre-created
+    # file first so that a non-empty file afterwards is a reliable success
+    # signal. Truncation (not unlink) is required: OUTPUT_FILE may be a Docker
+    # bind-mounted single file, which cannot be removed (EBUSY) but can be
+    # truncated in place.
+    : > "${OUTPUT_FILE}" 2>/dev/null || true
+
+    ${GHIDRA_HEADLESS} ${GHIDRA_PROJECTS} patchestry-decompilation \
+        -readOnly \
+        -deleteProject \
+        -import ${INPUT_FILE} \
+        ${guess_architecture}\
+        -scriptPath ${GHIDRA_SCRIPTS} \
+        -postScript "PatchestryDecompileCFunction" \
+        ${FUNCTION_NAME} \
+        ${OUTPUT_FILE}
+    local status=$?
+
+    if [ $status -ne 0 ]; then
+        die "Decompilation to C failed"
+    fi
+
+    if [ ! -s "${OUTPUT_FILE}" ]; then
+        die "Decompilation to C produced no output; PatchestryDecompileCFunction failed (see Ghidra log above)."
+    fi
+}
+
 # Function to run Ghidra headless script for decompiling
 function run_decompile_single {
     echo "Running Ghidra headless script to decompile the single function '$FUNCTION_NAME'..."
@@ -414,6 +462,9 @@ function main {
             ;;
         decompile-all)
             run_decompile_all
+            ;;
+        decompile-c)
+            run_decompile_c
             ;;
         *)
             die "Unknown command '$COMMAND'."
