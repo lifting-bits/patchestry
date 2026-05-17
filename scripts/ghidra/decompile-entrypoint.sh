@@ -218,7 +218,8 @@ function detect_processor {
     local mode="32"
     # this grep will take only the first match
     local processor_name=$(echo "$file_output" | grep -o -E \
-        'x86-64|Intel 80386|ARMv[0-9]+|armv[0-9]+|ARM aarch64|ARM|AArch64|MIPS|PowerPC|AVR|MSP430|8051|68k|SPARC|RISC-V|Xtensa|CR16C|Z80|6502|PIC')
+        'x86-64|Intel 80386|ARMv[0-9]+|armv[0-9]+|ARM aarch64|ARM|AArch64|MIPS|PowerPC|AVR|MSP430|8051|68k|SPARC|RISC-V|Xtensa|CR16C|Z80|6502|PIC' \
+        | head -n 1)
             case "$processor_name" in
                 "x86-64")
                     processor_name="x86"
