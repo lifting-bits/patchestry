@@ -636,17 +636,36 @@ namespace patchestry::ast {
         {
             std::string_view name;
             SRewriteDecision rewrite_decision = SRewriteDecision::LeaveGoto;
+            size_t source_candidates           = 0;
+            size_t priority                    = 0;
+            size_t estimated_benefit           = 0;
+            size_t estimated_cost              = 1;
+            size_t sequence                    = 0;
             std::function< bool() > rewrite;
         };
 
         struct SNodeCleanupScheduleReport
         {
-            size_t passes_run                       = 0;
+            size_t candidates_queued                = 0;
+            size_t candidates_run                   = 0;
             size_t changed_passes                   = 0;
             size_t changed_profitable_rewrite_passes = 0;
+            size_t rewrite_candidates_consumed       = 0;
+            size_t fixed_point_iterations           = 0;
 
             bool changed() const { return changed_passes != 0; }
         };
+
+        void MergeSNodeCleanupScheduleReport(
+            SNodeCleanupScheduleReport &dst, const SNodeCleanupScheduleReport &src
+        ) {
+            dst.candidates_queued += src.candidates_queued;
+            dst.candidates_run += src.candidates_run;
+            dst.changed_passes += src.changed_passes;
+            dst.changed_profitable_rewrite_passes += src.changed_profitable_rewrite_passes;
+            dst.rewrite_candidates_consumed += src.rewrite_candidates_consumed;
+            dst.fixed_point_iterations += src.fixed_point_iterations;
+        }
 
         bool IsProfitableRewriteDecision(SRewriteDecision decision) {
             return decision != SRewriteDecision::LeaveGoto;
@@ -654,13 +673,38 @@ namespace patchestry::ast {
 
         template< typename RewriteFn >
         SNodeCleanupPass MakeSNodeCleanupPass(
-            std::string_view name, SRewriteDecision rewrite_decision, RewriteFn rewrite
+            std::string_view name, SRewriteDecision rewrite_decision, RewriteFn rewrite,
+            size_t priority = 0, size_t estimated_benefit = 1, size_t estimated_cost = 1,
+            size_t source_candidates = 0
         ) {
             SNodeCleanupPass pass;
             pass.name             = name;
             pass.rewrite_decision = rewrite_decision;
+            pass.source_candidates = source_candidates;
+            pass.priority         = priority;
+            pass.estimated_benefit = estimated_benefit;
+            pass.estimated_cost   = std::max<size_t>(estimated_cost, 1);
             pass.rewrite          = rewrite;
             return pass;
+        }
+
+        std::vector< SNodeCleanupPass >
+        BuildSNodeCleanupCandidateQueue(std::vector< SNodeCleanupPass > passes) {
+            for (size_t i = 0; i < passes.size(); ++i) { passes[i].sequence = i; }
+            std::stable_sort(
+                passes.begin(), passes.end(),
+                [](const SNodeCleanupPass &lhs, const SNodeCleanupPass &rhs) {
+                    if (lhs.priority != rhs.priority) { return lhs.priority > rhs.priority; }
+                    if (lhs.estimated_benefit != rhs.estimated_benefit) {
+                        return lhs.estimated_benefit > rhs.estimated_benefit;
+                    }
+                    if (lhs.estimated_cost != rhs.estimated_cost) {
+                        return lhs.estimated_cost < rhs.estimated_cost;
+                    }
+                    return lhs.sequence < rhs.sequence;
+                }
+            );
+            return passes;
         }
 
         template< typename RunCleanupFn >
@@ -668,14 +712,17 @@ namespace patchestry::ast {
             const std::vector< SNodeCleanupPass > &passes, RunCleanupFn &&run_cleanup
         ) {
             SNodeCleanupScheduleReport report;
-            for (const auto &pass : passes) {
-                ++report.passes_run;
+            auto queue = BuildSNodeCleanupCandidateQueue(passes);
+            report.candidates_queued = queue.size();
+            for (const auto &pass : queue) {
+                ++report.candidates_run;
                 bool changed = run_cleanup(pass.name, pass.rewrite);
                 if (!changed) { continue; }
 
                 ++report.changed_passes;
                 if (IsProfitableRewriteDecision(pass.rewrite_decision)) {
                     ++report.changed_profitable_rewrite_passes;
+                    report.rewrite_candidates_consumed += pass.source_candidates;
                 }
             }
             return report;
@@ -688,13 +735,46 @@ namespace patchestry::ast {
             SNodeCleanupScheduleReport total;
             for (int pass = 0; pass < max_iterations; ++pass) {
                 auto iteration = RunSNodeCleanupSchedule(make_passes(), run_cleanup);
-                total.passes_run += iteration.passes_run;
-                total.changed_passes += iteration.changed_passes;
-                total.changed_profitable_rewrite_passes +=
-                    iteration.changed_profitable_rewrite_passes;
+                ++iteration.fixed_point_iterations;
+                MergeSNodeCleanupScheduleReport(total, iteration);
                 if (!iteration.changed()) { break; }
             }
             return total;
+        }
+
+        struct SRewriteCandidateActionScore
+        {
+            size_t count   = 0;
+            size_t benefit = 0;
+            size_t cost    = 0;
+        };
+
+        SRewriteCandidateActionScore ScoreRewriteCandidatesForDecision(
+            const SRewriteCandidateReport &report, SRewriteDecision decision
+        ) {
+            SRewriteCandidateActionScore score;
+            for (const auto &candidate : report.candidate_list) {
+                if (candidate.decision != decision) { continue; }
+                ++score.count;
+                score.benefit += candidate.estimated_benefit;
+                score.cost += std::max<size_t>(candidate.estimated_cost, 1);
+            }
+            return score;
+        }
+
+        template< typename RewriteFn >
+        void AddCandidateDrivenCleanupPass(
+            std::vector< SNodeCleanupPass > &passes, const SRewriteCandidateReport &candidates,
+            std::string_view name, SRewriteDecision decision, RewriteFn rewrite
+        ) {
+            auto score = ScoreRewriteCandidatesForDecision(candidates, decision);
+            if (score.count == 0) { return; }
+            passes.push_back(MakeSNodeCleanupPass(
+                name, decision, rewrite,
+                /*priority=*/0,
+                /*estimated_benefit=*/1,
+                /*estimated_cost=*/1, score.count
+            ));
         }
 
         struct ControlShapeSummary
@@ -1102,6 +1182,8 @@ namespace patchestry::ast {
                 std::vector< SNode * > root_body;
                 bool have_structured = false;
                 std::unordered_map< const clang::Stmt *, unsigned > baseline_payload_stmts;
+                SNodeCleanupScheduleReport cleanup_schedule_report;
+                SRewriteCandidateReport rewrite_candidate_report;
 
                 if (options.use_structuring_pass) {
                     if (options.verify_no_node_loss) {
@@ -1159,81 +1241,92 @@ namespace patchestry::ast {
                         };
 
                         auto make_profitable_rewrite_passes = [&]() {
+                            auto candidates = ExtractSNodeRewriteCandidates(root_body);
                             std::vector< SNodeCleanupPass > passes;
-                            passes.push_back(MakeSNodeCleanupPass(
+                            AddCandidateDrivenCleanupPass(
+                                passes, candidates,
                                 "DuplicateSwitchCaseTargets", SRewriteDecision::Clone,
                                 [&]() { return DuplicateSwitchCaseTargets(root_body, factory); }
-                            ));
-                            passes.push_back(MakeSNodeCleanupPass(
+                            );
+                            AddCandidateDrivenCleanupPass(
+                                passes, candidates,
                                 "FoldSwitchLocalCaseTargets", SRewriteDecision::Move,
                                 [&]() {
                                     return FoldSwitchLocalCaseTargets(
                                         root_body, factory, ctx
                                     );
                                 }
-                            ));
-                            passes.push_back(MakeSNodeCleanupPass(
+                            );
+                            AddCandidateDrivenCleanupPass(
+                                passes, candidates,
                                 "DuplicateSmallTerminatingTargets", SRewriteDecision::Clone,
                                 [&]() {
                                     return DuplicateSmallTerminatingTargets(root_body, factory);
                                 }
-                            ));
-                            passes.push_back(MakeSNodeCleanupPass(
+                            );
+                            AddCandidateDrivenCleanupPass(
+                                passes, candidates,
                                 "DuplicateSmallEpilogueTargets", SRewriteDecision::Clone,
                                 [&]() {
                                     return DuplicateSmallEpilogueTargets(
                                         root_body, factory, ctx
                                     );
                                 }
-                            ));
-                            passes.push_back(MakeSNodeCleanupPass(
+                            );
+                            AddCandidateDrivenCleanupPass(
+                                passes, candidates,
                                 "DuplicateSwitchFallthroughTargets", SRewriteDecision::Clone,
                                 [&]() {
                                     return DuplicateSwitchFallthroughTargets(
                                         root_body, factory, ctx
                                     );
                                 }
-                            ));
-                            passes.push_back(MakeSNodeCleanupPass(
+                            );
+                            AddCandidateDrivenCleanupPass(
+                                passes, candidates,
                                 "DuplicateLoopContinueTargets", SRewriteDecision::Clone,
                                 [&]() {
                                     return DuplicateLoopContinueTargets(
                                         root_body, factory, ctx
                                     );
                                 }
-                            ));
-                            passes.push_back(MakeSNodeCleanupPass(
+                            );
+                            AddCandidateDrivenCleanupPass(
+                                passes, candidates,
                                 "FoldGuardedFallthroughTargets", SRewriteDecision::Move,
                                 [&]() {
                                     return FoldGuardedFallthroughTargets(
                                         root_body, factory, ctx
                                     );
                                 }
-                            ));
-                            passes.push_back(MakeSNodeCleanupPass(
+                            );
+                            AddCandidateDrivenCleanupPass(
+                                passes, candidates,
                                 "RepairCrossScopeLabelEntries", SRewriteDecision::Clone,
                                 [&]() {
                                     return RepairCrossScopeLabelEntries(
                                         root_body, factory, ctx
                                     );
                                 }
-                            ));
-                            passes.push_back(MakeSNodeCleanupPass(
+                            );
+                            AddCandidateDrivenCleanupPass(
+                                passes, candidates,
                                 "DuplicateStackGuardReturnTargets", SRewriteDecision::Clone,
                                 [&]() {
                                     return DuplicateStackGuardReturnTargets(
                                         root_body, factory, ctx
                                     );
                                 }
-                            ));
-                            passes.push_back(MakeSNodeCleanupPass(
+                            );
+                            AddCandidateDrivenCleanupPass(
+                                passes, candidates,
                                 "DuplicateCleanupReturnTargets", SRewriteDecision::Clone,
                                 [&]() {
                                     return DuplicateCleanupReturnTargets(
                                         root_body, factory, ctx
                                     );
                                 }
-                            ));
+                            );
                             return passes;
                         };
 
@@ -1354,12 +1447,22 @@ namespace patchestry::ast {
                             return passes;
                         };
 
-                        RunSNodeCleanupSchedule(make_initial_cleanup_schedule(), run_cleanup);
-                        RunSNodeCleanupFixedPoint(
-                            make_fixed_point_cleanup_schedule, run_cleanup,
-                            kMaxGotoEliminationPasses
+                        MergeSNodeCleanupScheduleReport(
+                            cleanup_schedule_report,
+                            RunSNodeCleanupSchedule(make_initial_cleanup_schedule(), run_cleanup)
                         );
-                        RunSNodeCleanupSchedule(make_final_cleanup_passes(), run_cleanup);
+                        MergeSNodeCleanupScheduleReport(
+                            cleanup_schedule_report,
+                            RunSNodeCleanupFixedPoint(
+                                make_fixed_point_cleanup_schedule, run_cleanup,
+                                kMaxGotoEliminationPasses
+                            )
+                        );
+                        MergeSNodeCleanupScheduleReport(
+                            cleanup_schedule_report,
+                            RunSNodeCleanupSchedule(make_final_cleanup_passes(), run_cleanup)
+                        );
+                        rewrite_candidate_report = ExtractSNodeRewriteCandidates(root_body);
 
                         if (options.verify_no_node_loss) {
                             AnnotateSNodeOrigins(*builder, root_body);
@@ -1434,7 +1537,34 @@ namespace patchestry::ast {
                                  << " small_target_clone=" << report.small_target_clone
                                  << " terminal_epilogue=" << report.terminal_epilogue
                                  << " cross_scope_gotos=" << report.cross_scope_gotos
-                                 << " residual_hard=" << report.residual_hard << "\n";
+                                 << " residual_hard=" << report.residual_hard
+                                 << " cleanup_candidates_queued="
+                                 << cleanup_schedule_report.candidates_queued
+                                 << " cleanup_candidates_run="
+                                 << cleanup_schedule_report.candidates_run
+                                 << " cleanup_changed_passes="
+                                 << cleanup_schedule_report.changed_passes
+                                 << " cleanup_profitable_rewrites="
+                                 << cleanup_schedule_report.changed_profitable_rewrite_passes
+                                 << " cleanup_rewrite_candidates_consumed="
+                                 << cleanup_schedule_report.rewrite_candidates_consumed
+                                 << " cleanup_fixed_point_iterations="
+                                 << cleanup_schedule_report.fixed_point_iterations
+                                 << " rewrite_candidate_regions="
+                                 << rewrite_candidate_report.regions
+                                 << " rewrite_candidates=" << rewrite_candidate_report.candidates
+                                 << " rewrite_profitable_candidates="
+                                 << rewrite_candidate_report.profitable_candidates
+                                 << " rewrite_clone_candidates="
+                                 << rewrite_candidate_report.clone_candidates
+                                 << " rewrite_move_candidates="
+                                 << rewrite_candidate_report.move_candidates
+                                 << " rewrite_hoist_candidates="
+                                 << rewrite_candidate_report.hoist_candidates
+                                 << " rewrite_sink_candidates="
+                                 << rewrite_candidate_report.sink_candidates
+                                 << " rewrite_leave_goto_candidates="
+                                 << rewrite_candidate_report.leave_goto_candidates << "\n";
                 }
 
                 if (options.verify_no_node_loss && have_structured) {

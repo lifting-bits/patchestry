@@ -132,6 +132,46 @@ namespace patchestry::ast {
         bool profitable() const { return decision != SRewriteDecision::LeaveGoto; }
     };
 
+    struct SRewriteCandidate
+    {
+        size_t id                         = 0;
+        SRegionKind region_kind           = SRegionKind::Root;
+        std::string region_name;
+        const SNode *owner                = nullptr;
+        SRewriteAction action             = SRewriteAction::Move;
+        SRewriteDecision decision         = SRewriteDecision::LeaveGoto;
+        size_t payload_origins            = 0;
+        size_t estimated_cost             = 1;
+        size_t estimated_benefit          = 0;
+        std::vector< std::string > diagnostics;
+
+        bool profitable() const { return decision != SRewriteDecision::LeaveGoto; }
+    };
+
+    struct SRewriteCandidateExtractionOptions
+    {
+        SRewriteProfitabilityOptions clone_options;
+        SRewriteProfitabilityOptions move_options;
+        SRewriteProfitabilityOptions hoist_options;
+        SRewriteProfitabilityOptions sink_options;
+        bool include_unprofitable = true;
+        bool include_hoist_sink   = true;
+    };
+
+    struct SRewriteCandidateReport
+    {
+        size_t regions               = 0;
+        size_t candidates            = 0;
+        size_t profitable_candidates = 0;
+        size_t clone_candidates      = 0;
+        size_t move_candidates       = 0;
+        size_t hoist_candidates      = 0;
+        size_t sink_candidates       = 0;
+        size_t leave_goto_candidates = 0;
+        size_t payload_origins       = 0;
+        std::vector< SRewriteCandidate > candidate_list;
+    };
+
     /// Build a region graph from SNode body-list ownership.  Raw Clang
     /// CompoundStmt payloads inside SStmt remain opaque payload atoms; they are
     /// counted but not converted into structured regions.
@@ -189,5 +229,14 @@ namespace patchestry::ast {
         const std::vector< SNode * > &seq, SRewriteAction action,
         const SRewriteProfitabilityOptions &options = {}
     );
+
+    SRewriteCandidateExtractionOptions MakeDefaultSRewriteCandidateExtractionOptions();
+
+    SRewriteCandidateReport ExtractSNodeRewriteCandidates(
+        const std::vector< SNode * > &root,
+        const SRewriteCandidateExtractionOptions &options
+    );
+
+    SRewriteCandidateReport ExtractSNodeRewriteCandidates(const std::vector< SNode * > &root);
 
 } // namespace patchestry::ast

@@ -9,6 +9,7 @@
 #include <patchestry/AST/SourceOrigin.hpp>
 
 #include <algorithm>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -654,6 +655,219 @@ namespace patchestry::ast {
         const SRewriteProfitabilityOptions &options
     ) {
         return EvaluateSNodeRewriteProfitability(seq, action, options).profitable();
+    }
+
+    SRewriteCandidateExtractionOptions MakeDefaultSRewriteCandidateExtractionOptions() {
+        SRewriteCandidateExtractionOptions options;
+
+        options.clone_options.legality_options.allow_stores           = true;
+        options.clone_options.legality_options.allow_volatile         = true;
+        options.clone_options.legality_options.allow_internal_control = true;
+
+        options.move_options.legality_options.allow_calls       = true;
+        options.move_options.legality_options.allow_stores      = true;
+        options.move_options.legality_options.allow_volatile    = true;
+        options.move_options.single_reference                   = true;
+        options.move_options.source_has_fallthrough             = false;
+        options.move_options.preserves_region_ownership         = true;
+
+        options.hoist_options = options.move_options;
+        options.hoist_options.preserves_region_ownership = true;
+
+        options.sink_options = options.move_options;
+        options.sink_options.preserves_region_ownership = true;
+
+        return options;
+    }
+
+    namespace {
+
+        size_t CountCandidateSeqSNodes(const std::vector< SNode * > &seq) {
+            size_t count = 0;
+            std::function< void(const SNode *) > visit = [&](const SNode *node) {
+                if (!node) { return; }
+                ++count;
+                node->for_each_child([&](SNode *child) { visit(child); });
+            };
+            for (const SNode *node : seq) { visit(node); }
+            return count;
+        }
+
+        void AddCandidateToReport(
+            SRewriteCandidateReport &report, SRewriteCandidate candidate
+        ) {
+            candidate.id = report.candidate_list.size();
+            ++report.candidates;
+            report.payload_origins += candidate.payload_origins;
+            if (candidate.profitable()) {
+                ++report.profitable_candidates;
+            } else {
+                ++report.leave_goto_candidates;
+            }
+
+            switch (candidate.action) {
+                case SRewriteAction::Clone:
+                    ++report.clone_candidates;
+                    break;
+                case SRewriteAction::Move:
+                    ++report.move_candidates;
+                    break;
+                case SRewriteAction::Hoist:
+                    ++report.hoist_candidates;
+                    break;
+                case SRewriteAction::Sink:
+                    ++report.sink_candidates;
+                    break;
+            }
+
+            report.candidate_list.push_back(std::move(candidate));
+        }
+
+        void ExtractRewriteCandidateForAction(
+            const std::vector< SNode * > &seq, SRegionKind region_kind,
+            std::string_view region_name, const SNode *owner, SRewriteAction action,
+            const SRewriteProfitabilityOptions &options,
+            const SRewriteCandidateExtractionOptions &extraction_options,
+            SRewriteCandidateReport &report
+        ) {
+            auto profitability = EvaluateSNodeRewriteProfitability(seq, action, options);
+            if (profitability.payload_origins == 0) { return; }
+            if (!profitability.profitable() && !extraction_options.include_unprofitable) {
+                return;
+            }
+
+            SRewriteCandidate candidate;
+            candidate.region_kind       = region_kind;
+            candidate.region_name       = std::string(region_name);
+            candidate.owner             = owner;
+            candidate.action            = action;
+            candidate.decision          = profitability.decision;
+            candidate.payload_origins   = profitability.payload_origins;
+            candidate.estimated_cost    = std::max<size_t>(CountCandidateSeqSNodes(seq), 1);
+            candidate.estimated_benefit = profitability.profitable()
+                                            ? std::max<size_t>(profitability.payload_origins, 1)
+                                            : 0;
+            candidate.diagnostics       = std::move(profitability.diagnostics);
+            AddCandidateToReport(report, std::move(candidate));
+        }
+
+        void ExtractRewriteCandidatesForSeq(
+            const std::vector< SNode * > &seq, SRegionKind region_kind,
+            std::string_view region_name, const SNode *owner,
+            const SRewriteCandidateExtractionOptions &options,
+            SRewriteCandidateReport &report
+        );
+
+        void ExtractRewriteCandidatesForNode(
+            const SNode *node, const SRewriteCandidateExtractionOptions &options,
+            SRewriteCandidateReport &report
+        ) {
+            if (!node) { return; }
+
+            if (const auto *label = node->dyn_cast< SLabel >()) {
+                ExtractRewriteCandidatesForSeq(
+                    label->BodyList(), SRegionKind::LabelBody, label->Name(), node, options,
+                    report
+                );
+                return;
+            }
+
+            if (const auto *if_node = node->dyn_cast< SIfThenElse >()) {
+                ExtractRewriteCandidatesForSeq(
+                    if_node->ThenList(), SRegionKind::IfThen, "then", node, options, report
+                );
+                if (!if_node->ElseList().empty()) {
+                    ExtractRewriteCandidatesForSeq(
+                        if_node->ElseList(), SRegionKind::IfElse, "else", node, options, report
+                    );
+                }
+                return;
+            }
+
+            if (const auto *while_node = node->dyn_cast< SWhile >()) {
+                ExtractRewriteCandidatesForSeq(
+                    while_node->BodyList(), SRegionKind::WhileBody, "while", node, options,
+                    report
+                );
+                return;
+            }
+
+            if (const auto *do_node = node->dyn_cast< SDoWhile >()) {
+                ExtractRewriteCandidatesForSeq(
+                    do_node->BodyList(), SRegionKind::DoWhileBody, "do_while", node, options,
+                    report
+                );
+                return;
+            }
+
+            if (const auto *for_node = node->dyn_cast< SFor >()) {
+                ExtractRewriteCandidatesForSeq(
+                    for_node->BodyList(), SRegionKind::ForBody, "for", node, options, report
+                );
+                return;
+            }
+
+            if (const auto *switch_node = node->dyn_cast< SSwitch >()) {
+                size_t case_index = 0;
+                for (const auto &case_node : switch_node->Cases()) {
+                    ExtractRewriteCandidatesForSeq(
+                        case_node.body_list, SRegionKind::SwitchCase,
+                        "case_" + std::to_string(case_index++), node, options, report
+                    );
+                }
+                if (!switch_node->DefaultBodyList().empty()) {
+                    ExtractRewriteCandidatesForSeq(
+                        switch_node->DefaultBodyList(), SRegionKind::SwitchDefault, "default",
+                        node, options, report
+                    );
+                }
+            }
+        }
+
+        void ExtractRewriteCandidatesForSeq(
+            const std::vector< SNode * > &seq, SRegionKind region_kind,
+            std::string_view region_name, const SNode *owner,
+            const SRewriteCandidateExtractionOptions &options,
+            SRewriteCandidateReport &report
+        ) {
+            ++report.regions;
+            ExtractRewriteCandidateForAction(
+                seq, region_kind, region_name, owner, SRewriteAction::Clone,
+                options.clone_options, options, report
+            );
+            ExtractRewriteCandidateForAction(
+                seq, region_kind, region_name, owner, SRewriteAction::Move,
+                options.move_options, options, report
+            );
+            if (options.include_hoist_sink) {
+                ExtractRewriteCandidateForAction(
+                    seq, region_kind, region_name, owner, SRewriteAction::Hoist,
+                    options.hoist_options, options, report
+                );
+                ExtractRewriteCandidateForAction(
+                    seq, region_kind, region_name, owner, SRewriteAction::Sink,
+                    options.sink_options, options, report
+                );
+            }
+
+            for (const SNode *node : seq) {
+                ExtractRewriteCandidatesForNode(node, options, report);
+            }
+        }
+
+    } // namespace
+
+    SRewriteCandidateReport ExtractSNodeRewriteCandidates(
+        const std::vector< SNode * > &root,
+        const SRewriteCandidateExtractionOptions &options
+    ) {
+        SRewriteCandidateReport report;
+        ExtractRewriteCandidatesForSeq(root, SRegionKind::Root, "root", nullptr, options, report);
+        return report;
+    }
+
+    SRewriteCandidateReport ExtractSNodeRewriteCandidates(const std::vector< SNode * > &root) {
+        return ExtractSNodeRewriteCandidates(root, MakeDefaultSRewriteCandidateExtractionOptions());
     }
 
 } // namespace patchestry::ast
