@@ -6,6 +6,7 @@
  */
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -52,9 +53,7 @@ namespace patchestry::ast {
          */
 
         std::vector< std::shared_ptr< Operation > > getParameters(const Function &function) {
-            if (function.entry_block.empty() && function.basic_blocks.empty()) {
-                return {};
-            }
+            if (function.entry_block.empty() && function.basic_blocks.empty()) { return {}; }
 
             if (!function.basic_blocks.contains(function.entry_block)) {
                 LOG(ERROR) << "Function basic blocks doen't have entry block into it. key "
@@ -79,7 +78,6 @@ namespace patchestry::ast {
 
             return operation_vec;
         }
-
 
     } // namespace
 
@@ -145,9 +143,8 @@ namespace patchestry::ast {
 
         auto location   = SourceLocation(ctx.getSourceManager(), function.get().key);
         auto *func_decl = clang::FunctionDecl::Create(
-            ctx, ctx.getTranslationUnitDecl(), location, location,
-            &ctx.Idents.get(c_name), function_type,
-            ctx.getTrivialTypeSourceInfo(function_type), clang::SC_None
+            ctx, ctx.getTranslationUnitDecl(), location, location, &ctx.Idents.get(c_name),
+            function_type, ctx.getTrivialTypeSourceInfo(function_type), clang::SC_None
         );
 
         if (func_decl == nullptr) {
@@ -167,7 +164,7 @@ namespace patchestry::ast {
         // linker symbols and must not appear in asm labels — they would
         // cause link failures when recompiling for binary patching.
         const auto &original_name = function.get().name;
-        bool is_mangled = original_name.size() >= 2
+        bool is_mangled           = original_name.size() >= 2
             && ((original_name[0] == '_' && original_name[1] == 'Z')
                 || original_name[0] == '?');
         if (is_mangled && original_name != c_name) {
@@ -181,10 +178,7 @@ namespace patchestry::ast {
 
         // Propagate prototype noreturn so isNoReturn() agrees with Ghidra.
         if (function.get().prototype.is_noreturn) {
-            if (auto *nr_attr = clang::NoReturnAttr::Create(
-                    ctx, func_decl->getSourceRange()
-                ))
-            {
+            if (auto *nr_attr = clang::NoReturnAttr::Create(ctx, func_decl->getSourceRange())) {
                 func_decl->addAttr(nr_attr);
             }
         }
@@ -216,7 +210,7 @@ namespace patchestry::ast {
                 continue;
             }
             const auto &param_type = type_iter->second;
-            auto location = SourceLocation(ctx.getSourceManager(), param_op->key);
+            auto location          = SourceLocation(ctx.getSourceManager(), param_op->key);
 
             auto *param_decl = clang::ParmVarDecl::Create(
                 ctx, func_decl, location, location, &ctx.Idents.get(*param_op->name),
@@ -226,9 +220,7 @@ namespace patchestry::ast {
             parameter_vec.push_back(param_decl);
 
             // If this is for definition
-            if (is_definition) {
-                local_variables.emplace(param_op->key, param_decl);
-            }
+            if (is_definition) { local_variables.emplace(param_op->key, param_decl); }
         }
 
         func_decl->setParams(parameter_vec);
@@ -321,9 +313,7 @@ namespace patchestry::ast {
     std::vector< clang::ParmVarDecl * > FunctionBuilder::create_default_paramaters(
         clang::ASTContext &ctx, clang::FunctionDecl *func_decl, const FunctionPrototype &proto
     ) {
-        if (proto.parameters.empty()) {
-            return {};
-        }
+        if (proto.parameters.empty()) { return {}; }
 
         auto parameter_name = [](uint index) -> std::string {
             std::stringstream ss;
@@ -340,12 +330,11 @@ namespace patchestry::ast {
                 continue;
             }
 
-            auto param_loc = SourceLocation(ctx.getSourceManager(), param_key);
+            auto param_loc   = SourceLocation(ctx.getSourceManager(), param_key);
             auto *param_decl = clang::ParmVarDecl::Create(
-                ctx, func_decl, param_loc, param_loc,
-                &ctx.Idents.get(parameter_name(index++)), param_type,
-                ctx.getTrivialTypeSourceInfo(param_type, param_loc),
-                clang::SC_None, nullptr
+                ctx, func_decl, param_loc, param_loc, &ctx.Idents.get(parameter_name(index++)),
+                param_type, ctx.getTrivialTypeSourceInfo(param_type, param_loc), clang::SC_None,
+                nullptr
             );
             assert(param_decl != nullptr);
             param_decl->setIsUsed();
@@ -392,7 +381,8 @@ namespace patchestry::ast {
 
         auto *function_def = create_declaration(ctx, function_type, /*is_definition=*/true);
         if (function_def == nullptr) {
-            LOG(ERROR) << "Failed to create function shell. key: " << function.get().key << "\n";
+            LOG(ERROR) << "Failed to create function shell. key: " << function.get().key
+                       << "\n";
             return {};
         }
 
@@ -407,15 +397,13 @@ namespace patchestry::ast {
         return function_def;
     }
 
-    std::vector<clang::Stmt *>
+    std::vector< clang::Stmt * >
     FunctionBuilder::create_block_stmts(clang::ASTContext &ctx, const BasicBlock &block) {
         RegisterSourceBlock(block.key);
 
-        if (block.ordered_operations.empty()) {
-            return {};
-        }
+        if (block.ordered_operations.empty()) { return {}; }
 
-        std::vector<clang::Stmt *> stmt_vec;
+        std::vector< clang::Stmt * > stmt_vec;
         for (const auto &operation_key : block.ordered_operations) {
             if (!block.operations.contains(operation_key)) {
                 LOG(ERROR) << "Skipping, invalid operations key in the block. key "
@@ -424,8 +412,10 @@ namespace patchestry::ast {
             }
 
             const auto &operation = block.operations.at(operation_key);
-            RegisterSourceOperation(block.key, operation,
-                                    /*has_payload_carrier=*/false);
+            RegisterSourceOperation(
+                block.key, operation,
+                /*has_payload_carrier=*/false
+            );
 
             // Skip branch terminals — these become edges in the CGraph.
             // RETURN is NOT skipped: it produces a ReturnStmt that must
@@ -434,7 +424,8 @@ namespace patchestry::ast {
             // merge mechanism).
             if (operation.mnemonic == Mnemonic::OP_BRANCH
                 || operation.mnemonic == Mnemonic::OP_CBRANCH
-                || operation.mnemonic == Mnemonic::OP_BRANCHIND) {
+                || operation.mnemonic == Mnemonic::OP_BRANCHIND)
+            {
                 continue;
             }
 
@@ -443,22 +434,24 @@ namespace patchestry::ast {
 
             if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
                 for (auto *pending : pending_materialized) {
-                    TrackOperationStmt(block.key, operation, pending);
+                    TrackOperationStmt(
+                        block.key, operation, pending, ClassifyOperationStmt(operation, pending)
+                    );
                     stmt_vec.push_back(pending);
                 }
                 pending_materialized.clear();
                 operation_stmts.emplace(operation.key, stmt);
                 if (!should_merge_to_next) {
-                    TrackOperationStmt(block.key, operation, stmt);
+                    TrackOperationStmt(
+                        block.key, operation, stmt, ClassifyOperationStmt(operation, stmt)
+                    );
                     stmt_vec.push_back(stmt);
                 }
             } else {
                 pending_materialized.clear();
             }
 
-            for (auto *s : saved_pending) {
-                pending_materialized.push_back(s);
-            }
+            for (auto *s : saved_pending) { pending_materialized.push_back(s); }
         }
 
         InlineSingleUseTemps(ctx, stmt_vec);
@@ -466,64 +459,169 @@ namespace patchestry::ast {
     }
 
     void FunctionBuilder::RegisterSourceBlock(const std::string &block_key) {
-        if (block_key.empty()) return;
+        if (block_key.empty()) { return; }
 
-        std::string stable_id = function.get().key;
-        stable_id += "::block::";
-        stable_id += block_key;
+        std::string stable_id  = function.get().key;
+        stable_id             += "::block::";
+        stable_id             += block_key;
         source_block_ids.try_emplace(block_key, std::move(stable_id));
     }
 
     void FunctionBuilder::RegisterSourceOperation(
-        const std::string &block_key,
-        const Operation &op,
-        bool has_payload_carrier
+        const std::string &block_key, const Operation &op, bool has_payload_carrier
     ) {
-        if (op.key.empty()) return;
+        if (op.key.empty()) { return; }
 
         RegisterSourceBlock(block_key);
 
-        std::string stable_id = function.get().key;
-        stable_id += "::op::";
-        stable_id += block_key;
-        stable_id += "::";
-        stable_id += op.key;
+        std::string stable_id  = function.get().key;
+        stable_id             += "::op::";
+        stable_id             += block_key;
+        stable_id             += "::";
+        stable_id             += op.key;
 
         auto [it, inserted] = source_ops.try_emplace(
-            op.key,
-            SourceId{std::move(stable_id), block_key, op.key,
-                     has_payload_carrier});
-        if (!inserted && has_payload_carrier)
-            it->second.has_payload_carrier = true;
+            op.key, SourceId{ std::move(stable_id), block_key, op.key, has_payload_carrier }
+        );
+        if (!inserted && has_payload_carrier) { it->second.has_payload_carrier = true; }
     }
 
     void FunctionBuilder::TrackOperationStmt(
-        const std::string &block_key,
-        const Operation &op,
-        clang::Stmt *stmt,
+        const std::string &block_key, const Operation &op, clang::Stmt *stmt, PayloadKind kind,
         bool primary
     ) {
-        if (!stmt) return;
+        if (!stmt) { return; }
 
-        RegisterSourceOperation(block_key, op,
-                                /*has_payload_carrier=*/true);
+        RegisterSourceOperation(
+            block_key, op,
+            /*has_payload_carrier=*/true
+        );
+
+        auto build_origin = [&](PayloadKind origin_kind) {
+            StmtOrigin origin;
+            origin.block_key     = block_key;
+            origin.operation_key = op.key;
+            origin.kind          = origin_kind;
+            origin.primary       = primary;
+
+            std::function< void(const clang::Stmt *) > scan = [&](const clang::Stmt *cur) {
+                if (!cur) { return; }
+                if (llvm::isa< clang::CallExpr >(cur)) { origin.may_call = true; }
+                if (auto *expr = llvm::dyn_cast< clang::Expr >(cur)) {
+                    if (!expr->getType().isNull() && expr->getType().isVolatileQualified()) {
+                        origin.may_volatile = true;
+                    }
+                }
+                if (auto *bin = llvm::dyn_cast< clang::BinaryOperator >(cur)) {
+                    if (bin->isAssignmentOp()) { origin.may_store = true; }
+                }
+                if (auto *unary = llvm::dyn_cast< clang::UnaryOperator >(cur)) {
+                    if (unary->isIncrementDecrementOp()) { origin.may_store = true; }
+                }
+                if (llvm::isa< clang::IfStmt >(cur) || llvm::isa< clang::ForStmt >(cur)
+                    || llvm::isa< clang::WhileStmt >(cur) || llvm::isa< clang::DoStmt >(cur)
+                    || llvm::isa< clang::SwitchStmt >(cur) || llvm::isa< clang::GotoStmt >(cur)
+                    || llvm::isa< clang::IndirectGotoStmt >(cur)
+                    || llvm::isa< clang::LabelStmt >(cur) || llvm::isa< clang::CaseStmt >(cur)
+                    || llvm::isa< clang::DefaultStmt >(cur)
+                    || llvm::isa< clang::BreakStmt >(cur)
+                    || llvm::isa< clang::ContinueStmt >(cur)
+                    || llvm::isa< clang::ReturnStmt >(cur))
+                {
+                    origin.contains_internal_control = true;
+                }
+                for (const clang::Stmt *child : cur->children()) { scan(child); }
+            };
+            scan(stmt);
+
+            origin.movable = origin_kind != PayloadKind::PayloadSyntheticDecl
+                && origin_kind != PayloadKind::TerminalSynthetic
+                && origin_kind != PayloadKind::RegionSynthetic;
+            origin.cloneable = origin.movable && !origin.may_call && !origin.may_store
+                && !origin.may_volatile && !origin.contains_internal_control;
+            return origin;
+        };
+
+        stmt_origins[stmt] = build_origin(kind);
         source_coverage_nodes[stmt].insert(op.key);
-        if (primary)
-            source_primary_nodes[stmt].insert(op.key);
+        if (primary) { source_primary_nodes[stmt].insert(op.key); }
 
         // InlineSingleUseTemps may remove a DeclStmt and splice its
         // initializer into the following statement.  Treat the initializer
         // as a secondary carrier for the declaration operation so coverage
         // survives that local AST rewrite without reporting a false loss.
-        if (auto *decl_stmt = llvm::dyn_cast<clang::DeclStmt>(stmt)) {
+        if (auto *decl_stmt = llvm::dyn_cast< clang::DeclStmt >(stmt)) {
             if (decl_stmt->isSingleDecl()) {
-                if (auto *var = llvm::dyn_cast<clang::VarDecl>(
-                        decl_stmt->getSingleDecl())) {
-                    if (auto *init = var->getInit())
-                        TrackOperationStmt(block_key, op, init,
-                                           /*primary=*/false);
+                if (auto *var = llvm::dyn_cast< clang::VarDecl >(decl_stmt->getSingleDecl())) {
+                    if (auto *init = var->getInit()) {
+                        TrackOperationStmt(
+                            block_key, op, init, PayloadKind::PayloadExpression,
+                            /*primary=*/false
+                        );
+                    }
                 }
             }
+        }
+    }
+
+    PayloadKind
+    FunctionBuilder::ClassifyOperationStmt(const Operation &op, const clang::Stmt *stmt) const {
+        using M = Mnemonic;
+        if (op.mnemonic == M::OP_BRANCH || op.mnemonic == M::OP_CBRANCH
+            || op.mnemonic == M::OP_BRANCHIND)
+        {
+            return PayloadKind::TerminalSynthetic;
+        }
+
+        if (llvm::isa< clang::DeclStmt >(stmt)) { return PayloadKind::PayloadSyntheticDecl; }
+
+        if (llvm::isa< clang::Expr >(stmt)) { return PayloadKind::PayloadExpression; }
+
+        return PayloadKind::AtomicPayload;
+    }
+
+    void FunctionBuilder::TrackTerminalStmt(
+        const std::string &block_key, const Operation &op, clang::Stmt *stmt
+    ) {
+        if (!stmt) { return; }
+        RegisterSourceOperation(
+            block_key, op,
+            /*has_payload_carrier=*/false
+        );
+
+        StmtOrigin origin;
+        origin.block_key                 = block_key;
+        origin.operation_key             = op.key;
+        origin.kind                      = PayloadKind::TerminalSynthetic;
+        origin.movable                   = false;
+        origin.cloneable                 = false;
+        origin.contains_internal_control = true;
+        stmt_origins[stmt]               = std::move(origin);
+    }
+
+    const StmtOrigin *FunctionBuilder::GetStmtOrigin(const clang::Stmt *stmt) const {
+        auto it = stmt_origins.find(stmt);
+        if (it == stmt_origins.end()) { return nullptr; }
+        return &it->second;
+    }
+
+    void FunctionBuilder::CollectStmtOrigins(
+        const clang::Stmt *stmt, std::vector< StmtOrigin > &origins
+    ) const {
+        if (!stmt) { return; }
+
+        if (const auto *origin = GetStmtOrigin(stmt)) { origins.push_back(*origin); }
+
+        if (const auto *decl_stmt = llvm::dyn_cast< clang::DeclStmt >(stmt)) {
+            for (const clang::Decl *decl : decl_stmt->decls()) {
+                if (const auto *var = llvm::dyn_cast< clang::VarDecl >(decl)) {
+                    CollectStmtOrigins(var->getInit(), origins);
+                }
+            }
+        }
+
+        for (const clang::Stmt *child : stmt->children()) {
+            CollectStmtOrigins(child, origins);
         }
     }
 
@@ -531,79 +629,80 @@ namespace patchestry::ast {
 
         void CollectSourceCoverage(
             const clang::Stmt *stmt,
-            const std::unordered_map<
-                const clang::Stmt *,
-                std::unordered_set<std::string>> &coverage_nodes,
-            const std::unordered_map<
-                const clang::Stmt *,
-                std::unordered_set<std::string>> &primary_nodes,
-            std::unordered_set<std::string> &covered_ops,
-            std::unordered_map<std::string, unsigned> &primary_visits
+            const std::unordered_map< const clang::Stmt *, std::unordered_set< std::string > >
+                &coverage_nodes,
+            const std::unordered_map< const clang::Stmt *, std::unordered_set< std::string > >
+                &primary_nodes,
+            std::unordered_set< std::string > &covered_ops,
+            std::unordered_map< std::string, unsigned > &primary_visits
         ) {
-            if (!stmt) return;
+            if (!stmt) { return; }
 
-            if (auto it = coverage_nodes.find(stmt);
-                it != coverage_nodes.end()) {
-                for (const auto &op_key : it->second)
-                    covered_ops.insert(op_key);
+            if (auto it = coverage_nodes.find(stmt); it != coverage_nodes.end()) {
+                for (const auto &op_key : it->second) { covered_ops.insert(op_key); }
             }
-            if (auto it = primary_nodes.find(stmt);
-                it != primary_nodes.end()) {
-                for (const auto &op_key : it->second)
-                    ++primary_visits[op_key];
+            if (auto it = primary_nodes.find(stmt); it != primary_nodes.end()) {
+                for (const auto &op_key : it->second) { ++primary_visits[op_key]; }
             }
 
-            if (auto *decl_stmt = llvm::dyn_cast<clang::DeclStmt>(stmt)) {
+            if (auto *decl_stmt = llvm::dyn_cast< clang::DeclStmt >(stmt)) {
                 for (const clang::Decl *decl : decl_stmt->decls()) {
-                    if (auto *var = llvm::dyn_cast<clang::VarDecl>(decl))
-                        CollectSourceCoverage(var->getInit(), coverage_nodes,
-                                              primary_nodes, covered_ops,
-                                              primary_visits);
+                    if (auto *var = llvm::dyn_cast< clang::VarDecl >(decl)) {
+                        CollectSourceCoverage(
+                            var->getInit(), coverage_nodes, primary_nodes, covered_ops,
+                            primary_visits
+                        );
+                    }
                 }
             }
 
-            for (const clang::Stmt *child : stmt->children())
-                CollectSourceCoverage(child, coverage_nodes, primary_nodes,
-                                      covered_ops, primary_visits);
+            for (const clang::Stmt *child : stmt->children()) {
+                CollectSourceCoverage(
+                    child, coverage_nodes, primary_nodes, covered_ops, primary_visits
+                );
+            }
         }
 
     } // anonymous namespace
 
     FunctionBuilder::SourceVerificationReport
-    FunctionBuilder::BuildSourceVerificationReport(
-        const clang::FunctionDecl *fn
-    ) const {
+    FunctionBuilder::BuildSourceVerificationReport(const clang::FunctionDecl *fn) const {
         SourceVerificationReport report;
         for (const auto &[op_key, id] : source_ops) {
-            if (id.has_payload_carrier)
-                report.input_ops.push_back(op_key);
+            if (id.has_payload_carrier) { report.input_ops.push_back(op_key); }
         }
         std::sort(report.input_ops.begin(), report.input_ops.end());
+
+        for (const auto &[_, origin] : stmt_origins) {
+            ++report.origin_kind_counts[PayloadKindName(origin.kind)];
+        }
 
         if (!fn || !fn->hasBody()) {
             report.missing_ops = report.input_ops;
             return report;
         }
 
-        std::unordered_set<std::string> covered_ops;
-        std::unordered_map<std::string, unsigned> primary_visits;
-        CollectSourceCoverage(fn->getBody(), source_coverage_nodes,
-                              source_primary_nodes, covered_ops,
-                              primary_visits);
+        std::unordered_set< std::string > covered_ops;
+        std::unordered_map< std::string, unsigned > primary_visits;
+        CollectSourceCoverage(
+            fn->getBody(), source_coverage_nodes, source_primary_nodes, covered_ops,
+            primary_visits
+        );
 
         for (const auto &op_key : report.input_ops) {
-            if (covered_ops.contains(op_key))
+            if (covered_ops.contains(op_key)) {
                 report.emitted_ops.push_back(op_key);
-            else
+            } else {
                 report.missing_ops.push_back(op_key);
+            }
         }
         std::sort(report.emitted_ops.begin(), report.emitted_ops.end());
         std::sort(report.missing_ops.begin(), report.missing_ops.end());
 
         for (const auto &[op_key, count] : primary_visits) {
-            if (!source_ops.contains(op_key)
-                || !source_ops.at(op_key).has_payload_carrier)
+            if (!source_ops.contains(op_key) || !source_ops.at(op_key).has_payload_carrier) {
                 continue;
+            }
 
             report.emitted_counts[op_key] = count;
             if (count > 1) {
@@ -611,8 +710,7 @@ namespace patchestry::ast {
                 report.cloned_counts[op_key] = count - 1;
             }
         }
-        std::sort(report.duplicated_ops.begin(),
-                  report.duplicated_ops.end());
+        std::sort(report.duplicated_ops.begin(), report.duplicated_ops.end());
         return report;
     }
 
@@ -623,19 +721,14 @@ namespace patchestry::ast {
             if (!report.duplicated_ops.empty()) {
                 LOG(INFO) << "VerifyNoNodeLoss: function " << GetCName()
                           << " input_ops=" << report.input_ops.size()
-                          << " emitted_ops=" << report.emitted_ops.size()
-                          << " missing_ops=0"
-                          << " duplicated_ops="
-                          << report.duplicated_ops.size()
-                          << " cloned_carrier_occurrences="
-                          << [&]() {
-                                 unsigned total = 0;
-                                 for (const auto &[_, count] :
-                                      report.cloned_counts)
-                                     total += count;
-                                 return total;
-                             }()
-                          << "\n";
+                          << " emitted_ops=" << report.emitted_ops.size() << " missing_ops=0"
+                          << " duplicated_ops=" << report.duplicated_ops.size()
+                          << " cloned_carrier_occurrences=" <<
+                    [&]() {
+                        unsigned total = 0;
+                        for (const auto &[_, count] : report.cloned_counts) { total += count; }
+                        return total;
+                    }() << "\n";
             }
             return true;
         }
@@ -644,42 +737,38 @@ namespace patchestry::ast {
                    << " input_ops=" << report.input_ops.size()
                    << " emitted_ops=" << report.emitted_ops.size()
                    << " missing_ops=" << report.missing_ops.size()
-                   << " duplicated_ops=" << report.duplicated_ops.size()
-                   << "\n";
+                   << " duplicated_ops=" << report.duplicated_ops.size() << "\n";
         constexpr size_t kMaxReport = 20;
-        for (size_t i = 0;
-             i < std::min(report.missing_ops.size(), kMaxReport); ++i) {
+        for (size_t i = 0; i < std::min(report.missing_ops.size(), kMaxReport); ++i) {
             const auto &op_key = report.missing_ops[i];
-            const auto &info = source_ops.at(op_key);
-            LOG(ERROR) << "  missing op " << info.operation_key
-                       << " from block " << info.block_key
-                       << " source_id=" << info.stable_id << "\n";
+            const auto &info   = source_ops.at(op_key);
+            LOG(ERROR) << "  missing op " << info.operation_key << " from block "
+                       << info.block_key << " source_id=" << info.stable_id << "\n";
         }
-        if (report.missing_ops.size() > kMaxReport)
+        if (report.missing_ops.size() > kMaxReport) {
             LOG(ERROR) << "  ... " << (report.missing_ops.size() - kMaxReport)
                        << " more missing operation node(s)\n";
+        }
         return false;
     }
 
-    clang::Expr *FunctionBuilder::create_branch_condition(
-        clang::ASTContext &ctx, const Operation &op
-    ) {
+    clang::Expr *
+    FunctionBuilder::create_branch_condition(clang::ASTContext &ctx, const Operation &op) {
         if (!op.condition) {
             LOG(ERROR) << "CBRANCH with no condition. key: " << op.key << "\n";
             return nullptr;
         }
 
         auto *cond_stmt = op_builder->create_varnode(ctx, function.get(), *op.condition);
-        auto *cond_expr = clang::dyn_cast_or_null<clang::Expr>(cond_stmt);
+        auto *cond_expr = clang::dyn_cast_or_null< clang::Expr >(cond_stmt);
         if (!cond_expr) {
             LOG(ERROR) << "Failed to create condition for CBRANCH. key: " << op.key << "\n";
         }
         return cond_expr;
     }
 
-    clang::Expr *FunctionBuilder::create_switch_discriminant(
-        clang::ASTContext &ctx, const Operation &op
-    ) {
+    clang::Expr *
+    FunctionBuilder::create_switch_discriminant(clang::ASTContext &ctx, const Operation &op) {
         if (op.inputs.empty()) {
             LOG(ERROR) << "BRANCHIND with no inputs. key: " << op.key << "\n";
             return nullptr;
@@ -690,25 +779,29 @@ namespace patchestry::ast {
         // then fall back to inputs[0] regardless of kind (handles constants
         // for address-based jump tables).
         if (op.inputs[0].kind == Varnode::VARNODE_LOCAL
-            || op.inputs[0].kind == Varnode::VARNODE_PARAM) {
-            disc = clang::dyn_cast_or_null<clang::Expr>(
-                op_builder->create_varnode(ctx, function.get(), op.inputs[0]));
+            || op.inputs[0].kind == Varnode::VARNODE_PARAM)
+        {
+            disc = clang::dyn_cast_or_null< clang::Expr >(
+                op_builder->create_varnode(ctx, function.get(), op.inputs[0])
+            );
         } else if (op.switch_input.has_value()) {
-            disc = clang::dyn_cast_or_null<clang::Expr>(
-                op_builder->create_varnode(ctx, function.get(), *op.switch_input));
+            disc = clang::dyn_cast_or_null< clang::Expr >(
+                op_builder->create_varnode(ctx, function.get(), *op.switch_input)
+            );
         } else {
-            disc = clang::dyn_cast_or_null<clang::Expr>(
-                op_builder->create_varnode(ctx, function.get(), op.inputs[0]));
+            disc = clang::dyn_cast_or_null< clang::Expr >(
+                op_builder->create_varnode(ctx, function.get(), op.inputs[0])
+            );
         }
 
         if (disc) {
             // Promote narrow discriminant to int width
-            auto disc_type = disc->getType();
+            auto disc_type  = disc->getType();
             bool needs_cast = !disc_type->isIntegerType()
                 || ctx.getIntWidth(disc_type) < ctx.getIntWidth(ctx.IntTy);
             if (needs_cast) {
                 auto loc = SourceLocation(ctx.getSourceManager(), op.key);
-                disc = op_builder->make_cast(ctx, disc, ctx.IntTy, loc);
+                disc     = op_builder->make_cast(ctx, disc, ctx.IntTy, loc);
             }
         }
 
@@ -719,8 +812,8 @@ namespace patchestry::ast {
     }
 
     clang::Expr *FunctionBuilder::create_cast(
-        clang::ASTContext &ctx, clang::Expr *expr,
-        const clang::QualType &to_type, clang::SourceLocation loc
+        clang::ASTContext &ctx, clang::Expr *expr, const clang::QualType &to_type,
+        clang::SourceLocation loc
     ) {
         return op_builder->make_cast(ctx, expr, to_type, loc);
     }
@@ -733,16 +826,12 @@ namespace patchestry::ast {
      */
     void
     FunctionBuilder::create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl) {
-        if (function.get().basic_blocks.empty()) {
-            return;
-        }
+        if (function.get().basic_blocks.empty()) { return; }
 
         for (const auto &[key, block] : function.get().basic_blocks) {
             // entry block is custom added during recovery and branch instruction will not have
             // entry block as target.
-            if (block.is_entry_block) {
-                continue;
-            }
+            if (block.is_entry_block) { continue; }
 
             auto *label_decl = clang::LabelDecl::Create(
                 ctx, func_decl, SourceLocation(ctx.getSourceManager(), key),
@@ -767,35 +856,34 @@ namespace patchestry::ast {
 
         // Count references to a VarDecl within a Clang Stmt tree.
         unsigned CountVarRefs(const clang::Stmt *s, const clang::VarDecl *vd) {
-            if (!s) return 0;
-            if (auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(s)) {
-                if (dre->getDecl() == vd) return 1;
+            if (!s) { return 0; }
+            if (auto *dre = llvm::dyn_cast< clang::DeclRefExpr >(s)) {
+                if (dre->getDecl() == vd) { return 1; }
             }
             unsigned count = 0;
-            for (auto *child : s->children())
-                count += CountVarRefs(child, vd);
+            for (auto *child : s->children()) { count += CountVarRefs(child, vd); }
             return count;
         }
 
         // Replace all DeclRefExpr(vd) with replacement_expr in the stmt tree.
         // Returns true if a replacement was made.
-        bool ReplaceVarRef(clang::Stmt *s, clang::VarDecl *vd,
-                           clang::Expr *replacement, clang::ASTContext &ctx) {
-            if (!s) return false;
+        bool ReplaceVarRef(
+            clang::Stmt *s, clang::VarDecl *vd, clang::Expr *replacement, clang::ASTContext &ctx
+        ) {
+            if (!s) { return false; }
 
             // Check each child. If a child is a DeclRefExpr to vd, replace it
             // by mutating the parent's child pointer.
             for (auto it = s->child_begin(); it != s->child_end(); ++it) {
-                if (!*it) continue;
-                if (auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(*it)) {
+                if (!*it) { continue; }
+                if (auto *dre = llvm::dyn_cast< clang::DeclRefExpr >(*it)) {
                     if (dre->getDecl() == vd) {
                         // Clang Stmt children are mutable via the iterator
                         *it = replacement;
                         return true;
                     }
                 }
-                if (ReplaceVarRef(*it, vd, replacement, ctx))
-                    return true;
+                if (ReplaceVarRef(*it, vd, replacement, ctx)) { return true; }
             }
             return false;
         }
@@ -803,24 +891,36 @@ namespace patchestry::ast {
     } // anonymous namespace
 
     void FunctionBuilder::InlineSingleUseTemps(
-            clang::ASTContext &ctx,
-            std::vector<clang::Stmt *> &stmts) {
-        for (size_t i = 0; i + 1 < stmts.size(); ) {
+        clang::ASTContext &ctx, std::vector< clang::Stmt * > &stmts
+    ) {
+        for (size_t i = 0; i + 1 < stmts.size();) {
             // Look for: DeclStmt { VarDecl var = init_expr; }
-            auto *ds = llvm::dyn_cast<clang::DeclStmt>(stmts[i]);
-            if (!ds || !ds->isSingleDecl()) { ++i; continue; }
-            auto *vd = llvm::dyn_cast<clang::VarDecl>(ds->getSingleDecl());
-            if (!vd || !vd->hasInit()) { ++i; continue; }
+            auto *ds = llvm::dyn_cast< clang::DeclStmt >(stmts[i]);
+            if (!ds || !ds->isSingleDecl()) {
+                ++i;
+                continue;
+            }
+            auto *vd = llvm::dyn_cast< clang::VarDecl >(ds->getSingleDecl());
+            if (!vd || !vd->hasInit()) {
+                ++i;
+                continue;
+            }
 
             // Don't inline if the init has side effects that must execute
             // at this point (calls, increments, volatile loads).
             auto *init = vd->getInit();
-            if (init->HasSideEffects(ctx)) { ++i; continue; }
+            if (init->HasSideEffects(ctx)) {
+                ++i;
+                continue;
+            }
 
             // Count references in the NEXT statement only.
             // If exactly 1 reference, inline; otherwise skip.
             unsigned refs_in_next = CountVarRefs(stmts[i + 1], vd);
-            if (refs_in_next != 1) { ++i; continue; }
+            if (refs_in_next != 1) {
+                ++i;
+                continue;
+            }
 
             // Check no references in any later statements
             bool used_later = false;
@@ -830,12 +930,15 @@ namespace patchestry::ast {
                     break;
                 }
             }
-            if (used_later) { ++i; continue; }
+            if (used_later) {
+                ++i;
+                continue;
+            }
 
             // Inline: replace the DeclRefExpr in stmts[i+1] with init
             if (ReplaceVarRef(stmts[i + 1], vd, init, ctx)) {
                 // Remove the DeclStmt
-                stmts.erase(stmts.begin() + static_cast<ptrdiff_t>(i));
+                stmts.erase(stmts.begin() + static_cast< ptrdiff_t >(i));
                 // Don't increment — re-check same index (the next stmt shifted down)
             } else {
                 ++i;
@@ -881,9 +984,8 @@ namespace patchestry::ast {
             case Mnemonic::OP_CALLIND:
                 return op_builder->create_callind(ctx, function, op);
             case Mnemonic::OP_TAIL_CALL: {
-                auto *enclosing = clang::dyn_cast_or_null< clang::FunctionDecl >(
-                    get_sema_context()
-                );
+                auto *enclosing =
+                    clang::dyn_cast_or_null< clang::FunctionDecl >(get_sema_context());
                 return op_builder->create_tail_call(ctx, function, op, enclosing);
             }
             case Mnemonic::OP_CALLOTHER:

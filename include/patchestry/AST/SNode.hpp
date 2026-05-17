@@ -24,6 +24,8 @@
 #include <llvm/Support/Allocator.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <patchestry/AST/SourceOrigin.hpp>
+
 namespace patchestry::ast {
 
     enum class SNodeKind {
@@ -44,14 +46,30 @@ namespace patchestry::ast {
     {
       public:
         SNode(SNodeKind kind) : kind_(kind) {}
+
         virtual ~SNode() = default;
 
         SNodeKind Kind() const { return kind_; }
+
         static const char *KindName(SNodeKind k);
+
         const char *KindName() const { return KindName(kind_); }
 
         SNode *Parent() const { return parent_; }
+
         void SetParent(SNode *p) { parent_ = p; }
+
+        const std::vector< StmtOrigin > &Origins() const { return origins_; }
+
+        std::vector< StmtOrigin > &Origins() { return origins_; }
+
+        bool HasOrigins() const { return !origins_.empty(); }
+
+        void SetOrigins(std::vector< StmtOrigin > origins) { origins_ = std::move(origins); }
+
+        void ClearOrigins() { origins_.clear(); }
+
+        void AddOrigin(StmtOrigin origin) { origins_.push_back(std::move(origin)); }
 
         // ChildVisitor API (added in Layer C migration Stage 0).
         // Each subtype iterates over its immediate SNode children
@@ -63,23 +81,41 @@ namespace patchestry::ast {
         // mutable form takes SNode*& so callers can reassign the slot.
         //
         // Default: no children.  Each subtype with children overrides.
-        using ChildFn = std::function< void(SNode *) >;
+        using ChildFn    = std::function< void(SNode *) >;
         using ChildMutFn = std::function< void(SNode *&) >;
+
         virtual void for_each_child(const ChildFn &) const {}
+
         virtual void for_each_child_mut(const ChildMutFn &) {}
 
         void Dump(llvm::raw_ostream &os, unsigned indent = 0) const;
 
         template< typename T >
-        bool isa() const { return T::classof(this); }
+        bool isa() const {
+            return T::classof(this);
+        }
+
         template< typename T >
-        T *as() { assert(isa< T >()); return static_cast< T * >(this); }
+        T *as() {
+            assert(isa< T >());
+            return static_cast< T * >(this);
+        }
+
         template< typename T >
-        const T *as() const { assert(isa< T >()); return static_cast< const T * >(this); }
+        const T *as() const {
+            assert(isa< T >());
+            return static_cast< const T * >(this);
+        }
+
         template< typename T >
-        T *dyn_cast() { return isa< T >() ? static_cast< T * >(this) : nullptr; }
+        T *dyn_cast() {
+            return isa< T >() ? static_cast< T * >(this) : nullptr;
+        }
+
         template< typename T >
-        const T *dyn_cast() const { return isa< T >() ? static_cast< const T * >(this) : nullptr; }
+        const T *dyn_cast() const {
+            return isa< T >() ? static_cast< const T * >(this) : nullptr;
+        }
 
       protected:
         virtual void DumpChildren(llvm::raw_ostream & /*os*/, unsigned /*indent*/) const {}
@@ -87,6 +123,7 @@ namespace patchestry::ast {
       private:
         SNodeKind kind_;
         SNode *parent_ = nullptr;
+        std::vector< StmtOrigin > origins_;
     };
 
     // Single-statement leaf — holds one raw clang::Stmt*.  The
@@ -96,11 +133,14 @@ namespace patchestry::ast {
     class SStmt : public SNode
     {
       public:
-        explicit SStmt(clang::Stmt *stmt)
-            : SNode(SNodeKind::kStmt), stmt_(stmt) {}
+        explicit SStmt(clang::Stmt *stmt) : SNode(SNodeKind::kStmt), stmt_(stmt) {}
 
         clang::Stmt *Stmt() const { return stmt_; }
-        void SetStmt(clang::Stmt *s) { stmt_ = s; }
+
+        void SetStmt(clang::Stmt *s) {
+            stmt_ = s;
+            ClearOrigins();
+        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kStmt; }
 
@@ -117,10 +157,8 @@ namespace patchestry::ast {
     class SIfThenElse : public SNode
     {
       public:
-        SIfThenElse(clang::Expr *cond, SNode *then_branch,
-                    SNode *else_branch = nullptr)
-            : SNode(SNodeKind::kIfThenElse), cond_(cond)
-        {
+        SIfThenElse(clang::Expr *cond, SNode *then_branch, SNode *else_branch = nullptr)
+            : SNode(SNodeKind::kIfThenElse), cond_(cond) {
             if (then_branch) {
                 then_.push_back(then_branch);
                 then_branch->SetParent(this);
@@ -131,51 +169,84 @@ namespace patchestry::ast {
             }
         }
 
-        SIfThenElse(clang::Expr *cond,
-                    std::vector< SNode * > then_list,
-                    std::vector< SNode * > else_list)
-            : SNode(SNodeKind::kIfThenElse), cond_(cond)
-            , then_(std::move(then_list)), else_(std::move(else_list))
-        {
-            for (auto *c : then_) if (c) c->SetParent(this);
-            for (auto *c : else_) if (c) c->SetParent(this);
+        SIfThenElse(
+            clang::Expr *cond, std::vector< SNode * > then_list,
+            std::vector< SNode * > else_list
+        )
+            : SNode(SNodeKind::kIfThenElse)
+            , cond_(cond)
+            , then_(std::move(then_list))
+            , else_(std::move(else_list)) {
+            for (auto *c : then_) {
+                if (c) { c->SetParent(this); }
+            }
+            for (auto *c : else_) {
+                if (c) { c->SetParent(this); }
+            }
         }
 
         clang::Expr *Cond() const { return cond_; }
+
         void SetCond(clang::Expr *c) { cond_ = c; }
 
         SNode *ThenBranch() const { return then_.empty() ? nullptr : then_[0]; }
+
         void SetThenBranch(SNode *n) {
             then_.clear();
-            if (n) { then_.push_back(n); n->SetParent(this); }
+            if (n) {
+                then_.push_back(n);
+                n->SetParent(this);
+            }
         }
+
         void SetThenBranch(std::vector< SNode * > body) {
             then_ = std::move(body);
-            for (auto *c : then_) if (c) c->SetParent(this);
+            for (auto *c : then_) {
+                if (c) { c->SetParent(this); }
+            }
         }
 
         SNode *ElseBranch() const { return else_.empty() ? nullptr : else_[0]; }
+
         void SetElseBranch(SNode *n) {
             else_.clear();
-            if (n) { else_.push_back(n); n->SetParent(this); }
+            if (n) {
+                else_.push_back(n);
+                n->SetParent(this);
+            }
         }
+
         void SetElseBranch(std::vector< SNode * > body) {
             else_ = std::move(body);
-            for (auto *c : else_) if (c) c->SetParent(this);
+            for (auto *c : else_) {
+                if (c) { c->SetParent(this); }
+            }
         }
 
         const std::vector< SNode * > &ThenList() const { return then_; }
+
         std::vector< SNode * > &ThenList() { return then_; }
+
         const std::vector< SNode * > &ElseList() const { return else_; }
+
         std::vector< SNode * > &ElseList() { return else_; }
 
         void for_each_child(const ChildFn &fn) const override {
-            for (auto *c : then_) if (c) fn(c);
-            for (auto *c : else_) if (c) fn(c);
+            for (auto *c : then_) {
+                if (c) { fn(c); }
+            }
+            for (auto *c : else_) {
+                if (c) { fn(c); }
+            }
         }
+
         void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : then_) if (slot) fn(slot);
-            for (auto &slot : else_) if (slot) fn(slot);
+            for (auto &slot : then_) {
+                if (slot) { fn(slot); }
+            }
+            for (auto &slot : else_) {
+                if (slot) { fn(slot); }
+            }
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kIfThenElse; }
@@ -194,9 +265,7 @@ namespace patchestry::ast {
     class SWhile : public SNode
     {
       public:
-        SWhile(clang::Expr *cond, SNode *body)
-            : SNode(SNodeKind::kWhile), cond_(cond)
-        {
+        SWhile(clang::Expr *cond, SNode *body) : SNode(SNodeKind::kWhile), cond_(cond) {
             if (body) {
                 body_.push_back(body);
                 body->SetParent(this);
@@ -204,34 +273,49 @@ namespace patchestry::ast {
         }
 
         SWhile(clang::Expr *cond, std::vector< SNode * > body)
-            : SNode(SNodeKind::kWhile), cond_(cond), body_(std::move(body))
-        {
-            for (auto *c : body_) if (c) c->SetParent(this);
+            : SNode(SNodeKind::kWhile), cond_(cond), body_(std::move(body)) {
+            for (auto *c : body_) {
+                if (c) { c->SetParent(this); }
+            }
         }
 
         clang::Expr *Cond() const { return cond_; }
+
         void SetCond(clang::Expr *c) { cond_ = c; }
 
         SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+
         void SetBody(SNode *n) {
             body_.clear();
-            if (n) { body_.push_back(n); n->SetParent(this); }
+            if (n) {
+                body_.push_back(n);
+                n->SetParent(this);
+            }
         }
 
         const std::vector< SNode * > &BodyList() const { return body_; }
+
         std::vector< SNode * > &BodyList() { return body_; }
 
         // Scope labels for break/continue resolution (set by fold rules)
         std::string_view ExitLabel() const { return exit_label_; }
+
         void SetExitLabel(std::string_view l) { exit_label_ = l; }
+
         std::string_view HeaderLabel() const { return header_label_; }
+
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
 
         void for_each_child(const ChildFn &fn) const override {
-            for (auto *c : body_) if (c) fn(c);
+            for (auto *c : body_) {
+                if (c) { fn(c); }
+            }
         }
+
         void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : body_) if (slot) fn(slot);
+            for (auto &slot : body_) {
+                if (slot) { fn(slot); }
+            }
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kWhile; }
@@ -250,9 +334,7 @@ namespace patchestry::ast {
     class SDoWhile : public SNode
     {
       public:
-        SDoWhile(SNode *body, clang::Expr *cond)
-            : SNode(SNodeKind::kDoWhile), cond_(cond)
-        {
+        SDoWhile(SNode *body, clang::Expr *cond) : SNode(SNodeKind::kDoWhile), cond_(cond) {
             if (body) {
                 body_.push_back(body);
                 body->SetParent(this);
@@ -260,33 +342,48 @@ namespace patchestry::ast {
         }
 
         SDoWhile(std::vector< SNode * > body, clang::Expr *cond)
-            : SNode(SNodeKind::kDoWhile), cond_(cond), body_(std::move(body))
-        {
-            for (auto *c : body_) if (c) c->SetParent(this);
+            : SNode(SNodeKind::kDoWhile), cond_(cond), body_(std::move(body)) {
+            for (auto *c : body_) {
+                if (c) { c->SetParent(this); }
+            }
         }
 
         SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+
         void SetBody(SNode *n) {
             body_.clear();
-            if (n) { body_.push_back(n); n->SetParent(this); }
+            if (n) {
+                body_.push_back(n);
+                n->SetParent(this);
+            }
         }
 
         const std::vector< SNode * > &BodyList() const { return body_; }
+
         std::vector< SNode * > &BodyList() { return body_; }
 
         clang::Expr *Cond() const { return cond_; }
+
         void SetCond(clang::Expr *c) { cond_ = c; }
 
         std::string_view ExitLabel() const { return exit_label_; }
+
         void SetExitLabel(std::string_view l) { exit_label_ = l; }
+
         std::string_view HeaderLabel() const { return header_label_; }
+
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
 
         void for_each_child(const ChildFn &fn) const override {
-            for (auto *c : body_) if (c) fn(c);
+            for (auto *c : body_) {
+                if (c) { fn(c); }
+            }
         }
+
         void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : body_) if (slot) fn(slot);
+            for (auto &slot : body_) {
+                if (slot) { fn(slot); }
+            }
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kDoWhile; }
@@ -306,51 +403,70 @@ namespace patchestry::ast {
     {
       public:
         SFor(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc, SNode *body)
-            : SNode(SNodeKind::kFor)
-            , init_(init), cond_(cond), inc_(inc)
-        {
+            : SNode(SNodeKind::kFor), init_(init), cond_(cond), inc_(inc) {
             if (body) {
                 body_.push_back(body);
                 body->SetParent(this);
             }
         }
 
-        SFor(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc,
-             std::vector< SNode * > body)
+        SFor(
+            clang::Stmt *init, clang::Expr *cond, clang::Expr *inc, std::vector< SNode * > body
+        )
             : SNode(SNodeKind::kFor)
-            , init_(init), cond_(cond), inc_(inc), body_(std::move(body))
-        {
-            for (auto *c : body_) if (c) c->SetParent(this);
+            , init_(init)
+            , cond_(cond)
+            , inc_(inc)
+            , body_(std::move(body)) {
+            for (auto *c : body_) {
+                if (c) { c->SetParent(this); }
+            }
         }
 
         clang::Stmt *Init() const { return init_; }
+
         void SetInit(clang::Stmt *s) { init_ = s; }
 
         clang::Expr *Cond() const { return cond_; }
+
         void SetCond(clang::Expr *c) { cond_ = c; }
 
         clang::Expr *Inc() const { return inc_; }
+
         void SetInc(clang::Expr *e) { inc_ = e; }
 
         SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+
         void SetBody(SNode *n) {
             body_.clear();
-            if (n) { body_.push_back(n); n->SetParent(this); }
+            if (n) {
+                body_.push_back(n);
+                n->SetParent(this);
+            }
         }
 
         const std::vector< SNode * > &BodyList() const { return body_; }
+
         std::vector< SNode * > &BodyList() { return body_; }
 
         std::string_view ExitLabel() const { return exit_label_; }
+
         void SetExitLabel(std::string_view l) { exit_label_ = l; }
+
         std::string_view HeaderLabel() const { return header_label_; }
+
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
 
         void for_each_child(const ChildFn &fn) const override {
-            for (auto *c : body_) if (c) fn(c);
+            for (auto *c : body_) {
+                if (c) { fn(c); }
+            }
         }
+
         void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : body_) if (slot) fn(slot);
+            for (auto &slot : body_) {
+                if (slot) { fn(slot); }
+            }
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kFor; }
@@ -374,14 +490,16 @@ namespace patchestry::ast {
     //   c.set_body(n) clears body_list and pushes n (caller manages SetParent
     //                                                on the enclosing SSwitch)
     // body_list is the storage; callers that need direct access use it.
-    struct SCase {
-        clang::Expr *value;  // nullptr for default
+    struct SCase
+    {
+        clang::Expr *value; // nullptr for default
         std::vector< SNode * > body_list;
 
         SNode *body() const { return body_list.empty() ? nullptr : body_list[0]; }
+
         void set_body(SNode *n) {
             body_list.clear();
-            if (n) body_list.push_back(n);
+            if (n) { body_list.push_back(n); }
         }
     };
 
@@ -391,51 +509,71 @@ namespace patchestry::ast {
     {
       public:
         SSwitch(clang::Expr *discriminant)
-            : SNode(SNodeKind::kSwitch), discriminant_(discriminant)
-        {}
+            : SNode(SNodeKind::kSwitch), discriminant_(discriminant) {}
 
         clang::Expr *Discriminant() const { return discriminant_; }
+
         void SetDiscriminant(clang::Expr *e) { discriminant_ = e; }
 
         const std::vector< SCase > &Cases() const { return cases_; }
+
         std::vector< SCase > &Cases() { return cases_; }
 
         void AddCase(clang::Expr *value, SNode *body) {
-            if (body) body->SetParent(this);
-            SCase c{value, {}};
-            if (body) c.body_list.push_back(body);
+            if (body) { body->SetParent(this); }
+            SCase c{ value, {} };
+            if (body) { c.body_list.push_back(body); }
             cases_.push_back(std::move(c));
         }
 
         void AddCase(clang::Expr *value, std::vector< SNode * > body_list) {
-            for (auto *b : body_list) if (b) b->SetParent(this);
-            cases_.push_back({value, std::move(body_list)});
+            for (auto *b : body_list) {
+                if (b) { b->SetParent(this); }
+            }
+            cases_.push_back({ value, std::move(body_list) });
         }
 
-        SNode *DefaultBody() const {
-            return default_.empty() ? nullptr : default_[0];
-        }
+        SNode *DefaultBody() const { return default_.empty() ? nullptr : default_[0]; }
+
         void SetDefaultBody(SNode *n) {
             default_.clear();
-            if (n) { default_.push_back(n); n->SetParent(this); }
+            if (n) {
+                default_.push_back(n);
+                n->SetParent(this);
+            }
         }
+
         void SetDefaultBody(std::vector< SNode * > body) {
             default_ = std::move(body);
-            for (auto *c : default_) if (c) c->SetParent(this);
+            for (auto *c : default_) {
+                if (c) { c->SetParent(this); }
+            }
         }
 
         const std::vector< SNode * > &DefaultBodyList() const { return default_; }
+
         std::vector< SNode * > &DefaultBodyList() { return default_; }
 
         void for_each_child(const ChildFn &fn) const override {
-            for (auto &c : cases_)
-                for (auto *b : c.body_list) if (b) fn(b);
-            for (auto *b : default_) if (b) fn(b);
+            for (auto &c : cases_) {
+                for (auto *b : c.body_list) {
+                    if (b) { fn(b); }
+                }
+            }
+            for (auto *b : default_) {
+                if (b) { fn(b); }
+            }
         }
+
         void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &c : cases_)
-                for (auto &slot : c.body_list) if (slot) fn(slot);
-            for (auto &slot : default_) if (slot) fn(slot);
+            for (auto &c : cases_) {
+                for (auto &slot : c.body_list) {
+                    if (slot) { fn(slot); }
+                }
+            }
+            for (auto &slot : default_) {
+                if (slot) { fn(slot); }
+            }
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kSwitch; }
@@ -456,6 +594,7 @@ namespace patchestry::ast {
         SGoto(std::string_view target) : SNode(SNodeKind::kGoto), target_(target) {}
 
         std::string_view Target() const { return target_; }
+
         void SetTarget(std::string_view t) { target_ = t; }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kGoto; }
@@ -478,8 +617,7 @@ namespace patchestry::ast {
     {
       public:
         SLabel(std::string_view name, SNode *body = nullptr)
-            : SNode(SNodeKind::kLabel), name_(name)
-        {
+            : SNode(SNodeKind::kLabel), name_(name) {
             if (body) {
                 body_.push_back(body);
                 body->SetParent(this);
@@ -487,18 +625,21 @@ namespace patchestry::ast {
         }
 
         SLabel(std::string_view name, std::vector< SNode * > body)
-            : SNode(SNodeKind::kLabel), name_(name), body_(std::move(body))
-        {
-            for (auto *c : body_) if (c) c->SetParent(this);
+            : SNode(SNodeKind::kLabel), name_(name), body_(std::move(body)) {
+            for (auto *c : body_) {
+                if (c) { c->SetParent(this); }
+            }
         }
 
         std::string_view Name() const { return name_; }
+
         void SetName(std::string_view n) { name_ = n; }
 
         // Back-compat single-body view: returns the sole child or
         // nullptr.  Callers handling multi-child bodies should use
         // BodyList() instead.
         SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+
         void SetBody(SNode *n) {
             body_.clear();
             if (n) {
@@ -508,13 +649,19 @@ namespace patchestry::ast {
         }
 
         const std::vector< SNode * > &BodyList() const { return body_; }
+
         std::vector< SNode * > &BodyList() { return body_; }
 
         void for_each_child(const ChildFn &fn) const override {
-            for (auto *c : body_) if (c) fn(c);
+            for (auto *c : body_) {
+                if (c) { fn(c); }
+            }
         }
+
         void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : body_) if (slot) fn(slot);
+            for (auto &slot : body_) {
+                if (slot) { fn(slot); }
+            }
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kLabel; }
@@ -534,6 +681,7 @@ namespace patchestry::ast {
         SBreak(unsigned depth = 1) : SNode(SNodeKind::kBreak), depth_(depth) {}
 
         unsigned Depth() const { return depth_; }
+
         void SetDepth(unsigned d) { depth_ = d; }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kBreak; }
@@ -555,11 +703,10 @@ namespace patchestry::ast {
     class SReturn : public SNode
     {
       public:
-        SReturn(clang::Expr *value = nullptr)
-            : SNode(SNodeKind::kReturn), value_(value)
-        {}
+        SReturn(clang::Expr *value = nullptr) : SNode(SNodeKind::kReturn), value_(value) {}
 
         clang::Expr *Value() const { return value_; }
+
         void SetValue(clang::Expr *e) { value_ = e; }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kReturn; }
@@ -605,9 +752,7 @@ namespace patchestry::ast {
         // Intern a copy of a string; the returned view is valid until Reset().
         // Uses a bump allocator because raw char data carries no destructor.
         std::string_view Intern(std::string_view s) {
-            if (s.empty()) {
-                return {};
-            }
+            if (s.empty()) { return {}; }
             char *buf = static_cast< char * >(string_alloc_.Allocate(s.size(), 1));
             std::memcpy(buf, s.data(), s.size());
             return std::string_view(buf, s.size());

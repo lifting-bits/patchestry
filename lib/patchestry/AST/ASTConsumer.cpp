@@ -38,6 +38,7 @@
 #include <patchestry/AST/CfgDotEmitter.hpp>
 #include <patchestry/AST/ClangEmitter.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
+#include <patchestry/AST/SNodeRegion.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/Pcode.hpp>
@@ -129,9 +130,162 @@ namespace patchestry::ast {
             bool ok() const { return diagnostics.empty(); }
         };
 
+        struct SNodeOwnershipReport
+        {
+            size_t expected_owned_ops = 0;
+            size_t retained_owned_ops = 0;
+            std::vector< std::string > missing_owned_ops;
+            std::vector< std::string > duplicated_owned_ops;
+            std::vector< std::string > extra_owned_ops;
+            std::vector< std::string > diagnostics;
+
+            bool ok() const { return diagnostics.empty(); }
+        };
+
         std::string DescribeStmt(const clang::Stmt *stmt) {
             if (!stmt) { return "<null-stmt>"; }
             return stmt->getStmtClassName();
+        }
+
+        std::string OriginKey(const StmtOrigin &origin) {
+            return origin.block_key + "::" + origin.operation_key;
+        }
+
+        void AddUniqueOrigin(std::vector< StmtOrigin > &origins, const StmtOrigin &origin) {
+            auto same_origin = [&](const StmtOrigin &existing) {
+                return existing.block_key == origin.block_key
+                    && existing.operation_key == origin.operation_key
+                    && existing.kind == origin.kind && existing.primary == origin.primary;
+            };
+            if (std::find_if(origins.begin(), origins.end(), same_origin) == origins.end()) {
+                origins.push_back(origin);
+            }
+        }
+
+        void CollectRawStmtOrigins(
+            const FunctionBuilder &builder, const clang::Stmt *stmt,
+            std::vector< StmtOrigin > &origins
+        ) {
+            std::vector< StmtOrigin > collected;
+            builder.CollectStmtOrigins(stmt, collected);
+            for (const auto &origin : collected) { AddUniqueOrigin(origins, origin); }
+        }
+
+        void AnnotateSNodeOrigins(const FunctionBuilder &builder, SNode *node) {
+            if (!node) { return; }
+
+            std::vector< StmtOrigin > origins;
+            if (auto *stmt = node->dyn_cast< SStmt >()) {
+                CollectRawStmtOrigins(builder, stmt->Stmt(), origins);
+            } else if (auto *ite = node->dyn_cast< SIfThenElse >()) {
+                CollectRawStmtOrigins(builder, ite->Cond(), origins);
+            } else if (auto *while_node = node->dyn_cast< SWhile >()) {
+                CollectRawStmtOrigins(builder, while_node->Cond(), origins);
+            } else if (auto *do_node = node->dyn_cast< SDoWhile >()) {
+                CollectRawStmtOrigins(builder, do_node->Cond(), origins);
+            } else if (auto *for_node = node->dyn_cast< SFor >()) {
+                CollectRawStmtOrigins(builder, for_node->Init(), origins);
+                CollectRawStmtOrigins(builder, for_node->Cond(), origins);
+                CollectRawStmtOrigins(builder, for_node->Inc(), origins);
+            } else if (auto *switch_node = node->dyn_cast< SSwitch >()) {
+                CollectRawStmtOrigins(builder, switch_node->Discriminant(), origins);
+            } else if (auto *return_node = node->dyn_cast< SReturn >()) {
+                CollectRawStmtOrigins(builder, return_node->Value(), origins);
+            }
+            node->SetOrigins(std::move(origins));
+
+            node->for_each_child([&](SNode *child) { AnnotateSNodeOrigins(builder, child); });
+        }
+
+        void AnnotateSNodeOrigins(
+            const FunctionBuilder &builder, const std::vector< SNode * > &root
+        ) {
+            for (SNode *node : root) { AnnotateSNodeOrigins(builder, node); }
+        }
+
+        void CountPayloadOrigins(
+            const std::vector< StmtOrigin > &origins,
+            std::unordered_map< std::string, unsigned > &counts
+        ) {
+            for (const auto &origin : origins) {
+                if (!origin.primary || !IsPayloadCarrierKind(origin.kind)) { continue; }
+                ++counts[OriginKey(origin)];
+            }
+        }
+
+        void CollectSNodeOriginCounts(
+            const SNode *node, std::unordered_map< std::string, unsigned > &counts
+        ) {
+            if (!node) { return; }
+            CountPayloadOrigins(node->Origins(), counts);
+            node->for_each_child([&](SNode *child) {
+                CollectSNodeOriginCounts(child, counts);
+            });
+        }
+
+        void CollectSNodeOriginCounts(
+            const std::vector< SNode * > &root,
+            std::unordered_map< std::string, unsigned > &counts
+        ) {
+            for (const SNode *node : root) { CollectSNodeOriginCounts(node, counts); }
+        }
+
+        std::unordered_map< std::string, unsigned > CollectExpectedOwnershipCounts(
+            const CGraph &flow_graph, const FunctionBuilder &builder
+        ) {
+            std::unordered_map< std::string, unsigned > counts;
+            for (const auto &node : flow_graph.nodes) {
+                for (const clang::Stmt *stmt : node.stmts) {
+                    std::vector< StmtOrigin > origins;
+                    CollectRawStmtOrigins(builder, stmt, origins);
+                    CountPayloadOrigins(origins, counts);
+                }
+            }
+            return counts;
+        }
+
+        SNodeOwnershipReport ValidateSNodePayloadOwnership(
+            const CGraph &flow_graph, const std::vector< SNode * > &root,
+            const FunctionBuilder &builder
+        ) {
+            SNodeOwnershipReport report;
+            auto expected = CollectExpectedOwnershipCounts(flow_graph, builder);
+
+            std::unordered_map< std::string, unsigned > actual;
+            CollectSNodeOriginCounts(root, actual);
+
+            for (const auto &[_, count] : expected) { report.expected_owned_ops += count; }
+            for (const auto &[_, count] : actual) { report.retained_owned_ops += count; }
+
+            for (const auto &[op_key, expected_count] : expected) {
+                unsigned actual_count = 0;
+                if (auto it = actual.find(op_key); it != actual.end()) {
+                    actual_count = it->second;
+                }
+                if (actual_count < expected_count) {
+                    report.missing_owned_ops.push_back(op_key);
+                    report.diagnostics.push_back(
+                        "missing SNode-owned payload operation " + op_key + " expected "
+                        + std::to_string(expected_count) + " occurrence(s), saw "
+                        + std::to_string(actual_count)
+                    );
+                } else if (actual_count > expected_count) {
+                    report.duplicated_owned_ops.push_back(op_key);
+                }
+            }
+
+            for (const auto &[op_key, actual_count] : actual) {
+                if (!expected.contains(op_key)) {
+                    report.extra_owned_ops.push_back(
+                        op_key + " count=" + std::to_string(actual_count)
+                    );
+                }
+            }
+
+            std::sort(report.missing_owned_ops.begin(), report.missing_owned_ops.end());
+            std::sort(report.duplicated_owned_ops.begin(), report.duplicated_owned_ops.end());
+            std::sort(report.extra_owned_ops.begin(), report.extra_owned_ops.end());
+            return report;
         }
 
         void CollectClangStmtOccurrences(
@@ -264,6 +418,46 @@ namespace patchestry::ast {
             if (report.diagnostics.size() > kMaxPayloadDiagnostics) {
                 LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxPayloadDiagnostics)
                            << " more payload diagnostic(s)\n";
+            }
+        }
+
+        void
+        LogSNodeOwnershipFailure(std::string_view fn_name, const SNodeOwnershipReport &report) {
+            LOG(ERROR) << "SNode payload ownership verification failed for " << fn_name
+                       << " expected_owned_ops=" << report.expected_owned_ops
+                       << " retained_owned_ops=" << report.retained_owned_ops
+                       << " missing_owned_ops=" << report.missing_owned_ops.size()
+                       << " duplicated_owned_ops=" << report.duplicated_owned_ops.size()
+                       << " extra_owned_ops=" << report.extra_owned_ops.size()
+                       << " diagnostics=" << report.diagnostics.size() << "\n";
+            constexpr size_t kMaxOwnershipDiagnostics = 20;
+            for (size_t i = 0;
+                 i < std::min(report.diagnostics.size(), kMaxOwnershipDiagnostics); ++i)
+            {
+                LOG(ERROR) << "  " << report.diagnostics[i] << "\n";
+            }
+            if (report.diagnostics.size() > kMaxOwnershipDiagnostics) {
+                LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxOwnershipDiagnostics)
+                           << " more SNode ownership diagnostic(s)\n";
+            }
+        }
+
+        void
+        LogSNodeRegionFailure(std::string_view fn_name, const SRegionValidationReport &report) {
+            LOG(ERROR) << "SNode region ownership verification failed for " << fn_name
+                       << " regions=" << report.regions << " owned_ops=" << report.owned_ops
+                       << " duplicated_owned_ops=" << report.duplicated_owned_ops
+                       << " opaque_compound_payloads=" << report.opaque_compound_payloads
+                       << " diagnostics=" << report.diagnostics.size() << "\n";
+            constexpr size_t kMaxRegionDiagnostics = 20;
+            for (size_t i = 0; i < std::min(report.diagnostics.size(), kMaxRegionDiagnostics);
+                 ++i)
+            {
+                LOG(ERROR) << "  " << report.diagnostics[i] << "\n";
+            }
+            if (report.diagnostics.size() > kMaxRegionDiagnostics) {
+                LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxRegionDiagnostics)
+                           << " more SNode region diagnostic(s)\n";
             }
         }
 
@@ -437,7 +631,8 @@ namespace patchestry::ast {
                     + std::to_string(emitted)
                 );
             };
-            auto require_at_most = [&](std::string_view field, size_t expected, size_t emitted) {
+            auto require_at_most = [&](std::string_view field, size_t expected,
+                                       size_t emitted) {
                 if (emitted <= expected) { return; }
                 report.diagnostics.push_back(
                     std::string("control shape growth for ") + std::string(field)
@@ -706,6 +901,7 @@ namespace patchestry::ast {
                     // when MakeSeq returned nullptr).
                     if (!root_body.empty()) {
                         have_structured = true;
+                        AnnotateSNodeOrigins(*builder, root_body);
 
                         // Post-pass: replace goto→break/continue for loop labels.
                         ConvertGotoToBreakContinue(root_body, factory);
@@ -826,6 +1022,23 @@ namespace patchestry::ast {
                         SimplifyEmptyControlFlow(root_body, ctx);
 
                         if (options.verify_no_node_loss) {
+                            AnnotateSNodeOrigins(*builder, root_body);
+                            auto ownership_report =
+                                ValidateSNodePayloadOwnership(flow_graph, root_body, *builder);
+                            if (!ownership_report.ok()) {
+                                LogSNodeOwnershipFailure(fn_name, ownership_report);
+                                LOG(FATAL) << "SNode payload ownership verification failed for "
+                                           << fn_name << "\n";
+                            }
+
+                            auto region_graph  = BuildSNodeRegionGraph(root_body);
+                            auto region_report = ValidateSNodeRegionGraph(region_graph);
+                            if (!region_report.ok()) {
+                                LogSNodeRegionFailure(fn_name, region_report);
+                                LOG(FATAL) << "SNode region ownership verification failed for "
+                                           << fn_name << "\n";
+                            }
+
                             auto payload_report = ValidateStructuredPayloadRetention(
                                 baseline_payload_stmts, root_body
                             );
@@ -922,11 +1135,11 @@ namespace patchestry::ast {
                     if (structure_report.cross_scope_gotos != 0) {
                         LOG(ERROR)
                             << "Clang AST emission verification failed for " << fn_name
-                            << " cross_scope_gotos="
-                            << structure_report.cross_scope_gotos << "\n";
-                        LOG(FATAL)
-                            << "Clang AST contains goto entries into nested structured scopes for "
-                            << fn_name << "\n";
+                            << " cross_scope_gotos=" << structure_report.cross_scope_gotos
+                            << "\n";
+                        LOG(FATAL) << "Clang AST contains goto entries into nested structured "
+                                      "scopes for "
+                                   << fn_name << "\n";
                     }
                 }
 

@@ -20,6 +20,7 @@
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Sema/Sema.h>
 
+#include <patchestry/AST/SourceOrigin.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 
@@ -100,7 +101,7 @@ namespace patchestry::ast {
 
         /// Process all non-terminal operations in a block (skips
         /// BRANCH/CBRANCH/BRANCHIND/RETURN).  Returns the stmts.
-        std::vector<clang::Stmt *>
+        std::vector< clang::Stmt * >
         create_block_stmts(clang::ASTContext &ctx, const BasicBlock &block);
 
         /// Build just the branch condition expression from a CBRANCH op.
@@ -112,9 +113,10 @@ namespace patchestry::ast {
         bool has_basic_blocks() const { return !function.get().basic_blocks.empty(); }
 
         /// Cast an expression to the target type (delegates to OpBuilder::make_cast).
-        clang::Expr *create_cast(clang::ASTContext &ctx, clang::Expr *expr,
-                                  const clang::QualType &to_type,
-                                  clang::SourceLocation loc);
+        clang::Expr *create_cast(
+            clang::ASTContext &ctx, clang::Expr *expr, const clang::QualType &to_type,
+            clang::SourceLocation loc
+        );
 
         /// Access to the ghidra::Function for CGraph building.
         const Function &get_function() const { return function.get(); }
@@ -125,8 +127,9 @@ namespace patchestry::ast {
         const std::string &program_arch() const { return arch; }
 
         /// Access to labels_declaration for CGraph building.
-        const std::unordered_map<std::string, clang::LabelDecl *> &
-        get_labels() const { return labels_declaration; }
+        const std::unordered_map< std::string, clang::LabelDecl * > &get_labels() const {
+            return labels_declaration;
+        }
 
         /// Set the sema context to the given function for building stmts.
         /// Returns the previous context for later restoration.
@@ -137,9 +140,7 @@ namespace patchestry::ast {
         }
 
         /// Restore sema context to a previously saved value.
-        void leave_function_context(clang::DeclContext *prev) {
-            set_sema_context(prev);
-        }
+        void leave_function_context(clang::DeclContext *prev) { set_sema_context(prev); }
 
         /// Verify that each operation-associated Clang node produced by this
         /// builder is still reachable from the final emitted function body.
@@ -147,24 +148,35 @@ namespace patchestry::ast {
         /// may move or be nested, but they must not disappear silently.
         bool VerifyNoNodeLoss(const clang::FunctionDecl *fn) const;
 
-        struct SourceId {
+        struct SourceId
+        {
             std::string stable_id;
             std::string block_key;
             std::string operation_key;
             bool has_payload_carrier = false;
         };
 
-        struct SourceVerificationReport {
-            std::vector<std::string> input_ops;
-            std::vector<std::string> emitted_ops;
-            std::vector<std::string> missing_ops;
-            std::vector<std::string> duplicated_ops;
-            std::unordered_map<std::string, unsigned> emitted_counts;
-            std::unordered_map<std::string, unsigned> cloned_counts;
+        struct SourceVerificationReport
+        {
+            std::vector< std::string > input_ops;
+            std::vector< std::string > emitted_ops;
+            std::vector< std::string > missing_ops;
+            std::vector< std::string > duplicated_ops;
+            std::unordered_map< std::string, unsigned > emitted_counts;
+            std::unordered_map< std::string, unsigned > cloned_counts;
+            std::unordered_map< std::string, unsigned > origin_kind_counts;
         };
 
         SourceVerificationReport
         BuildSourceVerificationReport(const clang::FunctionDecl *fn) const;
+
+        const StmtOrigin *GetStmtOrigin(const clang::Stmt *stmt) const;
+
+        void
+        CollectStmtOrigins(const clang::Stmt *stmt, std::vector< StmtOrigin > &origins) const;
+
+        void
+        TrackTerminalStmt(const std::string &block_key, const Operation &op, clang::Stmt *stmt);
 
       private:
         void create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl);
@@ -174,17 +186,19 @@ namespace patchestry::ast {
 
         /// Inline single-use temporaries: replace DeclStmt+single-ref patterns
         /// with the initializer expression inlined at the use site.
-        static void InlineSingleUseTemps(clang::ASTContext &ctx,
-                                         std::vector<clang::Stmt *> &stmts);
+        static void
+        InlineSingleUseTemps(clang::ASTContext &ctx, std::vector< clang::Stmt * > &stmts);
 
         void RegisterSourceBlock(const std::string &block_key);
-        void RegisterSourceOperation(const std::string &block_key,
-                                     const Operation &op,
-                                     bool has_payload_carrier);
-        void TrackOperationStmt(const std::string &block_key,
-                                const Operation &op,
-                                clang::Stmt *stmt,
-                                bool primary = true);
+        void RegisterSourceOperation(
+            const std::string &block_key, const Operation &op, bool has_payload_carrier
+        );
+        void TrackOperationStmt(
+            const std::string &block_key, const Operation &op, clang::Stmt *stmt,
+            PayloadKind kind = PayloadKind::PayloadExpression, bool primary = true
+        );
+
+        PayloadKind ClassifyOperationStmt(const Operation &op, const clang::Stmt *stmt) const;
 
         void set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
 
@@ -194,9 +208,8 @@ namespace patchestry::ast {
 
         /// The C-visible name for the function: display_name if set, else name.
         const std::string &GetCName() const {
-            return function.get().display_name.empty()
-                ? function.get().name
-                : function.get().display_name;
+            return function.get().display_name.empty() ? function.get().name
+                                                       : function.get().display_name;
         }
 
         clang::FunctionDecl *prev_decl;
@@ -222,10 +235,11 @@ namespace patchestry::ast {
         // DeclStmt initializer that survives if the declaration is inlined.
         std::unordered_map< std::string, std::string > source_block_ids;
         std::unordered_map< std::string, SourceId > source_ops;
-        std::unordered_map< const clang::Stmt *, std::unordered_set<std::string> >
+        std::unordered_map< const clang::Stmt *, std::unordered_set< std::string > >
             source_coverage_nodes;
-        std::unordered_map< const clang::Stmt *, std::unordered_set<std::string> >
+        std::unordered_map< const clang::Stmt *, std::unordered_set< std::string > >
             source_primary_nodes;
+        std::unordered_map< const clang::Stmt *, StmtOrigin > stmt_origins;
 
         // Tracks how many times each local variable name has been declared so
         // that duplicates (e.g. multiple "UNNAMED" vars) get unique suffixes.
