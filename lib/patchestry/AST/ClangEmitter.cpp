@@ -21,10 +21,12 @@
 namespace patchestry::ast {
 
     namespace detail {
-        static clang::CompoundStmt *MakeCompound(
-            clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts) {
+        static clang::CompoundStmt *
+        MakeCompound(clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts) {
             auto loc = VirtualLoc(ctx);
-            return clang::CompoundStmt::Create(ctx, stmts, clang::FPOptionsOverride(), loc, loc);
+            return clang::CompoundStmt::Create(
+                ctx, stmts, clang::FPOptionsOverride(), loc, loc
+            );
         }
     } // namespace detail
 
@@ -47,19 +49,20 @@ namespace patchestry::ast {
     namespace detail {
         bool EndsWithTerminator(clang::Stmt *s) {
             llvm::SmallVector< clang::Stmt *, 4 > worklist;
-            if (s) worklist.push_back(s);
+            if (s) { worklist.push_back(s); }
 
             while (!worklist.empty()) {
                 auto *cur = worklist.pop_back_val();
-                if (!cur) return false;
+                if (!cur) { return false; }
 
-                if (llvm::isa< clang::GotoStmt >(cur)
-                    || llvm::isa< clang::BreakStmt >(cur)
+                if (llvm::isa< clang::GotoStmt >(cur) || llvm::isa< clang::BreakStmt >(cur)
                     || llvm::isa< clang::ContinueStmt >(cur)
                     || llvm::isa< clang::ReturnStmt >(cur))
+                {
                     continue;
+                }
                 if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(cur)) {
-                    if (cs->body_empty()) return false;
+                    if (cs->body_empty()) { return false; }
                     worklist.push_back(cs->body_back());
                     continue;
                 }
@@ -68,7 +71,7 @@ namespace patchestry::ast {
                     continue;
                 }
                 if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(cur)) {
-                    if (!ifs->getThen() || !ifs->getElse()) return false;
+                    if (!ifs->getThen() || !ifs->getElse()) { return false; }
                     worklist.push_back(ifs->getThen());
                     worklist.push_back(ifs->getElse());
                     continue;
@@ -82,37 +85,38 @@ namespace patchestry::ast {
     namespace {
 
         // Recursively convert SNode tree to Clang Stmt*
-        class Emitter {
+        class Emitter
+        {
           public:
             Emitter(clang::ASTContext &ctx, clang::FunctionDecl *fn)
                 : ctx_(ctx), fn_(fn), loc_(VirtualLoc(ctx)) {}
 
             clang::Stmt *Emit(const SNode *node) {
-                if (!node) return nullptr;
+                if (!node) { return nullptr; }
 
                 switch (node->Kind()) {
-                case SNodeKind::kStmt:
-                    return node->as< SStmt >()->Stmt();
-                case SNodeKind::kIfThenElse:
-                    return EmitIfThenElse(node->as< SIfThenElse >());
-                case SNodeKind::kWhile:
-                    return EmitWhile(node->as< SWhile >());
-                case SNodeKind::kDoWhile:
-                    return EmitDoWhile(node->as< SDoWhile >());
-                case SNodeKind::kFor:
-                    return EmitFor(node->as< SFor >());
-                case SNodeKind::kSwitch:
-                    return EmitSwitch(node->as< SSwitch >());
-                case SNodeKind::kGoto:
-                    return EmitGoto(node->as< SGoto >());
-                case SNodeKind::kLabel:
-                    return EmitLabel(node->as< SLabel >());
-                case SNodeKind::kBreak:
-                    return EmitBreak(node->as< SBreak >());
-                case SNodeKind::kContinue:
-                    return EmitContinue();
-                case SNodeKind::kReturn:
-                    return EmitReturn(node->as< SReturn >());
+                    case SNodeKind::kStmt:
+                        return node->as< SStmt >()->Stmt();
+                    case SNodeKind::kIfThenElse:
+                        return EmitIfThenElse(node->as< SIfThenElse >());
+                    case SNodeKind::kWhile:
+                        return EmitWhile(node->as< SWhile >());
+                    case SNodeKind::kDoWhile:
+                        return EmitDoWhile(node->as< SDoWhile >());
+                    case SNodeKind::kFor:
+                        return EmitFor(node->as< SFor >());
+                    case SNodeKind::kSwitch:
+                        return EmitSwitch(node->as< SSwitch >());
+                    case SNodeKind::kGoto:
+                        return EmitGoto(node->as< SGoto >());
+                    case SNodeKind::kLabel:
+                        return EmitLabel(node->as< SLabel >());
+                    case SNodeKind::kBreak:
+                        return EmitBreak(node->as< SBreak >());
+                    case SNodeKind::kContinue:
+                        return EmitContinue();
+                    case SNodeKind::kReturn:
+                        return EmitReturn(node->as< SReturn >());
                 }
                 llvm_unreachable("unhandled SNodeKind in Emitter::Emit");
             }
@@ -123,23 +127,23 @@ namespace patchestry::ast {
             clang::SourceLocation Loc() const { return loc_; }
 
             clang::Stmt *EmitIfThenElse(const SIfThenElse *ite) {
-                LOG_FATAL_IF(!ite->Cond(),
+                LOG_FATAL_IF(
+                    !ite->Cond(),
                     "SIfThenElse has null condition - structuring "
-                    "rule produced a branch without a guard expression");
-                auto *cond = EnsureRValue(ctx_, CloneExpr(ctx_, ite->Cond()));
+                    "rule produced a branch without a guard expression"
+                );
+                auto *cond             = EnsureRValue(ctx_, CloneExpr(ctx_, ite->Cond()));
                 // Layer C Stage 3c: arms are std::vector<SNode*>.
                 // Then-arm: required (NullStmt for empty list).
                 // Else-arm: optional (nullptr for empty list = no else
                 // clause; NullStmt would render as `else ;`).
-                auto *then_stmt = EmitBodyList(ite->ThenList());
+                auto *then_stmt        = EmitBodyList(ite->ThenList());
                 // No else clause when the slot is empty.  Use
                 // ElseBranch() to also handle the defensive
                 // "[nullptr]" case (matches the prior gating which
                 // skipped Emit when ElseBranch() returned null).
                 clang::Stmt *else_stmt = nullptr;
-                if (ite->ElseBranch()) {
-                    else_stmt = EmitBodyList(ite->ElseList());
-                }
+                if (ite->ElseBranch()) { else_stmt = EmitBodyList(ite->ElseList()); }
 
                 // Defensive else-if unwrap: when the else slot already
                 // produces a CompoundStmt around a single IfStmt, the
@@ -150,14 +154,14 @@ namespace patchestry::ast {
                 // that flattens to a single IfStmt via downstream
                 // optimisation could still trigger it.  Cheap to keep.
                 if (auto *cs = llvm::dyn_cast_or_null< clang::CompoundStmt >(else_stmt)) {
-                    if (cs->size() == 1 && llvm::isa< clang::IfStmt >(cs->body_front()))
+                    if (cs->size() == 1 && llvm::isa< clang::IfStmt >(cs->body_front())) {
                         else_stmt = cs->body_front();
+                    }
                 }
 
                 return clang::IfStmt::Create(
-                    ctx_, Loc(), clang::IfStatementKind::Ordinary,
-                    nullptr, nullptr, cond, Loc(), Loc(),
-                    then_stmt, Loc(), else_stmt
+                    ctx_, Loc(), clang::IfStatementKind::Ordinary, nullptr, nullptr, cond,
+                    Loc(), Loc(), then_stmt, Loc(), else_stmt
                 );
             }
 
@@ -167,16 +171,16 @@ namespace patchestry::ast {
             // Loop body slots in WhileStmt/DoStmt/ForStmt require a
             // single Stmt, so the multi-element case must wrap.
             clang::Stmt *EmitBodyList(const std::vector< SNode * > &body_list) {
-                if (body_list.empty())
-                    return new (ctx_) clang::NullStmt(Loc());
+                if (body_list.empty()) { return new (ctx_) clang::NullStmt(Loc()); }
                 if (body_list.size() == 1) {
                     auto *s = Emit(body_list[0]);
                     return s ? s : new (ctx_) clang::NullStmt(Loc());
                 }
                 std::vector< clang::Stmt * > stmts;
                 stmts.reserve(body_list.size());
-                for (const auto *c : body_list)
-                    if (auto *s = Emit(c)) stmts.push_back(s);
+                for (const auto *c : body_list) {
+                    if (auto *s = Emit(c)) { stmts.push_back(s); }
+                }
                 return detail::MakeCompound(ctx_, stmts);
             }
 
@@ -187,24 +191,24 @@ namespace patchestry::ast {
                 } else {
                     // while(1) — SWhile with null condition.
                     cond = clang::IntegerLiteral::Create(
-                        ctx_, llvm::APInt(32, 1), ctx_.IntTy, Loc());
+                        ctx_, llvm::APInt(32, 1), ctx_.IntTy, Loc()
+                    );
                 }
                 auto *body = EmitBodyList(w->BodyList());
 
-                return clang::WhileStmt::Create(
-                    ctx_, nullptr, cond, body, Loc(), Loc(), Loc()
-                );
+                return clang::WhileStmt::Create(ctx_, nullptr, cond, body, Loc(), Loc(), Loc());
             }
 
             clang::Stmt *EmitDoWhile(const SDoWhile *dw) {
-                auto *body = EmitBodyList(dw->BodyList());
+                auto *body        = EmitBodyList(dw->BodyList());
                 clang::Expr *cond = nullptr;
                 if (dw->Cond()) {
                     cond = EnsureRValue(ctx_, CloneExpr(ctx_, dw->Cond()));
                 } else {
                     // do { ... } while(1) — SDoWhile with null condition.
                     cond = clang::IntegerLiteral::Create(
-                        ctx_, llvm::APInt(32, 1), ctx_.IntTy, Loc());
+                        ctx_, llvm::APInt(32, 1), ctx_.IntTy, Loc()
+                    );
                 }
 
                 return new (ctx_) clang::DoStmt(body, cond, Loc(), Loc(), Loc());
@@ -222,9 +226,8 @@ namespace patchestry::ast {
 
             clang::Stmt *EmitSwitch(const SSwitch *sw) {
                 auto *disc = EnsureRValue(ctx_, CloneExpr(ctx_, sw->Discriminant()));
-                auto *switch_stmt = clang::SwitchStmt::Create(
-                    ctx_, nullptr, nullptr, disc, Loc(), Loc()
-                );
+                auto *switch_stmt =
+                    clang::SwitchStmt::Create(ctx_, nullptr, nullptr, disc, Loc(), Loc());
 
                 // Build the switch body as a compound stmt with cases
                 std::vector< clang::Stmt * > body_stmts;
@@ -235,27 +238,27 @@ namespace patchestry::ast {
                 // Build all child stmts, then optionally append a break
                 // and wrap in CompoundStmt (CaseStmt requires a single
                 // sub-stmt slot).
-                auto build_case_substmt = [&](const std::vector< SNode * > &body_list)
-                    -> clang::Stmt * {
+                auto build_case_substmt =
+                    [&](const std::vector< SNode * > &body_list) -> clang::Stmt * {
                     if (body_list.empty()) {
                         // Fallthrough stub.
                         return new (ctx_) clang::NullStmt(Loc());
                     }
                     std::vector< clang::Stmt * > stmts;
                     stmts.reserve(body_list.size() + 1);
-                    for (const auto *child : body_list)
-                        if (auto *s = Emit(child)) stmts.push_back(s);
-                    if (stmts.empty())
-                        stmts.push_back(new (ctx_) clang::NullStmt(Loc()));
-                    if (!detail::EndsWithTerminator(stmts.back()))
+                    for (const auto *child : body_list) {
+                        if (auto *s = Emit(child)) { stmts.push_back(s); }
+                    }
+                    if (stmts.empty()) { stmts.push_back(new (ctx_) clang::NullStmt(Loc())); }
+                    if (!detail::EndsWithTerminator(stmts.back())) {
                         stmts.push_back(new (ctx_) clang::BreakStmt(Loc()));
+                    }
                     return detail::MakeCompound(ctx_, stmts);
                 };
 
                 for (const auto &c : sw->Cases()) {
-                    auto *case_stmt = clang::CaseStmt::Create(
-                        ctx_, c.value, nullptr, Loc(), Loc(), Loc()
-                    );
+                    auto *case_stmt =
+                        clang::CaseStmt::Create(ctx_, c.value, nullptr, Loc(), Loc(), Loc());
                     case_stmt->setSubStmt(build_case_substmt(c.body_list));
                     body_stmts.push_back(case_stmt);
                     switch_stmt->addSwitchCase(case_stmt);
@@ -263,8 +266,8 @@ namespace patchestry::ast {
 
                 if (!sw->DefaultBodyList().empty()) {
                     auto *def_stmt = new (ctx_) clang::DefaultStmt(
-                        Loc(), Loc(),
-                        build_case_substmt(sw->DefaultBodyList()));
+                        Loc(), Loc(), build_case_substmt(sw->DefaultBodyList())
+                    );
                     body_stmts.push_back(def_stmt);
                     switch_stmt->addSwitchCase(def_stmt);
                 }
@@ -287,17 +290,18 @@ namespace patchestry::ast {
                 // there's more than one (LabelStmt requires a single
                 // sub-stmt slot).  Empty body → NullStmt.
                 const auto &body_list = l->BodyList();
-                clang::Stmt *sub = nullptr;
+                clang::Stmt *sub      = nullptr;
                 if (body_list.empty()) {
                     sub = new (ctx_) clang::NullStmt(Loc());
                 } else if (body_list.size() == 1) {
                     sub = Emit(body_list[0]);
-                    if (!sub) sub = new (ctx_) clang::NullStmt(Loc());
+                    if (!sub) { sub = new (ctx_) clang::NullStmt(Loc()); }
                 } else {
                     std::vector< clang::Stmt * > stmts;
                     stmts.reserve(body_list.size());
-                    for (const auto *c : body_list)
-                        if (auto *s = Emit(c)) stmts.push_back(s);
+                    for (const auto *c : body_list) {
+                        if (auto *s = Emit(c)) { stmts.push_back(s); }
+                    }
                     sub = detail::MakeCompound(ctx_, stmts);
                 }
                 return new (ctx_) clang::LabelStmt(Loc(), label_decl, sub);
@@ -307,9 +311,7 @@ namespace patchestry::ast {
                 return new (ctx_) clang::BreakStmt(Loc());
             }
 
-            clang::Stmt *EmitContinue() {
-                return new (ctx_) clang::ContinueStmt(Loc());
-            }
+            clang::Stmt *EmitContinue() { return new (ctx_) clang::ContinueStmt(Loc()); }
 
             clang::Stmt *EmitReturn(const SReturn *r) {
                 return clang::ReturnStmt::Create(ctx_, Loc(), r->Value(), nullptr);
@@ -318,7 +320,7 @@ namespace patchestry::ast {
             clang::LabelDecl *GetOrCreateLabel(std::string_view name) {
                 std::string key(name);
                 auto it = labels_.find(key);
-                if (it != labels_.end()) return it->second;
+                if (it != labels_.end()) { return it->second; }
 
                 // Check goto_labels_ cache (populated from raw Clang AST
                 // GotoStmts before emission).  Reusing the same LabelDecl
@@ -331,8 +333,8 @@ namespace patchestry::ast {
                 }
 
                 auto &idents = ctx_.Idents;
-                auto &ident = idents.get(llvm::StringRef(name.data(), name.size()));
-                auto *decl = clang::LabelDecl::Create(ctx_, fn_, Loc(), &ident);
+                auto &ident  = idents.get(llvm::StringRef(name.data(), name.size()));
+                auto *decl   = clang::LabelDecl::Create(ctx_, fn_, Loc(), &ident);
                 labels_[key] = decl;
                 return decl;
             }
@@ -341,24 +343,21 @@ namespace patchestry::ast {
             // Pre-scan: collect LabelDecl objects referenced by GotoStmts
             // in raw Clang AST (SStmt stmts).  Must be called before Emit().
             void CollectGotoLabelDecls(SNode *node) {
-                if (!node) return;
-                std::function< void(clang::Stmt *) > scan =
-                    [&](clang::Stmt *s) {
-                        if (!s) return;
-                        if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
-                            auto *ld = gs->getLabel();
-                            goto_labels_[ld->getName().str()] = ld;
-                            return;
-                        }
-                        for (auto *child : s->children()) scan(child);
-                    };
+                if (!node) { return; }
+                std::function< void(clang::Stmt *) > scan = [&](clang::Stmt *s) {
+                    if (!s) { return; }
+                    if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                        auto *ld                          = gs->getLabel();
+                        goto_labels_[ld->getName().str()] = ld;
+                        return;
+                    }
+                    for (auto *child : s->children()) { scan(child); }
+                };
                 if (auto *st = node->dyn_cast< SStmt >()) {
                     scan(st->Stmt());
                     return; // SStmt has no SNode children
                 }
-                node->for_each_child([&](SNode *c) {
-                    CollectGotoLabelDecls(c);
-                });
+                node->for_each_child([&](SNode *c) { CollectGotoLabelDecls(c); });
             }
 
             clang::ASTContext &ctx_;
@@ -372,43 +371,40 @@ namespace patchestry::ast {
     } // namespace
 
     // Collect all VarDecls referenced by DeclRefExprs in a Stmt tree.
-    static void CollectReferencedVars(clang::Stmt *s,
-                                      std::unordered_set< clang::VarDecl * > &vars,
-                                      std::unordered_set< clang::Stmt * > &seen) {
-        if (!s || !seen.insert(s).second) return;
+    static void CollectReferencedVars(
+        clang::Stmt *s, std::unordered_set< clang::VarDecl * > &vars,
+        std::unordered_set< clang::Stmt * > &seen
+    ) {
+        if (!s || !seen.insert(s).second) { return; }
         if (auto *dre = llvm::dyn_cast< clang::DeclRefExpr >(s)) {
             if (auto *vd = llvm::dyn_cast< clang::VarDecl >(dre->getDecl())) {
                 vars.insert(vd);
             }
         }
-        for (auto *child : s->children()) {
-            CollectReferencedVars(child, vars, seen);
-        }
+        for (auto *child : s->children()) { CollectReferencedVars(child, vars, seen); }
     }
 
     // Collect all VarDecls that already have a DeclStmt in the Stmt tree.
-    static void CollectDeclaredVars(clang::Stmt *s,
-                                    std::unordered_set< clang::VarDecl * > &vars,
-                                    std::unordered_set< clang::Stmt * > &seen) {
-        if (!s || !seen.insert(s).second) return;
+    static void CollectDeclaredVars(
+        clang::Stmt *s, std::unordered_set< clang::VarDecl * > &vars,
+        std::unordered_set< clang::Stmt * > &seen
+    ) {
+        if (!s || !seen.insert(s).second) { return; }
         if (auto *ds = llvm::dyn_cast< clang::DeclStmt >(s)) {
             for (auto *d : ds->decls()) {
-                if (auto *vd = llvm::dyn_cast< clang::VarDecl >(d)) {
-                    vars.insert(vd);
-                }
+                if (auto *vd = llvm::dyn_cast< clang::VarDecl >(d)) { vars.insert(vd); }
             }
         }
-        for (auto *child : s->children()) {
-            CollectDeclaredVars(child, vars, seen);
-        }
+        for (auto *child : s->children()) { CollectDeclaredVars(child, vars, seen); }
     }
 
     // Collect all DeclStmts from a statement tree for hoisting.
     // Skips DeclStmts inside for-loop init (they belong there).
-    static void CollectDeclStmts(clang::Stmt *s,
-                                 std::vector< clang::Stmt * > &decls,
-                                 std::unordered_set< clang::Stmt * > &seen) {
-        if (!s || !seen.insert(s).second) return;
+    static void CollectDeclStmts(
+        clang::Stmt *s, std::vector< clang::Stmt * > &decls,
+        std::unordered_set< clang::Stmt * > &seen
+    ) {
+        if (!s || !seen.insert(s).second) { return; }
         if (llvm::isa< clang::DeclStmt >(s)) {
             decls.push_back(s);
             return;
@@ -422,9 +418,7 @@ namespace patchestry::ast {
             CollectDeclStmts(fs->getBody(), decls, seen);
             return;
         }
-        for (auto *child : s->children()) {
-            CollectDeclStmts(child, decls, seen);
-        }
+        for (auto *child : s->children()) { CollectDeclStmts(child, decls, seen); }
     }
 
     // Remove DeclStmts from their original positions in the tree.
@@ -435,8 +429,8 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, clang::Stmt *s,
         const std::unordered_set< clang::Stmt * > &decl_set
     ) {
-        if (!s) return nullptr;
-        if (decl_set.count(s)) return nullptr;
+        if (!s) { return nullptr; }
+        if (decl_set.count(s)) { return nullptr; }
 
         // Guarantee a non-null Stmt* for set* methods that require one.
         auto safe = [&](clang::Stmt *r) -> clang::Stmt * {
@@ -446,8 +440,9 @@ namespace patchestry::ast {
         // Recurse into structured statement bodies
         if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s)) {
             ifs->setThen(safe(StripDeclStmts(ctx, ifs->getThen(), decl_set)));
-            if (ifs->getElse())
+            if (ifs->getElse()) {
                 ifs->setElse(safe(StripDeclStmts(ctx, ifs->getElse(), decl_set)));
+            }
             return s;
         }
         if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(s)) {
@@ -480,26 +475,23 @@ namespace patchestry::ast {
         }
 
         auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s);
-        if (!cs) return s;
+        if (!cs) { return s; }
 
         std::vector< clang::Stmt * > filtered;
         for (auto *child : cs->body()) {
-            if (decl_set.count(child)) continue;
+            if (decl_set.count(child)) { continue; }
             auto *stripped = StripDeclStmts(ctx, child, decl_set);
-            if (stripped) filtered.push_back(stripped);
+            if (stripped) { filtered.push_back(stripped); }
         }
         return detail::MakeCompound(ctx, filtered);
     }
 
-
-
     // Common DeclStmt-hoisting + setBody finalization.  Used by both
     // the SNode* and std::vector<SNode*> entry points (Layer C Stage 4
     // extracted this so the vector overload doesn't need to duplicate it).
-    static void FinalizeFunctionBody(clang::Stmt *body,
-                                     clang::FunctionDecl *fn,
-                                     clang::ASTContext &ctx) {
-        if (!body) body = detail::MakeCompound(ctx, {});
+    static void
+    FinalizeFunctionBody(clang::Stmt *body, clang::FunctionDecl *fn, clang::ASTContext &ctx) {
+        if (!body) { body = detail::MakeCompound(ctx, {}); }
 
         // Phase 1: Hoist all existing DeclStmts to the top of the function.
         std::vector< clang::Stmt * > decl_stmts;
@@ -509,9 +501,7 @@ namespace patchestry::ast {
         }
 
         if (!decl_stmts.empty()) {
-            std::unordered_set< clang::Stmt * > decl_set(
-                decl_stmts.begin(), decl_stmts.end()
-            );
+            std::unordered_set< clang::Stmt * > decl_set(decl_stmts.begin(), decl_stmts.end());
             body = StripDeclStmts(ctx, body, decl_set);
         }
 
@@ -527,12 +517,11 @@ namespace patchestry::ast {
                 CollectDeclaredVars(ds, declared, seen3);
             }
             for (auto *vd : referenced) {
-                if (declared.count(vd)) continue;
-                if (llvm::isa< clang::ParmVarDecl >(vd)) continue;
-                if (!vd->isLocalVarDecl()) continue;
+                if (declared.count(vd)) { continue; }
+                if (llvm::isa< clang::ParmVarDecl >(vd)) { continue; }
+                if (!vd->isLocalVarDecl()) { continue; }
                 auto loc = VirtualLoc(ctx);
-                auto *ds = new (ctx) clang::DeclStmt(
-                    clang::DeclGroupRef(vd), loc, loc);
+                auto *ds = new (ctx) clang::DeclStmt(clang::DeclGroupRef(vd), loc, loc);
                 decl_stmts.push_back(ds);
             }
         }
@@ -541,29 +530,31 @@ namespace patchestry::ast {
         std::vector< clang::Stmt * > all_stmts;
         all_stmts.insert(all_stmts.end(), decl_stmts.begin(), decl_stmts.end());
         if (auto *cs = llvm::dyn_cast_or_null< clang::CompoundStmt >(body)) {
-            for (auto *s : cs->body()) all_stmts.push_back(s);
+            for (auto *s : cs->body()) { all_stmts.push_back(s); }
         } else if (body) {
             all_stmts.push_back(body);
         }
         fn->setBody(detail::MakeCompound(ctx, all_stmts));
     }
 
-    void EmitClangAST(const std::vector< SNode * > &root_children,
-                      clang::FunctionDecl *fn, clang::ASTContext &ctx) {
+    void EmitClangAST(
+        const std::vector< SNode * > &root_children, clang::FunctionDecl *fn,
+        clang::ASTContext &ctx
+    ) {
         // Layer C Stage 4: take the function-body slot as a vector
         // directly so callers no longer need to wrap in an SSeq.
         Emitter emitter(ctx, fn);
-        for (auto *c : root_children) emitter.CollectGotoLabelDecls(c);
+        for (auto *c : root_children) { emitter.CollectGotoLabelDecls(c); }
 
         std::vector< clang::Stmt * > body_stmts;
         body_stmts.reserve(root_children.size());
-        for (auto *c : root_children)
-            if (auto *s = emitter.Emit(c)) body_stmts.push_back(s);
+        for (auto *c : root_children) {
+            if (auto *s = emitter.Emit(c)) { body_stmts.push_back(s); }
+        }
         FinalizeFunctionBody(detail::MakeCompound(ctx, body_stmts), fn, ctx);
     }
 
-    void EmitClangAST(SNode *root, clang::FunctionDecl *fn,
-                      clang::ASTContext &ctx) {
+    void EmitClangAST(SNode *root, clang::FunctionDecl *fn, clang::ASTContext &ctx) {
         Emitter emitter(ctx, fn);
         emitter.CollectGotoLabelDecls(root);
         FinalizeFunctionBody(emitter.Emit(root), fn, ctx);
@@ -572,87 +563,78 @@ namespace patchestry::ast {
     namespace {
 
         std::string LabelName(const clang::LabelDecl *decl) {
-            if (!decl) return "<null-label>";
+            if (!decl) { return "<null-label>"; }
             return decl->getName().str();
         }
 
         std::string StmtName(const clang::Stmt *stmt) {
-            if (!stmt) return "<null-stmt>";
+            if (!stmt) { return "<null-stmt>"; }
             return stmt->getStmtClassName();
         }
 
         void AddClangEmissionDiagnostic(
-            ClangEmissionValidationReport &report,
-            const std::string &message
+            ClangEmissionValidationReport &report, const std::string &message
         ) {
             report.diagnostics.push_back(message);
         }
 
         bool IsEmptyLabelSubStmt(clang::Stmt *stmt) {
-            if (!stmt) return true;
-            if (llvm::isa<clang::NullStmt>(stmt)) return true;
-            if (auto *compound = llvm::dyn_cast<clang::CompoundStmt>(stmt))
+            if (!stmt) { return true; }
+            if (llvm::isa< clang::NullStmt >(stmt)) { return true; }
+            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
                 return compound->body_empty();
+            }
             return false;
         }
 
-        struct ClangEmissionValidationState {
+        struct ClangEmissionValidationState
+        {
             ClangEmissionValidationReport report;
-            std::unordered_map<clang::LabelDecl *, unsigned> label_defs;
-            std::unordered_map<clang::LabelDecl *, unsigned> goto_refs;
-            std::unordered_map<std::string, unsigned> label_name_defs;
-            std::unordered_set<clang::LabelDecl *> empty_label_defs;
+            std::unordered_map< clang::LabelDecl *, unsigned > label_defs;
+            std::unordered_map< clang::LabelDecl *, unsigned > goto_refs;
+            std::unordered_map< std::string, unsigned > label_name_defs;
+            std::unordered_set< clang::LabelDecl * > empty_label_defs;
         };
 
         void ValidateClangStmtRecursive(
-            clang::Stmt *stmt,
-            ClangEmissionValidationState &state,
-            unsigned loop_depth,
-            unsigned switch_depth,
-            const char *context
+            clang::Stmt *stmt, ClangEmissionValidationState &state, unsigned loop_depth,
+            unsigned switch_depth, const char *context
         );
 
         void ValidateClangCompound(
-            clang::CompoundStmt *compound,
-            ClangEmissionValidationState &state,
-            unsigned loop_depth,
-            unsigned switch_depth,
-            const char *context
+            clang::CompoundStmt *compound, ClangEmissionValidationState &state,
+            unsigned loop_depth, unsigned switch_depth, const char *context
         ) {
             bool after_terminator = false;
             for (auto *child : compound->body()) {
-                if (!child) continue;
+                if (!child) { continue; }
                 if (after_terminator) {
-                    if (llvm::isa<clang::LabelStmt>(child)
-                        || llvm::isa<clang::CaseStmt>(child)
-                        || llvm::isa<clang::DefaultStmt>(child)) {
+                    if (llvm::isa< clang::LabelStmt >(child)
+                        || llvm::isa< clang::CaseStmt >(child)
+                        || llvm::isa< clang::DefaultStmt >(child))
+                    {
                         after_terminator = false;
                     } else {
                         ++state.report.unreachable_statements;
                         AddClangEmissionDiagnostic(
                             state.report,
-                            std::string("unreachable ")
-                                + StmtName(child)
-                                + " after terminator in " + context);
+                            std::string("unreachable ") + StmtName(child)
+                                + " after terminator in " + context
+                        );
                     }
                 }
-                ValidateClangStmtRecursive(child, state, loop_depth,
-                                           switch_depth, context);
-                if (detail::EndsWithTerminator(child))
-                    after_terminator = true;
+                ValidateClangStmtRecursive(child, state, loop_depth, switch_depth, context);
+                if (detail::EndsWithTerminator(child)) { after_terminator = true; }
             }
         }
 
         void ValidateClangStmtRecursive(
-            clang::Stmt *stmt,
-            ClangEmissionValidationState &state,
-            unsigned loop_depth,
-            unsigned switch_depth,
-            const char *context
+            clang::Stmt *stmt, ClangEmissionValidationState &state, unsigned loop_depth,
+            unsigned switch_depth, const char *context
         ) {
-            if (!stmt) return;
+            if (!stmt) { return; }
 
-            if (auto *label = llvm::dyn_cast<clang::LabelStmt>(stmt)) {
+            if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
                 auto *decl = label->getDecl();
                 ++state.report.emitted_labels;
                 ++state.label_defs[decl];
@@ -661,153 +643,152 @@ namespace patchestry::ast {
                     ++state.report.empty_labels;
                     state.empty_label_defs.insert(decl);
                 }
-                ValidateClangStmtRecursive(label->getSubStmt(), state,
-                                           loop_depth, switch_depth, "label");
+                ValidateClangStmtRecursive(
+                    label->getSubStmt(), state, loop_depth, switch_depth, "label"
+                );
                 return;
             }
 
-            if (auto *go = llvm::dyn_cast<clang::GotoStmt>(stmt)) {
+            if (auto *go = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
                 ++state.report.emitted_gotos;
                 ++state.goto_refs[go->getLabel()];
                 return;
             }
 
-            if (llvm::isa<clang::BreakStmt>(stmt)) {
+            if (llvm::isa< clang::BreakStmt >(stmt)) {
                 ++state.report.break_stmts;
                 if (loop_depth == 0 && switch_depth == 0) {
                     AddClangEmissionDiagnostic(
-                        state.report,
-                        std::string("break outside loop/switch in ")
-                            + context);
+                        state.report, std::string("break outside loop/switch in ") + context
+                    );
                 }
                 return;
             }
 
-            if (llvm::isa<clang::ContinueStmt>(stmt)) {
+            if (llvm::isa< clang::ContinueStmt >(stmt)) {
                 ++state.report.continue_stmts;
                 if (loop_depth == 0) {
                     AddClangEmissionDiagnostic(
-                        state.report,
-                        std::string("continue outside loop in ") + context);
+                        state.report, std::string("continue outside loop in ") + context
+                    );
                 }
                 return;
             }
 
-            if (llvm::isa<clang::ReturnStmt>(stmt))
-                return;
+            if (llvm::isa< clang::ReturnStmt >(stmt)) { return; }
 
-            if (auto *compound = llvm::dyn_cast<clang::CompoundStmt>(stmt)) {
-                ValidateClangCompound(compound, state, loop_depth,
-                                      switch_depth, "compound");
+            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                ValidateClangCompound(compound, state, loop_depth, switch_depth, "compound");
                 return;
             }
 
-            if (auto *ifs = llvm::dyn_cast<clang::IfStmt>(stmt)) {
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
                 if (!ifs->getThen()) {
                     AddClangEmissionDiagnostic(
-                        state.report,
-                        std::string("if without then body in ") + context);
+                        state.report, std::string("if without then body in ") + context
+                    );
                 }
-                ValidateClangStmtRecursive(ifs->getThen(), state, loop_depth,
-                                           switch_depth, "if-then");
-                ValidateClangStmtRecursive(ifs->getElse(), state, loop_depth,
-                                           switch_depth, "if-else");
+                ValidateClangStmtRecursive(
+                    ifs->getThen(), state, loop_depth, switch_depth, "if-then"
+                );
+                ValidateClangStmtRecursive(
+                    ifs->getElse(), state, loop_depth, switch_depth, "if-else"
+                );
                 return;
             }
 
-            if (auto *while_stmt = llvm::dyn_cast<clang::WhileStmt>(stmt)) {
-                ValidateClangStmtRecursive(while_stmt->getBody(), state,
-                                           loop_depth + 1, switch_depth,
-                                           "while");
+            if (auto *while_stmt = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                ValidateClangStmtRecursive(
+                    while_stmt->getBody(), state, loop_depth + 1, switch_depth, "while"
+                );
                 return;
             }
 
-            if (auto *do_stmt = llvm::dyn_cast<clang::DoStmt>(stmt)) {
-                ValidateClangStmtRecursive(do_stmt->getBody(), state,
-                                           loop_depth + 1, switch_depth,
-                                           "do-while");
+            if (auto *do_stmt = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                ValidateClangStmtRecursive(
+                    do_stmt->getBody(), state, loop_depth + 1, switch_depth, "do-while"
+                );
                 return;
             }
 
-            if (auto *for_stmt = llvm::dyn_cast<clang::ForStmt>(stmt)) {
-                ValidateClangStmtRecursive(for_stmt->getBody(), state,
-                                           loop_depth + 1, switch_depth,
-                                           "for");
+            if (auto *for_stmt = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                ValidateClangStmtRecursive(
+                    for_stmt->getBody(), state, loop_depth + 1, switch_depth, "for"
+                );
                 return;
             }
 
-            if (auto *switch_stmt = llvm::dyn_cast<clang::SwitchStmt>(stmt)) {
+            if (auto *switch_stmt = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
                 ++state.report.switch_stmts;
                 if (!switch_stmt->getBody()) {
                     AddClangEmissionDiagnostic(
-                        state.report,
-                        std::string("switch without body in ") + context);
+                        state.report, std::string("switch without body in ") + context
+                    );
                 }
-                ValidateClangStmtRecursive(switch_stmt->getBody(), state,
-                                           loop_depth, switch_depth + 1,
-                                           "switch");
+                ValidateClangStmtRecursive(
+                    switch_stmt->getBody(), state, loop_depth, switch_depth + 1, "switch"
+                );
                 return;
             }
 
-            if (auto *case_stmt = llvm::dyn_cast<clang::CaseStmt>(stmt)) {
+            if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
                 ++state.report.case_stmts;
                 if (IsEmptyLabelSubStmt(case_stmt->getSubStmt())) {
                     AddClangEmissionDiagnostic(
-                        state.report,
-                        std::string("empty switch case body in ") + context);
+                        state.report, std::string("empty switch case body in ") + context
+                    );
                 }
-                ValidateClangStmtRecursive(case_stmt->getSubStmt(), state,
-                                           loop_depth, switch_depth,
-                                           "switch-case");
+                ValidateClangStmtRecursive(
+                    case_stmt->getSubStmt(), state, loop_depth, switch_depth, "switch-case"
+                );
                 return;
             }
 
-            if (auto *default_stmt = llvm::dyn_cast<clang::DefaultStmt>(stmt)) {
+            if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
                 ++state.report.default_stmts;
                 if (IsEmptyLabelSubStmt(default_stmt->getSubStmt())) {
                     AddClangEmissionDiagnostic(
-                        state.report,
-                        std::string("empty switch default body in ")
-                            + context);
+                        state.report, std::string("empty switch default body in ") + context
+                    );
                 }
-                ValidateClangStmtRecursive(default_stmt->getSubStmt(), state,
-                                           loop_depth, switch_depth,
-                                           "switch-default");
+                ValidateClangStmtRecursive(
+                    default_stmt->getSubStmt(), state, loop_depth, switch_depth,
+                    "switch-default"
+                );
                 return;
             }
 
             for (auto *child : stmt->children()) {
-                ValidateClangStmtRecursive(child, state, loop_depth,
-                                           switch_depth, context);
+                ValidateClangStmtRecursive(child, state, loop_depth, switch_depth, context);
             }
         }
 
     } // namespace
 
-    ClangEmissionValidationReport
-    ValidateEmittedClangAST(clang::FunctionDecl *fn) {
+    ClangEmissionValidationReport ValidateEmittedClangAST(clang::FunctionDecl *fn) {
         ClangEmissionValidationState state;
         if (!fn) {
-            AddClangEmissionDiagnostic(state.report,
-                                       "missing function declaration");
+            AddClangEmissionDiagnostic(state.report, "missing function declaration");
             return state.report;
         }
         if (!fn->getBody()) {
             AddClangEmissionDiagnostic(
-                state.report,
-                "function " + fn->getNameAsString() + " has no body");
+                state.report, "function " + fn->getNameAsString() + " has no body"
+            );
             return state.report;
         }
 
-        ValidateClangStmtRecursive(fn->getBody(), state, /*loop_depth=*/0,
-                                   /*switch_depth=*/0, "function");
+        ValidateClangStmtRecursive(
+            fn->getBody(), state, /*loop_depth=*/0,
+            /*switch_depth=*/0, "function"
+        );
 
         for (const auto &[target, count] : state.goto_refs) {
             if (!state.label_defs.contains(target)) {
                 state.report.dangling_gotos += count;
                 AddClangEmissionDiagnostic(
-                    state.report,
-                    "dangling goto target " + LabelName(target));
+                    state.report, "dangling goto target " + LabelName(target)
+                );
             }
         }
 
@@ -815,22 +796,405 @@ namespace patchestry::ast {
             if (count > 1) {
                 state.report.duplicate_labels += count - 1;
                 AddClangEmissionDiagnostic(
-                    state.report,
-                    "duplicate label definition " + LabelName(label));
+                    state.report, "duplicate label definition " + LabelName(label)
+                );
             }
-            if (state.empty_label_defs.contains(label)
-                && !state.goto_refs.contains(label)) {
+            if (state.empty_label_defs.contains(label) && !state.goto_refs.contains(label)) {
                 AddClangEmissionDiagnostic(
-                    state.report,
-                    "empty unreferenced label " + LabelName(label));
+                    state.report, "empty unreferenced label " + LabelName(label)
+                );
             }
         }
 
         for (const auto &[name, count] : state.label_name_defs) {
             if (count > 1) {
-                AddClangEmissionDiagnostic(
-                    state.report,
-                    "duplicate label name " + name);
+                AddClangEmissionDiagnostic(state.report, "duplicate label name " + name);
+            }
+        }
+
+        return state.report;
+    }
+
+    namespace {
+
+        struct LabelPlacement
+        {
+            clang::LabelStmt *label     = nullptr;
+            clang::CompoundStmt *parent = nullptr;
+            unsigned index              = 0;
+        };
+
+        struct GotoPlacement
+        {
+            clang::GotoStmt *go         = nullptr;
+            clang::CompoundStmt *parent = nullptr;
+            unsigned index              = 0;
+        };
+
+        struct StructuringOpportunityState
+        {
+            StructuringImprovementReport report;
+            std::unordered_map< clang::LabelDecl *, LabelPlacement > labels;
+            std::unordered_map< clang::LabelDecl *, unsigned > refs;
+            std::vector< GotoPlacement > gotos;
+        };
+
+        struct ScopeFrame
+        {
+            const clang::Stmt *owner = nullptr;
+            unsigned slot            = 0;
+        };
+
+        using ScopePath = std::vector< ScopeFrame >;
+
+        struct ScopedGotoPlacement
+        {
+            clang::GotoStmt *go = nullptr;
+            ScopePath scope;
+        };
+
+        struct ScopedControlTransferState
+        {
+            std::unordered_map< clang::LabelDecl *, ScopePath > labels;
+            std::vector< ScopedGotoPlacement > gotos;
+        };
+
+        bool IsScopePrefix(const ScopePath &prefix, const ScopePath &path) {
+            if (prefix.size() > path.size()) { return false; }
+            for (size_t i = 0; i < prefix.size(); ++i) {
+                if (prefix[i].owner != path[i].owner || prefix[i].slot != path[i].slot) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        ScopePath WithScope(const ScopePath &scope, const clang::Stmt *owner, unsigned slot) {
+            ScopePath result = scope;
+            result.push_back(ScopeFrame{ owner, slot });
+            return result;
+        }
+
+        void CollectScopedControlTransfers(
+            clang::Stmt *stmt, ScopedControlTransferState &state, const ScopePath &scope
+        ) {
+            if (!stmt) { return; }
+
+            if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                state.labels.try_emplace(label->getDecl(), scope);
+                CollectScopedControlTransfers(label->getSubStmt(), state, scope);
+                return;
+            }
+
+            if (auto *go = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                state.gotos.push_back(ScopedGotoPlacement{ go, scope });
+                return;
+            }
+
+            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                ScopePath compound_scope = WithScope(scope, compound, 0);
+                for (auto *child : compound->body()) {
+                    CollectScopedControlTransfers(child, state, compound_scope);
+                }
+                return;
+            }
+
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                CollectScopedControlTransfers(ifs->getThen(), state, WithScope(scope, ifs, 1));
+                CollectScopedControlTransfers(ifs->getElse(), state, WithScope(scope, ifs, 2));
+                return;
+            }
+
+            if (auto *while_stmt = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                CollectScopedControlTransfers(
+                    while_stmt->getBody(), state, WithScope(scope, while_stmt, 1)
+                );
+                return;
+            }
+
+            if (auto *do_stmt = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                CollectScopedControlTransfers(
+                    do_stmt->getBody(), state, WithScope(scope, do_stmt, 1)
+                );
+                return;
+            }
+
+            if (auto *for_stmt = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                CollectScopedControlTransfers(
+                    for_stmt->getBody(), state, WithScope(scope, for_stmt, 1)
+                );
+                return;
+            }
+
+            if (auto *switch_stmt = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
+                CollectScopedControlTransfers(
+                    switch_stmt->getBody(), state, WithScope(scope, switch_stmt, 1)
+                );
+                return;
+            }
+
+            if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
+                CollectScopedControlTransfers(
+                    case_stmt->getSubStmt(), state, WithScope(scope, case_stmt, 1)
+                );
+                return;
+            }
+
+            if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
+                CollectScopedControlTransfers(
+                    default_stmt->getSubStmt(), state, WithScope(scope, default_stmt, 1)
+                );
+                return;
+            }
+
+            for (auto *child : stmt->children()) {
+                CollectScopedControlTransfers(child, state, scope);
+            }
+        }
+
+        size_t CountCrossScopeGotos(clang::Stmt *stmt) {
+            ScopedControlTransferState state;
+            CollectScopedControlTransfers(stmt, state, ScopePath{});
+            size_t count = 0;
+            for (const ScopedGotoPlacement &placement : state.gotos) {
+                if (!placement.go) { continue; }
+                auto label_it = state.labels.find(placement.go->getLabel());
+                if (label_it == state.labels.end()) { continue; }
+                if (!IsScopePrefix(label_it->second, placement.scope)) { ++count; }
+            }
+            return count;
+        }
+
+        bool ContainsReturnBreakContinue(clang::Stmt *stmt) {
+            if (!stmt) { return false; }
+            if (llvm::isa< clang::ReturnStmt >(stmt) || llvm::isa< clang::BreakStmt >(stmt)
+                || llvm::isa< clang::ContinueStmt >(stmt))
+            {
+                return true;
+            }
+            for (auto *child : stmt->children()) {
+                if (ContainsReturnBreakContinue(child)) { return true; }
+            }
+            return false;
+        }
+
+        bool ContainsGoto(clang::Stmt *stmt) {
+            if (!stmt) { return false; }
+            if (llvm::isa< clang::GotoStmt >(stmt)) { return true; }
+            for (auto *child : stmt->children()) {
+                if (ContainsGoto(child)) { return true; }
+            }
+            return false;
+        }
+
+        bool ContainsCall(clang::Stmt *stmt) {
+            if (!stmt) { return false; }
+            if (llvm::isa< clang::CallExpr >(stmt)) { return true; }
+            for (auto *child : stmt->children()) {
+                if (ContainsCall(child)) { return true; }
+            }
+            return false;
+        }
+
+        size_t CountSimpleStatements(clang::Stmt *stmt) {
+            if (!stmt) { return 0; }
+            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                size_t total = 0;
+                for (auto *child : compound->body()) { total += CountSimpleStatements(child); }
+                return total;
+            }
+            if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                return CountSimpleStatements(label->getSubStmt());
+            }
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                return 1 + CountSimpleStatements(ifs->getThen())
+                    + CountSimpleStatements(ifs->getElse());
+            }
+            if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
+                return 1 + CountSimpleStatements(sw->getBody());
+            }
+            if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
+                return CountSimpleStatements(case_stmt->getSubStmt());
+            }
+            if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
+                return CountSimpleStatements(default_stmt->getSubStmt());
+            }
+            return 1;
+        }
+
+        clang::Stmt *SingleEffectiveStmt(clang::Stmt *stmt) {
+            while (stmt) {
+                if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                    stmt = label->getSubStmt();
+                    continue;
+                }
+                if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                    if (compound->size() != 1) { return stmt; }
+                    stmt = compound->body_front();
+                    continue;
+                }
+                return stmt;
+            }
+            return nullptr;
+        }
+
+        void CollectLabelBlockStatements(
+            const LabelPlacement &placement, std::vector< clang::Stmt * > &block
+        ) {
+            if (!placement.label) { return; }
+            if (!placement.parent) {
+                block.push_back(placement.label->getSubStmt());
+                return;
+            }
+
+            bool first     = true;
+            unsigned index = 0;
+            for (auto *child : placement.parent->body()) {
+                if (index++ < placement.index) { continue; }
+                if (!first
+                    && (llvm::isa< clang::LabelStmt >(child)
+                        || llvm::isa< clang::CaseStmt >(child)
+                        || llvm::isa< clang::DefaultStmt >(child)))
+                {
+                    break;
+                }
+                if (first) {
+                    block.push_back(placement.label->getSubStmt());
+                    first = false;
+                } else {
+                    block.push_back(child);
+                }
+            }
+        }
+
+        bool LabelBlockHasTerminal(const LabelPlacement &placement) {
+            std::vector< clang::Stmt * > block;
+            CollectLabelBlockStatements(placement, block);
+            for (auto *stmt : block) {
+                if (ContainsReturnBreakContinue(stmt)) { return true; }
+            }
+            return false;
+        }
+
+        bool LabelBlockEndsWithTerminal(const LabelPlacement &placement) {
+            std::vector< clang::Stmt * > block;
+            CollectLabelBlockStatements(placement, block);
+            if (block.empty()) { return false; }
+            return ContainsReturnBreakContinue(block.back())
+                && detail::EndsWithTerminator(block.back());
+        }
+
+        bool LabelBlockIsSmall(const LabelPlacement &placement) {
+            std::vector< clang::Stmt * > block;
+            CollectLabelBlockStatements(placement, block);
+            size_t count = 0;
+            for (auto *stmt : block) { count += CountSimpleStatements(stmt); }
+            return count <= 6;
+        }
+
+        bool LabelBlockHasCall(const LabelPlacement &placement) {
+            std::vector< clang::Stmt * > block;
+            CollectLabelBlockStatements(placement, block);
+            for (auto *stmt : block) {
+                if (ContainsCall(stmt)) { return true; }
+            }
+            return false;
+        }
+
+        bool LabelBlockIsPassThrough(const LabelPlacement &placement) {
+            std::vector< clang::Stmt * > block;
+            CollectLabelBlockStatements(placement, block);
+            if (block.empty()) { return false; }
+            auto *single = SingleEffectiveStmt(block.front());
+            if (!llvm::isa_and_nonnull< clang::GotoStmt >(single)) { return false; }
+            if (block.size() != 1) { return false; }
+            return true;
+        }
+
+        bool GotoFallsThroughToTarget(const GotoPlacement &placement) {
+            if (!placement.go || !placement.parent) { return false; }
+            unsigned index = 0;
+            for (auto *child : placement.parent->body()) {
+                if (index++ <= placement.index) { continue; }
+                if (!child || llvm::isa< clang::NullStmt >(child)) { continue; }
+                auto *label = llvm::dyn_cast< clang::LabelStmt >(child);
+                return label && label->getDecl() == placement.go->getLabel();
+            }
+            return false;
+        }
+
+        void CollectStructuringOpportunities(
+            clang::Stmt *stmt, StructuringOpportunityState &state,
+            clang::CompoundStmt *parent = nullptr, unsigned index = 0
+        ) {
+            if (!stmt) { return; }
+            if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                state.labels.try_emplace(
+                    label->getDecl(), LabelPlacement{ label, parent, index }
+                );
+                ++state.report.emitted_labels;
+                CollectStructuringOpportunities(label->getSubStmt(), state, nullptr, 0);
+                return;
+            }
+            if (auto *go = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                ++state.report.residual_gotos;
+                ++state.refs[go->getLabel()];
+                state.gotos.push_back(GotoPlacement{ go, parent, index });
+                return;
+            }
+            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                unsigned child_index = 0;
+                for (auto *child : compound->body()) {
+                    CollectStructuringOpportunities(child, state, compound, child_index++);
+                }
+                return;
+            }
+            for (auto *child : stmt->children()) {
+                CollectStructuringOpportunities(child, state, nullptr, 0);
+            }
+        }
+
+    } // namespace
+
+    StructuringImprovementReport AnalyzeStructuringImprovements(clang::FunctionDecl *fn) {
+        StructuringOpportunityState state;
+        if (!fn || !fn->getBody()) { return state.report; }
+
+        CollectStructuringOpportunities(fn->getBody(), state);
+        state.report.cross_scope_gotos = CountCrossScopeGotos(fn->getBody());
+        for (const auto &placement : state.gotos) {
+            auto *target  = placement.go->getLabel();
+            auto label_it = state.labels.find(target);
+            if (label_it == state.labels.end()) {
+                ++state.report.dangling_gotos;
+                ++state.report.residual_hard;
+                continue;
+            }
+
+            const LabelPlacement &label = label_it->second;
+            const bool single_ref       = state.refs[target] == 1;
+            const bool small            = LabelBlockIsSmall(label);
+            const bool terminal         = LabelBlockHasTerminal(label);
+            const bool small_terminal   = small && LabelBlockEndsWithTerminal(label);
+
+            if (GotoFallsThroughToTarget(placement)) {
+                ++state.report.layout_fallthrough;
+            } else if (LabelBlockIsPassThrough(label)) {
+                ++state.report.pass_through_collapse;
+            } else if (small_terminal) {
+                ++state.report.terminal_clone_inline;
+            } else if (single_ref) {
+                ++state.report.single_ref_inline_reorder;
+            } else if (
+                small && !terminal && !LabelBlockHasCall(label)
+                && !ContainsGoto(label.label->getSubStmt())
+            )
+            {
+                ++state.report.small_target_clone;
+            } else if (terminal) {
+                ++state.report.terminal_epilogue;
+            } else {
+                ++state.report.residual_hard;
             }
         }
 

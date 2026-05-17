@@ -5,7 +5,9 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <algorithm>
 #include <sstream>
+#include <vector>
 
 #include <clang/AST/Expr.h>
 #include <clang/AST/Type.h>
@@ -36,13 +38,28 @@ namespace patchestry::ast {
 
     void TypeBuilder::create_types(clang::ASTContext &ctx, TypeMap &lifted_types) {
         lifted_types_ = &lifted_types;
-        for (auto &[key, vnode_type] : lifted_types) {
+
+        std::vector< std::string > type_keys;
+        type_keys.reserve(lifted_types.size());
+        for (const auto &[key, _] : lifted_types) { type_keys.push_back(key); }
+        std::sort(type_keys.begin(), type_keys.end());
+
+        for (const auto &key : type_keys) {
+            const auto &vnode_type = lifted_types.at(key);
             serialized_types.emplace(key, create_type(ctx, vnode_type));
         }
 
         // Traverse through missing type definition for a composite type and create the complete
         // definition for them
-        for (auto &[key, decl] : missing_type_definition) {
+        std::vector< std::string > missing_definition_keys;
+        missing_definition_keys.reserve(missing_type_definition.size());
+        for (const auto &[key, _] : missing_type_definition) {
+            missing_definition_keys.push_back(key);
+        }
+        std::sort(missing_definition_keys.begin(), missing_definition_keys.end());
+
+        for (const auto &key : missing_definition_keys) {
+            auto *decl = missing_type_definition.at(key);
             if (llvm::isa< clang::RecordDecl >(decl)) {
                 auto iter = lifted_types.find(key);
                 // if type key does not exist in the lifted types, it could be a bug in create
@@ -141,18 +158,17 @@ namespace patchestry::ast {
                         if (it != lifted_types_->end()) {
                             param_types.push_back(create_type(ctx, it->second));
                         } else {
-                            LOG(ERROR) << "Unknown param type key '" << pk
-                                         << "' in function type '" << fn_type.key
-                                         << "'; using void*\n";
+                            LOG(ERROR)
+                                << "Unknown param type key '" << pk << "' in function type '"
+                                << fn_type.key << "'; using void*\n";
                             param_types.push_back(ctx.getPointerType(ctx.VoidTy));
                         }
                     }
                 }
 
                 clang::FunctionProtoType::ExtProtoInfo epi;
-                epi.Variadic = fn_type.is_variadic;
-                clang::QualType fn_qual =
-                    ctx.getFunctionType(return_type, param_types, epi);
+                epi.Variadic            = fn_type.is_variadic;
+                clang::QualType fn_qual = ctx.getFunctionType(return_type, param_types, epi);
                 return ctx.getPointerType(fn_qual);
             }
 
@@ -175,9 +191,7 @@ namespace patchestry::ast {
                 // BitField: return the base integer type.  The bit width is
                 // applied later when creating FieldDecls in composites.
                 auto &bf = dynamic_cast< const BitFieldType & >(*vnode_type);
-                if (bf.GetBaseType()) {
-                    return create_type(ctx, bf.GetBaseType());
-                }
+                if (bf.GetBaseType()) { return create_type(ctx, bf.GetBaseType()); }
                 return GetTypeFromSize(
                     ctx, vnode_type->size * TypeBuilder::kNumBitsInByte,
                     /*is_signed=*/false, /*is_integer=*/true
@@ -188,9 +202,8 @@ namespace patchestry::ast {
                 // String: char[N] if size is known, else char*.
                 if (vnode_type->size > 0) {
                     return ctx.getConstantArrayType(
-                        ctx.CharTy,
-                        llvm::APInt(TypeBuilder::kNumBitsUint, vnode_type->size), nullptr,
-                        clang::ArraySizeModifier::Normal, 0
+                        ctx.CharTy, llvm::APInt(TypeBuilder::kNumBitsUint, vnode_type->size),
+                        nullptr, clang::ArraySizeModifier::Normal, 0
                     );
                 }
                 return ctx.getPointerType(ctx.CharTy);
@@ -228,7 +241,9 @@ namespace patchestry::ast {
         typedef_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(typedef_decl);
 
-        return ctx.getTypedefType(clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl);
+        return ctx.getTypedefType(
+            clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl
+        );
     }
 
     /**
@@ -273,7 +288,9 @@ namespace patchestry::ast {
 
         typedef_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(typedef_decl);
-        return ctx.getTypedefType(clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl);
+        return ctx.getTypedefType(
+            clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl
+        );
     }
 
     /**
@@ -394,21 +411,25 @@ namespace patchestry::ast {
                 continue;
             }
 
-            auto field_type  = iter->second;
-            auto location    = SourceLocation(ctx.getSourceManager(), component.type->key);
+            auto field_type = iter->second;
+            auto location   = SourceLocation(ctx.getSourceManager(), component.type->key);
 
             // For bitfield components, create a ConstantExpr wrapping the bit width.
             clang::Expr *bit_width = nullptr;
             if (component.type->kind == VarnodeType::VT_BITFIELD) {
-                auto &bf = dynamic_cast< const BitFieldType & >(*component.type);
+                auto &bf      = dynamic_cast< const BitFieldType & >(*component.type);
                 auto *int_lit = clang::IntegerLiteral::Create(
-                    ctx, llvm::APInt(TypeBuilder::kNumBitsUint, bf.bit_size),
-                    ctx.UnsignedIntTy, location
+                    ctx, llvm::APInt(TypeBuilder::kNumBitsUint, bf.bit_size), ctx.UnsignedIntTy,
+                    location
                 );
                 bit_width = clang::ConstantExpr::Create(
-                    ctx, int_lit, clang::APValue(llvm::APSInt(
-                        llvm::APInt(TypeBuilder::kNumBitsUint, bf.bit_size), /*isUnsigned=*/true
-                    ))
+                    ctx, int_lit,
+                    clang::APValue(
+                        llvm::APSInt(
+                            llvm::APInt(TypeBuilder::kNumBitsUint, bf.bit_size),
+                            /*isUnsigned=*/true
+                        )
+                    )
                 );
             }
 
@@ -484,10 +505,10 @@ namespace patchestry::ast {
      */
     clang::QualType
     TypeBuilder::create_enum(clang::ASTContext &ctx, const EnumType &enum_type) {
-        auto loc = SourceLocation(ctx.getSourceManager(), enum_type.key);
+        auto loc        = SourceLocation(ctx.getSourceManager(), enum_type.key);
         auto *enum_decl = clang::EnumDecl::Create(
-            ctx, ctx.getTranslationUnitDecl(), loc, loc,
-            &ctx.Idents.get(enum_type.name), nullptr, false, false, false
+            ctx, ctx.getTranslationUnitDecl(), loc, loc, &ctx.Idents.get(enum_type.name),
+            nullptr, false, false, false
         );
 
         enum_decl->setDeclContext(ctx.getTranslationUnitDecl());
@@ -495,9 +516,7 @@ namespace patchestry::ast {
 
         // Derive the underlying integer type from the serialized enum size.
         unsigned bit_width = enum_type.size * TypeBuilder::kNumBitsInByte;
-        if (bit_width == 0) {
-            bit_width = TypeBuilder::kNumBitsUint;
-        }
+        if (bit_width == 0) { bit_width = TypeBuilder::kNumBitsUint; }
 
         auto underlying_type =
             GetTypeFromSize(ctx, bit_width, /*is_signed=*/true, /*is_integer=*/true);
@@ -567,7 +586,9 @@ namespace patchestry::ast {
         typedef_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(typedef_decl);
 
-        return ctx.getTypedefType(clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl);
+        return ctx.getTypedefType(
+            clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl
+        );
     }
 
     /**
@@ -585,9 +606,7 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const ArrayType &undefined_array
     ) {
         auto undef_array = create_array(ctx, undefined_array);
-        if (undef_array.isNull()) {
-            return {};
-        }
+        if (undef_array.isNull()) { return {}; }
 
         std::stringstream ss;
         ss << "struct_undefined" << undefined_array.size;

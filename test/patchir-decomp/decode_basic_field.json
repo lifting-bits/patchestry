@@ -14,7 +14,7 @@
 // C: if (param_2 == 5) {
 // C-NEXT: uVar2 = pb_decode_fixed32
 // C-NEXT: return uVar2;
-// C: } else if (param_2 == 255) {
+// C: if (param_2 == 255) {
 // C-NEXT: uVar2 = pb_decode_fixed32
 // C-NEXT: return uVar2;
 // C-NOT: goto ram_08006596_50_basic
@@ -22,7 +22,7 @@
 // C: if (param_2 == 1) {
 // C-NEXT: uVar2 = pb_decode_fixed64
 // C-NEXT: return uVar2;
-// C: } else if (param_2 == 255) {
+// C: if (param_2 == 255) {
 // C-NEXT: uVar2 = pb_decode_fixed64
 // C-NEXT: return uVar2;
 // C-NOT: goto ram_080065ae_47_basic

@@ -277,6 +277,7 @@ namespace patchestry::ast {
             size_t breaks    = 0;
             size_t continues = 0;
             size_t returns   = 0;
+            size_t fors      = 0;
         };
 
         struct ControlShapeReport
@@ -303,6 +304,14 @@ namespace patchestry::ast {
             if (const auto *switch_stmt = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
                 ++summary.switches;
                 CollectClangControlShape(switch_stmt->getBody(), summary);
+                return;
+            }
+            if (const auto *for_stmt = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                ++summary.fors;
+                CollectClangControlShape(for_stmt->getInit(), summary);
+                CollectClangControlShape(for_stmt->getCond(), summary);
+                CollectClangControlShape(for_stmt->getInc(), summary);
+                CollectClangControlShape(for_stmt->getBody(), summary);
                 return;
             }
             if (const auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
@@ -373,6 +382,16 @@ namespace patchestry::ast {
                 }
                 return;
             }
+            if (const auto *for_node = node->dyn_cast< SFor >()) {
+                ++summary.fors;
+                CollectClangControlShape(for_node->Init(), summary);
+                CollectClangControlShape(for_node->Cond(), summary);
+                CollectClangControlShape(for_node->Inc(), summary);
+                for (const SNode *child : for_node->BodyList()) {
+                    CollectSNodeControlShape(child, summary);
+                }
+                return;
+            }
             if (node->dyn_cast< SBreak >()) {
                 ++summary.breaks;
                 return;
@@ -436,10 +455,20 @@ namespace patchestry::ast {
 
             // ClangEmitter inserts implicit breaks for non-terminating switch
             // cases, and cleanup can duplicate terminating payloads through
-            // safe inlining.  These terminator classes are therefore lower
-            // bounds rather than exact-shape fields.
+            // safe inlining.  For-loop promotion can also erase one redundant
+            // terminal continue per newly-emitted for loop: `continue;` at the
+            // end of a for body has the same effect as falling off the body.
+            // These terminator classes are therefore lower bounds rather than
+            // exact-shape fields.
             require_at_least("breaks", report.expected.breaks, report.emitted.breaks);
-            require_at_least("continues", report.expected.continues, report.emitted.continues);
+            size_t promoted_for_allowance = 0;
+            if (report.emitted.fors > report.expected.fors) {
+                promoted_for_allowance = report.emitted.fors - report.expected.fors;
+            }
+            require_at_least(
+                "continues", report.expected.continues,
+                report.emitted.continues + promoted_for_allowance
+            );
             require_at_least("returns", report.expected.returns, report.emitted.returns);
             return report;
         }
@@ -461,6 +490,8 @@ namespace patchestry::ast {
                        << " emitted_breaks=" << report.emitted.breaks
                        << " expected_continues=" << report.expected.continues
                        << " emitted_continues=" << report.emitted.continues
+                       << " expected_fors=" << report.expected.fors
+                       << " emitted_fors=" << report.emitted.fors
                        << " expected_returns=" << report.expected.returns
                        << " emitted_returns=" << report.emitted.returns
                        << " diagnostics=" << report.diagnostics.size() << "\n";
@@ -766,13 +797,11 @@ namespace patchestry::ast {
                             bool did_cross  = InlineCrossScopeSingleRef(root_body, factory);
                             bool did_labels = RemoveUnreferencedLabels(root_body, factory);
                             if (!did_empty && !did_forward && !did_merge && !did_return
-                                && !did_dup && !did_switch_local
-                                && !did_small_dup && !did_epilogue_dup
-                                && !did_switch_fallthrough_dup && !did_stack_guard_dup
-                                && !did_loop_continue_dup
-                                && !did_guarded_fallthrough
-                                && !did_cross_entry && !did_cleanup_dup
-                                && !did_absorb && !did_scope && !did_elim
+                                && !did_dup && !did_switch_local && !did_small_dup
+                                && !did_epilogue_dup && !did_switch_fallthrough_dup
+                                && !did_stack_guard_dup && !did_loop_continue_dup
+                                && !did_guarded_fallthrough && !did_cross_entry
+                                && !did_cleanup_dup && !did_absorb && !did_scope && !did_elim
                                 && !did_inline && !did_cross && !did_labels)
                             {
                                 break;
@@ -821,6 +850,23 @@ namespace patchestry::ast {
 
                 CleanupPrettyPrint(fn, ctx);
 
+                if (options.structuring_improvement_report && have_structured) {
+                    auto report = AnalyzeStructuringImprovements(fn);
+                    llvm::errs() << "STRUCTURING_IMPROVEMENT_REPORT function=" << fn_name
+                                 << " residual_gotos=" << report.residual_gotos
+                                 << " emitted_labels=" << report.emitted_labels
+                                 << " dangling_gotos=" << report.dangling_gotos
+                                 << " layout_fallthrough=" << report.layout_fallthrough
+                                 << " pass_through_collapse=" << report.pass_through_collapse
+                                 << " terminal_clone_inline=" << report.terminal_clone_inline
+                                 << " single_ref_inline_reorder="
+                                 << report.single_ref_inline_reorder
+                                 << " small_target_clone=" << report.small_target_clone
+                                 << " terminal_epilogue=" << report.terminal_epilogue
+                                 << " cross_scope_gotos=" << report.cross_scope_gotos
+                                 << " residual_hard=" << report.residual_hard << "\n";
+                }
+
                 if (options.verify_no_node_loss && have_structured) {
                     auto clang_report = ValidateEmittedClangAST(fn);
                     if (!clang_report.ok()) {
@@ -860,6 +906,17 @@ namespace patchestry::ast {
                         LogControlShapeFailure(fn_name, control_report);
                         LOG(FATAL) << "Clang control shape verification failed for " << fn_name
                                    << "\n";
+                    }
+
+                    auto structure_report = AnalyzeStructuringImprovements(fn);
+                    if (structure_report.cross_scope_gotos != 0) {
+                        LOG(ERROR)
+                            << "Clang AST emission verification failed for " << fn_name
+                            << " cross_scope_gotos="
+                            << structure_report.cross_scope_gotos << "\n";
+                        LOG(FATAL)
+                            << "Clang AST contains goto entries into nested structured scopes for "
+                            << fn_name << "\n";
                     }
                 }
 

@@ -98,24 +98,31 @@ namespace {
         llvm::cl::init(false)
     );
 
+    const llvm::cl::opt< bool > structuring_improvement_report( // NOLINT(cert-err58-cpp)
+        "structuring-improvement-report",
+        llvm::cl::desc("Report residual goto cleanup opportunities after structuring"),
+        llvm::cl::init(false)
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
         );
 
         return {
-            .emit_cir                   = emit_cir.getValue(),
-            .emit_mlir                  = emit_mlir.getValue(), // It is set to true by default
-            .emit_llvm                  = emit_llvm.getValue(),
-            .emit_asm                   = emit_asm.getValue(),
-            .emit_obj                   = emit_obj.getValue(),
-            .verbose                    = verbose.getValue(),
-            .use_structuring_pass       = use_structuring_pass.getValue(),
-            .verify_no_node_loss        = verify_no_node_loss.getValue(),
-            .output_file                = output_filename.getValue(),
-            .input_file                 = input_filename.getValue(),
-            .print_tu                   = print_tu.getValue(),
-            .emit_dot_cfg               = emit_dot_cfg.getValue(),
+            .emit_cir             = emit_cir.getValue(),
+            .emit_mlir            = emit_mlir.getValue(), // It is set to true by default
+            .emit_llvm            = emit_llvm.getValue(),
+            .emit_asm             = emit_asm.getValue(),
+            .emit_obj             = emit_obj.getValue(),
+            .verbose              = verbose.getValue(),
+            .use_structuring_pass = use_structuring_pass.getValue(),
+            .verify_no_node_loss  = verify_no_node_loss.getValue(),
+            .structuring_improvement_report = structuring_improvement_report.getValue(),
+            .output_file                    = output_filename.getValue(),
+            .input_file                     = input_filename.getValue(),
+            .print_tu                       = print_tu.getValue(),
+            .emit_dot_cfg                   = emit_dot_cfg.getValue(),
         };
     }
 
@@ -131,16 +138,16 @@ namespace {
 
     bool validateBranchindSwitchMetadata(const patchestry::ghidra::Program &program) {
         for (const auto &[func_key, function] : program.serialized_functions) {
-            (void)func_key;
+            (void) func_key;
             for (const auto &[block_key, block] : function.basic_blocks) {
-                (void)block_key;
+                (void) block_key;
                 for (const auto &operation_key : block.ordered_operations) {
                     auto op_it = block.operations.find(operation_key);
-                    if (op_it == block.operations.end()) continue;
+                    if (op_it == block.operations.end()) { continue; }
 
                     const auto &op = op_it->second;
-                    if (op.mnemonic != patchestry::ghidra::Mnemonic::OP_BRANCHIND) continue;
-                    if (op.switch_cases.empty()) continue;
+                    if (op.mnemonic != patchestry::ghidra::Mnemonic::OP_BRANCHIND) { continue; }
+                    if (op.switch_cases.empty()) { continue; }
 
                     size_t valid_targets = 0;
                     for (const auto &sc : op.switch_cases) {
@@ -149,16 +156,18 @@ namespace {
                         }
                     }
 
-                    const bool has_successor_fallback = !op.successor_blocks.empty();
-                    const bool has_valid_fallback_block =
-                        op.fallback_block.has_value()
+                    const bool has_successor_fallback   = !op.successor_blocks.empty();
+                    const bool has_valid_fallback_block = op.fallback_block.has_value()
                         && function.basic_blocks.contains(*op.fallback_block);
 
-                    if (valid_targets == 0 && !has_successor_fallback && !has_valid_fallback_block) {
-                        LOG(ERROR) << "BRANCHIND switch_cases has no valid target blocks in "
-                                   << function.name << " at operation " << op.key
-                                   << "; add successor_blocks or at least one valid switch_cases "
-                                      "target.\n";
+                    if (valid_targets == 0 && !has_successor_fallback
+                        && !has_valid_fallback_block)
+                    {
+                        LOG(ERROR)
+                            << "BRANCHIND switch_cases has no valid target blocks in "
+                            << function.name << " at operation " << op.key
+                            << "; add successor_blocks or at least one valid switch_cases "
+                               "target.\n";
                         return false;
                     }
                 }
@@ -214,16 +223,15 @@ namespace {
             std::stringstream ss(lang_id);
             std::string token;
 
-            while (std::getline(ss, token, delim)) {
-                tokens.push_back(token);
-            }
+            while (std::getline(ss, token, delim)) { tokens.push_back(token); }
             return tokens;
         };
 
         // Ghidra export lang id in the format - arch:endianess:size:variant
         auto lang_vec = split_language(lang);
         if (lang_vec.size() < 3) {
-            LOG(ERROR
+            LOG(
+                ERROR
             ) << "Error: Invalid language format. Expected 'arch:endianess:size:variant'.\n";
             return "";
         }
@@ -285,9 +293,7 @@ namespace {
 
 int main(int argc, char **argv) {
     auto options = parseCommandLineOptions(argc, argv);
-    if (!validateUnsupportedOptions(options)) {
-        return EXIT_FAILURE;
-    }
+    if (!validateUnsupportedOptions(options)) { return EXIT_FAILURE; }
 
     llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
         llvm::MemoryBuffer::getFile(options.input_file);
@@ -317,9 +323,7 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    if (!validateBranchindSwitchMetadata(*program)) {
-        return EXIT_FAILURE;
-    }
+    if (!validateBranchindSwitchMetadata(*program)) { return EXIT_FAILURE; }
 
     clang::CompilerInstance ci;
     clang::CompilerInvocation &invocation = ci.getInvocation();
