@@ -457,9 +457,8 @@ namespace patchestry::ast {
     }
 
     static clang::Expr *ParenConditionOperand(clang::ASTContext &ctx, clang::Expr *expr) {
-        return new (ctx) clang::ParenExpr(
-            VirtualLoc(ctx), VirtualLoc(ctx), EnsureRValue(ctx, expr)
-        );
+        return new (ctx)
+            clang::ParenExpr(VirtualLoc(ctx), VirtualLoc(ctx), EnsureRValue(ctx, expr));
     }
 
     static std::pair< clang::LabelDecl *, clang::Expr * > ExtractIfGotoPattern(clang::Stmt *s) {
@@ -537,9 +536,7 @@ namespace patchestry::ast {
             auto *compound = llvm::dyn_cast_or_null< clang::CompoundStmt >(else_stmt);
             if (!compound || compound->size() < 2) { return nullptr; }
 
-            std::vector< clang::Stmt * > children(
-                compound->body_begin(), compound->body_end()
-            );
+            std::vector< clang::Stmt * > children(compound->body_begin(), compound->body_end());
             auto *lead = llvm::dyn_cast_or_null< clang::IfStmt >(children.front());
             if (!lead || lead->getElse() || lead->getInit() || lead->getConditionVariable()
                 || !detail::EndsWithTerminator(lead->getThen()))
@@ -555,8 +552,8 @@ namespace patchestry::ast {
 
             return clang::IfStmt::Create(
                 ctx, lead->getIfLoc(), lead->getStatementKind(), nullptr, nullptr,
-                lead->getCond(), lead->getLParenLoc(), lead->getRParenLoc(),
-                lead->getThen(), VirtualLoc(ctx), rest_stmt
+                lead->getCond(), lead->getLParenLoc(), lead->getRParenLoc(), lead->getThen(),
+                VirtualLoc(ctx), rest_stmt
             );
         };
 
@@ -657,22 +654,20 @@ namespace patchestry::ast {
                     auto *inner_goto = AsGotoStmt(inner->getThen());
                     auto *else_goto  = AsGotoStmt(new_else);
                     if (!ifs->getInit() && !ifs->getConditionVariable() && !inner->getInit()
-                        && !inner->getConditionVariable() && !inner->getElse()
-                        && inner_goto && else_goto
+                        && !inner->getConditionVariable() && !inner->getElse() && inner_goto
+                        && else_goto
                         && inner_goto->getLabel()->getName()
                             == else_goto->getLabel()->getName())
                     {
                         auto *merged = clang::BinaryOperator::Create(
-                            ctx,
-                            ParenConditionOperand(ctx, NegateExpr(ctx, ifs->getCond())),
+                            ctx, ParenConditionOperand(ctx, NegateExpr(ctx, ifs->getCond())),
                             ParenConditionOperand(ctx, inner->getCond()), clang::BO_LOr,
-                            ctx.BoolTy, clang::VK_PRValue, clang::OK_Ordinary,
-                            VirtualLoc(ctx), clang::FPOptionsOverride()
+                            ctx.BoolTy, clang::VK_PRValue, clang::OK_Ordinary, VirtualLoc(ctx),
+                            clang::FPOptionsOverride()
                         );
                         return clang::IfStmt::Create(
                             ctx, ifs->getIfLoc(), ifs->getStatementKind(), nullptr, nullptr,
-                            merged, ifs->getLParenLoc(), ifs->getRParenLoc(),
-                            inner->getThen()
+                            merged, ifs->getLParenLoc(), ifs->getRParenLoc(), inner->getThen()
                         );
                     }
                 }
@@ -693,8 +688,8 @@ namespace patchestry::ast {
                         auto *merged = clang::BinaryOperator::Create(
                             ctx, ParenConditionOperand(ctx, ifs->getCond()),
                             ParenConditionOperand(ctx, inner->getCond()), clang::BO_LOr,
-                            ctx.BoolTy, clang::VK_PRValue, clang::OK_Ordinary,
-                            VirtualLoc(ctx), clang::FPOptionsOverride()
+                            ctx.BoolTy, clang::VK_PRValue, clang::OK_Ordinary, VirtualLoc(ctx),
+                            clang::FPOptionsOverride()
                         );
                         return clang::IfStmt::Create(
                             ctx, ifs->getIfLoc(), ifs->getStatementKind(), nullptr, nullptr,
@@ -713,9 +708,10 @@ namespace patchestry::ast {
                     ifs->getConditionVariable(), ifs->getCond(), ifs->getLParenLoc(),
                     ifs->getRParenLoc(), ifs->getThen(), ifs->getElseLoc(), new_else
                 );
-            } else if (auto *inner = llvm::dyn_cast_or_null< clang::IfStmt >(
-                           UnwrapSingleCompoundStmt(new_then)
-                       ))
+            } else if (
+                auto *inner =
+                    llvm::dyn_cast_or_null< clang::IfStmt >(UnwrapSingleCompoundStmt(new_then))
+            )
             {
                 // Cosmetic only: `if (a) { if (b) body; }` becomes
                 // `if (a && b) body;`.  Keep this to plain if-statements with
@@ -726,13 +722,13 @@ namespace patchestry::ast {
                 {
                     auto *merged = clang::BinaryOperator::Create(
                         ctx, ParenConditionOperand(ctx, ifs->getCond()),
-                        ParenConditionOperand(ctx, inner->getCond()), clang::BO_LAnd, ctx.BoolTy,
-                        clang::VK_PRValue, clang::OK_Ordinary, VirtualLoc(ctx),
+                        ParenConditionOperand(ctx, inner->getCond()), clang::BO_LAnd,
+                        ctx.BoolTy, clang::VK_PRValue, clang::OK_Ordinary, VirtualLoc(ctx),
                         clang::FPOptionsOverride()
                     );
                     return clang::IfStmt::Create(
-                        ctx, ifs->getIfLoc(), ifs->getStatementKind(), nullptr, nullptr,
-                        merged, ifs->getLParenLoc(), ifs->getRParenLoc(), inner->getThen()
+                        ctx, ifs->getIfLoc(), ifs->getStatementKind(), nullptr, nullptr, merged,
+                        ifs->getLParenLoc(), ifs->getRParenLoc(), inner->getThen()
                     );
                 }
             }
@@ -933,6 +929,120 @@ namespace patchestry::ast {
             return true;
         }
 
+        constexpr size_t kMaxExternalContinuationCloneStmts     = 8;
+        constexpr unsigned kMaxExternalContinuationFallthroughs = 4;
+
+        size_t CountStraightLineStmtUnits(clang::Stmt *stmt) {
+            if (!stmt) { return 0; }
+            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                size_t count = 0;
+                for (clang::Stmt *child : compound->body()) {
+                    count += CountStraightLineStmtUnits(child);
+                    if (count > kMaxExternalContinuationCloneStmts) { return count; }
+                }
+                return count;
+            }
+            return llvm::isa< clang::NullStmt >(stmt) ? 0 : 1;
+        }
+
+        clang::Stmt *CloneStraightLineStmt(clang::ASTContext &ctx, clang::Stmt *stmt) {
+            if (!stmt) { return new (ctx) clang::NullStmt(VirtualLoc(ctx)); }
+            if (llvm::isa< clang::NullStmt >(stmt)) {
+                return new (ctx) clang::NullStmt(VirtualLoc(ctx));
+            }
+            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                std::vector< clang::Stmt * > cloned;
+                cloned.reserve(compound->size());
+                for (clang::Stmt *child : compound->body()) {
+                    clang::Stmt *copy = CloneStraightLineStmt(ctx, child);
+                    if (!copy) { return nullptr; }
+                    cloned.push_back(copy);
+                }
+                return detail::MakeCompound(ctx, cloned);
+            }
+            if (auto *expr = llvm::dyn_cast< clang::Expr >(stmt)) {
+                return CloneExpr(ctx, expr);
+            }
+            return nullptr;
+        }
+
+        bool StraightLineContinuationSeqIsSafe(const std::vector< clang::Stmt * > &stmts) {
+            size_t count = 0;
+            for (clang::Stmt *stmt : stmts) {
+                if (!StraightLineContinuationIsSafeToMove(stmt)) { return false; }
+                count += CountStraightLineStmtUnits(stmt);
+                if (count > kMaxExternalContinuationCloneStmts) { return false; }
+            }
+            return count != 0;
+        }
+
+        bool ContinuationStmtIsSafeToMoveOnce(clang::Stmt *stmt) {
+            if (!stmt) { return true; }
+            if (llvm::isa< clang::WhileStmt >(stmt) || llvm::isa< clang::DoStmt >(stmt)
+                || llvm::isa< clang::ForStmt >(stmt) || llvm::isa< clang::SwitchStmt >(stmt))
+            {
+                std::function< bool(clang::Stmt *) > has_label_or_goto =
+                    [&](clang::Stmt *cur) -> bool {
+                    if (!cur) { return false; }
+                    if (llvm::isa< clang::LabelStmt >(cur) || llvm::isa< clang::GotoStmt >(cur))
+                    {
+                        return true;
+                    }
+                    for (clang::Stmt *child : cur->children()) {
+                        if (has_label_or_goto(child)) { return true; }
+                    }
+                    return false;
+                };
+                return !has_label_or_goto(stmt);
+            }
+            if (llvm::isa< clang::LabelStmt >(stmt) || llvm::isa< clang::GotoStmt >(stmt)
+                || llvm::isa< clang::DeclStmt >(stmt) || llvm::isa< clang::CaseStmt >(stmt)
+                || llvm::isa< clang::DefaultStmt >(stmt) || llvm::isa< clang::BreakStmt >(stmt)
+                || llvm::isa< clang::ContinueStmt >(stmt))
+            {
+                return false;
+            }
+            for (clang::Stmt *child : stmt->children()) {
+                if (!ContinuationStmtIsSafeToMoveOnce(child)) { return false; }
+            }
+            return true;
+        }
+
+        bool ContinuationSeqIsSafeToMoveOnce(const std::vector< clang::Stmt * > &stmts) {
+            if (stmts.empty()) { return false; }
+            for (clang::Stmt *stmt : stmts) {
+                if (!ContinuationStmtIsSafeToMoveOnce(stmt)) { return false; }
+            }
+            return true;
+        }
+
+        clang::Stmt *MoveContinuationSeqAsStmt(
+            clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts
+        ) {
+            if (stmts.empty()) { return new (ctx) clang::NullStmt(VirtualLoc(ctx)); }
+            if (stmts.size() == 1) { return stmts.front(); }
+            return detail::MakeCompound(ctx, stmts);
+        }
+
+        clang::Stmt *CloneContinuationSeq(
+            clang::ASTContext &ctx, const std::vector< clang::Stmt * > &stmts
+        ) {
+            std::vector< clang::Stmt * > cloned;
+            cloned.reserve(stmts.size());
+            for (clang::Stmt *stmt : stmts) {
+                clang::Stmt *copy = CloneStraightLineStmt(ctx, stmt);
+                if (!copy) { return nullptr; }
+                if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(copy)) {
+                    for (clang::Stmt *child : compound->body()) { cloned.push_back(child); }
+                } else if (!llvm::isa< clang::NullStmt >(copy)) {
+                    cloned.push_back(copy);
+                }
+            }
+            return cloned.empty()
+                ? static_cast< clang::Stmt * >(new (ctx) clang::NullStmt(VirtualLoc(ctx)))
+                : detail::MakeCompound(ctx, cloned);
+        }
+
         unsigned CountGotosToTargetName(clang::Stmt *st, llvm::StringRef target) {
             if (!st) { return 0; }
             if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(st)) {
@@ -1044,6 +1154,206 @@ namespace patchestry::ast {
 
             ++inserted;
             return detail::MakeCompound(ctx, { st, continuation });
+        }
+
+        clang::Stmt *RewriteExternalTargetGotoWithContinuation(
+            clang::ASTContext &ctx, clang::Stmt *st, llvm::StringRef target,
+            const std::vector< clang::Stmt * > &continuation, unsigned &removed_gotos,
+            unsigned &inserted, bool &failed
+        ) {
+            if (!st || failed) { return st; }
+            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(st)) {
+                if (gs->getLabel()->getName() == target) {
+                    ++removed_gotos;
+                    return new (ctx) clang::NullStmt(VirtualLoc(ctx));
+                }
+                return st;
+            }
+            if (llvm::isa< clang::ReturnStmt >(st) || llvm::isa< clang::BreakStmt >(st)
+                || llvm::isa< clang::ContinueStmt >(st) || llvm::isa< clang::SwitchStmt >(st)
+                || llvm::isa< clang::WhileStmt >(st) || llvm::isa< clang::DoStmt >(st)
+                || llvm::isa< clang::ForStmt >(st) || llvm::isa< clang::LabelStmt >(st)
+                || llvm::isa< clang::CaseStmt >(st) || llvm::isa< clang::DefaultStmt >(st))
+            {
+                return st;
+            }
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(st)) {
+                if (cs->body_empty()) {
+                    clang::Stmt *copy = CloneContinuationSeq(ctx, continuation);
+                    if (!copy) {
+                        failed = true;
+                        return st;
+                    }
+                    ++inserted;
+                    return copy;
+                }
+                std::vector< clang::Stmt * > children(cs->body_begin(), cs->body_end());
+                children.back() = RewriteExternalTargetGotoWithContinuation(
+                    ctx, children.back(), target, continuation, removed_gotos, inserted, failed
+                );
+                return failed ? st : detail::MakeCompound(ctx, children);
+            }
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(st)) {
+                ifs->setThen(RewriteExternalTargetGotoWithContinuation(
+                    ctx, ifs->getThen(), target, continuation, removed_gotos, inserted, failed
+                ));
+                if (failed) { return st; }
+                if (ifs->getElse()) {
+                    ifs->setElse(RewriteExternalTargetGotoWithContinuation(
+                        ctx, ifs->getElse(), target, continuation, removed_gotos, inserted,
+                        failed
+                    ));
+                    return st;
+                }
+
+                clang::Stmt *copy = CloneContinuationSeq(ctx, continuation);
+                if (!copy) {
+                    failed = true;
+                    return st;
+                }
+                ++inserted;
+                return clang::IfStmt::Create(
+                    ctx, ifs->getIfLoc(), ifs->getStatementKind(), ifs->getInit(),
+                    ifs->getConditionVariable(), ifs->getCond(), ifs->getLParenLoc(),
+                    ifs->getRParenLoc(), ifs->getThen(), ifs->getIfLoc(), copy
+                );
+            }
+
+            clang::Stmt *copy = CloneContinuationSeq(ctx, continuation);
+            if (!copy) {
+                failed = true;
+                return st;
+            }
+            ++inserted;
+            return detail::MakeCompound(ctx, { st, copy });
+        }
+
+        clang::Stmt *FoldExternalTargetContinuations(
+            clang::ASTContext &ctx, clang::Stmt *stmt, llvm::StringRef target, unsigned &folded
+        ) {
+            if (!stmt || target.empty()) { return stmt; }
+
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                ifs->setThen(
+                    FoldExternalTargetContinuations(ctx, ifs->getThen(), target, folded)
+                );
+                if (ifs->getElse()) {
+                    ifs->setElse(
+                        FoldExternalTargetContinuations(ctx, ifs->getElse(), target, folded)
+                    );
+                }
+                return ifs;
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                ls->setSubStmt(
+                    FoldExternalTargetContinuations(ctx, ls->getSubStmt(), target, folded)
+                );
+                return ls;
+            }
+            if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
+                ws->setBody(
+                    FoldExternalTargetContinuations(ctx, ws->getBody(), target, folded)
+                );
+                return ws;
+            }
+            if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
+                ds->setBody(
+                    FoldExternalTargetContinuations(ctx, ds->getBody(), target, folded)
+                );
+                return ds;
+            }
+            if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
+                fs->setBody(
+                    FoldExternalTargetContinuations(ctx, fs->getBody(), target, folded)
+                );
+                return fs;
+            }
+            if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
+                sw->setBody(
+                    FoldExternalTargetContinuations(ctx, sw->getBody(), target, folded)
+                );
+                return sw;
+            }
+            if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
+                case_stmt->setSubStmt(FoldExternalTargetContinuations(
+                    ctx, case_stmt->getSubStmt(), target, folded
+                ));
+                return case_stmt;
+            }
+            if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
+                default_stmt->setSubStmt(FoldExternalTargetContinuations(
+                    ctx, default_stmt->getSubStmt(), target, folded
+                ));
+                return default_stmt;
+            }
+
+            auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt);
+            if (!compound) { return stmt; }
+
+            std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
+            for (clang::Stmt *&child : body) {
+                child = FoldExternalTargetContinuations(ctx, child, target, folded);
+            }
+
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (size_t i = 0; i + 1 < body.size(); ++i) {
+                    const unsigned target_gotos = CountGotosToTargetName(body[i], target);
+                    if (target_gotos == 0 || CountAllGotos(body[i]) != target_gotos) {
+                        continue;
+                    }
+
+                    const unsigned fallthroughs = CountTailFallthroughLeaves(body[i], target);
+                    if (fallthroughs == 0
+                        || fallthroughs > kMaxExternalContinuationFallthroughs)
+                    {
+                        continue;
+                    }
+
+                    std::vector< clang::Stmt * > continuation(
+                        body.begin() + static_cast< ptrdiff_t >(i + 1), body.end()
+                    );
+
+                    if (fallthroughs == 1 && ContinuationSeqIsSafeToMoveOnce(continuation)) {
+                        unsigned removed       = 0;
+                        unsigned inserted      = 0;
+                        clang::Stmt *rewritten = MoveContinuationIntoSingleFallthrough(
+                            ctx, body[i], target, MoveContinuationSeqAsStmt(ctx, continuation),
+                            removed, inserted
+                        );
+                        if (removed == target_gotos && inserted == 1) {
+                            body[i] = rewritten;
+                            body.erase(
+                                body.begin() + static_cast< ptrdiff_t >(i + 1), body.end()
+                            );
+                            ++folded;
+                            changed = true;
+                            break;
+                        }
+                    }
+
+                    if (!StraightLineContinuationSeqIsSafe(continuation)) { continue; }
+
+                    unsigned removed       = 0;
+                    unsigned inserted      = 0;
+                    bool failed            = false;
+                    clang::Stmt *rewritten = RewriteExternalTargetGotoWithContinuation(
+                        ctx, body[i], target, continuation, removed, inserted, failed
+                    );
+                    if (failed || removed != target_gotos || inserted != fallthroughs) {
+                        continue;
+                    }
+
+                    body[i] = rewritten;
+                    body.erase(body.begin() + static_cast< ptrdiff_t >(i + 1), body.end());
+                    ++folded;
+                    changed = true;
+                    break;
+                }
+            }
+
+            return detail::MakeCompound(ctx, body);
         }
 
         clang::Stmt *UnwrapDeadLeadingLabelForMove(
@@ -1357,6 +1667,16 @@ namespace patchestry::ast {
                                 }
                             }
                         }
+                    }
+
+                    unsigned folded_external = 0;
+                    auto *external_folded    = FoldExternalTargetContinuations(
+                        ctx, body[i], next_label, folded_external
+                    );
+                    if (folded_external != 0) {
+                        body[i] = external_folded;
+                        changed = true;
+                        break;
                     }
 
                     unsigned moved   = 0;
@@ -1981,9 +2301,8 @@ namespace patchestry::ast {
             }
         }
 
-        std::unordered_set< clang::LabelDecl * > CollectCrossScopeGotoTargets(
-            clang::Stmt *stmt
-        ) {
+        std::unordered_set< clang::LabelDecl * >
+        CollectCrossScopeGotoTargets(clang::Stmt *stmt) {
             ScopedControlTransferState state;
             CollectScopedControlTransfers(stmt, state, ScopePath{});
 
@@ -2004,9 +2323,9 @@ namespace patchestry::ast {
             if (llvm::isa< clang::LabelStmt >(stmt) || llvm::isa< clang::GotoStmt >(stmt)
                 || llvm::isa< clang::BreakStmt >(stmt) || llvm::isa< clang::ContinueStmt >(stmt)
                 || llvm::isa< clang::SwitchStmt >(stmt) || llvm::isa< clang::CaseStmt >(stmt)
-                || llvm::isa< clang::DefaultStmt >(stmt)
-                || llvm::isa< clang::WhileStmt >(stmt) || llvm::isa< clang::DoStmt >(stmt)
-                || llvm::isa< clang::ForStmt >(stmt) || llvm::isa< clang::DeclStmt >(stmt))
+                || llvm::isa< clang::DefaultStmt >(stmt) || llvm::isa< clang::WhileStmt >(stmt)
+                || llvm::isa< clang::DoStmt >(stmt) || llvm::isa< clang::ForStmt >(stmt)
+                || llvm::isa< clang::DeclStmt >(stmt))
             {
                 return false;
             }
@@ -2034,13 +2353,12 @@ namespace patchestry::ast {
                     && HoistedLabelBodyIsSafe(label->getSubStmt()))
                 {
                     extracted.decl = label->getDecl();
-                    extracted.body = label->getSubStmt()
-                        ? label->getSubStmt()
-                        : new (ctx) clang::NullStmt(VirtualLoc(ctx));
-                    changed = true;
-                    return new (ctx) clang::GotoStmt(
-                        extracted.decl, VirtualLoc(ctx), VirtualLoc(ctx)
-                    );
+                    extracted.body = label->getSubStmt() ? label->getSubStmt()
+                                                         : new (ctx)
+                                                               clang::NullStmt(VirtualLoc(ctx));
+                    changed        = true;
+                    return new (ctx)
+                        clang::GotoStmt(extracted.decl, VirtualLoc(ctx), VirtualLoc(ctx));
                 }
 
                 label->setSubStmt(ExtractFirstNestedTargetLabel(
@@ -2109,9 +2427,8 @@ namespace patchestry::ast {
                 name += target->getName().str();
             }
 
-            auto *decl = clang::LabelDecl::Create(
-                ctx, fn, VirtualLoc(ctx), &ctx.Idents.get(name)
-            );
+            auto *decl =
+                clang::LabelDecl::Create(ctx, fn, VirtualLoc(ctx), &ctx.Idents.get(name));
             if (fn) {
                 decl->setDeclContext(fn);
                 fn->addDecl(decl);
@@ -2174,14 +2491,14 @@ namespace patchestry::ast {
 
             bool changed = true;
             while (changed) {
-                changed = false;
+                changed       = false;
                 auto *scratch = detail::MakeCompound(ctx, body);
                 auto targets  = CollectCrossScopeGotoTargets(scratch);
                 if (targets.empty()) { break; }
 
                 for (size_t i = 0; i < body.size(); ++i) {
                     ExtractedNestedLabel extracted;
-                    bool extracted_one = false;
+                    bool extracted_one     = false;
                     clang::Stmt *rewritten = ExtractFirstNestedTargetLabel(
                         ctx, body[i], targets, /*under_structured_scope=*/false, extracted,
                         extracted_one
@@ -2199,13 +2516,12 @@ namespace patchestry::ast {
                         VirtualLoc(ctx), extracted.decl, extracted.body
                     ));
                     injected.push_back(new (ctx) clang::LabelStmt(
-                        VirtualLoc(ctx), join_decl,
-                        new (ctx) clang::NullStmt(VirtualLoc(ctx))
+                        VirtualLoc(ctx), join_decl, new (ctx) clang::NullStmt(VirtualLoc(ctx))
                     ));
 
                     body.insert(
-                        body.begin() + static_cast< ptrdiff_t >(i + 1),
-                        injected.begin(), injected.end()
+                        body.begin() + static_cast< ptrdiff_t >(i + 1), injected.begin(),
+                        injected.end()
                     );
                     changed = true;
                     break;
@@ -3524,9 +3840,9 @@ namespace patchestry::ast {
             }
             if (llvm::isa< clang::LabelStmt >(stmt) || llvm::isa< clang::GotoStmt >(stmt)
                 || llvm::isa< clang::SwitchStmt >(stmt) || llvm::isa< clang::CaseStmt >(stmt)
-                || llvm::isa< clang::DefaultStmt >(stmt)
-                || llvm::isa< clang::WhileStmt >(stmt) || llvm::isa< clang::DoStmt >(stmt)
-                || llvm::isa< clang::ForStmt >(stmt) || llvm::isa< clang::DeclStmt >(stmt))
+                || llvm::isa< clang::DefaultStmt >(stmt) || llvm::isa< clang::WhileStmt >(stmt)
+                || llvm::isa< clang::DoStmt >(stmt) || llvm::isa< clang::ForStmt >(stmt)
+                || llvm::isa< clang::DeclStmt >(stmt))
             {
                 return true;
             }
@@ -3544,9 +3860,9 @@ namespace patchestry::ast {
         struct LatchRewritePlan
         {
             std::string inc_text;
-            clang::Expr *inc = nullptr;
-            size_t continues = 0;
-            size_t latch_writes = 0;
+            clang::Expr *inc            = nullptr;
+            size_t continues            = 0;
+            size_t latch_writes         = 0;
             size_t other_counter_writes = 0;
         };
 
@@ -3594,7 +3910,9 @@ namespace patchestry::ast {
                     continue;
                 }
                 if (auto *label = llvm::dyn_cast< clang::LabelStmt >(children[i])) {
-                    if (!AnalyzeSharedLatchInStmt(ctx, label->getSubStmt(), counter, plan, true))
+                    if (!AnalyzeSharedLatchInStmt(
+                            ctx, label->getSubStmt(), counter, plan, true
+                        ))
                     {
                         return false;
                     }
@@ -3603,7 +3921,8 @@ namespace patchestry::ast {
                 if (IsNestedLoopOrSwitch(children[i])) { return false; }
 
                 if (StmtWritesVar(children[i], counter)) {
-                    if (i + 1 < children.size() && llvm::isa< clang::ContinueStmt >(children[i + 1])
+                    if (i + 1 < children.size()
+                        && llvm::isa< clang::ContinueStmt >(children[i + 1])
                         && IsSimpleCounterStep(AsExprStmt(children[i]), counter))
                     {
                         continue;
@@ -3674,23 +3993,25 @@ namespace patchestry::ast {
             if (!stmt) { return stmt; }
             if (IsNestedLoopOrSwitch(stmt)) { return stmt; }
             if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
-                return RemoveSharedLatchIncrementsFromCompound(ctx, compound, counter, inc_text);
+                return RemoveSharedLatchIncrementsFromCompound(
+                    ctx, compound, counter, inc_text
+                );
             }
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(RemoveSharedLatchIncrements(
-                    ctx, ifs->getThen(), counter, inc_text
-                ));
+                ifs->setThen(
+                    RemoveSharedLatchIncrements(ctx, ifs->getThen(), counter, inc_text)
+                );
                 if (ifs->getElse()) {
-                    ifs->setElse(RemoveSharedLatchIncrements(
-                        ctx, ifs->getElse(), counter, inc_text
-                    ));
+                    ifs->setElse(
+                        RemoveSharedLatchIncrements(ctx, ifs->getElse(), counter, inc_text)
+                    );
                 }
                 return ifs;
             }
             if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                label->setSubStmt(RemoveSharedLatchIncrements(
-                    ctx, label->getSubStmt(), counter, inc_text
-                ));
+                label->setSubStmt(
+                    RemoveSharedLatchIncrements(ctx, label->getSubStmt(), counter, inc_text)
+                );
                 return label;
             }
             return stmt;
@@ -3712,9 +4033,7 @@ namespace patchestry::ast {
             }
 
             std::vector< clang::Stmt * > loop_body;
-            if (auto *compound =
-                    llvm::dyn_cast< clang::CompoundStmt >(while_stmt->getBody()))
-            {
+            if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(while_stmt->getBody())) {
                 loop_body.assign(compound->body_begin(), compound->body_end());
             } else {
                 loop_body.push_back(while_stmt->getBody());
@@ -3854,9 +4173,8 @@ namespace patchestry::ast {
             return detail::MakeCompound(ctx, children);
         }
 
-        clang::Stmt *RemoveRedundantTerminalForContinues(
-            clang::ASTContext &ctx, clang::Stmt *stmt
-        ) {
+        clang::Stmt *
+        RemoveRedundantTerminalForContinues(clang::ASTContext &ctx, clang::Stmt *stmt) {
             if (!stmt) { return stmt; }
 
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
@@ -3901,17 +4219,13 @@ namespace patchestry::ast {
                     std::vector< clang::Stmt * > children(
                         compound->body_begin(), compound->body_end()
                     );
-                    if (!children.empty()
-                        && llvm::isa< clang::ContinueStmt >(children.back()))
+                    if (!children.empty() && llvm::isa< clang::ContinueStmt >(children.back()))
                     {
                         children.pop_back();
                         for_body = children.empty()
-                            ? static_cast< clang::Stmt * >(
-                                  new (ctx) clang::NullStmt(VirtualLoc(ctx))
-                              )
-                            : static_cast< clang::Stmt * >(
-                                  detail::MakeCompound(ctx, children)
-                              );
+                            ? static_cast< clang::Stmt * >(new (ctx)
+                                                               clang::NullStmt(VirtualLoc(ctx)))
+                            : static_cast< clang::Stmt * >(detail::MakeCompound(ctx, children));
                     }
                 } else if (llvm::isa_and_nonnull< clang::ContinueStmt >(for_body)) {
                     for_body = new (ctx) clang::NullStmt(VirtualLoc(ctx));
@@ -3957,7 +4271,7 @@ namespace patchestry::ast {
                 return sw;
             }
             if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
-                auto *sub = PushLabelsIntoCompounds(ctx, case_stmt->getSubStmt());
+                auto *sub      = PushLabelsIntoCompounds(ctx, case_stmt->getSubStmt());
                 auto *compound = llvm::dyn_cast_or_null< clang::CompoundStmt >(sub);
                 if (!compound) {
                     case_stmt->setSubStmt(
@@ -3984,7 +4298,7 @@ namespace patchestry::ast {
                 return detail::MakeCompound(ctx, flattened);
             }
             if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
-                auto *sub = PushLabelsIntoCompounds(ctx, default_stmt->getSubStmt());
+                auto *sub      = PushLabelsIntoCompounds(ctx, default_stmt->getSubStmt());
                 auto *compound = llvm::dyn_cast_or_null< clang::CompoundStmt >(sub);
                 if (!compound) {
                     default_stmt->setSubStmt(
@@ -4011,7 +4325,7 @@ namespace patchestry::ast {
                 return detail::MakeCompound(ctx, flattened);
             }
             if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                auto *sub = PushLabelsIntoCompounds(ctx, label->getSubStmt());
+                auto *sub      = PushLabelsIntoCompounds(ctx, label->getSubStmt());
                 auto *compound = llvm::dyn_cast_or_null< clang::CompoundStmt >(sub);
                 if (!compound) {
                     label->setSubStmt(sub ? sub : new (ctx) clang::NullStmt(VirtualLoc(ctx)));
@@ -4053,9 +4367,8 @@ namespace patchestry::ast {
             return stmt;
         }
 
-        clang::Stmt *AttachEmptyLabelsToFollowingStmt(
-            clang::ASTContext &ctx, clang::Stmt *stmt
-        ) {
+        clang::Stmt *
+        AttachEmptyLabelsToFollowingStmt(clang::ASTContext &ctx, clang::Stmt *stmt) {
             if (!stmt) { return stmt; }
 
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
@@ -4109,8 +4422,7 @@ namespace patchestry::ast {
 
             for (size_t i = 0; i + 1 < children.size(); ++i) {
                 auto *label = llvm::dyn_cast_or_null< clang::LabelStmt >(children[i]);
-                if (!label || !llvm::isa_and_nonnull< clang::NullStmt >(label->getSubStmt()))
-                {
+                if (!label || !llvm::isa_and_nonnull< clang::NullStmt >(label->getSubStmt())) {
                     continue;
                 }
 
@@ -4149,9 +4461,10 @@ namespace patchestry::ast {
         std::string NormalizeExprKey(clang::ASTContext &ctx, clang::Expr *expr) {
             std::string text = StmtToStableString(ctx, expr);
             text.erase(
-                std::remove_if(text.begin(), text.end(), [](unsigned char ch) {
-                    return std::isspace(ch) != 0;
-                }),
+                std::remove_if(
+                    text.begin(), text.end(),
+                    [](unsigned char ch) { return std::isspace(ch) != 0; }
+                ),
                 text.end()
             );
             while (text.size() >= 2 && text.front() == '(' && text.back() == ')') {
@@ -4181,10 +4494,10 @@ namespace patchestry::ast {
             if (normalized.empty() || normalized == "0") { return false; }
             size_t begin = normalized.front() == '-' ? 1 : 0;
             if (begin == normalized.size()) { return false; }
-            return std::all_of(normalized.begin() + static_cast< ptrdiff_t >(begin),
-                               normalized.end(), [](char ch) {
-                                   return std::isdigit(static_cast< unsigned char >(ch)) != 0;
-                               });
+            return std::all_of(
+                normalized.begin() + static_cast< ptrdiff_t >(begin), normalized.end(),
+                [](char ch) { return std::isdigit(static_cast< unsigned char >(ch)) != 0; }
+            );
         }
 
         struct SimpleEqualityCompare
@@ -4284,9 +4597,8 @@ namespace patchestry::ast {
                 if (inner_logic->getOpcode() == clang::BO_LAnd
                     || inner_logic->getOpcode() == clang::BO_LOr)
                 {
-                    auto flipped = inner_logic->getOpcode() == clang::BO_LAnd
-                        ? clang::BO_LOr
-                        : clang::BO_LAnd;
+                    auto flipped = inner_logic->getOpcode() == clang::BO_LAnd ? clang::BO_LOr
+                                                                              : clang::BO_LAnd;
                     auto *lhs = NormalizeBoolExpr(ctx, NegateExpr(ctx, inner_logic->getLHS()));
                     auto *rhs = NormalizeBoolExpr(ctx, NegateExpr(ctx, inner_logic->getRHS()));
                     return clang::BinaryOperator::Create(
@@ -4510,6 +4822,21 @@ namespace patchestry::ast {
         if (body) { fn->setBody(body); }
 
         body = HoistCrossScopeLabelEntries(ctx, fn, fn->getBody());
+        if (body) { fn->setBody(body); }
+
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
+        body = FoldConditionalFallthroughChains(ctx, fn->getBody(), refs);
+        if (body) { fn->setBody(body); }
+
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
+        body = FoldForwardSingleRefLabelRegions(ctx, fn->getBody(), refs);
+        if (body) { fn->setBody(body); }
+
+        refs.clear();
+        CountGotoDeclRefs(fn->getBody(), refs);
+        body = SinkCommonTerminalEpilogues(ctx, fn->getBody(), refs);
         if (body) { fn->setBody(body); }
 
         for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
