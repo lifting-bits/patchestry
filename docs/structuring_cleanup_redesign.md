@@ -84,54 +84,51 @@ result is currently unpinned. Before touching the engine:
 
 **Exit:** KPI is pinned in CI and every later phase is measurable.
 
-### Phase 1 — Diagnose the SNode layer (the decision phase)
+### Phase 1 — Diagnose the SNode layer (the decision phase) — DONE
 
-The pivotal question: **why does the SNode cleanup achieve only ~12%?**
+**Status: complete.** Full results in
+`docs/structuring_cleanup_phase1_findings.md`.
 
-Measurements:
-- Third data point: both cleanups off → raw post-collapse goto count. Fixes the
-  SNode layer's true contribution (currently only bounded: it reaches 196).
-- Instrument `ValidateSNodeRewriteLegality` / `ShouldApplySNodeRewrite`: how
-  often does a pass *attempt* a rewrite vs how often does `SNodeRegion`
-  legality/profitability *reject* it?
+The pivotal question was: *why does the SNode cleanup eliminate only ~16% of
+gotos?* The `ShouldApplySNodeRewrite` preflight gate was instrumented and
+measured over all fixtures.
 
-Hypotheses:
-- **H1** — legality/ownership gating rejects most rewrites (timid by construction).
-- **H2** — the SNode IR doesn't expose adjacency ("goto to the next label")
-  that only emerges after statements are laid out linearly at emission.
-- **H3** — the SNode passes are simply less complete than their Clang-AST twins.
+Verdicts:
+- **H1 (timid legality/ownership gating) — REJECTED.** The gate accepts 85% of
+  rewrite requests; all 15% rejections are genuine legality constraints, zero
+  are profitability, zero transactions roll back. There is no over-caution to
+  relax.
+- **H2 (the SNode tree cannot see post-linearization adjacency) — CONFIRMED**
+  as the dominant cause. `EliminateGotoToNextLabel` is the hottest Clang-AST
+  pass (3852 fires); "goto to the next label" is a linear-layout property a
+  tree of nested body slots structurally cannot expose.
+- **H3 (SNode passes incomplete) — minor**, not primary.
 
-**Decision gate** — pick the consolidation direction:
-- **Direction A — SNode becomes the single engine.** Choose if H1 dominates and
-  the gating is over-cautious / safely relaxable. Port the effective Clang-AST
-  transforms down to SNode passes; `ClangEmitterCleanup` keeps only cosmetics.
-- **Direction B — Clang-AST becomes the single engine.** Choose if H2 dominates
-  (some cleanup genuinely needs post-emission linear layout). Delete the weak
-  SNode cleanup layer and its transaction machinery; make `ClangEmitterCleanup`
-  the single, well-structured engine.
-- **Likely hybrid:** structural transforms (forwarder collapse, target inlining)
-  on the SNode tree; a *small* layout-dependent post-emission pass for
-  goto-to-next-label / label adjacency only.
-
-**Exit:** a written decision (A / B / hybrid) backed by the rejection data.
+**Decision: hybrid. Direction A is rejected** — a post-emission cleanup layer
+is architecturally necessary, not debt. The redesign therefore:
+- keeps a post-emission layer, rebuilt as one consolidated engine (Phases 2–3);
+- trims the SNode cleanup layer to genuinely structural rewrites;
+- resolves cross-layer duplicate passes *asymmetrically* — layout/adjacency
+  transforms live post-emission, structural transforms live on the tree.
 
 ### Phase 2 — Real fixed-point driver
 
-Independent of the A/B choice; fixes whichever driver survives.
+Independent of the Phase 4 layer-resolution work; fixes the post-emission
+(Clang-AST) driver.
 
-1. Enforce the changed-contract: every pass returns "changed" only when it
-   actually mutated. Fix the ~10 always-rebuild passes so the `if (body)` guard
-   becomes meaningful.
-2. Replace the fake 8× loop + 180-line unrolled tail with a genuine worklist
-   fixed point: run transforms until none reports a change.
+1. **Phase 2a** — Enforce the changed-contract: every pass returns "changed"
+   only when it actually mutated. Fix the ~10 always-rebuild passes so the
+   `if (body)` guard becomes meaningful (prerequisite for a real fixed point).
+2. **Phase 2b** — Replace the fake 8× loop + 180-line unrolled tail with a
+   genuine worklist fixed point: run transforms until none reports a change.
 
-**Exit:** convergence iteration count drops (measured via `-cleanup-stats`);
-80/80 lit; goto budget holds.
+**Exit:** convergence iteration count drops; 80/80 lit; goto budget holds.
 
 ### Phase 3 — Consolidate transform families
 
-Collapse ~49 passes into ~8 canonical, parameterized transforms, on the IR
-chosen in Phase 1, family by family (each family = one build + budget check):
+Collapse ~49 passes into ~8 canonical, parameterized transforms, on the
+post-emission Clang-AST layer (per the Phase 1 hybrid decision), family by
+family (each family = one build + budget check):
 
 | Canonical transform | Subsumes |
 |---|---|
@@ -150,16 +147,22 @@ boundaries — a non-issue on the SNode tree.
 
 **Exit:** ~8 transforms; goto budget holds at each family merge.
 
-### Phase 4 — Delete the redundant layer
+### Phase 4 — Resolve the cross-layer duplication (hybrid)
 
-- **Direction A:** delete `ClangEmitterCleanup`'s goto/label passes; it retains
-  only genuinely-Clang-AST cosmetics (`NormalizeConditions`,
-  `PushLabelsIntoCompounds`, while→for, empty-compound flatten). Target < 50 KB.
-- **Direction B:** delete the SNode cleanup scheduler and the cleanup-only parts
-  of the `SNodeRegion` transaction/legality machinery.
-- Either way: duplicated pass names collapse to one definition each.
+Phase 1 rejected the "delete one whole layer" framing — both layers are
+needed. Instead, place each transform in exactly one layer, decided by class:
 
-**Exit:** one cleanup engine; goto budget holds; 80/80 lit.
+- **Layout / adjacency transforms** (`EliminateGotoToNextLabel`, cross-compound
+  forwarder folds): keep the post-emission Clang-AST copy; delete the
+  tree-level SNode copy — the tree cannot see the adjacency, so the SNode copy
+  spins without effect.
+- **Purely structural region transforms** (clone/move payload, switch-case
+  folding): keep the SNode copy (its gate accepts 85%); delete the Clang-AST
+  duplicate.
+- Result: every duplicated pass name collapses to one definition, in the layer
+  that can actually do the work.
+
+**Exit:** no cross-layer duplicate passes; goto budget holds; 80/80 lit.
 
 ### Phase 5 — Split monoliths, document
 
@@ -179,7 +182,7 @@ residual gotos any cleanup layer must handle. Tracked separately.
 | Risk | Mitigation |
 |---|---|
 | Goto KPI regresses mid-migration | Phase 0 budget guard in CI; per-phase verification; atomic, revertable commits |
-| Direction A picked but SNode gating can't be safely relaxed → lose the 87% | Phase 1 decision gate — do not commit to A without H1 evidence |
+| Trimming a tree-level SNode pass drops a goto it was quietly handling | Phase 4 deletes tree-level copies family-by-family, each gated by the goto budget |
 | Clang-AST layer is unguarded per-rewrite (no rollback) | Keep `-verify-no-node-loss` in CI; consider making it default-on |
 | Effort overrun | Phases 0–2 are independently valuable; 3–5 can land incrementally, one family per PR |
 
