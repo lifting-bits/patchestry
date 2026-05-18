@@ -111,7 +111,7 @@ namespace patchestry::ast {
     }
 
     void FunctionBuilder::InitializeOpBuilder(void) {
-        // If `op_builder` is initialized don't initailize them
+        // Create op_builder on first call; later calls are no-ops.
         if (!op_builder) {
             op_builder =
                 std::make_shared< OpBuilder >(cii.get().getASTContext(), shared_from_this());

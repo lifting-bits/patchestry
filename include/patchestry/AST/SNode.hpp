@@ -71,14 +71,14 @@ namespace patchestry::ast {
 
         void AddOrigin(StmtOrigin origin) { origins_.push_back(std::move(origin)); }
 
-        // ChildVisitor API (added in Layer C migration Stage 0).
+        // ChildVisitor API.
         // Each subtype iterates over its immediate SNode children
         // (slots that hold an SNode* — not raw clang::Stmt members
         // like SStmt::Stmt or SFor::Init/Cond/Inc).
         //
-        // Used by uniform recursion in cleanup walks during/after the
-        // SSeq → vector-slot migration.  Read-only form takes SNode*;
-        // mutable form takes SNode*& so callers can reassign the slot.
+        // Used by uniform recursion in cleanup walks.  Read-only form
+        // takes SNode*; mutable form takes SNode*& so callers can
+        // reassign the slot.
         //
         // Default: no children.  Each subtype with children overrides.
         using ChildFn    = std::function< void(SNode *) >;
@@ -129,7 +129,7 @@ namespace patchestry::ast {
     // Single-statement leaf — holds one raw clang::Stmt*.  The
     // statement-level counterpart to the control-flow SNode kinds:
     // a "block" of N statements is represented as N SStmt siblings
-    // in a body vector (Phase 3 piece 2 — the SBlock replacement).
+    // in a body vector.
     class SStmt : public SNode
     {
       public:
@@ -151,9 +151,8 @@ namespace patchestry::ast {
         clang::Stmt *stmt_;
     };
 
-    // If-then-else — Layer C Stage 3c: then_/else_ are
-    // std::vector<SNode*>.  See SLabel docstring for the back-compat
-    // API rationale.
+    // If-then-else — then_/else_ are std::vector<SNode*>.  See SLabel
+    // docstring for the back-compat API rationale.
     class SIfThenElse : public SNode
     {
       public:
@@ -260,7 +259,7 @@ namespace patchestry::ast {
         std::vector< SNode * > else_;
     };
 
-    // While loop — Layer C Stage 3b: body_ is std::vector<SNode*>.
+    // While loop — body_ is std::vector<SNode*>.
     // See SLabel docstring for the back-compat API rationale.
     class SWhile : public SNode
     {
@@ -330,7 +329,7 @@ namespace patchestry::ast {
         std::string_view header_label_;
     };
 
-    // Do-while loop — Layer C Stage 3b: body_ is std::vector<SNode*>.
+    // Do-while loop — body_ is std::vector<SNode*>.
     class SDoWhile : public SNode
     {
       public:
@@ -398,7 +397,7 @@ namespace patchestry::ast {
         std::string_view header_label_;
     };
 
-    // For loop — Layer C Stage 3b: body_ is std::vector<SNode*>.
+    // For loop — body_ is std::vector<SNode*>.
     class SFor : public SNode
     {
       public:
@@ -483,7 +482,7 @@ namespace patchestry::ast {
         std::string_view header_label_;
     };
 
-    // Switch case — Layer C Stage 3d: body becomes std::vector<SNode*>.
+    // Switch case — body is std::vector<SNode*>.
     //
     // Back-compat helpers preserve the prior field-style read pattern:
     //   c.body() returns the first element of body_list (or nullptr)
@@ -503,8 +502,8 @@ namespace patchestry::ast {
         }
     };
 
-    // Switch statement — Layer C Stage 3d: default_ becomes
-    // std::vector<SNode*> (matches the cases_ list-of-list shape).
+    // Switch statement — default_ is std::vector<SNode*>
+    // (matches the cases_ list-of-list shape).
     class SSwitch : public SNode
     {
       public:
@@ -605,14 +604,12 @@ namespace patchestry::ast {
 
     // Label
     //
-    // Layer C Stage 3a: body changed from SNode* to std::vector<SNode*>
-    // so that label bodies can directly hold multi-statement sequences
-    // without an SSeq wrapper.  Public Body()/SetBody() preserve the
+    // body_ is a std::vector<SNode*> so a label body can directly hold a
+    // multi-statement sequence.  Public Body()/SetBody() preserve the
     // single-body API for back-compat (Body() returns the first child
-    // or nullptr; SetBody replaces the whole list).  Construction with
-    // a single SNode* still works via the existing constructor.  New
-    // BodyList accessors expose the vector directly for callers that
-    // want to append/iterate without round-tripping through SSeq.
+    // or nullptr; SetBody replaces the whole list); construction with a
+    // single SNode* still works via the existing constructor.  BodyList
+    // accessors expose the vector directly for append/iterate callers.
     class SLabel : public SNode
     {
       public:

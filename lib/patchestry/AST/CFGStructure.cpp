@@ -72,8 +72,7 @@ namespace patchestry::ast {
 
     // Spill a list of raw clang::Stmt* into individual SStmt SNodes,
     // appended to `out`.  A "block" of statements is a run of SStmt
-    // siblings in a body vector — the SBlock replacement (Phase 3
-    // piece 2).  Null statements are dropped.
+    // siblings in a body vector.  Null statements are dropped.
     static void AppendStmts(SNodeFactory &factory,
                             std::vector< SNode * > &out,
                             const std::vector< clang::Stmt * > &stmts) {
@@ -84,8 +83,6 @@ namespace patchestry::ast {
     // Invoke fn(std::vector<SNode*>&) on each body-vector slot held by
     // `node` (SLabel/loop bodies, if-then/else arms, switch case lists).
     // SGoto/SStmt/SBreak/SContinue/SReturn carry no body-vectors.
-    // This replaces the old SSeq-based child sequencing now that the
-    // SSeq node kind no longer exists.
     template< typename Fn >
     static void ForEachBodyList(SNode *node, Fn &&fn) {
         if (!node) return;
@@ -1168,7 +1165,7 @@ namespace patchestry::ast {
         // the rule-supplied SNode may not include the representative's
         // own label.  Wrap it now so goto targets remain valid.
         //
-        // Check recursively: the label might be inside an SSeq child
+        // Check recursively: the label might be inside a nested body
         // (e.g., after the explicit-goto pass wrapped the node).
         auto has_label = [](const std::vector<SNode *> &snodes,
                             std::string_view name) -> bool {
@@ -1259,7 +1256,7 @@ namespace patchestry::ast {
     // Pattern: Node A has exactly 1 successor B, and B has exactly 1
     //          predecessor A.  A is not a conditional or switch.
     //          Neither is already collapsed.
-    // Action:  Merge into SSeq, collapse via IdentifyInternal.
+    // Action:  Concatenate sequences, collapse via IdentifyInternal.
     // ---------------------------------------------------------------
 
     bool CFGStructure::RuleBlockCat(size_t id) {
@@ -2033,7 +2030,7 @@ namespace patchestry::ast {
     // Loop helper: build the body SNode for a loop.
     //
     // Collects body nodes (excluding the header) in RPO-ish order,
-    // strips terminals from interior nodes, and wraps in SSeq.
+    // strips terminals from interior nodes, and returns the body vector.
     // ---------------------------------------------------------------
 
     std::vector< SNode * > CFGStructure::BuildLoopBodySNode(
@@ -2985,8 +2982,8 @@ namespace patchestry::ast {
     // ---------------------------------------------------------------
     // InlineResidualGotos — post-structuring cleanup
     //
-    // Walks SSeq nodes looking for SGoto children whose target SLabel
-    // is a sibling in the same SSeq and is only referenced by that
+    // Walks body vectors looking for SGoto children whose target SLabel
+    // is a sibling in the same sequence and is only referenced by that
     // one goto.  Replaces the goto with the label's body and removes
     // the label node.
     // ---------------------------------------------------------------
@@ -3117,7 +3114,7 @@ namespace patchestry::ast {
                             clang::ASTContext &ctx) {
             bool changed = false;
             bool local_changed = true;
-            // Cap restarts to avoid O(N²) on large SSeq (e.g., 100+
+            // Cap restarts to avoid O(N²) on large sequences (e.g., 100+
             // uncollapsed leaf nodes from a partially-structured graph).
             int restart_budget = 50;
 
@@ -3353,7 +3350,7 @@ namespace patchestry::ast {
     // InlineCrossScopeSingleRef — cross-scope single-ref label inliner
     //
     // Extends InlineResidualGotos to the case where the goto and its
-    // target label live in *different* SSeq nodes.  When a label has
+    // target label live in *different* body vectors.  When a label has
     // exactly one goto reference, its body always terminates, and no
     // fallthrough can reach the label, the body is moved (not cloned)
     // into the goto's slot and the label node is deleted.
@@ -3460,25 +3457,19 @@ namespace patchestry::ast {
         }
 
         /// Locate an SLabel by name anywhere in the tree, returning
-        /// the enclosing SSeq and the label's index within it.  Only
-        /// labels that are *direct children of an SSeq* are returned —
-        /// labels embedded as bodies of if/while/switch or as the sole
-        /// child of an SLabel do not qualify.
+        /// the enclosing body vector and the label's index within it.
+        /// Only labels that are *direct children of a body vector* are
+        /// returned — labels embedded as bodies of if/while/switch or as
+        /// the sole child of an SLabel do not qualify.
         ///
-        /// The SSeq-position restriction is intentional and load-bearing:
+        /// The body-vector-position restriction is intentional and
+        /// load-bearing:
         ///   - Inlining checks (preceding-sibling-terminates) need a
         ///     genuine sibling list, not a single-slot body.
         ///   - The body's break/continue stmts have lexical scope
         ///     determined by enclosing loops; moving a body that
         ///     contains break/continue across loop boundaries would
         ///     change which loop the terminator refers to.
-        ///
-        /// Layer C Stage 2d migrates only the descent dispatch to
-        /// for_each_child for consistency with Stages 2a–c.  Widening
-        /// the search to non-SSeq positions (Benefit 3 from the
-        /// migration analysis) needs the vector slot storage from
-        /// Stage 3+ before it can be done with the right safety
-        /// analysis — deferred to a follow-up policy change.
         struct LabelLoc {
             std::vector< SNode * > *parent = nullptr;
             size_t idx = 0;
@@ -3665,7 +3656,7 @@ namespace patchestry::ast {
     // ---------------------------------------------------------------
     // ScopeifyIfGotos — convert if(cond) goto L; stmts; L: → if(!cond){stmts}
     //
-    // Scan SSeq children for: children[i] = SIfThenElse(cond, SGoto("L"), null)
+    // Scan body-vector children for: children[i] = SIfThenElse(cond, SGoto("L"), null)
     // followed by intermediate children, then children[j] = SLabel("L", body).
     // When label "L" has exactly one goto reference and no intermediate
     // children contain SLabel nodes, negate the condition, wrap the
@@ -3975,7 +3966,7 @@ namespace patchestry::ast {
                     if (target.empty()) continue;
                     std::string_view target_view(target);
 
-                    // Find target SLabel in same SSeq (forward only)
+                    // Find target SLabel in same body vector (forward only)
                     size_t label_idx = children.size();
                     for (size_t j = i + 1; j < children.size(); ++j) {
                         if (auto *lbl = children[j]->dyn_cast<SLabel>()) {
@@ -4077,9 +4068,9 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
-    // RemoveDeadSSeqChildren — strip unreachable SSeq children
+    // RemoveDeadSSeqChildren — strip unreachable body-vector children
     //
-    // Walk SSeq nodes bottom-up.  When child[i] always terminates
+    // Walk body vectors bottom-up.  When child[i] always terminates
     // (SNodeAlwaysTerminates), remove children [i+1..end) that are
     // NOT SLabel nodes.  SLabel nodes are preserved because they may
     // be goto targets from other scopes — removing them without a
@@ -4091,8 +4082,8 @@ namespace patchestry::ast {
         /// Check if an SNode contains any SLabel (directly or nested).
         /// Note: this scan uses the visitor API and therefore now also
         /// descends through SWhile/SDoWhile/SFor/SSwitch/SLabel bodies
-        /// — the previous implementation only descended through SSeq
-        /// and SIfThenElse, which was a latent under-scan that could
+        /// — the previous implementation only descended through
+        /// sequences and SIfThenElse, which was a latent under-scan that could
         /// false-negative on labels nested inside loop/switch arms.
         /// Conservative direction (more "yes, has label" answers) so
         /// safe with respect to the dead-code removal caller.
@@ -4108,9 +4099,9 @@ namespace patchestry::ast {
 
         /// Strict terminator check for dead-code removal purposes.
         ///
-        /// `SNodeAlwaysTerminates` marks any SSeq whose last child
+        /// `SNodeAlwaysTerminates` marks any sequence whose last child
         /// terminates as a "terminator" — but after AbsorbFallthroughIntoElse
-        /// or similar post-passes move content between siblings, an SSeq
+        /// or similar post-passes move content between siblings, a sequence
         /// that "always terminates" by that forward-flow check may still
         /// be part of a larger flow where subsequent siblings are reached
         /// via fall-through from an earlier if-then-else arm that was
@@ -4123,7 +4114,7 @@ namespace patchestry::ast {
         ///     (safe: AbsorbFallthroughIntoElse only fires on if-then
         ///     with NO else, so an if-then-else with both arms
         ///     terminating is structurally stable under post-passes).
-        /// SSeq / loops / switch are still excluded because their
+        /// Sequences / loops / switch are still excluded because their
         /// internal flow can be mutated in ways the forward "tail
         /// terminates" check doesn't capture.  The SIfThenElse case
         /// recovers the legitimate `if(c) return x; else return y;`
@@ -4302,7 +4293,7 @@ namespace patchestry::ast {
     // ConvertGotoToReturn — replace goto-to-return patterns
     //
     // When an SGoto targets a label whose body is a single SReturn
-    // (or an SSeq whose last child is SReturn with no other control
+    // (or a body vector whose last child is SReturn with no other control
     // flow), replace the goto with a cloned SReturn.
     // ---------------------------------------------------------------
 
@@ -4421,7 +4412,7 @@ namespace patchestry::ast {
                 } else if (auto *lbl = child->dyn_cast<SLabel>()) {
                     // Only a label whose body is a non-empty run of
                     // SStmt nodes contributes (matches the prior
-                    // single-SBlock-body restriction).
+                    // single-block-body restriction).
                     auto &b = lbl->BodyList();
                     bool all_stmt = !b.empty();
                     for (auto *bc : b)
@@ -5579,7 +5570,7 @@ namespace patchestry::ast {
                 default:
                     break;
             }
-            // SSeq / SIfThenElse / SSwitch: safe iff every child is safe.
+            // Sequences / SIfThenElse / SSwitch: safe iff every child is safe.
             // Leaves (SGoto/SBreak/SContinue/SReturn) have no children
             // and fall through to safe.
             bool safe = true;

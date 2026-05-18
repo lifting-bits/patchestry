@@ -133,26 +133,18 @@ namespace patchestry::ast {
                     "rule produced a branch without a guard expression"
                 );
                 auto *cond             = EnsureRValue(ctx_, CloneExpr(ctx_, ite->Cond()));
-                // Layer C Stage 3c: arms are std::vector<SNode*>.
-                // Then-arm: required (NullStmt for empty list).
-                // Else-arm: optional (nullptr for empty list = no else
-                // clause; NullStmt would render as `else ;`).
+                // Then-arm is required (NullStmt for an empty list);
+                // else-arm is optional (nullptr empty list = no else
+                // clause; a NullStmt would render as `else ;`).
                 auto *then_stmt        = EmitBodyList(ite->ThenList());
-                // No else clause when the slot is empty.  Use
-                // ElseBranch() to also handle the defensive
-                // "[nullptr]" case (matches the prior gating which
-                // skipped Emit when ElseBranch() returned null).
+                // No else clause when the slot is empty; ElseBranch()
+                // also handles the defensive "[nullptr]" case.
                 clang::Stmt *else_stmt = nullptr;
                 if (ite->ElseBranch()) { else_stmt = EmitBodyList(ite->ElseList()); }
 
-                // Defensive else-if unwrap: when the else slot already
-                // produces a CompoundStmt around a single IfStmt, the
-                // pretty-printer would emit `else { if(...) }` — pull
-                // the IfStmt out so it renders as `else if (...)`.
-                // With vector storage this branch is hard to hit (size 1
-                // already emits a bare IfStmt), but a multi-element list
-                // that flattens to a single IfStmt via downstream
-                // optimisation could still trigger it.  Cheap to keep.
+                // Defensive else-if unwrap: if the else slot is a
+                // CompoundStmt wrapping a single IfStmt, unwrap it so the
+                // printer emits `else if (...)` not `else { if(...) }`.
                 if (auto *cs = llvm::dyn_cast_or_null< clang::CompoundStmt >(else_stmt)) {
                     if (cs->size() == 1 && llvm::isa< clang::IfStmt >(cs->body_front())) {
                         else_stmt = cs->body_front();
@@ -165,7 +157,7 @@ namespace patchestry::ast {
                 );
             }
 
-            // Layer C Stage 3b helper: render a vector<SNode*> body
+            // Helper: render a vector<SNode*> body
             // into a single clang::Stmt — empty → NullStmt, size 1 →
             // emit the lone child directly, size > 1 → CompoundStmt.
             // Loop body slots in WhileStmt/DoStmt/ForStmt require a
@@ -232,12 +224,11 @@ namespace patchestry::ast {
                 // Build the switch body as a compound stmt with cases
                 std::vector< clang::Stmt * > body_stmts;
 
-                // Layer C Stage 3d: SCase.body_list and SSwitch.default_
-                // are std::vector<SNode*>.  Empty list = fallthrough stub
-                // (preserves the prior c.body == nullptr behaviour).
-                // Build all child stmts, then optionally append a break
-                // and wrap in CompoundStmt (CaseStmt requires a single
-                // sub-stmt slot).
+                // SCase.body_list and SSwitch.default_ are
+                // std::vector<SNode*>; an empty list is a fallthrough
+                // stub.  Build all child stmts, then optionally append a
+                // break and wrap in CompoundStmt (CaseStmt requires a
+                // single sub-stmt slot).
                 auto build_case_substmt =
                     [&](const std::vector< SNode * > &body_list) -> clang::Stmt * {
                     if (body_list.empty()) {
@@ -285,7 +276,7 @@ namespace patchestry::ast {
             clang::Stmt *EmitLabel(const SLabel *l) {
                 auto *label_decl = GetOrCreateLabel(l->Name());
                 emitted_labels_.insert(std::string(l->Name()));
-                // Layer C Stage 3a: SLabel.body_ is std::vector<SNode*>.
+                // SLabel.body_ is std::vector<SNode*>.
                 // Emit each child stmt and wrap in CompoundStmt only when
                 // there's more than one (LabelStmt requires a single
                 // sub-stmt slot).  Empty body → NullStmt.
@@ -486,9 +477,8 @@ namespace patchestry::ast {
         return detail::MakeCompound(ctx, filtered);
     }
 
-    // Common DeclStmt-hoisting + setBody finalization.  Used by both
-    // the SNode* and std::vector<SNode*> entry points (Layer C Stage 4
-    // extracted this so the vector overload doesn't need to duplicate it).
+    // Common DeclStmt-hoisting + setBody finalization.  Shared by both
+    // the SNode* and std::vector<SNode*> entry points.
     static void
     FinalizeFunctionBody(clang::Stmt *body, clang::FunctionDecl *fn, clang::ASTContext &ctx) {
         if (!body) { body = detail::MakeCompound(ctx, {}); }
@@ -541,8 +531,7 @@ namespace patchestry::ast {
         const std::vector< SNode * > &root_children, clang::FunctionDecl *fn,
         clang::ASTContext &ctx
     ) {
-        // Layer C Stage 4: take the function-body slot as a vector
-        // directly so callers no longer need to wrap in an SSeq.
+        // Take the function-body slot directly as a vector of SNodes.
         Emitter emitter(ctx, fn);
         for (auto *c : root_children) { emitter.CollectGotoLabelDecls(c); }
 
