@@ -7140,6 +7140,42 @@ namespace patchestry::ast {
         return body;
     }
 
+    // ---------------------------------------------------------------
+    // F7 — RecoverLoop: the consolidated loop-recovery transform.
+    // Composes the two sub-rewrites in fixed order:
+    //
+    //   1. ConvertImmediateLoopExitGotosToBreak — rewrite a goto that
+    //      jumps to the label immediately following a loop into a
+    //      `break`;
+    //   2. PromoteLocalBackwardGotoLoops — promote a local single-ref
+    //      backward-goto region into a `while (1)` loop.
+    //
+    // `mutated` is set iff the body structurally changed — detected via
+    // Stmt::Profile, since PromoteLocalBackwardGotoLoops always rebuilds
+    // its CompoundStmts even when nothing changed.
+    // ---------------------------------------------------------------
+    clang::Stmt *RecoverLoop(clang::ASTContext &ctx, clang::Stmt *body, bool &mutated) {
+        mutated = false;
+        if (!body) { return nullptr; }
+
+        llvm::FoldingSetNodeID before;
+        body->Profile(before, ctx, /*Canonical=*/false);
+
+        // 1. Convert immediate loop-exit gotos to break.
+        bool converted = false;
+        body = ConvertImmediateLoopExitGotosToBreak(ctx, body, converted);
+
+        // 2. Promote local backward-goto regions to while loops.
+        std::unordered_map< clang::LabelDecl *, unsigned > refs;
+        CountGotoDeclRefs(body, refs);
+        body = PromoteLocalBackwardGotoLoops(ctx, body, refs);
+
+        llvm::FoldingSetNodeID after;
+        body->Profile(after, ctx, /*Canonical=*/false);
+        mutated = (before != after);
+        return body;
+    }
+
     void CleanupPrettyPrint(
         clang::FunctionDecl *fn, clang::ASTContext &ctx, bool report_cleanup,
         std::string_view function_name
@@ -7230,14 +7266,9 @@ namespace patchestry::ast {
                 });
             },
             [&]() {
-                bool converted = false;
-                auto *r = ConvertImmediateLoopExitGotosToBreak(ctx, fn->getBody(), converted);
-                if (converted) { apply_body(r); }
-            },
-            [&]() {
-                run_with_refs([&](const auto &refs) {
-                    return PromoteLocalBackwardGotoLoops(ctx, fn->getBody(), refs);
-                });
+                bool mutated = false;
+                apply_body(RecoverLoop(ctx, fn->getBody(), mutated));
+                (void) mutated;
             },
             [&]() {
                 run_with_refs([&](const auto &refs) {
@@ -7334,12 +7365,8 @@ namespace patchestry::ast {
         CountGotoDeclRefs(fn->getBody(), refs);
         body = FoldConditionalFallthroughChains(ctx, fn->getBody(), refs);
         if (body) { fn->setBody(body); }
-        bool converted_loop_exit = false;
-        body = ConvertImmediateLoopExitGotosToBreak(ctx, fn->getBody(), converted_loop_exit);
-        if (converted_loop_exit && body) { fn->setBody(body); }
-        refs.clear();
-        CountGotoDeclRefs(fn->getBody(), refs);
-        body = PromoteLocalBackwardGotoLoops(ctx, fn->getBody(), refs);
+        bool recovered_loop = false;
+        body = RecoverLoop(ctx, fn->getBody(), recovered_loop);
         if (body) { fn->setBody(body); }
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);

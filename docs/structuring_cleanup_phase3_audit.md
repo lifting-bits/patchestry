@@ -189,3 +189,17 @@ Hoist-only site did **not** regress — verified, so F6 is a clean full
 merge with no position-preservation carve-out. 81/81 lit, goto budget
 holds, `cve_2016_6563_fun_0000b920` rc=0 in goto/struct/CIR modes,
 `/patchir-inspect --debug --batch` VERDICT PASS.
+
+## F7 merge — DONE
+
+`RecoverLoop(ctx, body, bool &mutated)` added after `HoistCrossScopeLabels`,
+composing `ConvertImmediateLoopExitGotosToBreak` then
+`PromoteLocalBackwardGotoLoops` (refs computed internally) with an honest
+changed-flag via `Stmt::Profile`. Both sub-functions are now internal.
+
+Two driver sites — the schedule's two adjacent steps (Convert, Promote)
+collapsed into one, and the tail Convert+Promote block collapsed into one.
+Both were already adjacent and in the same order, so the merge is exactly
+position-preserving — a clean full merge, no carve-out. 81/81 lit, goto
+budget holds, `/patchir-inspect --debug --batch` VERDICT PASS (loops
+correctly recovered into while/for; 0 lost calls/conditions/blocks).
