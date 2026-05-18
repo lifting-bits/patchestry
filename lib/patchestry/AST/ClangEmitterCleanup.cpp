@@ -7386,10 +7386,23 @@ namespace patchestry::ast {
                 });
             },
         };
+        // Phase 4 — real fixed point for the cleanup schedule: iterate until a
+        // full schedule pass leaves the body structurally unchanged
+        // (Stmt::Profile), bounded by kMaxGotoEliminationPasses against
+        // pathological oscillation.  Replaces a body-pointer-identity check
+        // that never converged — every always-rebuild pass bumped the pointer,
+        // so the loop always ran the full cap.  Output-identical: a schedule
+        // pass reporting no structural change is a true fixed point, and the
+        // schedule is deterministic, so any further passes are no-ops.
+        int schedule_iterations = 0;
         for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
-            auto *prev = fn->getBody();
+            llvm::FoldingSetNodeID before;
+            fn->getBody()->Profile(before, ctx, /*Canonical=*/false);
             for (const auto &step : fixed_point_cleanup_schedule) { step(); }
-            if (fn->getBody() == prev) { break; }
+            ++schedule_iterations;
+            llvm::FoldingSetNodeID after;
+            fn->getBody()->Profile(after, ctx, /*Canonical=*/false);
+            if (before == after) { break; }
         }
 
         // Remove labels that are not the target of any goto.
@@ -7553,7 +7566,8 @@ namespace patchestry::ast {
                          << " initial_dangling=" << initial_metrics.dangling
                          << " final_dangling=" << final_metrics.dangling
                          << " initial_cross_scope=" << initial_metrics.cross_scope
-                         << " final_cross_scope=" << final_metrics.cross_scope << "\n";
+                         << " final_cross_scope=" << final_metrics.cross_scope
+                         << " schedule_iterations=" << schedule_iterations << "\n";
         }
     }
 
