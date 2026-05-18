@@ -38,7 +38,31 @@ Helpers: `CloneStraightLineSeqAsStmt` (3878), `CloneGotoFreeSeqAsStmt` (3936),
 **5 driver passes — the largest family, and the highest-risk (this is the
 clone-payload family the reverted Phase 2b regression came from).**
 
-### F2 — `CollapseGotoForwarder` (fold a forwarder/single-ref region away)
+### F2 — `CollapseGotoForwarder` (fold a forwarder/single-ref region away) — IN PROGRESS
+
+> **Scope correction (found while merging).** F2 cannot be a single
+> fixed-order wrapper like F4/F6/F7. Its 7 passes are used **à la carte**
+> — different subsets in different orders at each of the schedule and
+> tail call sites. A single `CollapseGotoForwarder(all 7)` would move
+> passes past non-family passes (the F4 hazard). F2 therefore lands as a
+> sequence of sub-merges of always-adjacent-same-order pairs; the rest is
+> blocked on either genuine fold-logic unification or the Phase 4
+> worklist (which dissolves the hand-tuned à-la-carte ordering). The
+> audit's "Local vs CrossCompound = same transform" line was an
+> optimistic name-level guess: reading the code, `FoldLocalGotoDiamonds`
+> (224 lines, iterates to fixpoint, two sub-cases) and
+> `FoldCrossCompoundIfLabelDiamonds` (107 lines, single-pass) are two
+> *distinct* algorithms — composable, not trivially unifiable.
+>
+> **Sub-merge 1 — DONE.** `FoldGotoDiamonds` composition wrapper for
+> `FoldLocalGotoDiamonds` + `FoldCrossCompoundIfLabelDiamonds` (always
+> adjacent, same order, all 3 driver sites — position-preserving).
+> Both sub-functions internal. 81/81 lit, goto budget holds,
+> `/patchir-inspect --debug --batch` VERDICT PASS.
+> **Remaining:** `FoldConditionalFallthroughChains`,
+> `FoldForwardSingleRefLabelRegions`, `SinkCommonTerminalEpilogues`,
+> `FoldCrossCompoundDispatchChains`, `FoldGuardedJoinLabelChains` — no
+> clean always-adjacent grouping; deferred behind Phase 4.
 
 | Driver pass | Lines | ~LoC |
 |---|---|---|

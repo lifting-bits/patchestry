@@ -7176,6 +7176,46 @@ namespace patchestry::ast {
         return body;
     }
 
+    // ---------------------------------------------------------------
+    // F2 (part) — FoldGotoDiamonds: consolidated goto-diamond fold.
+    // Composes the two diamond-fold sub-rewrites in fixed order:
+    //
+    //   1. FoldLocalGotoDiamonds — recover if/else from a goto diamond
+    //      whose alt and join labels are siblings in the same compound;
+    //   2. FoldCrossCompoundIfLabelDiamonds — recover if/else from a
+    //      diamond whose then-arm gotos cross a CompoundStmt boundary.
+    //
+    // The two are always invoked adjacently and in this order at every
+    // driver site, so composing them is position-preserving.  Goto-ref
+    // counts are recomputed between them (matching the driver, since
+    // the first rewrite can change the tree).  `mutated` is set iff the
+    // body structurally changed — detected via Stmt::Profile, since
+    // both sub-rewrites always rebuild their CompoundStmts.
+    //
+    // NOTE: this is a composition wrapper, not a logic unification —
+    // the two fold algorithms remain distinct (see Phase 3 audit).
+    // ---------------------------------------------------------------
+    clang::Stmt *FoldGotoDiamonds(clang::ASTContext &ctx, clang::Stmt *body, bool &mutated) {
+        mutated = false;
+        if (!body) { return nullptr; }
+
+        llvm::FoldingSetNodeID before;
+        body->Profile(before, ctx, /*Canonical=*/false);
+
+        std::unordered_map< clang::LabelDecl *, unsigned > refs;
+        CountGotoDeclRefs(body, refs);
+        body = FoldLocalGotoDiamonds(ctx, body, refs);
+
+        refs.clear();
+        CountGotoDeclRefs(body, refs);
+        body = FoldCrossCompoundIfLabelDiamonds(ctx, body, refs);
+
+        llvm::FoldingSetNodeID after;
+        body->Profile(after, ctx, /*Canonical=*/false);
+        mutated = (before != after);
+        return body;
+    }
+
     void CleanupPrettyPrint(
         clang::FunctionDecl *fn, clang::ASTContext &ctx, bool report_cleanup,
         std::string_view function_name
@@ -7271,14 +7311,9 @@ namespace patchestry::ast {
                 (void) mutated;
             },
             [&]() {
-                run_with_refs([&](const auto &refs) {
-                    return FoldLocalGotoDiamonds(ctx, fn->getBody(), refs);
-                });
-            },
-            [&]() {
-                run_with_refs([&](const auto &refs) {
-                    return FoldCrossCompoundIfLabelDiamonds(ctx, fn->getBody(), refs);
-                });
+                bool mutated = false;
+                apply_body(FoldGotoDiamonds(ctx, fn->getBody(), mutated));
+                (void) mutated;
             },
             [&]() {
                 run_with_refs([&](const auto &refs) {
@@ -7368,14 +7403,8 @@ namespace patchestry::ast {
         bool recovered_loop = false;
         body = RecoverLoop(ctx, fn->getBody(), recovered_loop);
         if (body) { fn->setBody(body); }
-        refs.clear();
-        CountGotoDeclRefs(fn->getBody(), refs);
-        body = FoldLocalGotoDiamonds(ctx, fn->getBody(), refs);
-        if (body) { fn->setBody(body); }
-
-        refs.clear();
-        CountGotoDeclRefs(fn->getBody(), refs);
-        body = FoldCrossCompoundIfLabelDiamonds(ctx, fn->getBody(), refs);
+        bool folded_diamonds = false;
+        body = FoldGotoDiamonds(ctx, fn->getBody(), folded_diamonds);
         if (body) { fn->setBody(body); }
 
         refs.clear();
@@ -7441,14 +7470,8 @@ namespace patchestry::ast {
         body = AttachEmptyLabelsToFollowingStmt(ctx, fn->getBody(), attached_empty_labels);
         if (attached_empty_labels && body) { fn->setBody(body); }
 
-        refs.clear();
-        CountGotoDeclRefs(fn->getBody(), refs);
-        body = FoldLocalGotoDiamonds(ctx, fn->getBody(), refs);
-        if (body) { fn->setBody(body); }
-
-        refs.clear();
-        CountGotoDeclRefs(fn->getBody(), refs);
-        body = FoldCrossCompoundIfLabelDiamonds(ctx, fn->getBody(), refs);
+        bool folded_diamonds_late = false;
+        body = FoldGotoDiamonds(ctx, fn->getBody(), folded_diamonds_late);
         if (body) { fn->setBody(body); }
 
         if (!ContainsSwitchStmt(fn->getBody())) {
