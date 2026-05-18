@@ -24,6 +24,7 @@
 #include <clang/AST/Stmt.h>
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/FoldingSet.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -7055,6 +7056,52 @@ namespace patchestry::ast {
 
     } // anonymous namespace
 
+    // ---------------------------------------------------------------
+    // F4 — RemoveDeadControlFlow: the consolidated dead-control-flow
+    // transform.  Composes the three monotone deletion sub-rewrites
+    // behind one entry point with an honest changed-contract:
+    //
+    //   1. RemoveDeadLabels    — strip labels no goto targets;
+    //   2. RemoveOrphanedGotos — drop gotos with no defined label;
+    //   3. RemoveEmptyBlocks   — remove empty CompoundStmts/NullStmts.
+    //
+    // All three only ever delete control flow, so the order between
+    // them does not change the fixpoint (the family is confluent).
+    // `mutated` is set iff the body structurally changed — detected
+    // via Stmt::Profile, since RemoveDeadLabels/RemoveEmptyBlocks
+    // always rebuild their CompoundStmts even when nothing changed.
+    // ---------------------------------------------------------------
+    clang::Stmt *RemoveDeadControlFlow(
+        clang::ASTContext &ctx, clang::Stmt *body, bool &mutated
+    ) {
+        mutated = false;
+        if (!body) { return nullptr; }
+
+        llvm::FoldingSetNodeID before;
+        body->Profile(before, ctx, /*Canonical=*/false);
+
+        // 1. Strip labels that no goto targets.
+        std::unordered_set< clang::LabelDecl * > live;
+        std::unordered_set< clang::Stmt * > seen;
+        CollectGotoTargets(body, live, seen);
+        body = RemoveDeadLabels(ctx, body, live);
+
+        // 2. Drop gotos whose target label is no longer defined.
+        std::unordered_set< clang::LabelDecl * > defined;
+        CollectDefinedLabels(body, defined);
+        if (auto *repaired = RemoveOrphanedGotos(ctx, body, defined)) {
+            body = repaired;
+        }
+
+        // 3. Remove empty CompoundStmts and NullStmts.
+        body = RemoveEmptyBlocks(ctx, body);
+
+        llvm::FoldingSetNodeID after;
+        body->Profile(after, ctx, /*Canonical=*/false);
+        mutated = (before != after);
+        return body;
+    }
+
     void CleanupPrettyPrint(
         clang::FunctionDecl *fn, clang::ASTContext &ctx, bool report_cleanup,
         std::string_view function_name
@@ -7092,21 +7139,28 @@ namespace patchestry::ast {
             body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
             if (body) { fn->setBody(body); }
         };
+        // F4 — consolidated dead-control-flow cleanup (strip dead
+        // labels, drop orphaned gotos, remove empty blocks).
+        auto run_dead_control_flow = [&]() {
+            bool mutated = false;
+            apply_body(RemoveDeadControlFlow(ctx, fn->getBody(), mutated));
+            (void) mutated;
+        };
+        // Dead-label sweep only.  A few legacy tail positions run this
+        // without the empty-block merge: running RemoveEmptyBlocks there
+        // reshapes if/else ahead of downstream goto-elimination passes
+        // and regresses delicate fixtures (cve_2016_6563_fun_0000b920).
+        // Folds back into run_dead_control_flow once Phase 4 removes the
+        // downstream order-dependence.
         auto run_remove_dead_labels = [&]() {
             std::unordered_set< clang::LabelDecl * > goto_targets;
             std::unordered_set< clang::Stmt * > seen;
             CollectGotoTargets(fn->getBody(), goto_targets, seen);
-            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-            if (body) { fn->setBody(body); }
-        };
-        auto run_remove_empty_blocks = [&]() {
-            body = RemoveEmptyBlocks(ctx, fn->getBody());
-            if (body) { fn->setBody(body); }
+            apply_body(RemoveDeadLabels(ctx, fn->getBody(), goto_targets));
         };
         auto run_late_join_fixups = [&]() {
             run_goto_to_next_label_fixed_point();
-            run_remove_dead_labels();
-            run_remove_empty_blocks();
+            run_dead_control_flow();
         };
 
         // Eliminate gotos to immediately following labels.  Iterates
@@ -7235,18 +7289,9 @@ namespace patchestry::ast {
         body = InlineSingleRefTerminalLabelBlocks(ctx, fn->getBody(), refs, inlined_single_ref);
         if (inlined_single_ref && body) { fn->setBody(body); }
 
-        run_remove_dead_labels();
-
-        // Remove gotos whose target label was never emitted (orphaned
-        // by structuring rules that absorbed the target block).
-        std::unordered_set< clang::LabelDecl * > defined;
-        CollectDefinedLabels(fn->getBody(), defined);
-        body = RemoveOrphanedGotos(ctx, fn->getBody(), defined);
-        if (body) { fn->setBody(body); }
-
-        // Final pass: remove empty CompoundStmts and NullStmts.
-        body = RemoveEmptyBlocks(ctx, fn->getBody());
-        if (body) { fn->setBody(body); }
+        // Strip dead labels, orphaned gotos (targets absorbed by
+        // structuring rules), and empty CompoundStmts/NullStmts.
+        run_dead_control_flow();
 
         bool hoisted_cross_scope = false;
         body = HoistCrossScopeLabelEntries(ctx, fn, fn->getBody(), hoisted_cross_scope);
@@ -7314,10 +7359,7 @@ namespace patchestry::ast {
         if (body) { fn->setBody(body); }
 
         run_goto_to_next_label_fixed_point();
-        run_remove_dead_labels();
-
-        body = RemoveEmptyBlocks(ctx, fn->getBody());
-        if (body) { fn->setBody(body); }
+        run_dead_control_flow();
 
         bool promoted_counter_for = false;
         body = PromoteSimpleCounterWhileToFor(ctx, fn->getBody(), promoted_counter_for);
@@ -7329,8 +7371,7 @@ namespace patchestry::ast {
         );
         if (removed_terminal_continue && body) { fn->setBody(body); }
 
-        body = RemoveEmptyBlocks(ctx, fn->getBody());
-        if (body) { fn->setBody(body); }
+        run_dead_control_flow();
 
         bool pushed_labels = false;
         body = PushLabelsIntoCompounds(ctx, fn->getBody(), pushed_labels);
@@ -7356,10 +7397,7 @@ namespace patchestry::ast {
             body = CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
             if (body) { fn->setBody(body); }
 
-            run_remove_dead_labels();
-
-            body = RemoveEmptyBlocks(ctx, fn->getBody());
-            if (body) { fn->setBody(body); }
+            run_dead_control_flow();
         }
 
         refs.clear();

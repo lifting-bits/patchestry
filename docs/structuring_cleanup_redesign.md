@@ -61,14 +61,17 @@ transforms** — without regressing the goto KPI (≤ 25) or the 80/80 lit suite
 
 - Rewriting the `CFGStructure` graph-collapse algorithm (interval/loop-nest
   structuring). A stronger collapse would leave fewer residual gotos for *any*
-  cleanup layer — tracked as future work (Phase 6), not part of this redesign.
+  cleanup layer — tracked as future work (Phase 7), not part of this redesign.
 - Changing the vector-slot `SNode` data model — it is a sound foundation and
   stays.
 
 ## Phases
 
-Every phase ends green: Debug build clean, `llvm-lit` 80/80, goto budget holds,
-one atomic commit. Phases 0–2 deliver standalone value even if 3–5 stall.
+Every phase ends green: Debug build clean, `llvm-lit` 81/81, goto budget holds,
+one atomic commit. Phases 0–2 deliver standalone value even if 3–6 stall.
+
+> **Ordering note.** Consolidation (Phase 3) now runs *before* the worklist
+> driver (Phase 4) — the reverse of the original plan. Rationale in Phase 3.
 
 ### Phase 0 — Guardrails (prerequisite)
 
@@ -111,20 +114,37 @@ is architecturally necessary, not debt. The redesign therefore:
 - resolves cross-layer duplicate passes *asymmetrically* — layout/adjacency
   transforms live post-emission, structural transforms live on the tree.
 
-### Phase 2 — Real fixed-point driver
+### Phase 2 — Honest changed-contract — DONE
 
-Independent of the Phase 4 layer-resolution work; fixes the post-emission
-(Clang-AST) driver.
+Enforce the changed-contract: every pass returns "changed" only when it
+actually mutated, so the `if (body)` guard becomes meaningful (a prerequisite
+for any real fixed point).
 
-1. **Phase 2a** — Enforce the changed-contract: every pass returns "changed"
-   only when it actually mutated. Fix the ~10 always-rebuild passes so the
-   `if (body)` guard becomes meaningful (prerequisite for a real fixed point).
-2. **Phase 2b** — Replace the fake 8× loop + 180-line unrolled tail with a
-   genuine worklist fixed point: run transforms until none reports a change.
+**Status: complete.** Converted 9/10 always-rebuild passes to an honest
+`bool &mutated` contract (commits `f56784d`, `3e64290`, `405f0a4`).
+`CleanupStmtTree` was left alone — it is a one-shot prologue, not part of the
+loop. 81/81 lit holds.
 
-**Exit:** convergence iteration count drops; 80/80 lit; goto budget holds.
+> Phase 0's "10 always-rebuild passes" undercount was found here: passes
+> invoked N×/function (`RepairCrossScopeLabelEntries`,
+> `FoldClangSwitchLocalCaseTargets`, the `Fold*Diamonds` group) are *also*
+> always-rebuild and were missed. The full always-rebuild set is only knowable
+> after consolidation.
 
-### Phase 3 — Consolidate transform families
+### Phase 3 — Consolidate transform families — NEXT
+
+**Reorder rationale.** The original plan put the worklist driver (old Phase 2b)
+*before* consolidation. A Phase 2b attempt was built — a `Stmt::Profile`
+fingerprint worklist running to a structural fixed point — and **reverted**: it
+regressed `decode_basic_field` (dropped `if (param_2 == 5){... pb_decode_fixed32
+...}` blocks). Root cause: **the cleanup transforms are not confluent.** The
+hand-tuned "schedule ×8 then tail ×1" order is load-bearing; iterating the tail
+to a fixpoint converges to a *different, wrong* result. Building a worklist over
+a non-confluent transform set is backwards. Consolidate first — the ~8 survivors
+are few enough to reason about confluence directly, then a worklist over them is
+cheap and safe. Consolidation therefore moves ahead of the driver work.
+
+Collapse ~49 passes into ~8 canonical, parameterized transforms, on the
 
 Collapse ~49 passes into ~8 canonical, parameterized transforms, on the
 post-emission Clang-AST layer (per the Phase 1 hybrid decision), family by
@@ -147,7 +167,23 @@ boundaries — a non-issue on the SNode tree.
 
 **Exit:** ~8 transforms; goto budget holds at each family merge.
 
-### Phase 4 — Resolve the cross-layer duplication (hybrid)
+### Phase 4 — Real fixed-point worklist driver
+
+With ~8 consolidated transforms, replace the fake 8× loop + 180-line unrolled
+tail in `CleanupPrettyPrint` with a genuine worklist fixed point: run transforms
+until none reports a change.
+
+This is the old "Phase 2b", moved after consolidation. Confluence must be
+established for the ~8 survivors *first* — verify the order-independence the
+Phase 2b attempt assumed and the old 49-pass set lacked. If a pair is provably
+non-confluent, fix it (pick a canonical orientation) rather than freezing an
+order; a worklist over a still-non-confluent set will reproduce the
+`decode_basic_field` regression.
+
+**Exit:** fake loop + unrolled tail gone; convergence iteration count is data,
+not a hard cap; 81/81 lit; goto budget holds.
+
+### Phase 5 — Resolve the cross-layer duplication (hybrid)
 
 Phase 1 rejected the "delete one whole layer" framing — both layers are
 needed. Instead, place each transform in exactly one layer, decided by class:
@@ -164,14 +200,14 @@ needed. Instead, place each transform in exactly one layer, decided by class:
 
 **Exit:** no cross-layer duplicate passes; goto budget holds; 80/80 lit.
 
-### Phase 5 — Split monoliths, document
+### Phase 6 — Split monoliths, document
 
 - Split the surviving cleanup file by transform family (the current 7,337-line
   `ClangEmitterCleanup.cpp` / ~9,000-line `CFGStructure.cpp` are unmaintainable
   monoliths).
 - Update `AGENTS.md` / architecture docs to describe the single-engine pipeline.
 
-### Phase 6 — Strengthen CGraph collapse (future, separate effort)
+### Phase 7 — Strengthen CGraph collapse (future, separate effort)
 
 A stronger `CFGStructure` collapse (proper interval/loop-nest structuring,
 irreducible-region handling) emits cleaner control flow directly, shrinking the
@@ -206,4 +242,5 @@ builds/default/bin/llvm-lit builds/default/test/patchir-decomp/ --no-progress-ba
 ```
 
 Rough sizing: Phase 0 ~0.5d, Phase 1 ~2–3d, Phase 2 ~2d, Phase 3 ~1wk,
-Phase 4 ~3d, Phase 5 ~2d — on the order of 4–5 weeks total, front-loaded value.
+Phase 4 ~3d, Phase 5 ~3d, Phase 6 ~2d — on the order of 4–5 weeks total,
+front-loaded value.
