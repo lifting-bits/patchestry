@@ -103,8 +103,11 @@ calls out — same transform, different `CompoundStmt` nesting.**
 | `EliminateGotoToNextLabel` (wrapper + `ProcessCompound` + overload) | 1572–1856 | 285 |
 
 Helper: `StripGotoToFollowingLabelFromTailPosition` (865–1021).
-**1 driver pass. Plan note: a second copy exists in the SNode layer — dedup is
-Phase 5, not here.**
+**1 driver pass — already a single canonical transform. Nothing to merge
+on the Clang-AST layer.** The driver invokes it through two lambda modes
+(`run_goto_to_next_label_fixed_point` / `_once`); that is one transform with
+two call modes, not two passes. A second copy exists in the SNode layer —
+dedup is Phase 5, not Phase 3. **F3 status: DONE (no-op — confirmed canonical).**
 
 ### F4 — `RemoveDeadControlFlow` (delete unreachable labels/gotos/blocks)
 
@@ -124,7 +127,10 @@ Helpers: `CollectGotoTargets` (43), `CollectDefinedLabels` (5928).
 | `ScopeifyIfGotos` | 1917–2102 | 186 |
 
 Helper: `ClangScopeifyLabelsAreRegionLocal` (1872).
-**1 driver pass.**
+**1 driver pass — already a single canonical transform. Nothing to merge.**
+The canonical name in the plan table is `ScopeifyConditionalGoto`; the code
+keeps the existing name `ScopeifyIfGotos` (a rename would be cosmetic churn
+with no structural value). **F5 status: DONE (no-op — confirmed canonical).**
 
 ### F6 — `HoistCrossScopeLabels`
 
@@ -148,11 +154,34 @@ Helpers: `ReplaceGotoWithBreakInCurrentLoop` (5437),
 `LocalLoopRegionHasUnsafeControl` (5571), `SeqHasLocalLabelOrControl` (5694).
 **2 driver passes.**
 
+### F8 — `FoldClangSwitchLocalCaseTargets` (switch-case-target goto fold)
+
+| Driver pass | Lines | ~LoC |
+|---|---|---|
+| `FoldClangSwitchLocalCaseTargets` | 2950–3076 | 127 |
+
+Helpers: the switch-local-label group, 2650–2949.
+**1 driver pass — already a single canonical transform. Nothing to merge.**
+
+**Placement decision (settled).** The audit left this open between "fold into
+F2" and "its own family." It is **its own family, F8** — not part of F2:
+
+- Mechanism differs. F2 `CollapseGotoForwarder` collapses goto-forwarders /
+  single-ref label regions into their predecessor (a layout/forwarding
+  transform). F8 redirects a goto whose target is a *switch-case-local* label
+  into the switch itself. Different domain (switch-specific), different shape.
+- Layer placement differs. Phase 5 classifies switch-case folding as a
+  *structural region transform* — a candidate to live on the SNode tree —
+  whereas F2's forwarder-collapses are layout/adjacency transforms that stay
+  post-emission. Folding F8 into F2 would mix transforms Phase 5 must split to
+  different layers. Keeping F8 separate keeps that decision clean.
+
+**F8 status: DONE (no-op — confirmed canonical, its own family).**
+
 ### Unplaced / cosmetic
 
 | Pass | Lines | Disposition |
 |---|---|---|
-| `FoldClangSwitchLocalCaseTargets` | 2950–3076 | **Open** — `Fold*` by name but redirects gotos into switch cases. Candidate F2, or its own F8 switch family. Decide before merging F2. Helpers 2650–2949. |
 | `PromoteSimpleCounterWhileToFor` | 6355–6424 | Cosmetic, keep separate (plan). |
 | `RemoveRedundantTerminalForContinues` | 6425–6506 | Cosmetic. |
 | `PushLabelsIntoCompounds` | 6507–6638 | Cosmetic / layout. |
@@ -244,3 +273,44 @@ Both were already adjacent and in the same order, so the merge is exactly
 position-preserving — a clean full merge, no carve-out. 81/81 lit, goto
 budget holds, `/patchir-inspect --debug --batch` VERDICT PASS (loops
 correctly recovered into while/for; 0 lost calls/conditions/blocks).
+
+## Phase 3 — final state
+
+The 27 in-loop Clang-AST cleanup passes resolve to **8 canonical transform
+families** plus the 5 standalone cosmetic passes and the `CleanupStmtTree`
+prologue.
+
+| Family | Canonical transform | Passes | Phase 3 outcome |
+|---|---|---|---|
+| F1 | `CloneTerminalLabelGotos` (+`InlineGotoTarget` deferred) | 5 | sub-merge 1 done (2→1); 3 deferred |
+| F2 | `FoldGotoDiamonds` (+`CollapseGotoForwarder` deferred) | 7 | sub-merge 1 done (2→1); 5 deferred |
+| F3 | `EliminateGotoToNextLabel` | 1 | already canonical |
+| F4 | `RemoveDeadControlFlow` | 3 | merged (3→1) |
+| F5 | `ScopeifyIfGotos` | 1 | already canonical |
+| F6 | `HoistCrossScopeLabels` | 2 | merged (2→1) |
+| F7 | `RecoverLoop` | 2 | merged (2→1) |
+| F8 | `FoldClangSwitchLocalCaseTargets` | 1 | already canonical |
+
+Commits: F4 `c99b39e`, F6 `2605c82`, F7 `78ca42f`, F2-1 `7194a85`,
+F1-1 `b7d986d`. Every commit: 81/81 lit, goto budget holds,
+`/patchir-inspect` VERDICT PASS.
+
+**What Phase 3 achieved.** Five families (F3, F4, F5, F6, F7, F8) are now
+each exactly one canonical transform. Driver-facing cleanup entry points
+dropped by 9 (F4 −2, F6 −2, F7 −2, F2 −1, F1 −2). Every merged transform
+carries an honest `Stmt::Profile` changed-contract — a Phase 4 prerequisite.
+
+**What Phase 3 cannot finish without Phase 4.** F2 and F1 each retain a
+remainder (5 and 3 passes) that resists consolidation: their passes are
+invoked **à la carte** by the hand-unrolled driver tail — different subsets
+in different orders per site — so no position-preserving wrapper can group
+them. This is the hard dependency the reorder did not foresee: the *final*
+F2/F1 consolidation needs the Phase 4 worklist to dissolve the à-la-carte
+ordering first. The F2/F1 remainders are the explicit hand-off into Phase 4.
+
+**Confluence lesson (carried from F4).** A family being internally confluent
+does not license moving its passes past non-family passes. F4 needed a
+dead-label-only carve-out (3 sites); F1 keeps one lone `CloneFallthrough`
+site. F6/F7 and the two sub-merges were exactly position-preserving and
+needed none. Phase 4's worklist must establish confluence for the surviving
+~8 transforms before iterating them.

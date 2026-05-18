@@ -131,7 +131,7 @@ loop. 81/81 lit holds.
 > always-rebuild and were missed. The full always-rebuild set is only knowable
 > after consolidation.
 
-### Phase 3 — Consolidate transform families — NEXT
+### Phase 3 — Consolidate transform families — DONE (pre-Phase-4 ceiling)
 
 **Reorder rationale.** The original plan put the worklist driver (old Phase 2b)
 *before* consolidation. A Phase 2b attempt was built — a `Stmt::Profile`
@@ -143,8 +143,6 @@ to a fixpoint converges to a *different, wrong* result. Building a worklist over
 a non-confluent transform set is backwards. Consolidate first — the ~8 survivors
 are few enough to reason about confluence directly, then a worklist over them is
 cheap and safe. Consolidation therefore moves ahead of the driver work.
-
-Collapse ~49 passes into ~8 canonical, parameterized transforms, on the
 
 Collapse ~49 passes into ~8 canonical, parameterized transforms, on the
 post-emission Clang-AST layer (per the Phase 1 hybrid decision), family by
@@ -167,6 +165,22 @@ boundaries — a non-issue on the SNode tree.
 
 **Exit:** ~8 transforms; goto budget holds at each family merge.
 
+**Status: DONE to the pre-Phase-4 ceiling.** Full record in
+`docs/structuring_cleanup_phase3_audit.md`. The 27 in-loop Clang-AST passes
+resolve to 8 families (F1–F8). F3/F4/F5/F6/F7/F8 are each now one canonical
+transform; F4/F6/F7 were merges (commits `c99b39e`, `2605c82`, `78ca42f`),
+F3/F5/F8 were already canonical. F1 and F2 each got a first sub-merge
+(`b7d986d`, `7194a85`) but retain a remainder (3 and 5 passes) that **cannot**
+be consolidated by Phase 3 alone: the hand-unrolled driver tail invokes those
+passes *à la carte* — different subsets and orders per call site — so no
+position-preserving wrapper can group them. Two correctness facts surfaced
+that the original plan missed: (1) family-internal confluence does **not**
+license moving a pass past non-family passes (F4 needed a carve-out); (2) the
+F2/F1 remainders are gated on Phase 4 dissolving the à-la-carte ordering — so
+consolidation and the worklist are *mutually* entangled, not strictly
+sequential. Every Phase 3 commit held 81/81 lit, the goto budget, and
+`/patchir-inspect` VERDICT PASS.
+
 ### Phase 4 — Real fixed-point worklist driver
 
 With ~8 consolidated transforms, replace the fake 8× loop + 180-line unrolled
@@ -179,6 +193,16 @@ Phase 2b attempt assumed and the old 49-pass set lacked. If a pair is provably
 non-confluent, fix it (pick a canonical orientation) rather than freezing an
 order; a worklist over a still-non-confluent set will reproduce the
 `decode_basic_field` regression.
+
+**Inherited from Phase 3.** Phase 4 also absorbs the F2/F1 consolidation
+remainders: once the worklist replaces the à-la-carte unrolled tail, the
+5 residual F2 folds (`FoldConditionalFallthroughChains`,
+`FoldForwardSingleRefLabelRegions`, `SinkCommonTerminalEpilogues`,
+`FoldCrossCompoundDispatchChains`, `FoldGuardedJoinLabelChains`) and the
+3 residual F1 inline/clone passes (`InlineSingleRefTerminalLabelBlocks`,
+`CloneCleanupLabelBeforeJoinGotos`, `CloneSmallStraightLineLabelBeforeJoinGotos`)
+become worklist entries and the per-site ordering constraint disappears.
+Finishing F2/F1 is therefore a Phase 4 deliverable, not a Phase 3 gap.
 
 **Exit:** fake loop + unrolled tail gone; convergence iteration count is data,
 not a hard cap; 81/81 lit; goto budget holds.
