@@ -247,22 +247,34 @@ a genuine fixed point. The tail-worklist goal is withdrawn. Any future tail
 rework must make individual transforms idempotent / iteration-safe, one at a
 time — not a wholesale worklist.
 
-### Phase 5 — Resolve the cross-layer duplication (hybrid)
+### Phase 5 — Resolve the cross-layer duplication — REFUTED
 
-Phase 1 rejected the "delete one whole layer" framing — both layers are
-needed. Instead, place each transform in exactly one layer, decided by class:
+Original plan: place each cross-layer-duplicated transform in exactly one
+layer and delete the other copy — adjacency transforms keep the Clang-AST
+copy and drop the inert SNode copy; structural transforms keep the SNode copy
+and drop the Clang-AST duplicate.
 
-- **Layout / adjacency transforms** (`EliminateGotoToNextLabel`, cross-compound
-  forwarder folds): keep the post-emission Clang-AST copy; delete the
-  tree-level SNode copy — the tree cannot see the adjacency, so the SNode copy
-  spins without effect.
-- **Purely structural region transforms** (clone/move payload, switch-case
-  folding): keep the SNode copy (its gate accepts 85%); delete the Clang-AST
-  duplicate.
-- Result: every duplicated pass name collapses to one definition, in the layer
-  that can actually do the work.
+**Outcome: the premise is refuted by measurement.** Full record in
+`docs/structuring_cleanup_phase5_findings.md`. The flagship "delete the SNode
+copy" candidate — the SNode-layer `EliminateGotoToNextLabel`, which Phase 1
+argued the tree "structurally cannot expose" so should be inert — was removed
+from the SNode cleanup schedule and tested: **2 lit failures, including the
+`zz-goto-budget` guard.** The SNode copy is load-bearing, not inert.
 
-**Exit:** no cross-layer duplicate passes; goto budget holds; 80/80 lit.
+The reason generalizes: the SNode tree *can* see sibling-order adjacency
+within an `SSeq` (the SNode copy eliminates those gotos), and the Clang-AST
+copy handles the cases that only become adjacent after linearization. Same
+name, two IRs, **disjoint and complementary** adjacency — not duplication.
+Corroborated by Phase 1's own finding that no pass on either layer is dead.
+The "two parallel engines doing duplicate work" framing was a high-level
+Phase-1 impression that does not survive per-pass measurement.
+
+**Verdict:** no safe cross-layer deletion exists; the delete-one-copy goal is
+withdrawn. The shared *names* signal a shared *idea*, not redundant work. The
+intentional two-IR design should instead be **documented** (Phase 6).
+
+**Exit (revised):** Phase 5 produces no code change; its deliverable is the
+findings doc and the architecture note carried into Phase 6.
 
 ### Phase 6 — Split monoliths, document
 
