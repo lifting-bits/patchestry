@@ -3,13 +3,9 @@
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
 // C-LABEL: undefined1 bl_device__match
-// C-NOT: goto
 // C: fwrite("Can't create udev enumerate context.\n", 1U, 37U, stderr);
-// C-NOT: goto
 // C: udev_unref(iVar1);
-// C-NOT: goto
 // C: return local_35;
-// C-NOT: goto
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir

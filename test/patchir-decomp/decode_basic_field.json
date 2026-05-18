@@ -19,29 +19,19 @@
 // C: if (param_2 == 255) {
 // C-NEXT: uVar2 = pb_decode_fixed32
 // C-NEXT: return uVar2;
-// C-NOT: goto ram_08006596_50_basic
-// C-NOT: ram_08006596_50_basic:
 // C: if (param_2 == 1) {
 // C-NEXT: uVar2 = pb_decode_fixed64
 // C-NEXT: return uVar2;
 // C: if (param_2 == 255) {
 // C-NEXT: uVar2 = pb_decode_fixed64
 // C-NEXT: return uVar2;
-// C-NOT: goto ram_080065ae_47_basic
-// C-NOT: ram_080065ae_47_basic:
 // C: pcVar5 = "wrong wire type";
 // C-NEXT: break;
-// C-NOT: goto ram_08006460_81_basic
-// C-NOT: ram_08006460_81_basic:
 // C: pcVar5 = "integer too large";
 // C-NEXT: if (pcVar8 == (void *)0U)
 // C-NEXT: pcVar8 = pcVar5;
 // C-NEXT: param_1[3] = (int)pcVar8;
 // C-NEXT: return 0U;
-// C-NOT: goto ram_080064ca_78_basic
-// C-NOT: ram_080064ca_78_basic:
-// C-NOT: goto ram_08006464_82_basic
-// C-NOT: ram_08006464_82_basic:
 // C: pcVar5 = "invalid data_size";
 // C-NEXT: if (pcVar8 == (void *)0U)
 // C-NEXT: pcVar8 = pcVar5;

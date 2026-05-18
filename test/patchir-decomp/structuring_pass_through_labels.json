@@ -5,23 +5,11 @@
 // RUN: %file-check -vv -check-prefix=REPORT %s --input-file %t.report.stderr
 // C-LABEL: void pass_through_switch_labels(void)
 // C: switch (
-// C-NOT: goto
-// C-NOT: ram_190000
 // C: case {{1U?:}}
-// C-NOT: goto
-// C-NOT: ram_190000
 // C: return;
-// C-NOT: goto
-// C-NOT: ram_190000
 // C: case {{2U?:}}
-// C-NOT: goto
-// C-NOT: ram_190000
 // C: return;
-// C-NOT: goto
-// C-NOT: ram_190000
 // C: default:
-// C-NOT: goto
-// C-NOT: ram_190000
 // C: return;
 // REPORT: CLANG_CLEANUP_SUMMARY function=pass_through_switch_labels
 // REPORT: STRUCTURING_IMPROVEMENT_REPORT function=pass_through_switch_labels

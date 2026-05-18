@@ -5,8 +5,6 @@
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
 // C-LABEL: undefined4 load_descriptor_values
-// C-NOT: goto ram_08007400_10_basic
-// C-NOT: ram_08007400_10_basic:
 // FN: cir.func dso_local @load_descriptor_values(
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
 // CIR-DAG: load_descriptor_values

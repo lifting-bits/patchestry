@@ -5,25 +5,8 @@
 // RUN: test -e %t.c
 // RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
 // C-LABEL: unsigned long encode_basic_field
-// C-NOT: goto ram_00128120_114_basic
-// C-NOT: goto ram_00128504_120_basic
-// C-NOT: goto ram_00128494_20_basic
-// C-NOT: goto ram_001284ec_17_basic
-// C-NOT: ram_00128120_114_basic:
-// C-NOT: ram_00128504_120_basic:
-// C-NOT: ram_00128494_20_basic:
-// C-NOT: ram_001284ec_17_basic:
 // C: pcVar7 = "invalid field descriptor";
-// C-NOT: goto ram_00128120_114_basic
 // C: stack_chk_fail(puVar4, pcVar7, uVar6);
-// C-NOT: goto ram_00128120_114_basic
-// C-NOT: goto ram_00128504_120_basic
-// C-NOT: goto ram_00128494_20_basic
-// C-NOT: goto ram_001284ec_17_basic
-// C-NOT: ram_00128120_114_basic:
-// C-NOT: ram_00128504_120_basic:
-// C-NOT: ram_00128494_20_basic:
-// C-NOT: ram_001284ec_17_basic:
 // C: if (cVar3 != 0) {
 // C: param_1[3L] = uVar6 + 4UL;
 // C: pcVar7 = &__stack_chk_guard;

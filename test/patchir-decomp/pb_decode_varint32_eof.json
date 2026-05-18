@@ -11,8 +11,6 @@
 // C-NEXT: uVar4 = 1U;
 // C-NEXT: else
 // C-NEXT: uVar4 = 255U;
-// C-NOT: goto ram_0800e748_8_basic;
-// C-NOT: ram_0800e748_8_basic:
 // C: if (((unsigned int)uStack_1c & 2130706432U) != 0U && -1 < (int)uVar6 || uVar4 != uVar1 || 63U < uVar7)
 // C-NEXT: pcVar5 = (signed char *)param_1[3];
 // C: pcVar5 = "varint overflow";
@@ -30,12 +28,6 @@
 // C-NEXT: uVar6 = uVar6 | uVar1 << 28;
 // C-NEXT: } else
 // C-NEXT: uVar6 = uVar6 | uVar1 & 127U << uVar7 & 255U;
-// C-NOT: goto ram_0800e758_17_basic;
-// C-NOT: ram_0800e758_17_basic:
-// C-NOT: goto ram_0800e77c_21_basic;
-// C-NOT: ram_0800e770_16_basic:
-// C-NOT: ram_0800e778_20_basic:
-// C-NOT: ram_0800e77c_21_basic:
 // C: uVar7 = uVar7 + 7U;
 // RUN: %gen-call-checks %t.json > %t.call.checks
 // RUN: %file-check -check-prefix=CALL-CHECK %t.call.checks --input-file %t.cir

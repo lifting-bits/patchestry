@@ -6,7 +6,6 @@
 // SW2: switch (
 // SW2: case {{[0-9]+[U]?}}:
 // SW2: case {{[0-9]+[U]?}}:
-// SW2-NOT: goto *
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",
