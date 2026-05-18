@@ -6320,45 +6320,51 @@ namespace patchestry::ast {
             return true;
         }
 
-        clang::Stmt *PromoteSimpleCounterWhileToFor(clang::ASTContext &ctx, clang::Stmt *stmt) {
+        // Phase 2a: `mutated` is set true only when a real while→for
+        // promotion fires.  The recursive walk still rebuilds CompoundStmts,
+        // but the caller relies on `mutated` (not the non-null return) to
+        // decide whether anything actually changed.
+        clang::Stmt *PromoteSimpleCounterWhileToFor(
+            clang::ASTContext &ctx, clang::Stmt *stmt, bool &mutated
+        ) {
             if (!stmt) { return stmt; }
 
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(PromoteSimpleCounterWhileToFor(ctx, ifs->getThen()));
+                ifs->setThen(PromoteSimpleCounterWhileToFor(ctx, ifs->getThen(), mutated));
                 if (ifs->getElse()) {
-                    ifs->setElse(PromoteSimpleCounterWhileToFor(ctx, ifs->getElse()));
+                    ifs->setElse(PromoteSimpleCounterWhileToFor(ctx, ifs->getElse(), mutated));
                 }
                 return ifs;
             }
             if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
-                ws->setBody(PromoteSimpleCounterWhileToFor(ctx, ws->getBody()));
+                ws->setBody(PromoteSimpleCounterWhileToFor(ctx, ws->getBody(), mutated));
                 return ws;
             }
             if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
-                ds->setBody(PromoteSimpleCounterWhileToFor(ctx, ds->getBody()));
+                ds->setBody(PromoteSimpleCounterWhileToFor(ctx, ds->getBody(), mutated));
                 return ds;
             }
             if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
-                fs->setBody(PromoteSimpleCounterWhileToFor(ctx, fs->getBody()));
+                fs->setBody(PromoteSimpleCounterWhileToFor(ctx, fs->getBody(), mutated));
                 return fs;
             }
             if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                ls->setSubStmt(PromoteSimpleCounterWhileToFor(ctx, ls->getSubStmt()));
+                ls->setSubStmt(PromoteSimpleCounterWhileToFor(ctx, ls->getSubStmt(), mutated));
                 return ls;
             }
             if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
-                sw->setBody(PromoteSimpleCounterWhileToFor(ctx, sw->getBody()));
+                sw->setBody(PromoteSimpleCounterWhileToFor(ctx, sw->getBody(), mutated));
                 return sw;
             }
             if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
                 case_stmt->setSubStmt(
-                    PromoteSimpleCounterWhileToFor(ctx, case_stmt->getSubStmt())
+                    PromoteSimpleCounterWhileToFor(ctx, case_stmt->getSubStmt(), mutated)
                 );
                 return case_stmt;
             }
             if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
                 default_stmt->setSubStmt(
-                    PromoteSimpleCounterWhileToFor(ctx, default_stmt->getSubStmt())
+                    PromoteSimpleCounterWhileToFor(ctx, default_stmt->getSubStmt(), mutated)
                 );
                 return default_stmt;
             }
@@ -6368,7 +6374,7 @@ namespace patchestry::ast {
 
             std::vector< clang::Stmt * > children(compound->body_begin(), compound->body_end());
             for (clang::Stmt *&child : children) {
-                child = PromoteSimpleCounterWhileToFor(ctx, child);
+                child = PromoteSimpleCounterWhileToFor(ctx, child, mutated);
             }
 
             bool changed = true;
@@ -6377,6 +6383,7 @@ namespace patchestry::ast {
                 for (size_t i = 1; i < children.size(); ++i) {
                     if (TryPromoteWhileAt(ctx, children, i)) {
                         changed = true;
+                        mutated = true;
                         break;
                     }
                 }
@@ -7245,8 +7252,9 @@ namespace patchestry::ast {
         body = RemoveEmptyBlocks(ctx, fn->getBody());
         if (body) { fn->setBody(body); }
 
-        body = PromoteSimpleCounterWhileToFor(ctx, fn->getBody());
-        if (body) { fn->setBody(body); }
+        bool promoted_counter_for = false;
+        body = PromoteSimpleCounterWhileToFor(ctx, fn->getBody(), promoted_counter_for);
+        if (promoted_counter_for && body) { fn->setBody(body); }
 
         body = RemoveRedundantTerminalForContinues(ctx, fn->getBody());
         if (body) { fn->setBody(body); }
