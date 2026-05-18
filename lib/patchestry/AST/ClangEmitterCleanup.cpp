@@ -7102,6 +7102,44 @@ namespace patchestry::ast {
         return body;
     }
 
+    // ---------------------------------------------------------------
+    // F6 — HoistCrossScopeLabels: the consolidated cross-scope label
+    // transform.  Composes the two sub-rewrites in fixed order:
+    //
+    //   1. RepairCrossScopeLabelEntries — rewrite `if(c) goto L; ...;
+    //      L:` (L referenced exactly once) into a structured if/else;
+    //   2. HoistCrossScopeLabelEntries  — extract a label nested inside
+    //      a structured scope that a cross-scope goto targets out to
+    //      the enclosing compound, with a synthetic join label.
+    //
+    // `mutated` is set iff the body structurally changed — detected via
+    // Stmt::Profile, since RepairCrossScopeLabelEntries always rebuilds
+    // its CompoundStmts even when nothing changed.
+    // ---------------------------------------------------------------
+    clang::Stmt *HoistCrossScopeLabels(
+        clang::ASTContext &ctx, clang::FunctionDecl *fn, clang::Stmt *body, bool &mutated
+    ) {
+        mutated = false;
+        if (!body) { return nullptr; }
+
+        llvm::FoldingSetNodeID before;
+        body->Profile(before, ctx, /*Canonical=*/false);
+
+        // 1. Structured-if/else repair of single-ref cross-scope guards.
+        std::unordered_map< clang::LabelDecl *, unsigned > refs;
+        CountGotoDeclRefs(body, refs);
+        body = RepairCrossScopeLabelEntries(ctx, body, refs);
+
+        // 2. Hoist cross-scope label entries to the enclosing compound.
+        bool hoisted = false;
+        body = HoistCrossScopeLabelEntries(ctx, fn, body, hoisted);
+
+        llvm::FoldingSetNodeID after;
+        body->Profile(after, ctx, /*Canonical=*/false);
+        mutated = (before != after);
+        return body;
+    }
+
     void CleanupPrettyPrint(
         clang::FunctionDecl *fn, clang::ASTContext &ctx, bool report_cleanup,
         std::string_view function_name
@@ -7172,14 +7210,9 @@ namespace patchestry::ast {
         // may create new goto-to-next-label adjacencies, so iterate.
         std::vector< std::function< void() > > fixed_point_cleanup_schedule = {
             [&]() {
-                run_with_refs([&](const auto &refs) {
-                    return RepairCrossScopeLabelEntries(ctx, fn->getBody(), refs);
-                });
-            },
-            [&]() {
-                bool hoisted = false;
-                auto *r = HoistCrossScopeLabelEntries(ctx, fn, fn->getBody(), hoisted);
-                if (hoisted) { apply_body(r); }
+                bool mutated = false;
+                apply_body(HoistCrossScopeLabels(ctx, fn, fn->getBody(), mutated));
+                (void) mutated;
             },
             [&]() {
                 run_with_refs([&](const auto &refs) {
@@ -7294,7 +7327,7 @@ namespace patchestry::ast {
         run_dead_control_flow();
 
         bool hoisted_cross_scope = false;
-        body = HoistCrossScopeLabelEntries(ctx, fn, fn->getBody(), hoisted_cross_scope);
+        body = HoistCrossScopeLabels(ctx, fn, fn->getBody(), hoisted_cross_scope);
         if (hoisted_cross_scope && body) { fn->setBody(body); }
 
         refs.clear();

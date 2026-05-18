@@ -174,3 +174,18 @@ tree ahead of downstream goto-elimination and regressing
 dependence. Lesson for F1/F2/F5–F7: a family being internally confluent
 does **not** license moving its passes past non-family passes — preserve
 call-site position.
+
+## F6 merge — DONE
+
+`HoistCrossScopeLabels(ctx, fn, body, bool &mutated)` added after
+`RemoveDeadControlFlow`, composing `RepairCrossScopeLabelEntries` then
+`HoistCrossScopeLabelEntries` (refs computed internally) with an honest
+changed-flag via `Stmt::Profile`. Both sub-functions are now internal.
+
+Two driver sites: the schedule's two adjacent steps (Repair, Hoist)
+collapsed into one; the tail Hoist-only call also moved to the full
+transform. Unlike F4, adding the sibling pass (Repair) at the tail
+Hoist-only site did **not** regress — verified, so F6 is a clean full
+merge with no position-preservation carve-out. 81/81 lit, goto budget
+holds, `cve_2016_6563_fun_0000b920` rc=0 in goto/struct/CIR modes,
+`/patchir-inspect --debug --batch` VERDICT PASS.
