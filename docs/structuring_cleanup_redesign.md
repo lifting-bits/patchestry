@@ -219,11 +219,24 @@ Phase 2b big-bang regressed `decode_basic_field`).
   all fixtures, and **none oscillate** — positive confluence evidence for the
   schedule subset. Count exported as `schedule_iterations=` in
   `CLANG_CLEANUP_SUMMARY`.
-- *Step 2 — cross-pass confluence audit* (next). Enumerate the unrolled-tail
-  transforms; for each pair decide order-independence; fix non-confluent pairs
-  by canonical orientation. Analysis deliverable, gates step 3.
-- *Step 3 — tail worklist*. Only after step 2: replace the unrolled tail with
-  a worklist, absorbing the F2/F1 remainders as entries.
+- *Step 2 — cross-pass confluence audit* DONE. Full record in
+  `docs/structuring_cleanup_phase4_confluence_audit.md`. Finding: the tail is
+  mostly confluent — 8 transforms proven by step 1's no-oscillation
+  convergence, plus F4 (monotone deletion) and two structurally-homogeneous
+  tail-only folds. The non-confluent core is small and isolated: the three
+  *join* transforms (`FoldGuardedJoinLabelChains`,
+  `CloneSmallStraightLineLabelBeforeJoinGotos`,
+  `CloneCleanupLabelBeforeJoinGotos`), each driver-coupled to a conditional
+  `run_late_join_fixups` repair and mutually order-sensitive. Verdict: step 3
+  GREEN.
+- *Step 3 — tail worklist* (next). Three fixed phases per the audit:
+  (1) a real fixed-point worklist over the confluent core (schedule set ∪
+  `FoldCrossCompoundDispatchChains` ∪ `InlineSingleRefTerminalLabelBlocks` ∪
+  `RemoveDeadControlFlow`); (2) the three join transforms quarantined as a
+  fixed repaired sub-sequence; (3) the Class-C cosmetics as a terminal
+  once-only epilogue. Built behind a default-off flag, flipped only after the
+  empirical equivalence gate (per-fixture diff vs current tail, goto budget,
+  `/patchir-inspect` PASS).
 
 ### Phase 5 — Resolve the cross-layer duplication (hybrid)
 
