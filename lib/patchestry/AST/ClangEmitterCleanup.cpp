@@ -7136,46 +7136,17 @@ namespace patchestry::ast {
 
         // Remove labels that are not the target of any goto.
         // Run after CleanupStmtTree which may convert gotos to break/continue.
-        std::unordered_set< clang::LabelDecl * > goto_targets;
-        std::unordered_set< clang::Stmt * > seen;
-        CollectGotoTargets(fn->getBody(), goto_targets, seen);
-        body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-        if (body) { fn->setBody(body); }
-
-        for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
-            goto_targets.clear();
-            seen.clear();
-            CollectGotoTargets(fn->getBody(), goto_targets, seen);
-            body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
-            if (body) {
-                fn->setBody(body);
-            } else {
-                break;
-            }
-        }
-
-        goto_targets.clear();
-        seen.clear();
-        CollectGotoTargets(fn->getBody(), goto_targets, seen);
-        body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-        if (body) { fn->setBody(body); }
+        run_remove_dead_labels();
+        run_goto_to_next_label_fixed_point();
+        run_remove_dead_labels();
 
         std::unordered_map< clang::LabelDecl *, unsigned > refs;
         CountGotoDeclRefs(fn->getBody(), refs);
         body = ScopeifyIfGotos(ctx, fn->getBody(), refs);
         if (body) { fn->setBody(body); }
 
-        goto_targets.clear();
-        seen.clear();
-        CollectGotoTargets(fn->getBody(), goto_targets, seen);
-        body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
-        if (body) { fn->setBody(body); }
-
-        goto_targets.clear();
-        seen.clear();
-        CollectGotoTargets(fn->getBody(), goto_targets, seen);
-        body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-        if (body) { fn->setBody(body); }
+        run_goto_to_next_label_once();
+        run_remove_dead_labels();
 
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
@@ -7192,11 +7163,7 @@ namespace patchestry::ast {
         body = InlineSingleRefTerminalLabelBlocks(ctx, fn->getBody(), refs);
         if (body) { fn->setBody(body); }
 
-        goto_targets.clear();
-        seen.clear();
-        CollectGotoTargets(fn->getBody(), goto_targets, seen);
-        body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-        if (body) { fn->setBody(body); }
+        run_remove_dead_labels();
 
         // Remove gotos whose target label was never emitted (orphaned
         // by structuring rules that absorbed the target block).
@@ -7272,23 +7239,8 @@ namespace patchestry::ast {
         body = CloneNoFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
         if (body) { fn->setBody(body); }
 
-        for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
-            goto_targets.clear();
-            seen.clear();
-            CollectGotoTargets(fn->getBody(), goto_targets, seen);
-            body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
-            if (body) {
-                fn->setBody(body);
-            } else {
-                break;
-            }
-        }
-
-        goto_targets.clear();
-        seen.clear();
-        CollectGotoTargets(fn->getBody(), goto_targets, seen);
-        body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-        if (body) { fn->setBody(body); }
+        run_goto_to_next_label_fixed_point();
+        run_remove_dead_labels();
 
         body = RemoveEmptyBlocks(ctx, fn->getBody());
         if (body) { fn->setBody(body); }
@@ -7324,11 +7276,7 @@ namespace patchestry::ast {
             body = CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
             if (body) { fn->setBody(body); }
 
-            goto_targets.clear();
-            seen.clear();
-            CollectGotoTargets(fn->getBody(), goto_targets, seen);
-            body = RemoveDeadLabels(ctx, fn->getBody(), goto_targets);
-            if (body) { fn->setBody(body); }
+            run_remove_dead_labels();
 
             body = RemoveEmptyBlocks(ctx, fn->getBody());
             if (body) { fn->setBody(body); }
