@@ -202,8 +202,10 @@ sank Phase 2b — Phase 3's consolidation did **not** remove it.
 **Conclusion.** The unrolled tail is not a "fake loop" to be replaced by a
 worklist — it is a deliberately-ordered **run-once pipeline**, and several of
 its transforms are correctness-unsafe to iterate. A worklist is the wrong
-execution model for the tail. The `-cleanup-worklist` path is kept
-**default-off as an investigation harness only** and must never be promoted.
+execution model for the tail. The `-cleanup-worklist` flag and the worklist
+branch were **removed** (commit `48371a0`) once the gate result was recorded —
+known-divergent dead code behind a flag is a hazard, not an asset. This
+document is the surviving record of the experiment.
 
 Phase 4's achievable end-state is therefore: **step 1 stands** (the schedule
 loop is now a genuine `Stmt::Profile` fixed point — that *was* a fake loop

@@ -237,8 +237,9 @@ as a big-bang (the Phase 2b big-bang regressed `decode_basic_field`).
   The step-2 verdict was wrong: the schedule loop converging proves only that
   the *fixed-order composition* converges, not that the transforms are
   confluent under free re-iteration. The unrolled tail is a deliberately-
-  ordered run-once pipeline; a worklist is the wrong model. The flag is kept
-  default-off as an investigation harness only and must never be promoted.
+  ordered run-once pipeline; a worklist is the wrong model. The flag and
+  worklist branch were then **removed** (commit `48371a0`) — the gate result
+  is recorded in the confluence-audit doc; the dead branch was not kept.
   Detail in the confluence-audit doc, "Step 3 result" section.
 
 **Net Phase 4 result.** Step 1 is a real, kept win — the schedule loop is now
