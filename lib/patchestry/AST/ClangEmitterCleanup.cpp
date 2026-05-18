@@ -7262,7 +7262,7 @@ namespace patchestry::ast {
 
     void CleanupPrettyPrint(
         clang::FunctionDecl *fn, clang::ASTContext &ctx, bool report_cleanup,
-        std::string_view function_name
+        std::string_view function_name, bool use_cleanup_worklist
     ) {
         if (!fn || !fn->hasBody()) { return; }
         auto initial_metrics = MeasureClangCleanup(fn->getBody());
@@ -7403,6 +7403,127 @@ namespace patchestry::ast {
             llvm::FoldingSetNodeID after;
             fn->getBody()->Profile(after, ctx, /*Canonical=*/false);
             if (before == after) { break; }
+        }
+
+        auto emit_cleanup_report = [&]() {
+            if (!report_cleanup) { return; }
+            auto final_metrics = MeasureClangCleanup(fn->getBody());
+            llvm::errs() << "CLANG_CLEANUP_SUMMARY function="
+                         << CleanupReportName(function_name)
+                         << " initial_gotos=" << initial_metrics.gotos
+                         << " final_gotos=" << final_metrics.gotos
+                         << " initial_labels=" << initial_metrics.labels
+                         << " final_labels=" << final_metrics.labels
+                         << " initial_dangling=" << initial_metrics.dangling
+                         << " final_dangling=" << final_metrics.dangling
+                         << " initial_cross_scope=" << initial_metrics.cross_scope
+                         << " final_cross_scope=" << final_metrics.cross_scope
+                         << " schedule_iterations=" << schedule_iterations << "\n";
+        };
+
+        // ===== Phase 4 step 3 — three-phase worklist tail =====
+        // Enabled by -cleanup-worklist.  Phases per the Phase 4 confluence
+        // audit: (1) fixed-point worklist over the "confluent core",
+        // (2) the non-confluent join transforms quarantined as a fixed
+        // repaired sub-sequence, (3) cosmetic passes once.
+        //
+        // KNOWN-DIVERGENT — kept default-off as an investigation harness.
+        // The Phase 4 step-3 equivalence gate FAILED: iterating the tail
+        // transforms to a fixed point diverges from the unrolled tail
+        // (over-clones cwe22_init_logger, deletes ~80% of decode_basic_field).
+        // The audit's "confluent core" classification was refuted by
+        // measurement — several tail transforms (clone/inline/fold) are not
+        // iteration-safe; the unrolled tail is a deliberately-ordered
+        // run-once pipeline, not a fixed point.  Do NOT promote this path.
+        // See docs/structuring_cleanup_phase4_confluence_audit.md.
+        if (use_cleanup_worklist) {
+            // Phase 1 — confluent core: the step-1-proven schedule set plus the
+            // two structurally-homogeneous tail-only folds and monotone F4.
+            auto core_worklist = fixed_point_cleanup_schedule;
+            core_worklist.push_back([&]() {
+                run_with_refs([&](const auto &refs) {
+                    return FoldCrossCompoundDispatchChains(ctx, fn->getBody(), refs);
+                });
+            });
+            core_worklist.push_back([&]() {
+                std::unordered_map< clang::LabelDecl *, unsigned > refs;
+                CountGotoDeclRefs(fn->getBody(), refs);
+                bool inlined = false;
+                auto *r =
+                    InlineSingleRefTerminalLabelBlocks(ctx, fn->getBody(), refs, inlined);
+                if (inlined && r) { fn->setBody(r); }
+            });
+            core_worklist.push_back([&]() { run_dead_control_flow(); });
+
+            auto run_core_worklist = [&]() {
+                for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                    llvm::FoldingSetNodeID before;
+                    fn->getBody()->Profile(before, ctx, /*Canonical=*/false);
+                    for (const auto &step : core_worklist) { step(); }
+                    llvm::FoldingSetNodeID after;
+                    fn->getBody()->Profile(after, ctx, /*Canonical=*/false);
+                    if (before == after) { break; }
+                }
+            };
+
+            run_core_worklist();
+
+            // Phase 2 — non-confluent join transforms, quarantined: each is
+            // immediately followed by run_late_join_fixups, in this fixed
+            // order, exactly as the unrolled tail sequenced them.
+            std::unordered_map< clang::LabelDecl *, unsigned > refs;
+            CountGotoDeclRefs(fn->getBody(), refs);
+            bool folded_guarded_join = false;
+            body = FoldGuardedJoinLabelChains(ctx, fn->getBody(), refs, folded_guarded_join);
+            if (folded_guarded_join && body) { fn->setBody(body); }
+            if (folded_guarded_join) { run_late_join_fixups(); }
+
+            refs.clear();
+            CountGotoDeclRefs(fn->getBody(), refs);
+            bool cloned_small_join = false;
+            body = CloneSmallStraightLineLabelBeforeJoinGotos(
+                ctx, fn->getBody(), refs, cloned_small_join
+            );
+            if (body) { fn->setBody(body); }
+            if (cloned_small_join) { run_late_join_fixups(); }
+
+            refs.clear();
+            CountGotoDeclRefs(fn->getBody(), refs);
+            bool cloned_cleanup_join = false;
+            body = CloneCleanupLabelBeforeJoinGotos(
+                ctx, fn->getBody(), refs, cloned_cleanup_join
+            );
+            if (cloned_cleanup_join && body) { fn->setBody(body); }
+            if (cloned_cleanup_join) { run_late_join_fixups(); }
+
+            // The join clones can expose new structural folds — re-converge.
+            run_core_worklist();
+
+            // Phase 3 — cosmetic passes, once.
+            bool promoted_counter_for = false;
+            body = PromoteSimpleCounterWhileToFor(ctx, fn->getBody(), promoted_counter_for);
+            if (promoted_counter_for && body) { fn->setBody(body); }
+
+            bool removed_terminal_continue = false;
+            body = RemoveRedundantTerminalForContinues(
+                ctx, fn->getBody(), removed_terminal_continue
+            );
+            if (removed_terminal_continue && body) { fn->setBody(body); }
+
+            bool pushed_labels = false;
+            body = PushLabelsIntoCompounds(ctx, fn->getBody(), pushed_labels);
+            if (pushed_labels && body) { fn->setBody(body); }
+
+            bool attached_empty_labels = false;
+            body =
+                AttachEmptyLabelsToFollowingStmt(ctx, fn->getBody(), attached_empty_labels);
+            if (attached_empty_labels && body) { fn->setBody(body); }
+
+            run_dead_control_flow();
+
+            NormalizeConditions(ctx, fn->getBody());
+            emit_cleanup_report();
+            return;
         }
 
         // Remove labels that are not the target of any goto.
@@ -7555,20 +7676,7 @@ namespace patchestry::ast {
         // pass, no effect on goto/label structure.
         NormalizeConditions(ctx, fn->getBody());
 
-        if (report_cleanup) {
-            auto final_metrics = MeasureClangCleanup(fn->getBody());
-            llvm::errs() << "CLANG_CLEANUP_SUMMARY function="
-                         << CleanupReportName(function_name)
-                         << " initial_gotos=" << initial_metrics.gotos
-                         << " final_gotos=" << final_metrics.gotos
-                         << " initial_labels=" << initial_metrics.labels
-                         << " final_labels=" << final_metrics.labels
-                         << " initial_dangling=" << initial_metrics.dangling
-                         << " final_dangling=" << final_metrics.dangling
-                         << " initial_cross_scope=" << initial_metrics.cross_scope
-                         << " final_cross_scope=" << final_metrics.cross_scope
-                         << " schedule_iterations=" << schedule_iterations << "\n";
-        }
+        emit_cleanup_report();
     }
 
 } // namespace patchestry::ast

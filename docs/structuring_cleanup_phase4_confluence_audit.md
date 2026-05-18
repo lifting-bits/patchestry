@@ -170,3 +170,44 @@ mutual ordering are load-bearing. Step 3 is **GREEN to proceed** with the
 three-phase design above: a real worklist for the confluent majority, the
 join transforms quarantined as a fixed repaired sub-sequence, cosmetics as a
 terminal epilogue — gated by the empirical equivalence check.
+
+## Step 3 result — the equivalence gate FAILED (audit verdict refuted)
+
+The three-phase worklist was implemented behind the default-off
+`-cleanup-worklist` flag and run through the mandated empirical gate
+(per-fixture diff of worklist output vs the unrolled-tail output, all 80
+fixtures). **Result: 70 identical, 9 divergent — and the divergences are
+catastrophic regressions, not goto improvements.** The gate's bar
+(byte-identical, or strict goto improvement with `/patchir-inspect` PASS) is
+not met. Sample:
+
+| Fixture | unrolled tail | worklist | divergence |
+|---|---|---|---|
+| `decode_basic_field` | 60 if, 48 return | 10 if, 10 return | worklist **deleted ~80%** of the function |
+| `cwe22_init_logger` | 45 if, 10 return, 409 ln | 129 if, 50 return, 744 ln | worklist **over-cloned 3–5×** |
+| `cve_2016_6563_fun_0000b920` | 0 goto | 1 goto | worklist **regressed the goto KPI** |
+| `bloodview__parse_cli` | 5 `__stack_chk_fail` | 4 | worklist **lost a call** |
+
+**The audit's "step 3 GREEN" verdict is refuted by measurement.** The error
+was classifying the tail transforms as "confluent / worklist-safe" because
+the *schedule loop* converges (step 1). That inference was wrong: the
+schedule loop runs each transform **once per iteration in a fixed order**,
+and it is the *fixed-order composition* that converges — not the transform
+set under free re-ordering/re-iteration. Iterating the clone/inline/fold
+transforms to a fixed point diverges: cloning passes keep cloning
+(`cwe22` blow-up), and clone+dead-code interaction runs away to deletion
+(`decode_basic_field` collapse). This is the same non-confluence that
+sank Phase 2b — Phase 3's consolidation did **not** remove it.
+
+**Conclusion.** The unrolled tail is not a "fake loop" to be replaced by a
+worklist — it is a deliberately-ordered **run-once pipeline**, and several of
+its transforms are correctness-unsafe to iterate. A worklist is the wrong
+execution model for the tail. The `-cleanup-worklist` path is kept
+**default-off as an investigation harness only** and must never be promoted.
+
+Phase 4's achievable end-state is therefore: **step 1 stands** (the schedule
+loop is now a genuine `Stmt::Profile` fixed point — that *was* a fake loop
+and is now real); **the unrolled tail stays** as the production path. The
+"replace the unrolled tail with a worklist" goal is withdrawn as refuted.
+Any future tail rework must be per-transform (make individual transforms
+idempotent / iteration-safe), not a wholesale worklist.
