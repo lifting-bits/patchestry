@@ -207,6 +207,24 @@ Finishing F2/F1 is therefore a Phase 4 deliverable, not a Phase 3 gap.
 **Exit:** fake loop + unrolled tail gone; convergence iteration count is data,
 not a hard cap; 81/81 lit; goto budget holds.
 
+**Status: step 1 DONE.** Done incrementally rather than as a big-bang (the
+Phase 2b big-bang regressed `decode_basic_field`).
+
+- *Step 1 — real schedule fixed point* (commit `42149ac`). The schedule
+  loop's convergence check moved from body-pointer identity (never
+  converged — always-rebuild passes bumped the pointer, so it always ran the
+  cap) to a `Stmt::Profile` structural fingerprint. Output-identical: a
+  schedule pass reporting no change is a true fixed point and the schedule is
+  deterministic. The schedule now converges in 1–4 iterations (cap 8) across
+  all fixtures, and **none oscillate** — positive confluence evidence for the
+  schedule subset. Count exported as `schedule_iterations=` in
+  `CLANG_CLEANUP_SUMMARY`.
+- *Step 2 — cross-pass confluence audit* (next). Enumerate the unrolled-tail
+  transforms; for each pair decide order-independence; fix non-confluent pairs
+  by canonical orientation. Analysis deliverable, gates step 3.
+- *Step 3 — tail worklist*. Only after step 2: replace the unrolled tail with
+  a worklist, absorbing the F2/F1 remainders as entries.
+
 ### Phase 5 — Resolve the cross-layer duplication (hybrid)
 
 Phase 1 rejected the "delete one whole layer" framing — both layers are
