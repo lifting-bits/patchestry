@@ -139,6 +139,53 @@ Keep these dependency boundaries in mind when editing interfaces:
    P-Code operations and types; document the dialect boundary, not MLIR's
    generic translation internals.
 
+### `patchir-decomp` structuring and cleanup pipeline
+
+Inside `patchir-decomp`, after the Ghidra model is lifted, control flow is
+recovered and tidied through this internal pipeline:
+
+```text
+P-Code JSON
+  -> CGraph                 (CGraphBuilder.cpp — direct graph from P-Code)
+  -> CFGStructure collapse  (CFGStructure.cpp — interval/loop structuring)
+  -> SNode tree
+  -> [SNode cleanup]        (CFGStructure.cpp passes, scheduled in
+                             ASTConsumer.cpp; runs only under
+                             -use-structuring-pass; transaction-guarded)
+  -> ClangEmitter           (SNode tree -> clang::Stmt AST)
+  -> [Clang-AST cleanup]    (ClangEmitterCleanup.cpp, CleanupPrettyPrint;
+                             always runs on the patchir-decomp path)
+  -> C / CIR
+```
+
+**Two cleanup layers, by design.** The SNode cleanup operates on the SNode
+tree; the Clang-AST cleanup operates on the emitted, flattened `clang::Stmt`
+tree. They are *not* redundant: the SNode tree exposes sibling-order
+adjacency within a sequence, while the flattened Clang AST exposes
+post-linearization adjacency. Passes that share a name across the two layers
+(`EliminateGotoToNextLabel`, `ScopeifyIfGotos`, `RepairCrossScopeLabelEntries`,
+`FoldSwitchLocalCaseTargets`) apply the same idea to the different adjacency
+each IR can see — they are complementary, and both are load-bearing. Do not
+delete one as a "duplicate."
+
+**Clang-AST cleanup structure** (`CleanupPrettyPrint`). Post-Phase-3 the
+27 in-loop passes are consolidated into 8 canonical transform families:
+`CloneTerminalLabelGotos` (inline a label's payload to its goto site),
+`FoldGotoDiamonds` (fold goto forwarders), `EliminateGotoToNextLabel`,
+`RemoveDeadControlFlow` (dead labels/gotos/empty blocks), `ScopeifyIfGotos`,
+`HoistCrossScopeLabels`, `RecoverLoop`, `FoldClangSwitchLocalCaseTargets`,
+plus standalone cosmetic passes. The driver runs a fixed-point *schedule*
+loop (a genuine `Stmt::Profile` fixed point — converges in 1–4 iterations)
+followed by a deliberately-ordered run-once *tail* and a cosmetic epilogue.
+The tail is order-sensitive and must not be iterated as a worklist.
+
+**Regression guard.** `test/patchir-decomp/zz-goto-budget.test` pins the
+emitted `goto` count per fixture; any structuring or cleanup change must keep
+it within budget.
+
+The full design rationale and the measured history of this layer are in
+`docs/structuring_cleanup_*.md`.
+
 ## Usage and Workflows
 
 ### Who uses which tools and why
@@ -201,6 +248,7 @@ patchir-yaml-parser config.yaml --validate
 - Host ARM64 image build for macOS: `.devcontainer/README-HOST-BUILD.md`
 - System data flow diagram: `docs/system_data_flow.md`
 - Decompilation semantics and JSON/CFG structuring notes: `docs/system_data_flow.md`
+- Structuring cleanup redesign (plan, audits, findings): `docs/structuring_cleanup_*.md`
 - Claude-specific workflow notes: `.claude/rules/*.md`
 
 ## Test Suites

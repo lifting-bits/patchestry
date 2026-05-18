@@ -276,12 +276,24 @@ intentional two-IR design should instead be **documented** (Phase 6).
 **Exit (revised):** Phase 5 produces no code change; its deliverable is the
 findings doc and the architecture note carried into Phase 6.
 
-### Phase 6 — Split monoliths, document
+### Phase 6 — Split monoliths, document — DOCUMENTATION DONE; SPLIT DEFERRED
 
-- Split the surviving cleanup file by transform family (the current 7,337-line
-  `ClangEmitterCleanup.cpp` / ~9,000-line `CFGStructure.cpp` are unmaintainable
-  monoliths).
-- Update `AGENTS.md` / architecture docs to describe the single-engine pipeline.
+- **Documentation — DONE.** `AGENTS.md` now carries a "`patchir-decomp`
+  structuring and cleanup pipeline" subsection: the CGraph → CFGStructure →
+  SNode → ClangEmitter flow, the *two intentional cleanup layers* (and why
+  they are complementary, not duplicate — the Phase 5 finding), the 8
+  Clang-AST transform families, the schedule fixed point + run-once tail, and
+  the goto-budget guard. The `docs/structuring_cleanup_*.md` set is linked
+  from "Related Docs". Note: the plan originally said "single-engine
+  pipeline" — that wording is dropped; Phase 5 established the two layers are
+  both load-bearing, so the docs describe the real two-layer design.
+- **File split — DEFERRED.** Splitting `ClangEmitterCleanup.cpp` (7,574 lines)
+  and `CFGStructure.cpp` (8,725 lines) by family is a large, dedicated
+  refactor: nearly all of `ClangEmitterCleanup.cpp`'s passes live in one
+  anonymous namespace (lines 782–7057), so a split also requires restructuring
+  that namespace and introducing internal headers for the shared helpers. It
+  is pure code motion with **zero behavioral value** and produces a very large
+  diff. Recommended as its own standalone PR, not bundled with the redesign.
 
 ### Phase 7 — Strengthen CGraph collapse (future, separate effort)
 
