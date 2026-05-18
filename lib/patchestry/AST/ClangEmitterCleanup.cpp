@@ -7216,6 +7216,50 @@ namespace patchestry::ast {
         return body;
     }
 
+    // ---------------------------------------------------------------
+    // F1 (part) — CloneTerminalLabelGotos: consolidated terminal-label
+    // goto-inlining.  Composes the two complementary clone sub-rewrites
+    // in fixed order:
+    //
+    //   1. CloneFallthroughTerminalLabelGotos — inline a terminal label
+    //      block (one ending in a terminator) that HAS a fallthrough
+    //      predecessor into each of its goto sites;
+    //   2. CloneNoFallthroughTerminalLabelGotos — the same, for a
+    //      terminal label block with NO fallthrough predecessor.
+    //
+    // The two are always invoked adjacently and in this order at every
+    // paired driver site, so composing them is position-preserving.
+    // Goto-ref counts are recomputed between them (matching the driver,
+    // since the first rewrite can change the tree).  `mutated` is set
+    // iff the body structurally changed — detected via Stmt::Profile,
+    // since both sub-rewrites always rebuild their CompoundStmts.
+    //
+    // NOTE: composition wrapper, not a logic unification (see Phase 3
+    // audit).  One lone CloneFallthrough-only driver site is left
+    // unmerged to preserve call-site position.
+    // ---------------------------------------------------------------
+    clang::Stmt *
+    CloneTerminalLabelGotos(clang::ASTContext &ctx, clang::Stmt *body, bool &mutated) {
+        mutated = false;
+        if (!body) { return nullptr; }
+
+        llvm::FoldingSetNodeID before;
+        body->Profile(before, ctx, /*Canonical=*/false);
+
+        std::unordered_map< clang::LabelDecl *, unsigned > refs;
+        CountGotoDeclRefs(body, refs);
+        body = CloneFallthroughTerminalLabelGotos(ctx, body, refs);
+
+        refs.clear();
+        CountGotoDeclRefs(body, refs);
+        body = CloneNoFallthroughTerminalLabelGotos(ctx, body, refs);
+
+        llvm::FoldingSetNodeID after;
+        body->Profile(after, ctx, /*Canonical=*/false);
+        mutated = (before != after);
+        return body;
+    }
+
     void CleanupPrettyPrint(
         clang::FunctionDecl *fn, clang::ASTContext &ctx, bool report_cleanup,
         std::string_view function_name
@@ -7316,14 +7360,9 @@ namespace patchestry::ast {
                 (void) mutated;
             },
             [&]() {
-                run_with_refs([&](const auto &refs) {
-                    return CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
-                });
-            },
-            [&]() {
-                run_with_refs([&](const auto &refs) {
-                    return CloneNoFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
-                });
+                bool mutated = false;
+                apply_body(CloneTerminalLabelGotos(ctx, fn->getBody(), mutated));
+                (void) mutated;
             },
             [&]() {
                 run_with_refs([&](const auto &refs) {
@@ -7336,14 +7375,9 @@ namespace patchestry::ast {
                 });
             },
             [&]() {
-                run_with_refs([&](const auto &refs) {
-                    return CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
-                });
-            },
-            [&]() {
-                run_with_refs([&](const auto &refs) {
-                    return CloneNoFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
-                });
+                bool mutated = false;
+                apply_body(CloneTerminalLabelGotos(ctx, fn->getBody(), mutated));
+                (void) mutated;
             },
             [&]() { run_goto_to_next_label_once(); },
             [&]() {
@@ -7412,14 +7446,8 @@ namespace patchestry::ast {
         body = FoldCrossCompoundDispatchChains(ctx, fn->getBody(), refs);
         if (body) { fn->setBody(body); }
 
-        refs.clear();
-        CountGotoDeclRefs(fn->getBody(), refs);
-        body = CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
-        if (body) { fn->setBody(body); }
-
-        refs.clear();
-        CountGotoDeclRefs(fn->getBody(), refs);
-        body = CloneNoFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
+        bool cloned_terminal = false;
+        body = CloneTerminalLabelGotos(ctx, fn->getBody(), cloned_terminal);
         if (body) { fn->setBody(body); }
 
         refs.clear();
@@ -7437,14 +7465,8 @@ namespace patchestry::ast {
         body = SinkCommonTerminalEpilogues(ctx, fn->getBody(), refs);
         if (body) { fn->setBody(body); }
 
-        refs.clear();
-        CountGotoDeclRefs(fn->getBody(), refs);
-        body = CloneFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
-        if (body) { fn->setBody(body); }
-
-        refs.clear();
-        CountGotoDeclRefs(fn->getBody(), refs);
-        body = CloneNoFallthroughTerminalLabelGotos(ctx, fn->getBody(), refs);
+        bool cloned_terminal_late = false;
+        body = CloneTerminalLabelGotos(ctx, fn->getBody(), cloned_terminal_late);
         if (body) { fn->setBody(body); }
 
         run_goto_to_next_label_fixed_point();

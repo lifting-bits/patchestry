@@ -21,7 +21,24 @@ transforms, and stay as-is.
 Eight target families per the Phase 3 plan table. Line ranges are
 `[def-start, next-def-start)`.
 
-### F1 — `InlineGotoTarget` (clone label payload to the goto site)
+### F1 — `InlineGotoTarget` (clone label payload to the goto site) — IN PROGRESS
+
+> Like F2, F1's 5 passes are used à la carte — no single fixed-order
+> wrapper. F1 lands as sub-merges of always-adjacent pairs.
+>
+> **Sub-merge 1 — DONE.** `CloneTerminalLabelGotos` composition wrapper
+> for `CloneFallthroughTerminalLabelGotos` + `CloneNoFallthroughTerminalLabelGotos`
+> — two complementary passes (fallthrough-predecessor vs not), always
+> invoked as an adjacent `Fallthrough → NoFallthrough` pair at four
+> driver sites (2 schedule, 2 tail). `CloneNoFallthrough` is now
+> internal; `CloneFallthrough` keeps one lone driver call (the
+> switch-guarded tail site) to preserve call-site position. 81/81 lit,
+> goto budget holds, `/patchir-inspect --debug --batch` VERDICT PASS
+> (cloning verified correct on highest-clone-count fixtures).
+> **Remaining:** `InlineSingleRefTerminalLabelBlocks`,
+> `CloneCleanupLabelBeforeJoinGotos`,
+> `CloneSmallStraightLineLabelBeforeJoinGotos` — all standalone,
+> scattered; deferred behind Phase 4.
 
 | Driver pass | Lines | ~LoC |
 |---|---|---|
