@@ -1,0 +1,12 @@
+# Per-fixture emitted-goto budget for the structuring cleanup pipeline.
+# Format: <fixture-name> <max-gotos>.  Fixtures not listed here have budget 0.
+# A fixture exceeding its budget fails the zz-goto-budget.test lit test.
+#
+# Baseline captured 2026-05-18 on kumarak/redesign_structuring.
+# Total across all 80 fixtures: 25 emitted gotos (4 fixtures non-zero).
+# These budgets are upper bounds — improvements need not update this file;
+# only regressions (a fixture going over its bound) fail the guard.
+cwe22_init_logger 6
+decode_basic_field 5
+encode_basic_field 4
+pb_decode_inner 10

@@ -55,6 +55,22 @@ namespace patchestry::ast {
             return node.original_label;
         }
 
+        // Count SGoto nodes anywhere in an SNode forest.  Used to report the
+        // post-collapse goto count (the pipeline stage that precedes SNode
+        // cleanup) in STRUCTURING_IMPROVEMENT_REPORT.
+        size_t CountSNodeGotos(SNode *node) {
+            if (!node) { return 0; }
+            size_t count = (node->Kind() == SNodeKind::kGoto) ? 1u : 0u;
+            node->for_each_child([&](SNode *child) { count += CountSNodeGotos(child); });
+            return count;
+        }
+
+        size_t CountSNodeGotos(const std::vector< SNode * > &body) {
+            size_t count = 0;
+            for (SNode *node : body) { count += CountSNodeGotos(node); }
+            return count;
+        }
+
         std::vector< SNode * >
         BuildGotoSNodeBody(CGraph &flow_graph, SNodeFactory &factory, clang::ASTContext &ctx) {
             std::vector< SNode * > root_body;
@@ -1268,6 +1284,10 @@ namespace patchestry::ast {
                 // (std::vector) — the SSeq node kind was removed.
                 std::vector< SNode * > root_body;
                 bool have_structured = false;
+                // Emitted-goto count of the SNode tree straight out of
+                // CFGStructure collapse, before any SNode-level cleanup —
+                // the first of the three cleanup-pipeline stages.
+                size_t pre_cleanup_gotos = 0;
                 std::unordered_map< const clang::Stmt *, unsigned > baseline_payload_stmts;
                 SNodeCleanupScheduleReport cleanup_schedule_report;
                 SRewriteCandidateReport rewrite_candidate_report;
@@ -1306,6 +1326,7 @@ namespace patchestry::ast {
                     // when MakeSeq returned nullptr).
                     if (!root_body.empty()) {
                         have_structured = true;
+                        pre_cleanup_gotos = CountSNodeGotos(root_body);
                         AnnotateSNodeOrigins(*builder, root_body);
                         auto run_cleanup = [&](std::string_view pass_name, auto rewrite) {
                             return RunSNodeRewriteTransaction(
@@ -1643,6 +1664,7 @@ namespace patchestry::ast {
                 if (options.structuring_improvement_report && have_structured) {
                     auto report = AnalyzeStructuringImprovements(fn);
                     llvm::errs() << "STRUCTURING_IMPROVEMENT_REPORT function=" << fn_name
+                                 << " pre_cleanup_gotos=" << pre_cleanup_gotos
                                  << " residual_gotos=" << report.residual_gotos
                                  << " emitted_labels=" << report.emitted_labels
                                  << " dangling_gotos=" << report.dangling_gotos

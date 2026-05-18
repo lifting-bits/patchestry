@@ -1,0 +1,7 @@
+# Structuring cleanup-pipeline regression guard.
+#
+# Fails if any patchir-decomp fixture emits more `goto` statements than its
+# recorded budget in goto-budget.txt.  Pins the structuring KPI so the cleanup
+# redesign (docs/structuring_cleanup_redesign.md) cannot silently regress.
+#
+# RUN: bash %S/check-goto-budget.sh %patchir-decomp %strip-json-comments %S
