@@ -2448,47 +2448,49 @@ namespace patchestry::ast {
             return decl;
         }
 
+        // Phase 2a: `mutated` is set true only when a cross-scope label is
+        // actually extracted and hoisted.
         clang::Stmt *HoistCrossScopeLabelEntries(
-            clang::ASTContext &ctx, clang::FunctionDecl *fn, clang::Stmt *stmt
+            clang::ASTContext &ctx, clang::FunctionDecl *fn, clang::Stmt *stmt, bool &mutated
         ) {
             if (!stmt) { return stmt; }
 
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(HoistCrossScopeLabelEntries(ctx, fn, ifs->getThen()));
+                ifs->setThen(HoistCrossScopeLabelEntries(ctx, fn, ifs->getThen(), mutated));
                 if (ifs->getElse()) {
-                    ifs->setElse(HoistCrossScopeLabelEntries(ctx, fn, ifs->getElse()));
+                    ifs->setElse(HoistCrossScopeLabelEntries(ctx, fn, ifs->getElse(), mutated));
                 }
                 return ifs;
             }
             if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
-                ws->setBody(HoistCrossScopeLabelEntries(ctx, fn, ws->getBody()));
+                ws->setBody(HoistCrossScopeLabelEntries(ctx, fn, ws->getBody(), mutated));
                 return ws;
             }
             if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
-                ds->setBody(HoistCrossScopeLabelEntries(ctx, fn, ds->getBody()));
+                ds->setBody(HoistCrossScopeLabelEntries(ctx, fn, ds->getBody(), mutated));
                 return ds;
             }
             if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
-                fs->setBody(HoistCrossScopeLabelEntries(ctx, fn, fs->getBody()));
+                fs->setBody(HoistCrossScopeLabelEntries(ctx, fn, fs->getBody(), mutated));
                 return fs;
             }
             if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                ls->setSubStmt(HoistCrossScopeLabelEntries(ctx, fn, ls->getSubStmt()));
+                ls->setSubStmt(HoistCrossScopeLabelEntries(ctx, fn, ls->getSubStmt(), mutated));
                 return ls;
             }
             if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
-                sw->setBody(HoistCrossScopeLabelEntries(ctx, fn, sw->getBody()));
+                sw->setBody(HoistCrossScopeLabelEntries(ctx, fn, sw->getBody(), mutated));
                 return sw;
             }
             if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
                 case_stmt->setSubStmt(
-                    HoistCrossScopeLabelEntries(ctx, fn, case_stmt->getSubStmt())
+                    HoistCrossScopeLabelEntries(ctx, fn, case_stmt->getSubStmt(), mutated)
                 );
                 return case_stmt;
             }
             if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
                 default_stmt->setSubStmt(
-                    HoistCrossScopeLabelEntries(ctx, fn, default_stmt->getSubStmt())
+                    HoistCrossScopeLabelEntries(ctx, fn, default_stmt->getSubStmt(), mutated)
                 );
                 return default_stmt;
             }
@@ -2498,7 +2500,7 @@ namespace patchestry::ast {
 
             std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
             for (clang::Stmt *&child : body) {
-                child = HoistCrossScopeLabelEntries(ctx, fn, child);
+                child = HoistCrossScopeLabelEntries(ctx, fn, child, mutated);
             }
 
             bool changed = true;
@@ -2536,6 +2538,7 @@ namespace patchestry::ast {
                         injected.end()
                     );
                     changed = true;
+                    mutated = true;
                     break;
                 }
             }
@@ -3757,37 +3760,53 @@ namespace patchestry::ast {
             return detail::MakeCompound(ctx, body);
         }
 
+        // Phase 2a: `mutated` is set true only when a single-ref terminal
+        // label block is actually inlined.
         clang::Stmt *InlineSingleRefTerminalLabelBlocks(
             clang::ASTContext &ctx, clang::Stmt *stmt,
-            const std::unordered_map< clang::LabelDecl *, unsigned > &refs
+            const std::unordered_map< clang::LabelDecl *, unsigned > &refs, bool &mutated
         ) {
             if (!stmt) { return stmt; }
 
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(InlineSingleRefTerminalLabelBlocks(ctx, ifs->getThen(), refs));
+                ifs->setThen(
+                    InlineSingleRefTerminalLabelBlocks(ctx, ifs->getThen(), refs, mutated)
+                );
                 if (ifs->getElse()) {
-                    ifs->setElse(InlineSingleRefTerminalLabelBlocks(ctx, ifs->getElse(), refs));
+                    ifs->setElse(
+                        InlineSingleRefTerminalLabelBlocks(ctx, ifs->getElse(), refs, mutated)
+                    );
                 }
                 return ifs;
             }
             if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
-                ws->setBody(InlineSingleRefTerminalLabelBlocks(ctx, ws->getBody(), refs));
+                ws->setBody(
+                    InlineSingleRefTerminalLabelBlocks(ctx, ws->getBody(), refs, mutated)
+                );
                 return ws;
             }
             if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
-                ds->setBody(InlineSingleRefTerminalLabelBlocks(ctx, ds->getBody(), refs));
+                ds->setBody(
+                    InlineSingleRefTerminalLabelBlocks(ctx, ds->getBody(), refs, mutated)
+                );
                 return ds;
             }
             if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
-                fs->setBody(InlineSingleRefTerminalLabelBlocks(ctx, fs->getBody(), refs));
+                fs->setBody(
+                    InlineSingleRefTerminalLabelBlocks(ctx, fs->getBody(), refs, mutated)
+                );
                 return fs;
             }
             if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                ls->setSubStmt(InlineSingleRefTerminalLabelBlocks(ctx, ls->getSubStmt(), refs));
+                ls->setSubStmt(
+                    InlineSingleRefTerminalLabelBlocks(ctx, ls->getSubStmt(), refs, mutated)
+                );
                 return ls;
             }
             if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
-                sw->setBody(InlineSingleRefTerminalLabelBlocks(ctx, sw->getBody(), refs));
+                sw->setBody(
+                    InlineSingleRefTerminalLabelBlocks(ctx, sw->getBody(), refs, mutated)
+                );
                 return sw;
             }
 
@@ -3796,7 +3815,7 @@ namespace patchestry::ast {
 
             std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
             for (clang::Stmt *&child : body) {
-                child = InlineSingleRefTerminalLabelBlocks(ctx, child, refs);
+                child = InlineSingleRefTerminalLabelBlocks(ctx, child, refs, mutated);
             }
 
             bool changed = true;
@@ -3848,6 +3867,7 @@ namespace patchestry::ast {
                         body.begin() + static_cast< ptrdiff_t >(block.end)
                     );
                     changed = true;
+                    mutated = true;
                     break;
                 }
             }
@@ -5466,49 +5486,54 @@ namespace patchestry::ast {
             return stmt;
         }
 
-        clang::Stmt *
-        ConvertImmediateLoopExitGotosToBreak(clang::ASTContext &ctx, clang::Stmt *stmt) {
+        // Phase 2a: `mutated` is set true only when a loop-exit goto is
+        // actually rewritten to a break.
+        clang::Stmt *ConvertImmediateLoopExitGotosToBreak(
+            clang::ASTContext &ctx, clang::Stmt *stmt, bool &mutated
+        ) {
             if (!stmt) { return stmt; }
 
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(ConvertImmediateLoopExitGotosToBreak(ctx, ifs->getThen()));
+                ifs->setThen(ConvertImmediateLoopExitGotosToBreak(ctx, ifs->getThen(), mutated));
                 if (ifs->getElse()) {
-                    ifs->setElse(ConvertImmediateLoopExitGotosToBreak(ctx, ifs->getElse()));
+                    ifs->setElse(
+                        ConvertImmediateLoopExitGotosToBreak(ctx, ifs->getElse(), mutated)
+                    );
                 }
                 return ifs;
             }
             if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
                 label->setSubStmt(
-                    ConvertImmediateLoopExitGotosToBreak(ctx, label->getSubStmt())
+                    ConvertImmediateLoopExitGotosToBreak(ctx, label->getSubStmt(), mutated)
                 );
                 return label;
             }
             if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
-                ws->setBody(ConvertImmediateLoopExitGotosToBreak(ctx, ws->getBody()));
+                ws->setBody(ConvertImmediateLoopExitGotosToBreak(ctx, ws->getBody(), mutated));
                 return ws;
             }
             if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
-                ds->setBody(ConvertImmediateLoopExitGotosToBreak(ctx, ds->getBody()));
+                ds->setBody(ConvertImmediateLoopExitGotosToBreak(ctx, ds->getBody(), mutated));
                 return ds;
             }
             if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
-                fs->setBody(ConvertImmediateLoopExitGotosToBreak(ctx, fs->getBody()));
+                fs->setBody(ConvertImmediateLoopExitGotosToBreak(ctx, fs->getBody(), mutated));
                 return fs;
             }
             if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
-                sw->setBody(ConvertImmediateLoopExitGotosToBreak(ctx, sw->getBody()));
+                sw->setBody(ConvertImmediateLoopExitGotosToBreak(ctx, sw->getBody(), mutated));
                 return sw;
             }
             if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
                 case_stmt->setSubStmt(
-                    ConvertImmediateLoopExitGotosToBreak(ctx, case_stmt->getSubStmt())
+                    ConvertImmediateLoopExitGotosToBreak(ctx, case_stmt->getSubStmt(), mutated)
                 );
                 return case_stmt;
             }
             if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
-                default_stmt->setSubStmt(
-                    ConvertImmediateLoopExitGotosToBreak(ctx, default_stmt->getSubStmt())
-                );
+                default_stmt->setSubStmt(ConvertImmediateLoopExitGotosToBreak(
+                    ctx, default_stmt->getSubStmt(), mutated
+                ));
                 return default_stmt;
             }
 
@@ -5517,7 +5542,7 @@ namespace patchestry::ast {
 
             std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
             for (clang::Stmt *&child : body) {
-                child = ConvertImmediateLoopExitGotosToBreak(ctx, child);
+                child = ConvertImmediateLoopExitGotosToBreak(ctx, child, mutated);
             }
 
             for (size_t i = 0; i + 1 < body.size(); ++i) {
@@ -5534,7 +5559,10 @@ namespace patchestry::ast {
                 clang::Stmt *rewritten_body = ReplaceGotoWithBreakInCurrentLoop(
                     ctx, GetLoopBody(body[i]), exit_label, replaced
                 );
-                if (replaced != 0) { SetLoopBody(body[i], rewritten_body); }
+                if (replaced != 0) {
+                    SetLoopBody(body[i], rewritten_body);
+                    mutated = true;
+                }
             }
 
             return detail::MakeCompound(ctx, body);
@@ -7094,7 +7122,11 @@ namespace patchestry::ast {
                     return RepairCrossScopeLabelEntries(ctx, fn->getBody(), refs);
                 });
             },
-            [&]() { apply_body(HoistCrossScopeLabelEntries(ctx, fn, fn->getBody())); },
+            [&]() {
+                bool hoisted = false;
+                auto *r = HoistCrossScopeLabelEntries(ctx, fn, fn->getBody(), hoisted);
+                if (hoisted) { apply_body(r); }
+            },
             [&]() {
                 run_with_refs([&](const auto &refs) {
                     return FoldClangSwitchLocalCaseTargets(ctx, fn->getBody(), refs);
@@ -7110,7 +7142,11 @@ namespace patchestry::ast {
                     return FoldConditionalFallthroughChains(ctx, fn->getBody(), refs);
                 });
             },
-            [&]() { apply_body(ConvertImmediateLoopExitGotosToBreak(ctx, fn->getBody())); },
+            [&]() {
+                bool converted = false;
+                auto *r = ConvertImmediateLoopExitGotosToBreak(ctx, fn->getBody(), converted);
+                if (converted) { apply_body(r); }
+            },
             [&]() {
                 run_with_refs([&](const auto &refs) {
                     return PromoteLocalBackwardGotoLoops(ctx, fn->getBody(), refs);
@@ -7195,8 +7231,9 @@ namespace patchestry::ast {
 
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
-        body = InlineSingleRefTerminalLabelBlocks(ctx, fn->getBody(), refs);
-        if (body) { fn->setBody(body); }
+        bool inlined_single_ref = false;
+        body = InlineSingleRefTerminalLabelBlocks(ctx, fn->getBody(), refs, inlined_single_ref);
+        if (inlined_single_ref && body) { fn->setBody(body); }
 
         run_remove_dead_labels();
 
@@ -7211,15 +7248,17 @@ namespace patchestry::ast {
         body = RemoveEmptyBlocks(ctx, fn->getBody());
         if (body) { fn->setBody(body); }
 
-        body = HoistCrossScopeLabelEntries(ctx, fn, fn->getBody());
-        if (body) { fn->setBody(body); }
+        bool hoisted_cross_scope = false;
+        body = HoistCrossScopeLabelEntries(ctx, fn, fn->getBody(), hoisted_cross_scope);
+        if (hoisted_cross_scope && body) { fn->setBody(body); }
 
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
         body = FoldConditionalFallthroughChains(ctx, fn->getBody(), refs);
         if (body) { fn->setBody(body); }
-        body = ConvertImmediateLoopExitGotosToBreak(ctx, fn->getBody());
-        if (body) { fn->setBody(body); }
+        bool converted_loop_exit = false;
+        body = ConvertImmediateLoopExitGotosToBreak(ctx, fn->getBody(), converted_loop_exit);
+        if (converted_loop_exit && body) { fn->setBody(body); }
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
         body = PromoteLocalBackwardGotoLoops(ctx, fn->getBody(), refs);
@@ -7327,7 +7366,7 @@ namespace patchestry::ast {
         CountGotoDeclRefs(fn->getBody(), refs);
         bool folded_guarded_join = false;
         body = FoldGuardedJoinLabelChains(ctx, fn->getBody(), refs, folded_guarded_join);
-        if (body) { fn->setBody(body); }
+        if (folded_guarded_join && body) { fn->setBody(body); }
 
         if (folded_guarded_join) {
             run_late_join_fixups();
@@ -7349,7 +7388,7 @@ namespace patchestry::ast {
         CountGotoDeclRefs(fn->getBody(), refs);
         bool cloned_cleanup_join = false;
         body = CloneCleanupLabelBeforeJoinGotos(ctx, fn->getBody(), refs, cloned_cleanup_join);
-        if (body) { fn->setBody(body); }
+        if (cloned_cleanup_join && body) { fn->setBody(body); }
 
         if (cloned_cleanup_join) {
             run_late_join_fixups();
