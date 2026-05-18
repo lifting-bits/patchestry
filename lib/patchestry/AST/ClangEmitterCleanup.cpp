@@ -6392,48 +6392,55 @@ namespace patchestry::ast {
             return detail::MakeCompound(ctx, children);
         }
 
-        clang::Stmt *
-        RemoveRedundantTerminalForContinues(clang::ASTContext &ctx, clang::Stmt *stmt) {
+        // Phase 2a: `mutated` is set true only when a trailing `continue`
+        // is actually dropped from a for-loop body.
+        clang::Stmt *RemoveRedundantTerminalForContinues(
+            clang::ASTContext &ctx, clang::Stmt *stmt, bool &mutated
+        ) {
             if (!stmt) { return stmt; }
 
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(RemoveRedundantTerminalForContinues(ctx, ifs->getThen()));
+                ifs->setThen(RemoveRedundantTerminalForContinues(ctx, ifs->getThen(), mutated));
                 if (ifs->getElse()) {
-                    ifs->setElse(RemoveRedundantTerminalForContinues(ctx, ifs->getElse()));
+                    ifs->setElse(
+                        RemoveRedundantTerminalForContinues(ctx, ifs->getElse(), mutated)
+                    );
                 }
                 return ifs;
             }
             if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
-                ws->setBody(RemoveRedundantTerminalForContinues(ctx, ws->getBody()));
+                ws->setBody(RemoveRedundantTerminalForContinues(ctx, ws->getBody(), mutated));
                 return ws;
             }
             if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
-                ds->setBody(RemoveRedundantTerminalForContinues(ctx, ds->getBody()));
+                ds->setBody(RemoveRedundantTerminalForContinues(ctx, ds->getBody(), mutated));
                 return ds;
             }
             if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                ls->setSubStmt(RemoveRedundantTerminalForContinues(ctx, ls->getSubStmt()));
+                ls->setSubStmt(
+                    RemoveRedundantTerminalForContinues(ctx, ls->getSubStmt(), mutated)
+                );
                 return ls;
             }
             if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
-                sw->setBody(RemoveRedundantTerminalForContinues(ctx, sw->getBody()));
+                sw->setBody(RemoveRedundantTerminalForContinues(ctx, sw->getBody(), mutated));
                 return sw;
             }
             if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
                 case_stmt->setSubStmt(
-                    RemoveRedundantTerminalForContinues(ctx, case_stmt->getSubStmt())
+                    RemoveRedundantTerminalForContinues(ctx, case_stmt->getSubStmt(), mutated)
                 );
                 return case_stmt;
             }
             if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
-                default_stmt->setSubStmt(
-                    RemoveRedundantTerminalForContinues(ctx, default_stmt->getSubStmt())
-                );
+                default_stmt->setSubStmt(RemoveRedundantTerminalForContinues(
+                    ctx, default_stmt->getSubStmt(), mutated
+                ));
                 return default_stmt;
             }
             if (auto *for_stmt = llvm::dyn_cast< clang::ForStmt >(stmt)) {
                 clang::Stmt *for_body =
-                    RemoveRedundantTerminalForContinues(ctx, for_stmt->getBody());
+                    RemoveRedundantTerminalForContinues(ctx, for_stmt->getBody(), mutated);
                 if (auto *compound = llvm::dyn_cast_or_null< clang::CompoundStmt >(for_body)) {
                     std::vector< clang::Stmt * > children(
                         compound->body_begin(), compound->body_end()
@@ -6441,6 +6448,7 @@ namespace patchestry::ast {
                     if (!children.empty() && llvm::isa< clang::ContinueStmt >(children.back()))
                     {
                         children.pop_back();
+                        mutated  = true;
                         for_body = children.empty()
                             ? static_cast< clang::Stmt * >(new (ctx)
                                                                clang::NullStmt(VirtualLoc(ctx)))
@@ -6448,6 +6456,7 @@ namespace patchestry::ast {
                     }
                 } else if (llvm::isa_and_nonnull< clang::ContinueStmt >(for_body)) {
                     for_body = new (ctx) clang::NullStmt(VirtualLoc(ctx));
+                    mutated  = true;
                 }
                 for_stmt->setBody(for_body);
                 return for_stmt;
@@ -6456,41 +6465,47 @@ namespace patchestry::ast {
                 std::vector< clang::Stmt * > children;
                 children.reserve(compound->size());
                 for (clang::Stmt *child : compound->body()) {
-                    children.push_back(RemoveRedundantTerminalForContinues(ctx, child));
+                    children.push_back(
+                        RemoveRedundantTerminalForContinues(ctx, child, mutated)
+                    );
                 }
                 return detail::MakeCompound(ctx, children);
             }
             return stmt;
         }
 
-        clang::Stmt *PushLabelsIntoCompounds(clang::ASTContext &ctx, clang::Stmt *stmt) {
+        // Phase 2a: `mutated` is set true when a label/case/default body
+        // compound is unwrapped, or a nested compound is spliced flat.
+        clang::Stmt *PushLabelsIntoCompounds(
+            clang::ASTContext &ctx, clang::Stmt *stmt, bool &mutated
+        ) {
             if (!stmt) { return stmt; }
 
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(PushLabelsIntoCompounds(ctx, ifs->getThen()));
+                ifs->setThen(PushLabelsIntoCompounds(ctx, ifs->getThen(), mutated));
                 if (ifs->getElse()) {
-                    ifs->setElse(PushLabelsIntoCompounds(ctx, ifs->getElse()));
+                    ifs->setElse(PushLabelsIntoCompounds(ctx, ifs->getElse(), mutated));
                 }
                 return ifs;
             }
             if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
-                ws->setBody(PushLabelsIntoCompounds(ctx, ws->getBody()));
+                ws->setBody(PushLabelsIntoCompounds(ctx, ws->getBody(), mutated));
                 return ws;
             }
             if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
-                ds->setBody(PushLabelsIntoCompounds(ctx, ds->getBody()));
+                ds->setBody(PushLabelsIntoCompounds(ctx, ds->getBody(), mutated));
                 return ds;
             }
             if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
-                fs->setBody(PushLabelsIntoCompounds(ctx, fs->getBody()));
+                fs->setBody(PushLabelsIntoCompounds(ctx, fs->getBody(), mutated));
                 return fs;
             }
             if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
-                sw->setBody(PushLabelsIntoCompounds(ctx, sw->getBody()));
+                sw->setBody(PushLabelsIntoCompounds(ctx, sw->getBody(), mutated));
                 return sw;
             }
             if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
-                auto *sub      = PushLabelsIntoCompounds(ctx, case_stmt->getSubStmt());
+                auto *sub      = PushLabelsIntoCompounds(ctx, case_stmt->getSubStmt(), mutated);
                 auto *compound = llvm::dyn_cast_or_null< clang::CompoundStmt >(sub);
                 if (!compound) {
                     case_stmt->setSubStmt(
@@ -6498,6 +6513,7 @@ namespace patchestry::ast {
                     );
                     return case_stmt;
                 }
+                mutated = true;
 
                 std::vector< clang::Stmt * > children(
                     compound->body_begin(), compound->body_end()
@@ -6517,7 +6533,8 @@ namespace patchestry::ast {
                 return detail::MakeCompound(ctx, flattened);
             }
             if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
-                auto *sub      = PushLabelsIntoCompounds(ctx, default_stmt->getSubStmt());
+                auto *sub =
+                    PushLabelsIntoCompounds(ctx, default_stmt->getSubStmt(), mutated);
                 auto *compound = llvm::dyn_cast_or_null< clang::CompoundStmt >(sub);
                 if (!compound) {
                     default_stmt->setSubStmt(
@@ -6525,6 +6542,7 @@ namespace patchestry::ast {
                     );
                     return default_stmt;
                 }
+                mutated = true;
 
                 std::vector< clang::Stmt * > children(
                     compound->body_begin(), compound->body_end()
@@ -6544,12 +6562,13 @@ namespace patchestry::ast {
                 return detail::MakeCompound(ctx, flattened);
             }
             if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                auto *sub      = PushLabelsIntoCompounds(ctx, label->getSubStmt());
+                auto *sub      = PushLabelsIntoCompounds(ctx, label->getSubStmt(), mutated);
                 auto *compound = llvm::dyn_cast_or_null< clang::CompoundStmt >(sub);
                 if (!compound) {
                     label->setSubStmt(sub ? sub : new (ctx) clang::NullStmt(VirtualLoc(ctx)));
                     return label;
                 }
+                mutated = true;
 
                 std::vector< clang::Stmt * > children(
                     compound->body_begin(), compound->body_end()
@@ -6572,11 +6591,12 @@ namespace patchestry::ast {
                 std::vector< clang::Stmt * > children;
                 children.reserve(compound->size());
                 for (clang::Stmt *child : compound->body()) {
-                    auto *cleaned = PushLabelsIntoCompounds(ctx, child);
+                    auto *cleaned = PushLabelsIntoCompounds(ctx, child, mutated);
                     if (auto *nested = llvm::dyn_cast_or_null< clang::CompoundStmt >(cleaned)) {
                         for (clang::Stmt *nested_child : nested->body()) {
                             children.push_back(nested_child);
                         }
+                        mutated = true;
                         continue;
                     }
                     children.push_back(cleaned);
@@ -6586,47 +6606,54 @@ namespace patchestry::ast {
             return stmt;
         }
 
-        clang::Stmt *
-        AttachEmptyLabelsToFollowingStmt(clang::ASTContext &ctx, clang::Stmt *stmt) {
+        // Phase 2a: `mutated` is set true only when an empty label is
+        // actually attached to its following statement.
+        clang::Stmt *AttachEmptyLabelsToFollowingStmt(
+            clang::ASTContext &ctx, clang::Stmt *stmt, bool &mutated
+        ) {
             if (!stmt) { return stmt; }
 
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(AttachEmptyLabelsToFollowingStmt(ctx, ifs->getThen()));
+                ifs->setThen(AttachEmptyLabelsToFollowingStmt(ctx, ifs->getThen(), mutated));
                 if (ifs->getElse()) {
-                    ifs->setElse(AttachEmptyLabelsToFollowingStmt(ctx, ifs->getElse()));
+                    ifs->setElse(
+                        AttachEmptyLabelsToFollowingStmt(ctx, ifs->getElse(), mutated)
+                    );
                 }
                 return ifs;
             }
             if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
-                ws->setBody(AttachEmptyLabelsToFollowingStmt(ctx, ws->getBody()));
+                ws->setBody(AttachEmptyLabelsToFollowingStmt(ctx, ws->getBody(), mutated));
                 return ws;
             }
             if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
-                ds->setBody(AttachEmptyLabelsToFollowingStmt(ctx, ds->getBody()));
+                ds->setBody(AttachEmptyLabelsToFollowingStmt(ctx, ds->getBody(), mutated));
                 return ds;
             }
             if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
-                fs->setBody(AttachEmptyLabelsToFollowingStmt(ctx, fs->getBody()));
+                fs->setBody(AttachEmptyLabelsToFollowingStmt(ctx, fs->getBody(), mutated));
                 return fs;
             }
             if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                ls->setSubStmt(AttachEmptyLabelsToFollowingStmt(ctx, ls->getSubStmt()));
+                ls->setSubStmt(
+                    AttachEmptyLabelsToFollowingStmt(ctx, ls->getSubStmt(), mutated)
+                );
                 return ls;
             }
             if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
-                sw->setBody(AttachEmptyLabelsToFollowingStmt(ctx, sw->getBody()));
+                sw->setBody(AttachEmptyLabelsToFollowingStmt(ctx, sw->getBody(), mutated));
                 return sw;
             }
             if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
                 case_stmt->setSubStmt(
-                    AttachEmptyLabelsToFollowingStmt(ctx, case_stmt->getSubStmt())
+                    AttachEmptyLabelsToFollowingStmt(ctx, case_stmt->getSubStmt(), mutated)
                 );
                 return case_stmt;
             }
             if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
-                default_stmt->setSubStmt(
-                    AttachEmptyLabelsToFollowingStmt(ctx, default_stmt->getSubStmt())
-                );
+                default_stmt->setSubStmt(AttachEmptyLabelsToFollowingStmt(
+                    ctx, default_stmt->getSubStmt(), mutated
+                ));
                 return default_stmt;
             }
 
@@ -6636,7 +6663,7 @@ namespace patchestry::ast {
             std::vector< clang::Stmt * > children;
             children.reserve(compound->size());
             for (clang::Stmt *child : compound->body()) {
-                children.push_back(AttachEmptyLabelsToFollowingStmt(ctx, child));
+                children.push_back(AttachEmptyLabelsToFollowingStmt(ctx, child, mutated));
             }
 
             for (size_t i = 0; i + 1 < children.size(); ++i) {
@@ -6655,6 +6682,7 @@ namespace patchestry::ast {
 
                 label->setSubStmt(next);
                 children.erase(children.begin() + static_cast< ptrdiff_t >(i + 1));
+                mutated = true;
             }
 
             return detail::MakeCompound(ctx, children);
@@ -7256,17 +7284,22 @@ namespace patchestry::ast {
         body = PromoteSimpleCounterWhileToFor(ctx, fn->getBody(), promoted_counter_for);
         if (promoted_counter_for && body) { fn->setBody(body); }
 
-        body = RemoveRedundantTerminalForContinues(ctx, fn->getBody());
-        if (body) { fn->setBody(body); }
+        bool removed_terminal_continue = false;
+        body = RemoveRedundantTerminalForContinues(
+            ctx, fn->getBody(), removed_terminal_continue
+        );
+        if (removed_terminal_continue && body) { fn->setBody(body); }
 
         body = RemoveEmptyBlocks(ctx, fn->getBody());
         if (body) { fn->setBody(body); }
 
-        body = PushLabelsIntoCompounds(ctx, fn->getBody());
-        if (body) { fn->setBody(body); }
+        bool pushed_labels = false;
+        body = PushLabelsIntoCompounds(ctx, fn->getBody(), pushed_labels);
+        if (pushed_labels && body) { fn->setBody(body); }
 
-        body = AttachEmptyLabelsToFollowingStmt(ctx, fn->getBody());
-        if (body) { fn->setBody(body); }
+        bool attached_empty_labels = false;
+        body = AttachEmptyLabelsToFollowingStmt(ctx, fn->getBody(), attached_empty_labels);
+        if (attached_empty_labels && body) { fn->setBody(body); }
 
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
