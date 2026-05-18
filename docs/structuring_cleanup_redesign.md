@@ -181,11 +181,17 @@ consolidation and the worklist are *mutually* entangled, not strictly
 sequential. Every Phase 3 commit held 81/81 lit, the goto budget, and
 `/patchir-inspect` VERDICT PASS.
 
-### Phase 4 — Real fixed-point worklist driver
+### Phase 4 — Real fixed-point worklist driver — PARTIAL (worklist refuted)
 
-With ~8 consolidated transforms, replace the fake 8× loop + 180-line unrolled
-tail in `CleanupPrettyPrint` with a genuine worklist fixed point: run transforms
-until none reports a change.
+Original goal: replace the fake 8× loop + 180-line unrolled tail in
+`CleanupPrettyPrint` with a genuine worklist fixed point.
+
+**Outcome (see Status below): half achieved, half refuted.** The "fake 8×
+loop" half *was* a fake loop and is now a genuine fixed point (step 1). The
+"unrolled tail" half is **not** a fake loop — step 3 measured that iterating
+its transforms to a fixed point diverges catastrophically — so it stays. The
+"replace the unrolled tail with a worklist" goal is withdrawn as empirically
+refuted.
 
 This is the old "Phase 2b", moved after consolidation. Confluence must be
 established for the ~8 survivors *first* — verify the order-independence the
@@ -204,11 +210,11 @@ remainders: once the worklist replaces the à-la-carte unrolled tail, the
 become worklist entries and the per-site ordering constraint disappears.
 Finishing F2/F1 is therefore a Phase 4 deliverable, not a Phase 3 gap.
 
-**Exit:** fake loop + unrolled tail gone; convergence iteration count is data,
-not a hard cap; 81/81 lit; goto budget holds.
+**Exit (revised):** the schedule loop is a real fixed point (done); the
+unrolled tail stays (worklist refuted); 81/81 lit; goto budget holds.
 
-**Status: step 1 DONE.** Done incrementally rather than as a big-bang (the
-Phase 2b big-bang regressed `decode_basic_field`).
+**Status: steps 1–3 DONE; worklist refuted.** Done incrementally rather than
+as a big-bang (the Phase 2b big-bang regressed `decode_basic_field`).
 
 - *Step 1 — real schedule fixed point* (commit `42149ac`). The schedule
   loop's convergence check moved from body-pointer identity (never
@@ -219,24 +225,26 @@ Phase 2b big-bang regressed `decode_basic_field`).
   all fixtures, and **none oscillate** — positive confluence evidence for the
   schedule subset. Count exported as `schedule_iterations=` in
   `CLANG_CLEANUP_SUMMARY`.
-- *Step 2 — cross-pass confluence audit* DONE. Full record in
-  `docs/structuring_cleanup_phase4_confluence_audit.md`. Finding: the tail is
-  mostly confluent — 8 transforms proven by step 1's no-oscillation
-  convergence, plus F4 (monotone deletion) and two structurally-homogeneous
-  tail-only folds. The non-confluent core is small and isolated: the three
-  *join* transforms (`FoldGuardedJoinLabelChains`,
-  `CloneSmallStraightLineLabelBeforeJoinGotos`,
-  `CloneCleanupLabelBeforeJoinGotos`), each driver-coupled to a conditional
-  `run_late_join_fixups` repair and mutually order-sensitive. Verdict: step 3
-  GREEN.
-- *Step 3 — tail worklist* (next). Three fixed phases per the audit:
-  (1) a real fixed-point worklist over the confluent core (schedule set ∪
-  `FoldCrossCompoundDispatchChains` ∪ `InlineSingleRefTerminalLabelBlocks` ∪
-  `RemoveDeadControlFlow`); (2) the three join transforms quarantined as a
-  fixed repaired sub-sequence; (3) the Class-C cosmetics as a terminal
-  once-only epilogue. Built behind a default-off flag, flipped only after the
-  empirical equivalence gate (per-fixture diff vs current tail, goto budget,
-  `/patchir-inspect` PASS).
+- *Step 2 — cross-pass confluence audit* DONE (commit `70467b7`). Recorded in
+  `docs/structuring_cleanup_phase4_confluence_audit.md`. It classified most of
+  the tail as confluent and gave step 3 a (later-refuted) GREEN.
+- *Step 3 — tail worklist: IMPLEMENTED then REFUTED* (commit `ec4a9b8`). The
+  three-phase worklist was built behind a default-off `-cleanup-worklist`
+  flag and run through the mandated empirical gate (per-fixture diff vs the
+  unrolled tail, all 80 fixtures). The gate **FAILED**: 9 fixtures diverge
+  catastrophically — the worklist deletes ~80% of `decode_basic_field`,
+  over-clones `cwe22_init_logger` 3–5×, regresses `cve_2016_6563`'s goto KPI.
+  The step-2 verdict was wrong: the schedule loop converging proves only that
+  the *fixed-order composition* converges, not that the transforms are
+  confluent under free re-iteration. The unrolled tail is a deliberately-
+  ordered run-once pipeline; a worklist is the wrong model. The flag is kept
+  default-off as an investigation harness only and must never be promoted.
+  Detail in the confluence-audit doc, "Step 3 result" section.
+
+**Net Phase 4 result.** Step 1 is a real, kept win — the schedule loop is now
+a genuine fixed point. The tail-worklist goal is withdrawn. Any future tail
+rework must make individual transforms idempotent / iteration-safe, one at a
+time — not a wholesale worklist.
 
 ### Phase 5 — Resolve the cross-layer duplication (hybrid)
 
