@@ -14,6 +14,7 @@ add_library(patchestry_ast STATIC
   SNodeRegion.cpp
   ClangEmitter.cpp
   ClangEmitterCleanup.cpp
+  ClangEmitterPostPasses.cpp
   CfgDotEmitter.cpp
   CGraph.cpp
   CGraphBuilder.cpp
