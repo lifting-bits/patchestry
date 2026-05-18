@@ -500,6 +500,22 @@ namespace patchestry::ast {
             return ValidatePayloadRetention(baseline_payload_stmts, emitted_stmts, "emitted");
         }
 
+        // Emit up to 20 diagnostic lines from a validation report, followed
+        // by a "... N more <kind> diagnostic(s)" summary when the report
+        // carries more than the cap.  Shared tail for every Log*Failure path.
+        void LogReportDiagnostics(
+            const std::vector< std::string > &diagnostics, std::string_view kind
+        ) {
+            constexpr size_t kMaxReportDiagnostics = 20;
+            for (size_t i = 0; i < std::min(diagnostics.size(), kMaxReportDiagnostics); ++i) {
+                LOG(ERROR) << "  " << diagnostics[i] << "\n";
+            }
+            if (diagnostics.size() > kMaxReportDiagnostics) {
+                LOG(ERROR) << "  ... " << (diagnostics.size() - kMaxReportDiagnostics)
+                           << " more " << kind << " diagnostic(s)\n";
+            }
+        }
+
         void LogPayloadRetentionFailure(
             std::string_view verifier_name, std::string_view fn_name,
             const PayloadRetentionReport &report
@@ -510,16 +526,7 @@ namespace patchestry::ast {
                        << " missing_payload_stmts=" << report.missing_payload_stmts.size()
                        << " duplicated_payload_stmts=" << report.duplicated_payload_stmts.size()
                        << " diagnostics=" << report.diagnostics.size() << "\n";
-            constexpr size_t kMaxPayloadDiagnostics = 20;
-            for (size_t i = 0; i < std::min(report.diagnostics.size(), kMaxPayloadDiagnostics);
-                 ++i)
-            {
-                LOG(ERROR) << "  " << report.diagnostics[i] << "\n";
-            }
-            if (report.diagnostics.size() > kMaxPayloadDiagnostics) {
-                LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxPayloadDiagnostics)
-                           << " more payload diagnostic(s)\n";
-            }
+            LogReportDiagnostics(report.diagnostics, "payload");
         }
 
         void
@@ -531,16 +538,7 @@ namespace patchestry::ast {
                        << " duplicated_owned_ops=" << report.duplicated_owned_ops.size()
                        << " extra_owned_ops=" << report.extra_owned_ops.size()
                        << " diagnostics=" << report.diagnostics.size() << "\n";
-            constexpr size_t kMaxOwnershipDiagnostics = 20;
-            for (size_t i = 0;
-                 i < std::min(report.diagnostics.size(), kMaxOwnershipDiagnostics); ++i)
-            {
-                LOG(ERROR) << "  " << report.diagnostics[i] << "\n";
-            }
-            if (report.diagnostics.size() > kMaxOwnershipDiagnostics) {
-                LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxOwnershipDiagnostics)
-                           << " more SNode ownership diagnostic(s)\n";
-            }
+            LogReportDiagnostics(report.diagnostics, "SNode ownership");
         }
 
         void
@@ -550,16 +548,7 @@ namespace patchestry::ast {
                        << " duplicated_owned_ops=" << report.duplicated_owned_ops
                        << " opaque_compound_payloads=" << report.opaque_compound_payloads
                        << " diagnostics=" << report.diagnostics.size() << "\n";
-            constexpr size_t kMaxRegionDiagnostics = 20;
-            for (size_t i = 0; i < std::min(report.diagnostics.size(), kMaxRegionDiagnostics);
-                 ++i)
-            {
-                LOG(ERROR) << "  " << report.diagnostics[i] << "\n";
-            }
-            if (report.diagnostics.size() > kMaxRegionDiagnostics) {
-                LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxRegionDiagnostics)
-                           << " more SNode region diagnostic(s)\n";
-            }
+            LogReportDiagnostics(report.diagnostics, "SNode region");
         }
 
         void LogSNodeRegionLegalityFailure(
@@ -571,16 +560,7 @@ namespace patchestry::ast {
                        << " cross_region_cloned_ops=" << report.cross_region_cloned_ops
                        << " illegal_cloned_ops=" << report.illegal_cloned_ops
                        << " diagnostics=" << report.diagnostics.size() << "\n";
-            constexpr size_t kMaxLegalityDiagnostics = 20;
-            for (size_t i = 0; i < std::min(report.diagnostics.size(), kMaxLegalityDiagnostics);
-                 ++i)
-            {
-                LOG(ERROR) << "  " << report.diagnostics[i] << "\n";
-            }
-            if (report.diagnostics.size() > kMaxLegalityDiagnostics) {
-                LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxLegalityDiagnostics)
-                           << " more SNode region legality diagnostic(s)\n";
-            }
+            LogReportDiagnostics(report.diagnostics, "SNode region legality");
         }
 
         bool ValidateSNodeRewriteTransaction(
@@ -1152,16 +1132,7 @@ namespace patchestry::ast {
                        << " expected_returns=" << report.expected.returns
                        << " emitted_returns=" << report.emitted.returns
                        << " diagnostics=" << report.diagnostics.size() << "\n";
-            constexpr size_t kMaxControlDiagnostics = 20;
-            for (size_t i = 0; i < std::min(report.diagnostics.size(), kMaxControlDiagnostics);
-                 ++i)
-            {
-                LOG(ERROR) << "  " << report.diagnostics[i] << "\n";
-            }
-            if (report.diagnostics.size() > kMaxControlDiagnostics) {
-                LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxControlDiagnostics)
-                           << " more control-shape diagnostic(s)\n";
-            }
+            LogReportDiagnostics(report.diagnostics, "control-shape");
         }
 
         void LogSNodeVerificationFailure(
@@ -1181,16 +1152,7 @@ namespace patchestry::ast {
                        << " emitted_gotos=" << report.emitted_gotos
                        << " dangling_gotos=" << report.dangling_gotos.size()
                        << " diagnostics=" << report.diagnostics.size() << "\n";
-            constexpr size_t kMaxSNodeDiagnostics = 20;
-            for (size_t i = 0; i < std::min(report.diagnostics.size(), kMaxSNodeDiagnostics);
-                 ++i)
-            {
-                LOG(ERROR) << "  " << report.diagnostics[i] << "\n";
-            }
-            if (report.diagnostics.size() > kMaxSNodeDiagnostics) {
-                LOG(ERROR) << "  ... " << (report.diagnostics.size() - kMaxSNodeDiagnostics)
-                           << " more SNode diagnostic(s)\n";
-            }
+            LogReportDiagnostics(report.diagnostics, "SNode");
         }
 
     } // namespace
@@ -1287,18 +1249,7 @@ namespace patchestry::ast {
                             << " condition_negations=" << cfg_report.condition_negations
                             << " irreducible_regions=" << cfg_report.irreducible_regions
                             << " diagnostics=" << cfg_report.diagnostics.size() << "\n";
-                        constexpr size_t kMaxCfgDiagnostics = 20;
-                        for (size_t i = 0;
-                             i < std::min(cfg_report.diagnostics.size(), kMaxCfgDiagnostics);
-                             ++i)
-                        {
-                            LOG(ERROR) << "  " << cfg_report.diagnostics[i] << "\n";
-                        }
-                        if (cfg_report.diagnostics.size() > kMaxCfgDiagnostics) {
-                            LOG(ERROR) << "  ... "
-                                       << (cfg_report.diagnostics.size() - kMaxCfgDiagnostics)
-                                       << " more CGraph diagnostic(s)\n";
-                        }
+                        LogReportDiagnostics(cfg_report.diagnostics, "CGraph");
                         LOG(FATAL)
                             << "CGraph source verification failed for " << fn_name << "\n";
                     }
@@ -1755,19 +1706,7 @@ namespace patchestry::ast {
                             << " break_stmts=" << clang_report.break_stmts
                             << " continue_stmts=" << clang_report.continue_stmts
                             << " diagnostics=" << clang_report.diagnostics.size() << "\n";
-                        constexpr size_t kMaxClangDiagnostics = 20;
-                        for (size_t i = 0; i
-                             < std::min(clang_report.diagnostics.size(), kMaxClangDiagnostics);
-                             ++i)
-                        {
-                            LOG(ERROR) << "  " << clang_report.diagnostics[i] << "\n";
-                        }
-                        if (clang_report.diagnostics.size() > kMaxClangDiagnostics) {
-                            LOG(ERROR)
-                                << "  ... "
-                                << (clang_report.diagnostics.size() - kMaxClangDiagnostics)
-                                << " more Clang AST diagnostic(s)\n";
-                        }
+                        LogReportDiagnostics(clang_report.diagnostics, "Clang AST");
                         LOG(FATAL)
                             << "Clang AST emission verification failed for " << fn_name << "\n";
                     }
