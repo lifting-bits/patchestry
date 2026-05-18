@@ -104,15 +104,6 @@ namespace {
         llvm::cl::init(false)
     );
 
-    const llvm::cl::opt< bool > cleanup_worklist( // NOLINT(cert-err58-cpp)
-        "cleanup-worklist",
-        llvm::cl::desc("Investigation-only: run the post-emission cleanup tail as a "
-                       "three-phase worklist. KNOWN-DIVERGENT — fails the Phase 4 "
-                       "equivalence gate (over-clones / deletes code); never enable "
-                       "for production output. See docs/structuring_cleanup_phase4_*"),
-        llvm::cl::init(false)
-    );
-
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -128,7 +119,6 @@ namespace {
             .use_structuring_pass = use_structuring_pass.getValue(),
             .verify_no_node_loss  = verify_no_node_loss.getValue(),
             .structuring_improvement_report = structuring_improvement_report.getValue(),
-            .use_cleanup_worklist           = cleanup_worklist.getValue(),
             .output_file                    = output_filename.getValue(),
             .input_file                     = input_filename.getValue(),
             .print_tu                       = print_tu.getValue(),

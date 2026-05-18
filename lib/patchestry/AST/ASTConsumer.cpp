@@ -1658,8 +1658,7 @@ namespace patchestry::ast {
                 EmitClangAST(root_body, fn, ctx);
 
                 CleanupPrettyPrint(
-                    fn, ctx, options.structuring_improvement_report, fn_name,
-                    options.use_cleanup_worklist
+                    fn, ctx, options.structuring_improvement_report, fn_name
                 );
 
                 if (options.structuring_improvement_report && have_structured) {

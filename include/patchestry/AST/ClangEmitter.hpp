@@ -43,7 +43,7 @@ namespace patchestry::ast {
     // CompoundStmt bodies. Only call for patchir-decomp path.
     void CleanupPrettyPrint(
         clang::FunctionDecl *fn, clang::ASTContext &ctx, bool report_cleanup = false,
-        std::string_view function_name = {}, bool use_cleanup_worklist = false
+        std::string_view function_name = {}
     );
 
     struct ClangEmissionValidationReport

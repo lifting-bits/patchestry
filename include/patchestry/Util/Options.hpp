@@ -22,7 +22,6 @@ namespace patchestry {
         bool use_structuring_pass           = false;
         bool verify_no_node_loss            = false;
         bool structuring_improvement_report = false;
-        bool use_cleanup_worklist           = false;
 
         std::string output_file;
         std::string input_file;
