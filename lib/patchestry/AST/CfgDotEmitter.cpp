@@ -352,7 +352,7 @@ namespace patchestry::ast {
         case SNodeKind::kSwitch:
             // Count 1 for the discriminant — compensates for the original
             // SwitchStmt that FoldSwitch strips from the head block's stmts.
-            total += root->as<SSwitch>()->Discriminant() ? 1 : 0;
+            total += root->as<SSwitch>()->Discriminant() ? size_t{ 1 } : size_t{ 0 };
             break;
         default:
             break;
