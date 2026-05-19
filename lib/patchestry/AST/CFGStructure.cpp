@@ -110,14 +110,26 @@ namespace patchestry::ast {
     // Run `worker` on every body-vector in the tree rooted at the
     // sequence `seq`, post-order: deepest body-vectors first, then
     // `seq` itself.  `worker` returns true if it mutated the list.
+    //
+    // With `stop_after_change`, the traversal unwinds immediately once
+    // `worker` reports a mutation — no suspended ancestor loop resumes
+    // over a vector the worker may have mutated.  Required for workers
+    // that mutate a non-local sequence (e.g. cross-scope inlining).
     static bool ForEachSeqPostOrder(
         std::vector< SNode * > &seq,
-        const std::function< bool(std::vector< SNode * > &) > &worker) {
+        const std::function< bool(std::vector< SNode * > &) > &worker,
+        bool stop_after_change = false) {
         bool changed = false;
         for (SNode *child : seq) {
+            bool stop = false;
             ForEachBodyList(child, [&](std::vector< SNode * > &body) {
-                if (ForEachSeqPostOrder(body, worker)) changed = true;
+                if (stop) return;
+                if (ForEachSeqPostOrder(body, worker, stop_after_change)) {
+                    changed = true;
+                    if (stop_after_change) stop = true;
+                }
             });
+            if (stop) return true;
         }
         if (worker(seq)) changed = true;
         return changed;
@@ -3028,17 +3040,18 @@ namespace patchestry::ast {
         // goto, so the initial ref count bounds the loop.
         size_t max_passes = std::min(refs.size() + 1, size_t{20});
         for (size_t p = 0; p < max_passes; ++p) {
-            bool done = false;
-            ForEachSeqPostOrder(
-                root, [&](std::vector< SNode * > &seq) {
-                    if (done) return false;
-                    if (CrossScopeInlineInSeq(seq, root, refs)) {
-                        done = true;
-                        return true;
-                    }
-                    return false;
-                });
-            if (!done) break;
+            // stop_after_change: CrossScopeInlineInSeq erases the target
+            // label from whatever sequence holds it — possibly a strict
+            // ancestor of the goto's sequence.  Unwinding immediately
+            // keeps a suspended ancestor traversal from resuming over
+            // the mutated vector (iterator invalidation / UB).
+            bool changed = ForEachSeqPostOrder(
+                root,
+                [&](std::vector< SNode * > &seq) {
+                    return CrossScopeInlineInSeq(seq, root, refs);
+                },
+                /*stop_after_change=*/true);
+            if (!changed) break;
             any_changed = true;
             refs.clear();
             CountGotoRefs(root, refs);
