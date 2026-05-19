@@ -30,67 +30,51 @@ namespace patchestry::ast {
 
                 os << "\"];\n";
 
+                // Emit one edge per child for a body slot.  Body vectors
+                // may hold many siblings, not just the first — the
+                // single-body Body()/ThenBranch() accessors would drop
+                // everything after the first child.
+                auto emit_list = [&](const std::vector< SNode * > &list,
+                                     const std::string &edge) {
+                    for (const auto *c : list) {
+                        if (!c) continue;
+                        unsigned cid = Emit(c);
+                        os << "  n" << id << " -> n" << cid;
+                        if (!edge.empty()) {
+                            os << " [label=\"" << edge << "\"]";
+                        }
+                        os << ";\n";
+                    }
+                };
+
                 switch (node->Kind()) {
                 case SNodeKind::kIfThenElse: {
                     auto *ite = node->as< SIfThenElse >();
-                    if (ite->ThenBranch()) {
-                        unsigned tid = Emit(ite->ThenBranch());
-                        os << "  n" << id << " -> n" << tid << " [label=\"then\"];\n";
-                    }
-                    if (ite->ElseBranch()) {
-                        unsigned eid = Emit(ite->ElseBranch());
-                        os << "  n" << id << " -> n" << eid << " [label=\"else\"];\n";
-                    }
+                    emit_list(ite->ThenList(), "then");
+                    emit_list(ite->ElseList(), "else");
                     break;
                 }
-                case SNodeKind::kWhile: {
-                    auto *w = node->as< SWhile >();
-                    if (w->Body()) {
-                        unsigned bid = Emit(w->Body());
-                        os << "  n" << id << " -> n" << bid << " [label=\"body\"];\n";
-                    }
+                case SNodeKind::kWhile:
+                    emit_list(node->as< SWhile >()->BodyList(), "body");
                     break;
-                }
-                case SNodeKind::kDoWhile: {
-                    auto *dw = node->as< SDoWhile >();
-                    if (dw->Body()) {
-                        unsigned bid = Emit(dw->Body());
-                        os << "  n" << id << " -> n" << bid << " [label=\"body\"];\n";
-                    }
+                case SNodeKind::kDoWhile:
+                    emit_list(node->as< SDoWhile >()->BodyList(), "body");
                     break;
-                }
-                case SNodeKind::kFor: {
-                    auto *f = node->as< SFor >();
-                    if (f->Body()) {
-                        unsigned bid = Emit(f->Body());
-                        os << "  n" << id << " -> n" << bid << " [label=\"body\"];\n";
-                    }
+                case SNodeKind::kFor:
+                    emit_list(node->as< SFor >()->BodyList(), "body");
                     break;
-                }
                 case SNodeKind::kSwitch: {
                     auto *sw = node->as< SSwitch >();
                     for (size_t i = 0; i < sw->Cases().size(); ++i) {
-                        if (auto *b = sw->Cases()[i].body()) {
-                            unsigned cid = Emit(b);
-                            os << "  n" << id << " -> n" << cid
-                               << " [label=\"case " << i << "\"];\n";
-                        }
+                        emit_list(sw->Cases()[i].body_list,
+                                  "case " + std::to_string(i));
                     }
-                    if (sw->DefaultBody()) {
-                        unsigned did = Emit(sw->DefaultBody());
-                        os << "  n" << id << " -> n" << did
-                           << " [label=\"default\"];\n";
-                    }
+                    emit_list(sw->DefaultBodyList(), "default");
                     break;
                 }
-                case SNodeKind::kLabel: {
-                    auto *lbl = node->as< SLabel >();
-                    if (lbl->Body()) {
-                        unsigned bid = Emit(lbl->Body());
-                        os << "  n" << id << " -> n" << bid << ";\n";
-                    }
+                case SNodeKind::kLabel:
+                    emit_list(node->as< SLabel >()->BodyList(), "");
                     break;
-                }
                 default:
                     break;
                 }
