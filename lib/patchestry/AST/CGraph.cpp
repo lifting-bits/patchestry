@@ -22,10 +22,11 @@ namespace patchestry::ast {
     // structured block (structural).
     // ---------------------------------------------------------------
     size_t CGraph::IdentifyInternal(const std::vector<size_t> &ids,
-                                        CNode::BlockType type, SNode *snode) {
+                                        CNode::BlockType type,
+                                        std::vector< SNode * > snodes) {
         if (ids.empty()) return CNode::kNone;
         size_t rep = ids[0];
-        nodes[rep].structured = snode;
+        nodes[rep].structured = std::move(snodes);
         nodes[rep].block_type = type;
 
         std::unordered_set<size_t> idset(ids.begin(), ids.end());

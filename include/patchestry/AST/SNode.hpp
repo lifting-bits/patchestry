@@ -27,7 +27,6 @@
 namespace patchestry::ast {
 
     enum class SNodeKind {
-        kSeq,
         kBlock,
         kIfThenElse,
         kWhile,
@@ -88,75 +87,6 @@ namespace patchestry::ast {
       private:
         SNodeKind kind_;
         SNode *parent_ = nullptr;
-    };
-
-    // Sequence of SNodes (analogous to CompoundStmt)
-    class SSeq : public SNode
-    {
-      public:
-        SSeq() : SNode(SNodeKind::kSeq) {}
-
-        const std::vector< SNode * > &Children() const { return children_; }
-        std::vector< SNode * > &Children() { return children_; }
-
-        void AddChild(SNode *child) {
-            child->SetParent(this);
-            children_.push_back(child);
-        }
-
-        void InsertChild(size_t pos, SNode *child) {
-            child->SetParent(this);
-            children_.insert(children_.begin() + static_cast< ptrdiff_t >(pos), child);
-        }
-
-        void RemoveChild(size_t pos) {
-            children_.erase(children_.begin() + static_cast< ptrdiff_t >(pos));
-        }
-
-        void ReplaceChild(size_t pos, SNode *child) {
-            child->SetParent(this);
-            children_[pos] = child;
-        }
-
-        // Replace a range [from, to) with a single node
-        void ReplaceRange(size_t from, size_t to, SNode *replacement) {
-            replacement->SetParent(this);
-            auto begin = children_.begin();
-            children_.erase(begin + static_cast< ptrdiff_t >(from) + 1,
-                            begin + static_cast< ptrdiff_t >(to));
-            children_[from] = replacement;
-        }
-
-        // Replace a range [from, to) with multiple nodes
-        void ReplaceRange(size_t from, size_t to,
-                           const std::vector< SNode * > &replacements) {
-            for (auto *r : replacements) r->SetParent(this);
-            auto begin = children_.begin();
-            children_.erase(begin + static_cast< ptrdiff_t >(from),
-                            begin + static_cast< ptrdiff_t >(to));
-            children_.insert(children_.begin() + static_cast< ptrdiff_t >(from),
-                             replacements.begin(), replacements.end());
-        }
-
-        size_t Size() const { return children_.size(); }
-        bool Empty() const { return children_.empty(); }
-        SNode *operator[](size_t i) { return children_[i]; }
-        const SNode *operator[](size_t i) const { return children_[i]; }
-
-        void for_each_child(const ChildFn &fn) const override {
-            for (auto *c : children_) fn(c);
-        }
-        void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : children_) fn(slot);
-        }
-
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kSeq; }
-
-      protected:
-        void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
-
-      private:
-        std::vector< SNode * > children_;
     };
 
     // Basic block: holds raw Clang Stmt* and an optional label
@@ -223,11 +153,19 @@ namespace patchestry::ast {
             then_.clear();
             if (n) { then_.push_back(n); n->SetParent(this); }
         }
+        void SetThenBranch(std::vector< SNode * > body) {
+            then_ = std::move(body);
+            for (auto *c : then_) if (c) c->SetParent(this);
+        }
 
         SNode *ElseBranch() const { return else_.empty() ? nullptr : else_[0]; }
         void SetElseBranch(SNode *n) {
             else_.clear();
             if (n) { else_.push_back(n); n->SetParent(this); }
+        }
+        void SetElseBranch(std::vector< SNode * > body) {
+            else_ = std::move(body);
+            for (auto *c : else_) if (c) c->SetParent(this);
         }
 
         const std::vector< SNode * > &ThenList() const { return then_; }
@@ -485,6 +423,10 @@ namespace patchestry::ast {
             default_.clear();
             if (n) { default_.push_back(n); n->SetParent(this); }
         }
+        void SetDefaultBody(std::vector< SNode * > body) {
+            default_ = std::move(body);
+            for (auto *c : default_) if (c) c->SetParent(this);
+        }
 
         const std::vector< SNode * > &DefaultBodyList() const { return default_; }
         std::vector< SNode * > &DefaultBodyList() { return default_; }
@@ -655,35 +597,18 @@ namespace patchestry::ast {
             return ptr;
         }
 
-        // Build a sequence with normalization (Layer C migration Stage 0).
+        // Build a sequence (std::vector<SNode*>) with normalization:
+        // nullptr children are dropped.  A "sequence" is a plain
+        // std::vector<SNode*> — the SSeq node kind no longer exists.
         //
-        // Rules applied at construction time:
-        //   - Drop nullptr children.
-        //   - If size 0 → return nullptr (caller decides substitute).
-        //   - If size 1 → return the single child directly (no wrap).
-        //   - Otherwise → allocate an SSeq and AddChild each.
-        //
-        // Two more aggressive normalizations are intentionally deferred:
-        //   * Empty unlabeled SBlock children are NOT dropped (they
-        //     correspond to CFG nodes with no stmts; sibling distance
-        //     is load-bearing for downstream fallthrough reasoning).
-        //   * Nested SSeq children are NOT flattened inline (flattening
-        //     exposes label adjacency that the EliminateGotoToNextLabel
-        //     elision logic mishandles when the label has live non-goto
-        //     predecessors).
-        // Both have been tried and revert with the same 4-fixture
-        // regression set; see SNode.cpp for details.  Re-enabling them
-        // requires a separate fix to downstream cleanup passes and
-        // belongs in a follow-up policy change, not this refactor.
-        //
-        // After Stage 5 (SSeq removal) callers will use std::vector<SNode*>
-        // directly; until then, MakeSeq is the single chokepoint that
-        // ensures every constructed SSeq is non-trivial and non-redundant.
-        SNode *MakeSeq(std::initializer_list< SNode * > children) {
+        // Empty unlabeled SBlock children are intentionally NOT dropped
+        // (they correspond to CFG nodes with no stmts; sibling distance
+        // is load-bearing for downstream fallthrough reasoning).
+        std::vector< SNode * > MakeSeq(std::initializer_list< SNode * > children) {
             return MakeSeq(std::vector< SNode * >(children));
         }
 
-        SNode *MakeSeq(std::vector< SNode * > children);
+        std::vector< SNode * > MakeSeq(std::vector< SNode * > children);
 
         // Intern a copy of a string; the returned view is valid until Reset().
         // Uses a bump allocator because raw char data carries no destructor.

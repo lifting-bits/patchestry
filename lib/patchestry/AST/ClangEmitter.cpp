@@ -91,8 +91,6 @@ namespace patchestry::ast {
                 if (!node) return nullptr;
 
                 switch (node->Kind()) {
-                case SNodeKind::kSeq:
-                    return EmitSeq(node->as< SSeq >());
                 case SNodeKind::kBlock:
                     return EmitBlock(node->as< SBlock >());
                 case SNodeKind::kIfThenElse:
@@ -123,15 +121,6 @@ namespace patchestry::ast {
             // corresponding label definitions. This prevents CIR goto/label mismatch.
           private:
             clang::SourceLocation Loc() const { return loc_; }
-
-            clang::Stmt *EmitSeq(const SSeq *seq) {
-                std::vector< clang::Stmt * > stmts;
-                for (const auto *child : seq->Children()) {
-                    auto *s = Emit(child);
-                    if (s) stmts.push_back(s);
-                }
-                return detail::MakeCompound(ctx_, stmts);
-            }
 
             clang::Stmt *EmitBlock(const SBlock *block) {
                 if (block->Size() == 1) return block->Stmts()[0];
@@ -372,27 +361,9 @@ namespace patchestry::ast {
                     for (auto *s : blk->Stmts()) scan(s);
                     return; // SBlock has no SNode children
                 }
-                if (auto *seq = node->dyn_cast< SSeq >()) {
-                    for (size_t i = 0; i < seq->Size(); ++i)
-                        CollectGotoLabelDecls((*seq)[i]);
-                } else if (auto *ite = node->dyn_cast< SIfThenElse >()) {
-                    CollectGotoLabelDecls(ite->ThenBranch());
-                    CollectGotoLabelDecls(ite->ElseBranch());
-                } else if (auto *sw = node->dyn_cast< SSwitch >()) {
-                    for (auto &c : sw->Cases())
-                        for (auto *b : c.body_list)
-                            CollectGotoLabelDecls(b);
-                    for (auto *b : sw->DefaultBodyList())
-                        CollectGotoLabelDecls(b);
-                } else if (auto *lbl = node->dyn_cast< SLabel >()) {
-                    CollectGotoLabelDecls(lbl->Body());
-                } else if (auto *w = node->dyn_cast< SWhile >()) {
-                    CollectGotoLabelDecls(w->Body());
-                } else if (auto *dw = node->dyn_cast< SDoWhile >()) {
-                    CollectGotoLabelDecls(dw->Body());
-                } else if (auto *f = node->dyn_cast< SFor >()) {
-                    CollectGotoLabelDecls(f->Body());
-                }
+                node->for_each_child([&](SNode *c) {
+                    CollectGotoLabelDecls(c);
+                });
             }
 
             clang::ASTContext &ctx_;

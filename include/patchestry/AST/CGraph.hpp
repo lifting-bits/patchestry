@@ -51,8 +51,10 @@ namespace patchestry::ast {
         // Edge properties (indexed same as succs)
         std::vector<uint32_t> edge_flags;
 
-        // The SNode produced when this node is collapsed (null = leaf)
-        SNode *structured = nullptr;
+        // The structured SNode sequence produced when this node is
+        // collapsed (empty = leaf).  A "sequence" is a std::vector<SNode*>
+        // since the SSeq node kind was removed.
+        std::vector< SNode * > structured;
 
         // Leaf payload: statements from the original basic block
         std::string label;                      // mutable label (cleared after SLabel wrapping)
@@ -183,7 +185,8 @@ namespace patchestry::ast {
         /// collapsed but their stmts/labels remain accessible.
         /// Returns the representative node id.
         size_t IdentifyInternal(const std::vector<size_t> &ids,
-                                CNode::BlockType type, SNode *snode);
+                                CNode::BlockType type,
+                                std::vector< SNode * > snodes);
     };
 
     class FunctionBuilder;

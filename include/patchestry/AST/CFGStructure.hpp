@@ -92,7 +92,8 @@ namespace patchestry::ast {
 
         /// Wrap child SNode with node's prior content (structured or stmts)
         /// and label.  Used by all if/if-else/if-return rules.
-        SNode *WrapWithPriorContent(size_t id, SNode *child);
+        /// Returns the resulting SNode sequence.
+        std::vector< SNode * > WrapWithPriorContent(size_t id, SNode *child);
 
         /// Check if node d is dominated by node root via idom_ chain.
         bool IsDominatedBy(size_t d, size_t root) const;
@@ -109,16 +110,20 @@ namespace patchestry::ast {
         /// When \p include_terminal is false the node's terminal stmt (goto /
         /// if-goto) is omitted — used for non-tail nodes in a sequential merge
         /// where the edge is absorbed by the merge.
-        SNode *BuildLeafSNode(size_t id, bool include_terminal = true);
+        /// Returns a single-element sequence (or the node's existing
+        /// structured sequence if it was already structured).
+        std::vector< SNode * > BuildLeafSNode(size_t id,
+                                              bool include_terminal = true);
 
-        /// Build an SSeq from multiple node ids (each wrapped via BuildLeafSNode).
-        SNode *BuildBodySNode(const std::vector<size_t> &ids);
+        /// Build a sequence from multiple node ids (each via BuildLeafSNode).
+        std::vector< SNode * > BuildBodySNode(const std::vector<size_t> &ids);
 
-        /// Build the body SNode for a loop, excluding the header.
+        /// Build the body SNode sequence for a loop, excluding the header.
         /// Interior node terminals are stripped (edges absorbed by loop).
         /// Conditional interior nodes with exits outside the body get
         /// an if-goto to preserve the exit path.
-        SNode *BuildLoopBodySNode(const std::vector<size_t> &body,
+        std::vector< SNode * > BuildLoopBodySNode(
+                                  const std::vector<size_t> &body,
                                   size_t header_id,
                                   const std::unordered_set<size_t> &bodyset);
 
@@ -130,19 +135,21 @@ namespace patchestry::ast {
     /// Eliminate gotos whose target label immediately follows in the
     /// same SSeq.  Chases through SLabel→SSeq→SBlock nesting to find
     /// deeply buried gotos (DeepTrailingStmt pattern).
-    bool EliminateGotoToNextLabel(SNode *root, SNodeFactory &factory,
+    bool EliminateGotoToNextLabel(std::vector< SNode * > &root,
+                                  SNodeFactory &factory,
                                   clang::ASTContext &ctx);
 
     /// Absorb unreferenced SLabel siblings after if-then (no else) into
     /// the else branch.  Prevents spurious fallthrough from the false path
     /// into code that was goto-only in the original CFG.
-    bool AbsorbFallthroughIntoElse(SNode *root, SNodeFactory &factory);
+    bool AbsorbFallthroughIntoElse(std::vector< SNode * > &root,
+                                   SNodeFactory &factory);
 
     /// Convert if(cond) goto L; stmts; L: patterns into if(!cond) { stmts }
     /// within SSeq nodes.  Only fires when label L has a single goto
     /// reference and no intermediate SLabel nodes exist between the goto
     /// and its target.  Recurses into all nested SNode bodies.
-    bool ScopeifyIfGotos(SNode *root, SNodeFactory &factory,
+    bool ScopeifyIfGotos(std::vector< SNode * > &root, SNodeFactory &factory,
                          clang::ASTContext &ctx);
 
     /// Post-structuring cleanup: inline residual goto-to-label pairs.
@@ -154,14 +161,15 @@ namespace patchestry::ast {
     /// from structuring.
     ///
     /// Returns true if any inlining was performed.
-    bool InlineResidualGotos(SNode *root, SNodeFactory &factory);
+    bool InlineResidualGotos(std::vector< SNode * > &root, SNodeFactory &factory);
 
     /// Replace goto-to-break/continue: when a trailing clang::GotoStmt or
     /// SGoto targets an enclosing loop's exit label (→ break) or header
     /// label (→ continue), replace it with the structured equivalent.
     ///
     /// Returns true if any replacement was performed.
-    bool ConvertGotoToBreakContinue(SNode *root, SNodeFactory &factory);
+    bool ConvertGotoToBreakContinue(std::vector< SNode * > &root,
+                                    SNodeFactory &factory);
 
     /// Replace goto-to-return: when a trailing clang::GotoStmt in an SBlock
     /// (or an SGoto SNode) targets a label whose body ends with a
@@ -171,13 +179,14 @@ namespace patchestry::ast {
     /// Dead labels are cleaned up by a subsequent InlineResidualGotos pass.
     ///
     /// Returns true if any replacement was performed.
-    bool ConvertGotoToReturn(SNode *root, SNodeFactory &factory,
+    bool ConvertGotoToReturn(std::vector< SNode * > &root, SNodeFactory &factory,
                              clang::ASTContext &ctx);
 
     /// Remove SLabel nodes from SSeq whose label has zero references
     /// (no SGoto and no clang::GotoStmt targets it).  The label's body
     /// is dropped — it is dead code reachable only via the removed label.
-    bool RemoveUnreferencedLabels(SNode *root, SNodeFactory &factory);
+    bool RemoveUnreferencedLabels(std::vector< SNode * > &root,
+                                  SNodeFactory &factory);
 
     /// Duplicate small, side-effect-contained label targets into switch
     /// case arms that end in `SGoto L`, making the case bodies goto-free.
@@ -187,7 +196,8 @@ namespace patchestry::ast {
     /// cloning, dead labels are reclaimed by RemoveUnreferencedLabels.
     ///
     /// Returns true if any duplication was performed.
-    bool DuplicateSwitchCaseTargets(SNode *root, SNodeFactory &factory);
+    bool DuplicateSwitchCaseTargets(std::vector< SNode * > &root,
+                                    SNodeFactory &factory);
 
     /// Cross-scope version of InlineResidualGotos: for each goto whose
     /// target label has exactly one reference, the label's body always
@@ -203,11 +213,12 @@ namespace patchestry::ast {
     /// matters.
     ///
     /// Returns true if any label was inlined.
-    bool InlineCrossScopeSingleRef(SNode *root, SNodeFactory &factory);
+    bool InlineCrossScopeSingleRef(std::vector< SNode * > &root,
+                                   SNodeFactory &factory);
 
     /// Remove unreachable SSeq children that follow a terminating
     /// sibling.  Preserves SLabel children (may be goto targets from
     /// other scopes).  Bottom-up recursive.
-    bool RemoveDeadSSeqChildren(SNode *root);
+    bool RemoveDeadSSeqChildren(std::vector< SNode * > &root);
 
 } // namespace patchestry::ast

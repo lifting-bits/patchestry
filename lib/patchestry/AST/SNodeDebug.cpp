@@ -32,14 +32,6 @@ namespace patchestry::ast {
                 os << "\"];\n";
 
                 switch (node->Kind()) {
-                case SNodeKind::kSeq: {
-                    auto *seq = node->as< SSeq >();
-                    for (const auto *child : seq->Children()) {
-                        unsigned cid = Emit(child);
-                        os << "  n" << id << " -> n" << cid << ";\n";
-                    }
-                    break;
-                }
                 case SNodeKind::kIfThenElse: {
                     auto *ite = node->as< SIfThenElse >();
                     if (ite->ThenBranch()) {
