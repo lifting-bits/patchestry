@@ -131,7 +131,7 @@ namespace patchestry::ast {
                 // Null else_stmt for an empty slot = no else clause
                 // (a NullStmt would render as `else ;`).
                 clang::Stmt *else_stmt = nullptr;
-                if (ite->ElseBranch()) {
+                if (!ite->ElseList().empty()) {
                     else_stmt = EmitBodyList(ite->ElseList());
                 }
 

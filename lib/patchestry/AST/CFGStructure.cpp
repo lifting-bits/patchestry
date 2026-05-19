@@ -3099,7 +3099,12 @@ namespace patchestry::ast {
 
                 auto rc = refs.find(lbl->Name());
                 if (rc != refs.end() && rc->second > 0) continue;
-                if (!SNodeAlwaysTerminates(ite->ThenBranch())) continue;
+                // The whole then-sequence must terminate — ThenBranch()
+                // only exposes then_[0], so a multi-statement then that
+                // ends in a return would otherwise be missed.
+                if (ite->ThenList().empty()
+                    || !SNodeAlwaysTerminates(ite->ThenList().back()))
+                    continue;
 
                 ite->SetElseBranch(lbl->BodyList());
 
