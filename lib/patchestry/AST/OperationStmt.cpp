@@ -3667,22 +3667,24 @@ namespace patchestry::ast {
 
     clang::FunctionDecl *OpBuilder::get_or_create_intrinsic_decl(
         clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,
-        bool is_variadic, clang::QualType first_param_type
+        llvm::ArrayRef< clang::QualType > param_types
     ) {
         // Cache key encodes everything that affects the FunctionDecl identity:
-        // name, return type, and (for variadic prototypes) the type of the
-        // synthesized fixed parameter. Without the return type, the same
-        // intrinsic called in both void and valued contexts (e.g. as a
-        // statement and as an expression) would collide and the second call
-        // would reuse a wrong-return-type FunctionDecl.
+        // name, return type, and the full parameter list. Without the return
+        // type, the same intrinsic called in both void and valued contexts
+        // would collide and the second call would reuse a wrong-return-type
+        // FunctionDecl. Without the full parameter list, two callers passing
+        // differently-typed args would share a single decl whose prototype
+        // matches only one of them, producing arity/type mismatches during
+        // CIR -> LLVM lowering.
         std::string cache_key = name;
         cache_key += "|ret:";
         cache_key += return_type.getCanonicalType().getAsString();
-        if (is_variadic) {
-            cache_key += "|param0:";
-            cache_key += first_param_type.isNull()
-                             ? std::string("void *")
-                             : first_param_type.getCanonicalType().getAsString();
+        for (std::size_t i = 0; i < param_types.size(); ++i) {
+            cache_key += "|param";
+            cache_key += std::to_string(i);
+            cache_key += ":";
+            cache_key += param_types[i].getCanonicalType().getAsString();
         }
 
         auto it = intrinsic_decls().find(cache_key);
@@ -3690,27 +3692,22 @@ namespace patchestry::ast {
             return it->second;
         }
 
-        // Create a new intrinsic function declaration
+        // Create a new intrinsic function declaration. A fully fixed-arity
+        // prototype is used (epi.Variadic = false): ClangIR's CIRGen
+        // occasionally drops the variadic flag for void-returning functions,
+        // producing prototypes that mismatch the call site arity and abort
+        // the lowering pass. For genuine zero-input CALLOTHER userops (e.g.
+        // the AArch64 ClearExclusiveLocal SLEIGH emit), the prototype must
+        // also be empty so that BuildCallExpr's `0 args -> 0 params` check
+        // succeeds; synthesizing a void* placeholder here used to put us
+        // back into a `0 args -> 1 param` mismatch.
         auto loc = VirtualLoc(ctx);
-
-        // Create function type with variadic signature if requested.
-        // Note: Variadic prototypes must have at least one non-variadic parameter
-        // to satisfy CIR/LLVM lowering requirements.
         clang::FunctionProtoType::ExtProtoInfo epi;
-        epi.Variadic = is_variadic;
+        epi.Variadic = false;
 
-        llvm::SmallVector<clang::QualType, 1> param_types;
-        if (is_variadic) {
-            // Variadic prototypes need at least one fixed parameter for CIR/LLVM
-            // lowering. Use the first real argument's type when available so
-            // processor userops are not forced through an unrelated void *.
-            if (first_param_type.isNull()) {
-                first_param_type = ctx.getPointerType(ctx.VoidTy);
-            }
-            param_types.push_back(first_param_type);
-        }
+        llvm::SmallVector< clang::QualType, 4 > params(param_types.begin(), param_types.end());
 
-        auto func_type = ctx.getFunctionType(return_type, param_types, epi);
+        auto func_type = ctx.getFunctionType(return_type, params, epi);
         auto *func_decl = clang::FunctionDecl::Create(
             ctx, ctx.getTranslationUnitDecl(), loc, loc, &ctx.Idents.get(name), func_type,
             ctx.getTrivialTypeSourceInfo(func_type), clang::SC_Extern
@@ -3724,8 +3721,8 @@ namespace patchestry::ast {
         // Create ParmVarDecls so Sema can inspect fixed parameters while
         // performing call conversions.
         std::vector< clang::ParmVarDecl * > param_decls;
-        param_decls.reserve(param_types.size());
-        for (auto param_type : param_types) {
+        param_decls.reserve(params.size());
+        for (auto param_type : params) {
             auto *param = clang::ParmVarDecl::Create(
                 ctx, func_decl, loc, loc, nullptr, param_type, nullptr, clang::SC_None, nullptr
             );
@@ -3769,12 +3766,19 @@ namespace patchestry::ast {
             }
         }
 
-        // Get or create function declaration
-        clang::QualType first_param_type;
-        if (!args.empty()) {
-            first_param_type = args.front()->getType();
+        // Build the function prototype from the actual argument types so the
+        // declared arity always matches the call site. Earlier revisions used
+        // a variadic prototype keyed only on the first argument type, but
+        // ClangIR's CIRGen intermittently dropped the variadic flag on
+        // void-returning intrinsic declarations and produced cir.func types
+        // with fewer fixed parameters than the call passed, aborting the
+        // lowering pass with "incorrect number of operands for callee".
+        llvm::SmallVector< clang::QualType, 4 > param_types;
+        param_types.reserve(args.size());
+        for (auto *arg : args) {
+            param_types.push_back(arg->getType());
         }
-        auto *fn_decl = get_or_create_intrinsic_decl(ctx, name, ret_type, true, first_param_type);
+        auto *fn_decl = get_or_create_intrinsic_decl(ctx, name, ret_type, param_types);
         if (fn_decl == nullptr) {
             LOG(ERROR) << "Failed to get intrinsic declaration. key: " << op.key << "\n";
             return {};
@@ -3919,13 +3923,28 @@ namespace patchestry::ast {
             if (!t.isNull()) ret_type = t;
         }
 
-        // Cache key must encode the return type so a void-context call and
-        // a valued-context call of the same userop do not collide on the
-        // cached FunctionDecl (see get_or_create_intrinsic_decl for the
-        // canonical statement of this invariant).
+        // Build the fixed-arity prototype up front so the cache key encodes
+        // both the return type and every parameter type, matching the
+        // invariant in get_or_create_intrinsic_decl. Without the parameter
+        // types in the key, the same unknown userop name appearing at two
+        // call sites with different arities (possible with custom or
+        // exotic SLEIGH processors that emit it as a CALLOTHER) would reuse
+        // the first-seen FunctionDecl and produce an arity mismatch in
+        // BuildCallExpr at the second call site.
+        llvm::SmallVector< clang::QualType, 4 > param_types;
+        for (const auto &input : op.inputs) {
+            param_types.push_back(get_varnode_type(ctx, input));
+        }
+
         std::string cache_key = func_name;
         cache_key += "|ret:";
         cache_key += ret_type.getCanonicalType().getAsString();
+        for (std::size_t i = 0; i < param_types.size(); ++i) {
+            cache_key += "|param";
+            cache_key += std::to_string(i);
+            cache_key += ":";
+            cache_key += param_types[i].getCanonicalType().getAsString();
+        }
 
         // Check cache for existing declaration
         auto cache_it = intrinsic_decls().find(cache_key);
@@ -3934,16 +3953,11 @@ namespace patchestry::ast {
         if (cache_it != intrinsic_decls().end()) {
             fn_decl = cache_it->second;
         } else {
-            // Build param types from inputs; use non-variadic to satisfy "prototyped
-            // function must have at least one non-variadic input" (void() and void(...)
-            // are invalid in CIR/LLVM lowering)
-            llvm::SmallVector< clang::QualType, 4 > param_types;
-            for (const auto &input : op.inputs) {
-                param_types.push_back(get_varnode_type(ctx, input));
-            }
-            if (param_types.empty()) {
-                param_types.push_back(ctx.VoidPtrTy);
-            }
+            // A zero-input userop becomes a `()` prototype rather than a
+            // `(void*)` placeholder so that the call (which also has zero
+            // args) lines up; the earlier placeholder produced a 0-args vs
+            // 1-param mismatch in Sema for genuine no-operand userops such
+            // as AArch64 ClearExclusiveLocal.
             clang::FunctionProtoType::ExtProtoInfo epi;
             epi.Variadic = false;
 
@@ -3995,17 +4009,6 @@ namespace patchestry::ast {
                 args.push_back(e);
             }
         }
-        // When function expects void* placeholder (op had zero inputs), pass (void*)0
-        if (op.inputs.empty() && args.empty()) {
-            auto *zero = clang::IntegerLiteral::Create(
-                ctx, llvm::APInt(32, 0), ctx.IntTy, op_loc
-            );
-            auto *null_expr = make_cast(ctx, zero, ctx.VoidPtrTy, op_loc);
-            if (null_expr != nullptr) {
-                args.push_back(null_expr);
-            }
-        }
-
         // Build call expression
         auto *fn_ref = clang::DeclRefExpr::Create(
             ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), fn_decl, false, op_loc,

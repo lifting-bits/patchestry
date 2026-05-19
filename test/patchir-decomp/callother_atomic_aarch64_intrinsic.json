@@ -2,23 +2,237 @@
 // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+
+// Two grounded vocabularies are exercised here:
+//
+//   1. Stock Ghidra 12.0.4 AArch64 SLEIGH CALLOTHER userops:
+//        DataMemoryBarrier, DataSynchronizationBarrier,
+//        InstructionSynchronizationBarrier, ClearExclusiveLocal,
+//        LOAcquire, LORelease, SpeculationBarrier
+//      (Ghidra/Processors/AARCH64/data/languages/AARCH64instructions.sinc)
+//
+//   2. LLVM compiler-rt AArch64 outline-atomic helper symbols:
+//        __aarch64_<base><size><ordering>
+//      (compiler-rt/lib/builtins/aarch64/lse.S)
+//      Real binaries built with -moutline-atomics call these as ordinary
+//      external functions; this fixture confirms the normalizer maps the
+//      symbol name to the C11 atomic canonical even when the upstream
+//      pipeline surfaces it as an intrinsic CALLOTHER.
+
+// CIR-DAG: atomic_thread_fence_seq_cst
+// CIR-DAG: atomic_thread_fence_acquire
+// CIR-DAG: atomic_thread_fence_release
+// CIR-DAG: instruction_sync_fence
+// CIR-DAG: atomic_clear_exclusive
 // CIR-DAG: atomic_fetch_add_acq_rel
+// CIR-DAG: atomic_fetch_add_seq_cst
 // CIR-DAG: atomic_exchange_acquire
 // CIR-DAG: atomic_fetch_or_relaxed
 // CIR-DAG: atomic_compare_exchange_release
-// CIR-DAG: __patchestry_missing___aarch64_dmb
+// CIR-DAG: __patchestry_missing___aarch64_undocumented_userop
+
+// LL-DAG: call {{.*}} @atomic_thread_fence_seq_cst
+// LL-DAG: call {{.*}} @atomic_thread_fence_acquire
+// LL-DAG: call {{.*}} @atomic_thread_fence_release
+// LL-DAG: call {{.*}} @instruction_sync_fence
+// LL-DAG: call {{.*}} @atomic_clear_exclusive
 // LL-DAG: call {{.*}} @atomic_fetch_add_acq_rel
+// LL-DAG: call {{.*}} @atomic_fetch_add_seq_cst
 // LL-DAG: call {{.*}} @atomic_exchange_acquire
 // LL-DAG: call {{.*}} @atomic_fetch_or_relaxed
 // LL-DAG: call {{.*}} @atomic_compare_exchange_release
-// LL-DAG: call {{.*}} @__patchestry_missing___aarch64_dmb
+// LL-DAG: call {{.*}} @__patchestry_missing___aarch64_undocumented_userop
 {
   "architecture": "AARCH64",
   "id": "AARCH64:LE:64:v8A",
   "format": "Executable and Linking Format (ELF)",
   "functions": {
     "ram:10000000": {
-      "name": "aarch64_atomic_add_acq_rel_test",
+      "name": "aarch64_dmb_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int", "type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "a64_dmb_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "domain", "type": "type_int", "kind": "parameter", "index": 0 },
+            "a64_dmb_p1": { "mnemonic": "DECLARE_PARAMETER", "name": "types", "type": "type_int", "kind": "parameter", "index": 1 },
+            "a64_dmb_br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["a64_dmb_p0", "a64_dmb_p1", "a64_dmb_br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "a64_dmb_op": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "DataMemoryBarrier:t0",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "a64_dmb_p0" },
+                { "type": "type_int", "kind": "parameter", "operation": "a64_dmb_p1" }
+              ]
+            },
+            "a64_dmb_ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["a64_dmb_op", "a64_dmb_ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:10000100": {
+      "name": "aarch64_loacquire_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int"]
+      },
+      "basic_blocks": {
+        "ram:10000100:entry": {
+          "operations": {
+            "a64_loa_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "tag", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "a64_loa_br": { "mnemonic": "BRANCH", "target_block": "ram:10000100:0:basic" }
+          },
+          "ordered_operations": ["a64_loa_p0", "a64_loa_br"]
+        },
+        "ram:10000100:0:basic": {
+          "operations": {
+            "a64_loa_op": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "LOAcquire:t0",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [{ "type": "type_ptr_int", "kind": "parameter", "operation": "a64_loa_p0" }]
+            },
+            "a64_loa_ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["a64_loa_op", "a64_loa_ret"]
+        }
+      },
+      "entry_block": "ram:10000100:entry"
+    },
+    "ram:10000200": {
+      "name": "aarch64_lorelease_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int"]
+      },
+      "basic_blocks": {
+        "ram:10000200:entry": {
+          "operations": {
+            "a64_lor_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "tag", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "a64_lor_br": { "mnemonic": "BRANCH", "target_block": "ram:10000200:0:basic" }
+          },
+          "ordered_operations": ["a64_lor_p0", "a64_lor_br"]
+        },
+        "ram:10000200:0:basic": {
+          "operations": {
+            "a64_lor_op": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "LORelease:t0",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [{ "type": "type_ptr_int", "kind": "parameter", "operation": "a64_lor_p0" }]
+            },
+            "a64_lor_ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["a64_lor_op", "a64_lor_ret"]
+        }
+      },
+      "entry_block": "ram:10000200:entry"
+    },
+    "ram:10000300": {
+      "name": "aarch64_isb_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000300:entry": {
+          "operations": {
+            "a64_isb_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "scope", "type": "type_int", "kind": "parameter", "index": 0 },
+            "a64_isb_br": { "mnemonic": "BRANCH", "target_block": "ram:10000300:0:basic" }
+          },
+          "ordered_operations": ["a64_isb_p0", "a64_isb_br"]
+        },
+        "ram:10000300:0:basic": {
+          "operations": {
+            "a64_isb_op": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "InstructionSynchronizationBarrier:t0",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "a64_isb_p0" }]
+            },
+            "a64_isb_ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["a64_isb_op", "a64_isb_ret"]
+        }
+      },
+      "entry_block": "ram:10000300:entry"
+    },
+    "ram:10000400": {
+      "name": "aarch64_clrex_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int"]
+      },
+      "basic_blocks": {
+        "ram:10000400:entry": {
+          "operations": {
+            "a64_clrex_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "monitor", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "a64_clrex_br": { "mnemonic": "BRANCH", "target_block": "ram:10000400:0:basic" }
+          },
+          "ordered_operations": ["a64_clrex_p0", "a64_clrex_br"]
+        },
+        "ram:10000400:0:basic": {
+          "operations": {
+            "a64_clrex_op": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "ClearExclusiveLocal:t0",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [{ "type": "type_ptr_int", "kind": "parameter", "operation": "a64_clrex_p0" }]
+            },
+            "a64_clrex_ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["a64_clrex_op", "a64_clrex_ret"]
+        }
+      },
+      "entry_block": "ram:10000400:entry"
+    },
+    "ram:10000500": {
+      "name": "aarch64_outline_ldadd_acq_rel_test",
       "is_intrinsic": false,
       "type": {
         "return_type": "type_int",
@@ -27,21 +241,21 @@
         "parameter_types": ["type_ptr_int", "type_int"]
       },
       "basic_blocks": {
-        "ram:10000000:entry": {
+        "ram:10000500:entry": {
           "operations": {
-            "a64_add_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
-            "a64_add_p1": { "mnemonic": "DECLARE_PARAMETER", "name": "delta", "type": "type_int", "kind": "parameter", "index": 1 },
-            "a64_add_old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000000:0:basic:a64_add_op" },
-            "a64_add_br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+            "a64_la_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "a64_la_p1": { "mnemonic": "DECLARE_PARAMETER", "name": "delta", "type": "type_int", "kind": "parameter", "index": 1 },
+            "a64_la_old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000500:0:basic:a64_la_op" },
+            "a64_la_br": { "mnemonic": "BRANCH", "target_block": "ram:10000500:0:basic" }
           },
-          "ordered_operations": ["a64_add_p0", "a64_add_p1", "a64_add_old", "a64_add_br"]
+          "ordered_operations": ["a64_la_p0", "a64_la_p1", "a64_la_old", "a64_la_br"]
         },
-        "ram:10000000:0:basic": {
+        "ram:10000500:0:basic": {
           "operations": {
-            "a64_add_op": {
+            "a64_la_op": {
               "mnemonic": "CALLOTHER",
               "type": "type_int",
-              "output": { "kind": "temporary", "operation": "a64_add_old", "type": "type_int" },
+              "output": { "kind": "temporary", "operation": "a64_la_old", "type": "type_int" },
               "target": {
                 "kind": "intrinsic",
                 "function": "__aarch64_ldadd4_acq_rel:t0",
@@ -49,22 +263,22 @@
                 "is_noreturn": false
               },
               "inputs": [
-                { "type": "type_int", "kind": "parameter", "operation": "a64_add_p1" },
-                { "type": "type_ptr_int", "kind": "parameter", "operation": "a64_add_p0" }
+                { "type": "type_int", "kind": "parameter", "operation": "a64_la_p1" },
+                { "type": "type_ptr_int", "kind": "parameter", "operation": "a64_la_p0" }
               ]
             },
-            "a64_add_ret": {
+            "a64_la_ret": {
               "mnemonic": "RETURN",
-              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "a64_add_op" }]
+              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "a64_la_op" }]
             }
           },
-          "ordered_operations": ["a64_add_op", "a64_add_ret"]
+          "ordered_operations": ["a64_la_op", "a64_la_ret"]
         }
       },
-      "entry_block": "ram:10000000:entry"
+      "entry_block": "ram:10000500:entry"
     },
-    "ram:10000100": {
-      "name": "aarch64_atomic_swp_acquire_test",
+    "ram:10000600": {
+      "name": "aarch64_outline_ldadd_sync_test",
       "is_intrinsic": false,
       "type": {
         "return_type": "type_int",
@@ -73,16 +287,62 @@
         "parameter_types": ["type_ptr_int", "type_int"]
       },
       "basic_blocks": {
-        "ram:10000100:entry": {
+        "ram:10000600:entry": {
+          "operations": {
+            "a64_ls_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "a64_ls_p1": { "mnemonic": "DECLARE_PARAMETER", "name": "delta", "type": "type_int", "kind": "parameter", "index": 1 },
+            "a64_ls_old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000600:0:basic:a64_ls_op" },
+            "a64_ls_br": { "mnemonic": "BRANCH", "target_block": "ram:10000600:0:basic" }
+          },
+          "ordered_operations": ["a64_ls_p0", "a64_ls_p1", "a64_ls_old", "a64_ls_br"]
+        },
+        "ram:10000600:0:basic": {
+          "operations": {
+            "a64_ls_op": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_int",
+              "output": { "kind": "temporary", "operation": "a64_ls_old", "type": "type_int" },
+              "target": {
+                "kind": "intrinsic",
+                "function": "__aarch64_ldadd8_sync:t0",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "a64_ls_p1" },
+                { "type": "type_ptr_int", "kind": "parameter", "operation": "a64_ls_p0" }
+              ]
+            },
+            "a64_ls_ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "a64_ls_op" }]
+            }
+          },
+          "ordered_operations": ["a64_ls_op", "a64_ls_ret"]
+        }
+      },
+      "entry_block": "ram:10000600:entry"
+    },
+    "ram:10000700": {
+      "name": "aarch64_outline_swp_acq_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int", "type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000700:entry": {
           "operations": {
             "a64_swp_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
             "a64_swp_p1": { "mnemonic": "DECLARE_PARAMETER", "name": "value", "type": "type_int", "kind": "parameter", "index": 1 },
-            "a64_swp_old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000100:0:basic:a64_swp_op" },
-            "a64_swp_br": { "mnemonic": "BRANCH", "target_block": "ram:10000100:0:basic" }
+            "a64_swp_old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000700:0:basic:a64_swp_op" },
+            "a64_swp_br": { "mnemonic": "BRANCH", "target_block": "ram:10000700:0:basic" }
           },
           "ordered_operations": ["a64_swp_p0", "a64_swp_p1", "a64_swp_old", "a64_swp_br"]
         },
-        "ram:10000100:0:basic": {
+        "ram:10000700:0:basic": {
           "operations": {
             "a64_swp_op": {
               "mnemonic": "CALLOTHER",
@@ -107,10 +367,10 @@
           "ordered_operations": ["a64_swp_op", "a64_swp_ret"]
         }
       },
-      "entry_block": "ram:10000100:entry"
+      "entry_block": "ram:10000700:entry"
     },
-    "ram:10000200": {
-      "name": "aarch64_atomic_ldset_relaxed_test",
+    "ram:10000800": {
+      "name": "aarch64_outline_ldset_relax_test",
       "is_intrinsic": false,
       "type": {
         "return_type": "type_int",
@@ -119,44 +379,44 @@
         "parameter_types": ["type_ptr_int", "type_int"]
       },
       "basic_blocks": {
-        "ram:10000200:entry": {
+        "ram:10000800:entry": {
           "operations": {
-            "a64_set_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
-            "a64_set_p1": { "mnemonic": "DECLARE_PARAMETER", "name": "mask", "type": "type_int", "kind": "parameter", "index": 1 },
-            "a64_set_old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000200:0:basic:a64_set_op" },
-            "a64_set_br": { "mnemonic": "BRANCH", "target_block": "ram:10000200:0:basic" }
+            "a64_ls_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "a64_ls_p1": { "mnemonic": "DECLARE_PARAMETER", "name": "mask", "type": "type_int", "kind": "parameter", "index": 1 },
+            "a64_ls_old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000800:0:basic:a64_ls_op" },
+            "a64_ls_br": { "mnemonic": "BRANCH", "target_block": "ram:10000800:0:basic" }
           },
-          "ordered_operations": ["a64_set_p0", "a64_set_p1", "a64_set_old", "a64_set_br"]
+          "ordered_operations": ["a64_ls_p0", "a64_ls_p1", "a64_ls_old", "a64_ls_br"]
         },
-        "ram:10000200:0:basic": {
+        "ram:10000800:0:basic": {
           "operations": {
-            "a64_set_op": {
+            "a64_ls_op": {
               "mnemonic": "CALLOTHER",
               "type": "type_int",
-              "output": { "kind": "temporary", "operation": "a64_set_old", "type": "type_int" },
+              "output": { "kind": "temporary", "operation": "a64_ls_old", "type": "type_int" },
               "target": {
                 "kind": "intrinsic",
-                "function": "__aarch64_ldset4:t0",
+                "function": "__aarch64_ldset4_relax:t0",
                 "is_variadic": true,
                 "is_noreturn": false
               },
               "inputs": [
-                { "type": "type_int", "kind": "parameter", "operation": "a64_set_p1" },
-                { "type": "type_ptr_int", "kind": "parameter", "operation": "a64_set_p0" }
+                { "type": "type_int", "kind": "parameter", "operation": "a64_ls_p1" },
+                { "type": "type_ptr_int", "kind": "parameter", "operation": "a64_ls_p0" }
               ]
             },
-            "a64_set_ret": {
+            "a64_ls_ret": {
               "mnemonic": "RETURN",
-              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "a64_set_op" }]
+              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "a64_ls_op" }]
             }
           },
-          "ordered_operations": ["a64_set_op", "a64_set_ret"]
+          "ordered_operations": ["a64_ls_op", "a64_ls_ret"]
         }
       },
-      "entry_block": "ram:10000200:entry"
+      "entry_block": "ram:10000800:entry"
     },
-    "ram:10000300": {
-      "name": "aarch64_atomic_cas_release_test",
+    "ram:10000900": {
+      "name": "aarch64_outline_cas_rel_test",
       "is_intrinsic": false,
       "type": {
         "return_type": "type_int",
@@ -165,17 +425,17 @@
         "parameter_types": ["type_ptr_int", "type_int", "type_int"]
       },
       "basic_blocks": {
-        "ram:10000300:entry": {
+        "ram:10000900:entry": {
           "operations": {
             "a64_cas_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
             "a64_cas_p1": { "mnemonic": "DECLARE_PARAMETER", "name": "expected", "type": "type_int", "kind": "parameter", "index": 1 },
             "a64_cas_p2": { "mnemonic": "DECLARE_PARAMETER", "name": "desired", "type": "type_int", "kind": "parameter", "index": 2 },
-            "a64_cas_old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000300:0:basic:a64_cas_op" },
-            "a64_cas_br": { "mnemonic": "BRANCH", "target_block": "ram:10000300:0:basic" }
+            "a64_cas_old": { "mnemonic": "DECLARE_TEMPORARY", "name": "old", "kind": "temporary", "type": "type_int", "address": "ram:10000900:0:basic:a64_cas_op" },
+            "a64_cas_br": { "mnemonic": "BRANCH", "target_block": "ram:10000900:0:basic" }
           },
           "ordered_operations": ["a64_cas_p0", "a64_cas_p1", "a64_cas_p2", "a64_cas_old", "a64_cas_br"]
         },
-        "ram:10000300:0:basic": {
+        "ram:10000900:0:basic": {
           "operations": {
             "a64_cas_op": {
               "mnemonic": "CALLOTHER",
@@ -201,9 +461,9 @@
           "ordered_operations": ["a64_cas_op", "a64_cas_ret"]
         }
       },
-      "entry_block": "ram:10000300:entry"
+      "entry_block": "ram:10000900:entry"
     },
-    "ram:10000600": {
+    "ram:10000a00": {
       "name": "aarch64_unknown_userop_test",
       "is_intrinsic": false,
       "type": {
@@ -213,31 +473,31 @@
         "parameter_types": ["type_ptr_int"]
       },
       "basic_blocks": {
-        "ram:10000600:entry": {
+        "ram:10000a00:entry": {
           "operations": {
-            "a64_unknown_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
-            "a64_unknown_br": { "mnemonic": "BRANCH", "target_block": "ram:10000600:0:basic" }
+            "a64_unk_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "a64_unk_br": { "mnemonic": "BRANCH", "target_block": "ram:10000a00:0:basic" }
           },
-          "ordered_operations": ["a64_unknown_p0", "a64_unknown_br"]
+          "ordered_operations": ["a64_unk_p0", "a64_unk_br"]
         },
-        "ram:10000600:0:basic": {
+        "ram:10000a00:0:basic": {
           "operations": {
-            "a64_unknown_op": {
+            "a64_unk_op": {
               "mnemonic": "CALLOTHER",
               "target": {
                 "kind": "intrinsic",
-                "function": "__aarch64_dmb:t0",
+                "function": "__aarch64_undocumented_userop:t0",
                 "is_variadic": true,
                 "is_noreturn": false
               },
-              "inputs": [{ "type": "type_ptr_int", "kind": "parameter", "operation": "a64_unknown_p0" }]
+              "inputs": [{ "type": "type_ptr_int", "kind": "parameter", "operation": "a64_unk_p0" }]
             },
-            "a64_unknown_ret": { "mnemonic": "RETURN", "inputs": [] }
+            "a64_unk_ret": { "mnemonic": "RETURN", "inputs": [] }
           },
-          "ordered_operations": ["a64_unknown_op", "a64_unknown_ret"]
+          "ordered_operations": ["a64_unk_op", "a64_unk_ret"]
         }
       },
-      "entry_block": "ram:10000600:entry"
+      "entry_block": "ram:10000a00:entry"
     }
   },
   "globals": {},

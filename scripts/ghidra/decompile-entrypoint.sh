@@ -216,7 +216,11 @@ function detect_processor {
     fi
 
     local mode="32"
-    # this grep will take only the first match
+    # `grep -o` emits every match on a separate line. `file` output for an
+    # x86-64 ELF mentions x86-64 twice (the architecture and the dynamic
+    # linker path), so without `head -n1` $processor_name picks up both
+    # matches and the case statement below falls through to the
+    # "Unsupported architecture" path.
     local processor_name=$(echo "$file_output" | grep -o -E \
         'x86-64|Intel 80386|ARMv[0-9]+|armv[0-9]+|ARM aarch64|ARM|AArch64|MIPS|PowerPC|AVR|MSP430|8051|68k|SPARC|RISC-V|Xtensa|CR16C|Z80|6502|PIC' \
         | head -n 1)
