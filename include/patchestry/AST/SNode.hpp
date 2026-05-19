@@ -10,7 +10,6 @@
 #include <cassert>
 #include <cstring>
 #include <functional>
-#include <initializer_list>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -53,20 +52,10 @@ namespace patchestry::ast {
         SNode *Parent() const { return parent_; }
         void SetParent(SNode *p) { parent_ = p; }
 
-        // ChildVisitor API (added in Layer C migration Stage 0).
-        // Each subtype iterates over its immediate SNode children
-        // (slots that hold an SNode* — not raw clang::Stmt members
-        // like SStmt::Stmt or SFor::Init/Cond/Inc).
-        //
-        // Used by uniform recursion in cleanup walks during/after the
-        // SSeq → vector-slot migration.  Read-only form takes SNode*;
-        // mutable form takes SNode*& so callers can reassign the slot.
-        //
-        // Default: no children.  Each subtype with children overrides.
+        // Visit immediate SNode children (slots holding SNode*, not raw
+        // clang::Stmt members). Default: no children; subtypes override.
         using ChildFn = std::function< void(SNode *) >;
-        using ChildMutFn = std::function< void(SNode *&) >;
         virtual void for_each_child(const ChildFn &) const {}
-        virtual void for_each_child_mut(const ChildMutFn &) {}
 
         void Dump(llvm::raw_ostream &os, unsigned indent = 0) const;
 
@@ -89,10 +78,8 @@ namespace patchestry::ast {
         SNode *parent_ = nullptr;
     };
 
-    // Single-statement leaf — holds one raw clang::Stmt*.  The
-    // statement-level counterpart to the control-flow SNode kinds:
-    // a "block" of N statements is represented as N SStmt siblings
-    // in a body vector (Phase 3 piece 2 — the SBlock replacement).
+    // Single-statement leaf — holds one raw clang::Stmt*. A "block" of N
+    // statements is N SStmt siblings in a body vector.
     class SStmt : public SNode
     {
       public:
@@ -111,9 +98,8 @@ namespace patchestry::ast {
         clang::Stmt *stmt_;
     };
 
-    // If-then-else — Layer C Stage 3c: then_/else_ are
-    // std::vector<SNode*>.  See SLabel docstring for the back-compat
-    // API rationale.
+    // If-then-else. then_/else_ are SNode* vectors; single-body
+    // Then/ElseBranch accessors preserve the prior field-style API.
     class SIfThenElse : public SNode
     {
       public:
@@ -145,14 +131,6 @@ namespace patchestry::ast {
         void SetCond(clang::Expr *c) { cond_ = c; }
 
         SNode *ThenBranch() const { return then_.empty() ? nullptr : then_[0]; }
-        void SetThenBranch(SNode *n) {
-            then_.clear();
-            if (n) { then_.push_back(n); n->SetParent(this); }
-        }
-        void SetThenBranch(std::vector< SNode * > body) {
-            then_ = std::move(body);
-            for (auto *c : then_) if (c) c->SetParent(this);
-        }
 
         SNode *ElseBranch() const { return else_.empty() ? nullptr : else_[0]; }
         void SetElseBranch(SNode *n) {
@@ -173,10 +151,6 @@ namespace patchestry::ast {
             for (auto *c : then_) if (c) fn(c);
             for (auto *c : else_) if (c) fn(c);
         }
-        void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : then_) if (slot) fn(slot);
-            for (auto &slot : else_) if (slot) fn(slot);
-        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kIfThenElse; }
 
@@ -189,20 +163,10 @@ namespace patchestry::ast {
         std::vector< SNode * > else_;
     };
 
-    // While loop — Layer C Stage 3b: body_ is std::vector<SNode*>.
-    // See SLabel docstring for the back-compat API rationale.
+    // While loop. body_ is an SNode* vector.
     class SWhile : public SNode
     {
       public:
-        SWhile(clang::Expr *cond, SNode *body)
-            : SNode(SNodeKind::kWhile), cond_(cond)
-        {
-            if (body) {
-                body_.push_back(body);
-                body->SetParent(this);
-            }
-        }
-
         SWhile(clang::Expr *cond, std::vector< SNode * > body)
             : SNode(SNodeKind::kWhile), cond_(cond), body_(std::move(body))
         {
@@ -213,10 +177,6 @@ namespace patchestry::ast {
         void SetCond(clang::Expr *c) { cond_ = c; }
 
         SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
-        void SetBody(SNode *n) {
-            body_.clear();
-            if (n) { body_.push_back(n); n->SetParent(this); }
-        }
 
         const std::vector< SNode * > &BodyList() const { return body_; }
         std::vector< SNode * > &BodyList() { return body_; }
@@ -229,9 +189,6 @@ namespace patchestry::ast {
 
         void for_each_child(const ChildFn &fn) const override {
             for (auto *c : body_) if (c) fn(c);
-        }
-        void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : body_) if (slot) fn(slot);
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kWhile; }
@@ -246,19 +203,10 @@ namespace patchestry::ast {
         std::string_view header_label_;
     };
 
-    // Do-while loop — Layer C Stage 3b: body_ is std::vector<SNode*>.
+    // Do-while loop. body_ is an SNode* vector.
     class SDoWhile : public SNode
     {
       public:
-        SDoWhile(SNode *body, clang::Expr *cond)
-            : SNode(SNodeKind::kDoWhile), cond_(cond)
-        {
-            if (body) {
-                body_.push_back(body);
-                body->SetParent(this);
-            }
-        }
-
         SDoWhile(std::vector< SNode * > body, clang::Expr *cond)
             : SNode(SNodeKind::kDoWhile), cond_(cond), body_(std::move(body))
         {
@@ -266,10 +214,6 @@ namespace patchestry::ast {
         }
 
         SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
-        void SetBody(SNode *n) {
-            body_.clear();
-            if (n) { body_.push_back(n); n->SetParent(this); }
-        }
 
         const std::vector< SNode * > &BodyList() const { return body_; }
         std::vector< SNode * > &BodyList() { return body_; }
@@ -285,9 +229,6 @@ namespace patchestry::ast {
         void for_each_child(const ChildFn &fn) const override {
             for (auto *c : body_) if (c) fn(c);
         }
-        void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : body_) if (slot) fn(slot);
-        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kDoWhile; }
 
@@ -301,20 +242,10 @@ namespace patchestry::ast {
         std::string_view header_label_;
     };
 
-    // For loop — Layer C Stage 3b: body_ is std::vector<SNode*>.
+    // For loop. body_ is an SNode* vector.
     class SFor : public SNode
     {
       public:
-        SFor(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc, SNode *body)
-            : SNode(SNodeKind::kFor)
-            , init_(init), cond_(cond), inc_(inc)
-        {
-            if (body) {
-                body_.push_back(body);
-                body->SetParent(this);
-            }
-        }
-
         SFor(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc,
              std::vector< SNode * > body)
             : SNode(SNodeKind::kFor)
@@ -333,10 +264,6 @@ namespace patchestry::ast {
         void SetInc(clang::Expr *e) { inc_ = e; }
 
         SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
-        void SetBody(SNode *n) {
-            body_.clear();
-            if (n) { body_.push_back(n); n->SetParent(this); }
-        }
 
         const std::vector< SNode * > &BodyList() const { return body_; }
         std::vector< SNode * > &BodyList() { return body_; }
@@ -348,9 +275,6 @@ namespace patchestry::ast {
 
         void for_each_child(const ChildFn &fn) const override {
             for (auto *c : body_) if (c) fn(c);
-        }
-        void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : body_) if (slot) fn(slot);
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kFor; }
@@ -367,26 +291,16 @@ namespace patchestry::ast {
         std::string_view header_label_;
     };
 
-    // Switch case — Layer C Stage 3d: body becomes std::vector<SNode*>.
-    //
-    // Back-compat helpers preserve the prior field-style read pattern:
-    //   c.body() returns the first element of body_list (or nullptr)
-    //   c.set_body(n) clears body_list and pushes n (caller manages SetParent
-    //                                                on the enclosing SSwitch)
-    // body_list is the storage; callers that need direct access use it.
+    // Switch case. body_list holds the case body; body() returns its
+    // first element (or nullptr) for the prior field-style read pattern.
     struct SCase {
         clang::Expr *value;  // nullptr for default
         std::vector< SNode * > body_list;
 
         SNode *body() const { return body_list.empty() ? nullptr : body_list[0]; }
-        void set_body(SNode *n) {
-            body_list.clear();
-            if (n) body_list.push_back(n);
-        }
     };
 
-    // Switch statement — Layer C Stage 3d: default_ becomes
-    // std::vector<SNode*> (matches the cases_ list-of-list shape).
+    // Switch statement. cases_ and default_ hold SNode* vectors.
     class SSwitch : public SNode
     {
       public:
@@ -432,11 +346,6 @@ namespace patchestry::ast {
                 for (auto *b : c.body_list) if (b) fn(b);
             for (auto *b : default_) if (b) fn(b);
         }
-        void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &c : cases_)
-                for (auto &slot : c.body_list) if (slot) fn(slot);
-            for (auto &slot : default_) if (slot) fn(slot);
-        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kSwitch; }
 
@@ -464,16 +373,9 @@ namespace patchestry::ast {
         std::string target_;
     };
 
-    // Label
-    //
-    // Layer C Stage 3a: body changed from SNode* to std::vector<SNode*>
-    // so that label bodies can directly hold multi-statement sequences
-    // without an SSeq wrapper.  Public Body()/SetBody() preserve the
-    // single-body API for back-compat (Body() returns the first child
-    // or nullptr; SetBody replaces the whole list).  Construction with
-    // a single SNode* still works via the existing constructor.  New
-    // BodyList accessors expose the vector directly for callers that
-    // want to append/iterate without round-tripping through SSeq.
+    // Label. body_ is an SNode* vector so a label can directly hold a
+    // multi-statement body; Body() returns the first child for the
+    // prior single-body API.
     class SLabel : public SNode
     {
       public:
@@ -495,26 +397,13 @@ namespace patchestry::ast {
         std::string_view Name() const { return name_; }
         void SetName(std::string_view n) { name_ = n; }
 
-        // Back-compat single-body view: returns the sole child or
-        // nullptr.  Callers handling multi-child bodies should use
-        // BodyList() instead.
         SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
-        void SetBody(SNode *n) {
-            body_.clear();
-            if (n) {
-                body_.push_back(n);
-                n->SetParent(this);
-            }
-        }
 
         const std::vector< SNode * > &BodyList() const { return body_; }
         std::vector< SNode * > &BodyList() { return body_; }
 
         void for_each_child(const ChildFn &fn) const override {
             for (auto *c : body_) if (c) fn(c);
-        }
-        void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &slot : body_) if (slot) fn(slot);
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kLabel; }
@@ -593,13 +482,8 @@ namespace patchestry::ast {
             return ptr;
         }
 
-        // Build a sequence (std::vector<SNode*>) with normalization:
-        // nullptr children are dropped.  A "sequence" is a plain
-        // std::vector<SNode*> — the SSeq node kind no longer exists.
-        std::vector< SNode * > MakeSeq(std::initializer_list< SNode * > children) {
-            return MakeSeq(std::vector< SNode * >(children));
-        }
-
+        // Build a normalized sequence (a std::vector<SNode*>): nullptr
+        // children are dropped.
         std::vector< SNode * > MakeSeq(std::vector< SNode * > children);
 
         // Intern a copy of a string; the returned view is valid until Reset().

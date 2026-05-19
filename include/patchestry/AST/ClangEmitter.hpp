@@ -22,15 +22,8 @@ namespace patchestry::ast {
         bool EndsWithTerminator(clang::Stmt *s);
     } // namespace detail
 
-    // Convert an SNode tree back to a Clang CompoundStmt and set it as the
-    // function body.
-    void EmitClangAST(SNode *root, clang::FunctionDecl *fn,
-                      clang::ASTContext &ctx);
-
-    // Layer C Stage 4 overload: take the function-body slot directly as a
-    // std::vector<SNode*> instead of routing through an intermediate SSeq.
-    // Materializes a single CompoundStmt from the vector and sets it as
-    // the function body.
+    // Convert a function-body SNode sequence to a Clang CompoundStmt and
+    // set it as the function body.
     void EmitClangAST(const std::vector< SNode * > &root_children,
                       clang::FunctionDecl *fn, clang::ASTContext &ctx);
 

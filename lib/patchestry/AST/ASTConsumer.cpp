@@ -107,8 +107,7 @@ namespace patchestry::ast {
                 }
 
                 SNodeFactory factory;
-                // The function body is a sequence of SNodes
-                // (std::vector) — the SSeq node kind was removed.
+                // The function body is a sequence of SNodes.
                 std::vector<SNode *> root_body;
                 bool have_structured = false;
 
@@ -127,9 +126,8 @@ namespace patchestry::ast {
                             root_body.push_back(s);
                     }
 
-                    // A fully-empty structured result falls through to
-                    // the goto-based path below (matches prior behaviour
-                    // when MakeSeq returned nullptr).
+                    // An empty structured result falls through to the
+                    // goto-based path below.
                     if (!root_body.empty()) {
                         have_structured = true;
 
@@ -179,16 +177,10 @@ namespace patchestry::ast {
                         // sequencing).
                         RemoveDeadSSeqChildren(root_body);
 
-                        // NOTE: RemoveUnreferencedLabels is intentionally
-                        // NOT called here.  CountAllGotoRefs does not yet
-                        // walk every clang::Stmt embedded inside all SNode
-                        // kinds (e.g. if-guarded gotos synthesised by the
-                        // goto-path), so enabling it drops live labels on
-                        // some fixtures.  The duplication pass above still
-                        // inlines shared targets correctly; dead label
-                        // bodies simply remain in the output as
-                        // unreferenced labelled blocks, which is
-                        // preferable to losing reachable code.
+                        // RemoveUnreferencedLabels is intentionally NOT
+                        // called: CountAllGotoRefs misses gotos embedded
+                        // in some SNode kinds, so it would drop live
+                        // labels on some fixtures.
                     }
                 }
 

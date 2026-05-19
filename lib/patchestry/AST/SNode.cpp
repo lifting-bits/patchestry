@@ -114,14 +114,7 @@ namespace patchestry::ast {
         for (const auto *c : body_) if (c) c->Dump(os, indent + 1);
     }
 
-    // ---------------------------------------------------------------
-    // SNodeFactory::MakeSeq — normalize a child sequence.
-    //
-    // Since the SSeq node kind was removed, a "sequence" is just a
-    // std::vector<SNode*>.  MakeSeq drops nullptr children and returns
-    // the resulting vector; callers store it directly into a body
-    // slot, into CNode::structured, or pass it to IdentifyInternal.
-    // ---------------------------------------------------------------
+    // Normalize a child sequence: drop nullptr children.
     std::vector< SNode * > SNodeFactory::MakeSeq(std::vector< SNode * > children) {
         std::vector< SNode * > out;
         out.reserve(children.size());

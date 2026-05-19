@@ -51,9 +51,8 @@ namespace patchestry::ast {
         // Edge properties (indexed same as succs)
         std::vector<uint32_t> edge_flags;
 
-        // The structured SNode sequence produced when this node is
-        // collapsed (empty = leaf).  A "sequence" is a std::vector<SNode*>
-        // since the SSeq node kind was removed.
+        // Structured SNode sequence produced when this node is
+        // collapsed (empty = leaf).
         std::vector< SNode * > structured;
 
         // Leaf payload: statements from the original basic block

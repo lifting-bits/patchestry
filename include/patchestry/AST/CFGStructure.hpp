@@ -147,20 +147,15 @@ namespace patchestry::ast {
                                    SNodeFactory &factory);
 
     /// Convert if(cond) goto L; stmts; L: patterns into if(!cond) { stmts }
-    /// within SSeq nodes.  Only fires when label L has a single goto
-    /// reference and no intermediate SLabel nodes exist between the goto
-    /// and its target.  Recurses into all nested SNode bodies.
+    /// within a sibling sequence.  Only fires when label L has a single
+    /// goto reference and no intermediate SLabel nodes exist between the
+    /// goto and its target.  Recurses into all nested SNode bodies.
     bool ScopeifyIfGotos(std::vector< SNode * > &root, SNodeFactory &factory,
                          clang::ASTContext &ctx);
 
     /// Post-structuring cleanup: inline residual goto-to-label pairs.
-    ///
-    /// Walks the SNode tree looking for SGoto nodes whose target SLabel
-    /// appears in the same parent SSeq and is only referenced by that one
-    /// goto.  When found, the goto is replaced with the label's body and
-    /// the label is removed.  This eliminates trivial gotos left over
-    /// from structuring.
-    ///
+    /// When an SGoto's target SLabel is a sibling referenced only by that
+    /// goto, replace the goto with the label's body and drop the label.
     /// Returns true if any inlining was performed.
     bool InlineResidualGotos(std::vector< SNode * > &root, SNodeFactory &factory);
 
@@ -183,9 +178,9 @@ namespace patchestry::ast {
     bool ConvertGotoToReturn(std::vector< SNode * > &root, SNodeFactory &factory,
                              clang::ASTContext &ctx);
 
-    /// Remove SLabel nodes from SSeq whose label has zero references
-    /// (no SGoto and no clang::GotoStmt targets it).  The label's body
-    /// is dropped — it is dead code reachable only via the removed label.
+    /// Remove SLabel siblings whose label has zero references (no SGoto
+    /// and no clang::GotoStmt targets it).  The label's body is dropped —
+    /// it is dead code reachable only via the removed label.
     bool RemoveUnreferencedLabels(std::vector< SNode * > &root,
                                   SNodeFactory &factory);
 
@@ -200,26 +195,19 @@ namespace patchestry::ast {
     bool DuplicateSwitchCaseTargets(std::vector< SNode * > &root,
                                     SNodeFactory &factory);
 
-    /// Cross-scope version of InlineResidualGotos: for each goto whose
-    /// target label has exactly one reference, the label's body always
-    /// terminates (every path ends in return/break/continue/unconditional
-    /// goto), the label sits as a direct child of some SSeq, and the
-    /// label's preceding sibling in that SSeq also terminates (so no
-    /// fallthrough reaches the label), splice the body into the goto's
-    /// slot by *move* — no cloning.  Removes the now-dead label.
-    ///
-    /// This is safe because: (a) refs==1 means no other goto observes the
-    /// label; (b) no fallthrough reaches the label; (c) the moved body
-    /// terminates, so there is no post-body continuation whose location
-    /// matters.
-    ///
+    /// Cross-scope version of InlineResidualGotos: when a goto's target
+    /// label has exactly one reference, the label's body always terminates,
+    /// and the label's preceding sibling also terminates (no fallthrough
+    /// reaches it), move the body into the goto's slot and drop the label.
+    /// Safe because no other goto observes the label, no fallthrough
+    /// reaches it, and the moved body terminates.
     /// Returns true if any label was inlined.
     bool InlineCrossScopeSingleRef(std::vector< SNode * > &root,
                                    SNodeFactory &factory);
 
-    /// Remove unreachable SSeq children that follow a terminating
-    /// sibling.  Preserves SLabel children (may be goto targets from
-    /// other scopes).  Bottom-up recursive.
+    /// Remove unreachable siblings that follow a terminating sibling.
+    /// Preserves SLabel children (may be goto targets from other scopes).
+    /// Bottom-up recursive.
     bool RemoveDeadSSeqChildren(std::vector< SNode * > &root);
 
 } // namespace patchestry::ast
