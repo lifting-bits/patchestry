@@ -1,0 +1,184 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+
+// Exercises stock Ghidra 12.0.4 AArch32 (ARM) SLEIGH CALLOTHER userops with
+// C11 atomic semantics:
+//   DataMemoryBarrier, DataSynchronizationBarrier,
+//   InstructionSynchronizationBarrier, ClearExclusiveLocal
+// Source: Ghidra/Processors/ARM/data/languages/*.sinc
+//
+// AArch32 has no compiler-rt outline-atomic helpers (those exist only for
+// AArch64), so this fixture covers only the SLEIGH userop vocabulary.
+
+// CIR-DAG: atomic_thread_fence_seq_cst
+// CIR-DAG: instruction_sync_fence
+// CIR-DAG: atomic_clear_exclusive
+// CIR-DAG: __patchestry_missing_unknown_userop
+
+// LL-DAG: call {{.*}} @atomic_thread_fence_seq_cst
+// LL-DAG: call {{.*}} @instruction_sync_fence
+// LL-DAG: call {{.*}} @atomic_clear_exclusive
+// LL-DAG: call {{.*}} @__patchestry_missing_unknown_userop
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000000": {
+      "name": "arm_dmb_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int", "type_int"]
+      },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "a32_dmb_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "domain", "type": "type_int", "kind": "parameter", "index": 0 },
+            "a32_dmb_p1": { "mnemonic": "DECLARE_PARAMETER", "name": "types", "type": "type_int", "kind": "parameter", "index": 1 },
+            "a32_dmb_br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" }
+          },
+          "ordered_operations": ["a32_dmb_p0", "a32_dmb_p1", "a32_dmb_br"]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "a32_dmb_op": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "DataMemoryBarrier:type_void",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "a32_dmb_p0" },
+                { "type": "type_int", "kind": "parameter", "operation": "a32_dmb_p1" }
+              ]
+            },
+            "a32_dmb_ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["a32_dmb_op", "a32_dmb_ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    },
+    "ram:20000100": {
+      "name": "arm_isb_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int"]
+      },
+      "basic_blocks": {
+        "ram:20000100:entry": {
+          "operations": {
+            "a32_isb_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "scope", "type": "type_int", "kind": "parameter", "index": 0 },
+            "a32_isb_br": { "mnemonic": "BRANCH", "target_block": "ram:20000100:0:basic" }
+          },
+          "ordered_operations": ["a32_isb_p0", "a32_isb_br"]
+        },
+        "ram:20000100:0:basic": {
+          "operations": {
+            "a32_isb_op": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "InstructionSynchronizationBarrier:type_void",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "a32_isb_p0" }]
+            },
+            "a32_isb_ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["a32_isb_op", "a32_isb_ret"]
+        }
+      },
+      "entry_block": "ram:20000100:entry"
+    },
+    "ram:20000200": {
+      "name": "arm_clrex_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int"]
+      },
+      "basic_blocks": {
+        "ram:20000200:entry": {
+          "operations": {
+            "a32_clrex_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "monitor", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "a32_clrex_br": { "mnemonic": "BRANCH", "target_block": "ram:20000200:0:basic" }
+          },
+          "ordered_operations": ["a32_clrex_p0", "a32_clrex_br"]
+        },
+        "ram:20000200:0:basic": {
+          "operations": {
+            "a32_clrex_op": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "ClearExclusiveLocal:type_void",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [{ "type": "type_ptr_int", "kind": "parameter", "operation": "a32_clrex_p0" }]
+            },
+            "a32_clrex_ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["a32_clrex_op", "a32_clrex_ret"]
+        }
+      },
+      "entry_block": "ram:20000200:entry"
+    },
+    "ram:20000300": {
+      "name": "arm_unknown_userop_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_ptr_int"]
+      },
+      "basic_blocks": {
+        "ram:20000300:entry": {
+          "operations": {
+            "a32_unk_p0": { "mnemonic": "DECLARE_PARAMETER", "name": "ptr", "type": "type_ptr_int", "kind": "parameter", "index": 0 },
+            "a32_unk_br": { "mnemonic": "BRANCH", "target_block": "ram:20000300:0:basic" }
+          },
+          "ordered_operations": ["a32_unk_p0", "a32_unk_br"]
+        },
+        "ram:20000300:0:basic": {
+          "operations": {
+            "a32_unk_op": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "unknown_userop:type_void",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [{ "type": "type_ptr_int", "kind": "parameter", "operation": "a32_unk_p0" }]
+            },
+            "a32_unk_ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["a32_unk_op", "a32_unk_ret"]
+        }
+      },
+      "entry_block": "ram:20000300:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_ptr_int": { "kind": "pointer", "size": 4, "element_type": "type_int" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

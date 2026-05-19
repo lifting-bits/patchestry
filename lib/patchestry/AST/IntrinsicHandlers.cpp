@@ -127,156 +127,163 @@ namespace patchestry::ast {
             return value;
         }
 
-        std::optional< std::string > normalize_aarch64_atomic_intrinsic(std::string_view name) {
-            constexpr std::string_view prefix = "__aarch64_";
-            if (!starts_with(name, prefix)) { return std::nullopt; }
+        // === Vocabulary tables ===========================================
+        //
+        // The normalizer is driven by two data tables, grouped by the source
+        // that produces the raw name:
+        //
+        //   1. Real CALLOTHER userops declared in stock Ghidra 12.0.4 SLEIGH
+        //      (Ghidra/Processors/{AARCH64,ARM}/data/languages/*.sinc).
+        //   2. LLVM compiler-rt AArch64 outline-atomic helper symbols compiled
+        //      into the target binary by `-moutline-atomics`
+        //      (compiler-rt/lib/builtins/aarch64/lse.S).
+        //
+        // Both sources use globally unique names -- the AArch64 and ARM SLEIGH
+        // declare overlapping userops (DataMemoryBarrier, ClearExclusiveLocal,
+        // ...) with *identical* semantics, and the compiler-rt symbols carry an
+        // unambiguous `__aarch64_` prefix -- so a single flat lookup is enough.
+        // The `arch` parameter on parse_intrinsic_name is preserved for ABI
+        // compatibility with callers and to leave room for a future
+        // architecture that genuinely needs disjoint normalization, but it is
+        // not consulted today.
 
-            auto op    = name.substr(prefix.size());
-            auto order = std::string_view("relaxed");
+        struct UseropMapping
+        {
+            std::string_view raw;       // Exact userop / symbol name to match
+            std::string_view canonical; // Canonical intrinsic name we emit
+        };
 
-            if (ends_with(op, "_acq_rel")) {
-                order = "acq_rel";
-                op.remove_suffix(std::string_view("_acq_rel").size());
-            } else if (ends_with(op, "_acq")) {
-                order = "acquire";
-                op.remove_suffix(std::string_view("_acq").size());
-            } else if (ends_with(op, "_rel")) {
-                order = "release";
-                op.remove_suffix(std::string_view("_rel").size());
+        // Ghidra SLEIGH CALLOTHER userops with C11 atomic semantics.
+        // Sources:
+        //   Ghidra/Processors/AARCH64/data/languages/AARCH64instructions.sinc
+        //   Ghidra/Processors/ARM/data/languages/{ARMinstructions,
+        //     ARMTHUMBinstructions,ARMv8}.sinc
+        // (Ghidra 12.0.4).
+        //
+        // DMB and DSB map to *distinct* canonical names rather than collapsing
+        // both onto atomic_thread_fence_seq_cst, because stock Ghidra emits DMB
+        // with two arguments and DSB with three; the patchir-decomp pipeline
+        // declares each canonical with the fixed arity of its first call site,
+        // so unifying them on a single canonical causes the second caller to
+        // fail CIR call-shape verification.
+        //
+        // LOAcquire / LORelease are AArch64-only ordering hooks SLEIGH emits
+        // around the LSE instructions' inline P-Code bodies; SpeculationBarrier
+        // is the AArch64 SB userop. Including them here also handles any ARM
+        // input that happened to surface them (Ghidra's ARM SLEIGH does not,
+        // but the broader table makes the lookup arch-independent).
+        //
+        // ExclusiveAccess / hasExclusiveAccess (ARM) and ExclusiveMonitorPass /
+        // ExclusiveMonitorsStatus (AArch64) are LL/SC monitor primitives with
+        // no clean C11 mapping; they are intentionally not normalized.
+        constexpr std::array< UseropMapping, 7 > sleigh_userops = { {
+            { "DataMemoryBarrier",                 "atomic_thread_fence_seq_cst"    },
+            { "DataSynchronizationBarrier",        "atomic_data_sync_fence_seq_cst" },
+            { "InstructionSynchronizationBarrier", "instruction_sync_fence"         },
+            { "ClearExclusiveLocal",               "atomic_clear_exclusive"         },
+            { "SpeculationBarrier",                "cpu_speculation_barrier"        },
+            { "LOAcquire",                         "atomic_thread_fence_acquire"    },
+            { "LORelease",                         "atomic_thread_fence_release"    },
+        } };
+
+        // compiler-rt AArch64 outline-atomic helper bases.
+        // Source: compiler-rt/lib/builtins/aarch64/lse.S
+        // Symbol shape: __aarch64_<base><size><ordering>
+        //   base     in {cas, swp, ldadd, ldclr, ldeor, ldset}
+        //   size     in {1, 2, 4, 8} (cas also 16 for paired registers)
+        //   ordering in {_relax, _acq, _rel, _acq_rel, _sync}
+        struct OutlineAtomicBase
+        {
+            std::string_view base;      // Base token between prefix and size
+            std::string_view canonical; // canonical_op in atomic_<canonical>_<order>
+        };
+        constexpr std::array< OutlineAtomicBase, 6 > compiler_rt_aarch64_bases = { {
+            { "cas",   "compare_exchange" },
+            { "swp",   "exchange"         },
+            { "ldadd", "fetch_add"        },
+            { "ldclr", "fetch_clear"      },
+            { "ldeor", "fetch_xor"        },
+            { "ldset", "fetch_or"         },
+        } };
+
+        struct OrderingSuffix
+        {
+            std::string_view suffix;    // suffix in the binary symbol (with leading _)
+            std::string_view canonical; // ordering token in the canonical name
+        };
+        // Order matters: greedy ends_with must see longer suffixes first so
+        // "_acq_rel" wins over "_acq".
+        constexpr std::array< OrderingSuffix, 5 > compiler_rt_ordering = { {
+            { "_acq_rel", "acq_rel" },
+            { "_relax",   "relaxed" },
+            { "_acq",     "acquire" },
+            { "_rel",     "release" },
+            { "_sync",    "seq_cst" },
+        } };
+
+        // === Lookups =====================================================
+
+        std::optional< std::string > lookup_sleigh_userop(std::string_view name) {
+            for (const auto &entry : sleigh_userops) {
+                if (name == entry.raw) {
+                    return std::string(entry.canonical);
+                }
             }
-
-            op = strip_trailing_size(op);
-
-            // These names are Patchestry's portable atomic userop vocabulary,
-            // not a strict C11 builtin list. Forms such as ldclr, ldumax, and
-            // casp preserve source architecture semantics for later lowering.
-            std::string_view canonical_op;
-            if (op == "ldadd") {
-                canonical_op = "fetch_add";
-            } else if (op == "ldclr") {
-                canonical_op = "fetch_clear";
-            } else if (op == "ldeor") {
-                canonical_op = "fetch_xor";
-            } else if (op == "ldset") {
-                canonical_op = "fetch_or";
-            } else if (op == "ldsmax") {
-                canonical_op = "fetch_max";
-            } else if (op == "ldsmin") {
-                canonical_op = "fetch_min";
-            } else if (op == "ldumax") {
-                canonical_op = "fetch_umax";
-            } else if (op == "ldumin") {
-                canonical_op = "fetch_umin";
-            } else if (op == "swp") {
-                canonical_op = "exchange";
-            } else if (op == "cas") {
-                canonical_op = "compare_exchange";
-            } else if (op == "casp") {
-                canonical_op = "compare_exchange_pair";
-            } else {
-                return std::nullopt;
-            }
-
-            return "atomic_" + std::string(canonical_op) + "_" + std::string(order);
+            return std::nullopt;
         }
 
         std::optional< std::string >
-        normalize_x86_lock_atomic_intrinsic(std::string_view name) {
-            auto lower_name = to_lower_ascii(name);
-            std::string_view op(lower_name);
-
-            if (starts_with(op, "__x86_lock_")) {
-                op.remove_prefix(std::string_view("__x86_lock_").size());
-            } else if (starts_with(op, "x86_lock_")) {
-                op.remove_prefix(std::string_view("x86_lock_").size());
-            } else if (starts_with(op, "lock_")) {
-                op.remove_prefix(std::string_view("lock_").size());
-            } else {
+        match_compiler_rt_aarch64_outline(std::string_view name) {
+            constexpr std::string_view prefix = "__aarch64_";
+            if (!starts_with(name, prefix)) {
                 return std::nullopt;
+            }
+
+            std::string_view op = name.substr(prefix.size());
+            std::string_view order;
+
+            for (const auto &entry : compiler_rt_ordering) {
+                if (ends_with(op, entry.suffix)) {
+                    order = entry.canonical;
+                    op.remove_suffix(entry.suffix.size());
+                    break;
+                }
             }
 
             op = strip_trailing_size(op);
 
-            std::string_view canonical_op;
-            if (op == "add" || op == "xadd") {
-                canonical_op = "fetch_add";
-            } else if (op == "inc") {
-                canonical_op = "inc";
-            } else if (op == "sub") {
-                canonical_op = "fetch_sub";
-            } else if (op == "dec") {
-                canonical_op = "dec";
-            } else if (op == "and") {
-                canonical_op = "fetch_and";
-            } else if (op == "or") {
-                canonical_op = "fetch_or";
-            } else if (op == "xor") {
-                canonical_op = "fetch_xor";
-            } else if (op == "xchg") {
-                canonical_op = "exchange";
-            } else if (op == "cmpxchg") {
-                canonical_op = "compare_exchange";
-            } else {
-                return std::nullopt;
-            }
-
-            return "atomic_" + std::string(canonical_op) + "_seq_cst";
-        }
-
-        using ArchAtomicNormalizer = std::optional< std::string > (*)(std::string_view);
-
-        struct ArchNormalizerEntry
-        {
-            std::string_view arch_key; // matched case-insensitively
-            ArchAtomicNormalizer normalize;
-        };
-
-        // Architecture-keyed dispatch table. Adding a new architecture is a
-        // matter of writing one normalizer function and registering it here;
-        // there is no per-call-site dispatch to edit.
-        constexpr std::array< ArchNormalizerEntry, 5 > arch_normalizers = { {
-            { "aarch64", normalize_aarch64_atomic_intrinsic },
-            { "arm64",   normalize_aarch64_atomic_intrinsic },
-            { "x86",     normalize_x86_lock_atomic_intrinsic },
-            { "x86_64",  normalize_x86_lock_atomic_intrinsic },
-            { "x86-64",  normalize_x86_lock_atomic_intrinsic },
-        } };
-
-        ArchAtomicNormalizer find_arch_normalizer(std::string_view arch) {
-            if (arch.empty()) {
-                return nullptr;
-            }
-            auto arch_lower = to_lower_ascii(arch);
-            for (const auto &entry : arch_normalizers) {
-                if (arch_lower == entry.arch_key) {
-                    return entry.normalize;
+            for (const auto &entry : compiler_rt_aarch64_bases) {
+                if (op != entry.base) {
+                    continue;
                 }
+                // Real compiler-rt always emits one of the five ordering
+                // suffixes (lse.S sets SUFF for every MODEL). Fall back to
+                // seq_cst defensively if the symbol lacks one, since that is
+                // the most conservative ordering for an unknown source.
+                std::string_view effective_order =
+                    order.empty() ? std::string_view("seq_cst") : order;
+                return "atomic_" + std::string(entry.canonical) + "_"
+                    + std::string(effective_order);
             }
-            return nullptr;
+            return std::nullopt;
         }
 
         std::string
         normalize_intrinsic_name(std::string_view arch, std::string_view name) {
-            // Preferred path: arch is known, so route directly to the matching
-            // normalizer. Names that do not match any registered userop for that
-            // arch fall through unchanged.
-            if (auto *normalize = find_arch_normalizer(arch)) {
-                if (auto normalized = normalize(name)) {
-                    return *normalized;
-                }
-                return std::string(name);
-            }
+            // The `arch` parameter is preserved on the signature for ABI
+            // compatibility with callers and so a future architecture that
+            // genuinely needs arch-specific normalization can be added without
+            // touching call sites. Today both supported vocabularies (Ghidra
+            // SLEIGH userops, compiler-rt outline atomics) use globally unique
+            // names, so the lookup does not need to dispatch on it.
+            (void) arch;
 
-            // Fallback for inputs that lack an architecture tag (e.g. legacy JSON
-            // or test fixtures): try every registered normalizer in order. The
-            // userop name spaces are disjoint (each normalizer checks a distinct
-            // prefix), so order does not change semantics.
-            for (const auto &entry : arch_normalizers) {
-                if (auto normalized = entry.normalize(name)) {
-                    return *normalized;
-                }
+            if (auto result = lookup_sleigh_userop(name)) {
+                return *result;
             }
-
+            if (auto result = match_compiler_rt_aarch64_outline(name)) {
+                return *result;
+            }
             return std::string(name);
         }
 
@@ -444,29 +451,36 @@ namespace patchestry::ast {
     const std::unordered_map< std::string, IntrinsicHandler > &get_intrinsic_handlers() {
         static const auto handlers = [] {
             std::unordered_map< std::string, IntrinsicHandler > result = {
-                {   "volatile_read",  handle_volatile_read },
-                {  "volatile_write", handle_volatile_write },
-                {  "builtin_memcpy", handle_builtin_memcpy },
-                { "builtin_strncpy", handle_builtin_memcpy }, // Same impl as memcpy
-                { "builtin_wcsncpy", handle_builtin_memcpy },
-                {      "stringdata",     handle_stringdata },
+                {          "volatile_read",         handle_volatile_read },
+                {         "volatile_write",        handle_volatile_write },
+                {         "builtin_memcpy",        handle_builtin_memcpy },
+                {        "builtin_strncpy",        handle_builtin_memcpy }, // Same impl as memcpy
+                {        "builtin_wcsncpy",        handle_builtin_memcpy },
+                {             "stringdata",            handle_stringdata },
+                // Bare-named synchronization primitives that have no C11
+                // memory-ordering parameter. ClearExclusiveLocal resets the
+                // local exclusive monitor; ISB is a pipeline sync, not a
+                // memory fence; SpeculationBarrier blocks speculative
+                // execution -- C11 has no equivalent for any of them.
+                {   "atomic_clear_exclusive", handle_generic_intrinsic_call },
+                {  "instruction_sync_fence", handle_generic_intrinsic_call },
+                { "cpu_speculation_barrier", handle_generic_intrinsic_call },
             };
 
+            // Register canonical intrinsic names that the per-arch normalizers
+            // can produce. Each entry covers all five C11 memory orderings; the
+            // set is exactly the union of:
+            //   - compiler-rt outline-atomic bases (fetch_add, fetch_clear,
+            //     fetch_xor, fetch_or, exchange, compare_exchange)
+            //   - Ghidra SLEIGH barrier mappings (thread_fence, data_sync_fence)
             add_atomic_intrinsic_handlers(result, "fetch_add");
-            add_atomic_intrinsic_handlers(result, "fetch_sub");
-            add_atomic_intrinsic_handlers(result, "fetch_and");
             add_atomic_intrinsic_handlers(result, "fetch_clear");
-            add_atomic_intrinsic_handlers(result, "fetch_or");
             add_atomic_intrinsic_handlers(result, "fetch_xor");
-            add_atomic_intrinsic_handlers(result, "fetch_max");
-            add_atomic_intrinsic_handlers(result, "fetch_min");
-            add_atomic_intrinsic_handlers(result, "fetch_umax");
-            add_atomic_intrinsic_handlers(result, "fetch_umin");
-            add_atomic_intrinsic_handlers(result, "inc");
-            add_atomic_intrinsic_handlers(result, "dec");
+            add_atomic_intrinsic_handlers(result, "fetch_or");
             add_atomic_intrinsic_handlers(result, "exchange");
             add_atomic_intrinsic_handlers(result, "compare_exchange");
-            add_atomic_intrinsic_handlers(result, "compare_exchange_pair");
+            add_atomic_intrinsic_handlers(result, "thread_fence");
+            add_atomic_intrinsic_handlers(result, "data_sync_fence");
             return result;
         }();
         return handlers;
