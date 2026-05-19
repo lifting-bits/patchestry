@@ -3635,9 +3635,13 @@ namespace patchestry::ast {
                 out.push_back(s);
                 return out.size() <= max_stmts;
             }
-            // SIfThenElse where both arms terminate.
+            // SIfThenElse where both arms terminate.  An empty else
+            // falls through, so it cannot be flattened as a terminating
+            // body — hard-fail rather than drop the fallthrough path
+            // (the else is filled later by AbsorbFallthroughIntoElse).
             if (auto *ite = body->dyn_cast<SIfThenElse>()) {
-                if (!ite->Cond() || ite->ThenList().empty())
+                if (!ite->Cond() || ite->ThenList().empty()
+                    || ite->ElseList().empty())
                     return false;
                 std::vector<clang::Stmt *> then_stmts, else_stmts;
                 if (!FlattenTerminatingSeq(
@@ -3653,7 +3657,7 @@ namespace patchestry::ast {
                         loc, loc);
                 }
                 clang::Stmt *else_body = nullptr;
-                if (!ite->ElseList().empty()) {
+                {
                     if (!FlattenTerminatingSeq(
                             ite->ElseList(), ctx, else_stmts, max_stmts))
                         return false;
