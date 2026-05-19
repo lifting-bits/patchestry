@@ -91,8 +91,8 @@ namespace patchestry::ast {
                 if (!node) return nullptr;
 
                 switch (node->Kind()) {
-                case SNodeKind::kBlock:
-                    return EmitBlock(node->as< SBlock >());
+                case SNodeKind::kStmt:
+                    return node->as< SStmt >()->Stmt();
                 case SNodeKind::kIfThenElse:
                     return EmitIfThenElse(node->as< SIfThenElse >());
                 case SNodeKind::kWhile:
@@ -121,11 +121,6 @@ namespace patchestry::ast {
             // corresponding label definitions. This prevents CIR goto/label mismatch.
           private:
             clang::SourceLocation Loc() const { return loc_; }
-
-            clang::Stmt *EmitBlock(const SBlock *block) {
-                if (block->Size() == 1) return block->Stmts()[0];
-                return detail::MakeCompound(ctx_, block->Stmts());
-            }
 
             clang::Stmt *EmitIfThenElse(const SIfThenElse *ite) {
                 LOG_FATAL_IF(!ite->Cond(),
@@ -344,22 +339,22 @@ namespace patchestry::ast {
 
           public:
             // Pre-scan: collect LabelDecl objects referenced by GotoStmts
-            // in raw Clang AST (SBlock stmts).  Must be called before Emit().
+            // in raw Clang AST (SStmt stmts).  Must be called before Emit().
             void CollectGotoLabelDecls(SNode *node) {
                 if (!node) return;
-                if (auto *blk = node->dyn_cast< SBlock >()) {
-                    std::function< void(clang::Stmt *) > scan =
-                        [&](clang::Stmt *s) {
-                            if (!s) return;
-                            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
-                                auto *ld = gs->getLabel();
-                                goto_labels_[ld->getName().str()] = ld;
-                                return;
-                            }
-                            for (auto *child : s->children()) scan(child);
-                        };
-                    for (auto *s : blk->Stmts()) scan(s);
-                    return; // SBlock has no SNode children
+                std::function< void(clang::Stmt *) > scan =
+                    [&](clang::Stmt *s) {
+                        if (!s) return;
+                        if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                            auto *ld = gs->getLabel();
+                            goto_labels_[ld->getName().str()] = ld;
+                            return;
+                        }
+                        for (auto *child : s->children()) scan(child);
+                    };
+                if (auto *st = node->dyn_cast< SStmt >()) {
+                    scan(st->Stmt());
+                    return; // SStmt has no SNode children
                 }
                 node->for_each_child([&](SNode *c) {
                     CollectGotoLabelDecls(c);

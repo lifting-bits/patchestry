@@ -70,11 +70,9 @@ namespace patchestry::ast {
             };
 
             switch (node->Kind()) {
-            case SNodeKind::kBlock: {
-                auto *blk = node->as<SBlock>();
-                for (const auto *s : blk->Stmts()) {
-                    pad(); os << StmtToOneLine(s) << "\\l";
-                }
+            case SNodeKind::kStmt: {
+                pad();
+                os << StmtToOneLine(node->as<SStmt>()->Stmt()) << "\\l";
                 break;
             }
             case SNodeKind::kIfThenElse: {
@@ -343,8 +341,8 @@ namespace patchestry::ast {
 
         size_t total = 0;
         switch (root->Kind()) {
-        case SNodeKind::kBlock:
-            return root->as<SBlock>()->Stmts().size();
+        case SNodeKind::kStmt:
+            return 1;
         case SNodeKind::kWhile:
             total += CountCommaChainStmts(root->as<SWhile>()->Cond());
             break;
@@ -385,9 +383,8 @@ namespace patchestry::ast {
                                           std::unordered_set<const clang::Stmt *> &out) {
         if (!root) return;
         switch (root->Kind()) {
-        case SNodeKind::kBlock:
-            for (auto *s : root->as<SBlock>()->Stmts())
-                if (s) out.insert(s);
+        case SNodeKind::kStmt:
+            if (auto *s = root->as<SStmt>()->Stmt()) out.insert(s);
             break;
         case SNodeKind::kIfThenElse:
             // The condition may embed stmts via comma-operator.

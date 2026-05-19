@@ -24,9 +24,8 @@ namespace patchestry::ast {
                     os << "\\n" << lbl->Name();
                 } else if (auto *g = node->dyn_cast< SGoto >()) {
                     os << "\\n-> " << g->Target();
-                } else if (auto *blk = node->dyn_cast< SBlock >()) {
-                    os << "\\n(" << blk->Size() << " stmts)";
-                    if (!blk->Label().empty()) os << "\\nlabel: " << blk->Label();
+                } else if (node->dyn_cast< SStmt >()) {
+                    os << "\\n(stmt)";
                 }
 
                 os << "\"];\n";

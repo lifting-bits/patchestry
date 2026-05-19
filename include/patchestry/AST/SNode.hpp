@@ -27,7 +27,7 @@
 namespace patchestry::ast {
 
     enum class SNodeKind {
-        kBlock,
+        kStmt,
         kIfThenElse,
         kWhile,
         kDoWhile,
@@ -56,7 +56,7 @@ namespace patchestry::ast {
         // ChildVisitor API (added in Layer C migration Stage 0).
         // Each subtype iterates over its immediate SNode children
         // (slots that hold an SNode* — not raw clang::Stmt members
-        // like SBlock::Stmts or SFor::Init/Cond/Inc).
+        // like SStmt::Stmt or SFor::Init/Cond/Inc).
         //
         // Used by uniform recursion in cleanup walks during/after the
         // SSeq → vector-slot migration.  Read-only form takes SNode*;
@@ -89,30 +89,26 @@ namespace patchestry::ast {
         SNode *parent_ = nullptr;
     };
 
-    // Basic block: holds raw Clang Stmt* and an optional label
-    class SBlock : public SNode
+    // Single-statement leaf — holds one raw clang::Stmt*.  The
+    // statement-level counterpart to the control-flow SNode kinds:
+    // a "block" of N statements is represented as N SStmt siblings
+    // in a body vector (Phase 3 piece 2 — the SBlock replacement).
+    class SStmt : public SNode
     {
       public:
-        SBlock() : SNode(SNodeKind::kBlock) {}
+        explicit SStmt(clang::Stmt *stmt)
+            : SNode(SNodeKind::kStmt), stmt_(stmt) {}
 
-        std::string_view Label() const { return label_; }
-        void SetLabel(std::string_view l) { label_ = l; }
+        clang::Stmt *Stmt() const { return stmt_; }
+        void SetStmt(clang::Stmt *s) { stmt_ = s; }
 
-        const std::vector< clang::Stmt * > &Stmts() const { return stmts_; }
-        std::vector< clang::Stmt * > &Stmts() { return stmts_; }
-
-        void AddStmt(clang::Stmt *s) { stmts_.push_back(s); }
-        bool Empty() const { return stmts_.empty(); }
-        size_t Size() const { return stmts_.size(); }
-
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kBlock; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kStmt; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
 
       private:
-        std::string label_;
-        std::vector< clang::Stmt * > stmts_;
+        clang::Stmt *stmt_;
     };
 
     // If-then-else — Layer C Stage 3c: then_/else_ are
@@ -600,10 +596,6 @@ namespace patchestry::ast {
         // Build a sequence (std::vector<SNode*>) with normalization:
         // nullptr children are dropped.  A "sequence" is a plain
         // std::vector<SNode*> — the SSeq node kind no longer exists.
-        //
-        // Empty unlabeled SBlock children are intentionally NOT dropped
-        // (they correspond to CFG nodes with no stmts; sibling distance
-        // is load-bearing for downstream fallthrough reasoning).
         std::vector< SNode * > MakeSeq(std::initializer_list< SNode * > children) {
             return MakeSeq(std::vector< SNode * >(children));
         }

@@ -200,8 +200,10 @@ namespace patchestry::ast {
                     // Switch blocks get an SSwitch with goto-to-label cases.
                     for (auto &node : flow_graph.nodes) {
                         if (node.IsCollapsed()) continue;
-                        auto *blk = factory.Make<SBlock>();
-                        for (auto *s : node.stmts) blk->AddStmt(s);
+                        // Spill the node's stmts as SStmt siblings.
+                        std::vector<SNode *> blk_nodes;
+                        for (auto *s : node.stmts)
+                            if (s) blk_nodes.push_back(factory.Make<SStmt>(s));
 
                         // Switch block: build SSwitch with goto cases
                         if (!node.switch_cases.empty() && node.branch_cond) {
@@ -267,10 +269,9 @@ namespace patchestry::ast {
                                     sw->AddCase(val, body);
                                 }
                             }
-                            // MakeSeq drops the prefix block when empty.
-                            std::vector<SNode *> sw_seq = factory.MakeSeq({
-                                blk->Stmts().empty() ? nullptr : blk,
-                                sw});
+                            // Pre-switch stmts (if any) precede the switch.
+                            std::vector<SNode *> sw_seq = std::move(blk_nodes);
+                            sw_seq.push_back(sw);
                             if (!node.label.empty()) {
                                 root_body.push_back(factory.Make<SLabel>(
                                     factory.Intern(node.label),
@@ -283,12 +284,16 @@ namespace patchestry::ast {
                         }
 
                         // Non-switch: append terminal (goto/if-goto)
-                        if (node.terminal) blk->AddStmt(node.terminal);
+                        if (node.terminal)
+                            blk_nodes.push_back(
+                                factory.Make<SStmt>(node.terminal));
                         if (!node.label.empty()) {
                             root_body.push_back(factory.Make<SLabel>(
-                                factory.Intern(node.label), blk));
+                                factory.Intern(node.label),
+                                std::move(blk_nodes)));
                         } else {
-                            root_body.push_back(blk);
+                            for (SNode *s : blk_nodes)
+                                root_body.push_back(s);
                         }
                     }
                 }

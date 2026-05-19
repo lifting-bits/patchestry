@@ -106,11 +106,12 @@ namespace patchestry::ast {
         // Helpers
         // ---------------------------------------------------------------
 
-        /// Wrap a single CNode's stmts + label in an SBlock (+ optional SLabel).
+        /// Spill a single CNode's stmts into SStmt siblings, optionally
+        /// wrapped in an SLabel if the node has a label.
         /// When \p include_terminal is false the node's terminal stmt (goto /
         /// if-goto) is omitted — used for non-tail nodes in a sequential merge
         /// where the edge is absorbed by the merge.
-        /// Returns a single-element sequence (or the node's existing
+        /// Returns the resulting SNode sequence (or the node's existing
         /// structured sequence if it was already structured).
         std::vector< SNode * > BuildLeafSNode(size_t id,
                                               bool include_terminal = true);
@@ -133,8 +134,8 @@ namespace patchestry::ast {
     };
 
     /// Eliminate gotos whose target label immediately follows in the
-    /// same SSeq.  Chases through SLabel→SSeq→SBlock nesting to find
-    /// deeply buried gotos (DeepTrailingStmt pattern).
+    /// same sibling sequence.  Chases through SLabel→SStmt nesting to
+    /// find deeply buried gotos (DeepTrailingStmt pattern).
     bool EliminateGotoToNextLabel(std::vector< SNode * > &root,
                                   SNodeFactory &factory,
                                   clang::ASTContext &ctx);
@@ -171,11 +172,11 @@ namespace patchestry::ast {
     bool ConvertGotoToBreakContinue(std::vector< SNode * > &root,
                                     SNodeFactory &factory);
 
-    /// Replace goto-to-return: when a trailing clang::GotoStmt in an SBlock
+    /// Replace goto-to-return: when an SStmt holding a clang::GotoStmt
     /// (or an SGoto SNode) targets a label whose body ends with a
     /// clang::ReturnStmt, replace the goto with the label's return stmts.
-    /// Also handles non-trailing gotos inside clang::IfStmt arms within
-    /// SBlocks — the most common residual pattern.
+    /// Also handles gotos inside clang::IfStmt arms held by SStmt nodes
+    /// — the most common residual pattern.
     /// Dead labels are cleaned up by a subsequent InlineResidualGotos pass.
     ///
     /// Returns true if any replacement was performed.

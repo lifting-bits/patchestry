@@ -28,12 +28,12 @@ namespace patchestry::ast {
 
         // Two leaf cases that the generic for_each_child can't express:
         //   - SGoto contributes a ref to its target label (no SNode children).
-        //   - SBlock holds raw clang::Stmt*; embedded GotoStmt also counts.
+        //   - SStmt holds a raw clang::Stmt*; embedded GotoStmt also counts.
         if (auto *g = node->dyn_cast<SGoto>()) {
             refs[g->Target()]++;
             return;
         }
-        if (auto *blk = node->dyn_cast<SBlock>()) {
+        if (auto *st = node->dyn_cast<SStmt>()) {
             std::function< void(clang::Stmt *) > walk =
                 [&](clang::Stmt *s) {
                 if (!s) return;
@@ -43,7 +43,7 @@ namespace patchestry::ast {
                 }
                 for (auto *child : s->children()) walk(child);
             };
-            for (auto *s : blk->Stmts()) walk(s);
+            walk(st->Stmt());
             return;
         }
 
@@ -64,9 +64,20 @@ namespace patchestry::ast {
         dst.insert(dst.end(), src.begin(), src.end());
     }
 
+    // Spill a list of raw clang::Stmt* into individual SStmt SNodes,
+    // appended to `out`.  A "block" of statements is a run of SStmt
+    // siblings in a body vector — the SBlock replacement (Phase 3
+    // piece 2).  Null statements are dropped.
+    static void AppendStmts(SNodeFactory &factory,
+                            std::vector< SNode * > &out,
+                            const std::vector< clang::Stmt * > &stmts) {
+        for (auto *s : stmts)
+            if (s) out.push_back(factory.Make< SStmt >(s));
+    }
+
     // Invoke fn(std::vector<SNode*>&) on each body-vector slot held by
     // `node` (SLabel/loop bodies, if-then/else arms, switch case lists).
-    // SGoto/SBlock/SBreak/SContinue/SReturn carry no body-vectors.
+    // SGoto/SStmt/SBreak/SContinue/SReturn carry no body-vectors.
     // This replaces the old SSeq-based child sequencing now that the
     // SSeq node kind no longer exists.
     template< typename Fn >
@@ -834,14 +845,12 @@ namespace patchestry::ast {
         size_t id, SNode *child) {
         auto &a = graph_.Node(id);
         // Prefix: a's prior content — either a pre-structured sequence
-        // from an earlier rule, or a fresh SBlock wrapping a.stmts.
+        // from an earlier rule, or a.stmts spilled as SStmt siblings.
         std::vector< SNode * > result;
         if (!a.structured.empty()) {
             result = a.structured;
-        } else if (!a.stmts.empty()) {
-            auto *a_blk = factory_.Make<SBlock>();
-            for (auto *s : a.stmts) a_blk->AddStmt(s);
-            result.push_back(a_blk);
+        } else {
+            AppendStmts(factory_, result, a.stmts);
         }
         if (child) result.push_back(child);
         if (!a.original_label.empty()) {
@@ -1532,7 +1541,7 @@ namespace patchestry::ast {
         std::sort(interior.begin(), interior.end());
 
         if (interior.empty()) {
-            return { factory_.Make<SBlock>() }; // empty body
+            return {}; // empty body
         }
 
         // Helper: for a conditional interior node, if one successor
@@ -1652,13 +1661,9 @@ namespace patchestry::ast {
         }
 
         // Merge pass: look for SIfThenElse(cond, SGoto(L), null) nodes
-        // targeting the same label and combine with ||.  Skip empty
-        // SBlock nodes between them (remnants of conditional routing nodes).
-        auto is_empty_block = [](SNode *n) -> bool {
-            auto *blk = n->dyn_cast<SBlock>();
-            return blk && blk->Stmts().empty();
-        };
-
+        // targeting the same label and combine with ||.  In the spilled
+        // model empty blocks no longer exist, so adjacent if-gotos merge
+        // directly.
         for (size_t i = 0; i < children.size(); ++i) {
             auto *ite1 = children[i]->dyn_cast<SIfThenElse>();
             if (!ite1 || ite1->ElseBranch() || !ite1->ThenBranch())
@@ -1666,11 +1671,8 @@ namespace patchestry::ast {
             auto *g1 = ite1->ThenBranch()->dyn_cast<SGoto>();
             if (!g1) continue;
 
-            // Scan forward, skipping empty blocks, looking for
-            // another if-goto to the same target.
+            // The next sibling is the merge candidate.
             size_t j = i + 1;
-            while (j < children.size() && is_empty_block(children[j]))
-                ++j;
             if (j >= children.size()) continue;
 
             auto *ite2 = children[j]->dyn_cast<SIfThenElse>();
@@ -1692,18 +1694,11 @@ namespace patchestry::ast {
                 factory_.Make<SGoto>(g1->Target()),
                 nullptr);
             children[i] = merged;
-            // Remove empty blocks between i and j, plus j itself.
+            // Remove the merged-in sibling j.
             children.erase(children.begin() + static_cast<ptrdiff_t>(i + 1),
                            children.begin() + static_cast<ptrdiff_t>(j + 1));
             --i;  // retry from same position (might merge 3+)
         }
-
-        // Remove any remaining empty blocks.  MakeSeq drops empty
-        // unlabeled SBlocks too, but the explicit pre-filter keeps
-        // the merged-if-goto loop above from chasing emptied slots.
-        children.erase(
-            std::remove_if(children.begin(), children.end(), is_empty_block),
-            children.end());
 
         return factory_.MakeSeq(std::move(children));
     }
@@ -1761,10 +1756,8 @@ namespace patchestry::ast {
             std::vector<SNode *> inner_children;
             if (!h.structured.empty()) {
                 SeqAppend(inner_children, h.structured);
-            } else if (!h.stmts.empty()) {
-                auto *h_blk = factory_.Make<SBlock>();
-                for (auto *s : h.stmts) h_blk->AddStmt(s);
-                inner_children.push_back(h_blk);
+            } else {
+                AppendStmts(factory_, inner_children, h.stmts);
             }
 
             // Header conditional: if(branch_cond) goto taken_label;
@@ -1825,9 +1818,7 @@ namespace patchestry::ast {
             if (!h.structured.empty()) {
                 SeqAppend(inner, h.structured);
             } else {
-                auto *h_blk = factory_.Make<SBlock>();
-                for (auto *s : h.stmts) h_blk->AddStmt(s);
-                inner.push_back(h_blk);
+                AppendStmts(factory_, inner, h.stmts);
             }
 
             // 2. Exit test: if (exit_cond) break;
@@ -1921,9 +1912,7 @@ namespace patchestry::ast {
             if (!h.structured.empty()) {
                 SeqAppend(full_body, h.structured);
             } else {
-                auto *h_blk = factory_.Make<SBlock>();
-                for (auto *s : h.stmts) h_blk->AddStmt(s);
-                full_body.push_back(h_blk);
+                AppendStmts(factory_, full_body, h.stmts);
             }
         }
         SeqAppend(full_body, loop_body);
@@ -2024,9 +2013,7 @@ namespace patchestry::ast {
             if (!h.structured.empty()) {
                 SeqAppend(full_body, h.structured);
             } else {
-                auto *h_blk = factory_.Make<SBlock>();
-                for (auto *s : h.stmts) h_blk->AddStmt(s);
-                full_body.push_back(h_blk);
+                AppendStmts(factory_, full_body, h.stmts);
             }
         }
         SeqAppend(full_body, loop_body);
@@ -2225,7 +2212,7 @@ namespace patchestry::ast {
                         if (!sn.original_label.empty())
                             return { factory_.Make<SGoto>(
                                 factory_.Intern(sn.original_label)) };
-                        return { factory_.Make<SBlock>() };
+                        return {};
                     };
 
                     std::vector< SNode * > then_body = build_branch(t_id);
@@ -2270,7 +2257,7 @@ namespace patchestry::ast {
                     LOG(WARNING) << "RuleBlockSwitch: target node "
                                  << target << " missing label for goto"
                                  << " — emitting empty case body\n";
-                    case_body = { factory_.Make<SBlock>() };
+                    case_body = {};
                 } else {
                     const std::string &lbl = tn.original_label;
                     case_body = { factory_.Make<SGoto>(factory_.Intern(lbl)) };
@@ -2290,11 +2277,7 @@ namespace patchestry::ast {
 
         // A's pre-switch stmts go before the switch.
         std::vector< SNode * > result;
-        if (!a.stmts.empty()) {
-            auto *a_blk = factory_.Make<SBlock>();
-            for (auto *s : a.stmts) a_blk->AddStmt(s);
-            result.push_back(a_blk);
-        }
+        AppendStmts(factory_, result, a.stmts);
         result.push_back(sw);
 
         // Preserve A's label.
@@ -2420,8 +2403,9 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
-    // BuildLeafSNode — wrap a CNode's stmts in an SBlock, optionally
-    //                   wrapped in an SLabel if the node has a label.
+    // BuildLeafSNode — spill a CNode's stmts into SStmt siblings,
+    //                  optionally wrapped in an SLabel if the node
+    //                  has a label.
     // ---------------------------------------------------------------
 
     std::vector< SNode * > CFGStructure::BuildLeafSNode(
@@ -2432,27 +2416,38 @@ namespace patchestry::ast {
         // return its existing structured sequence.
         if (!node.structured.empty()) return node.structured;
 
-        auto *blk = factory_.Make<SBlock>();
-        for (auto *s : node.stmts) {
-            blk->AddStmt(s);
-        }
-
-        // Append terminal (goto/if-goto) so the existing emitter path
-        // can reconstruct control flow for unstructured remainders.
+        // Terminal (goto/if-goto) is appended so the emitter can
+        // reconstruct control flow for unstructured remainders.
         // Skipped for non-tail nodes in a sequential merge where the
         // edge is absorbed — the terminal would be a dead goto.
-        if (include_terminal && node.terminal) {
-            blk->AddStmt(node.terminal);
+        const bool has_content = !node.stmts.empty()
+            || (include_terminal && node.terminal);
+
+        // An empty unlabeled leaf contributes nothing.
+        if (!has_content && node.original_label.empty()) {
+            return {};
         }
 
-        SNode *result = blk;
+        // An empty labeled leaf keeps its SLabel (it is still a goto
+        // target) but with an empty body, rendered as `label: ;`.
+        if (!has_content) {
+            return { factory_.Make<SLabel>(
+                factory_.Intern(node.original_label),
+                std::vector< SNode * >{}) };
+        }
+
+        std::vector< SNode * > body;
+        AppendStmts(factory_, body, node.stmts);
+        if (include_terminal && node.terminal) {
+            body.push_back(factory_.Make<SStmt>(node.terminal));
+        }
 
         if (!node.original_label.empty()) {
-            result = factory_.Make<SLabel>(
-                factory_.Intern(node.original_label), blk);
+            return { factory_.Make<SLabel>(
+                factory_.Intern(node.original_label), std::move(body)) };
         }
 
-        return { result };
+        return body;
     }
 
     // ---------------------------------------------------------------
@@ -2479,7 +2474,7 @@ namespace patchestry::ast {
 
         // Try to inline gotos in a single sequence.  Returns true if changed.
         bool InlineGotosInSeq(
-            std::vector< SNode * > &seq, SNodeFactory &factory,
+            std::vector< SNode * > &seq, SNodeFactory & /*factory*/,
             const std::unordered_map<std::string_view, int> &refs
         ) {
             bool changed = false;
@@ -2493,11 +2488,12 @@ namespace patchestry::ast {
             }
 
             // Scan children for SGoto nodes that can be inlined.
-            // Only inline when:
-            //   (a) label is the immediate next sibling (forward goto, no skipped code), OR
-            //   (b) all siblings between goto and label are empty SBlocks (nothing skipped)
-            // This prevents changing control-flow semantics by executing code
-            // that the goto would have jumped over.
+            // Only inline when the label is the immediate next sibling
+            // (forward goto, no skipped code).  This prevents changing
+            // control-flow semantics by executing code the goto would
+            // have jumped over.  (In the spilled model empty placeholder
+            // blocks no longer exist, so immediate adjacency is the only
+            // "nothing skipped" case.)
             for (size_t i = 0; i < seq.size(); ++i) {
                 auto *g = seq[i]->dyn_cast<SGoto>();
                 if (!g) continue;
@@ -2515,25 +2511,15 @@ namespace patchestry::ast {
                 // Backward gotos: skip — inlining would re-order execution.
                 if (label_idx <= i) continue;
 
-                // Check that all siblings between goto (i) and label (label_idx)
-                // are empty SBlocks — i.e., the goto doesn't skip any real code.
-                bool can_inline = true;
-                for (size_t k = i + 1; k < label_idx; ++k) {
-                    auto *blk = seq[k]->dyn_cast<SBlock>();
-                    if (!blk || !blk->Empty()) {
-                        can_inline = false;
-                        break;
-                    }
-                }
-                if (!can_inline) continue;
+                // The goto must skip no real code: the label must be
+                // the immediate next sibling.
+                if (label_idx != i + 1) continue;
 
                 auto *lbl = seq[label_idx]->as<SLabel>();
 
                 // Splice the label's body (a vector) into the goto's
-                // slot, dropping the goto, the empty blocks between,
-                // and the label node itself.
+                // slot, dropping the goto and the label node itself.
                 std::vector< SNode * > repl = lbl->BodyList();
-                if (repl.empty()) repl.push_back(factory.Make<SBlock>());
 
                 seq.erase(seq.begin() + static_cast<ptrdiff_t>(i),
                           seq.begin() + static_cast<ptrdiff_t>(label_idx) + 1);
@@ -2558,21 +2544,21 @@ namespace patchestry::ast {
     // ---------------------------------------------------------------
     // EliminateGotoToNextLabel — SNode post-pass
     //
-    // Walk SSeq children.  For each child followed by an SLabel,
-    // chase through nesting (SLabel body → SSeq last child → SBlock
-    // trailing stmt) to find the deepest trailing stmt.  If it's a
-    // goto (SGoto or clang::GotoStmt) targeting the next label, or
-    // an IfStmt with one arm being such a goto, eliminate it.
+    // Walk a sibling sequence.  For each child followed by an SLabel,
+    // chase through nesting (SLabel body → last child → SStmt) to find
+    // the deepest trailing stmt.  If it's a goto (SGoto or
+    // clang::GotoStmt) targeting the next label, or an IfStmt with one
+    // arm being such a goto, eliminate it.
     // ---------------------------------------------------------------
 
     namespace {
 
-        /// Chase through SLabel/SSeq/SBlock to find the deepest trailing
+        /// Chase through SLabel/SStmt to find the deepest trailing
         /// SNode or clang::Stmt.  Returns {leaf_snode, clang_stmt_or_null}.
         /// The leaf_snode is the SNode containing the trailing stmt.
         struct TrailingInfo {
-            SNode *container = nullptr;  // innermost SNode (SBlock, SGoto, etc.)
-            clang::Stmt *stmt = nullptr; // if container is SBlock, its last stmt
+            SNode *container = nullptr;  // innermost SNode (SStmt, SGoto, etc.)
+            clang::Stmt *stmt = nullptr; // if container is SStmt, its stmt
         };
 
         TrailingInfo DeepTrailingSNode(SNode *node) {
@@ -2582,9 +2568,8 @@ namespace patchestry::ast {
                 if (body.empty()) return {};
                 return DeepTrailingSNode(body.back());
             }
-            if (auto *blk = node->dyn_cast<SBlock>()) {
-                if (blk->Empty()) return {};
-                return {blk, blk->Stmts().back()};
+            if (auto *st = node->dyn_cast<SStmt>()) {
+                return {st, st->Stmt()};
             }
             // SGoto, SIfThenElse, etc. — the node itself is the trailing
             return {node, nullptr};
@@ -2663,17 +2648,41 @@ namespace patchestry::ast {
                         break;
                     }
 
-                    // --- Check clang::GotoStmt in SBlock ---
+                    // --- Check clang::GotoStmt / IfStmt held by an SStmt ---
                     if (info.stmt) {
-                        auto clang_tgt = ClangGotoTarget(info.stmt);
-                        if (!clang_tgt.empty() && clang_tgt == next_name) {
-                            // Remove the trailing GotoStmt from the SBlock
-                            auto *blk = info.container->dyn_cast<SBlock>();
-                            if (blk && !blk->Empty()) {
-                                blk->Stmts().pop_back();
-                                local_changed = true; changed = true;
-                                break;
+                        auto *st = info.container->dyn_cast<SStmt>();
+
+                        // Erase the trailing SStmt container, whether it
+                        // is a direct child or nested at the tail of an
+                        // SLabel body chain.
+                        auto erase_container = [&]() {
+                            if (info.container == children[i]) {
+                                children.erase(
+                                    children.begin()
+                                    + static_cast<ptrdiff_t>(i));
+                                return;
                             }
+                            std::function<bool(SNode *)> rec;
+                            rec = [&](SNode *n) -> bool {
+                                auto *l = n->dyn_cast<SLabel>();
+                                if (!l) return false;
+                                auto &body = l->BodyList();
+                                if (body.empty()) return false;
+                                if (body.back() == info.container) {
+                                    body.pop_back();
+                                    return true;
+                                }
+                                return rec(body.back());
+                            };
+                            rec(children[i]);
+                        };
+
+                        auto clang_tgt = ClangGotoTarget(info.stmt);
+                        if (st && !clang_tgt.empty() && clang_tgt == next_name) {
+                            // goto L; L: → drop the trailing goto SStmt
+                            erase_container();
+                            local_changed = true; changed = true;
+                            break;
                         }
 
                         // --- Check clang::IfStmt with goto arm ---
@@ -2681,7 +2690,7 @@ namespace patchestry::ast {
                             auto else_tgt = ClangGotoTarget(ifs->getElse());
                             auto then_tgt = ClangGotoTarget(ifs->getThen());
 
-                            if (!else_tgt.empty() && else_tgt == next_name) {
+                            if (st && !else_tgt.empty() && else_tgt == next_name) {
                                 // else goto L; L: → drop else arm
                                 auto loc = ifs->getIfLoc();
                                 auto *new_if = clang::IfStmt::Create(
@@ -2689,26 +2698,20 @@ namespace patchestry::ast {
                                     nullptr, nullptr,
                                     ifs->getCond(), loc, loc,
                                     ifs->getThen(), loc, nullptr);
-                                auto *blk = info.container->dyn_cast<SBlock>();
-                                if (blk && !blk->Empty()) {
-                                    blk->Stmts().back() = new_if;
-                                    local_changed = true; changed = true;
-                                    break;
-                                }
+                                st->SetStmt(new_if);
+                                local_changed = true; changed = true;
+                                break;
                             }
 
-                            if (!then_tgt.empty() && then_tgt == next_name
+                            if (st && !then_tgt.empty() && then_tgt == next_name
                                 && !ifs->getElse()) {
                                 // if(c) goto L; L: → nop (remove the if-stmt)
-                                auto *blk = info.container->dyn_cast<SBlock>();
-                                if (blk && !blk->Empty()) {
-                                    blk->Stmts().pop_back();
-                                    local_changed = true; changed = true;
-                                    break;
-                                }
+                                erase_container();
+                                local_changed = true; changed = true;
+                                break;
                             }
 
-                            if (!then_tgt.empty() && then_tgt == next_name
+                            if (st && !then_tgt.empty() && then_tgt == next_name
                                 && ifs->getElse()) {
                                 // if(c) goto L; else S; L: → if(!c) S
                                 auto *neg = NegateExpr(ctx, ifs->getCond());
@@ -2718,12 +2721,9 @@ namespace patchestry::ast {
                                     nullptr, nullptr,
                                     neg, loc, loc,
                                     ifs->getElse(), loc, nullptr);
-                                auto *blk = info.container->dyn_cast<SBlock>();
-                                if (blk && !blk->Empty()) {
-                                    blk->Stmts().back() = new_if;
-                                    local_changed = true; changed = true;
-                                    break;
-                                }
+                                st->SetStmt(new_if);
+                                local_changed = true; changed = true;
+                                break;
                             }
                         }
                     }
@@ -2769,9 +2769,13 @@ namespace patchestry::ast {
                         }
                         if (!then_tgt.empty() && then_tgt == next_name
                             && ite->ElseBranch() && ite->Cond()) {
+                            // if(c) goto L; else { S... }; L: → if(!c) { S... }
+                            // The whole else list becomes the new then list —
+                            // ElseBranch() alone would drop all but the first
+                            // sibling in the spilled (SStmt) model.
                             auto *neg = NegateExpr(ctx, ite->Cond());
                             auto *new_ite = factory.Make<SIfThenElse>(
-                                neg, ite->ElseBranch(), nullptr);
+                                neg, ite->ElseList(), std::vector< SNode * >{});
                             // Replace in parent
                             if (info.container == children[i]) {
                                 children[i] = new_ite;
@@ -2878,9 +2882,8 @@ namespace patchestry::ast {
             if (node->dyn_cast<SContinue>()) return true;
             if (node->dyn_cast<SGoto>()) return true;
 
-            if (auto *blk = node->dyn_cast<SBlock>()) {
-                if (blk->Empty()) return false;
-                return ClangStmtIsTerminator(blk->Stmts().back());
+            if (auto *st = node->dyn_cast<SStmt>()) {
+                return ClangStmtIsTerminator(st->Stmt());
             }
             if (auto *lbl = node->dyn_cast<SLabel>()) {
                 return SeqAlwaysTerminates(lbl->BodyList());
@@ -2919,12 +2922,11 @@ namespace patchestry::ast {
             if (!node) return false;
             if (node->dyn_cast<SLabel>()) return true;
 
-            // SBlock may hold a clang::LabelStmt — check too.
-            // (SBlock has no SNode children, so we return early.)
-            if (auto *blk = node->dyn_cast<SBlock>()) {
-                for (auto *s : blk->Stmts())
-                    if (llvm::isa<clang::LabelStmt>(s)) return true;
-                return false;
+            // An SStmt may hold a clang::LabelStmt — check too.
+            // (SStmt has no SNode children, so we return early.)
+            if (auto *st = node->dyn_cast<SStmt>()) {
+                return st->Stmt()
+                    && llvm::isa<clang::LabelStmt>(st->Stmt());
             }
 
             // Uniform recursion via the visitor API: any descendant
@@ -3151,8 +3153,8 @@ namespace patchestry::ast {
             if (!node) return false;
             if (node->dyn_cast<SLabel>()) return true;
             // Note: this scan deliberately does NOT inspect clang::LabelStmt
-            // inside SBlock (unlike SubtreeHasLabel).  Preserving that
-            // narrower scope; the SBlock leaf has no SNode children so
+            // inside an SStmt (unlike SubtreeHasLabel).  Preserving that
+            // narrower scope; the SStmt leaf has no SNode children so
             // the visitor simply returns false for it.
             bool found = false;
             node->for_each_child([&](SNode *c) {
@@ -3231,8 +3233,6 @@ namespace patchestry::ast {
                     replacements.push_back(new_if);
                     for (SNode *c : lbl->BodyList())
                         replacements.push_back(c);
-                    if (lbl->BodyList().empty())
-                        replacements.push_back(factory.Make<SBlock>());
 
                     // Replace range [i, label_idx+1) with `replacements`.
                     children.erase(
@@ -3302,20 +3302,6 @@ namespace patchestry::ast {
             return found;
         }
 
-        /// Trim dead stmts inside an SBlock after the first terminator.
-        bool TrimDeadStmtsInSBlock(SBlock *blk) {
-            auto &stmts = blk->Stmts();
-            for (size_t i = 0; i < stmts.size(); ++i) {
-                if (!ClangStmtIsTerminator(stmts[i])) continue;
-                if (i + 1 >= stmts.size()) return false;
-                stmts.erase(
-                    stmts.begin() + static_cast< ptrdiff_t >(i) + 1,
-                    stmts.end());
-                return true;
-            }
-            return false;
-        }
-
         /// Strict terminator check for dead-code removal purposes.
         ///
         /// `SNodeAlwaysTerminates` marks any SSeq whose last child
@@ -3327,7 +3313,7 @@ namespace patchestry::ast {
         /// modified in-place.  To avoid dropping live code we only treat
         /// these as strong terminators:
         ///   - primitive terminators (SReturn/SBreak/SContinue/SGoto)
-        ///   - SBlock whose last clang::Stmt is itself terminal
+        ///   - SStmt whose clang::Stmt is itself terminal
         ///   - SLabel wrapping any of the above
         ///   - SIfThenElse where BOTH branches are strong terminators
         ///     (safe: AbsorbFallthroughIntoElse only fires on if-then
@@ -3345,9 +3331,8 @@ namespace patchestry::ast {
             if (node->dyn_cast<SBreak>()) return true;
             if (node->dyn_cast<SContinue>()) return true;
             if (node->dyn_cast<SGoto>()) return true;
-            if (auto *blk = node->dyn_cast<SBlock>()) {
-                if (blk->Empty()) return false;
-                return ClangStmtIsTerminator(blk->Stmts().back());
+            if (auto *st = node->dyn_cast<SStmt>()) {
+                return ClangStmtIsTerminator(st->Stmt());
             }
             if (auto *lbl = node->dyn_cast<SLabel>()) {
                 auto &body = lbl->BodyList();
@@ -3371,12 +3356,8 @@ namespace patchestry::ast {
 
         bool RemoveDeadInSeq(std::vector< SNode * > &children) {
             bool changed = false;
-            // Trim dead stmts inside SBlock children first — SBlocks
-            // hold no body-vectors so ForEachSeqPostOrder never visits
-            // them as a sequence on their own.
-            for (SNode *c : children)
-                if (auto *blk = c->dyn_cast<SBlock>())
-                    if (TrimDeadStmtsInSBlock(blk)) changed = true;
+            // Dead statements after a terminator are now dead SStmt
+            // siblings — the loop below trims them at the sibling level.
 
             for (size_t i = 0; i + 1 < children.size(); ++i) {
                 if (!IsStrongTerminator(children[i])) continue;
@@ -3409,7 +3390,7 @@ namespace patchestry::ast {
     // ConvertGotoToBreakContinue — replace gotos to loop exit/header
     //
     // Walks the SNode tree with a scope stack of enclosing loops.
-    // For each trailing clang::GotoStmt in an SBlock:
+    // For each SStmt holding a clang::GotoStmt:
     //   - target matches loop ExitLabel → replace with SBreak
     //   - target matches loop HeaderLabel → replace with SContinue
     // Also handles SGoto SNodes from SelectAndMarkGotoEdge.
@@ -3481,30 +3462,22 @@ namespace patchestry::ast {
                     continue;
                 }
 
-                auto *block = seq[i]->dyn_cast<SBlock>();
-                if (!block || block->Empty()) continue;
+                auto *st = seq[i]->dyn_cast<SStmt>();
+                if (!st) continue;
                 auto *goto_stmt =
-                    llvm::dyn_cast<clang::GotoStmt>(block->Stmts().back());
+                    llvm::dyn_cast_or_null<clang::GotoStmt>(st->Stmt());
                 if (!goto_stmt || !goto_stmt->getLabel()) continue;
 
                 std::string_view target = goto_stmt->getLabel()->getName();
                 for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
                     if (!it->exit_label.empty() && target == it->exit_label) {
-                        block->Stmts().pop_back();
-                        seq.insert(
-                            seq.begin() + static_cast<ptrdiff_t>(i) + 1,
-                            factory.Make<SBreak>());
-                        ++i; // skip the just-inserted SBreak
+                        seq[i] = factory.Make<SBreak>();
                         changed = true;
                         break;
                     }
                     if (!it->header_label.empty()
                         && target == it->header_label) {
-                        block->Stmts().pop_back();
-                        seq.insert(
-                            seq.begin() + static_cast<ptrdiff_t>(i) + 1,
-                            factory.Make<SContinue>());
-                        ++i; // skip the just-inserted SContinue
+                        seq[i] = factory.Make<SContinue>();
                         changed = true;
                         break;
                     }
@@ -3531,45 +3504,67 @@ namespace patchestry::ast {
 
     namespace {
 
-        /// Check if an SBlock is a safe, return-terminating block that
-        /// can be duplicated at goto sites.  Must:
+        /// True if a clang::Stmt tree contains a CallExpr.
+        bool StmtTreeHasCall(const clang::Stmt *s) {
+            if (!s) return false;
+            if (llvm::isa<clang::CallExpr>(s)) return true;
+            for (const auto *c : s->children())
+                if (StmtTreeHasCall(c)) return true;
+            return false;
+        }
+
+        /// True if any stmt in the vector contains a CallExpr.
+        bool StmtVecHasCall(const std::vector<clang::Stmt *> &v) {
+            for (auto *s : v)
+                if (StmtTreeHasCall(s)) return true;
+            return false;
+        }
+
+        /// Check whether the maximal trailing run of SStmt siblings in
+        /// `body` forms a safe, return-terminating block that can be
+        /// duplicated at goto sites, collecting its statements into
+        /// `out`.  The run must:
+        ///   - be non-empty
         ///   - end with clang::ReturnStmt
         ///   - have ≤ max_stmts statements
         ///   - contain no GotoStmt or LabelStmt (no new label references)
-        bool IsSafeReturnBlock(SBlock *block, size_t max_stmts = 8) {
-            if (!block || block->Empty()) return false;
-            if (block->Size() > max_stmts) return false;
-            if (!llvm::isa<clang::ReturnStmt>(block->Stmts().back()))
+        ///   - contain no CallExpr — duplicating a call inflates the
+        ///     output with extra call sites that do not exist in the
+        ///     input P-Code; such a body stays shared behind its goto
+        bool ExtractReturnTail(const std::vector<SNode *> &body,
+                               std::vector<clang::Stmt *> &out,
+                               size_t max_stmts = 8) {
+            out.clear();
+            size_t start = body.size();
+            while (start > 0 && body[start - 1]->dyn_cast<SStmt>())
+                --start;
+            if (start == body.size()) return false; // no trailing SStmt run
+            for (size_t j = start; j < body.size(); ++j)
+                out.push_back(body[j]->as<SStmt>()->Stmt());
+            if (out.size() > max_stmts) { out.clear(); return false; }
+            if (out.empty()
+                || !llvm::isa<clang::ReturnStmt>(out.back())) {
+                out.clear();
                 return false;
-            for (auto *s : block->Stmts()) {
-                if (llvm::isa<clang::GotoStmt>(s)
-                    || llvm::isa<clang::LabelStmt>(s))
+            }
+            for (auto *s : out) {
+                if (!s || llvm::isa<clang::GotoStmt>(s)
+                    || llvm::isa<clang::LabelStmt>(s)
+                    || StmtTreeHasCall(s)) {
+                    out.clear();
                     return false;
+                }
             }
             return true;
         }
 
-        /// If `body` is an SBlock passing IsSafeReturnBlock, return it.
-        SBlock *ExtractReturnBlock(SNode *body) {
-            if (!body) return nullptr;
-            if (auto *block = body->dyn_cast<SBlock>()) {
-                if (IsSafeReturnBlock(block)) return block;
-            }
-            return nullptr;
-        }
-
-        /// Sequence form: the last element of `body` is the candidate
-        /// return-terminating block.
-        SBlock *ExtractReturnBlockSeq(const std::vector<SNode *> &body) {
-            if (body.empty()) return nullptr;
-            return ExtractReturnBlock(body.back());
-        }
-
-        /// Info about a label's position in the SNode tree.
+        /// Info about a label's position in the SNode tree.  Only the
+        /// owning sequence is recorded — the label's index within it is
+        /// re-derived on demand, since goto-to-return splicing shifts
+        /// sibling positions during the pass.
         struct LabelEntry {
             SLabel *label;
             std::vector<SNode *> *parent_seq;  // body-vector holding the label
-            size_t index;                      // position in parent_seq
         };
 
         /// Build global label→LabelEntry map.
@@ -3577,7 +3572,7 @@ namespace patchestry::ast {
                            std::unordered_map<std::string_view, LabelEntry> &labels) {
             for (size_t i = 0; i < seq.size(); ++i) {
                 if (auto *lbl = seq[i]->dyn_cast<SLabel>())
-                    labels[lbl->Name()] = {lbl, &seq, i};
+                    labels[lbl->Name()] = {lbl, &seq};
                 ForEachBodyList(seq[i], [&](std::vector<SNode *> &body) {
                     CollectLabels(body, labels);
                 });
@@ -3585,10 +3580,11 @@ namespace patchestry::ast {
         }
 
         /// Collect the fallthrough tail stmts starting from a label's
-        /// position in its parent SSeq.  Follows consecutive SLabel/SBlock
-        /// siblings, collecting their stmts.  Returns true if the tail
-        /// ends with ReturnStmt and total stmts ≤ max_stmts.  All stmts
-        /// must be safe (no GotoStmt/LabelStmt except the label markers).
+        /// position in its parent sequence.  Follows consecutive SStmt
+        /// siblings and all-SStmt-bodied SLabel siblings, collecting
+        /// their stmts.  Returns true if the tail ends with ReturnStmt
+        /// and total stmts ≤ max_stmts.  All stmts must be safe (no
+        /// GotoStmt/LabelStmt except the label markers).
         bool CollectReturnTail(
             const LabelEntry &entry,
             std::vector<clang::Stmt *> &out,
@@ -3597,30 +3593,40 @@ namespace patchestry::ast {
             if (!entry.parent_seq) return false;
             auto &seq = *entry.parent_seq;
 
+            // Re-derive the label's current index — splicing earlier in
+            // this pass may have shifted it.
+            size_t start = seq.size();
+            for (size_t k = 0; k < seq.size(); ++k)
+                if (seq[k] == entry.label) { start = k; break; }
+            if (start == seq.size()) return false;
+
             out.clear();
-            for (size_t j = entry.index; j < seq.size(); ++j) {
+            auto collect = [&](clang::Stmt *s) -> bool {
+                if (llvm::isa<clang::GotoStmt>(s)
+                    || llvm::isa<clang::LabelStmt>(s))
+                    return false; // unsafe stmt — hard fail
+                out.push_back(s);
+                return out.size() <= max_stmts;
+            };
+
+            for (size_t j = start; j < seq.size(); ++j) {
                 auto *child = seq[j];
 
-                // Extract stmts from SLabel(body=SBlock) or bare SBlock.
-                SBlock *block = nullptr;
-                if (auto *lbl = child->dyn_cast<SLabel>()) {
+                if (auto *st = child->dyn_cast<SStmt>()) {
+                    if (!collect(st->Stmt())) return false;
+                } else if (auto *lbl = child->dyn_cast<SLabel>()) {
+                    // Only a label whose body is a non-empty run of
+                    // SStmt nodes contributes (matches the prior
+                    // single-SBlock-body restriction).
                     auto &b = lbl->BodyList();
-                    if (b.size() == 1)
-                        block = b[0]->dyn_cast<SBlock>();
-                } else if (auto *blk = child->dyn_cast<SBlock>()) {
-                    block = blk;
+                    bool all_stmt = !b.empty();
+                    for (auto *bc : b)
+                        if (!bc->dyn_cast<SStmt>()) { all_stmt = false; break; }
+                    if (!all_stmt) break;
+                    for (auto *bc : b)
+                        if (!collect(bc->as<SStmt>()->Stmt())) return false;
                 } else {
-                    break; // non-label/non-block sibling — stop
-                }
-
-                if (!block) break;
-
-                for (auto *s : block->Stmts()) {
-                    if (llvm::isa<clang::GotoStmt>(s)
-                        || llvm::isa<clang::LabelStmt>(s))
-                        return false; // unsafe stmt
-                    out.push_back(s);
-                    if (out.size() > max_stmts) return false;
+                    break; // non-label/non-stmt sibling — stop
                 }
             }
 
@@ -3649,7 +3655,7 @@ namespace patchestry::ast {
             std::vector<clang::Stmt *> &out, size_t max_stmts);
 
         /// Try to flatten a terminating SNode body into clang::Stmts.
-        /// Handles SBlock ending in return, SReturn, SLabel (unwrap),
+        /// Handles SStmt holding a return, SReturn, SLabel (unwrap),
         /// and SIfThenElse where both arms terminate.
         bool FlattenTerminatingBody(
             SNode *body, clang::ASTContext &ctx,
@@ -3667,12 +3673,13 @@ namespace patchestry::ast {
                 return FlattenTerminatingSeq(
                     lbl->BodyList(), ctx, out, max_stmts);
             }
-            if (auto *blk = body->dyn_cast<SBlock>()) {
-                if (IsSafeReturnBlock(blk, max_stmts)) {
-                    for (auto *s : blk->Stmts()) out.push_back(s);
-                    return out.size() <= max_stmts;
-                }
-                return false;
+            if (auto *st = body->dyn_cast<SStmt>()) {
+                auto *s = st->Stmt();
+                if (!s || !llvm::isa<clang::ReturnStmt>(s)
+                    || StmtTreeHasCall(s))
+                    return false;
+                out.push_back(s);
+                return out.size() <= max_stmts;
             }
             // SIfThenElse where both arms terminate.
             if (auto *ite = body->dyn_cast<SIfThenElse>()) {
@@ -3716,7 +3723,7 @@ namespace patchestry::ast {
             return false;
         }
 
-        /// Flatten a terminating sequence: SBlock prefix children
+        /// Flatten a terminating sequence: SStmt prefix children
         /// followed by a terminating last element.
         bool FlattenTerminatingSeq(
             const std::vector<SNode *> &body, clang::ASTContext &ctx,
@@ -3724,76 +3731,23 @@ namespace patchestry::ast {
         ) {
             if (body.empty()) return false;
             for (size_t i = 0; i + 1 < body.size(); ++i) {
-                auto *child = body[i]->dyn_cast<SBlock>();
+                auto *child = body[i]->dyn_cast<SStmt>();
                 if (!child) return false;
-                for (auto *s : child->Stmts()) {
-                    if (llvm::isa<clang::GotoStmt>(s)
-                        || llvm::isa<clang::LabelStmt>(s))
-                        return false;
-                    out.push_back(s);
-                    if (out.size() > max_stmts) return false;
-                }
+                auto *s = child->Stmt();
+                if (llvm::isa<clang::GotoStmt>(s)
+                    || llvm::isa<clang::LabelStmt>(s))
+                    return false;
+                out.push_back(s);
+                if (out.size() > max_stmts) return false;
             }
             return FlattenTerminatingBody(body.back(), ctx, out, max_stmts);
         }
 
-        /// Check if the last stmt in an SBlock is a GotoStmt targeting
-        /// a return-terminating label.  If so, replace with the return stmts.
-        /// First tries the label's direct body (ExtractReturnBlock), then
-        /// falls back to collecting the fallthrough tail through consecutive
-        /// labels in the parent SSeq (CollectReturnTail).
-        bool TryReplaceBlockTrailingGoto(
-            SBlock *block, SNodeFactory &/*factory*/,
-            clang::ASTContext &ctx,
-            const std::unordered_map<std::string_view, LabelEntry> &labels
-        ) {
-            if (!block || block->Empty()) return false;
-            auto *last = block->Stmts().back();
-            auto *goto_stmt = llvm::dyn_cast<clang::GotoStmt>(last);
-            if (!goto_stmt || !goto_stmt->getLabel()) return false;
-
-            std::string_view target = goto_stmt->getLabel()->getName();
-            auto it = labels.find(target);
-            if (it == labels.end()) return false;
-
-            // Try 1: label body is directly a return-terminating block.
-            auto *ret_block =
-                ExtractReturnBlockSeq(it->second.label->BodyList());
-            if (ret_block && ret_block != block) {
-                block->Stmts().pop_back();
-                for (auto *s : ret_block->Stmts())
-                    block->AddStmt(s);
-                return true;
-            }
-
-            // Try 2: follow the fallthrough chain through consecutive
-            // labels in the parent SSeq to collect a return-terminating tail.
-            std::vector<clang::Stmt *> tail;
-            if (CollectReturnTail(it->second, tail)) {
-                block->Stmts().pop_back();
-                for (auto *s : tail)
-                    block->AddStmt(s);
-                return true;
-            }
-
-            // Try 3: resolve goto chains (label body ends in another
-            // goto → follow until a return-terminating body).
-            std::vector<clang::Stmt *> chain;
-            if (ResolveGotoChain(target, labels, ctx, chain)) {
-                block->Stmts().pop_back();
-                for (auto *s : chain)
-                    block->AddStmt(s);
-                return true;
-            }
-
-            return false;
-        }
-
         /// Follow a goto chain through labels collecting stmts until
         /// a return-terminating body is reached.  Each link in the
-        /// chain is a label whose SBlock body ends in a GotoStmt to
-        /// the next link.  Returns true if a return-terminated
-        /// sequence was assembled within the budget.
+        /// chain is a label whose body ends in a goto to the next
+        /// link.  Returns true if a return-terminated sequence was
+        /// assembled within the budget.
         ///
         /// Example chain:  goto L1 → L1:{s1; goto L2} → L2:{s2; return v;}
         /// Result:          out = {s1, s2, return v;}
@@ -3816,10 +3770,10 @@ namespace patchestry::ast {
                 if (body.empty()) return false;
 
                 // Try direct: body is return-terminating (no goto inside).
-                if (auto *ret_block = ExtractReturnBlockSeq(body)) {
-                    for (auto *s : ret_block->Stmts())
-                        out.push_back(s);
-                    return out.size() <= max_stmts;
+                std::vector<clang::Stmt *> direct;
+                if (ExtractReturnTail(body, direct, max_stmts)) {
+                    for (auto *s : direct) out.push_back(s);
+                    return out.size() <= max_stmts && !StmtVecHasCall(out);
                 }
 
                 // Try fallthrough tail from label's sequence position.
@@ -3837,35 +3791,26 @@ namespace patchestry::ast {
                 }
 
                 // Body must end in a goto (passthrough).  Collect the
-                // non-goto stmts from the prefix SBlocks, then follow
-                // the chain to the next label.
+                // non-label stmts from the prefix SStmt siblings, then
+                // follow the chain to the next label.
                 std::string_view next_target;
                 for (size_t ci = 0; ci + 1 < body.size(); ++ci) {
-                    auto *child_blk = body[ci]->dyn_cast<SBlock>();
-                    if (!child_blk) return false;
-                    for (auto *s : child_blk->Stmts()) {
-                        if (llvm::isa<clang::LabelStmt>(s))
-                            return false;
-                        out.push_back(s);
-                        if (out.size() > max_stmts) return false;
-                    }
+                    auto *child_st = body[ci]->dyn_cast<SStmt>();
+                    if (!child_st) return false;
+                    auto *s = child_st->Stmt();
+                    if (llvm::isa<clang::LabelStmt>(s))
+                        return false;
+                    out.push_back(s);
+                    if (out.size() > max_stmts) return false;
                 }
                 SNode *last = body.back();
                 if (auto *sg = last->dyn_cast<SGoto>()) {
                     next_target = sg->Target();
-                } else if (auto *lb = last->dyn_cast<SBlock>()) {
-                    if (lb->Empty()) return false;
-                    auto *gs2 = llvm::dyn_cast<clang::GotoStmt>(
-                        lb->Stmts().back());
+                } else if (auto *st = last->dyn_cast<SStmt>()) {
+                    auto *gs2 = llvm::dyn_cast_or_null<clang::GotoStmt>(
+                        st->Stmt());
                     if (!gs2 || !gs2->getLabel()) return false;
                     next_target = gs2->getLabel()->getName();
-                    // Collect non-goto stmts from the trailing block.
-                    for (size_t i = 0; i + 1 < lb->Size(); ++i) {
-                        if (llvm::isa<clang::LabelStmt>(lb->Stmts()[i]))
-                            return false;
-                        out.push_back(lb->Stmts()[i]);
-                        if (out.size() > max_stmts) return false;
-                    }
                 } else {
                     return false;
                 }
@@ -3932,53 +3877,73 @@ namespace patchestry::ast {
                 ctx, stmts, clang::FPOptionsOverride(), loc, loc);
         }
 
-        /// Scan all stmts in an SBlock for clang::IfStmt whose then/else
-        /// arm is a GotoStmt targeting a return-terminating label.
-        /// Replaces the goto arm with the label's body wrapped in a
-        /// CompoundStmt.  Handles bare gotos and CompoundStmt-wrapped gotos.
-        bool TryReplaceIfGuardedGotos(
-            SBlock *block,
+        /// For a clang::IfStmt whose then/else arm is a GotoStmt
+        /// targeting a return-terminating label, replace the goto arm
+        /// with the label's body wrapped in a CompoundStmt.  Handles
+        /// bare gotos and CompoundStmt-wrapped gotos.
+        bool TryReplaceIfGuardedGoto(
+            clang::IfStmt *ifs,
             clang::ASTContext &ctx,
             const std::unordered_map<std::string_view, LabelEntry> &labels
         ) {
-            if (!block || block->Empty()) return false;
             bool changed = false;
 
-            for (size_t i = 0; i < block->Stmts().size(); ++i) {
-                auto *ifs = llvm::dyn_cast<clang::IfStmt>(block->Stmts()[i]);
-                if (!ifs) continue;
-
-                // Check then-arm.
-                auto then_info = ExtractIfArmGoto(ifs->getThen());
-                if (then_info.gs) {
-                    std::vector<clang::Stmt *> body;
-                    if (ResolveGotoReturnBody(then_info.gs, labels, ctx, body)) {
-                        auto *replacement = BuildReplacementArm(
-                            ctx, then_info.compound, body);
-                        ifs->setThen(replacement);
-                        changed = true;
-                    }
+            // Check then-arm.
+            auto then_info = ExtractIfArmGoto(ifs->getThen());
+            if (then_info.gs) {
+                std::vector<clang::Stmt *> body;
+                if (ResolveGotoReturnBody(then_info.gs, labels, ctx, body)) {
+                    ifs->setThen(BuildReplacementArm(
+                        ctx, then_info.compound, body));
+                    changed = true;
                 }
+            }
 
-                // Check else-arm.
-                auto else_info = ExtractIfArmGoto(ifs->getElse());
-                if (else_info.gs) {
-                    std::vector<clang::Stmt *> body;
-                    if (ResolveGotoReturnBody(else_info.gs, labels, ctx, body)) {
-                        auto *replacement = BuildReplacementArm(
-                            ctx, else_info.compound, body);
-                        ifs->setElse(replacement);
-                        changed = true;
-                    }
+            // Check else-arm.
+            auto else_info = ExtractIfArmGoto(ifs->getElse());
+            if (else_info.gs) {
+                std::vector<clang::Stmt *> body;
+                if (ResolveGotoReturnBody(else_info.gs, labels, ctx, body)) {
+                    ifs->setElse(BuildReplacementArm(
+                        ctx, else_info.compound, body));
+                    changed = true;
                 }
             }
             return changed;
         }
 
+        /// Resolve a goto `target` into the return-terminating stmts
+        /// that should replace the goto.  Tries the label body's
+        /// trailing SStmt run, then the fallthrough tail across sibling
+        /// labels, then multi-hop goto-chain resolution.
+        bool ResolveReturnStmts(
+            std::string_view target,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            clang::ASTContext &ctx,
+            std::vector<clang::Stmt *> &out
+        ) {
+            auto it = labels.find(target);
+            if (it == labels.end()) return false;
+
+            out.clear();
+            if (ExtractReturnTail(it->second.label->BodyList(), out))
+                return true;
+            out.clear();
+            if (CollectReturnTail(it->second, out))
+                return true;
+            out.clear();
+            if (ResolveGotoChain(target, labels, ctx, out))
+                return true;
+            out.clear();
+            return false;
+        }
+
         /// Replace goto-to-return across one sequence and its nested
-        /// body-vectors.  SBlock children get trailing-goto and
-        /// if-guarded-goto rewrites; bare SGoto children are replaced
-        /// with a cloned copy of the target label's return body.
+        /// body-vectors.  An SStmt holding a clang::IfStmt with a goto
+        /// arm gets the arm rewritten in place; an SStmt holding a
+        /// GotoStmt — or a bare SGoto — that targets a return-terminating
+        /// label is replaced by the label's return body, spilled as
+        /// SStmt siblings.
         bool ReplaceGotoInSeq(
             std::vector<SNode *> &seq, SNodeFactory &factory,
             clang::ASTContext &ctx,
@@ -3986,59 +3951,51 @@ namespace patchestry::ast {
         ) {
             bool changed = false;
 
+            // Recurse into nested body-vectors first.
             for (SNode *child : seq) {
-                if (auto *block = child->dyn_cast<SBlock>()) {
-                    if (TryReplaceBlockTrailingGoto(
-                            block, factory, ctx, labels))
-                        changed = true;
-                    if (TryReplaceIfGuardedGotos(block, ctx, labels))
-                        changed = true;
-                }
                 ForEachBodyList(child, [&](std::vector<SNode *> &body) {
                     if (ReplaceGotoInSeq(body, factory, ctx, labels))
                         changed = true;
                 });
             }
 
-            // Bare SGoto children (from SelectAndMarkGotoEdge) → clone
-            // of the target label's return body.
-            for (size_t i = 0; i < seq.size(); ++i) {
-                auto *g = seq[i]->dyn_cast<SGoto>();
-                if (!g) continue;
-                auto it = labels.find(g->Target());
-                if (it == labels.end()) continue;
+            // Rewrite if-guarded goto arms in place (mutates the
+            // clang::IfStmt; does not alter the sibling list).
+            for (SNode *child : seq) {
+                if (auto *st = child->dyn_cast<SStmt>())
+                    if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(
+                            st->Stmt()))
+                        if (TryReplaceIfGuardedGoto(ifs, ctx, labels))
+                            changed = true;
+            }
 
-                // Try direct return block first.
-                auto *ret_block =
-                    ExtractReturnBlockSeq(it->second.label->BodyList());
-                if (ret_block) {
-                    auto *clone = factory.Make<SBlock>();
-                    clone->SetLabel(ret_block->Label());
-                    for (auto *s : ret_block->Stmts())
-                        clone->AddStmt(s);
-                    seq[i] = clone;
-                    changed = true;
+            // Replace goto-holding siblings (SStmt(GotoStmt) or bare
+            // SGoto) with the resolved return body.
+            for (size_t i = 0; i < seq.size(); ++i) {
+                std::string_view target;
+                if (auto *st = seq[i]->dyn_cast<SStmt>()) {
+                    if (auto *gs = llvm::dyn_cast_or_null<clang::GotoStmt>(
+                            st->Stmt()))
+                        if (gs->getLabel())
+                            target = gs->getLabel()->getName();
+                } else if (auto *g = seq[i]->dyn_cast<SGoto>()) {
+                    target = g->Target();
+                }
+                if (target.empty()) continue;
+
+                std::vector<clang::Stmt *> body;
+                if (!ResolveReturnStmts(target, labels, ctx, body))
                     continue;
-                }
-                // Try fallthrough tail.
-                std::vector<clang::Stmt *> tail;
-                if (CollectReturnTail(it->second, tail)) {
-                    auto *clone = factory.Make<SBlock>();
-                    for (auto *s : tail)
-                        clone->AddStmt(s);
-                    seq[i] = clone;
-                    changed = true;
-                    continue;
-                }
-                // Try goto chain resolution.
-                std::vector<clang::Stmt *> chain;
-                if (ResolveGotoChain(g->Target(), labels, ctx, chain)) {
-                    auto *clone = factory.Make<SBlock>();
-                    for (auto *s : chain)
-                        clone->AddStmt(s);
-                    seq[i] = clone;
-                    changed = true;
-                }
+
+                std::vector<SNode *> repl;
+                AppendStmts(factory, repl, body);
+                if (repl.empty()) continue;
+
+                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
+                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
+                           repl.begin(), repl.end());
+                i += repl.size() - 1; // skip the just-inserted siblings
+                changed = true;
             }
             return changed;
         }
@@ -4068,7 +4025,7 @@ namespace patchestry::ast {
     namespace {
 
         // Collect ALL label references: SGoto targets + clang::GotoStmt
-        // targets inside SBlock stmts.
+        // targets inside SStmt stmts.
         void CountAllGotoRefs(
             const SNode *node,
             std::unordered_set<std::string_view> &refs
@@ -4078,8 +4035,8 @@ namespace patchestry::ast {
                 refs.insert(g->Target());
                 return;
             }
-            if (auto *blk = node->dyn_cast<SBlock>()) {
-                // Recursively walk clang::Stmt trees for GotoStmt.
+            if (auto *st = node->dyn_cast<SStmt>()) {
+                // Recursively walk the clang::Stmt tree for GotoStmt.
                 std::function<void(clang::Stmt *)> walk =
                     [&](clang::Stmt *s) {
                     if (!s) return;
@@ -4089,7 +4046,7 @@ namespace patchestry::ast {
                     }
                     for (auto *child : s->children()) walk(child);
                 };
-                for (auto *s : blk->Stmts()) walk(s);
+                walk(st->Stmt());
                 return;
             }
             // All other kinds: recurse uniformly via the visitor API.
@@ -4172,8 +4129,8 @@ namespace patchestry::ast {
         /// Count approximate clang::Stmt-equivalent size of a subtree.
         size_t CountCloneStmts(const SNode *node) {
             if (!node) return 0;
-            if (auto *blk = node->dyn_cast<SBlock>())
-                return blk->Size();
+            if (node->dyn_cast<SStmt>())
+                return 1;
             if (auto *ite = node->dyn_cast<SIfThenElse>()) {
                 return 1 + CountCloneSeq(ite->ThenList())
                          + CountCloneSeq(ite->ElseList());
@@ -4197,18 +4154,21 @@ namespace patchestry::ast {
         /// SFor (loops would be duplicated, changing complexity).
         bool SubtreeIsSafeToClone(const SNode *node) {
             if (!node) return true;
-            if (auto *blk = node->dyn_cast<SBlock>()) {
-                std::function<bool(const clang::Stmt *)> has_label =
-                    [&](const clang::Stmt *st) -> bool {
-                        if (!st) return false;
-                        if (llvm::isa<clang::LabelStmt>(st)) return true;
-                        for (const auto *c : st->children())
-                            if (has_label(c)) return true;
+            if (auto *st = node->dyn_cast<SStmt>()) {
+                // Reject an SStmt that defines a label (cloning would
+                // duplicate the definition) or contains a call (cloning
+                // a call inflates the output with extra call sites that
+                // do not exist in the input P-Code).
+                std::function<bool(const clang::Stmt *)> has_unsafe =
+                    [&](const clang::Stmt *cs) -> bool {
+                        if (!cs) return false;
+                        if (llvm::isa<clang::LabelStmt>(cs)) return true;
+                        if (llvm::isa<clang::CallExpr>(cs)) return true;
+                        for (const auto *c : cs->children())
+                            if (has_unsafe(c)) return true;
                         return false;
                     };
-                for (auto *s : blk->Stmts())
-                    if (has_label(s)) return false;
-                return true;
+                return !has_unsafe(st->Stmt());
             }
             // Reject SLabel (would duplicate definition) and all loops.
             switch (node->Kind()) {
@@ -4244,15 +4204,11 @@ namespace patchestry::ast {
 
         /// Deep-clone a subtree.  Pre-condition: SubtreeIsSafeToClone(src).
         /// clang::Stmt* pointers are shared — clang::Stmt has no single
-        /// parent, so aliasing the same stmt in two SBlocks is legal.
+        /// parent, so aliasing the same stmt in two SStmt nodes is legal.
         SNode *CloneSNode(SNode *src, SNodeFactory &factory) {
             if (!src) return nullptr;
-            if (auto *blk = src->dyn_cast<SBlock>()) {
-                auto *out = factory.Make<SBlock>();
-                out->SetLabel(blk->Label());
-                for (auto *s : blk->Stmts()) out->AddStmt(s);
-                return out;
-            }
+            if (auto *st = src->dyn_cast<SStmt>())
+                return factory.Make<SStmt>(st->Stmt());
             if (auto *ite = src->dyn_cast<SIfThenElse>()) {
                 return factory.Make<SIfThenElse>(
                     ite->Cond(),
@@ -4298,9 +4254,8 @@ namespace patchestry::ast {
                 || node->dyn_cast<SContinue>()
                 || node->dyn_cast<SGoto>())
                 return false;
-            if (auto *blk = node->dyn_cast<SBlock>()) {
-                if (blk->Empty()) return true;
-                auto *last = blk->Stmts().back();
+            if (auto *st = node->dyn_cast<SStmt>()) {
+                auto *last = st->Stmt();
                 if (llvm::isa<clang::ReturnStmt>(last)
                     || llvm::isa<clang::BreakStmt>(last)
                     || llvm::isa<clang::ContinueStmt>(last)
@@ -4325,15 +4280,14 @@ namespace patchestry::ast {
         }
 
         /// Return the trailing goto target name if \p body ends in a
-        /// goto (bare SGoto, SBlock with trailing GotoStmt, or SLabel
+        /// goto (bare SGoto, SStmt holding a GotoStmt, or SLabel
         /// wrapping any of those).  Empty otherwise.
         std::string_view TrailingGotoTarget(const SNode *body) {
             if (!body) return {};
             if (auto *g = body->dyn_cast<SGoto>()) return g->Target();
-            if (auto *blk = body->dyn_cast<SBlock>()) {
-                if (blk->Empty()) return {};
-                if (auto *gs = llvm::dyn_cast<clang::GotoStmt>(
-                        blk->Stmts().back()))
+            if (auto *st = body->dyn_cast<SStmt>()) {
+                if (auto *gs = llvm::dyn_cast_or_null<clang::GotoStmt>(
+                        st->Stmt()))
                     return gs->getLabel()->getName();
                 return {};
             }
@@ -4384,18 +4338,12 @@ namespace patchestry::ast {
                 return out;
             }
 
-            // Last element is an SBlock whose last stmt is a GotoStmt.
-            if (auto *blk = last->dyn_cast<SBlock>()) {
-                if (blk->Empty()
-                    || !llvm::isa<clang::GotoStmt>(blk->Stmts().back()))
+            // Last element is an SStmt holding a GotoStmt — drop it,
+            // append clone.  (Any non-goto prefix statements are
+            // already separate SStmt siblings retained in `out`.)
+            if (auto *st = last->dyn_cast<SStmt>()) {
+                if (!llvm::isa<clang::GotoStmt>(st->Stmt()))
                     return {};
-                if (blk->Size() > 1) {
-                    auto *trimmed = factory.Make<SBlock>();
-                    trimmed->SetLabel(blk->Label());
-                    for (size_t i = 0; i + 1 < blk->Size(); ++i)
-                        trimmed->AddStmt(blk->Stmts()[i]);
-                    out.push_back(trimmed);
-                }
                 append_clone();
                 return out;
             }

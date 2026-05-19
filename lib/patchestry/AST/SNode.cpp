@@ -13,7 +13,7 @@ namespace patchestry::ast {
 
     const char *SNode::KindName(SNodeKind k) {
         switch (k) {
-            case SNodeKind::kBlock:       return "Block";
+            case SNodeKind::kStmt:        return "Stmt";
             case SNodeKind::kIfThenElse:return "IfThenElse";
             case SNodeKind::kWhile:       return "While";
             case SNodeKind::kDoWhile:    return "DoWhile";
@@ -38,13 +38,9 @@ namespace patchestry::ast {
         DumpChildren(os, indent);
     }
 
-    void SBlock::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
-        if (!label_.empty()) {
-            PrintIndent(os, indent + 1);
-            os << "label: " << label_ << "\n";
-        }
+    void SStmt::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
         PrintIndent(os, indent + 1);
-        os << "stmts: " << stmts_.size() << "\n";
+        os << "stmt: " << (stmt_ ? "<stmt>" : "null") << "\n";
     }
 
     void SIfThenElse::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
@@ -125,12 +121,6 @@ namespace patchestry::ast {
     // std::vector<SNode*>.  MakeSeq drops nullptr children and returns
     // the resulting vector; callers store it directly into a body
     // slot, into CNode::structured, or pass it to IdentifyInternal.
-    //
-    // NOTE: empty unlabeled SBlocks are intentionally PRESERVED — they
-    // correspond to CFG nodes with no statements and downstream cleanup
-    // uses sibling position to reason about fallthrough vs goto.  The
-    // cosmetic `{ }` artifact in the emitted C is handled by
-    // RemoveEmptyBlocks at the Clang-AST level.
     // ---------------------------------------------------------------
     std::vector< SNode * > SNodeFactory::MakeSeq(std::vector< SNode * > children) {
         std::vector< SNode * > out;
