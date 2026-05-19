@@ -9,6 +9,8 @@
 
 #include <cassert>
 #include <cstring>
+#include <functional>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -51,6 +53,21 @@ namespace patchestry::ast {
 
         SNode *Parent() const { return parent_; }
         void SetParent(SNode *p) { parent_ = p; }
+
+        // ChildVisitor API (added in Layer C migration Stage 0).
+        // Each subtype iterates over its immediate SNode children
+        // (slots that hold an SNode* — not raw clang::Stmt members
+        // like SBlock::Stmts or SFor::Init/Cond/Inc).
+        //
+        // Used by uniform recursion in cleanup walks during/after the
+        // SSeq → vector-slot migration.  Read-only form takes SNode*;
+        // mutable form takes SNode*& so callers can reassign the slot.
+        //
+        // Default: no children.  Each subtype with children overrides.
+        using ChildFn = std::function< void(SNode *) >;
+        using ChildMutFn = std::function< void(SNode *&) >;
+        virtual void for_each_child(const ChildFn &) const {}
+        virtual void for_each_child_mut(const ChildMutFn &) {}
 
         void Dump(llvm::raw_ostream &os, unsigned indent = 0) const;
 
@@ -126,6 +143,13 @@ namespace patchestry::ast {
         SNode *operator[](size_t i) { return children_[i]; }
         const SNode *operator[](size_t i) const { return children_[i]; }
 
+        void for_each_child(const ChildFn &fn) const override {
+            for (auto *c : children_) fn(c);
+        }
+        void for_each_child_mut(const ChildMutFn &fn) override {
+            for (auto &slot : children_) fn(slot);
+        }
+
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kSeq; }
 
       protected:
@@ -182,6 +206,15 @@ namespace patchestry::ast {
         SNode *ElseBranch() const { return else_; }
         void SetElseBranch(SNode *n) { else_ = n; if (n) n->SetParent(this); }
 
+        void for_each_child(const ChildFn &fn) const override {
+            if (then_) fn(then_);
+            if (else_) fn(else_);
+        }
+        void for_each_child_mut(const ChildMutFn &fn) override {
+            if (then_) fn(then_);
+            if (else_) fn(else_);
+        }
+
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kIfThenElse; }
 
       protected:
@@ -215,6 +248,13 @@ namespace patchestry::ast {
         std::string_view HeaderLabel() const { return header_label_; }
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
 
+        void for_each_child(const ChildFn &fn) const override {
+            if (body_) fn(body_);
+        }
+        void for_each_child_mut(const ChildMutFn &fn) override {
+            if (body_) fn(body_);
+        }
+
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kWhile; }
 
       protected:
@@ -247,6 +287,13 @@ namespace patchestry::ast {
         void SetExitLabel(std::string_view l) { exit_label_ = l; }
         std::string_view HeaderLabel() const { return header_label_; }
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
+
+        void for_each_child(const ChildFn &fn) const override {
+            if (body_) fn(body_);
+        }
+        void for_each_child_mut(const ChildMutFn &fn) override {
+            if (body_) fn(body_);
+        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kDoWhile; }
 
@@ -287,6 +334,13 @@ namespace patchestry::ast {
         void SetExitLabel(std::string_view l) { exit_label_ = l; }
         std::string_view HeaderLabel() const { return header_label_; }
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
+
+        void for_each_child(const ChildFn &fn) const override {
+            if (body_) fn(body_);
+        }
+        void for_each_child_mut(const ChildMutFn &fn) override {
+            if (body_) fn(body_);
+        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kFor; }
 
@@ -330,6 +384,15 @@ namespace patchestry::ast {
         SNode *DefaultBody() const { return default_; }
         void SetDefaultBody(SNode *n) { default_ = n; if (n) n->SetParent(this); }
 
+        void for_each_child(const ChildFn &fn) const override {
+            for (auto &c : cases_) if (c.body) fn(c.body);
+            if (default_) fn(default_);
+        }
+        void for_each_child_mut(const ChildMutFn &fn) override {
+            for (auto &c : cases_) if (c.body) fn(c.body);
+            if (default_) fn(default_);
+        }
+
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kSwitch; }
 
       protected:
@@ -371,6 +434,13 @@ namespace patchestry::ast {
 
         SNode *Body() const { return body_; }
         void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
+
+        void for_each_child(const ChildFn &fn) const override {
+            if (body_) fn(body_);
+        }
+        void for_each_child_mut(const ChildMutFn &fn) override {
+            if (body_) fn(body_);
+        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kLabel; }
 
@@ -447,6 +517,36 @@ namespace patchestry::ast {
             nodes_.push_back(std::move(node));
             return ptr;
         }
+
+        // Build a sequence with normalization (Layer C migration Stage 0).
+        //
+        // Rules applied at construction time:
+        //   - Drop nullptr children.
+        //   - If size 0 → return nullptr (caller decides substitute).
+        //   - If size 1 → return the single child directly (no wrap).
+        //   - Otherwise → allocate an SSeq and AddChild each.
+        //
+        // Two more aggressive normalizations are intentionally deferred:
+        //   * Empty unlabeled SBlock children are NOT dropped (they
+        //     correspond to CFG nodes with no stmts; sibling distance
+        //     is load-bearing for downstream fallthrough reasoning).
+        //   * Nested SSeq children are NOT flattened inline (flattening
+        //     exposes label adjacency that the EliminateGotoToNextLabel
+        //     elision logic mishandles when the label has live non-goto
+        //     predecessors).
+        // Both have been tried and revert with the same 4-fixture
+        // regression set; see SNode.cpp for details.  Re-enabling them
+        // requires a separate fix to downstream cleanup passes and
+        // belongs in a follow-up policy change, not this refactor.
+        //
+        // After Stage 5 (SSeq removal) callers will use std::vector<SNode*>
+        // directly; until then, MakeSeq is the single chokepoint that
+        // ensures every constructed SSeq is non-trivial and non-redundant.
+        SNode *MakeSeq(std::initializer_list< SNode * > children) {
+            return MakeSeq(std::vector< SNode * >(children));
+        }
+
+        SNode *MakeSeq(std::vector< SNode * > children);
 
         // Intern a copy of a string; the returned view is valid until Reset().
         // Uses a bump allocator because raw char data carries no destructor.

@@ -128,4 +128,64 @@ namespace patchestry::ast {
         }
     }
 
+    // ---------------------------------------------------------------
+    // SNodeFactory::MakeSeq — Layer C migration Stage 0
+    //
+    // Normalizes children before constructing an SSeq.  See header
+    // for rules.  Out-of-line so we can inspect SSeq's internals
+    // without forcing a chain of inline includes.
+    //
+    // NOTE: Empty unlabeled SBlocks are intentionally PRESERVED here.
+    // They are topologically meaningful — they correspond to CFG nodes
+    // with no statements, and downstream cleanup passes use sibling
+    // position to reason about fallthrough vs goto.  Dropping them at
+    // construction was tried in an earlier draft of Stage 1 and broke
+    // 4 fixtures (cwe121_eeprom_handler_write DUP_ASSIGN +
+    // decode_frame / load_descriptor_values / pb_decode_inner Fall=N)
+    // by promoting goto-only labels to sequential successors.  The
+    // cosmetic `{ }` artifact in the emitted C is handled by
+    // RemoveEmptyBlocks at the Clang-AST level, which understands
+    // topology because it operates after IR materialization.
+    // ---------------------------------------------------------------
+    SNode *SNodeFactory::MakeSeq(std::vector< SNode * > children) {
+        // Conservative normalization for Stage 1:
+        //   - Drop nullptr children.
+        //   - If size 0 → return nullptr (caller decides substitute).
+        //   - If size 1 → return the single child directly (no wrap).
+        //   - Otherwise → allocate an SSeq and AddChild each.
+        //
+        // Two more aggressive normalizations were tried and reverted:
+        //
+        //   * Dropping empty unlabeled SBlock children — broke 4 fixtures
+        //     (cwe121_eeprom_handler_write DUP_ASSIGN +
+        //      decode_frame / load_descriptor_values / pb_decode_inner Fall=N)
+        //     by promoting goto-only labels to sequential successors.
+        //     Empty SBlocks correspond to CFG nodes with no statements
+        //     and downstream cleanup uses sibling distance to reason
+        //     about fallthrough vs goto.
+        //
+        //   * Flattening nested SSeq inline — also broke the same 4
+        //     fixtures.  Flattening exposed label adjacency that
+        //     downstream EliminateGotoToNextLabel / IfStmtGotoArm
+        //     elision logic mis-handles when the label has live
+        //     non-goto predecessors.  The aggressive goto reduction it
+        //     delivered (cve_2016_6563 38→6) is real but requires a
+        //     separate fix to the elision predecessor-set check before
+        //     it can be enabled safely.
+        //
+        // Both deferrals keep Stage 1 semantics-preserving so the SSeq
+        // → vector-slot migration can land without entangling policy
+        // fixes with the structural refactor.
+        std::vector< SNode * > out;
+        out.reserve(children.size());
+        for (SNode *c : children) {
+            if (c) out.push_back(c);
+        }
+        if (out.empty()) return nullptr;
+        if (out.size() == 1) return out[0];
+        auto *seq = Make< SSeq >();
+        for (auto *c : out) seq->AddChild(c);
+        return seq;
+    }
+
 } // namespace patchestry::ast

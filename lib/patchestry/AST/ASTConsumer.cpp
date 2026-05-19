@@ -117,15 +117,17 @@ namespace patchestry::ast {
 
                     // Build root SSeq from the remaining active (uncollapsed)
                     // nodes.  After StructureAll, each active node has a
-                    // ->structured SNode set.
-                    auto *seq = factory.Make<SSeq>();
+                    // ->structured SNode set.  MakeSeq normalizes (drops
+                    // null/empty children, unwraps single-child cases);
+                    // a fully-empty function yields nullptr, which the
+                    // emitter treats as an empty body.
+                    std::vector<SNode *> root_children;
                     for (auto &node : flow_graph.nodes) {
                         if (node.IsCollapsed()) continue;
-                        if (node.structured) {
-                            seq->AddChild(node.structured);
-                        }
+                        if (node.structured)
+                            root_children.push_back(node.structured);
                     }
-                    root_snode = seq;
+                    root_snode = factory.MakeSeq(std::move(root_children));
 
                     // Post-pass: replace goto→break/continue for loop labels.
                     ConvertGotoToBreakContinue(root_snode, factory);
@@ -189,7 +191,7 @@ namespace patchestry::ast {
                     // Emit the CGraph blocks sequentially with goto-based
                     // control flow from terminals.
                     // Switch blocks get an SSwitch with goto-to-label cases.
-                    auto *seq = factory.Make<SSeq>();
+                    std::vector<SNode *> root_children;
 
                     for (auto &node : flow_graph.nodes) {
                         if (node.IsCollapsed()) continue;
@@ -260,14 +262,16 @@ namespace patchestry::ast {
                                     sw->AddCase(val, body);
                                 }
                             }
-                            auto *sw_seq = factory.Make<SSeq>();
-                            if (!blk->Stmts().empty()) sw_seq->AddChild(blk);
-                            sw_seq->AddChild(sw);
+                            // MakeSeq drops the prefix block when empty
+                            // and unwraps single-child to plain SSwitch.
+                            SNode *sw_seq = factory.MakeSeq({
+                                blk->Stmts().empty() ? nullptr : blk,
+                                sw});
                             if (!node.label.empty()) {
-                                seq->AddChild(factory.Make<SLabel>(
+                                root_children.push_back(factory.Make<SLabel>(
                                     factory.Intern(node.label), sw_seq));
                             } else {
-                                seq->AddChild(sw_seq);
+                                root_children.push_back(sw_seq);
                             }
                             continue;
                         }
@@ -275,14 +279,13 @@ namespace patchestry::ast {
                         // Non-switch: append terminal (goto/if-goto)
                         if (node.terminal) blk->AddStmt(node.terminal);
                         if (!node.label.empty()) {
-                            auto *lbl = factory.Make<SLabel>(
-                                factory.Intern(node.label), blk);
-                            seq->AddChild(lbl);
+                            root_children.push_back(factory.Make<SLabel>(
+                                factory.Intern(node.label), blk));
                         } else {
-                            seq->AddChild(blk);
+                            root_children.push_back(blk);
                         }
                     }
-                    root_snode = seq;
+                    root_snode = factory.MakeSeq(std::move(root_children));
                 }
 
                 EmitClangAST(root_snode, fn, ctx);
