@@ -180,6 +180,10 @@ namespace patchestry::ast {
             return common;
         }
 
+        // Phase-7 Step-0 premise-pin counters — see CleanupStmtTreeStats.
+        static size_t g_cleanup_compound_splices = 0;
+        static size_t g_cleanup_label_pushes     = 0;
+
         // Recursively clean up a Stmt tree:
         //  - Flatten nested CompoundStmts
         //  - Push LabelStmt(CompoundStmt) patterns into CompoundStmt{LabelStmt, ...}
@@ -263,6 +267,7 @@ namespace patchestry::ast {
 
                     // Flatten nested CompoundStmts
                     if (auto *inner_cs = llvm::dyn_cast< clang::CompoundStmt >(cleaned)) {
+                        ++g_cleanup_compound_splices;
                         for (auto *gc : inner_cs->body()) { children.push_back(gc); }
                     }
                     // Push label inside compound
@@ -272,6 +277,7 @@ namespace patchestry::ast {
                         {
                             auto it = lcs->body_begin();
                             if (it != lcs->body_end()) {
+                                ++g_cleanup_label_pushes;
                                 ls->setSubStmt(*it);
                                 children.push_back(ls);
                                 for (++it; it != lcs->body_end(); ++it) {
@@ -353,6 +359,15 @@ namespace patchestry::ast {
 
             return s;
         }
+
+    CleanupStmtTreeStats TakeCleanupStmtTreeStats() {
+        CleanupStmtTreeStats stats;
+        stats.compound_splices    = g_cleanup_compound_splices;
+        stats.label_pushes        = g_cleanup_label_pushes;
+        g_cleanup_compound_splices = 0;
+        g_cleanup_label_pushes     = 0;
+        return stats;
+    }
 
     // Remove LabelStmts that are not the target of any GotoStmt.
     // Replaces dead LabelStmt with its sub-statement.

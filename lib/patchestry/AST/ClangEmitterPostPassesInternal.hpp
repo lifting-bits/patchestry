@@ -29,6 +29,21 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, clang::Stmt *s, const std::string &continue_label = ""
     );
 
+    // Phase-7 Step-0 premise-pin diagnostic.  CleanupStmtTree is the only
+    // emission-adjacent transform that changes statement adjacency: it
+    // flattens nested CompoundStmts and pushes labels inside compounds.
+    // These counters quantify how much of that "post-linearization
+    // adjacency" the Clang-AST layer manufactures — work the flat-vector
+    // SNode tree can do before emission.  TakeCleanupStmtTreeStats reads
+    // and resets the counters; call it once per CleanupPrettyPrint.
+    struct CleanupStmtTreeStats
+    {
+        size_t compound_splices = 0; // nested CompoundStmts flattened
+        size_t label_pushes     = 0; // LabelStmt(CompoundStmt) pushed inside
+    };
+
+    CleanupStmtTreeStats TakeCleanupStmtTreeStats();
+
     // --- shared analysis helpers --------------------------------------------
     void CollectGotoTargets(
         clang::Stmt *s, std::unordered_set< clang::LabelDecl * > &targets,

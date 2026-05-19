@@ -1286,8 +1286,13 @@ namespace patchestry::ast {
                 bool have_structured = false;
                 // Emitted-goto count of the SNode tree straight out of
                 // CFGStructure collapse, before any SNode-level cleanup —
-                // the first of the three cleanup-pipeline stages.
+                // stage 1 of the four cleanup-pipeline goto-funnel stages.
                 size_t pre_cleanup_gotos = 0;
+                // Emitted-goto count after the SNode-level cleanup schedule,
+                // before ClangEmitter — stage 2.  Stage 3 (post-emission /
+                // pre-Clang-cleanup) and stage 4 (post-Clang-cleanup) are the
+                // initial_gotos / final_gotos fields of CLANG_CLEANUP_SUMMARY.
+                size_t post_cleanup_gotos = 0;
                 std::unordered_map< const clang::Stmt *, unsigned > baseline_payload_stmts;
                 SNodeCleanupScheduleReport cleanup_schedule_report;
                 SRewriteCandidateReport rewrite_candidate_report;
@@ -1599,6 +1604,7 @@ namespace patchestry::ast {
                             RunSNodeCleanupSchedule(make_final_cleanup_passes(), run_cleanup)
                         );
                         rewrite_candidate_report = ExtractSNodeRewriteCandidates(root_body);
+                        post_cleanup_gotos = CountSNodeGotos(root_body);
 
                         if (options.verify_no_node_loss) {
                             AnnotateSNodeOrigins(*builder, root_body);
@@ -1665,6 +1671,7 @@ namespace patchestry::ast {
                     auto report = AnalyzeStructuringImprovements(fn);
                     llvm::errs() << "STRUCTURING_IMPROVEMENT_REPORT function=" << fn_name
                                  << " pre_cleanup_gotos=" << pre_cleanup_gotos
+                                 << " post_cleanup_gotos=" << post_cleanup_gotos
                                  << " residual_gotos=" << report.residual_gotos
                                  << " emitted_labels=" << report.emitted_labels
                                  << " dangling_gotos=" << report.dangling_gotos

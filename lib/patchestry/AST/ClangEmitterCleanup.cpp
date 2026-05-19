@@ -75,6 +75,9 @@ namespace patchestry::ast {
         auto initial_metrics = MeasureClangCleanup(fn->getBody());
         auto *body = CleanupStmtTree(ctx, fn->getBody());
         if (body) { fn->setBody(body); }
+        // Phase-7 Step-0: capture how much statement-adjacency the
+        // emission-adjacent prologue manufactured (premise pin).
+        auto cleanup_stmt_tree_stats = TakeCleanupStmtTreeStats();
 
         auto apply_body = [&](clang::Stmt *next) {
             if (next) { fn->setBody(next); }
@@ -374,7 +377,11 @@ namespace patchestry::ast {
                          << " final_dangling=" << final_metrics.dangling
                          << " initial_cross_scope=" << initial_metrics.cross_scope
                          << " final_cross_scope=" << final_metrics.cross_scope
-                         << " schedule_iterations=" << schedule_iterations << "\n";
+                         << " schedule_iterations=" << schedule_iterations
+                         << " prologue_compound_splices="
+                         << cleanup_stmt_tree_stats.compound_splices
+                         << " prologue_label_pushes="
+                         << cleanup_stmt_tree_stats.label_pushes << "\n";
         }
     }
 
