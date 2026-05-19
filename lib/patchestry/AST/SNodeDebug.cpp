@@ -79,8 +79,8 @@ namespace patchestry::ast {
                 case SNodeKind::kSwitch: {
                     auto *sw = node->as< SSwitch >();
                     for (size_t i = 0; i < sw->Cases().size(); ++i) {
-                        if (sw->Cases()[i].body) {
-                            unsigned cid = Emit(sw->Cases()[i].body);
+                        if (auto *b = sw->Cases()[i].body()) {
+                            unsigned cid = Emit(b);
                             os << "  n" << id << " -> n" << cid
                                << " [label=\"case " << i << "\"];\n";
                         }

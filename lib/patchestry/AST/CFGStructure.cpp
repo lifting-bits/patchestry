@@ -2853,7 +2853,7 @@ namespace patchestry::ast {
                 if (!SNodeAlwaysTerminates(sw->DefaultBody()))
                     return false;
                 for (auto &c : sw->Cases()) {
-                    if (!SNodeAlwaysTerminates(c.body))
+                    if (!SNodeAlwaysTerminates(c.body()))
                         return false;
                 }
                 return true;
@@ -3050,7 +3050,7 @@ namespace patchestry::ast {
             if (auto *sw = node->dyn_cast<SSwitch>()) {
                 for (size_t ci = 0; ci < sw->Cases().size(); ++ci) {
                     auto &c = sw->Cases()[ci];
-                    if (CrossScopeInlineRecursive(c.body, root, refs))
+                    if (CrossScopeInlineRecursive(c.body(), root, refs))
                         return true;
                 }
                 if (CrossScopeInlineRecursive(
@@ -3058,9 +3058,9 @@ namespace patchestry::ast {
                     return true;
                 for (size_t ci = 0; ci < sw->Cases().size(); ++ci) {
                     if (TryInlineGotoSlot(
-                            [sw, ci]() { return sw->Cases()[ci].body; },
+                            [sw, ci]() { return sw->Cases()[ci].body(); },
                             [sw, ci](SNode *n) {
-                                sw->Cases()[ci].body = n;
+                                sw->Cases()[ci].set_body(n);
                                 if (n) n->SetParent(sw);
                             },
                             root, refs))
@@ -3661,7 +3661,7 @@ namespace patchestry::ast {
 
             if (auto *sw = node->dyn_cast<SSwitch>()) {
                 for (auto &c : sw->Cases()) {
-                    if (ConvertGotosInNode(c.body, factory, scopes))
+                    if (ConvertGotosInNode(c.body(), factory, scopes))
                         changed = true;
                 }
                 if (ConvertGotosInNode(sw->DefaultBody(), factory, scopes))
@@ -3772,7 +3772,7 @@ namespace patchestry::ast {
                 return;
             }
             if (auto *sw = node->dyn_cast<SSwitch>()) {
-                for (auto &c : sw->Cases()) CollectLabels(c.body, labels);
+                for (auto &c : sw->Cases()) CollectLabels(c.body(), labels);
                 CollectLabels(sw->DefaultBody(), labels);
                 return;
             }
@@ -4306,7 +4306,7 @@ namespace patchestry::ast {
             }
             if (auto *sw = node->dyn_cast<SSwitch>()) {
                 for (auto &c : sw->Cases()) {
-                    if (ReplaceGotoWithReturn(c.body, factory, ctx, labels))
+                    if (ReplaceGotoWithReturn(c.body(), factory, ctx, labels))
                         changed = true;
                 }
                 if (ReplaceGotoWithReturn(sw->DefaultBody(), factory, ctx, labels))
@@ -4392,7 +4392,7 @@ namespace patchestry::ast {
                 CountAllGotoRefs(f->Body(), refs); return;
             }
             if (auto *sw = node->dyn_cast<SSwitch>()) {
-                for (auto &c : sw->Cases()) CountAllGotoRefs(c.body, refs);
+                for (auto &c : sw->Cases()) CountAllGotoRefs(c.body(), refs);
                 CountAllGotoRefs(sw->DefaultBody(), refs);
                 return;
             }
@@ -4445,7 +4445,7 @@ namespace patchestry::ast {
                 return RemoveDeadLabelsRecursive(dw->Body(), refs);
             if (auto *sw = node->dyn_cast<SSwitch>()) {
                 for (auto &c : sw->Cases())
-                    if (RemoveDeadLabelsRecursive(c.body, refs)) changed = true;
+                    if (RemoveDeadLabelsRecursive(c.body(), refs)) changed = true;
                 if (RemoveDeadLabelsRecursive(sw->DefaultBody(), refs)) changed = true;
                 return changed;
             }
@@ -4502,7 +4502,7 @@ namespace patchestry::ast {
             if (auto *sw = node->dyn_cast<SSwitch>()) {
                 size_t n = 1;
                 for (auto &c : sw->Cases()) {
-                    n += CountCloneStmts(c.body);
+                    n += CountCloneStmts(c.body());
                     if (n > kMaxCloneStmts) return n;
                 }
                 n += CountCloneStmts(sw->DefaultBody());
@@ -4542,7 +4542,7 @@ namespace patchestry::ast {
             }
             if (auto *sw = node->dyn_cast<SSwitch>()) {
                 for (auto &c : sw->Cases())
-                    if (!SubtreeIsSafeToClone(c.body)) return false;
+                    if (!SubtreeIsSafeToClone(c.body())) return false;
                 return SubtreeIsSafeToClone(sw->DefaultBody());
             }
             // Reject SLabel (would duplicate definition) and all loops.
@@ -4584,7 +4584,7 @@ namespace patchestry::ast {
             if (auto *sw = src->dyn_cast<SSwitch>()) {
                 auto *out = factory.Make<SSwitch>(sw->Discriminant());
                 for (auto &c : sw->Cases())
-                    out->AddCase(c.value, CloneSNode(c.body, factory));
+                    out->AddCase(c.value, CloneSNode(c.body(), factory));
                 if (sw->DefaultBody())
                     out->SetDefaultBody(CloneSNode(sw->DefaultBody(), factory));
                 return out;
@@ -4768,13 +4768,13 @@ namespace patchestry::ast {
         ) {
             bool changed = false;
             for (auto &c : sw->Cases()) {
-                auto target = TrailingGotoTarget(c.body);
+                auto target = TrailingGotoTarget(c.body());
                 if (target.empty()) continue;
                 SNode *clone = TryCloneLabelBody(target, labels, factory);
                 if (!clone) continue;
-                SNode *spliced = BuildSplicedBody(c.body, clone, factory);
+                SNode *spliced = BuildSplicedBody(c.body(), clone, factory);
                 if (!spliced) continue;
-                c.body = spliced;
+                c.set_body(spliced);
                 spliced->SetParent(sw);
                 changed = true;
             }

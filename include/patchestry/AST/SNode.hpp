@@ -185,34 +185,63 @@ namespace patchestry::ast {
         std::vector< clang::Stmt * > stmts_;
     };
 
-    // If-then-else
+    // If-then-else — Layer C Stage 3c: then_/else_ are
+    // std::vector<SNode*>.  See SLabel docstring for the back-compat
+    // API rationale.
     class SIfThenElse : public SNode
     {
       public:
-        SIfThenElse(clang::Expr *cond, SNode *then_branch, SNode *else_branch = nullptr)
-            : SNode(SNodeKind::kIfThenElse)
-            , cond_(cond), then_(then_branch), else_(else_branch)
+        SIfThenElse(clang::Expr *cond, SNode *then_branch,
+                    SNode *else_branch = nullptr)
+            : SNode(SNodeKind::kIfThenElse), cond_(cond)
         {
-            if (then_) then_->SetParent(this);
-            if (else_) else_->SetParent(this);
+            if (then_branch) {
+                then_.push_back(then_branch);
+                then_branch->SetParent(this);
+            }
+            if (else_branch) {
+                else_.push_back(else_branch);
+                else_branch->SetParent(this);
+            }
+        }
+
+        SIfThenElse(clang::Expr *cond,
+                    std::vector< SNode * > then_list,
+                    std::vector< SNode * > else_list)
+            : SNode(SNodeKind::kIfThenElse), cond_(cond)
+            , then_(std::move(then_list)), else_(std::move(else_list))
+        {
+            for (auto *c : then_) if (c) c->SetParent(this);
+            for (auto *c : else_) if (c) c->SetParent(this);
         }
 
         clang::Expr *Cond() const { return cond_; }
         void SetCond(clang::Expr *c) { cond_ = c; }
 
-        SNode *ThenBranch() const { return then_; }
-        void SetThenBranch(SNode *n) { then_ = n; if (n) n->SetParent(this); }
+        SNode *ThenBranch() const { return then_.empty() ? nullptr : then_[0]; }
+        void SetThenBranch(SNode *n) {
+            then_.clear();
+            if (n) { then_.push_back(n); n->SetParent(this); }
+        }
 
-        SNode *ElseBranch() const { return else_; }
-        void SetElseBranch(SNode *n) { else_ = n; if (n) n->SetParent(this); }
+        SNode *ElseBranch() const { return else_.empty() ? nullptr : else_[0]; }
+        void SetElseBranch(SNode *n) {
+            else_.clear();
+            if (n) { else_.push_back(n); n->SetParent(this); }
+        }
+
+        const std::vector< SNode * > &ThenList() const { return then_; }
+        std::vector< SNode * > &ThenList() { return then_; }
+        const std::vector< SNode * > &ElseList() const { return else_; }
+        std::vector< SNode * > &ElseList() { return else_; }
 
         void for_each_child(const ChildFn &fn) const override {
-            if (then_) fn(then_);
-            if (else_) fn(else_);
+            for (auto *c : then_) if (c) fn(c);
+            for (auto *c : else_) if (c) fn(c);
         }
         void for_each_child_mut(const ChildMutFn &fn) override {
-            if (then_) fn(then_);
-            if (else_) fn(else_);
+            for (auto &slot : then_) if (slot) fn(slot);
+            for (auto &slot : else_) if (slot) fn(slot);
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kIfThenElse; }
@@ -222,25 +251,41 @@ namespace patchestry::ast {
 
       private:
         clang::Expr *cond_;
-        SNode *then_;
-        SNode *else_;
+        std::vector< SNode * > then_;
+        std::vector< SNode * > else_;
     };
 
-    // While loop
+    // While loop — Layer C Stage 3b: body_ is std::vector<SNode*>.
+    // See SLabel docstring for the back-compat API rationale.
     class SWhile : public SNode
     {
       public:
         SWhile(clang::Expr *cond, SNode *body)
-            : SNode(SNodeKind::kWhile), cond_(cond), body_(body)
+            : SNode(SNodeKind::kWhile), cond_(cond)
         {
-            if (body_) body_->SetParent(this);
+            if (body) {
+                body_.push_back(body);
+                body->SetParent(this);
+            }
+        }
+
+        SWhile(clang::Expr *cond, std::vector< SNode * > body)
+            : SNode(SNodeKind::kWhile), cond_(cond), body_(std::move(body))
+        {
+            for (auto *c : body_) if (c) c->SetParent(this);
         }
 
         clang::Expr *Cond() const { return cond_; }
         void SetCond(clang::Expr *c) { cond_ = c; }
 
-        SNode *Body() const { return body_; }
-        void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
+        SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+        void SetBody(SNode *n) {
+            body_.clear();
+            if (n) { body_.push_back(n); n->SetParent(this); }
+        }
+
+        const std::vector< SNode * > &BodyList() const { return body_; }
+        std::vector< SNode * > &BodyList() { return body_; }
 
         // Scope labels for break/continue resolution (set by fold rules)
         std::string_view ExitLabel() const { return exit_label_; }
@@ -249,10 +294,10 @@ namespace patchestry::ast {
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
 
         void for_each_child(const ChildFn &fn) const override {
-            if (body_) fn(body_);
+            for (auto *c : body_) if (c) fn(c);
         }
         void for_each_child_mut(const ChildMutFn &fn) override {
-            if (body_) fn(body_);
+            for (auto &slot : body_) if (slot) fn(slot);
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kWhile; }
@@ -262,23 +307,38 @@ namespace patchestry::ast {
 
       private:
         clang::Expr *cond_;
-        SNode *body_;
+        std::vector< SNode * > body_;
         std::string_view exit_label_;
         std::string_view header_label_;
     };
 
-    // Do-while loop
+    // Do-while loop — Layer C Stage 3b: body_ is std::vector<SNode*>.
     class SDoWhile : public SNode
     {
       public:
         SDoWhile(SNode *body, clang::Expr *cond)
-            : SNode(SNodeKind::kDoWhile), body_(body), cond_(cond)
+            : SNode(SNodeKind::kDoWhile), cond_(cond)
         {
-            if (body_) body_->SetParent(this);
+            if (body) {
+                body_.push_back(body);
+                body->SetParent(this);
+            }
         }
 
-        SNode *Body() const { return body_; }
-        void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
+        SDoWhile(std::vector< SNode * > body, clang::Expr *cond)
+            : SNode(SNodeKind::kDoWhile), cond_(cond), body_(std::move(body))
+        {
+            for (auto *c : body_) if (c) c->SetParent(this);
+        }
+
+        SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+        void SetBody(SNode *n) {
+            body_.clear();
+            if (n) { body_.push_back(n); n->SetParent(this); }
+        }
+
+        const std::vector< SNode * > &BodyList() const { return body_; }
+        std::vector< SNode * > &BodyList() { return body_; }
 
         clang::Expr *Cond() const { return cond_; }
         void SetCond(clang::Expr *c) { cond_ = c; }
@@ -289,10 +349,10 @@ namespace patchestry::ast {
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
 
         void for_each_child(const ChildFn &fn) const override {
-            if (body_) fn(body_);
+            for (auto *c : body_) if (c) fn(c);
         }
         void for_each_child_mut(const ChildMutFn &fn) override {
-            if (body_) fn(body_);
+            for (auto &slot : body_) if (slot) fn(slot);
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kDoWhile; }
@@ -301,21 +361,32 @@ namespace patchestry::ast {
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
 
       private:
-        SNode *body_;
         clang::Expr *cond_;
+        std::vector< SNode * > body_;
         std::string_view exit_label_;
         std::string_view header_label_;
     };
 
-    // For loop
+    // For loop — Layer C Stage 3b: body_ is std::vector<SNode*>.
     class SFor : public SNode
     {
       public:
         SFor(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc, SNode *body)
             : SNode(SNodeKind::kFor)
-            , init_(init), cond_(cond), inc_(inc), body_(body)
+            , init_(init), cond_(cond), inc_(inc)
         {
-            if (body_) body_->SetParent(this);
+            if (body) {
+                body_.push_back(body);
+                body->SetParent(this);
+            }
+        }
+
+        SFor(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc,
+             std::vector< SNode * > body)
+            : SNode(SNodeKind::kFor)
+            , init_(init), cond_(cond), inc_(inc), body_(std::move(body))
+        {
+            for (auto *c : body_) if (c) c->SetParent(this);
         }
 
         clang::Stmt *Init() const { return init_; }
@@ -327,8 +398,14 @@ namespace patchestry::ast {
         clang::Expr *Inc() const { return inc_; }
         void SetInc(clang::Expr *e) { inc_ = e; }
 
-        SNode *Body() const { return body_; }
-        void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
+        SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+        void SetBody(SNode *n) {
+            body_.clear();
+            if (n) { body_.push_back(n); n->SetParent(this); }
+        }
+
+        const std::vector< SNode * > &BodyList() const { return body_; }
+        std::vector< SNode * > &BodyList() { return body_; }
 
         std::string_view ExitLabel() const { return exit_label_; }
         void SetExitLabel(std::string_view l) { exit_label_ = l; }
@@ -336,10 +413,10 @@ namespace patchestry::ast {
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
 
         void for_each_child(const ChildFn &fn) const override {
-            if (body_) fn(body_);
+            for (auto *c : body_) if (c) fn(c);
         }
         void for_each_child_mut(const ChildMutFn &fn) override {
-            if (body_) fn(body_);
+            for (auto &slot : body_) if (slot) fn(slot);
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kFor; }
@@ -351,18 +428,31 @@ namespace patchestry::ast {
         clang::Stmt *init_;
         clang::Expr *cond_;
         clang::Expr *inc_;
-        SNode *body_;
+        std::vector< SNode * > body_;
         std::string_view exit_label_;
         std::string_view header_label_;
     };
 
-    // Switch case
+    // Switch case — Layer C Stage 3d: body becomes std::vector<SNode*>.
+    //
+    // Back-compat helpers preserve the prior field-style read pattern:
+    //   c.body() returns the first element of body_list (or nullptr)
+    //   c.set_body(n) clears body_list and pushes n (caller manages SetParent
+    //                                                on the enclosing SSwitch)
+    // body_list is the storage; callers that need direct access use it.
     struct SCase {
         clang::Expr *value;  // nullptr for default
-        SNode *body;
+        std::vector< SNode * > body_list;
+
+        SNode *body() const { return body_list.empty() ? nullptr : body_list[0]; }
+        void set_body(SNode *n) {
+            body_list.clear();
+            if (n) body_list.push_back(n);
+        }
     };
 
-    // Switch statement
+    // Switch statement — Layer C Stage 3d: default_ becomes
+    // std::vector<SNode*> (matches the cases_ list-of-list shape).
     class SSwitch : public SNode
     {
       public:
@@ -378,19 +468,36 @@ namespace patchestry::ast {
 
         void AddCase(clang::Expr *value, SNode *body) {
             if (body) body->SetParent(this);
-            cases_.push_back({value, body});
+            SCase c{value, {}};
+            if (body) c.body_list.push_back(body);
+            cases_.push_back(std::move(c));
         }
 
-        SNode *DefaultBody() const { return default_; }
-        void SetDefaultBody(SNode *n) { default_ = n; if (n) n->SetParent(this); }
+        void AddCase(clang::Expr *value, std::vector< SNode * > body_list) {
+            for (auto *b : body_list) if (b) b->SetParent(this);
+            cases_.push_back({value, std::move(body_list)});
+        }
+
+        SNode *DefaultBody() const {
+            return default_.empty() ? nullptr : default_[0];
+        }
+        void SetDefaultBody(SNode *n) {
+            default_.clear();
+            if (n) { default_.push_back(n); n->SetParent(this); }
+        }
+
+        const std::vector< SNode * > &DefaultBodyList() const { return default_; }
+        std::vector< SNode * > &DefaultBodyList() { return default_; }
 
         void for_each_child(const ChildFn &fn) const override {
-            for (auto &c : cases_) if (c.body) fn(c.body);
-            if (default_) fn(default_);
+            for (auto &c : cases_)
+                for (auto *b : c.body_list) if (b) fn(b);
+            for (auto *b : default_) if (b) fn(b);
         }
         void for_each_child_mut(const ChildMutFn &fn) override {
-            for (auto &c : cases_) if (c.body) fn(c.body);
-            if (default_) fn(default_);
+            for (auto &c : cases_)
+                for (auto &slot : c.body_list) if (slot) fn(slot);
+            for (auto &slot : default_) if (slot) fn(slot);
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kSwitch; }
@@ -401,7 +508,7 @@ namespace patchestry::ast {
       private:
         clang::Expr *discriminant_;
         std::vector< SCase > cases_;
-        SNode *default_ = nullptr;
+        std::vector< SNode * > default_;
     };
 
     // Goto
@@ -420,26 +527,56 @@ namespace patchestry::ast {
     };
 
     // Label
+    //
+    // Layer C Stage 3a: body changed from SNode* to std::vector<SNode*>
+    // so that label bodies can directly hold multi-statement sequences
+    // without an SSeq wrapper.  Public Body()/SetBody() preserve the
+    // single-body API for back-compat (Body() returns the first child
+    // or nullptr; SetBody replaces the whole list).  Construction with
+    // a single SNode* still works via the existing constructor.  New
+    // BodyList accessors expose the vector directly for callers that
+    // want to append/iterate without round-tripping through SSeq.
     class SLabel : public SNode
     {
       public:
         SLabel(std::string_view name, SNode *body = nullptr)
-            : SNode(SNodeKind::kLabel), name_(name), body_(body)
+            : SNode(SNodeKind::kLabel), name_(name)
         {
-            if (body_) body_->SetParent(this);
+            if (body) {
+                body_.push_back(body);
+                body->SetParent(this);
+            }
+        }
+
+        SLabel(std::string_view name, std::vector< SNode * > body)
+            : SNode(SNodeKind::kLabel), name_(name), body_(std::move(body))
+        {
+            for (auto *c : body_) if (c) c->SetParent(this);
         }
 
         std::string_view Name() const { return name_; }
         void SetName(std::string_view n) { name_ = n; }
 
-        SNode *Body() const { return body_; }
-        void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
+        // Back-compat single-body view: returns the sole child or
+        // nullptr.  Callers handling multi-child bodies should use
+        // BodyList() instead.
+        SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+        void SetBody(SNode *n) {
+            body_.clear();
+            if (n) {
+                body_.push_back(n);
+                n->SetParent(this);
+            }
+        }
+
+        const std::vector< SNode * > &BodyList() const { return body_; }
+        std::vector< SNode * > &BodyList() { return body_; }
 
         void for_each_child(const ChildFn &fn) const override {
-            if (body_) fn(body_);
+            for (auto *c : body_) if (c) fn(c);
         }
         void for_each_child_mut(const ChildMutFn &fn) override {
-            if (body_) fn(body_);
+            for (auto &slot : body_) if (slot) fn(slot);
         }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kLabel; }
@@ -449,7 +586,7 @@ namespace patchestry::ast {
 
       private:
         std::string name_;
-        SNode *body_;
+        std::vector< SNode * > body_;
     };
 
     // Break (with optional depth for multi-level breaks)

@@ -57,33 +57,33 @@ namespace patchestry::ast {
     void SIfThenElse::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
         PrintIndent(os, indent + 1);
         os << "cond: <expr>\n";
-        if (then_) {
+        if (!then_.empty()) {
             PrintIndent(os, indent + 1);
             os << "then:\n";
-            then_->Dump(os, indent + 2);
+            for (const auto *c : then_) if (c) c->Dump(os, indent + 2);
         }
-        if (else_) {
+        if (!else_.empty()) {
             PrintIndent(os, indent + 1);
             os << "else:\n";
-            else_->Dump(os, indent + 2);
+            for (const auto *c : else_) if (c) c->Dump(os, indent + 2);
         }
     }
 
     void SWhile::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
         PrintIndent(os, indent + 1);
         os << "cond: <expr>\n";
-        if (body_) {
+        if (!body_.empty()) {
             PrintIndent(os, indent + 1);
             os << "body:\n";
-            body_->Dump(os, indent + 2);
+            for (const auto *c : body_) if (c) c->Dump(os, indent + 2);
         }
     }
 
     void SDoWhile::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
-        if (body_) {
+        if (!body_.empty()) {
             PrintIndent(os, indent + 1);
             os << "body:\n";
-            body_->Dump(os, indent + 2);
+            for (const auto *c : body_) if (c) c->Dump(os, indent + 2);
         }
         PrintIndent(os, indent + 1);
         os << "cond: <expr>\n";
@@ -96,10 +96,10 @@ namespace patchestry::ast {
         os << "cond: " << (cond_ ? "<expr>" : "null") << "\n";
         PrintIndent(os, indent + 1);
         os << "inc: " << (inc_ ? "<expr>" : "null") << "\n";
-        if (body_) {
+        if (!body_.empty()) {
             PrintIndent(os, indent + 1);
             os << "body:\n";
-            body_->Dump(os, indent + 2);
+            for (const auto *c : body_) if (c) c->Dump(os, indent + 2);
         }
     }
 
@@ -109,23 +109,20 @@ namespace patchestry::ast {
         for (size_t i = 0; i < cases_.size(); ++i) {
             PrintIndent(os, indent + 1);
             os << "case " << i << ":\n";
-            if (cases_[i].body) {
-                cases_[i].body->Dump(os, indent + 2);
-            }
+            for (const auto *c : cases_[i].body_list)
+                if (c) c->Dump(os, indent + 2);
         }
-        if (default_) {
+        if (!default_.empty()) {
             PrintIndent(os, indent + 1);
             os << "default:\n";
-            default_->Dump(os, indent + 2);
+            for (const auto *c : default_) if (c) c->Dump(os, indent + 2);
         }
     }
 
     void SLabel::DumpChildren(llvm::raw_ostream &os, unsigned indent) const {
         PrintIndent(os, indent + 1);
         os << "name: " << name_ << "\n";
-        if (body_) {
-            body_->Dump(os, indent + 1);
-        }
+        for (const auto *c : body_) if (c) c->Dump(os, indent + 1);
     }
 
     // ---------------------------------------------------------------

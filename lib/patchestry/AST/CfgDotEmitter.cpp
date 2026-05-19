@@ -120,11 +120,13 @@ namespace patchestry::ast {
                 for (size_t i = 0; i < sw->Cases().size(); ++i) {
                     const auto &c = sw->Cases()[i];
                     pad(); os << "  case " << StmtToOneLine(c.value) << ":\\l";
-                    DumpSNode(c.body, os, indent + 2);
+                    for (const auto *b : c.body_list)
+                        DumpSNode(b, os, indent + 2);
                 }
-                if (sw->DefaultBody()) {
+                if (!sw->DefaultBodyList().empty()) {
                     pad(); os << "  default:\\l";
-                    DumpSNode(sw->DefaultBody(), os, indent + 2);
+                    for (const auto *b : sw->DefaultBodyList())
+                        DumpSNode(b, os, indent + 2);
                 }
                 pad(); os << "}\\l";
                 break;
@@ -365,8 +367,10 @@ namespace patchestry::ast {
             // SwitchStmt that FoldSwitch strips from the head block's stmts.
             size_t total = sw->Discriminant() ? 1 : 0;
             for (const auto &c : sw->Cases())
-                total += CountSNodeStmts(c.body);
-            total += CountSNodeStmts(sw->DefaultBody());
+                for (const auto *b : c.body_list)
+                    total += CountSNodeStmts(b);
+            for (const auto *b : sw->DefaultBodyList())
+                total += CountSNodeStmts(b);
             return total;
         }
         case SNodeKind::kLabel:
@@ -434,8 +438,10 @@ namespace patchestry::ast {
             auto *sw = root->as<SSwitch>();
             if (sw->Discriminant()) out.insert(sw->Discriminant());
             for (const auto &c : sw->Cases())
-                CollectSNodeStmtPtrsImpl(c.body, out);
-            CollectSNodeStmtPtrsImpl(sw->DefaultBody(), out);
+                for (const auto *b : c.body_list)
+                    CollectSNodeStmtPtrsImpl(b, out);
+            for (const auto *b : sw->DefaultBodyList())
+                CollectSNodeStmtPtrsImpl(b, out);
             break;
         }
         case SNodeKind::kLabel:

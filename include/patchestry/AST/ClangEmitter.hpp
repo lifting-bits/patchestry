@@ -27,6 +27,13 @@ namespace patchestry::ast {
     void EmitClangAST(SNode *root, clang::FunctionDecl *fn,
                       clang::ASTContext &ctx);
 
+    // Layer C Stage 4 overload: take the function-body slot directly as a
+    // std::vector<SNode*> instead of routing through an intermediate SSeq.
+    // Materializes a single CompoundStmt from the vector and sets it as
+    // the function body.
+    void EmitClangAST(const std::vector< SNode * > &root_children,
+                      clang::FunctionDecl *fn, clang::ASTContext &ctx);
+
     // Post-emission cleanup for prettier C output.
     // Flattens nested CompoundStmts and pushes LabelStmts inside
     // CompoundStmt bodies. Only call for patchir-decomp path.
