@@ -49,9 +49,6 @@ namespace patchestry::ast {
         static const char *KindName(SNodeKind k);
         const char *KindName() const { return KindName(kind_); }
 
-        SNode *Parent() const { return parent_; }
-        void SetParent(SNode *p) { parent_ = p; }
-
         // Visit immediate SNode children (slots holding SNode*, not raw
         // clang::Stmt members). Default: no children; subtypes override.
         using ChildFn = std::function< void(SNode *) >;
@@ -75,7 +72,6 @@ namespace patchestry::ast {
 
       private:
         SNodeKind kind_;
-        SNode *parent_ = nullptr;
     };
 
     // Single-statement leaf — holds one raw clang::Stmt*. A "block" of N
@@ -109,11 +105,9 @@ namespace patchestry::ast {
         {
             if (then_branch) {
                 then_.push_back(then_branch);
-                then_branch->SetParent(this);
             }
             if (else_branch) {
                 else_.push_back(else_branch);
-                else_branch->SetParent(this);
             }
         }
 
@@ -122,10 +116,7 @@ namespace patchestry::ast {
                     std::vector< SNode * > else_list)
             : SNode(SNodeKind::kIfThenElse), cond_(cond)
             , then_(std::move(then_list)), else_(std::move(else_list))
-        {
-            for (auto *c : then_) if (c) c->SetParent(this);
-            for (auto *c : else_) if (c) c->SetParent(this);
-        }
+        {}
 
         clang::Expr *Cond() const { return cond_; }
         void SetCond(clang::Expr *c) { cond_ = c; }
@@ -135,11 +126,10 @@ namespace patchestry::ast {
         SNode *ElseBranch() const { return else_.empty() ? nullptr : else_[0]; }
         void SetElseBranch(SNode *n) {
             else_.clear();
-            if (n) { else_.push_back(n); n->SetParent(this); }
+            if (n) { else_.push_back(n); }
         }
         void SetElseBranch(std::vector< SNode * > body) {
             else_ = std::move(body);
-            for (auto *c : else_) if (c) c->SetParent(this);
         }
 
         const std::vector< SNode * > &ThenList() const { return then_; }
@@ -169,9 +159,7 @@ namespace patchestry::ast {
       public:
         SWhile(clang::Expr *cond, std::vector< SNode * > body)
             : SNode(SNodeKind::kWhile), cond_(cond), body_(std::move(body))
-        {
-            for (auto *c : body_) if (c) c->SetParent(this);
-        }
+        {}
 
         clang::Expr *Cond() const { return cond_; }
         void SetCond(clang::Expr *c) { cond_ = c; }
@@ -209,9 +197,7 @@ namespace patchestry::ast {
       public:
         SDoWhile(std::vector< SNode * > body, clang::Expr *cond)
             : SNode(SNodeKind::kDoWhile), cond_(cond), body_(std::move(body))
-        {
-            for (auto *c : body_) if (c) c->SetParent(this);
-        }
+        {}
 
         SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
 
@@ -250,9 +236,7 @@ namespace patchestry::ast {
              std::vector< SNode * > body)
             : SNode(SNodeKind::kFor)
             , init_(init), cond_(cond), inc_(inc), body_(std::move(body))
-        {
-            for (auto *c : body_) if (c) c->SetParent(this);
-        }
+        {}
 
         clang::Stmt *Init() const { return init_; }
         void SetInit(clang::Stmt *s) { init_ = s; }
@@ -315,14 +299,12 @@ namespace patchestry::ast {
         std::vector< SCase > &Cases() { return cases_; }
 
         void AddCase(clang::Expr *value, SNode *body) {
-            if (body) body->SetParent(this);
             SCase c{value, {}};
             if (body) c.body_list.push_back(body);
             cases_.push_back(std::move(c));
         }
 
         void AddCase(clang::Expr *value, std::vector< SNode * > body_list) {
-            for (auto *b : body_list) if (b) b->SetParent(this);
             cases_.push_back({value, std::move(body_list)});
         }
 
@@ -331,11 +313,10 @@ namespace patchestry::ast {
         }
         void SetDefaultBody(SNode *n) {
             default_.clear();
-            if (n) { default_.push_back(n); n->SetParent(this); }
+            if (n) { default_.push_back(n); }
         }
         void SetDefaultBody(std::vector< SNode * > body) {
             default_ = std::move(body);
-            for (auto *c : default_) if (c) c->SetParent(this);
         }
 
         const std::vector< SNode * > &DefaultBodyList() const { return default_; }
@@ -384,15 +365,12 @@ namespace patchestry::ast {
         {
             if (body) {
                 body_.push_back(body);
-                body->SetParent(this);
             }
         }
 
         SLabel(std::string_view name, std::vector< SNode * > body)
             : SNode(SNodeKind::kLabel), name_(name), body_(std::move(body))
-        {
-            for (auto *c : body_) if (c) c->SetParent(this);
-        }
+        {}
 
         std::string_view Name() const { return name_; }
         void SetName(std::string_view n) { name_ = n; }
