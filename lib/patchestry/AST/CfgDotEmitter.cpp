@@ -70,25 +70,20 @@ namespace patchestry::ast {
             };
 
             switch (node->Kind()) {
-            case SNodeKind::kBlock: {
-                auto *blk = node->as<SBlock>();
-                for (const auto *s : blk->Stmts()) {
-                    pad(); os << StmtToOneLine(s) << "\\l";
-                }
-                break;
-            }
-            case SNodeKind::kSeq: {
-                for (const auto *child : node->as<SSeq>()->Children())
-                    DumpSNode(child, os, indent);
+            case SNodeKind::kStmt: {
+                pad();
+                os << StmtToOneLine(node->as<SStmt>()->Stmt()) << "\\l";
                 break;
             }
             case SNodeKind::kIfThenElse: {
                 auto *ite = node->as<SIfThenElse>();
                 pad(); os << "if (" << StmtToOneLine(ite->Cond()) << ") {\\l";
-                DumpSNode(ite->ThenBranch(), os, indent + 1);
-                if (ite->ElseBranch()) {
+                for (const auto *c : ite->ThenList())
+                    DumpSNode(c, os, indent + 1);
+                if (!ite->ElseList().empty()) {
                     pad(); os << "} else {\\l";
-                    DumpSNode(ite->ElseBranch(), os, indent + 1);
+                    for (const auto *c : ite->ElseList())
+                        DumpSNode(c, os, indent + 1);
                 }
                 pad(); os << "}\\l";
                 break;
@@ -96,21 +91,24 @@ namespace patchestry::ast {
             case SNodeKind::kWhile: {
                 auto *w = node->as<SWhile>();
                 pad(); os << "while (" << StmtToOneLine(w->Cond()) << ") {\\l";
-                DumpSNode(w->Body(), os, indent + 1);
+                for (const auto *c : w->BodyList())
+                    DumpSNode(c, os, indent + 1);
                 pad(); os << "}\\l";
                 break;
             }
             case SNodeKind::kDoWhile: {
                 auto *dw = node->as<SDoWhile>();
                 pad(); os << "do {\\l";
-                DumpSNode(dw->Body(), os, indent + 1);
+                for (const auto *c : dw->BodyList())
+                    DumpSNode(c, os, indent + 1);
                 pad(); os << "} while (" << StmtToOneLine(dw->Cond()) << ");\\l";
                 break;
             }
             case SNodeKind::kFor: {
                 auto *f = node->as<SFor>();
                 pad(); os << "for (...) {\\l";
-                DumpSNode(f->Body(), os, indent + 1);
+                for (const auto *c : f->BodyList())
+                    DumpSNode(c, os, indent + 1);
                 pad(); os << "}\\l";
                 break;
             }
@@ -120,11 +118,13 @@ namespace patchestry::ast {
                 for (size_t i = 0; i < sw->Cases().size(); ++i) {
                     const auto &c = sw->Cases()[i];
                     pad(); os << "  case " << StmtToOneLine(c.value) << ":\\l";
-                    DumpSNode(c.body, os, indent + 2);
+                    for (const auto *b : c.body_list)
+                        DumpSNode(b, os, indent + 2);
                 }
-                if (sw->DefaultBody()) {
+                if (!sw->DefaultBodyList().empty()) {
                     pad(); os << "  default:\\l";
-                    DumpSNode(sw->DefaultBody(), os, indent + 2);
+                    for (const auto *b : sw->DefaultBodyList())
+                        DumpSNode(b, os, indent + 2);
                 }
                 pad(); os << "}\\l";
                 break;
@@ -132,7 +132,8 @@ namespace patchestry::ast {
             case SNodeKind::kLabel: {
                 auto *lbl = node->as<SLabel>();
                 pad(); os << lbl->Name() << ":\\l";
-                DumpSNode(lbl->Body(), os, indent);
+                for (const auto *c : lbl->BodyList())
+                    DumpSNode(c, os, indent);
                 break;
             }
             case SNodeKind::kGoto: {
@@ -187,16 +188,17 @@ namespace patchestry::ast {
             for (const auto *s : n.stmts) {
                 os << StmtToOneLine(s) << "\\l";
             }
-            if (n.structured) {
+            if (!n.structured.empty()) {
                 if (!n.stmts.empty()) os << "---\\l";
-                DumpSNode(n.structured, os, 0);
+                for (const auto *s : n.structured)
+                    DumpSNode(s, os, 0);
             }
 
             // Show synthesized control flow from edge metadata.
             // This is more useful for debugging than the raw terminal
             // stmt, since it reflects the current graph state (edges
             // may have been added/removed/marked by fold rules).
-            if (!n.structured) {
+            if (n.structured.empty()) {
                 auto node_label = [&](size_t id) -> std::string {
                     if (id < g.nodes.size() && !g.nodes[id].label.empty())
                         return g.nodes[id].label;
@@ -337,43 +339,29 @@ namespace patchestry::ast {
     size_t CountSNodeStmts(const SNode *root) {
         if (!root) return 0;
 
+        size_t total = 0;
         switch (root->Kind()) {
-        case SNodeKind::kBlock:
-            return root->as<SBlock>()->Stmts().size();
-        case SNodeKind::kSeq: {
-            size_t total = 0;
-            for (const auto *child : root->as<SSeq>()->Children())
-                total += CountSNodeStmts(child);
-            return total;
-        }
-        case SNodeKind::kIfThenElse: {
-            auto *ite = root->as<SIfThenElse>();
-            return CountSNodeStmts(ite->ThenBranch())
-                 + CountSNodeStmts(ite->ElseBranch());
-        }
+        case SNodeKind::kStmt:
+            return 1;
         case SNodeKind::kWhile:
-            return CountCommaChainStmts(root->as<SWhile>()->Cond())
-                 + CountSNodeStmts(root->as<SWhile>()->Body());
+            total += CountCommaChainStmts(root->as<SWhile>()->Cond());
+            break;
         case SNodeKind::kDoWhile:
-            return CountCommaChainStmts(root->as<SDoWhile>()->Cond())
-                 + CountSNodeStmts(root->as<SDoWhile>()->Body());
-        case SNodeKind::kFor:
-            return CountSNodeStmts(root->as<SFor>()->Body());
-        case SNodeKind::kSwitch: {
-            auto *sw = root->as<SSwitch>();
+            total += CountCommaChainStmts(root->as<SDoWhile>()->Cond());
+            break;
+        case SNodeKind::kSwitch:
             // Count 1 for the discriminant — compensates for the original
             // SwitchStmt that FoldSwitch strips from the head block's stmts.
-            size_t total = sw->Discriminant() ? 1 : 0;
-            for (const auto &c : sw->Cases())
-                total += CountSNodeStmts(c.body);
-            total += CountSNodeStmts(sw->DefaultBody());
-            return total;
-        }
-        case SNodeKind::kLabel:
-            return CountSNodeStmts(root->as<SLabel>()->Body());
+            total += root->as<SSwitch>()->Discriminant() ? size_t{ 1 } : size_t{ 0 };
+            break;
         default:
-            return 0;
+            break;
         }
+        // Recurse uniformly into every SNode child slot.
+        root->for_each_child([&](const SNode *c) {
+            total += CountSNodeStmts(c);
+        });
+        return total;
     }
 
     size_t CountCGraphStmts(const detail::CGraph &g) {
@@ -381,9 +369,8 @@ namespace patchestry::ast {
         for (const auto &n : g.nodes) {
             if (n.IsCollapsed()) continue;
             total += n.stmts.size();
-            if (n.structured) {
-                total += CountSNodeStmts(n.structured);
-            }
+            for (const auto *s : n.structured)
+                total += CountSNodeStmts(s);
         }
         return total;
     }
@@ -396,54 +383,33 @@ namespace patchestry::ast {
                                           std::unordered_set<const clang::Stmt *> &out) {
         if (!root) return;
         switch (root->Kind()) {
-        case SNodeKind::kBlock:
-            for (auto *s : root->as<SBlock>()->Stmts())
-                if (s) out.insert(s);
+        case SNodeKind::kStmt:
+            if (auto *s = root->as<SStmt>()->Stmt()) out.insert(s);
             break;
-        case SNodeKind::kSeq:
-            for (const auto *child : root->as<SSeq>()->Children())
-                CollectSNodeStmtPtrsImpl(child, out);
+        case SNodeKind::kIfThenElse:
+            // The condition may embed stmts via comma-operator.
+            if (auto *c = root->as<SIfThenElse>()->Cond()) out.insert(c);
             break;
-        case SNodeKind::kIfThenElse: {
-            auto *ite = root->as<SIfThenElse>();
-            // The condition may embed stmts via comma-operator
-            if (ite->Cond()) out.insert(ite->Cond());
-            CollectSNodeStmtPtrsImpl(ite->ThenBranch(), out);
-            CollectSNodeStmtPtrsImpl(ite->ElseBranch(), out);
+        case SNodeKind::kWhile:
+            if (auto *c = root->as<SWhile>()->Cond()) out.insert(c);
             break;
-        }
-        case SNodeKind::kWhile: {
-            auto *w = root->as<SWhile>();
-            if (w->Cond()) out.insert(w->Cond());
-            CollectSNodeStmtPtrsImpl(w->Body(), out);
+        case SNodeKind::kDoWhile:
+            if (auto *c = root->as<SDoWhile>()->Cond()) out.insert(c);
             break;
-        }
-        case SNodeKind::kDoWhile: {
-            auto *dw = root->as<SDoWhile>();
-            if (dw->Cond()) out.insert(dw->Cond());
-            CollectSNodeStmtPtrsImpl(dw->Body(), out);
+        case SNodeKind::kFor:
+            if (auto *c = root->as<SFor>()->Cond()) out.insert(c);
             break;
-        }
-        case SNodeKind::kFor: {
-            auto *f = root->as<SFor>();
-            if (f->Cond()) out.insert(f->Cond());
-            CollectSNodeStmtPtrsImpl(f->Body(), out);
-            break;
-        }
-        case SNodeKind::kSwitch: {
-            auto *sw = root->as<SSwitch>();
-            if (sw->Discriminant()) out.insert(sw->Discriminant());
-            for (const auto &c : sw->Cases())
-                CollectSNodeStmtPtrsImpl(c.body, out);
-            CollectSNodeStmtPtrsImpl(sw->DefaultBody(), out);
-            break;
-        }
-        case SNodeKind::kLabel:
-            CollectSNodeStmtPtrsImpl(root->as<SLabel>()->Body(), out);
+        case SNodeKind::kSwitch:
+            if (auto *d = root->as<SSwitch>()->Discriminant())
+                out.insert(d);
             break;
         default:
             break;
         }
+        // Recurse uniformly into every SNode child slot.
+        root->for_each_child([&](const SNode *c) {
+            CollectSNodeStmtPtrsImpl(c, out);
+        });
     }
 
     void CollectSNodeStmtPtrs(const SNode *root,
@@ -457,8 +423,8 @@ namespace patchestry::ast {
             if (n.IsCollapsed()) continue;
             for (auto *s : n.stmts)
                 if (s) out.insert(s);
-            if (n.structured)
-                CollectSNodeStmtPtrsImpl(n.structured, out);
+            for (const auto *s : n.structured)
+                CollectSNodeStmtPtrsImpl(s, out);
         }
     }
 

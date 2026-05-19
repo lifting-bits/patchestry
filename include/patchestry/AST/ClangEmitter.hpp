@@ -22,10 +22,10 @@ namespace patchestry::ast {
         bool EndsWithTerminator(clang::Stmt *s);
     } // namespace detail
 
-    // Convert an SNode tree back to a Clang CompoundStmt and set it as the
-    // function body.
-    void EmitClangAST(SNode *root, clang::FunctionDecl *fn,
-                      clang::ASTContext &ctx);
+    // Convert a function-body SNode sequence to a Clang CompoundStmt and
+    // set it as the function body.
+    void EmitClangAST(const std::vector< SNode * > &root_children,
+                      clang::FunctionDecl *fn, clang::ASTContext &ctx);
 
     // Post-emission cleanup for prettier C output.
     // Flattens nested CompoundStmts and pushes LabelStmts inside

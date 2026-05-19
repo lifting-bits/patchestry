@@ -9,6 +9,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -25,8 +26,7 @@
 namespace patchestry::ast {
 
     enum class SNodeKind {
-        kSeq,
-        kBlock,
+        kStmt,
         kIfThenElse,
         kWhile,
         kDoWhile,
@@ -49,8 +49,10 @@ namespace patchestry::ast {
         static const char *KindName(SNodeKind k);
         const char *KindName() const { return KindName(kind_); }
 
-        SNode *Parent() const { return parent_; }
-        void SetParent(SNode *p) { parent_ = p; }
+        // Visit immediate SNode children (slots holding SNode*, not raw
+        // clang::Stmt members). Default: no children; subtypes override.
+        using ChildFn = std::function< void(SNode *) >;
+        virtual void for_each_child(const ChildFn &) const {}
 
         void Dump(llvm::raw_ostream &os, unsigned indent = 0) const;
 
@@ -70,117 +72,75 @@ namespace patchestry::ast {
 
       private:
         SNodeKind kind_;
-        SNode *parent_ = nullptr;
     };
 
-    // Sequence of SNodes (analogous to CompoundStmt)
-    class SSeq : public SNode
+    // Single-statement leaf — holds one raw clang::Stmt*. A "block" of N
+    // statements is N SStmt siblings in a body vector.
+    class SStmt : public SNode
     {
       public:
-        SSeq() : SNode(SNodeKind::kSeq) {}
+        explicit SStmt(clang::Stmt *stmt)
+            : SNode(SNodeKind::kStmt), stmt_(stmt) {}
 
-        const std::vector< SNode * > &Children() const { return children_; }
-        std::vector< SNode * > &Children() { return children_; }
+        clang::Stmt *Stmt() const { return stmt_; }
+        void SetStmt(clang::Stmt *s) { stmt_ = s; }
 
-        void AddChild(SNode *child) {
-            child->SetParent(this);
-            children_.push_back(child);
-        }
-
-        void InsertChild(size_t pos, SNode *child) {
-            child->SetParent(this);
-            children_.insert(children_.begin() + static_cast< ptrdiff_t >(pos), child);
-        }
-
-        void RemoveChild(size_t pos) {
-            children_.erase(children_.begin() + static_cast< ptrdiff_t >(pos));
-        }
-
-        void ReplaceChild(size_t pos, SNode *child) {
-            child->SetParent(this);
-            children_[pos] = child;
-        }
-
-        // Replace a range [from, to) with a single node
-        void ReplaceRange(size_t from, size_t to, SNode *replacement) {
-            replacement->SetParent(this);
-            auto begin = children_.begin();
-            children_.erase(begin + static_cast< ptrdiff_t >(from) + 1,
-                            begin + static_cast< ptrdiff_t >(to));
-            children_[from] = replacement;
-        }
-
-        // Replace a range [from, to) with multiple nodes
-        void ReplaceRange(size_t from, size_t to,
-                           const std::vector< SNode * > &replacements) {
-            for (auto *r : replacements) r->SetParent(this);
-            auto begin = children_.begin();
-            children_.erase(begin + static_cast< ptrdiff_t >(from),
-                            begin + static_cast< ptrdiff_t >(to));
-            children_.insert(children_.begin() + static_cast< ptrdiff_t >(from),
-                             replacements.begin(), replacements.end());
-        }
-
-        size_t Size() const { return children_.size(); }
-        bool Empty() const { return children_.empty(); }
-        SNode *operator[](size_t i) { return children_[i]; }
-        const SNode *operator[](size_t i) const { return children_[i]; }
-
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kSeq; }
+        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kStmt; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
 
       private:
-        std::vector< SNode * > children_;
+        clang::Stmt *stmt_;
     };
 
-    // Basic block: holds raw Clang Stmt* and an optional label
-    class SBlock : public SNode
-    {
-      public:
-        SBlock() : SNode(SNodeKind::kBlock) {}
-
-        std::string_view Label() const { return label_; }
-        void SetLabel(std::string_view l) { label_ = l; }
-
-        const std::vector< clang::Stmt * > &Stmts() const { return stmts_; }
-        std::vector< clang::Stmt * > &Stmts() { return stmts_; }
-
-        void AddStmt(clang::Stmt *s) { stmts_.push_back(s); }
-        bool Empty() const { return stmts_.empty(); }
-        size_t Size() const { return stmts_.size(); }
-
-        static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kBlock; }
-
-      protected:
-        void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
-
-      private:
-        std::string label_;
-        std::vector< clang::Stmt * > stmts_;
-    };
-
-    // If-then-else
+    // If-then-else. then_/else_ are SNode* vectors; single-body
+    // Then/ElseBranch accessors preserve the prior field-style API.
     class SIfThenElse : public SNode
     {
       public:
-        SIfThenElse(clang::Expr *cond, SNode *then_branch, SNode *else_branch = nullptr)
-            : SNode(SNodeKind::kIfThenElse)
-            , cond_(cond), then_(then_branch), else_(else_branch)
+        SIfThenElse(clang::Expr *cond, SNode *then_branch,
+                    SNode *else_branch = nullptr)
+            : SNode(SNodeKind::kIfThenElse), cond_(cond)
         {
-            if (then_) then_->SetParent(this);
-            if (else_) else_->SetParent(this);
+            if (then_branch) {
+                then_.push_back(then_branch);
+            }
+            if (else_branch) {
+                else_.push_back(else_branch);
+            }
         }
+
+        SIfThenElse(clang::Expr *cond,
+                    std::vector< SNode * > then_list,
+                    std::vector< SNode * > else_list)
+            : SNode(SNodeKind::kIfThenElse), cond_(cond)
+            , then_(std::move(then_list)), else_(std::move(else_list))
+        {}
 
         clang::Expr *Cond() const { return cond_; }
         void SetCond(clang::Expr *c) { cond_ = c; }
 
-        SNode *ThenBranch() const { return then_; }
-        void SetThenBranch(SNode *n) { then_ = n; if (n) n->SetParent(this); }
+        SNode *ThenBranch() const { return then_.empty() ? nullptr : then_[0]; }
 
-        SNode *ElseBranch() const { return else_; }
-        void SetElseBranch(SNode *n) { else_ = n; if (n) n->SetParent(this); }
+        SNode *ElseBranch() const { return else_.empty() ? nullptr : else_[0]; }
+        void SetElseBranch(SNode *n) {
+            else_.clear();
+            if (n) { else_.push_back(n); }
+        }
+        void SetElseBranch(std::vector< SNode * > body) {
+            else_ = std::move(body);
+        }
+
+        const std::vector< SNode * > &ThenList() const { return then_; }
+        std::vector< SNode * > &ThenList() { return then_; }
+        const std::vector< SNode * > &ElseList() const { return else_; }
+        std::vector< SNode * > &ElseList() { return else_; }
+
+        void for_each_child(const ChildFn &fn) const override {
+            for (auto *c : then_) if (c) fn(c);
+            for (auto *c : else_) if (c) fn(c);
+        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kIfThenElse; }
 
@@ -189,31 +149,35 @@ namespace patchestry::ast {
 
       private:
         clang::Expr *cond_;
-        SNode *then_;
-        SNode *else_;
+        std::vector< SNode * > then_;
+        std::vector< SNode * > else_;
     };
 
-    // While loop
+    // While loop. body_ is an SNode* vector.
     class SWhile : public SNode
     {
       public:
-        SWhile(clang::Expr *cond, SNode *body)
-            : SNode(SNodeKind::kWhile), cond_(cond), body_(body)
-        {
-            if (body_) body_->SetParent(this);
-        }
+        SWhile(clang::Expr *cond, std::vector< SNode * > body)
+            : SNode(SNodeKind::kWhile), cond_(cond), body_(std::move(body))
+        {}
 
         clang::Expr *Cond() const { return cond_; }
         void SetCond(clang::Expr *c) { cond_ = c; }
 
-        SNode *Body() const { return body_; }
-        void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
+        SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+
+        const std::vector< SNode * > &BodyList() const { return body_; }
+        std::vector< SNode * > &BodyList() { return body_; }
 
         // Scope labels for break/continue resolution (set by fold rules)
         std::string_view ExitLabel() const { return exit_label_; }
         void SetExitLabel(std::string_view l) { exit_label_ = l; }
         std::string_view HeaderLabel() const { return header_label_; }
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
+
+        void for_each_child(const ChildFn &fn) const override {
+            for (auto *c : body_) if (c) fn(c);
+        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kWhile; }
 
@@ -222,23 +186,23 @@ namespace patchestry::ast {
 
       private:
         clang::Expr *cond_;
-        SNode *body_;
+        std::vector< SNode * > body_;
         std::string_view exit_label_;
         std::string_view header_label_;
     };
 
-    // Do-while loop
+    // Do-while loop. body_ is an SNode* vector.
     class SDoWhile : public SNode
     {
       public:
-        SDoWhile(SNode *body, clang::Expr *cond)
-            : SNode(SNodeKind::kDoWhile), body_(body), cond_(cond)
-        {
-            if (body_) body_->SetParent(this);
-        }
+        SDoWhile(std::vector< SNode * > body, clang::Expr *cond)
+            : SNode(SNodeKind::kDoWhile), cond_(cond), body_(std::move(body))
+        {}
 
-        SNode *Body() const { return body_; }
-        void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
+        SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+
+        const std::vector< SNode * > &BodyList() const { return body_; }
+        std::vector< SNode * > &BodyList() { return body_; }
 
         clang::Expr *Cond() const { return cond_; }
         void SetCond(clang::Expr *c) { cond_ = c; }
@@ -248,28 +212,31 @@ namespace patchestry::ast {
         std::string_view HeaderLabel() const { return header_label_; }
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
 
+        void for_each_child(const ChildFn &fn) const override {
+            for (auto *c : body_) if (c) fn(c);
+        }
+
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kDoWhile; }
 
       protected:
         void DumpChildren(llvm::raw_ostream &os, unsigned indent) const override;
 
       private:
-        SNode *body_;
         clang::Expr *cond_;
+        std::vector< SNode * > body_;
         std::string_view exit_label_;
         std::string_view header_label_;
     };
 
-    // For loop
+    // For loop. body_ is an SNode* vector.
     class SFor : public SNode
     {
       public:
-        SFor(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc, SNode *body)
+        SFor(clang::Stmt *init, clang::Expr *cond, clang::Expr *inc,
+             std::vector< SNode * > body)
             : SNode(SNodeKind::kFor)
-            , init_(init), cond_(cond), inc_(inc), body_(body)
-        {
-            if (body_) body_->SetParent(this);
-        }
+            , init_(init), cond_(cond), inc_(inc), body_(std::move(body))
+        {}
 
         clang::Stmt *Init() const { return init_; }
         void SetInit(clang::Stmt *s) { init_ = s; }
@@ -280,13 +247,19 @@ namespace patchestry::ast {
         clang::Expr *Inc() const { return inc_; }
         void SetInc(clang::Expr *e) { inc_ = e; }
 
-        SNode *Body() const { return body_; }
-        void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
+        SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+
+        const std::vector< SNode * > &BodyList() const { return body_; }
+        std::vector< SNode * > &BodyList() { return body_; }
 
         std::string_view ExitLabel() const { return exit_label_; }
         void SetExitLabel(std::string_view l) { exit_label_ = l; }
         std::string_view HeaderLabel() const { return header_label_; }
         void SetHeaderLabel(std::string_view l) { header_label_ = l; }
+
+        void for_each_child(const ChildFn &fn) const override {
+            for (auto *c : body_) if (c) fn(c);
+        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kFor; }
 
@@ -297,18 +270,21 @@ namespace patchestry::ast {
         clang::Stmt *init_;
         clang::Expr *cond_;
         clang::Expr *inc_;
-        SNode *body_;
+        std::vector< SNode * > body_;
         std::string_view exit_label_;
         std::string_view header_label_;
     };
 
-    // Switch case
+    // Switch case. body_list holds the case body; body() returns its
+    // first element (or nullptr) for the prior field-style read pattern.
     struct SCase {
         clang::Expr *value;  // nullptr for default
-        SNode *body;
+        std::vector< SNode * > body_list;
+
+        SNode *body() const { return body_list.empty() ? nullptr : body_list[0]; }
     };
 
-    // Switch statement
+    // Switch statement. cases_ and default_ hold SNode* vectors.
     class SSwitch : public SNode
     {
       public:
@@ -323,12 +299,34 @@ namespace patchestry::ast {
         std::vector< SCase > &Cases() { return cases_; }
 
         void AddCase(clang::Expr *value, SNode *body) {
-            if (body) body->SetParent(this);
-            cases_.push_back({value, body});
+            SCase c{value, {}};
+            if (body) c.body_list.push_back(body);
+            cases_.push_back(std::move(c));
         }
 
-        SNode *DefaultBody() const { return default_; }
-        void SetDefaultBody(SNode *n) { default_ = n; if (n) n->SetParent(this); }
+        void AddCase(clang::Expr *value, std::vector< SNode * > body_list) {
+            cases_.push_back({value, std::move(body_list)});
+        }
+
+        SNode *DefaultBody() const {
+            return default_.empty() ? nullptr : default_[0];
+        }
+        void SetDefaultBody(SNode *n) {
+            default_.clear();
+            if (n) { default_.push_back(n); }
+        }
+        void SetDefaultBody(std::vector< SNode * > body) {
+            default_ = std::move(body);
+        }
+
+        const std::vector< SNode * > &DefaultBodyList() const { return default_; }
+        std::vector< SNode * > &DefaultBodyList() { return default_; }
+
+        void for_each_child(const ChildFn &fn) const override {
+            for (auto &c : cases_)
+                for (auto *b : c.body_list) if (b) fn(b);
+            for (auto *b : default_) if (b) fn(b);
+        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kSwitch; }
 
@@ -338,7 +336,7 @@ namespace patchestry::ast {
       private:
         clang::Expr *discriminant_;
         std::vector< SCase > cases_;
-        SNode *default_ = nullptr;
+        std::vector< SNode * > default_;
     };
 
     // Goto
@@ -356,21 +354,35 @@ namespace patchestry::ast {
         std::string target_;
     };
 
-    // Label
+    // Label. body_ is an SNode* vector so a label can directly hold a
+    // multi-statement body; Body() returns the first child for the
+    // prior single-body API.
     class SLabel : public SNode
     {
       public:
         SLabel(std::string_view name, SNode *body = nullptr)
-            : SNode(SNodeKind::kLabel), name_(name), body_(body)
+            : SNode(SNodeKind::kLabel), name_(name)
         {
-            if (body_) body_->SetParent(this);
+            if (body) {
+                body_.push_back(body);
+            }
         }
+
+        SLabel(std::string_view name, std::vector< SNode * > body)
+            : SNode(SNodeKind::kLabel), name_(name), body_(std::move(body))
+        {}
 
         std::string_view Name() const { return name_; }
         void SetName(std::string_view n) { name_ = n; }
 
-        SNode *Body() const { return body_; }
-        void SetBody(SNode *n) { body_ = n; if (n) n->SetParent(this); }
+        SNode *Body() const { return body_.empty() ? nullptr : body_[0]; }
+
+        const std::vector< SNode * > &BodyList() const { return body_; }
+        std::vector< SNode * > &BodyList() { return body_; }
+
+        void for_each_child(const ChildFn &fn) const override {
+            for (auto *c : body_) if (c) fn(c);
+        }
 
         static bool classof(const SNode *n) { return n->Kind() == SNodeKind::kLabel; }
 
@@ -379,7 +391,7 @@ namespace patchestry::ast {
 
       private:
         std::string name_;
-        SNode *body_;
+        std::vector< SNode * > body_;
     };
 
     // Break (with optional depth for multi-level breaks)
@@ -447,6 +459,10 @@ namespace patchestry::ast {
             nodes_.push_back(std::move(node));
             return ptr;
         }
+
+        // Build a normalized sequence (a std::vector<SNode*>): nullptr
+        // children are dropped.
+        std::vector< SNode * > MakeSeq(std::vector< SNode * > children);
 
         // Intern a copy of a string; the returned view is valid until Reset().
         // Uses a bump allocator because raw char data carries no destructor.

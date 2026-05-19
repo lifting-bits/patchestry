@@ -91,10 +91,8 @@ namespace patchestry::ast {
                 if (!node) return nullptr;
 
                 switch (node->Kind()) {
-                case SNodeKind::kSeq:
-                    return EmitSeq(node->as< SSeq >());
-                case SNodeKind::kBlock:
-                    return EmitBlock(node->as< SBlock >());
+                case SNodeKind::kStmt:
+                    return node->as< SStmt >()->Stmt();
                 case SNodeKind::kIfThenElse:
                     return EmitIfThenElse(node->as< SIfThenElse >());
                 case SNodeKind::kWhile:
@@ -124,32 +122,21 @@ namespace patchestry::ast {
           private:
             clang::SourceLocation Loc() const { return loc_; }
 
-            clang::Stmt *EmitSeq(const SSeq *seq) {
-                std::vector< clang::Stmt * > stmts;
-                for (const auto *child : seq->Children()) {
-                    auto *s = Emit(child);
-                    if (s) stmts.push_back(s);
-                }
-                return detail::MakeCompound(ctx_, stmts);
-            }
-
-            clang::Stmt *EmitBlock(const SBlock *block) {
-                if (block->Size() == 1) return block->Stmts()[0];
-                return detail::MakeCompound(ctx_, block->Stmts());
-            }
-
             clang::Stmt *EmitIfThenElse(const SIfThenElse *ite) {
                 LOG_FATAL_IF(!ite->Cond(),
                     "SIfThenElse has null condition - structuring "
                     "rule produced a branch without a guard expression");
                 auto *cond = EnsureRValue(ctx_, CloneExpr(ctx_, ite->Cond()));
-                auto *then_stmt = Emit(ite->ThenBranch());
-                auto *else_stmt = ite->ElseBranch() ? Emit(ite->ElseBranch()) : nullptr;
+                auto *then_stmt = EmitBodyList(ite->ThenList());
+                // Null else_stmt for an empty slot = no else clause
+                // (a NullStmt would render as `else ;`).
+                clang::Stmt *else_stmt = nullptr;
+                if (!ite->ElseList().empty()) {
+                    else_stmt = EmitBodyList(ite->ElseList());
+                }
 
-                if (!then_stmt) then_stmt = new (ctx_) clang::NullStmt(Loc());
-
-                // Unwrap CompoundStmt around a single IfStmt in the else
-                // branch so Clang's printer emits "else if" not "else { if".
+                // else-if unwrap: pull a lone IfStmt out of a CompoundStmt
+                // so the printer emits `else if` rather than `else { if }`.
                 if (auto *cs = llvm::dyn_cast_or_null< clang::CompoundStmt >(else_stmt)) {
                     if (cs->size() == 1 && llvm::isa< clang::IfStmt >(cs->body_front()))
                         else_stmt = cs->body_front();
@@ -162,6 +149,22 @@ namespace patchestry::ast {
                 );
             }
 
+            // Render a body sequence into a single clang::Stmt: empty →
+            // NullStmt, size 1 → the lone child, size > 1 → CompoundStmt.
+            clang::Stmt *EmitBodyList(const std::vector< SNode * > &body_list) {
+                if (body_list.empty())
+                    return new (ctx_) clang::NullStmt(Loc());
+                if (body_list.size() == 1) {
+                    auto *s = Emit(body_list[0]);
+                    return s ? s : new (ctx_) clang::NullStmt(Loc());
+                }
+                std::vector< clang::Stmt * > stmts;
+                stmts.reserve(body_list.size());
+                for (const auto *c : body_list)
+                    if (auto *s = Emit(c)) stmts.push_back(s);
+                return detail::MakeCompound(ctx_, stmts);
+            }
+
             clang::Stmt *EmitWhile(const SWhile *w) {
                 clang::Expr *cond = nullptr;
                 if (w->Cond()) {
@@ -171,8 +174,7 @@ namespace patchestry::ast {
                     cond = clang::IntegerLiteral::Create(
                         ctx_, llvm::APInt(32, 1), ctx_.IntTy, Loc());
                 }
-                auto *body = Emit(w->Body());
-                if (!body) body = new (ctx_) clang::NullStmt(Loc());
+                auto *body = EmitBodyList(w->BodyList());
 
                 return clang::WhileStmt::Create(
                     ctx_, nullptr, cond, body, Loc(), Loc(), Loc()
@@ -180,8 +182,7 @@ namespace patchestry::ast {
             }
 
             clang::Stmt *EmitDoWhile(const SDoWhile *dw) {
-                auto *body = Emit(dw->Body());
-                if (!body) body = new (ctx_) clang::NullStmt(Loc());
+                auto *body = EmitBodyList(dw->BodyList());
                 clang::Expr *cond = nullptr;
                 if (dw->Cond()) {
                     cond = EnsureRValue(ctx_, CloneExpr(ctx_, dw->Cond()));
@@ -195,8 +196,7 @@ namespace patchestry::ast {
             }
 
             clang::Stmt *EmitFor(const SFor *f) {
-                auto *body = Emit(f->Body());
-                if (!body) body = new (ctx_) clang::NullStmt(Loc());
+                auto *body = EmitBodyList(f->BodyList());
 
                 return new (ctx_) clang::ForStmt(
                     ctx_, f->Init(),
@@ -214,44 +214,39 @@ namespace patchestry::ast {
                 // Build the switch body as a compound stmt with cases
                 std::vector< clang::Stmt * > body_stmts;
 
+                // Build a case/default sub-stmt: empty list = fallthrough
+                // stub; otherwise emit children, append a break if needed,
+                // and wrap in CompoundStmt (the slot takes a single Stmt).
+                auto build_case_substmt = [&](const std::vector< SNode * > &body_list)
+                    -> clang::Stmt * {
+                    if (body_list.empty()) {
+                        // Fallthrough stub.
+                        return new (ctx_) clang::NullStmt(Loc());
+                    }
+                    std::vector< clang::Stmt * > stmts;
+                    stmts.reserve(body_list.size() + 1);
+                    for (const auto *child : body_list)
+                        if (auto *s = Emit(child)) stmts.push_back(s);
+                    if (stmts.empty())
+                        stmts.push_back(new (ctx_) clang::NullStmt(Loc()));
+                    if (!detail::EndsWithTerminator(stmts.back()))
+                        stmts.push_back(new (ctx_) clang::BreakStmt(Loc()));
+                    return detail::MakeCompound(ctx_, stmts);
+                };
+
                 for (const auto &c : sw->Cases()) {
                     auto *case_stmt = clang::CaseStmt::Create(
                         ctx_, c.value, nullptr, Loc(), Loc(), Loc()
                     );
-
-                    if (c.body == nullptr) {
-                        // Fallthrough stub: case N: (no body, falls into next case)
-                        case_stmt->setSubStmt(new (ctx_) clang::NullStmt(Loc()));
-                    } else {
-                        clang::Stmt *case_body = Emit(c.body);
-                        if (!case_body) {
-                            case_body = new (ctx_) clang::NullStmt(Loc());
-                        }
-
-                        std::vector< clang::Stmt * > case_stmts = { case_body };
-                        if (!detail::EndsWithTerminator(case_body)) {
-                            case_stmts.push_back(new (ctx_) clang::BreakStmt(Loc()));
-                        }
-                        case_stmt->setSubStmt(detail::MakeCompound(ctx_, case_stmts));
-                    }
-
+                    case_stmt->setSubStmt(build_case_substmt(c.body_list));
                     body_stmts.push_back(case_stmt);
                     switch_stmt->addSwitchCase(case_stmt);
                 }
 
-                if (sw->DefaultBody()) {
-                    clang::Stmt *def_body = Emit(sw->DefaultBody());
-                    if (!def_body) {
-                        def_body = new (ctx_) clang::NullStmt(Loc());
-                    }
-
-                    std::vector< clang::Stmt * > def_stmts = { def_body };
-                    if (!detail::EndsWithTerminator(def_body)) {
-                        def_stmts.push_back(new (ctx_) clang::BreakStmt(Loc()));
-                    }
-
-                    auto *def_stmt = new (ctx_)
-                        clang::DefaultStmt(Loc(), Loc(), detail::MakeCompound(ctx_, def_stmts));
+                if (!sw->DefaultBodyList().empty()) {
+                    auto *def_stmt = new (ctx_) clang::DefaultStmt(
+                        Loc(), Loc(),
+                        build_case_substmt(sw->DefaultBodyList()));
                     body_stmts.push_back(def_stmt);
                     switch_stmt->addSwitchCase(def_stmt);
                 }
@@ -269,7 +264,22 @@ namespace patchestry::ast {
             clang::Stmt *EmitLabel(const SLabel *l) {
                 auto *label_decl = GetOrCreateLabel(l->Name());
                 emitted_labels_.insert(std::string(l->Name()));
-                auto *sub = l->Body() ? Emit(l->Body()) : new (ctx_) clang::NullStmt(Loc());
+                // Emit the body; wrap in CompoundStmt only when there's
+                // more than one child (LabelStmt takes a single Stmt).
+                const auto &body_list = l->BodyList();
+                clang::Stmt *sub = nullptr;
+                if (body_list.empty()) {
+                    sub = new (ctx_) clang::NullStmt(Loc());
+                } else if (body_list.size() == 1) {
+                    sub = Emit(body_list[0]);
+                    if (!sub) sub = new (ctx_) clang::NullStmt(Loc());
+                } else {
+                    std::vector< clang::Stmt * > stmts;
+                    stmts.reserve(body_list.size());
+                    for (const auto *c : body_list)
+                        if (auto *s = Emit(c)) stmts.push_back(s);
+                    sub = detail::MakeCompound(ctx_, stmts);
+                }
                 return new (ctx_) clang::LabelStmt(Loc(), label_decl, sub);
             }
 
@@ -309,42 +319,26 @@ namespace patchestry::ast {
 
           public:
             // Pre-scan: collect LabelDecl objects referenced by GotoStmts
-            // in raw Clang AST (SBlock stmts).  Must be called before Emit().
+            // in raw Clang AST (SStmt stmts).  Must be called before Emit().
             void CollectGotoLabelDecls(SNode *node) {
                 if (!node) return;
-                if (auto *blk = node->dyn_cast< SBlock >()) {
-                    std::function< void(clang::Stmt *) > scan =
-                        [&](clang::Stmt *s) {
-                            if (!s) return;
-                            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
-                                auto *ld = gs->getLabel();
-                                goto_labels_[ld->getName().str()] = ld;
-                                return;
-                            }
-                            for (auto *child : s->children()) scan(child);
-                        };
-                    for (auto *s : blk->Stmts()) scan(s);
-                    return; // SBlock has no SNode children
+                std::function< void(clang::Stmt *) > scan =
+                    [&](clang::Stmt *s) {
+                        if (!s) return;
+                        if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                            auto *ld = gs->getLabel();
+                            goto_labels_[ld->getName().str()] = ld;
+                            return;
+                        }
+                        for (auto *child : s->children()) scan(child);
+                    };
+                if (auto *st = node->dyn_cast< SStmt >()) {
+                    scan(st->Stmt());
+                    return; // SStmt has no SNode children
                 }
-                if (auto *seq = node->dyn_cast< SSeq >()) {
-                    for (size_t i = 0; i < seq->Size(); ++i)
-                        CollectGotoLabelDecls((*seq)[i]);
-                } else if (auto *ite = node->dyn_cast< SIfThenElse >()) {
-                    CollectGotoLabelDecls(ite->ThenBranch());
-                    CollectGotoLabelDecls(ite->ElseBranch());
-                } else if (auto *sw = node->dyn_cast< SSwitch >()) {
-                    for (auto &c : sw->Cases())
-                        CollectGotoLabelDecls(c.body);
-                    CollectGotoLabelDecls(sw->DefaultBody());
-                } else if (auto *lbl = node->dyn_cast< SLabel >()) {
-                    CollectGotoLabelDecls(lbl->Body());
-                } else if (auto *w = node->dyn_cast< SWhile >()) {
-                    CollectGotoLabelDecls(w->Body());
-                } else if (auto *dw = node->dyn_cast< SDoWhile >()) {
-                    CollectGotoLabelDecls(dw->Body());
-                } else if (auto *f = node->dyn_cast< SFor >()) {
-                    CollectGotoLabelDecls(f->Body());
-                }
+                node->for_each_child([&](SNode *c) {
+                    CollectGotoLabelDecls(c);
+                });
             }
 
             clang::ASTContext &ctx_;
@@ -479,16 +473,11 @@ namespace patchestry::ast {
 
 
 
-    void EmitClangAST(SNode *root, clang::FunctionDecl *fn,
-                      clang::ASTContext &ctx) {
-        Emitter emitter(ctx, fn);
-        // Pre-scan: collect LabelDecl objects from raw Clang GotoStmts
-        // so EmitLabel can reuse the same objects (pointer identity match).
-        emitter.CollectGotoLabelDecls(root);
-        auto *body = emitter.Emit(root);
-        if (!body) {
-            body = detail::MakeCompound(ctx, {});
-        }
+    // Common DeclStmt-hoisting + setBody finalization for EmitClangAST.
+    static void FinalizeFunctionBody(clang::Stmt *body,
+                                     clang::FunctionDecl *fn,
+                                     clang::ASTContext &ctx) {
+        if (!body) body = detail::MakeCompound(ctx, {});
 
         // Phase 1: Hoist all existing DeclStmts to the top of the function.
         std::vector< clang::Stmt * > decl_stmts;
@@ -505,37 +494,28 @@ namespace patchestry::ast {
         }
 
         // Phase 2: Synthesize DeclStmts for any VarDecls referenced but not
-        // declared in the body. Unreachable blocks may be dropped during graph
-        // construction while retaining blocks that reference those vars.
-        // CIR crashes with "DeclRefExpr for decl not entered in LocalDeclMap"
-        // when it encounters a reference to an undeclared variable.
+        // declared in the body.  CIR crashes on undeclared local var refs.
         {
             std::unordered_set< clang::VarDecl * > referenced, declared;
             std::unordered_set< clang::Stmt * > seen1, seen2;
             CollectReferencedVars(body, referenced, seen1);
             CollectDeclaredVars(body, declared, seen2);
-            // Also count vars from hoisted DeclStmts
             for (auto *ds : decl_stmts) {
                 std::unordered_set< clang::Stmt * > seen3;
                 CollectDeclaredVars(ds, declared, seen3);
             }
-
             for (auto *vd : referenced) {
                 if (declared.count(vd)) continue;
-                // Skip function parameters — they're already in CIR's map
                 if (llvm::isa< clang::ParmVarDecl >(vd)) continue;
-                // Skip file-scope / extern globals — CIR asserts isLocalVarDecl()
                 if (!vd->isLocalVarDecl()) continue;
-                // Synthesize a DeclStmt for this missing variable
                 auto loc = VirtualLoc(ctx);
                 auto *ds = new (ctx) clang::DeclStmt(
-                    clang::DeclGroupRef(vd), loc, loc
-                );
+                    clang::DeclGroupRef(vd), loc, loc);
                 decl_stmts.push_back(ds);
             }
         }
 
-        // Build final body: hoisted decls + control flow
+        // Build final body: hoisted decls + control flow.
         std::vector< clang::Stmt * > all_stmts;
         all_stmts.insert(all_stmts.end(), decl_stmts.begin(), decl_stmts.end());
         if (auto *cs = llvm::dyn_cast_or_null< clang::CompoundStmt >(body)) {
@@ -543,10 +523,19 @@ namespace patchestry::ast {
         } else if (body) {
             all_stmts.push_back(body);
         }
-        body = detail::MakeCompound(ctx, all_stmts);
-
-        fn->setBody(body);
+        fn->setBody(detail::MakeCompound(ctx, all_stmts));
     }
 
+    void EmitClangAST(const std::vector< SNode * > &root_children,
+                      clang::FunctionDecl *fn, clang::ASTContext &ctx) {
+        Emitter emitter(ctx, fn);
+        for (auto *c : root_children) emitter.CollectGotoLabelDecls(c);
+
+        std::vector< clang::Stmt * > body_stmts;
+        body_stmts.reserve(root_children.size());
+        for (auto *c : root_children)
+            if (auto *s = emitter.Emit(c)) body_stmts.push_back(s);
+        FinalizeFunctionBody(detail::MakeCompound(ctx, body_stmts), fn, ctx);
+    }
 
 } // namespace patchestry::ast
