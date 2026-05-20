@@ -223,18 +223,12 @@ namespace patchestry::ast {
                                   SNodeFactory &factory,
                                   clang::ASTContext &ctx);
 
-    /// Remove SLabel siblings whose label has zero references (no SGoto
-    /// and no clang::GotoStmt targets it).  The label's body is dropped —
-    /// it is dead code reachable only via the removed label.
-    bool RemoveUnreferencedLabels(std::vector< SNode * > &root,
-                                  SNodeFactory &factory);
-
     /// Duplicate small, side-effect-contained label targets into switch
     /// case arms that end in `SGoto L`, making the case bodies goto-free.
     /// Handles goto-into-another-switch by recursively cloning the inner
     /// switch.  Refuses to clone subtrees containing labels or loops so
-    /// that goto/label pairing stays consistent.  After successful
-    /// cloning, dead labels are reclaimed by RemoveUnreferencedLabels.
+    /// that goto/label pairing stays consistent.  Outbound gotos from
+    /// the clone are allowed — they reference an already-live label.
     ///
     /// Returns true if any duplication was performed.
     bool DuplicateSwitchCaseTargets(std::vector< SNode * > &root,

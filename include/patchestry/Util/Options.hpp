@@ -19,9 +19,15 @@ namespace patchestry {
         bool emit_asm                       = false;
         bool emit_obj                       = false;
         bool verbose                        = false;
-        bool use_structuring_pass           = false;
+        bool use_structuring_pass           = true;
         bool verify_no_node_loss            = false;
         bool structuring_improvement_report = false;
+        // Run the Clang-AST post-emission cleanup pipeline in
+        // CleanupPrettyPrint.
+        // Default on; flip off via --clang-ast-cleanup=false to
+        // compare the structured C output without the AST-layer
+        // passes (useful for bisecting structuring drift).
+        bool clang_ast_cleanup              = true;
 
         std::string output_file;
         std::string input_file;

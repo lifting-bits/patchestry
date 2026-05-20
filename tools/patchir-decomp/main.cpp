@@ -82,8 +82,11 @@ namespace {
 
     const llvm::cl::opt< bool > use_structuring_pass( // NOLINT(cert-err58-cpp)
         "use-structuring-pass",
-        llvm::cl::desc("Enable the CFGStructure structuring pass"),
-        llvm::cl::init(false)
+        llvm::cl::desc(
+            "Enable the CFGStructure structuring pass (default on; "
+            "pass =false to fall back to the legacy goto-emitted path)"
+        ),
+        llvm::cl::init(true)
     );
 
     const llvm::cl::opt< bool > emit_dot_cfg( // NOLINT(cert-err58-cpp)
@@ -108,6 +111,15 @@ namespace {
         llvm::cl::init(false)
     );
 
+    const llvm::cl::opt< bool > clang_ast_cleanup( // NOLINT(cert-err58-cpp)
+        "clang-ast-cleanup",
+        llvm::cl::desc(
+            "Run the Clang-AST post-emission cleanup pipeline after "
+            "EmitClangAST.  Default on; pass =false to skip it and "
+            "emit the raw post-emission AST."),
+        llvm::cl::init(true)
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -123,6 +135,7 @@ namespace {
             .use_structuring_pass       = use_structuring_pass.getValue(),
             .verify_no_node_loss        = verify_no_node_loss.getValue(),
             .structuring_improvement_report = structuring_improvement_report.getValue(),
+            .clang_ast_cleanup          = clang_ast_cleanup.getValue(),
             .output_file                = output_filename.getValue(),
             .input_file                 = input_filename.getValue(),
             .print_tu                   = print_tu.getValue(),

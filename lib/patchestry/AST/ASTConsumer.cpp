@@ -339,11 +339,6 @@ namespace patchestry::ast {
                             post_cleanup_gotos = CountSNodeGotos(root_body);
                         }
 
-                        // RemoveUnreferencedLabels is intentionally NOT
-                        // called: CountAllGotoRefs misses gotos embedded
-                        // in some SNode kinds, so it would drop live
-                        // labels on some fixtures.
-
                         // Structural verification of the structured SNode
                         // tree after cleanup and before Clang AST emission.
                         // This catches SNode-level damage (dangling gotos,
@@ -493,7 +488,13 @@ namespace patchestry::ast {
 
                 EmitClangAST(root_body, fn, ctx);
 
-                CleanupPrettyPrint(fn, ctx);
+                // Clang-AST post-emission cleanup pipeline.
+                // Gated by --clang-ast-cleanup (default on).
+                // Toggle to bisect any structuring drift introduced by
+                // these post-passes vs the SNode-layer cleanup alone.
+                if (options.clang_ast_cleanup) {
+                    CleanupPrettyPrint(fn, ctx);
+                }
 
                 // Goto-funnel report: per-function goto-elimination metrics
                 // for the structured path.  Gated by

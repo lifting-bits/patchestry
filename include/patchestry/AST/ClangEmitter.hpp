@@ -27,9 +27,13 @@ namespace patchestry::ast {
     void EmitClangAST(const std::vector< SNode * > &root_children,
                       clang::FunctionDecl *fn, clang::ASTContext &ctx);
 
-    // Post-emission cleanup for prettier C output.
-    // Flattens nested CompoundStmts and pushes LabelStmts inside
-    // CompoundStmt bodies. Only call for patchir-decomp path.
+    // Post-emission Clang-AST cleanup driver.  Runs the post-emission
+    // pass pipeline (terminal-label inlining, goto-forwarder folds,
+    // goto-to-next-label elimination, dead-control removal, if-goto
+    // scopeification, cross-scope label hoist, loop recovery, switch-
+    // local case folds) plus cosmetic normalizers (while->for promotion,
+    // condition normalization, label-into-compound pushes).  Only call
+    // for patchir-decomp path.
     void CleanupPrettyPrint(clang::FunctionDecl *fn, clang::ASTContext &ctx);
 
 } // namespace patchestry::ast
