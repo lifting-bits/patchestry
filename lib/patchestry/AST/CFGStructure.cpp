@@ -484,7 +484,16 @@ namespace patchestry::ast {
 
         for (const auto &[target, count] : gotos) {
             report.input_gotos += count;
-            if (!snode_labels.contains(target)) {
+            // Targets resolved by either layer: a lifted SLabel OR a raw
+            // clang::LabelStmt still inside an opaque SStmt payload (e.g.,
+            // a label sitting inside an un-lifted while/for body or a
+            // switch that TryLiftSwitch declined to lift).  Either anchors
+            // the goto.  Without the clang_labels arm, the validator
+            // produced a spurious dangling-goto diagnostic and a
+            // LOG(FATAL) under --verify-no-node-loss on any function with
+            // such an opaque control-flow payload.
+            if (!snode_labels.contains(target)
+                && !clang_labels.contains(target)) {
                 report.dangling_gotos.push_back(target);
                 report.missing_labels.push_back(target);
                 AddSNodeDiagnostic(report, "dangling goto target " + target);
@@ -527,7 +536,17 @@ namespace patchestry::ast {
                     report,
                     "duplicate Clang LabelStmt definition " + label);
             }
-            if (!snode_labels.contains(label)) {
+            // A raw clang::LabelStmt that NormalizeRawControlFlow chose
+            // to leave inside an opaque SStmt payload (the
+            // ClangStmtContainsControlFlow == false compound-stmt path or
+            // a TryLiftSwitch-declined switch) is still a legitimate
+            // anchor for a raw clang::GotoStmt in the same payload.
+            // Only complain when the label has no SLabel form AND no
+            // clang-level goto references it — otherwise the validator
+            // emits a spurious diagnostic and a LOG(FATAL) under
+            // --verify-no-node-loss.
+            if (!snode_labels.contains(label)
+                && gotos.find(label) == gotos.end()) {
                 AddSNodeDiagnostic(
                     report, "Clang LabelStmt has no matching SLabel " + label);
             }
@@ -1066,6 +1085,15 @@ namespace patchestry::ast {
                 std::swap(a.succs[0], a.succs[1]);
                 std::swap(a.edge_flags[0], a.edge_flags[1]);
                 a.branch_cond = NegateExpr(ctx_, a.branch_cond);
+                // Record what we did so ValidateCGraph's branch_swaps /
+                // condition_negations counters and the "negated condition
+                // without branch swap" invariant check at CGraph.cpp:513
+                // see actual transitions.  These flags default to false
+                // on construction and no other pass writes them, so
+                // omitting the assignment here leaves the validator
+                // silently inert for every function this pass mutates.
+                a.branch_roles.swapped           = true;
+                a.branch_roles.condition_negated = true;
 
                 if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(a.terminal)) {
                     auto loc = ifs->getIfLoc();

@@ -681,14 +681,13 @@ namespace patchestry::ast {
                                       + " occurrence(s), saw "
                                       + NodeLabel(actual_count));
                 }
-                if (actual_count > 1) {
-                    if (std::find(report.duplicated_cases.begin(),
-                                  report.duplicated_cases.end(),
-                                  case_key)
-                        == report.duplicated_cases.end()) {
-                        report.duplicated_cases.push_back(case_key);
-                    }
-                }
+                // The else-if branch above already records every genuine
+                // duplicate.  An earlier unconditional `if (actual_count
+                // > 1)` block that also pushed to duplicated_cases was a
+                // bug: it double-classified extras (expected_count == 0)
+                // and falsely flagged exact-match cases (expected_count
+                // > 1 && actual_count == expected_count, e.g. fallthrough
+                // chains repeating a value the source also repeats).
             }
 
             std::sort(report.missing_switches.begin(),
