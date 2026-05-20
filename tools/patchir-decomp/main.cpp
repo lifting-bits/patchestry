@@ -111,10 +111,9 @@ namespace {
     const llvm::cl::opt< bool > clang_ast_cleanup( // NOLINT(cert-err58-cpp)
         "clang-ast-cleanup",
         llvm::cl::desc(
-            "Run the Clang-AST post-emission cleanup pipeline "
-            "(F1-F8 + cosmetic passes) after EmitClangAST.  "
-            "Default on; pass =false to skip it and emit the raw "
-            "post-emission AST."),
+            "Run the Clang-AST post-emission cleanup pipeline after "
+            "EmitClangAST.  Default on; pass =false to skip it and "
+            "emit the raw post-emission AST."),
         llvm::cl::init(true)
     );
 

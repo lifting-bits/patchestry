@@ -45,10 +45,7 @@ namespace patchestry::ast {
 
             std::unordered_map< clang::LabelDecl *, unsigned > refs;
             CountGotoDeclRefs(stmt, refs);
-            for (const auto &[label, count] : refs) {
-                (void)label;
-                metrics.gotos += count;
-            }
+            for (const auto &kv : refs) { metrics.gotos += kv.second; }
 
             std::unordered_set< clang::LabelDecl * > defined;
             CollectDefinedLabels(stmt, defined);
@@ -138,6 +135,13 @@ namespace patchestry::ast {
         // Scope creation + goto-to-next-label cascade.  ScopeifyIfGotos
         // converts if(c) goto L; stmts; L: → if(!c) { stmts; }, which
         // may create new goto-to-next-label adjacencies, so iterate.
+        //
+        // Each schedule lambda discards its `mutated` flag — the outer
+        // fixed-point loop below uses Stmt::Profile to detect
+        // structural convergence across the whole schedule, so a
+        // per-pass mutation flag is redundant here.  Single-shot
+        // callers (further down) DO gate body reassignment on
+        // `mutated` to avoid pointer-churn when the pass is a no-op.
         std::vector< std::function< void() > > fixed_point_cleanup_schedule = {
             [&]() {
                 bool mutated = false;
@@ -204,15 +208,20 @@ namespace patchestry::ast {
         // so the loop always ran the full cap.  Output-identical: a schedule
         // pass reporting no structural change is a true fixed point, and the
         // schedule is deterministic, so any further passes are no-ops.
+        // `schedule_iterations` counts only productive passes — passes
+        // that left the body structurally changed (Profile differs).
+        // The terminating no-op pass that proves convergence is not
+        // counted, so the value reported in CLANG_CLEANUP_SUMMARY
+        // reflects the work actually done, not work attempted.
         int schedule_iterations = 0;
         for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
             llvm::FoldingSetNodeID before;
             fn->getBody()->Profile(before, ctx, /*Canonical=*/false);
             for (const auto &step : fixed_point_cleanup_schedule) { step(); }
-            ++schedule_iterations;
             llvm::FoldingSetNodeID after;
             fn->getBody()->Profile(after, ctx, /*Canonical=*/false);
             if (before == after) { break; }
+            ++schedule_iterations;
         }
 
         // Remove labels that are not the target of any goto.

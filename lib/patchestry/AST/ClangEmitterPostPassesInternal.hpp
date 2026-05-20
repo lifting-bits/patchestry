@@ -117,11 +117,10 @@ namespace patchestry::ast {
         const std::unordered_set< clang::LabelDecl * > &live
     );
     clang::Stmt *RemoveEmptyBlocks(clang::ASTContext &ctx, clang::Stmt *s);
-    clang::Stmt *RemoveOrphanedGotos(
-        clang::ASTContext &ctx, clang::Stmt *s,
-        const std::unordered_set< clang::LabelDecl * > &defined, unsigned depth,
-        bool in_switch_case
-    );
+    // RemoveOrphanedGotos is internal to ClangEmitterPostPasses.cpp —
+    // it's reached only via RemoveDeadControlFlow.  Kept file-local so
+    // its default arguments (depth = 0, in_switch_case = false) are not
+    // out of sync with a header declaration that lacks them.
 
     // --- scope-ify conditional gotos ----------------------------------------
     clang::Stmt *ScopeifyIfGotos(
