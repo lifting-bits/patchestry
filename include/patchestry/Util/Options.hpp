@@ -19,7 +19,7 @@ namespace patchestry {
         bool emit_asm                       = false;
         bool emit_obj                       = false;
         bool verbose                        = false;
-        bool use_structuring_pass           = false;
+        bool use_structuring_pass           = true;
         bool verify_no_node_loss            = false;
         bool structuring_improvement_report = false;
         // Run the Clang-AST post-emission cleanup pipeline in

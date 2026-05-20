@@ -82,8 +82,11 @@ namespace {
 
     const llvm::cl::opt< bool > use_structuring_pass( // NOLINT(cert-err58-cpp)
         "use-structuring-pass",
-        llvm::cl::desc("Enable the CFGStructure structuring pass"),
-        llvm::cl::init(false)
+        llvm::cl::desc(
+            "Enable the CFGStructure structuring pass (default on; "
+            "pass =false to fall back to the legacy goto-emitted path)"
+        ),
+        llvm::cl::init(true)
     );
 
     const llvm::cl::opt< bool > emit_dot_cfg( // NOLINT(cert-err58-cpp)
