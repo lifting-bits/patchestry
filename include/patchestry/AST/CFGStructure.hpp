@@ -11,6 +11,7 @@
 #include <patchestry/AST/SNode.hpp>
 
 #include <list>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -59,15 +60,16 @@ namespace patchestry::ast {
         void ComputeDominatorTree();
         void ComputePostDominatorTree();
         void NormalizeConditionPolarityIPdom();
+        void ClassifyRegions();
+        bool MarkIrreducibleSCCs();
+        void CanonicalizeTopology();
         void OrderLoops();
 
         /// Try all collapse rules on every active node.
         /// Returns true if at least one rule fired.
         bool StructureInternal();
 
-        // ---------------------------------------------------------------
         // Collapse rules — each returns true if it matched and fired.
-        // ---------------------------------------------------------------
 
         /// Sequential merge: A->B where B has single predecessor A.
         bool RuleBlockCat(size_t id);
@@ -102,9 +104,7 @@ namespace patchestry::ast {
         /// Sorted by rpo_pos_.
         std::vector<size_t> CollectDomRegion(size_t root, size_t stop) const;
 
-        // ---------------------------------------------------------------
         // Helpers
-        // ---------------------------------------------------------------
 
         /// Spill a single CNode's stmts into SStmt siblings, optionally
         /// wrapped in an SLabel if the node has a label.
@@ -132,6 +132,33 @@ namespace patchestry::ast {
         /// as a goto.  Returns true if an edge was selected and marked.
         bool SelectAndMarkGotoEdge();
     };
+
+    /// Lift raw clang control flow embedded in opaque SStmt leaf SNodes
+    /// into first-class SNodes so the SNode-layer cleanup passes can see
+    /// it.  Payload shapes lifted (each handled by the shared recursive
+    /// helper `NormalizeClangStmt`):
+    ///   - `clang::GotoStmt`       -> `SGoto`
+    ///   - `clang::LabelStmt`      -> `SLabel` (body normalized recursively)
+    ///   - `clang::BreakStmt`      -> `SBreak`
+    ///   - `clang::IfStmt`         -> `SIfThenElse` (arms normalized recursively)
+    ///   - `clang::SwitchStmt`     -> `SSwitch` when the body matches the
+    ///                                 switch-of-CaseStmt/DefaultStmt shape;
+    ///                                 each case body normalized recursively,
+    ///                                 fallthrough chains preserved.  A
+    ///                                 non-matching switch is left as a
+    ///                                 single SStmt.
+    ///   - `clang::CompoundStmt`   -> decomposed into a sequence of SNodes
+    ///                                 ONLY if it transitively contains a
+    ///                                 goto or label; otherwise left as a
+    ///                                 single opaque SStmt so emission keeps
+    ///                                 its brace level.
+    ///   - `clang::NullStmt` / null -> dropped.
+    /// Any other clang::Stmt shape is left as a plain SStmt — never guess,
+    /// never drop.  Goto/label pairing is preserved verbatim: no rename,
+    /// no synthesis, no case-value width recompute.
+    void NormalizeRawControlFlow(std::vector< SNode * > &root,
+                                 SNodeFactory &factory,
+                                 clang::ASTContext &ctx);
 
     /// Eliminate gotos whose target label immediately follows in the
     /// same sibling sequence.  Chases through SLabel→SStmt nesting to
@@ -178,6 +205,24 @@ namespace patchestry::ast {
     bool ConvertGotoToReturn(std::vector< SNode * > &root, SNodeFactory &factory,
                              clang::ASTContext &ctx);
 
+    /// Redirect gotos through labels whose body is only `goto other_label`.
+    /// This removes label pass-through chains (alias elimination) and is run
+    /// early, before the regular goto cleanup.
+    bool CollapsePassThroughLabels(std::vector< SNode * > &root,
+                                   SNodeFactory &factory);
+
+    /// Fold empty label wrappers onto the following sibling and simplify
+    /// empty if/else shells: drop side-effect-free `if (c) {}` and flip
+    /// `if (c) {} else { B }` into `if (!c) { B }`.
+    bool SimplifyEmptyControlFlow(std::vector< SNode * > &root,
+                                  clang::ASTContext &ctx);
+
+    /// Merge adjacent, nested, and else-if guarded gotos that target the
+    /// same label, preserving short-circuit condition order.
+    bool MergeRedundantGotoGuards(std::vector< SNode * > &root,
+                                  SNodeFactory &factory,
+                                  clang::ASTContext &ctx);
+
     /// Remove SLabel siblings whose label has zero references (no SGoto
     /// and no clang::GotoStmt targets it).  The label's body is dropped —
     /// it is dead code reachable only via the removed label.
@@ -195,6 +240,101 @@ namespace patchestry::ast {
     bool DuplicateSwitchCaseTargets(std::vector< SNode * > &root,
                                     SNodeFactory &factory);
 
+    /// Fold guarded fallthrough-to-join patterns:
+    ///
+    ///   if (A && B && C) goto body; else goto join;
+    /// body:
+    ///   ...
+    /// join:
+    ///
+    /// into:
+    ///
+    ///   if (A && B && C) { ... }
+    /// join:
+    ///
+    /// The pass only moves a single-ref immediately-following label body whose
+    /// tail falls through to the next direct label, and only when all other
+    /// guard exits already target that join label.
+    bool FoldGuardedFallthroughTargets(std::vector< SNode * > &root,
+                                       SNodeFactory &factory,
+                                       clang::ASTContext &ctx);
+
+    /// Repair one-way gotos that enter a label nested inside a later
+    /// structured if/else region by duplicating a small label body at the
+    /// outer guard site and moving the skipped region into the guard's else.
+    ///
+    /// This is intentionally conservative: it only handles single-ref labels
+    /// nested under if/else nodes, not loops/switches, and only when the label
+    /// is the last child along the nested path so the cloned entry has the
+    /// same fallthrough continuation as the original label entry.
+    bool RepairCrossScopeLabelEntries(std::vector< SNode * > &root,
+                                      SNodeFactory &factory,
+                                      clang::ASTContext &ctx);
+
+    /// Move single-ref label targets into switch case arms.
+    ///
+    /// This complements DuplicateSwitchCaseTargets for switch-local labels that
+    /// contain calls and therefore must not be cloned.  The target label must
+    /// have exactly one goto reference, no fallthrough predecessor, a bounded
+    /// label-free body, and every path through the moved body must terminate.
+    bool FoldSwitchLocalCaseTargets(std::vector< SNode * > &root,
+                                    SNodeFactory &factory,
+                                    clang::ASTContext &ctx);
+
+    /// Duplicate small, terminating, label-free target bodies at ordinary
+    /// residual goto sites.  This is the general form of the switch-case target
+    /// duplication rule: it clones only bounded assignment/control tails that
+    /// always terminate and rejects labels, loops, calls, and break/continue
+    /// whose target would depend on the original lexical scope.
+    ///
+    /// Returns true if any duplication was performed.
+    bool DuplicateSmallTerminatingTargets(std::vector< SNode * > &root,
+                                          SNodeFactory &factory);
+
+    /// Duplicate small producer->epilogue error tails at residual goto sites.
+    /// A direct goto to the epilogue is cloned only when all local variables
+    /// read by the epilogue are definitely assigned earlier in the same SNode
+    /// sequence.  A goto to a producer label may clone the producer plus one
+    /// terminal epilogue hop when the combined body is self-contained.
+    bool DuplicateSmallEpilogueTargets(std::vector< SNode * > &root,
+                                       SNodeFactory &factory,
+                                       clang::ASTContext &ctx);
+
+    /// Duplicate small switch-local fallthrough label tails into case arms.
+    /// A clone is emitted as the label body plus an explicit SBreak, and only
+    /// when the target is small, label-free, call-free, and has no local
+    /// live-ins.  Rewrites are restricted to the same SSwitch so the cloned
+    /// break targets the same structured scope as the original fallthrough.
+    bool DuplicateSwitchFallthroughTargets(std::vector< SNode * > &root,
+                                           SNodeFactory &factory,
+                                           clang::ASTContext &ctx);
+
+    /// Duplicate loop-local continue/latch label tails into goto sites.
+    /// The pass only clones small, goto-free, label-free tails that end in
+    /// continue, and only rewrites gotos inside the same loop body.  Nested
+    /// loops are treated as separate continue scopes.
+    bool DuplicateLoopContinueTargets(std::vector< SNode * > &root,
+                                      SNodeFactory &factory,
+                                      clang::ASTContext &ctx);
+
+    /// Duplicate stack-protector return epilogues at residual goto sites.
+    /// The cloned body may contain only stack_chk_fail-like calls, must
+    /// terminate on every path, and is still gated by local live-in checks
+    /// before being placed at a goto site.  Label wrappers are dropped from
+    /// the clone so the pass does not duplicate label definitions.
+    bool DuplicateStackGuardReturnTargets(std::vector< SNode * > &root,
+                                          SNodeFactory &factory,
+                                          clang::ASTContext &ctx);
+
+    /// Duplicate small cleanup/logging return tails at residual goto sites.
+    /// The pass follows bounded cleanup chains, drops cloned label/goto
+    /// wrappers, and only clones direct calls that look like cleanup or
+    /// diagnostic calls.  Local live-ins must be definitely available at
+    /// the goto site.
+    bool DuplicateCleanupReturnTargets(std::vector< SNode * > &root,
+                                       SNodeFactory &factory,
+                                       clang::ASTContext &ctx);
+
     /// Cross-scope version of InlineResidualGotos: when a goto's target
     /// label has exactly one reference, the label's body always terminates,
     /// and the label's preceding sibling also terminates (no fallthrough
@@ -209,5 +349,37 @@ namespace patchestry::ast {
     /// Preserves SLabel children (may be goto targets from other scopes).
     /// Bottom-up recursive.
     bool RemoveDeadSSeqChildren(std::vector< SNode * > &root);
+
+    /// Structural verification report for a (post-cleanup) SNode tree.
+    /// Counts labels/gotos/switches and records any structural defect
+    /// that would produce invalid Clang AST (dangling gotos, duplicate
+    /// labels, break/continue outside their enclosing construct, empty
+    /// bodies, unreachable siblings, switch-count drift, ...).
+    struct SNodeValidationReport {
+        size_t input_blocks    = 0;
+        size_t emitted_labels  = 0;
+        size_t input_switches  = 0;
+        size_t emitted_switches = 0;
+        size_t input_gotos     = 0;
+        size_t emitted_gotos   = 0;
+        std::vector< std::string > missing_labels;
+        std::vector< std::string > extra_labels;
+        std::vector< std::string > missing_switches;
+        std::vector< std::string > extra_switches;
+        std::vector< std::string > dangling_gotos;
+        std::vector< std::string > duplicate_labels;
+        std::vector< std::string > diagnostics;
+
+        bool ok() const { return diagnostics.empty(); }
+    };
+
+    /// Verify the structured SNode tree after structuring cleanup and
+    /// before Clang AST emission.  This catches SNode-level damage that
+    /// can be introduced after the JSON->CGraph verifier has passed.
+    /// When `source_graph` is supplied, the report also cross-checks
+    /// emitted labels/switches against the source CGraph.
+    SNodeValidationReport
+    ValidateSNodeTree(const std::vector< SNode * > &root,
+                      const CGraph *source_graph = nullptr);
 
 } // namespace patchestry::ast

@@ -10,10 +10,15 @@
 #include <patchestry/Util/Log.hpp>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
+#include <clang/AST/ExprCXX.h>
+#include <clang/AST/Stmt.h>
 
 #include <algorithm>
 #include <cassert>
+#include <functional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -60,6 +65,24 @@ namespace patchestry::ast {
     static void SeqAppend(std::vector< SNode * > &dst,
                           const std::vector< SNode * > &src) {
         dst.insert(dst.end(), src.begin(), src.end());
+    }
+
+    // Replace seq[i] with the contents of `repl` and advance `i` so the
+    // outer iterator lands on the last inserted element (the next
+    // `++i` in the surrounding loop steps to the first node after the
+    // splice).  Asserts `repl` is non-empty: a zero-length replacement
+    // would underflow `i` (size_t arithmetic) and livelock the loop.
+    // Replaces an 8-site copy of erase + insert + `i += repl.size() - 1`
+    // across CFGStructure.cpp.
+    static void SpliceAndAdvance(std::vector< SNode * > &seq,
+                                 size_t &i,
+                                 const std::vector< SNode * > &repl) {
+        assert(!repl.empty()
+               && "SpliceAndAdvance requires non-empty replacement");
+        seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
+        seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
+                   repl.begin(), repl.end());
+        i += repl.size() - 1;
     }
 
     // Spill raw clang::Stmt* into individual SStmt SNodes appended to
@@ -139,9 +162,413 @@ namespace patchestry::ast {
                                          clang::ASTContext &ctx)
         : graph_(g), factory_(factory), ctx_(ctx) {}
 
-    // ---------------------------------------------------------------
+    // ValidateSNodeTree — structural SNode-tree verifier
+
+    namespace {
+
+        std::string ToString(std::string_view sv) {
+            return std::string(sv.data(), sv.size());
+        }
+
+        void AddSNodeDiagnostic(SNodeValidationReport &report,
+                                const std::string &message) {
+            report.diagnostics.push_back(message);
+        }
+
+        // True if a raw clang::Stmt always transfers control away (so a
+        // following sibling is unreachable).
+        bool ClangStmtTerminatesForValidation(clang::Stmt *s) {
+            if (!s) { return false; }
+            if (llvm::isa< clang::GotoStmt >(s)
+                || llvm::isa< clang::BreakStmt >(s)
+                || llvm::isa< clang::ContinueStmt >(s)
+                || llvm::isa< clang::ReturnStmt >(s))
+            {
+                return true;
+            }
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s)) {
+                if (cs->body_empty()) { return false; }
+                return ClangStmtTerminatesForValidation(cs->body_back());
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
+                return ClangStmtTerminatesForValidation(ls->getSubStmt());
+            }
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s)) {
+                return ifs->getThen() && ifs->getElse()
+                    && ClangStmtTerminatesForValidation(ifs->getThen())
+                    && ClangStmtTerminatesForValidation(ifs->getElse());
+            }
+            return false;
+        }
+
+        bool SNodeSeqTerminatesForValidation(const std::vector< SNode * > &seq);
+
+        // True if an SNode always transfers control away.
+        bool SNodeTerminatesForValidation(const SNode *node) {
+            if (!node) { return false; }
+            if (node->dyn_cast< SReturn >() || node->dyn_cast< SBreak >()
+                || node->dyn_cast< SContinue >() || node->dyn_cast< SGoto >())
+            {
+                return true;
+            }
+            if (auto *st = node->dyn_cast< SStmt >()) {
+                return ClangStmtTerminatesForValidation(st->Stmt());
+            }
+            if (auto *lbl = node->dyn_cast< SLabel >()) {
+                return SNodeSeqTerminatesForValidation(lbl->BodyList());
+            }
+            if (auto *ite = node->dyn_cast< SIfThenElse >()) {
+                return !ite->ThenList().empty() && !ite->ElseList().empty()
+                    && SNodeSeqTerminatesForValidation(ite->ThenList())
+                    && SNodeSeqTerminatesForValidation(ite->ElseList());
+            }
+            return false;
+        }
+
+        bool SNodeSeqTerminatesForValidation(const std::vector< SNode * > &seq) {
+            if (seq.empty()) { return false; }
+            return SNodeTerminatesForValidation(seq.back());
+        }
+
+        // Recursively count label definitions and goto targets embedded in
+        // a raw clang::Stmt subtree (SStmt opaque payloads).
+        void CollectClangStmtLabelsAndGotos(
+            clang::Stmt *stmt,
+            SNodeValidationReport &report,
+            std::unordered_map< std::string, unsigned > &clang_labels,
+            std::unordered_map< std::string, unsigned > &gotos
+        ) {
+            if (!stmt) { return; }
+            if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                clang_labels[label->getDecl()->getName().str()]++;
+            } else if (auto *go = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                ++report.emitted_gotos;
+                gotos[go->getLabel()->getName().str()]++;
+            }
+            for (auto *child : stmt->children()) {
+                CollectClangStmtLabelsAndGotos(child, report, clang_labels,
+                                               gotos);
+            }
+        }
+
+        void ValidateSNodeSeqRecursive(
+            const std::vector< SNode * > &seq,
+            SNodeValidationReport &report,
+            std::unordered_map< std::string, unsigned > &snode_labels,
+            std::unordered_map< std::string, unsigned > &clang_labels,
+            std::unordered_map< std::string, unsigned > &gotos,
+            std::unordered_set< std::string > &empty_labels,
+            unsigned loop_depth,
+            unsigned switch_depth,
+            const char *context
+        );
+
+        void ValidateSNodeRecursive(
+            const SNode *node,
+            SNodeValidationReport &report,
+            std::unordered_map< std::string, unsigned > &snode_labels,
+            std::unordered_map< std::string, unsigned > &clang_labels,
+            std::unordered_map< std::string, unsigned > &gotos,
+            std::unordered_set< std::string > &empty_labels,
+            unsigned loop_depth,
+            unsigned switch_depth,
+            const char *context
+        ) {
+            if (!node) { return; }
+
+            if (auto *stmt = node->dyn_cast< SStmt >()) {
+                CollectClangStmtLabelsAndGotos(stmt->Stmt(), report,
+                                               clang_labels, gotos);
+                return;
+            }
+            if (auto *go = node->dyn_cast< SGoto >()) {
+                ++report.emitted_gotos;
+                gotos[ToString(go->Target())]++;
+                return;
+            }
+            if (node->dyn_cast< SBreak >()) {
+                if (loop_depth == 0 && switch_depth == 0) {
+                    AddSNodeDiagnostic(
+                        report,
+                        std::string("break outside loop/switch in ") + context);
+                }
+                return;
+            }
+            if (node->dyn_cast< SContinue >()) {
+                if (loop_depth == 0) {
+                    AddSNodeDiagnostic(
+                        report,
+                        std::string("continue outside loop in ") + context);
+                }
+                return;
+            }
+            if (auto *label = node->dyn_cast< SLabel >()) {
+                std::string name = ToString(label->Name());
+                snode_labels[name]++;
+                ++report.emitted_labels;
+                if (label->BodyList().empty()) { empty_labels.insert(name); }
+                ValidateSNodeSeqRecursive(label->BodyList(), report,
+                                          snode_labels, clang_labels, gotos,
+                                          empty_labels, loop_depth,
+                                          switch_depth, "label");
+                return;
+            }
+            if (auto *ite = node->dyn_cast< SIfThenElse >()) {
+                if (ite->ThenList().empty()) {
+                    AddSNodeDiagnostic(
+                        report,
+                        std::string("empty if-then body in ") + context);
+                }
+                ValidateSNodeSeqRecursive(ite->ThenList(), report,
+                                          snode_labels, clang_labels, gotos,
+                                          empty_labels, loop_depth,
+                                          switch_depth, "if-then");
+                ValidateSNodeSeqRecursive(ite->ElseList(), report,
+                                          snode_labels, clang_labels, gotos,
+                                          empty_labels, loop_depth,
+                                          switch_depth, "if-else");
+                return;
+            }
+            if (auto *wh = node->dyn_cast< SWhile >()) {
+                if (wh->BodyList().empty()) {
+                    AddSNodeDiagnostic(
+                        report, std::string("empty while body in ") + context);
+                }
+                ValidateSNodeSeqRecursive(wh->BodyList(), report, snode_labels,
+                                          clang_labels, gotos, empty_labels,
+                                          loop_depth + 1, switch_depth,
+                                          "while");
+                return;
+            }
+            if (auto *dw = node->dyn_cast< SDoWhile >()) {
+                if (dw->BodyList().empty()) {
+                    AddSNodeDiagnostic(
+                        report,
+                        std::string("empty do-while body in ") + context);
+                }
+                ValidateSNodeSeqRecursive(dw->BodyList(), report, snode_labels,
+                                          clang_labels, gotos, empty_labels,
+                                          loop_depth + 1, switch_depth,
+                                          "do-while");
+                return;
+            }
+            if (auto *for_node = node->dyn_cast< SFor >()) {
+                if (for_node->BodyList().empty()) {
+                    AddSNodeDiagnostic(
+                        report, std::string("empty for body in ") + context);
+                }
+                ValidateSNodeSeqRecursive(for_node->BodyList(), report,
+                                          snode_labels, clang_labels, gotos,
+                                          empty_labels, loop_depth + 1,
+                                          switch_depth, "for");
+                return;
+            }
+            if (auto *sw = node->dyn_cast< SSwitch >()) {
+                ++report.emitted_switches;
+                if (!sw->Discriminant()) {
+                    AddSNodeDiagnostic(
+                        report,
+                        std::string("switch without discriminant in ")
+                            + context);
+                }
+                for (const auto &c : sw->Cases()) {
+                    if (c.body_list.empty()) {
+                        AddSNodeDiagnostic(
+                            report,
+                            std::string("empty switch case body in ")
+                                + context);
+                    }
+                    ValidateSNodeSeqRecursive(c.body_list, report, snode_labels,
+                                              clang_labels, gotos, empty_labels,
+                                              loop_depth, switch_depth + 1,
+                                              "switch-case");
+                }
+                ValidateSNodeSeqRecursive(sw->DefaultBodyList(), report,
+                                          snode_labels, clang_labels, gotos,
+                                          empty_labels, loop_depth,
+                                          switch_depth + 1, "switch-default");
+                return;
+            }
+        }
+
+        // True if a raw clang::Stmt subtree contains any LabelStmt.
+        bool ClangStmtContainsLabel(clang::Stmt *s) {
+            if (!s) { return false; }
+            if (llvm::isa< clang::LabelStmt >(s)) { return true; }
+            for (auto *child : s->children()) {
+                if (ClangStmtContainsLabel(child)) { return true; }
+            }
+            return false;
+        }
+
+        // A control-flow landing point: an SNode that a goto/branch may
+        // jump *into*, so a preceding terminator does not make it
+        // unreachable.  This is an SLabel, or — on the current mixed
+        // representation where labels still live as raw clang::LabelStmt
+        // inside opaque SStmt payloads — an SStmt that carries a label.
+        bool SNodeIsLabelLandingPoint(const SNode *node) {
+            if (!node) { return false; }
+            if (node->dyn_cast< SLabel >()) { return true; }
+            if (auto *st = node->dyn_cast< SStmt >()) {
+                return ClangStmtContainsLabel(st->Stmt());
+            }
+            return false;
+        }
+
+        void ValidateSNodeSeqRecursive(
+            const std::vector< SNode * > &seq,
+            SNodeValidationReport &report,
+            std::unordered_map< std::string, unsigned > &snode_labels,
+            std::unordered_map< std::string, unsigned > &clang_labels,
+            std::unordered_map< std::string, unsigned > &gotos,
+            std::unordered_set< std::string > &empty_labels,
+            unsigned loop_depth,
+            unsigned switch_depth,
+            const char *context
+        ) {
+            bool after_terminator = false;
+            for (const auto *node : seq) {
+                if (!node) { continue; }
+                if (after_terminator) {
+                    if (SNodeIsLabelLandingPoint(node)) {
+                        after_terminator = false;
+                    } else {
+                        AddSNodeDiagnostic(
+                            report,
+                            std::string("unreachable SNode ") + node->KindName()
+                                + " after terminator in " + context);
+                    }
+                }
+                ValidateSNodeRecursive(node, report, snode_labels, clang_labels,
+                                       gotos, empty_labels, loop_depth,
+                                       switch_depth, context);
+                if (SNodeTerminatesForValidation(node)) {
+                    after_terminator = true;
+                }
+            }
+        }
+
+    } // namespace
+
+    SNodeValidationReport
+    ValidateSNodeTree(const std::vector< SNode * > &root,
+                      const CGraph *source_graph) {
+        SNodeValidationReport report;
+
+        std::unordered_set< std::string > source_labels;
+        if (source_graph) {
+            report.input_blocks = source_graph->nodes.size();
+            for (const auto &node : source_graph->nodes) {
+                if (!node.original_label.empty()) {
+                    source_labels.insert(node.original_label);
+                }
+                // A source block is a switch when it has an explicit
+                // case list OR more than two successors — matching the
+                // CGraph IsSwitchOut() predicate the structurer uses to
+                // synthesize SSwitch nodes.  Counting only blocks with a
+                // populated switch_cases vector under-counts multi-way
+                // branches and yields false "extra switch" diagnostics.
+                if (node.IsSwitchOut()) {
+                    ++report.input_switches;
+                }
+            }
+        }
+
+        std::unordered_map< std::string, unsigned > snode_labels;
+        std::unordered_map< std::string, unsigned > clang_labels;
+        std::unordered_map< std::string, unsigned > gotos;
+        std::unordered_set< std::string > empty_labels;
+        ValidateSNodeSeqRecursive(root, report, snode_labels, clang_labels,
+                                  gotos, empty_labels, /*loop_depth=*/0,
+                                  /*switch_depth=*/0, "root");
+
+        for (const auto &[target, count] : gotos) {
+            report.input_gotos += count;
+            // Targets resolved by either layer: a lifted SLabel OR a raw
+            // clang::LabelStmt still inside an opaque SStmt payload (e.g.,
+            // a label sitting inside an un-lifted while/for body or a
+            // switch that TryLiftSwitch declined to lift).  Either anchors
+            // the goto.  Without the clang_labels arm, the validator
+            // produced a spurious dangling-goto diagnostic and a
+            // LOG(FATAL) under --verify-no-node-loss on any function with
+            // such an opaque control-flow payload.
+            if (!snode_labels.contains(target)
+                && !clang_labels.contains(target)) {
+                report.dangling_gotos.push_back(target);
+                report.missing_labels.push_back(target);
+                AddSNodeDiagnostic(report, "dangling goto target " + target);
+            }
+        }
+
+        for (const auto &[label, count] : snode_labels) {
+            if (count > 1) {
+                report.duplicate_labels.push_back(label);
+                AddSNodeDiagnostic(report,
+                                   "duplicate label definition " + label);
+            }
+            auto clang_label = clang_labels.find(label);
+            if (clang_label != clang_labels.end()) {
+                report.duplicate_labels.push_back(label);
+                AddSNodeDiagnostic(
+                    report, "SLabel also defined by Clang LabelStmt " + label);
+            }
+            // Note: a structured-vs-source label-set comparison is
+            // intentionally NOT performed here.  The structurer mutates
+            // the source CGraph in place (collapse) and synthesizes its
+            // own labels (loop headers, ...), so source `original_label`
+            // membership is not a sound basis for an "extra label"
+            // diagnostic.  Verification stays self-contained on the
+            // SNode tree; cross-graph payload retention is left to a
+            // dedicated later verifier.
+            (void) source_labels;
+            if (empty_labels.contains(label)
+                && gotos.find(label) == gotos.end())
+            {
+                AddSNodeDiagnostic(report,
+                                   "empty unreferenced label " + label);
+            }
+        }
+
+        for (const auto &[label, count] : clang_labels) {
+            if (count > 1) {
+                report.duplicate_labels.push_back(label);
+                AddSNodeDiagnostic(
+                    report,
+                    "duplicate Clang LabelStmt definition " + label);
+            }
+            // A raw clang::LabelStmt that NormalizeRawControlFlow chose
+            // to leave inside an opaque SStmt payload (the
+            // ClangStmtContainsControlFlow == false compound-stmt path or
+            // a TryLiftSwitch-declined switch) is still a legitimate
+            // anchor for a raw clang::GotoStmt in the same payload.
+            // Only complain when the label has no SLabel form AND no
+            // clang-level goto references it — otherwise the validator
+            // emits a spurious diagnostic and a LOG(FATAL) under
+            // --verify-no-node-loss.
+            if (!snode_labels.contains(label)
+                && gotos.find(label) == gotos.end()) {
+                AddSNodeDiagnostic(
+                    report, "Clang LabelStmt has no matching SLabel " + label);
+            }
+        }
+
+        // Note: a structured-vs-source switch-count comparison is
+        // intentionally NOT performed here.  StructureAll collapses
+        // source switch blocks in place and consumes their switch_cases
+        // metadata, so the post-structuring CGraph no longer reflects
+        // the original switch count.  `input_switches` is still recorded
+        // for informational reporting only.  A sound switch-retention
+        // check belongs in a dedicated cross-graph verifier.
+
+        std::sort(report.missing_labels.begin(), report.missing_labels.end());
+        std::sort(report.extra_labels.begin(), report.extra_labels.end());
+        std::sort(report.dangling_gotos.begin(), report.dangling_gotos.end());
+        std::sort(report.duplicate_labels.begin(),
+                  report.duplicate_labels.end());
+        return report;
+    }
+
     // MergeConditionalForwarders — pre-pass
-    // ---------------------------------------------------------------
     //
     // Absorb conditional successor nodes into their unconditional
     // predecessors when the successor has a sole predecessor.
@@ -232,10 +659,7 @@ namespace patchestry::ast {
         n.is_conditional = n.succs.size() >= 2;
     }
 
-    // ---------------------------------------------------------------
-    // ---------------------------------------------------------------
     // ComputeDominatorTree
-    // ---------------------------------------------------------------
     //
     // Cooper-Harvey-Kennedy iterative dominator algorithm.
     //
@@ -325,14 +749,10 @@ namespace patchestry::ast {
         }
     }
 
-    // ---------------------------------------------------------------
-    // ComputePostDominatorTree — pre-pass Phase 6
-    // ---------------------------------------------------------------
-    //
-    // Same Cooper-Harvey-Kennedy algorithm as Phase 5, but on the
-    // reversed CFG.  A virtual exit node is added: all terminal
-    // nodes (no active successors) are treated as predecessors of
-    // the virtual exit in the reversed graph.
+    // ComputePostDominatorTree — same Cooper-Harvey-Kennedy algorithm as
+    // the dominator pass, but on the reversed CFG.  A virtual exit node
+    // is added: all terminal nodes (no active successors) are treated as
+    // predecessors of the virtual exit in the reversed graph.
 
     void CFGStructure::ComputePostDominatorTree() {
         const size_t n = graph_.nodes.size();
@@ -489,9 +909,156 @@ namespace patchestry::ast {
         }
     }
 
-    // ---------------------------------------------------------------
+    // CanonicalizeTopology — deterministic ordering
+    //
+    // Predecessor order is not semantic, but later helpers scan it
+    // linearly.  Keep it stable.  Do not sort conditional or switch
+    // successors: those carry branch/case semantics.
+
+    void CFGStructure::CanonicalizeTopology() {
+        for (auto &node : graph_.nodes) {
+            std::sort(node.preds.begin(), node.preds.end());
+            node.preds.erase(std::unique(node.preds.begin(),
+                                         node.preds.end()),
+                             node.preds.end());
+
+            // Successor order is intentionally preserved.  Conditional
+            // nodes use succs[0]/succs[1] as semantic false/true arms,
+            // switch nodes index cases into succs, and fallback nodes use
+            // first-seen order when choosing residual gotos.
+        }
+    }
+
+    // MarkIrreducibleSCCs — region classification
+    //
+    // A reducible loop-like SCC has one entry node from outside the
+    // component.  Multiple-entry components are recorded so fallback
+    // and diagnostics can keep them visible instead of silently treating
+    // them as ordinary natural loops.
+
+    bool CFGStructure::MarkIrreducibleSCCs() {
+        const size_t n = graph_.nodes.size();
+        std::vector<int> index(n, -1);
+        std::vector<int> lowlink(n, 0);
+        std::vector<bool> on_stack(n, false);
+        std::vector<size_t> stack;
+        int next_index = 0;
+        bool found_irreducible = false;
+
+        auto mark_component = [&](const std::vector<size_t> &component) {
+            std::unordered_set<size_t> member(component.begin(),
+                                             component.end());
+            std::unordered_set<size_t> entry_nodes;
+            for (size_t nid : component) {
+                for (size_t pred : graph_.Node(nid).preds) {
+                    if (pred >= graph_.nodes.size()) continue;
+                    if (graph_.Node(pred).IsCollapsed()) continue;
+                    if (!member.contains(pred))
+                        entry_nodes.insert(nid);
+                }
+            }
+            if (entry_nodes.size() <= 1) return;
+
+            found_irreducible = true;
+            for (size_t nid : component) {
+                graph_.Node(nid).region_kind =
+                    CNode::RegionKind::kIrreducible;
+            }
+        };
+
+        std::function<void(size_t)> strongconnect = [&](size_t v) {
+            index[v] = lowlink[v] = next_index++;
+            stack.push_back(v);
+            on_stack[v] = true;
+
+            for (size_t w : graph_.Node(v).succs) {
+                if (w >= n || graph_.Node(w).IsCollapsed()) continue;
+                if (index[w] == -1) {
+                    strongconnect(w);
+                    lowlink[v] = std::min(lowlink[v], lowlink[w]);
+                } else if (on_stack[w]) {
+                    lowlink[v] = std::min(lowlink[v], index[w]);
+                }
+            }
+
+            if (lowlink[v] != index[v]) return;
+
+            std::vector<size_t> component;
+            while (!stack.empty()) {
+                size_t w = stack.back();
+                stack.pop_back();
+                on_stack[w] = false;
+                component.push_back(w);
+                if (w == v) break;
+            }
+
+            if (component.size() > 1)
+                mark_component(component);
+        };
+
+        for (const auto &node : graph_.nodes) {
+            if (node.IsCollapsed()) continue;
+            if (index[node.id] == -1)
+                strongconnect(node.id);
+        }
+        return found_irreducible;
+    }
+
+    // ClassifyRegions — region classification
+
+    void CFGStructure::ClassifyRegions() {
+        for (auto &node : graph_.nodes) {
+            node.region_kind = CNode::RegionKind::kUnknown;
+            node.branch_roles = CNode::BranchRoles{};
+        }
+
+        for (auto &node : graph_.nodes) {
+            if (node.IsCollapsed()) continue;
+            if (node.IsSwitchOut())
+                node.region_kind = CNode::RegionKind::kSwitch;
+        }
+
+        for (auto *lb : loop_order_) {
+            if (!lb) continue;
+            std::vector<size_t> body;
+            lb->FindBase(graph_, body);
+            for (size_t nid : body) {
+                auto &node = graph_.Node(nid);
+                if (node.IsCollapsed()) continue;
+                if (node.region_kind == CNode::RegionKind::kSwitch)
+                    continue;
+                node.region_kind = CNode::RegionKind::kLoop;
+            }
+            for (size_t nid : body)
+                graph_.Node(nid).mark = false;
+        }
+
+        MarkIrreducibleSCCs();
+
+        constexpr size_t kNone = CNode::kNone;
+        for (auto &node : graph_.nodes) {
+            if (node.IsCollapsed()) continue;
+            if (node.region_kind == CNode::RegionKind::kUnknown)
+                node.region_kind = CNode::RegionKind::kAcyclic;
+
+            if (!node.is_conditional || node.succs.size() != 2)
+                continue;
+
+            size_t ipd = (node.id < ipdom_.size()) ? ipdom_[node.id] : kNone;
+            if (ipd == node.succs[0]) {
+                node.branch_roles.merge = node.succs[0];
+                node.branch_roles.body = node.succs[1];
+                node.branch_roles.exit = node.succs[0];
+                node.branch_roles.normalized = true;
+            } else if (ipd == node.succs[1]) {
+                node.branch_roles.merge = node.succs[1];
+                node.branch_roles.body = node.succs[0];
+                node.branch_roles.exit = node.succs[1];
+            }
+        }
+    }
+
     // NormalizeConditionPolarityIPdom — pre-pass 5
-    // ---------------------------------------------------------------
     //
     // Refine conditional polarity using the post-dominator tree.
     // If ipdom[A] == succs[1] (taken), the merge point is on the
@@ -518,6 +1085,24 @@ namespace patchestry::ast {
                 std::swap(a.succs[0], a.succs[1]);
                 std::swap(a.edge_flags[0], a.edge_flags[1]);
                 a.branch_cond = NegateExpr(ctx_, a.branch_cond);
+                // Record what we did so ValidateCGraph's branch_swaps /
+                // condition_negations counters and the "negated condition
+                // without branch swap" invariant check at CGraph.cpp:513
+                // see actual transitions.  These flags default to false
+                // on construction and no other pass writes them, so
+                // omitting the assignment here leaves the validator
+                // silently inert for every function this pass mutates.
+                a.branch_roles.swapped           = true;
+                a.branch_roles.condition_negated = true;
+                // ClassifyRegions wrote merge/body/exit using pre-swap
+                // node IDs and intentionally left `normalized` false for
+                // the ipd==succs[1] arm, deferring the flip to this pass.
+                // merge/body/exit are node IDs (not slot indices), so the
+                // swap above does not invalidate them — merge still equals
+                // the post-dominator, which now sits at the new succs[0].
+                // Setting `normalized` here lets ValidateCGraph count this
+                // node and run the "merge on succs[0]" invariant on it.
+                a.branch_roles.normalized        = true;
 
                 if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(a.terminal)) {
                     auto loc = ifs->getIfLoc();
@@ -531,19 +1116,18 @@ namespace patchestry::ast {
                         ifs->getThen());
                 }
             }
-            // Neither succ is ipdom — leave as-is (Phase 2 RPO heuristic)
+            // Neither succ is ipdom — leave as-is (RPO-order heuristic)
         }
     }
 
-    // ---------------------------------------------------------------
     // StructureAll — main driver
-    // ---------------------------------------------------------------
 
     void CFGStructure::StructureAll() {
         if (graph_.nodes.empty()) return;
 
         // Pre-pass 1: merge conditional forwarders into predecessors.
         MergeConditionalForwarders(graph_);
+        CanonicalizeTopology();
 
         // Pre-pass 2: compute immediate dominators.
         // RPO positions are derived from node indices (already RPO-ordered
@@ -561,10 +1145,14 @@ namespace patchestry::ast {
         MarkBackEdges(graph_);
         OrderLoops();
 
-        // Pre-pass 5: refine polarity using ipdom.
+        // Pre-pass 5: classify regions and refine polarity using ipdom.
         // Runs AFTER loop detection so loop body membership is stable.
+        // ClassifyRegions records loop/switch/irreducible kinds and
+        // branch roles for diagnostics and residual goto fallback.
         // Loop rules handle both polarities dynamically (s1_in_body check).
+        ClassifyRegions();
         NormalizeConditionPolarityIPdom();
+        CanonicalizeTopology();
 
         // Hard termination bound: each successful rule reduces active
         // count, so 2 * initial count is generous.
@@ -680,18 +1268,14 @@ namespace patchestry::ast {
         }
     }
 
-    // ---------------------------------------------------------------
     // OrderLoops
-    // ---------------------------------------------------------------
 
     void CFGStructure::OrderLoops() {
         OrderLoopBodies(graph_, loop_body_storage_);
         for (auto &lb : loop_body_storage_) { loop_order_.push_back(&lb); }
     }
 
-    // ---------------------------------------------------------------
     // StructureInternal — one round of rule matching
-    // ---------------------------------------------------------------
 
     bool CFGStructure::StructureInternal() {
         auto active = graph_.ActiveIds();
@@ -736,14 +1320,12 @@ namespace patchestry::ast {
         return false;
     }
 
-    // ---------------------------------------------------------------
     // RuleBlockCat — sequential merge
     //
     // Pattern: Node A has exactly 1 successor B, and B has exactly 1
     //          predecessor A.  A is not a conditional or switch.
     //          Neither is already collapsed.
     // Action:  Merge into a sequence, collapse via IdentifyInternal.
-    // ---------------------------------------------------------------
 
     bool CFGStructure::RuleBlockCat(size_t id) {
         auto &a = graph_.Node(id);
@@ -804,7 +1386,6 @@ namespace patchestry::ast {
         return true;
     }
 
-    // ---------------------------------------------------------------
     // Helper: check if the only "real" predecessor of `node_id` is
     // `expected_pred`.  A predecessor is "real" if it is not collapsed
     // and the edge to node_id is not marked as a goto.  Goto-edge
@@ -814,7 +1395,6 @@ namespace patchestry::ast {
     // rules: a node may have multiple predecessors in the graph, but
     // if all the extra ones are goto edges or collapsed nodes, the
     // node is effectively single-predecessor for structuring purposes.
-    // ---------------------------------------------------------------
 
     bool CFGStructure::HasSoleRealPredecessor(size_t node_id,
                                                     size_t expected_pred) {
@@ -841,9 +1421,7 @@ namespace patchestry::ast {
         return true;
     }
 
-    // ---------------------------------------------------------------
     // WrapWithPriorContent — shared helper for all if/if-else rules
-    // ---------------------------------------------------------------
 
     std::vector< SNode * > CFGStructure::WrapWithPriorContent(
         size_t id, SNode *child) {
@@ -874,7 +1452,6 @@ namespace patchestry::ast {
         return result;
     }
 
-    // ---------------------------------------------------------------
     // RuleBlockProperIf — if-then (no else)
     //
     // Pattern: Node A is conditional with 2 successors (T, F).
@@ -887,7 +1464,6 @@ namespace patchestry::ast {
     // Also handles the symmetric case: F is the body and T is the
     // merge — the condition is negated so the body is always the
     // then-branch.
-    // ---------------------------------------------------------------
 
     bool CFGStructure::RuleBlockProperIf(size_t id) {
         auto &a = graph_.Node(id);
@@ -903,9 +1479,10 @@ namespace patchestry::ast {
         auto &f = graph_.Node(f_id);
         if (t.IsCollapsed() || f.IsCollapsed()) return false;
 
-        // Use ipdom to determine orientation.  After Phase 7 normalization,
-        // ipdom[A] == succs[0] (merge on not-taken) for most nodes, so
-        // Case 1 (body=taken) should fire.  Skip Case 2 when ipdom confirms.
+        // Use ipdom to determine orientation.  After condition-polarity
+        // normalization, ipdom[A] == succs[0] (merge on not-taken) for
+        // most nodes, so Case 1 (body=taken) should fire.  Skip Case 2
+        // when ipdom confirms.
         constexpr size_t kNone = CNode::kNone;
         size_t ipd = (!ipdom_.empty() && id < ipdom_.size()) ? ipdom_[id] : kNone;
         bool skip_case1 = (ipd != kNone && ipd == t_id);  // merge on taken → body on not-taken
@@ -1155,7 +1732,6 @@ namespace patchestry::ast {
         return false;
     }
 
-    // ---------------------------------------------------------------
     // RuleBlockPostDomIf — post-dominator-guided if-then
     //
     // Pattern: Node A is conditional with 2 successors.
@@ -1171,7 +1747,6 @@ namespace patchestry::ast {
     //
     // Only fires when the body arm has a single succ (simple body),
     // to avoid absorbing complex multi-exit bodies.
-    // ---------------------------------------------------------------
 
     bool CFGStructure::RuleBlockPostDomIf(size_t id) {
         auto &a = graph_.Node(id);
@@ -1299,7 +1874,6 @@ namespace patchestry::ast {
         return false;
     }
 
-    // ---------------------------------------------------------------
     // RuleBlockIfElse — if-then-else (diamond)
     //
     // Pattern: Node A is conditional with 2 successors (T, F).
@@ -1309,13 +1883,18 @@ namespace patchestry::ast {
     //          M is not collapsed.
     // Action:  Create SIfThenElse(cond, then_body, else_body).
     //          Collapse {A, T, F} with exit to M.
-    // ---------------------------------------------------------------
 
     /// Helper: check if node d is dominated by node root via idom_ chain.
+    /// Bounded by idom_.size() so a hypothetical idom_ cycle (which
+    /// shouldn't happen in a well-formed dominator tree, but the
+    /// validator at CGraph.cpp:469 confirms parallel invariants can
+    /// break) does not livelock the structurer.
     bool CFGStructure::IsDominatedBy(size_t d, size_t root) const {
         constexpr size_t kNone = CNode::kNone;
-        while (d != root) {
+        const size_t max_steps = idom_.size();
+        for (size_t steps = 0; d != root; ++steps) {
             if (d == kNone) return false;
+            if (steps >= max_steps) return false;  // cycle guard
             size_t up = idom_[d];
             if (up == d) return false;  // reached entry without finding root
             d = up;
@@ -1413,7 +1992,6 @@ namespace patchestry::ast {
         return false;
     }
 
-    // ---------------------------------------------------------------
     // RuleBlockIfReturn — if-then-else where both arms terminate
     //
     // Pattern: Node A is conditional with 2 successors (T, F).
@@ -1422,7 +2000,6 @@ namespace patchestry::ast {
     //          or are dead-ends).  No merge point is needed.
     // Action:  Create SIfThenElse(cond, then_body, else_body).
     //          Collapse {A, T, F} — representative has no successors.
-    // ---------------------------------------------------------------
 
     bool CFGStructure::RuleBlockIfReturn(size_t id) {
         auto &a = graph_.Node(id);
@@ -1465,10 +2042,8 @@ namespace patchestry::ast {
         return true;
     }
 
-    // ---------------------------------------------------------------
     // Loop helper: find the LoopBody whose head matches `id`.
     // Returns nullptr if none found.
-    // ---------------------------------------------------------------
 
     /// Resolve collapsed body nodes to their active representatives.
     /// Collapsed nodes are replaced by their representative (following
@@ -1512,12 +2087,10 @@ namespace patchestry::ast {
         return nullptr;
     }
 
-    // ---------------------------------------------------------------
     // Loop helper: build the body SNode for a loop.
     //
     // Collects body nodes (excluding the header) in RPO-ish order,
     // strips terminals from interior nodes.
-    // ---------------------------------------------------------------
 
     std::vector< SNode * > CFGStructure::BuildLoopBodySNode(
         const std::vector<size_t> &body, size_t header_id,
@@ -1707,7 +2280,6 @@ namespace patchestry::ast {
         return factory_.MakeSeq(std::move(children));
     }
 
-    // ---------------------------------------------------------------
     // RuleBlockWhileDo — while loop
     //
     // Pattern: Node H is the head of a detected LoopBody.
@@ -1715,7 +2287,6 @@ namespace patchestry::ast {
     //          inside the loop body, the other is the exit.
     // Action:  Create SWhile(H.branch_cond, body).
     //          Collapse all body nodes via IdentifyInternal.
-    // ---------------------------------------------------------------
 
     bool CFGStructure::RuleBlockWhileDo(size_t id) {
         auto &h = graph_.Node(id);
@@ -1862,7 +2433,6 @@ namespace patchestry::ast {
         return true;
     }
 
-    // ---------------------------------------------------------------
     // RuleBlockDoWhile — do-while loop
     //
     // Pattern: Node H is the head of a detected LoopBody.
@@ -1870,7 +2440,6 @@ namespace patchestry::ast {
     //          The loop has a single tail T that IS conditional.
     //          T's back-edge goes to H, other edge is the exit.
     // Action:  Create SDoWhile(body, T.branch_cond).
-    // ---------------------------------------------------------------
 
     bool CFGStructure::RuleBlockDoWhile(size_t id) {
         auto &h = graph_.Node(id);
@@ -1951,14 +2520,12 @@ namespace patchestry::ast {
         return true;
     }
 
-    // ---------------------------------------------------------------
     // RuleBlockInfLoop — infinite loop (no conditional exit)
     //
     // Pattern: Node H is the head of a detected LoopBody.
     //          The exit_block is kNone (no exit found).
     //          All paths loop back to H.
     // Action:  Create SWhile(true, body) — infinite loop.
-    // ---------------------------------------------------------------
 
     bool CFGStructure::RuleBlockInfLoop(size_t id) {
         auto &h = graph_.Node(id);
@@ -2040,7 +2607,6 @@ namespace patchestry::ast {
         return true;
     }
 
-    // ---------------------------------------------------------------
     // RuleBlockSwitch — switch statement
     //
     // Pattern: Node A has IsSwitchOut() (non-empty switch_cases or
@@ -2048,7 +2614,6 @@ namespace patchestry::ast {
     // Action:  Create SSwitch with SCase entries from switch_cases
     //          metadata.  Case bodies are built from target blocks.
     //          Collapse A + case body nodes via IdentifyInternal.
-    // ---------------------------------------------------------------
 
     bool CFGStructure::RuleBlockSwitch(size_t id) {
         auto &a = graph_.Node(id);
@@ -2295,7 +2860,6 @@ namespace patchestry::ast {
         return true;
     }
 
-    // ---------------------------------------------------------------
     // SelectAndMarkGotoEdge — use TraceDAG to find the least-disruptive
     // edge and mark it as a goto.
     //
@@ -2305,7 +2869,6 @@ namespace patchestry::ast {
     // from the graph — it stays as a goto in the emitted output.
     //
     // Returns true if an edge was selected.
-    // ---------------------------------------------------------------
 
     bool CFGStructure::SelectAndMarkGotoEdge() {
         auto active = graph_.ActiveIds();
@@ -2406,11 +2969,9 @@ namespace patchestry::ast {
         return false;
     }
 
-    // ---------------------------------------------------------------
     // BuildLeafSNode — spill a CNode's stmts into SStmt siblings,
     //                  optionally wrapped in an SLabel if the node
     //                  has a label.
-    // ---------------------------------------------------------------
 
     std::vector< SNode * > CFGStructure::BuildLeafSNode(
         size_t id, bool include_terminal) {
@@ -2454,9 +3015,7 @@ namespace patchestry::ast {
         return body;
     }
 
-    // ---------------------------------------------------------------
     // BuildBodySNode — sequence of leaf SNodes from a list of node ids.
-    // ---------------------------------------------------------------
 
     std::vector< SNode * > CFGStructure::BuildBodySNode(
         const std::vector<size_t> &ids) {
@@ -2465,11 +3024,9 @@ namespace patchestry::ast {
         return factory_.MakeSeq(std::move(children));
     }
 
-    // ---------------------------------------------------------------
     // InlineResidualGotos — post-structuring cleanup.  Replaces an
     // SGoto whose target SLabel is a sibling referenced only by that
     // goto with the label's body, and removes the label.
-    // ---------------------------------------------------------------
 
     namespace {
 
@@ -2542,7 +3099,6 @@ namespace patchestry::ast {
 
     } // anonymous namespace
 
-    // ---------------------------------------------------------------
     // EliminateGotoToNextLabel — SNode post-pass
     //
     // Walk a sibling sequence.  For each child followed by an SLabel,
@@ -2550,7 +3106,6 @@ namespace patchestry::ast {
     // the deepest trailing stmt.  If it's a goto (SGoto or
     // clang::GotoStmt) targeting the next label, or an IfStmt with one
     // arm being such a goto, eliminate it.
-    // ---------------------------------------------------------------
 
     namespace {
 
@@ -2829,7 +3384,6 @@ namespace patchestry::ast {
         return any_changed;
     }
 
-    // ---------------------------------------------------------------
     // InlineCrossScopeSingleRef — cross-scope single-ref label inliner
     //
     // Extends InlineResidualGotos to the case where the goto and its
@@ -2837,7 +3391,6 @@ namespace patchestry::ast {
     // exactly one goto reference, its body always terminates, and no
     // fallthrough can reach the label, the body is moved (not cloned)
     // into the goto's slot and the label node is deleted.
-    // ---------------------------------------------------------------
 
     namespace {
 
@@ -3129,33 +3682,232 @@ namespace patchestry::ast {
             });
     }
 
-    // ---------------------------------------------------------------
     // ScopeifyIfGotos — convert if(cond) goto L; stmts; L: → if(!cond){stmts}
     //
-    // Scan siblings for: children[i] = SIfThenElse(cond, SGoto("L"), null)
+    // Scan body-vector children for: children[i] = SIfThenElse(cond, SGoto("L"), null)
     // followed by intermediate children, then children[j] = SLabel("L", body).
     // When label "L" has exactly one goto reference and no intermediate
     // children contain SLabel nodes, negate the condition, wrap the
     // intermediates in a scoped if(!cond){...}, and inline the label body.
-    // ---------------------------------------------------------------
+    //
+    // The region-aware variant additionally allows intermediate labels to
+    // remain inside the scoped region as long as every goto reference to
+    // those labels also lives inside that region — preserving local label
+    // traffic while refusing to move labels that are externally jumped to.
 
     namespace {
 
-        bool ScopeifyHasLabel(SNode *node) {
-            if (!node) return false;
-            if (node->dyn_cast<SLabel>()) return true;
+        void CollectScopeifyLabels(
+            SNode *node,
+            std::unordered_set<std::string_view> &labels
+        ) {
+            if (!node) return;
+            if (auto *lbl = node->dyn_cast<SLabel>())
+                labels.insert(lbl->Name());
             // Note: this scan deliberately does NOT inspect clang::LabelStmt
             // inside an SStmt (unlike SubtreeHasLabel).  Preserving that
             // narrower scope; the SStmt leaf has no SNode children so
-            // the visitor simply returns false for it.
-            bool found = false;
-            node->for_each_child([&](SNode *c) {
-                if (!found && ScopeifyHasLabel(c)) found = true;
-            });
-            return found;
+            // the visitor simply stops there.
+            node->for_each_child(
+                [&](SNode *c) { CollectScopeifyLabels(c, labels); });
         }
 
+        /// True when every label appearing inside `region` has all of its
+        /// goto references inside `region` as well — i.e. the region is
+        /// closed with respect to its own labels and may be moved or
+        /// rewrapped without breaking goto/label pairing.
+        bool ScopeifyLabelsAreRegionLocal(
+            const std::vector<SNode *> &region,
+            const std::unordered_map<std::string_view, int> &refs
+        ) {
+            std::unordered_set<std::string_view> labels;
+            std::unordered_map<std::string_view, int> region_refs;
 
+            for (SNode *node : region) {
+                CollectScopeifyLabels(node, labels);
+                CountGotoRefs(node, region_refs);
+            }
+
+            for (auto label : labels) {
+                int global_count = 0;
+                if (auto it = refs.find(label); it != refs.end())
+                    global_count = it->second;
+
+                int region_count = 0;
+                if (auto it = region_refs.find(label);
+                    it != region_refs.end())
+                    region_count = it->second;
+
+                if (global_count != region_count)
+                    return false;
+            }
+            return true;
+        }
+
+        std::string ScopeifyGotoTarget(SNode *node) {
+            if (!node) return {};
+            if (auto *g = node->dyn_cast<SGoto>())
+                return std::string(g->Target());
+            if (auto *st = node->dyn_cast<SStmt>()) {
+                if (auto *gs = llvm::dyn_cast_or_null<clang::GotoStmt>(
+                        st->Stmt()))
+                    return gs->getLabel()->getName().str();
+            }
+            return {};
+        }
+
+        std::string ScopeifyTrailingGotoTarget(
+            const std::vector<SNode *> &body
+        ) {
+            if (body.empty())
+                return {};
+            return ScopeifyGotoTarget(body.back());
+        }
+
+        std::string ScopeifySingleGotoListTarget(
+            const std::vector<SNode *> &body
+        ) {
+            if (body.size() != 1)
+                return {};
+            return ScopeifyGotoTarget(body.front());
+        }
+
+        bool RefCountIsOne(
+            const std::unordered_map<std::string_view, int> &refs,
+            std::string_view label
+        ) {
+            auto it = refs.find(label);
+            return it != refs.end() && it->second == 1;
+        }
+
+        size_t FindDirectLabelIndex(
+            const std::vector<SNode *> &children,
+            size_t begin,
+            std::string_view target
+        ) {
+            for (size_t i = begin; i < children.size(); ++i) {
+                if (auto *lbl = children[i]->dyn_cast<SLabel>())
+                    if (lbl->Name() == target)
+                        return i;
+            }
+            return children.size();
+        }
+
+        bool SeqHasLabel(const std::vector<SNode *> &seq) {
+            for (SNode *node : seq)
+                if (SubtreeHasLabel(node))
+                    return true;
+            return false;
+        }
+
+        // Structure a nested two-way if-goto / goto dispatch:
+        //
+        //   if (outer) { ...; if (c) goto T; else goto E; }
+        //   goto J;
+        // T: then_body;
+        // E: else_body;
+        // J: join_body;
+        //
+        // into:
+        //
+        //   if (outer) { ...; if (c) { then_body } else_body }
+        //   join_body;
+        //
+        // Only fires when T, E and J are all single-ref, region-local
+        // labels arranged contiguously right after the dispatch.
+        bool ScopeifyTwoWayLocalDispatchInSeq(
+            std::vector<SNode *> &children,
+            SNodeFactory &factory,
+            clang::ASTContext &ctx,
+            const std::unordered_map<std::string_view, int> &refs
+        ) {
+            for (size_t i = 0; i + 1 < children.size(); ++i) {
+                auto *outer = children[i]->dyn_cast<SIfThenElse>();
+                if (!outer || !outer->Cond() || outer->ThenList().empty())
+                    continue;
+
+                std::string join_target = ScopeifyGotoTarget(children[i + 1]);
+                if (join_target.empty())
+                    continue;
+                std::string_view join_view(join_target);
+                if (!RefCountIsOne(refs, join_view))
+                    continue;
+
+                auto *dispatch =
+                    outer->ThenList().back()->dyn_cast<SIfThenElse>();
+                if (!dispatch || !dispatch->Cond())
+                    continue;
+
+                std::string then_target =
+                    ScopeifySingleGotoListTarget(dispatch->ThenList());
+                std::string else_target =
+                    ScopeifySingleGotoListTarget(dispatch->ElseList());
+                if (then_target.empty() || else_target.empty()
+                    || then_target == else_target)
+                    continue;
+
+                std::string_view then_view(then_target);
+                std::string_view else_view(else_target);
+                if (!RefCountIsOne(refs, then_view)
+                    || !RefCountIsOne(refs, else_view))
+                    continue;
+
+                size_t then_idx =
+                    FindDirectLabelIndex(children, i + 2, then_view);
+                size_t else_idx =
+                    FindDirectLabelIndex(children, i + 2, else_view);
+                size_t join_idx =
+                    FindDirectLabelIndex(children, i + 2, join_view);
+                if (then_idx >= children.size() || else_idx >= children.size()
+                    || join_idx >= children.size())
+                    continue;
+
+                size_t first_idx = std::min(then_idx, else_idx);
+                size_t second_idx = std::max(then_idx, else_idx);
+                if (first_idx != i + 2 || second_idx != first_idx + 1
+                    || join_idx != second_idx + 1)
+                    continue;
+
+                auto *first_label = children[first_idx]->as<SLabel>();
+                auto *second_label = children[second_idx]->as<SLabel>();
+                if (SeqHasLabel(first_label->BodyList())
+                    || SeqHasLabel(second_label->BodyList()))
+                    continue;
+
+                std::vector<SNode *> then_body = outer->ThenList();
+                then_body.pop_back();
+
+                std::vector<SNode *> first_body =
+                    std::move(first_label->BodyList());
+                std::vector<SNode *> second_body =
+                    std::move(second_label->BodyList());
+                std::vector<SNode *> join_body =
+                    std::move(children[join_idx]->as<SLabel>()->BodyList());
+
+                clang::Expr *first_cond = nullptr;
+                if (first_label->Name() == then_view)
+                    first_cond = dispatch->Cond();
+                else
+                    first_cond =
+                        NegateExpr(ctx, CloneExpr(ctx, dispatch->Cond()));
+
+                then_body.push_back(factory.Make<SIfThenElse>(
+                    first_cond, std::move(first_body),
+                    std::vector<SNode *>{}));
+                then_body.insert(then_body.end(), second_body.begin(),
+                                 second_body.end());
+                then_body = factory.MakeSeq(std::move(then_body));
+                outer->SetThenBranch(std::move(then_body));
+
+                children.erase(children.begin() + static_cast<ptrdiff_t>(i + 1),
+                               children.begin()
+                                   + static_cast<ptrdiff_t>(join_idx) + 1);
+                children.insert(children.begin() + static_cast<ptrdiff_t>(i + 1),
+                                join_body.begin(), join_body.end());
+                return true;
+            }
+            return false;
+        }
 
         bool ScopeifyInSeq(std::vector< SNode * > &children,
                            SNodeFactory &factory,
@@ -3166,48 +3918,150 @@ namespace patchestry::ast {
 
             while (changed) {
                 changed = false;
+                if (ScopeifyTwoWayLocalDispatchInSeq(
+                        children, factory, ctx, refs)) {
+                    changed = true;
+                    any_change = true;
+                    continue;
+                }
+
                 for (size_t i = 0; i < children.size(); ++i) {
-                    // Match: SIfThenElse(cond, SGoto("L"), null)
+                    // Match: SIfThenElse(cond, goto "L", optional_else)
                     auto *ite = children[i]->dyn_cast<SIfThenElse>();
-                    if (!ite || !ite->Cond() || ite->ElseBranch()) continue;
-                    auto *goto_node = ite->ThenBranch()
-                        ? ite->ThenBranch()->dyn_cast<SGoto>() : nullptr;
-                    if (!goto_node) continue;
+                    if (!ite || !ite->Cond()) continue;
 
-                    auto target = goto_node->Target();
+                    // Pattern:
+                    //   if (cond) { then_prefix; goto L; }
+                    //   skipped_region;
+                    //   L: label_body;
+                    //
+                    // With a single reference to L this is just:
+                    //   if (cond) { then_prefix; }
+                    //   else { skipped_region; }
+                    //   label_body;
+                    //
+                    // This removes common goto-over-fallthrough shapes
+                    // without moving labels that are externally targeted.
+                    if (ite->ElseList().empty()
+                        && ite->ThenList().size() > 1) {
+                        std::string trailing_target =
+                            ScopeifyTrailingGotoTarget(ite->ThenList());
+                        std::string_view trailing_view(trailing_target);
 
-                    // Find target SLabel in same sequence (forward only)
+                        size_t label_idx = children.size();
+                        if (!trailing_view.empty()) {
+                            for (size_t j = i + 1; j < children.size(); ++j) {
+                                if (auto *lbl = children[j]->dyn_cast<SLabel>()) {
+                                    if (lbl->Name() == trailing_view) {
+                                        label_idx = j;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (label_idx < children.size()) {
+                            auto rc = refs.find(trailing_view);
+                            if (rc != refs.end() && rc->second == 1) {
+                                std::vector<SNode *> region_nodes;
+                                for (size_t j = i + 1; j < label_idx; ++j)
+                                    region_nodes.push_back(children[j]);
+
+                                if (ScopeifyLabelsAreRegionLocal(
+                                        region_nodes, refs)) {
+                                    std::vector<SNode *> then_body =
+                                        ite->ThenList();
+                                    then_body.pop_back();
+                                    then_body =
+                                        factory.MakeSeq(std::move(then_body));
+
+                                    std::vector<SNode *> else_body;
+                                    else_body.reserve(label_idx - i - 1);
+                                    for (size_t j = i + 1; j < label_idx; ++j)
+                                        else_body.push_back(children[j]);
+                                    else_body =
+                                        factory.MakeSeq(std::move(else_body));
+
+                                    auto *new_if = factory.Make<SIfThenElse>(
+                                        ite->Cond(), std::move(then_body),
+                                        std::move(else_body));
+
+                                    auto *lbl = children[label_idx]->as<SLabel>();
+                                    std::vector<SNode *> replacements;
+                                    replacements.push_back(new_if);
+                                    for (SNode *c : lbl->BodyList())
+                                        replacements.push_back(c);
+
+                                    children.erase(
+                                        children.begin()
+                                            + static_cast<ptrdiff_t>(i),
+                                        children.begin()
+                                            + static_cast<ptrdiff_t>(label_idx)
+                                            + 1);
+                                    children.insert(
+                                        children.begin()
+                                            + static_cast<ptrdiff_t>(i),
+                                        replacements.begin(),
+                                        replacements.end());
+
+                                    changed = true;
+                                    any_change = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    std::string target = ScopeifyGotoTarget(
+                        ite->ThenBranch());
+                    if (target.empty()) continue;
+                    std::string_view target_view(target);
+
+                    // Find target SLabel in same body vector (forward only)
                     size_t label_idx = children.size();
                     for (size_t j = i + 1; j < children.size(); ++j) {
                         if (auto *lbl = children[j]->dyn_cast<SLabel>()) {
-                            if (lbl->Name() == target) {
+                            if (lbl->Name() == target_view) {
                                 label_idx = j;
                                 break;
                             }
                         }
                     }
                     if (label_idx >= children.size()) continue;
-                    // Adjacent — handled by EliminateGotoToNextLabel
-                    if (label_idx == i + 1) continue;
+                    const bool has_else = !ite->ElseList().empty();
+                    // Adjacent if-then without else is handled by
+                    // EliminateGotoToNextLabel.
+                    if (!has_else && label_idx == i + 1) continue;
 
                     // Single reference only
-                    auto rc = refs.find(target);
+                    auto rc = refs.find(target_view);
                     if (rc == refs.end() || rc->second != 1) continue;
 
-                    // No intermediate labels
-                    bool has_label = false;
-                    for (size_t j = i + 1; j < label_idx; ++j) {
-                        if (ScopeifyHasLabel(children[j])) {
-                            has_label = true;
-                            break;
-                        }
+                    std::vector<SNode *> region_nodes;
+                    if (has_else) {
+                        region_nodes.insert(
+                            region_nodes.end(),
+                            ite->ElseList().begin(), ite->ElseList().end());
                     }
-                    if (has_label) continue;
+                    for (size_t j = i + 1; j < label_idx; ++j)
+                        region_nodes.push_back(children[j]);
+
+                    // Intermediate labels are safe only when every goto
+                    // reference to those labels also lives inside the
+                    // region being scoped.  That preserves local label
+                    // traffic while refusing to move labels that are
+                    // externally jumped into.
+                    if (!ScopeifyLabelsAreRegionLocal(region_nodes, refs))
+                        continue;
 
                     // Build scoped body from intermediates.  MakeSeq
                     // normalizes (drops nulls).
                     std::vector<SNode *> scoped_children;
-                    scoped_children.reserve(label_idx - i - 1);
+                    scoped_children.reserve(region_nodes.size());
+                    if (has_else) {
+                        for (SNode *c : ite->ElseList())
+                            scoped_children.push_back(c);
+                    }
                     for (size_t j = i + 1; j < label_idx; ++j)
                         scoped_children.push_back(children[j]);
                     std::vector< SNode * > scoped_body =
@@ -3264,12 +4118,10 @@ namespace patchestry::ast {
         return any_changed;
     }
 
-    // ---------------------------------------------------------------
     // RemoveDeadSSeqChildren — strip unreachable siblings.  Bottom-up:
     // when child[i] always terminates, remove siblings [i+1..end) that
     // are not SLabel nodes.  SLabels are preserved — they may be goto
     // targets from other scopes.
-    // ---------------------------------------------------------------
 
     namespace {
 
@@ -3358,7 +4210,6 @@ namespace patchestry::ast {
             });
     }
 
-    // ---------------------------------------------------------------
     // ConvertGotoToBreakContinue — replace gotos to loop exit/header
     //
     // Walks the SNode tree with a scope stack of enclosing loops.
@@ -3366,7 +4217,6 @@ namespace patchestry::ast {
     //   - target matches loop ExitLabel → replace with SBreak
     //   - target matches loop HeaderLabel → replace with SContinue
     // Also handles SGoto SNodes from SelectAndMarkGotoEdge.
-    // ---------------------------------------------------------------
 
     namespace {
 
@@ -3466,13 +4316,11 @@ namespace patchestry::ast {
         return ConvertGotosInSeq(root, factory, scopes);
     }
 
-    // ---------------------------------------------------------------
     // ConvertGotoToReturn — replace goto-to-return patterns
     //
     // When an SGoto targets a label whose body is a single SReturn
     // (or a sequence whose last child is SReturn with no other control
     // flow), replace the goto with a cloned SReturn.
-    // ---------------------------------------------------------------
 
     namespace {
 
@@ -3967,10 +4815,7 @@ namespace patchestry::ast {
                 AppendStmts(factory, repl, body);
                 if (repl.empty()) continue;
 
-                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
-                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
-                           repl.begin(), repl.end());
-                i += repl.size() - 1; // skip the just-inserted siblings
+                SpliceAndAdvance(seq, i, repl);
                 changed = true;
             }
             return changed;
@@ -3989,14 +4834,12 @@ namespace patchestry::ast {
         return ReplaceGotoInSeq(root, factory, ctx, labels);
     }
 
-    // ---------------------------------------------------------------
     // RemoveUnreferencedLabels — drop SLabel nodes with zero refs.
     //
     // After ConvertGotoToReturn inlines return bodies at goto sites,
     // the original labels may have zero remaining references.  Their
     // bodies are dead code (only reachable via the now-removed label).
     // This pass removes such SLabel+body from the SNode tree.
-    // ---------------------------------------------------------------
 
     namespace {
 
@@ -4065,7 +4908,609 @@ namespace patchestry::ast {
             });
     }
 
-    // ---------------------------------------------------------------
+    // CollapsePassThroughLabels / SimplifyEmptyControlFlow /
+    // MergeRedundantGotoGuards.
+    //
+    // Labels whose body is just `goto other_label` add noise to the
+    // structured output.  CollapsePassThroughLabels retargets SGoto
+    // nodes through those aliases.  SimplifyEmptyControlFlow folds
+    // empty label wrappers onto the following sibling and deletes
+    // empty conditional shells that became no-ops.  MergeRedundantGoto-
+    // Guards merges adjacent / else-if guarded gotos that target the
+    // same label, preserving short-circuit condition order.
+
+    namespace {
+
+        // True iff \p body is a single statement that is just `goto T`,
+        // either as an SGoto node or an SStmt wrapping a clang::GotoStmt.
+        // Writes the target label name into \p target.
+        bool SinglePassThroughTarget(
+            const std::vector<SNode *> &body,
+            std::string &target
+        ) {
+            if (body.size() != 1) return false;
+
+            if (auto *g = body.front()->dyn_cast<SGoto>()) {
+                target = std::string(g->Target());
+                return true;
+            }
+
+            if (auto *st = body.front()->dyn_cast<SStmt>()) {
+                if (auto *gs = llvm::dyn_cast_or_null<clang::GotoStmt>(
+                        st->Stmt())) {
+                    assert(gs->getLabel()
+                           && "clang::GotoStmt missing target label");
+                    target = gs->getLabel()->getName().str();
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        void CollectPassThroughAliases(
+            SNode *node,
+            std::unordered_map<std::string_view, std::string> &aliases
+        ) {
+            if (!node) return;
+
+            if (auto *lbl = node->dyn_cast<SLabel>()) {
+                std::string target;
+                if (SinglePassThroughTarget(lbl->BodyList(), target))
+                    aliases[lbl->Name()] = std::move(target);
+            }
+
+            node->for_each_child(
+                [&](SNode *c) { CollectPassThroughAliases(c, aliases); });
+        }
+
+        void CollectPassThroughAliases(
+            const std::vector<SNode *> &seq,
+            std::unordered_map<std::string_view, std::string> &aliases
+        ) {
+            for (auto *c : seq) CollectPassThroughAliases(c, aliases);
+        }
+
+        // Follow an alias chain to its final target.  Returns {} if the
+        // chain is cyclic (a self-referential goto loop) so the caller
+        // leaves the goto untouched.
+        std::string ResolveAlias(
+            std::string_view start,
+            const std::unordered_map<std::string_view, std::string> &aliases
+        ) {
+            std::string current(start);
+            std::unordered_set<std::string> seen;
+            while (true) {
+                if (!seen.insert(current).second)
+                    return {};
+
+                auto it = aliases.find(current);
+                if (it == aliases.end())
+                    return current;
+                current = it->second;
+            }
+        }
+
+        bool RewriteSGotoAliases(
+            SNode *node,
+            const std::unordered_map<std::string_view, std::string> &aliases,
+            SNodeFactory &factory
+        ) {
+            if (!node) return false;
+
+            if (auto *g = node->dyn_cast<SGoto>()) {
+                std::string resolved = ResolveAlias(g->Target(), aliases);
+                if (resolved.empty() || resolved == g->Target())
+                    return false;
+                g->SetTarget(factory.Intern(resolved));
+                return true;
+            }
+
+            bool changed = false;
+            node->for_each_child([&](SNode *c) {
+                if (RewriteSGotoAliases(c, aliases, factory))
+                    changed = true;
+            });
+            return changed;
+        }
+
+        bool RewriteSGotoAliases(
+            const std::vector<SNode *> &seq,
+            const std::unordered_map<std::string_view, std::string> &aliases,
+            SNodeFactory &factory
+        ) {
+            bool changed = false;
+            for (auto *c : seq)
+                if (RewriteSGotoAliases(c, aliases, factory)) changed = true;
+            return changed;
+        }
+
+        // Fold runs of empty SLabel wrappers onto the following sibling
+        // (or, at the end of a sequence, onto each other) so that the
+        // labels nest instead of cluttering the sequence.
+        bool AttachEmptyLabelsInSeq(std::vector<SNode *> &seq) {
+            bool changed = false;
+            for (size_t i = 0; i < seq.size(); ++i) {
+                auto *first = seq[i]->dyn_cast<SLabel>();
+                if (!first || !first->BodyList().empty())
+                    continue;
+
+                std::vector<SLabel *> labels;
+                size_t j = i;
+                while (j < seq.size()) {
+                    auto *lbl = seq[j]->dyn_cast<SLabel>();
+                    if (!lbl || !lbl->BodyList().empty())
+                        break;
+                    labels.push_back(lbl);
+                    ++j;
+                }
+
+                if (j == seq.size()) {
+                    if (labels.size() < 2)
+                        continue;
+                    for (size_t k = labels.size() - 1; k > 0; --k) {
+                        labels[k - 1]->AppendChild(labels[k]);
+                    }
+                    seq.erase(seq.begin() + static_cast<ptrdiff_t>(i + 1),
+                              seq.end());
+                    changed = true;
+                    continue;
+                }
+
+                SNode *child = seq[j];
+                for (size_t k = labels.size(); k > 0; --k) {
+                    auto *lbl = labels[k - 1];
+                    lbl->AppendChild(child);
+                    child = lbl;
+                }
+                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i + 1),
+                          seq.begin() + static_cast<ptrdiff_t>(j + 1));
+                changed = true;
+            }
+            return changed;
+        }
+
+        bool IsSideEffectFree(clang::Expr *expr, clang::ASTContext &ctx) {
+            return !expr || !expr->HasSideEffects(ctx);
+        }
+
+        // Drop `if (c) {}` shells whose condition is side-effect free and
+        // flip `if (c) {} else { B }` into `if (!c) { B }`.
+        bool SimplifyEmptyIfsInSeq(
+            std::vector<SNode *> &seq,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+            for (size_t i = 0; i < seq.size(); ) {
+                auto *ite = seq[i]->dyn_cast<SIfThenElse>();
+                if (!ite) {
+                    ++i;
+                    continue;
+                }
+
+                bool then_empty = ite->ThenList().empty();
+                bool else_empty = ite->ElseList().empty();
+
+                if (then_empty && else_empty) {
+                    if (!IsSideEffectFree(ite->Cond(), ctx)) {
+                        ++i;
+                        continue;
+                    }
+                    seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
+                    changed = true;
+                    continue;
+                }
+
+                if (then_empty && !else_empty && ite->Cond()) {
+                    std::vector<SNode *> else_body =
+                        std::move(ite->ElseList());
+                    ite->SetCond(NegateExpr(ctx, CloneExpr(ctx, ite->Cond())));
+                    ite->SetThenBranch(std::move(else_body));
+                    ite->SetElseBranch(std::vector<SNode *>{});
+                    changed = true;
+                }
+
+                ++i;
+            }
+            return changed;
+        }
+
+        // True iff \p body is a single statement that is just `goto T`,
+        // returning the target as a string_view (no copy).
+        bool SingleSGotoListTarget(
+            const std::vector<SNode *> &body,
+            std::string_view &target
+        ) {
+            if (body.size() != 1)
+                return false;
+            if (auto *g = body.front()->dyn_cast<SGoto>()) {
+                target = g->Target();
+                return true;
+            }
+            if (auto *st = body.front()->dyn_cast<SStmt>()) {
+                if (auto *gs = llvm::dyn_cast_or_null<clang::GotoStmt>(
+                        st->Stmt())) {
+                    assert(gs->getLabel()
+                           && "clang::GotoStmt missing target label");
+                    target = gs->getLabel()->getName();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        clang::Stmt *SingleClangStmt(clang::Stmt *stmt) {
+            while (auto *cs = llvm::dyn_cast_or_null<clang::CompoundStmt>(
+                       stmt)) {
+                if (cs->size() != 1)
+                    return stmt;
+                stmt = *cs->body_begin();
+            }
+            return stmt;
+        }
+
+        bool ClangGotoTarget(clang::Stmt *stmt, llvm::StringRef &target) {
+            auto *gs = llvm::dyn_cast_or_null<clang::GotoStmt>(
+                SingleClangStmt(stmt));
+            if (!gs)
+                return false;
+            target = gs->getLabel()->getName();
+            return true;
+        }
+
+        clang::Expr *ComparableExpr(clang::Expr *expr) {
+            while (expr) {
+                expr = expr->IgnoreParens();
+                if (auto *ice = llvm::dyn_cast<clang::ImplicitCastExpr>(expr)) {
+                    expr = ice->getSubExpr();
+                    continue;
+                }
+                if (auto *cse = llvm::dyn_cast<clang::CStyleCastExpr>(expr)) {
+                    expr = cse->getSubExpr();
+                    continue;
+                }
+                break;
+            }
+            return expr;
+        }
+
+        bool ExprStructurallyEqual(clang::Expr *lhs, clang::Expr *rhs) {
+            lhs = ComparableExpr(lhs);
+            rhs = ComparableExpr(rhs);
+            if (lhs == rhs)
+                return true;
+            if (!lhs || !rhs || lhs->getStmtClass() != rhs->getStmtClass())
+                return false;
+
+            if (auto *lbo = llvm::dyn_cast<clang::BinaryOperator>(lhs)) {
+                auto *rbo = llvm::cast<clang::BinaryOperator>(rhs);
+                return lbo->getOpcode() == rbo->getOpcode()
+                    && ExprStructurallyEqual(lbo->getLHS(), rbo->getLHS())
+                    && ExprStructurallyEqual(lbo->getRHS(), rbo->getRHS());
+            }
+
+            if (auto *luo = llvm::dyn_cast<clang::UnaryOperator>(lhs)) {
+                auto *ruo = llvm::cast<clang::UnaryOperator>(rhs);
+                return luo->getOpcode() == ruo->getOpcode()
+                    && ExprStructurallyEqual(luo->getSubExpr(),
+                                             ruo->getSubExpr());
+            }
+
+            if (auto *ldr = llvm::dyn_cast<clang::DeclRefExpr>(lhs)) {
+                auto *rdr = llvm::cast<clang::DeclRefExpr>(rhs);
+                return ldr->getDecl() == rdr->getDecl();
+            }
+
+            if (auto *lil = llvm::dyn_cast<clang::IntegerLiteral>(lhs)) {
+                auto *ril = llvm::cast<clang::IntegerLiteral>(rhs);
+                return lil->getValue() == ril->getValue();
+            }
+
+            if (auto *lbl = llvm::dyn_cast<clang::CXXBoolLiteralExpr>(lhs)) {
+                auto *rbl = llvm::cast<clang::CXXBoolLiteralExpr>(rhs);
+                return lbl->getValue() == rbl->getValue();
+            }
+
+            if (auto *lme = llvm::dyn_cast<clang::MemberExpr>(lhs)) {
+                auto *rme = llvm::cast<clang::MemberExpr>(rhs);
+                return lme->getMemberDecl() == rme->getMemberDecl()
+                    && ExprStructurallyEqual(lme->getBase(), rme->getBase());
+            }
+
+            if (auto *las = llvm::dyn_cast<clang::ArraySubscriptExpr>(lhs)) {
+                auto *ras = llvm::cast<clang::ArraySubscriptExpr>(rhs);
+                return ExprStructurallyEqual(las->getLHS(), ras->getLHS())
+                    && ExprStructurallyEqual(las->getRHS(), ras->getRHS());
+            }
+
+            return false;
+        }
+
+        clang::Expr *CreateLogicalBinary(
+            clang::ASTContext &ctx,
+            clang::Expr *lhs,
+            clang::Expr *rhs,
+            clang::BinaryOperatorKind opcode
+        ) {
+            auto loc = lhs ? lhs->getExprLoc() : VirtualLoc(ctx);
+            return clang::BinaryOperator::Create(
+                ctx, EnsureRValue(ctx, CloneExpr(ctx, lhs)),
+                EnsureRValue(ctx, CloneExpr(ctx, rhs)), opcode,
+                ctx.BoolTy, clang::VK_PRValue, clang::OK_Ordinary, loc,
+                clang::FPOptionsOverride());
+        }
+
+        // Drop any sub-term of \p expr that is structurally equal to
+        // \p covered_term, recursing through ||/&& trees.  Used to keep
+        // a merged condition minimal: `(A || B) || B` collapses to
+        // `A || B`.
+        clang::Expr *RemoveOrCoveredTerm(
+            clang::ASTContext &ctx,
+            clang::Expr *expr,
+            clang::Expr *covered_term
+        ) {
+            expr = ComparableExpr(expr);
+            if (!expr)
+                return nullptr;
+            if (ExprStructurallyEqual(expr, covered_term))
+                return nullptr;
+
+            auto *bo = llvm::dyn_cast<clang::BinaryOperator>(expr);
+            if (!bo)
+                return expr;
+
+            if (bo->getOpcode() == clang::BO_LOr) {
+                clang::Expr *lhs =
+                    RemoveOrCoveredTerm(ctx, bo->getLHS(), covered_term);
+                clang::Expr *rhs =
+                    RemoveOrCoveredTerm(ctx, bo->getRHS(), covered_term);
+                if (!lhs) return rhs;
+                if (!rhs) return lhs;
+                if (lhs == bo->getLHS() && rhs == bo->getRHS())
+                    return expr;
+                return CreateLogicalBinary(ctx, lhs, rhs, clang::BO_LOr);
+            }
+
+            if (bo->getOpcode() == clang::BO_LAnd) {
+                clang::Expr *lhs =
+                    RemoveOrCoveredTerm(ctx, bo->getLHS(), covered_term);
+                clang::Expr *rhs =
+                    RemoveOrCoveredTerm(ctx, bo->getRHS(), covered_term);
+                if (!lhs || !rhs)
+                    return nullptr;
+                if (lhs == bo->getLHS() && rhs == bo->getRHS())
+                    return expr;
+                return CreateLogicalBinary(ctx, lhs, rhs, clang::BO_LAnd);
+            }
+
+            return expr;
+        }
+
+        clang::Expr *BuildShortCircuitOr(
+            clang::ASTContext &ctx,
+            clang::Expr *lhs,
+            clang::Expr *rhs
+        ) {
+            lhs = RemoveOrCoveredTerm(ctx, lhs, rhs);
+            if (!lhs)
+                return CloneExpr(ctx, rhs);
+            return CreateLogicalBinary(ctx, lhs, rhs, clang::BO_LOr);
+        }
+
+        clang::Expr *BuildShortCircuitAnd(
+            clang::ASTContext &ctx,
+            clang::Expr *lhs,
+            clang::Expr *rhs
+        ) {
+            return CreateLogicalBinary(ctx, lhs, rhs, clang::BO_LAnd);
+        }
+
+        // `if (A) { if (B) goto L; }`  ->  `if (A && B) goto L;`
+        bool FlattenNestedGotoGuardsInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+            for (size_t i = 0; i < seq.size(); ++i) {
+                auto *outer = seq[i]->dyn_cast<SIfThenElse>();
+                if (!outer || !outer->Cond() || !outer->ElseList().empty()
+                    || outer->ThenList().size() != 1)
+                    continue;
+
+                auto *inner = outer->ThenList().front()->dyn_cast<SIfThenElse>();
+                if (!inner || !inner->Cond() || !inner->ElseList().empty())
+                    continue;
+
+                std::string_view target;
+                if (!SingleSGotoListTarget(inner->ThenList(), target))
+                    continue;
+
+                std::vector<SNode *> then_body = {
+                    factory.Make<SGoto>(factory.Intern(target)) };
+                seq[i] = factory.Make<SIfThenElse>(
+                    BuildShortCircuitAnd(ctx, outer->Cond(), inner->Cond()),
+                    std::move(then_body), std::vector<SNode *>{});
+                changed = true;
+            }
+            return changed;
+        }
+
+        // `if (A) goto L; else if (B) goto L;`  ->  `if (A || B) goto L;`
+        bool MergeElseIfGotoGuardsInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+            for (size_t i = 0; i < seq.size(); ++i) {
+                auto *outer = seq[i]->dyn_cast<SIfThenElse>();
+                if (!outer || !outer->Cond() || outer->ElseList().size() != 1)
+                    continue;
+
+                std::string_view outer_target;
+                if (!SingleSGotoListTarget(outer->ThenList(), outer_target))
+                    continue;
+
+                auto *inner = outer->ElseList().front()->dyn_cast<SIfThenElse>();
+                if (!inner || !inner->Cond())
+                    continue;
+
+                std::string_view inner_target;
+                if (!SingleSGotoListTarget(inner->ThenList(), inner_target)
+                    || inner_target != outer_target)
+                    continue;
+
+                std::vector<SNode *> else_body = std::move(inner->ElseList());
+                std::vector<SNode *> then_body = {
+                    factory.Make<SGoto>(factory.Intern(outer_target)) };
+                auto *merged = factory.Make<SIfThenElse>(
+                    BuildShortCircuitOr(ctx, outer->Cond(), inner->Cond()),
+                    std::move(then_body),
+                    std::move(else_body));
+                seq[i] = merged;
+                changed = true;
+            }
+            return changed;
+        }
+
+        // `if (A) goto L; if (B) goto L;`  ->  `if (A || B) goto L;`
+        bool MergeAdjacentGotoGuardsInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+            for (size_t i = 0; i + 1 < seq.size(); ) {
+                auto *first = seq[i]->dyn_cast<SIfThenElse>();
+                auto *second = seq[i + 1]->dyn_cast<SIfThenElse>();
+                if (!first || !second || !first->Cond() || !second->Cond()
+                    || !first->ElseList().empty()) {
+                    ++i;
+                    continue;
+                }
+
+                std::string_view first_target;
+                std::string_view second_target;
+                if (!SingleSGotoListTarget(first->ThenList(), first_target)
+                    || !SingleSGotoListTarget(second->ThenList(), second_target)
+                    || first_target != second_target) {
+                    ++i;
+                    continue;
+                }
+
+                std::vector<SNode *> else_body = std::move(second->ElseList());
+                std::vector<SNode *> then_body = {
+                    factory.Make<SGoto>(factory.Intern(first_target)) };
+                auto *merged = factory.Make<SIfThenElse>(
+                    BuildShortCircuitOr(ctx, first->Cond(), second->Cond()),
+                    std::move(then_body),
+                    std::move(else_body));
+                seq[i] = merged;
+                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i + 1));
+                changed = true;
+            }
+            return changed;
+        }
+
+        // Same as MergeElseIfGotoGuardsInSeq but for an else-if chain
+        // expressed as a raw clang::IfStmt held inside an SStmt.
+        bool MergeClangElseIfGotoGuardsInSeq(
+            std::vector<SNode *> &seq,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+            for (SNode *node : seq) {
+                auto *st = node->dyn_cast<SStmt>();
+                if (!st)
+                    continue;
+
+                auto *outer = llvm::dyn_cast_or_null<clang::IfStmt>(
+                    SingleClangStmt(st->Stmt()));
+                if (!outer || !outer->getCond() || !outer->getThen()
+                    || !outer->getElse())
+                    continue;
+
+                llvm::StringRef outer_target;
+                if (!ClangGotoTarget(outer->getThen(), outer_target))
+                    continue;
+
+                auto *inner = llvm::dyn_cast<clang::IfStmt>(
+                    SingleClangStmt(outer->getElse()));
+                if (!inner || !inner->getCond() || !inner->getThen())
+                    continue;
+
+                llvm::StringRef inner_target;
+                if (!ClangGotoTarget(inner->getThen(), inner_target)
+                    || inner_target != outer_target)
+                    continue;
+
+                auto loc = outer->getIfLoc();
+                st->SetStmt(clang::IfStmt::Create(
+                    ctx, loc, clang::IfStatementKind::Ordinary, nullptr,
+                    nullptr,
+                    BuildShortCircuitOr(ctx, outer->getCond(),
+                                        inner->getCond()),
+                    loc, loc, outer->getThen(), loc, inner->getElse()));
+                changed = true;
+            }
+            return changed;
+        }
+
+        bool MergeGotoGuardsInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            clang::ASTContext &ctx
+        ) {
+            bool any_changed = false;
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                if (FlattenNestedGotoGuardsInSeq(seq, factory, ctx))
+                    changed = true;
+                if (MergeElseIfGotoGuardsInSeq(seq, factory, ctx))
+                    changed = true;
+                if (MergeAdjacentGotoGuardsInSeq(seq, factory, ctx))
+                    changed = true;
+                if (MergeClangElseIfGotoGuardsInSeq(seq, ctx))
+                    changed = true;
+                if (changed)
+                    any_changed = true;
+            }
+            return any_changed;
+        }
+
+    } // anonymous namespace
+
+    bool CollapsePassThroughLabels(std::vector<SNode *> &root,
+                                   SNodeFactory &factory) {
+        std::unordered_map<std::string_view, std::string> aliases;
+        CollectPassThroughAliases(root, aliases);
+        if (aliases.empty()) return false;
+        return RewriteSGotoAliases(root, aliases, factory);
+    }
+
+    bool SimplifyEmptyControlFlow(std::vector<SNode *> &root,
+                                  clang::ASTContext &ctx) {
+        bool changed = false;
+        changed |= ForEachSeqPostOrder(root, AttachEmptyLabelsInSeq);
+        changed |= ForEachSeqPostOrder(
+            root, [&](std::vector<SNode *> &seq) {
+                return SimplifyEmptyIfsInSeq(seq, ctx);
+            });
+        changed |= ForEachSeqPostOrder(root, AttachEmptyLabelsInSeq);
+        return changed;
+    }
+
+    bool MergeRedundantGotoGuards(std::vector<SNode *> &root,
+                                  SNodeFactory &factory,
+                                  clang::ASTContext &ctx) {
+        return ForEachSeqPostOrder(
+            root, [&](std::vector<SNode *> &seq) {
+                return MergeGotoGuardsInSeq(seq, factory, ctx);
+            });
+    }
+
     // DuplicateSwitchCaseTargets — replace case bodies ending in
     // `SGoto L` with a cloned copy of L's body, making switches
     // goto-free even when the target is shared, a collapsed block,
@@ -4078,7 +5523,6 @@ namespace patchestry::ast {
     // rule.  Outbound gotos *from* the clone are allowed: they add a
     // new reference to an already-live label, and RemoveUnreferencedLabels
     // recomputes liveness from scratch after the pass.
-    // ---------------------------------------------------------------
 
     namespace {
 
@@ -4089,6 +5533,11 @@ namespace patchestry::ast {
         // a switch with many arms all targeting the same label can't
         // clone a medium body into every arm.
         constexpr size_t kMaxSwitchCloneTotal = 24;
+
+        // Aggregate clone budget for the general residual-goto target
+        // duplicator.  Keep this modest: it is a readability cleanup, not an
+        // unbounded tail-duplication optimizer.
+        constexpr size_t kMaxGeneralCloneTotal = 64;
 
         size_t CountCloneStmts(const SNode *node);
 
@@ -4156,7 +5605,7 @@ namespace patchestry::ast {
                 default:
                     break;
             }
-            // Sequence / SIfThenElse / SSwitch: safe iff every child is safe.
+            // Sequences / SIfThenElse / SSwitch: safe iff every child is safe.
             // Leaves (SGoto/SBreak/SContinue/SReturn) have no children
             // and fall through to safe.
             bool safe = true;
@@ -4273,8 +5722,11 @@ namespace patchestry::ast {
             return {};
         }
 
-        /// Try to clone \p target_label's body.  Returns an empty vector
-        /// if unsafe or too large.
+        /// Try to clone the complete terminating tail reached by
+        /// \p target_label.  The first chunk is the label body; if that
+        /// body falls through, include following unlabeled siblings until
+        /// the cloned sequence terminates.  Returns an empty vector if the
+        /// tail is unsafe, non-terminating, or too large.
         std::vector<SNode *> TryCloneLabelBody(
             std::string_view target_label,
             const std::unordered_map<std::string_view, LabelEntry> &labels,
@@ -4282,12 +5734,1186 @@ namespace patchestry::ast {
         ) {
             auto it = labels.find(target_label);
             if (it == labels.end()) return {};
+            auto *parent_seq = it->second.parent_seq;
+            if (!parent_seq) return {};
+
+            size_t label_idx = parent_seq->size();
+            for (size_t i = 0; i < parent_seq->size(); ++i) {
+                if ((*parent_seq)[i] == it->second.label) {
+                    label_idx = i;
+                    break;
+                }
+            }
+            if (label_idx == parent_seq->size()) return {};
+
+            std::vector<SNode *> tail;
             auto &label_body = it->second.label->BodyList();
             if (label_body.empty()) return {};
-            if (CountCloneSeq(label_body) > kMaxCloneStmts) return {};
-            for (auto *c : label_body)
+            tail.insert(tail.end(), label_body.begin(), label_body.end());
+
+            for (size_t i = label_idx + 1;
+                 !SeqAlwaysTerminates(tail) && i < parent_seq->size(); ++i) {
+                SNode *next = (*parent_seq)[i];
+                if (next->dyn_cast<SLabel>()) return {};
+                tail.push_back(next);
+            }
+
+            if (!SeqAlwaysTerminates(tail)) return {};
+            if (CountCloneSeq(tail) > kMaxCloneStmts) return {};
+            for (auto *c : tail)
                 if (!SubtreeIsSafeToClone(c)) return {};
-            return CloneSeq(label_body, factory);
+            return CloneSeq(tail, factory);
+        }
+
+        bool SeqHasBreakContinue(const std::vector<SNode *> &seq);
+        bool SeqHasGoto(const std::vector<SNode *> &seq);
+        bool SeqHasLocalLiveIns(const std::vector<SNode *> &seq);
+        std::unordered_set<const clang::VarDecl *>
+        SeqLocalLiveIns(const std::vector<SNode *> &seq);
+
+        bool SubtreeHasBreakContinue(const SNode *node) {
+            if (!node) return false;
+            if (node->dyn_cast<SBreak>() || node->dyn_cast<SContinue>())
+                return true;
+            bool found = false;
+            node->for_each_child([&](SNode *child) {
+                if (!found && SubtreeHasBreakContinue(child))
+                    found = true;
+            });
+            return found;
+        }
+
+        bool SeqHasBreakContinue(const std::vector<SNode *> &seq) {
+            for (auto *child : seq)
+                if (SubtreeHasBreakContinue(child))
+                    return true;
+            return false;
+        }
+
+        bool ClangStmtHasGoto(const clang::Stmt *stmt) {
+            if (!stmt) return false;
+            if (llvm::isa<clang::GotoStmt>(stmt)) return true;
+            for (const clang::Stmt *child : stmt->children())
+                if (ClangStmtHasGoto(child)) return true;
+            return false;
+        }
+
+        bool SubtreeHasGoto(const SNode *node) {
+            if (!node) return false;
+            if (node->dyn_cast<SGoto>()) return true;
+            if (auto *st = node->dyn_cast<SStmt>())
+                return ClangStmtHasGoto(st->Stmt());
+
+            bool found = false;
+            node->for_each_child([&](SNode *child) {
+                if (!found && SubtreeHasGoto(child))
+                    found = true;
+            });
+            return found;
+        }
+
+        bool SeqHasGoto(const std::vector<SNode *> &seq) {
+            for (auto *child : seq)
+                if (SubtreeHasGoto(child))
+                    return true;
+            return false;
+        }
+
+        bool IsLocalVarDecl(const clang::VarDecl *decl) {
+            return decl && !llvm::isa<clang::ParmVarDecl>(decl)
+                && !decl->hasGlobalStorage();
+        }
+
+        const clang::VarDecl *WrittenLocalDecl(clang::Expr *expr) {
+            if (!expr) return nullptr;
+            expr = expr->IgnoreParenImpCasts();
+            if (auto *decl_ref = llvm::dyn_cast<clang::DeclRefExpr>(expr))
+                if (auto *var = llvm::dyn_cast<clang::VarDecl>(
+                        decl_ref->getDecl()))
+                    if (IsLocalVarDecl(var))
+                        return var;
+            return nullptr;
+        }
+
+        void ExprCollectLocalLiveIns(
+            clang::Expr *expr,
+            const std::unordered_set<const clang::VarDecl *> &defined,
+            std::unordered_set<const clang::VarDecl *> &live_ins
+        );
+
+        void StmtCollectLocalLiveIns(
+            clang::Stmt *stmt,
+            std::unordered_set<const clang::VarDecl *> &defined,
+            std::unordered_set<const clang::VarDecl *> &live_ins
+        );
+
+        void ExprCollectLocalLiveIns(
+            clang::Expr *expr,
+            const std::unordered_set<const clang::VarDecl *> &defined,
+            std::unordered_set<const clang::VarDecl *> &live_ins
+        ) {
+            if (!expr) return;
+            expr = expr->IgnoreParenImpCasts();
+
+            if (auto *decl_ref = llvm::dyn_cast<clang::DeclRefExpr>(expr)) {
+                if (auto *var = llvm::dyn_cast<clang::VarDecl>(
+                        decl_ref->getDecl()))
+                    if (IsLocalVarDecl(var) && !defined.contains(var))
+                        live_ins.insert(var);
+                return;
+            }
+
+            for (clang::Stmt *child : expr->children()) {
+                auto *child_expr = llvm::dyn_cast_or_null<clang::Expr>(child);
+                if (child_expr)
+                    ExprCollectLocalLiveIns(child_expr, defined, live_ins);
+            }
+        }
+
+        void StmtCollectLocalLiveIns(
+            clang::Stmt *stmt,
+            std::unordered_set<const clang::VarDecl *> &defined,
+            std::unordered_set<const clang::VarDecl *> &live_ins
+        ) {
+            if (!stmt) return;
+
+            if (auto *decl_stmt = llvm::dyn_cast<clang::DeclStmt>(stmt)) {
+                for (clang::Decl *decl : decl_stmt->decls()) {
+                    auto *var = llvm::dyn_cast<clang::VarDecl>(decl);
+                    if (!var) continue;
+                    if (var->getInit())
+                        ExprCollectLocalLiveIns(
+                            var->getInit(), defined, live_ins);
+                    if (IsLocalVarDecl(var))
+                        defined.insert(var);
+                }
+                return;
+            }
+
+            if (auto *bin = llvm::dyn_cast<clang::BinaryOperator>(stmt)) {
+                if (bin->isAssignmentOp()) {
+                    ExprCollectLocalLiveIns(
+                        bin->getRHS(), defined, live_ins);
+                    if (!WrittenLocalDecl(bin->getLHS()))
+                        ExprCollectLocalLiveIns(
+                            bin->getLHS(), defined, live_ins);
+                    if (const clang::VarDecl *written =
+                            WrittenLocalDecl(bin->getLHS()))
+                        defined.insert(written);
+                    return;
+                }
+            }
+
+            if (auto *ifs = llvm::dyn_cast<clang::IfStmt>(stmt)) {
+                ExprCollectLocalLiveIns(ifs->getCond(), defined, live_ins);
+                auto then_defined = defined;
+                auto else_defined = defined;
+                StmtCollectLocalLiveIns(
+                    ifs->getThen(), then_defined, live_ins);
+                if (ifs->getElse()) {
+                    StmtCollectLocalLiveIns(
+                        ifs->getElse(), else_defined, live_ins);
+                    for (const clang::VarDecl *decl : then_defined)
+                        if (else_defined.contains(decl))
+                            defined.insert(decl);
+                }
+                return;
+            }
+
+            if (auto *compound = llvm::dyn_cast<clang::CompoundStmt>(stmt)) {
+                for (clang::Stmt *child : compound->body())
+                    StmtCollectLocalLiveIns(child, defined, live_ins);
+                return;
+            }
+
+            if (auto *expr = llvm::dyn_cast<clang::Expr>(stmt))
+                return ExprCollectLocalLiveIns(expr, defined, live_ins);
+
+            for (clang::Stmt *child : stmt->children()) {
+                StmtCollectLocalLiveIns(child, defined, live_ins);
+            }
+        }
+
+        void SNodeCollectLocalLiveIns(
+            SNode *node,
+            std::unordered_set<const clang::VarDecl *> &defined,
+            std::unordered_set<const clang::VarDecl *> &live_ins
+        ) {
+            if (!node) return;
+            if (auto *stmt = node->dyn_cast<SStmt>())
+                return StmtCollectLocalLiveIns(
+                    stmt->Stmt(), defined, live_ins);
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                ExprCollectLocalLiveIns(ite->Cond(), defined, live_ins);
+                auto then_defined = defined;
+                auto else_defined = defined;
+                for (SNode *child : ite->ThenList())
+                    SNodeCollectLocalLiveIns(
+                        child, then_defined, live_ins);
+                for (SNode *child : ite->ElseList())
+                    SNodeCollectLocalLiveIns(
+                        child, else_defined, live_ins);
+                if (!ite->ElseList().empty())
+                    for (const clang::VarDecl *decl : then_defined)
+                        if (else_defined.contains(decl))
+                            defined.insert(decl);
+                return;
+            }
+            node->for_each_child([&](SNode *child) {
+                SNodeCollectLocalLiveIns(child, defined, live_ins);
+            });
+        }
+
+        std::unordered_set<const clang::VarDecl *>
+        SeqLocalLiveIns(const std::vector<SNode *> &seq) {
+            std::unordered_set<const clang::VarDecl *> defined;
+            std::unordered_set<const clang::VarDecl *> live_ins;
+            for (SNode *child : seq)
+                SNodeCollectLocalLiveIns(child, defined, live_ins);
+            return live_ins;
+        }
+
+        bool SeqHasLocalLiveIns(const std::vector<SNode *> &seq) {
+            return !SeqLocalLiveIns(seq).empty();
+        }
+
+        void StmtCollectGuaranteedLocalDefs(
+            clang::Stmt *stmt,
+            std::unordered_set<const clang::VarDecl *> &defined
+        );
+
+        void SNodeCollectGuaranteedLocalDefs(
+            SNode *node,
+            std::unordered_set<const clang::VarDecl *> &defined
+        );
+
+        void StmtCollectGuaranteedLocalDefs(
+            clang::Stmt *stmt,
+            std::unordered_set<const clang::VarDecl *> &defined
+        ) {
+            if (!stmt) return;
+
+            if (auto *decl_stmt = llvm::dyn_cast<clang::DeclStmt>(stmt)) {
+                for (clang::Decl *decl : decl_stmt->decls()) {
+                    if (auto *var = llvm::dyn_cast<clang::VarDecl>(decl))
+                        if (IsLocalVarDecl(var))
+                            defined.insert(var);
+                }
+                return;
+            }
+
+            if (auto *bin = llvm::dyn_cast<clang::BinaryOperator>(stmt)) {
+                if (bin->isAssignmentOp()) {
+                    if (const clang::VarDecl *written =
+                            WrittenLocalDecl(bin->getLHS()))
+                        defined.insert(written);
+                    return;
+                }
+            }
+
+            if (auto *compound = llvm::dyn_cast<clang::CompoundStmt>(stmt)) {
+                for (clang::Stmt *child : compound->body())
+                    StmtCollectGuaranteedLocalDefs(child, defined);
+                return;
+            }
+
+            if (auto *ifs = llvm::dyn_cast<clang::IfStmt>(stmt)) {
+                auto then_defined = defined;
+                auto else_defined = defined;
+                StmtCollectGuaranteedLocalDefs(ifs->getThen(), then_defined);
+                if (!ifs->getElse()) return;
+                StmtCollectGuaranteedLocalDefs(ifs->getElse(), else_defined);
+                for (const clang::VarDecl *decl : then_defined)
+                    if (else_defined.contains(decl))
+                        defined.insert(decl);
+            }
+        }
+
+        void SNodeCollectGuaranteedLocalDefs(
+            SNode *node,
+            std::unordered_set<const clang::VarDecl *> &defined
+        ) {
+            if (!node) return;
+            if (auto *stmt = node->dyn_cast<SStmt>()) {
+                StmtCollectGuaranteedLocalDefs(stmt->Stmt(), defined);
+                return;
+            }
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                auto then_defined = defined;
+                auto else_defined = defined;
+                for (SNode *child : ite->ThenList())
+                    SNodeCollectGuaranteedLocalDefs(child, then_defined);
+                if (ite->ElseList().empty()) return;
+                for (SNode *child : ite->ElseList())
+                    SNodeCollectGuaranteedLocalDefs(child, else_defined);
+                for (const clang::VarDecl *decl : then_defined)
+                    if (else_defined.contains(decl))
+                        defined.insert(decl);
+                return;
+            }
+            node->for_each_child([&](SNode *child) {
+                SNodeCollectGuaranteedLocalDefs(child, defined);
+            });
+        }
+
+        std::unordered_set<const clang::VarDecl *> GuaranteedLocalDefsBefore(
+            const std::vector<SNode *> &seq, size_t end
+        ) {
+            std::unordered_set<const clang::VarDecl *> defined;
+            for (size_t i = 0; i < end; ++i)
+                SNodeCollectGuaranteedLocalDefs(seq[i], defined);
+            return defined;
+        }
+
+        bool LiveInsSatisfiedBy(
+            const std::vector<SNode *> &seq,
+            const std::unordered_set<const clang::VarDecl *> &defined
+        ) {
+            for (const clang::VarDecl *decl : SeqLocalLiveIns(seq))
+                if (!defined.contains(decl))
+                    return false;
+            return true;
+        }
+
+        void CollectCompoundPrefixDefs(
+            clang::CompoundStmt *compound,
+            std::unordered_set<const clang::VarDecl *> &defined
+        ) {
+            if (!compound || compound->body_empty()) return;
+            for (clang::Stmt *stmt : compound->body()) {
+                if (stmt == compound->body_back())
+                    break;
+                StmtCollectGuaranteedLocalDefs(stmt, defined);
+            }
+        }
+
+        /// Try to clone a target body for cross-arm inlining.  Unlike the
+        /// direct switch-case clone path, this is used inside nested
+        /// conditional arms, so avoid break/continue whose target would
+        /// depend on the original lexical scope.
+        std::vector<SNode *> TryCloneTerminatingLabelBody(
+            std::string_view target_label,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            SNodeFactory &factory
+        ) {
+            auto clone = TryCloneLabelBody(target_label, labels, factory);
+            if (SeqHasBreakContinue(clone)) return {};
+            return clone;
+        }
+
+        std::string_view DirectGotoTarget(const SNode *node);
+        std::vector<SNode *> BuildSplicedSeq(
+            const std::vector<SNode *> &existing,
+            const std::vector<SNode *> &clone, SNodeFactory &factory);
+
+        std::vector<SNode *> TryCloneSmallEpilogueTarget(
+            std::string_view target_label,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            SNodeFactory &factory
+        ) {
+            std::vector<SNode *> tail =
+                TryCloneLabelBody(target_label, labels, factory);
+            if (tail.empty()) return {};
+
+            // Producer label: clone one hop through a terminal goto to the
+            // shared epilogue, dropping the goto itself.
+            if (auto next_target = TrailingGotoTargetSeq(tail);
+                !next_target.empty()) {
+                std::vector<SNode *> epilogue =
+                    TryCloneLabelBody(next_target, labels, factory);
+                if (epilogue.empty()) return {};
+                std::vector<SNode *> spliced =
+                    BuildSplicedSeq(tail, epilogue, factory);
+                if (spliced.empty()) return {};
+                tail = std::move(spliced);
+            }
+
+            if (!SeqAlwaysTerminates(tail)) return {};
+            if (SeqHasBreakContinue(tail)) return {};
+            if (SeqHasGoto(tail)) return {};
+            if (CountCloneSeq(tail) > kMaxCloneStmts) return {};
+            for (auto *child : tail)
+                if (!SubtreeIsSafeToClone(child)) return {};
+            return CloneSeq(tail, factory);
+        }
+
+        clang::Stmt *BuildSingleOrCompound(
+            clang::ASTContext &ctx,
+            const std::vector<clang::Stmt *> &stmts
+        ) {
+            if (stmts.empty()) return nullptr;
+            if (stmts.size() == 1) return stmts.front();
+            auto loc = VirtualLoc(ctx);
+            return clang::CompoundStmt::Create(
+                ctx, stmts, clang::FPOptionsOverride(), loc, loc);
+        }
+
+        bool FlattenClonedSNodeToStmt(
+            SNode *node,
+            clang::ASTContext &ctx,
+            std::vector<clang::Stmt *> &out
+        );
+
+        bool FlattenClonedSeqToStmts(
+            const std::vector<SNode *> &seq,
+            clang::ASTContext &ctx,
+            std::vector<clang::Stmt *> &out
+        ) {
+            for (SNode *node : seq)
+                if (!FlattenClonedSNodeToStmt(node, ctx, out))
+                    return false;
+            return true;
+        }
+
+        bool FlattenClonedSNodeToStmt(
+            SNode *node,
+            clang::ASTContext &ctx,
+            std::vector<clang::Stmt *> &out
+        ) {
+            if (!node) return true;
+            if (auto *stmt = node->dyn_cast<SStmt>()) {
+                out.push_back(stmt->Stmt());
+                return true;
+            }
+            if (auto *ret = node->dyn_cast<SReturn>()) {
+                out.push_back(MakeReturn(ctx, ret));
+                return true;
+            }
+            if (node->dyn_cast<SBreak>()) {
+                out.push_back(new (ctx) clang::BreakStmt(VirtualLoc(ctx)));
+                return true;
+            }
+            if (node->dyn_cast<SContinue>()) {
+                out.push_back(new (ctx) clang::ContinueStmt(VirtualLoc(ctx)));
+                return true;
+            }
+            if (auto *label = node->dyn_cast<SLabel>())
+                return FlattenClonedSeqToStmts(label->BodyList(), ctx, out);
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                std::vector<clang::Stmt *> then_stmts;
+                std::vector<clang::Stmt *> else_stmts;
+                if (!FlattenClonedSeqToStmts(
+                        ite->ThenList(), ctx, then_stmts))
+                    return false;
+                if (!FlattenClonedSeqToStmts(
+                        ite->ElseList(), ctx, else_stmts))
+                    return false;
+
+                auto loc = VirtualLoc(ctx);
+                out.push_back(clang::IfStmt::Create(
+                    ctx, loc, clang::IfStatementKind::Ordinary,
+                    nullptr, nullptr, CloneExpr(ctx, ite->Cond()), loc, loc,
+                    BuildSingleOrCompound(ctx, then_stmts), loc,
+                    BuildSingleOrCompound(ctx, else_stmts)));
+                return true;
+            }
+            return false;
+        }
+
+        bool IsSingleGotoTo(const std::vector<SNode *> &seq,
+                            std::string_view target) {
+            if (seq.size() != 1) return false;
+            auto got = TrailingGotoTargetSeq(seq);
+            return !got.empty() && got == target;
+        }
+
+        std::string_view DirectGotoTarget(const SNode *node) {
+            if (!node) return {};
+            if (auto *g = node->dyn_cast<SGoto>()) return g->Target();
+            if (auto *st = node->dyn_cast<SStmt>()) {
+                if (auto *gs = llvm::dyn_cast_or_null<clang::GotoStmt>(
+                        st->Stmt()))
+                    if (gs->getLabel())
+                        return gs->getLabel()->getName();
+            }
+            return {};
+        }
+
+        size_t FindNextDirectLabel(
+            const std::vector<SNode *> &seq, size_t begin
+        ) {
+            for (size_t i = begin; i < seq.size(); ++i)
+                if (seq[i]->dyn_cast<SLabel>())
+                    return i;
+            return seq.size();
+        }
+
+        bool RefCountEquals(
+            const std::unordered_map<std::string_view, int> &refs,
+            std::string_view label, int expected
+        ) {
+            auto it = refs.find(label);
+            int count = it == refs.end() ? 0 : it->second;
+            return count == expected;
+        }
+
+        clang::Expr *BuildGuardPathCondition(
+            clang::ASTContext &ctx,
+            const std::vector<clang::Expr *> &terms
+        ) {
+            if (terms.empty()) return nullptr;
+            clang::Expr *cond = CloneExpr(ctx, terms.front());
+            for (size_t i = 1; i < terms.size(); ++i)
+                cond = BuildShortCircuitAnd(ctx, cond, terms[i]);
+            return cond;
+        }
+
+        bool ExtractMovableFallthroughTail(
+            std::vector<SNode *> &seq,
+            size_t target_idx,
+            size_t join_idx,
+            std::vector<SNode *> &out
+        ) {
+            out.clear();
+            if (target_idx >= seq.size() || join_idx <= target_idx
+                || join_idx > seq.size())
+                return false;
+
+            auto *target_label = seq[target_idx]->dyn_cast<SLabel>();
+            if (!target_label) return false;
+
+            out.insert(out.end(), target_label->BodyList().begin(),
+                       target_label->BodyList().end());
+            for (size_t i = target_idx + 1; i < join_idx; ++i) {
+                if (seq[i]->dyn_cast<SLabel>())
+                    return false;
+                out.push_back(seq[i]);
+            }
+
+            if (out.empty()) return false;
+            if (SeqHasLabel(out) || SeqHasGoto(out)) {
+                out.clear();
+                return false;
+            }
+            return true;
+        }
+
+        enum class GuardLeafKind { Invalid, JoinOnly, TargetPath };
+
+        GuardLeafKind MergeGuardLeafKinds(
+            GuardLeafKind lhs, GuardLeafKind rhs
+        ) {
+            if (lhs == GuardLeafKind::Invalid || rhs == GuardLeafKind::Invalid)
+                return GuardLeafKind::Invalid;
+            if (lhs == GuardLeafKind::TargetPath
+                && rhs == GuardLeafKind::TargetPath)
+                return GuardLeafKind::Invalid;
+            if (lhs == GuardLeafKind::TargetPath
+                || rhs == GuardLeafKind::TargetPath)
+                return GuardLeafKind::TargetPath;
+            return GuardLeafKind::JoinOnly;
+        }
+
+        GuardLeafKind ClassifySNodeGuardSeq(
+            const std::vector<SNode *> &body,
+            std::string_view target_label,
+            std::string_view join_label,
+            clang::ASTContext &ctx,
+            std::vector<clang::Expr *> &target_terms
+        );
+
+        GuardLeafKind ClassifySNodeGuardIf(
+            const SIfThenElse *ifs,
+            std::string_view target_label,
+            std::string_view join_label,
+            clang::ASTContext &ctx,
+            std::vector<clang::Expr *> &target_terms
+        ) {
+            if (!ifs || !ifs->Cond() || ifs->ElseList().empty())
+                return GuardLeafKind::Invalid;
+
+            std::vector<clang::Expr *> then_terms;
+            std::vector<clang::Expr *> else_terms;
+            GuardLeafKind then_kind = ClassifySNodeGuardSeq(
+                ifs->ThenList(), target_label, join_label, ctx, then_terms);
+            GuardLeafKind else_kind = ClassifySNodeGuardSeq(
+                ifs->ElseList(), target_label, join_label, ctx, else_terms);
+
+            GuardLeafKind merged =
+                MergeGuardLeafKinds(then_kind, else_kind);
+            if (merged != GuardLeafKind::TargetPath)
+                return merged;
+
+            if (then_kind == GuardLeafKind::TargetPath) {
+                target_terms.push_back(CloneExpr(ctx, ifs->Cond()));
+                target_terms.insert(target_terms.end(), then_terms.begin(),
+                                    then_terms.end());
+            } else {
+                target_terms.push_back(
+                    NegateExpr(ctx, CloneExpr(ctx, ifs->Cond())));
+                target_terms.insert(target_terms.end(), else_terms.begin(),
+                                    else_terms.end());
+            }
+            return GuardLeafKind::TargetPath;
+        }
+
+        GuardLeafKind ClassifySNodeGuardSeq(
+            const std::vector<SNode *> &body,
+            std::string_view target_label,
+            std::string_view join_label,
+            clang::ASTContext &ctx,
+            std::vector<clang::Expr *> &target_terms
+        ) {
+            if (body.size() != 1)
+                return GuardLeafKind::Invalid;
+
+            std::string_view direct = DirectGotoTarget(body.front());
+            if (!direct.empty()) {
+                if (direct == target_label)
+                    return GuardLeafKind::TargetPath;
+                if (direct == join_label)
+                    return GuardLeafKind::JoinOnly;
+                return GuardLeafKind::Invalid;
+            }
+
+            if (auto *nested = body.front()->dyn_cast<SIfThenElse>())
+                return ClassifySNodeGuardIf(
+                    nested, target_label, join_label, ctx, target_terms);
+
+            return GuardLeafKind::Invalid;
+        }
+
+        GuardLeafKind ClassifyClangGuardStmt(
+            clang::Stmt *stmt,
+            std::string_view target_label,
+            std::string_view join_label,
+            clang::ASTContext &ctx,
+            std::vector<clang::Expr *> &target_terms
+        );
+
+        GuardLeafKind ClassifyClangGuardIf(
+            clang::IfStmt *ifs,
+            std::string_view target_label,
+            std::string_view join_label,
+            clang::ASTContext &ctx,
+            std::vector<clang::Expr *> &target_terms
+        ) {
+            if (!ifs || !ifs->getCond() || !ifs->getThen()
+                || !ifs->getElse())
+                return GuardLeafKind::Invalid;
+
+            std::vector<clang::Expr *> then_terms;
+            std::vector<clang::Expr *> else_terms;
+            GuardLeafKind then_kind = ClassifyClangGuardStmt(
+                ifs->getThen(), target_label, join_label, ctx, then_terms);
+            GuardLeafKind else_kind = ClassifyClangGuardStmt(
+                ifs->getElse(), target_label, join_label, ctx, else_terms);
+
+            GuardLeafKind merged =
+                MergeGuardLeafKinds(then_kind, else_kind);
+            if (merged != GuardLeafKind::TargetPath)
+                return merged;
+
+            if (then_kind == GuardLeafKind::TargetPath) {
+                target_terms.push_back(CloneExpr(ctx, ifs->getCond()));
+                target_terms.insert(target_terms.end(), then_terms.begin(),
+                                    then_terms.end());
+            } else {
+                target_terms.push_back(
+                    NegateExpr(ctx, CloneExpr(ctx, ifs->getCond())));
+                target_terms.insert(target_terms.end(), else_terms.begin(),
+                                    else_terms.end());
+            }
+            return GuardLeafKind::TargetPath;
+        }
+
+        GuardLeafKind ClassifyClangGuardStmt(
+            clang::Stmt *stmt,
+            std::string_view target_label,
+            std::string_view join_label,
+            clang::ASTContext &ctx,
+            std::vector<clang::Expr *> &target_terms
+        ) {
+            if (!stmt) return GuardLeafKind::Invalid;
+
+            if (auto *gs = llvm::dyn_cast<clang::GotoStmt>(stmt)) {
+                if (!gs->getLabel()) return GuardLeafKind::Invalid;
+                std::string_view name = gs->getLabel()->getName();
+                if (name == target_label)
+                    return GuardLeafKind::TargetPath;
+                if (name == join_label)
+                    return GuardLeafKind::JoinOnly;
+                return GuardLeafKind::Invalid;
+            }
+
+            if (auto *compound = llvm::dyn_cast<clang::CompoundStmt>(stmt)) {
+                if (compound->body_empty())
+                    return GuardLeafKind::Invalid;
+                auto it = compound->body_begin();
+                ++it;
+                if (it != compound->body_end())
+                    return GuardLeafKind::Invalid;
+                return ClassifyClangGuardStmt(
+                    compound->body_front(), target_label, join_label, ctx,
+                    target_terms);
+            }
+
+            if (auto *nested = llvm::dyn_cast<clang::IfStmt>(stmt))
+                return ClassifyClangGuardIf(
+                    nested, target_label, join_label, ctx, target_terms);
+
+            return GuardLeafKind::Invalid;
+        }
+
+        bool FoldGuardedFallthroughInSeq(
+            std::vector<SNode *> &seq,
+            const std::unordered_map<std::string_view, int> &refs,
+            clang::ASTContext &ctx
+        ) {
+            for (size_t i = 0; i + 2 < seq.size(); ++i) {
+                size_t target_idx = FindNextDirectLabel(seq, i + 1);
+                if (target_idx != i + 1)
+                    continue;
+                size_t join_idx = FindNextDirectLabel(seq, target_idx + 1);
+                if (join_idx >= seq.size())
+                    continue;
+
+                auto *target_label = seq[target_idx]->as<SLabel>();
+                auto *join_label = seq[join_idx]->as<SLabel>();
+                if (!RefCountEquals(refs, target_label->Name(), 1))
+                    continue;
+
+                std::vector<SNode *> target_body;
+                if (!ExtractMovableFallthroughTail(
+                        seq, target_idx, join_idx, target_body))
+                    continue;
+                if (auto *guard_if = seq[i]->dyn_cast<SIfThenElse>()) {
+                    std::vector<clang::Expr *> target_terms;
+                    GuardLeafKind kind = ClassifySNodeGuardIf(
+                        guard_if, target_label->Name(), join_label->Name(),
+                        ctx, target_terms);
+                    if (kind != GuardLeafKind::TargetPath)
+                        continue;
+
+                    clang::Expr *cond =
+                        BuildGuardPathCondition(ctx, target_terms);
+                    if (!cond) continue;
+
+                    guard_if->SetCond(cond);
+                    guard_if->SetThenBranch(std::move(target_body));
+                    guard_if->SetElseBranch(std::vector<SNode *>{});
+
+                    seq.erase(seq.begin() + static_cast<ptrdiff_t>(target_idx),
+                              seq.begin() + static_cast<ptrdiff_t>(join_idx));
+                    return true;
+                }
+
+                auto *stmt_node = seq[i]->dyn_cast<SStmt>();
+                if (!stmt_node)
+                    continue;
+                auto *guard_if = llvm::dyn_cast_or_null<clang::IfStmt>(
+                    stmt_node->Stmt());
+                if (!guard_if)
+                    continue;
+
+                std::vector<clang::Expr *> target_terms;
+                GuardLeafKind kind = ClassifyClangGuardIf(
+                    guard_if, target_label->Name(), join_label->Name(), ctx,
+                    target_terms);
+                if (kind != GuardLeafKind::TargetPath)
+                    continue;
+
+                clang::Expr *cond =
+                    BuildGuardPathCondition(ctx, target_terms);
+                if (!cond) continue;
+
+                std::vector<clang::Stmt *> body_stmts;
+                if (!FlattenClonedSeqToStmts(target_body, ctx, body_stmts)
+                    || body_stmts.empty())
+                    continue;
+
+                guard_if->setCond(cond);
+                guard_if->setThen(BuildSingleOrCompound(ctx, body_stmts));
+                guard_if->setElse(nullptr);
+
+                seq.erase(seq.begin() + static_cast<ptrdiff_t>(target_idx),
+                          seq.begin() + static_cast<ptrdiff_t>(join_idx));
+                return true;
+            }
+            return false;
+        }
+
+        struct NestedEntryLabelLoc {
+            SLabel *label = nullptr;
+            std::vector<SNode *> *parent_seq = nullptr;
+            size_t idx = 0;
+        };
+
+        struct ClangNestedEntryLabelLoc {
+            clang::LabelStmt *label = nullptr;
+            clang::IfStmt *owner_if = nullptr;
+            bool is_then = false;
+        };
+
+        bool FindNestedEntryLabelInSeq(
+            std::vector<SNode *> &seq,
+            std::string_view target,
+            NestedEntryLabelLoc &out
+        );
+
+        bool FindNestedEntryLabelInNode(
+            SNode *node,
+            std::string_view target,
+            NestedEntryLabelLoc &out
+        ) {
+            if (!node) return false;
+
+            // Entering loops or switches below their header/case dispatch
+            // changes break/continue/case scope.  Leave those to later,
+            // loop-aware duplication phases.
+            if (node->dyn_cast<SWhile>() || node->dyn_cast<SDoWhile>()
+                || node->dyn_cast<SFor>() || node->dyn_cast<SSwitch>())
+                return false;
+
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (FindNestedEntryLabelInSeq(ite->ThenList(), target, out))
+                    return true;
+                if (FindNestedEntryLabelInSeq(ite->ElseList(), target, out))
+                    return true;
+            }
+            if (auto *lbl = node->dyn_cast<SLabel>())
+                return FindNestedEntryLabelInSeq(lbl->BodyList(), target, out);
+            return false;
+        }
+
+        bool FindNestedEntryLabelInSeq(
+            std::vector<SNode *> &seq,
+            std::string_view target,
+            NestedEntryLabelLoc &out
+        ) {
+            for (size_t i = 0; i < seq.size(); ++i) {
+                auto *lbl = seq[i]->dyn_cast<SLabel>();
+                if (lbl && lbl->Name() == target) {
+                    if (i + 1 != seq.size())
+                        return false;
+                    out = {lbl, &seq, i};
+                    return true;
+                }
+
+                NestedEntryLabelLoc nested;
+                if (!FindNestedEntryLabelInNode(seq[i], target, nested))
+                    continue;
+                if (i + 1 != seq.size())
+                    return false;
+                out = nested;
+                return true;
+            }
+            return false;
+        }
+
+        bool FindNestedEntryLabelInLaterSibling(
+            std::vector<SNode *> &seq,
+            size_t begin,
+            std::string_view target,
+            size_t &carrier_idx,
+            NestedEntryLabelLoc &out
+        ) {
+            for (size_t i = begin; i < seq.size(); ++i) {
+                NestedEntryLabelLoc loc;
+                if (FindNestedEntryLabelInNode(seq[i], target, loc)) {
+                    carrier_idx = i;
+                    out = loc;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool FindClangNestedEntryLabelInStmt(
+            clang::Stmt *stmt,
+            std::string_view target,
+            ClangNestedEntryLabelLoc &out
+        ) {
+            auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(stmt);
+            if (!ifs)
+                return false;
+
+            auto arm_label = [&](clang::Stmt *arm,
+                                 bool is_then) -> clang::LabelStmt * {
+                auto *label = llvm::dyn_cast_or_null<clang::LabelStmt>(arm);
+                if (!label || !label->getDecl())
+                    return nullptr;
+                if (label->getDecl()->getName() != llvm::StringRef(target))
+                    return nullptr;
+                out = {label, ifs, is_then};
+                return label;
+            };
+
+            if (arm_label(ifs->getThen(), true))
+                return true;
+            if (arm_label(ifs->getElse(), false))
+                return true;
+            return false;
+        }
+
+        bool FindClangNestedEntryLabelInLaterSibling(
+            std::vector<SNode *> &seq,
+            size_t begin,
+            std::string_view target,
+            size_t &carrier_idx,
+            ClangNestedEntryLabelLoc &out
+        ) {
+            for (size_t i = begin; i < seq.size(); ++i) {
+                auto *stmt_node = seq[i]->dyn_cast<SStmt>();
+                if (!stmt_node)
+                    continue;
+                ClangNestedEntryLabelLoc loc;
+                if (FindClangNestedEntryLabelInStmt(
+                        stmt_node->Stmt(), target, loc)) {
+                    carrier_idx = i;
+                    out = loc;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        size_t CountClangEntryStmts(const clang::Stmt *stmt) {
+            if (!stmt) return 0;
+            if (auto *compound = llvm::dyn_cast<clang::CompoundStmt>(stmt)) {
+                size_t count = 0;
+                for (const clang::Stmt *child : compound->body()) {
+                    count += CountClangEntryStmts(child);
+                    if (count > kMaxCloneStmts)
+                        return count;
+                }
+                return count;
+            }
+            return 1;
+        }
+
+        bool ClangEntryStmtIsCloneSafe(const clang::Stmt *stmt) {
+            if (!stmt) return false;
+            if (CountClangEntryStmts(stmt) > kMaxCloneStmts)
+                return false;
+
+            std::function<bool(const clang::Stmt *)> safe =
+                [&](const clang::Stmt *cur) -> bool {
+                    if (!cur) return true;
+                    if (llvm::isa<clang::LabelStmt>(cur)
+                        || llvm::isa<clang::GotoStmt>(cur)
+                        || llvm::isa<clang::BreakStmt>(cur)
+                        || llvm::isa<clang::ContinueStmt>(cur)
+                        || llvm::isa<clang::SwitchStmt>(cur)
+                        || llvm::isa<clang::WhileStmt>(cur)
+                        || llvm::isa<clang::DoStmt>(cur)
+                        || llvm::isa<clang::ForStmt>(cur))
+                        return false;
+                    for (const clang::Stmt *child : cur->children())
+                        if (!safe(child))
+                            return false;
+                    return true;
+                };
+            return safe(stmt);
+        }
+
+        bool CrossScopeEntryBodyIsCloneSafe(
+            const std::vector<SNode *> &body
+        ) {
+            if (body.empty()) return false;
+            if (CountCloneSeq(body) > kMaxCloneStmts) return false;
+            if (SeqHasBreakContinue(body) || SeqHasGoto(body)
+                || SeqHasLabel(body))
+                return false;
+
+            std::function<bool(const clang::Stmt *)> clang_safe =
+                [&](const clang::Stmt *stmt) -> bool {
+                    if (!stmt) return true;
+                    if (llvm::isa<clang::LabelStmt>(stmt)
+                        || llvm::isa<clang::GotoStmt>(stmt)
+                        || llvm::isa<clang::BreakStmt>(stmt)
+                        || llvm::isa<clang::ContinueStmt>(stmt)
+                        || llvm::isa<clang::SwitchStmt>(stmt)
+                        || llvm::isa<clang::WhileStmt>(stmt)
+                        || llvm::isa<clang::DoStmt>(stmt)
+                        || llvm::isa<clang::ForStmt>(stmt))
+                        return false;
+                    for (const clang::Stmt *child : stmt->children())
+                        if (!clang_safe(child))
+                            return false;
+                    return true;
+                };
+
+            std::function<bool(const SNode *)> snode_safe =
+                [&](const SNode *node) -> bool {
+                    if (!node) return true;
+                    if (auto *stmt = node->dyn_cast<SStmt>())
+                        return clang_safe(stmt->Stmt());
+                    switch (node->Kind()) {
+                        case SNodeKind::kLabel:
+                        case SNodeKind::kGoto:
+                        case SNodeKind::kBreak:
+                        case SNodeKind::kContinue:
+                        case SNodeKind::kWhile:
+                        case SNodeKind::kDoWhile:
+                        case SNodeKind::kFor:
+                        case SNodeKind::kSwitch:
+                            return false;
+                        default:
+                            break;
+                    }
+                    bool safe = true;
+                    node->for_each_child([&](SNode *child) {
+                        if (safe && !snode_safe(child))
+                            safe = false;
+                    });
+                    return safe;
+                };
+
+            for (SNode *child : body)
+                if (!snode_safe(child))
+                    return false;
+            return true;
+        }
+
+        std::string_view SingleGotoTargetSeq(const std::vector<SNode *> &body) {
+            if (body.size() != 1) return {};
+            return DirectGotoTarget(body.front());
+        }
+
+        std::string_view SingleGotoTargetClangStmt(clang::Stmt *stmt) {
+            if (!stmt) return {};
+            if (auto *gs = llvm::dyn_cast<clang::GotoStmt>(stmt))
+                if (gs->getLabel())
+                    return gs->getLabel()->getName();
+            if (auto *compound = llvm::dyn_cast<clang::CompoundStmt>(stmt)) {
+                if (compound->body_empty())
+                    return {};
+                auto it = compound->body_begin();
+                ++it;
+                if (it != compound->body_end())
+                    return {};
+                return SingleGotoTargetClangStmt(compound->body_front());
+            }
+            return {};
+        }
+
+        clang::Expr *CrossScopeEntryGuardCond(
+            SNode *node,
+            std::string_view &target,
+            clang::ASTContext &ctx
+        ) {
+            target = {};
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (!ite->Cond() || !ite->ElseList().empty())
+                    return nullptr;
+                target = SingleGotoTargetSeq(ite->ThenList());
+                if (target.empty())
+                    return nullptr;
+                return CloneExpr(ctx, ite->Cond());
+            }
+
+            auto *stmt_node = node->dyn_cast<SStmt>();
+            if (!stmt_node)
+                return nullptr;
+            auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(
+                stmt_node->Stmt());
+            if (!ifs || !ifs->getCond() || ifs->getElse())
+                return nullptr;
+            target = SingleGotoTargetClangStmt(ifs->getThen());
+            if (target.empty())
+                return nullptr;
+            return CloneExpr(ctx, ifs->getCond());
+        }
+
+        bool RepairCrossScopeEntriesInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            clang::ASTContext &ctx,
+            const std::unordered_map<std::string_view, int> &refs
+        ) {
+            for (size_t i = 0; i + 1 < seq.size(); ++i) {
+                std::string_view target;
+                clang::Expr *cond =
+                    CrossScopeEntryGuardCond(seq[i], target, ctx);
+                if (!cond)
+                    continue;
+                if (!RefCountEquals(refs, target, 1))
+                    continue;
+
+                size_t carrier_idx = seq.size();
+                NestedEntryLabelLoc loc;
+                if (!FindNestedEntryLabelInLaterSibling(
+                        seq, i + 1, target, carrier_idx, loc))
+                    continue;
+                if (!loc.label || !loc.parent_seq)
+                    continue;
+
+                std::vector<SNode *> &label_body = loc.label->BodyList();
+                if (!CrossScopeEntryBodyIsCloneSafe(label_body))
+                    continue;
+
+                std::vector<SNode *> cloned_body =
+                    CloneSeq(label_body, factory);
+                std::vector<SNode *> unwrapped_body = label_body;
+
+                loc.parent_seq->erase(
+                    loc.parent_seq->begin()
+                        + static_cast<ptrdiff_t>(loc.idx));
+                loc.parent_seq->insert(
+                    loc.parent_seq->begin()
+                        + static_cast<ptrdiff_t>(loc.idx),
+                    unwrapped_body.begin(), unwrapped_body.end());
+
+                std::vector<SNode *> else_body;
+                else_body.reserve(carrier_idx - i);
+                for (size_t j = i + 1; j <= carrier_idx; ++j)
+                    else_body.push_back(seq[j]);
+
+                auto *new_if = factory.Make<SIfThenElse>(
+                    cond, std::move(cloned_body), std::move(else_body));
+
+                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i),
+                          seq.begin() + static_cast<ptrdiff_t>(carrier_idx)
+                              + 1);
+                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i), new_if);
+                return true;
+            }
+
+            for (size_t i = 0; i + 1 < seq.size(); ++i) {
+                std::string_view target;
+                clang::Expr *cond =
+                    CrossScopeEntryGuardCond(seq[i], target, ctx);
+                if (!cond)
+                    continue;
+                if (!RefCountEquals(refs, target, 1))
+                    continue;
+
+                size_t carrier_idx = seq.size();
+                ClangNestedEntryLabelLoc loc;
+                if (!FindClangNestedEntryLabelInLaterSibling(
+                        seq, i + 1, target, carrier_idx, loc))
+                    continue;
+                if (!loc.label || !loc.owner_if)
+                    continue;
+
+                clang::Stmt *entry_stmt = loc.label->getSubStmt();
+                if (!ClangEntryStmtIsCloneSafe(entry_stmt))
+                    continue;
+
+                if (loc.is_then)
+                    loc.owner_if->setThen(entry_stmt);
+                else
+                    loc.owner_if->setElse(entry_stmt);
+
+                std::vector<SNode *> cloned_body;
+                cloned_body.push_back(factory.Make<SStmt>(entry_stmt));
+
+                std::vector<SNode *> else_body;
+                else_body.reserve(carrier_idx - i);
+                for (size_t j = i + 1; j <= carrier_idx; ++j)
+                    else_body.push_back(seq[j]);
+
+                auto *new_if = factory.Make<SIfThenElse>(
+                    cond, std::move(cloned_body), std::move(else_body));
+
+                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i),
+                          seq.begin() + static_cast<ptrdiff_t>(carrier_idx)
+                              + 1);
+                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i), new_if);
+                return true;
+            }
+            return false;
         }
 
         /// Build a replacement case body by splicing \p clone in place
@@ -4339,6 +6965,1419 @@ namespace patchestry::ast {
             return {};
         }
 
+        bool SpliceTerminatingGotoTargetsInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            size_t &cloned_total,
+            size_t max_clone_total,
+            bool descend_into_labels,
+            bool require_goto_free_clone
+        ) {
+            bool changed = false;
+
+            for (auto *child : seq) {
+                if (!descend_into_labels && child->dyn_cast<SLabel>())
+                    continue;
+                ForEachBodyList(child, [&](std::vector<SNode *> &body) {
+                    if (SpliceTerminatingGotoTargetsInSeq(
+                            body, factory, labels, cloned_total,
+                            max_clone_total, descend_into_labels,
+                            require_goto_free_clone))
+                        changed = true;
+                });
+            }
+
+            for (size_t i = 0; i < seq.size(); ++i) {
+                auto target = DirectGotoTarget(seq[i]);
+                if (target.empty()) continue;
+
+                std::vector<SNode *> clone =
+                    TryCloneTerminatingLabelBody(target, labels, factory);
+                if (clone.empty()) continue;
+                if (IsSingleGotoTo(clone, target)) continue;
+                if (require_goto_free_clone && SeqHasGoto(clone)) continue;
+                if (require_goto_free_clone && SeqHasLocalLiveIns(clone))
+                    continue;
+
+                size_t clone_size = CountCloneSeq(clone);
+                if (cloned_total + clone_size > max_clone_total)
+                    continue;
+
+                cloned_total += clone_size;
+                SpliceAndAdvance(seq, i, clone);
+                changed = true;
+            }
+
+            auto target = TrailingGotoTargetSeq(seq);
+            if (target.empty()) return changed;
+
+            std::vector<SNode *> clone =
+                TryCloneTerminatingLabelBody(target, labels, factory);
+            if (clone.empty()) return changed;
+            if (IsSingleGotoTo(clone, target)) return changed;
+            if (require_goto_free_clone && SeqHasGoto(clone)) return changed;
+            if (require_goto_free_clone && SeqHasLocalLiveIns(clone))
+                return changed;
+
+            size_t clone_size = CountCloneSeq(clone);
+            if (cloned_total + clone_size > max_clone_total)
+                return changed;
+
+            std::vector<SNode *> spliced =
+                BuildSplicedSeq(seq, clone, factory);
+            if (spliced.empty()) return changed;
+
+            seq = std::move(spliced);
+            cloned_total += clone_size;
+            return true;
+        }
+
+        bool SpliceSmallEpilogueTargetsInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            size_t &cloned_total,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+
+            for (auto *child : seq) {
+                ForEachBodyList(child, [&](std::vector<SNode *> &body) {
+                    if (SpliceSmallEpilogueTargetsInSeq(
+                            body, factory, labels, cloned_total, ctx))
+                        changed = true;
+                });
+            }
+
+            for (size_t i = 0; i < seq.size(); ++i) {
+                if (auto *stmt_node = seq[i]->dyn_cast<SStmt>()) {
+                    if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(
+                            stmt_node->Stmt())) {
+                        auto defs_before = GuaranteedLocalDefsBefore(seq, i);
+                        auto try_replace_arm = [&](clang::Stmt *arm,
+                                                   bool is_then) -> bool {
+                            auto info = ExtractIfArmGoto(arm);
+                            if (!info.gs || !info.gs->getLabel()) return false;
+
+                            std::vector<SNode *> clone =
+                                TryCloneSmallEpilogueTarget(
+                                    info.gs->getLabel()->getName(), labels,
+                                    factory);
+                            if (clone.empty()) return false;
+
+                            auto arm_defs = defs_before;
+                            CollectCompoundPrefixDefs(
+                                info.compound, arm_defs);
+                            if (!LiveInsSatisfiedBy(clone, arm_defs))
+                                return false;
+
+                            size_t clone_size = CountCloneSeq(clone);
+                            if (cloned_total + clone_size
+                                > kMaxGeneralCloneTotal)
+                                return false;
+
+                            std::vector<clang::Stmt *> replacement_stmts;
+                            if (!FlattenClonedSeqToStmts(
+                                    clone, ctx, replacement_stmts))
+                                return false;
+
+                            clang::CompoundStmt *replacement =
+                                BuildReplacementArm(
+                                    ctx, info.compound, replacement_stmts);
+                            if (is_then)
+                                ifs->setThen(replacement);
+                            else
+                                ifs->setElse(replacement);
+                            cloned_total += clone_size;
+                            return true;
+                        };
+
+                        if (try_replace_arm(ifs->getThen(), true))
+                            changed = true;
+                        if (try_replace_arm(ifs->getElse(), false))
+                            changed = true;
+                    }
+                }
+
+                auto target = DirectGotoTarget(seq[i]);
+                if (target.empty()) continue;
+
+                std::vector<SNode *> clone =
+                    TryCloneSmallEpilogueTarget(target, labels, factory);
+                if (clone.empty()) continue;
+
+                auto defined = GuaranteedLocalDefsBefore(seq, i);
+                if (!LiveInsSatisfiedBy(clone, defined))
+                    continue;
+
+                size_t clone_size = CountCloneSeq(clone);
+                if (cloned_total + clone_size > kMaxGeneralCloneTotal)
+                    continue;
+
+                cloned_total += clone_size;
+                SpliceAndAdvance(seq, i, clone);
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        constexpr size_t kMaxStackGuardCloneTotal = 256;
+
+        bool IsStackFailCall(const clang::CallExpr *call) {
+            if (!call) return false;
+            const clang::FunctionDecl *callee = call->getDirectCallee();
+            if (!callee) return false;
+            return callee->getName().contains("stack_chk_fail");
+        }
+
+        bool ClangStmtIsStackGuardCloneSafe(
+            const clang::Stmt *stmt, bool &has_stack_fail
+        ) {
+            if (!stmt) return true;
+
+            if (auto *label = llvm::dyn_cast<clang::LabelStmt>(stmt))
+                return ClangStmtIsStackGuardCloneSafe(
+                    label->getSubStmt(), has_stack_fail);
+
+            if (auto *call = llvm::dyn_cast<clang::CallExpr>(stmt)) {
+                if (!IsStackFailCall(call)) return false;
+                has_stack_fail = true;
+            }
+
+            for (const clang::Stmt *child : stmt->children())
+                if (!ClangStmtIsStackGuardCloneSafe(child, has_stack_fail))
+                    return false;
+            return true;
+        }
+
+        bool SNodeIsStackGuardCloneSafe(const SNode *node, bool &has_stack_fail);
+
+        bool SeqIsStackGuardCloneSafe(
+            const std::vector<SNode *> &seq, bool &has_stack_fail
+        ) {
+            for (const SNode *child : seq)
+                if (!SNodeIsStackGuardCloneSafe(child, has_stack_fail))
+                    return false;
+            return true;
+        }
+
+        bool SNodeIsStackGuardCloneSafe(const SNode *node, bool &has_stack_fail) {
+            if (!node) return true;
+
+            if (auto *stmt = node->dyn_cast<SStmt>())
+                return ClangStmtIsStackGuardCloneSafe(
+                    stmt->Stmt(), has_stack_fail);
+            if (auto *ret = node->dyn_cast<SReturn>())
+                return ClangStmtIsStackGuardCloneSafe(
+                    ret->Value(), has_stack_fail);
+            if (auto *label = node->dyn_cast<SLabel>())
+                return SeqIsStackGuardCloneSafe(
+                    label->BodyList(), has_stack_fail);
+            if (auto *ite = node->dyn_cast<SIfThenElse>()) {
+                if (!ClangStmtIsStackGuardCloneSafe(
+                        ite->Cond(), has_stack_fail))
+                    return false;
+                return SeqIsStackGuardCloneSafe(
+                           ite->ThenList(), has_stack_fail)
+                    && SeqIsStackGuardCloneSafe(
+                           ite->ElseList(), has_stack_fail);
+            }
+
+            switch (node->Kind()) {
+                case SNodeKind::kGoto:
+                case SNodeKind::kBreak:
+                case SNodeKind::kContinue:
+                case SNodeKind::kSwitch:
+                case SNodeKind::kWhile:
+                case SNodeKind::kDoWhile:
+                case SNodeKind::kFor:
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
+        bool StackGuardTailIsSafe(const std::vector<SNode *> &tail) {
+            if (tail.empty()) return false;
+            if (!SeqAlwaysTerminates(tail)) return false;
+            if (SeqHasGoto(tail)) return false;
+            if (SeqHasBreakContinue(tail)) return false;
+            if (CountCloneSeq(tail) > kMaxCloneStmts) return false;
+
+            bool has_stack_fail = false;
+            return SeqIsStackGuardCloneSafe(tail, has_stack_fail)
+                && has_stack_fail;
+        }
+
+        bool CollectLabelTailForStackGuardClone(
+            std::string_view target_label,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            std::vector<SNode *> &tail
+        ) {
+            auto it = labels.find(target_label);
+            if (it == labels.end()) return false;
+            auto *parent_seq = it->second.parent_seq;
+            if (!parent_seq) return false;
+
+            size_t label_idx = parent_seq->size();
+            for (size_t i = 0; i < parent_seq->size(); ++i) {
+                if ((*parent_seq)[i] == it->second.label) {
+                    label_idx = i;
+                    break;
+                }
+            }
+            if (label_idx == parent_seq->size()) return false;
+
+            tail.clear();
+            auto &label_body = it->second.label->BodyList();
+            if (label_body.empty()) return false;
+            tail.insert(tail.end(), label_body.begin(), label_body.end());
+
+            for (size_t i = label_idx + 1;
+                 !SeqAlwaysTerminates(tail) && i < parent_seq->size(); ++i) {
+                SNode *next = (*parent_seq)[i];
+                if (next->dyn_cast<SLabel>()) return false;
+                tail.push_back(next);
+            }
+
+            return StackGuardTailIsSafe(tail);
+        }
+
+        SNode *CloneStackGuardNodeDroppingLabels(
+            SNode *src, SNodeFactory &factory);
+
+        bool AppendStackGuardCloneNode(
+            SNode *src, SNodeFactory &factory, std::vector<SNode *> &out
+        ) {
+            if (!src) return true;
+            if (auto *label = src->dyn_cast<SLabel>()) {
+                for (SNode *child : label->BodyList())
+                    if (!AppendStackGuardCloneNode(child, factory, out))
+                        return false;
+                return true;
+            }
+
+            SNode *clone = CloneStackGuardNodeDroppingLabels(src, factory);
+            if (!clone) return false;
+            out.push_back(clone);
+            return true;
+        }
+
+        std::vector<SNode *> CloneStackGuardSeqDroppingLabels(
+            const std::vector<SNode *> &src, SNodeFactory &factory
+        ) {
+            std::vector<SNode *> out;
+            out.reserve(src.size());
+            for (SNode *child : src)
+                if (!AppendStackGuardCloneNode(child, factory, out))
+                    return {};
+            return out;
+        }
+
+        SNode *CloneStackGuardNodeDroppingLabels(
+            SNode *src, SNodeFactory &factory
+        ) {
+            if (!src) return nullptr;
+            if (auto *stmt = src->dyn_cast<SStmt>()) {
+                clang::Stmt *body = stmt->Stmt();
+                if (auto *label = llvm::dyn_cast_or_null<clang::LabelStmt>(
+                        body))
+                    body = label->getSubStmt();
+                return body ? factory.Make<SStmt>(body) : nullptr;
+            }
+            if (auto *ite = src->dyn_cast<SIfThenElse>()) {
+                std::vector<SNode *> then_body =
+                    CloneStackGuardSeqDroppingLabels(
+                        ite->ThenList(), factory);
+                std::vector<SNode *> else_body =
+                    CloneStackGuardSeqDroppingLabels(
+                        ite->ElseList(), factory);
+                return 
+                    factory.Make<SIfThenElse>(
+                        ite->Cond(), std::move(then_body), std::move(else_body));
+            }
+            if (auto *ret = src->dyn_cast<SReturn>())
+                return factory.Make<SReturn>(ret->Value());
+            return nullptr;
+        }
+
+        std::vector<SNode *> TryCloneStackGuardReturnTarget(
+            std::string_view target_label,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            SNodeFactory &factory
+        ) {
+            std::vector<SNode *> tail;
+            if (!CollectLabelTailForStackGuardClone(
+                    target_label, labels, tail))
+                return {};
+
+            std::vector<SNode *> clone =
+                CloneStackGuardSeqDroppingLabels(tail, factory);
+            if (clone.empty()) return {};
+            if (!SeqAlwaysTerminates(clone)) return {};
+            if (SeqHasGoto(clone)) return {};
+            return clone;
+        }
+
+        bool SpliceStackGuardReturnTargetsInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            size_t &cloned_total,
+            clang::ASTContext &ctx,
+            const std::unordered_set<const clang::VarDecl *> &ambient_defs
+        ) {
+            bool changed = false;
+
+            for (auto *child : seq) {
+                ForEachBodyList(child, [&](std::vector<SNode *> &body) {
+                    if (SpliceStackGuardReturnTargetsInSeq(
+                            body, factory, labels, cloned_total, ctx,
+                            ambient_defs))
+                        changed = true;
+                });
+            }
+
+            for (size_t i = 0; i < seq.size(); ++i) {
+                if (auto *stmt_node = seq[i]->dyn_cast<SStmt>()) {
+                    if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(
+                            stmt_node->Stmt())) {
+                        auto defs_before = GuaranteedLocalDefsBefore(seq, i);
+                        defs_before.insert(
+                            ambient_defs.begin(), ambient_defs.end());
+                        auto try_replace_arm = [&](clang::Stmt *arm,
+                                                   bool is_then) -> bool {
+                            auto info = ExtractIfArmGoto(arm);
+                            if (!info.gs || !info.gs->getLabel()) return false;
+
+                            std::vector<SNode *> clone =
+                                TryCloneStackGuardReturnTarget(
+                                    info.gs->getLabel()->getName(), labels,
+                                    factory);
+                            if (clone.empty()) return false;
+
+                            auto arm_defs = defs_before;
+                            CollectCompoundPrefixDefs(
+                                info.compound, arm_defs);
+                            if (!LiveInsSatisfiedBy(clone, arm_defs))
+                                return false;
+
+                            size_t clone_size = CountCloneSeq(clone);
+                            if (cloned_total + clone_size
+                                > kMaxStackGuardCloneTotal)
+                                return false;
+
+                            std::vector<clang::Stmt *> replacement_stmts;
+                            if (!FlattenClonedSeqToStmts(
+                                    clone, ctx, replacement_stmts))
+                                return false;
+
+                            clang::CompoundStmt *replacement =
+                                BuildReplacementArm(
+                                    ctx, info.compound, replacement_stmts);
+                            if (is_then)
+                                ifs->setThen(replacement);
+                            else
+                                ifs->setElse(replacement);
+                            cloned_total += clone_size;
+                            return true;
+                        };
+
+                        if (try_replace_arm(ifs->getThen(), true))
+                            changed = true;
+                        if (try_replace_arm(ifs->getElse(), false))
+                            changed = true;
+                    }
+                }
+
+                auto target = DirectGotoTarget(seq[i]);
+                if (target.empty()) continue;
+
+                std::vector<SNode *> clone =
+                    TryCloneStackGuardReturnTarget(target, labels, factory);
+                if (clone.empty()) continue;
+
+                auto defined = GuaranteedLocalDefsBefore(seq, i);
+                defined.insert(ambient_defs.begin(), ambient_defs.end());
+                if (!LiveInsSatisfiedBy(clone, defined))
+                    continue;
+
+                size_t clone_size = CountCloneSeq(clone);
+                if (cloned_total + clone_size > kMaxStackGuardCloneTotal)
+                    continue;
+
+                cloned_total += clone_size;
+                SpliceAndAdvance(seq, i, clone);
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        std::unordered_set<const clang::VarDecl *> CollectEntryPrefixDefs(
+            std::vector<SNode *> &root
+        ) {
+            std::unordered_set<const clang::VarDecl *> defined;
+            for (SNode *node : root) {
+                // Once a residual label appears, later code can be reached
+                // by gotos from multiple places.  Only the unlabeled entry
+                // prefix is safe as an ambient fact for every label body.
+                if (node->dyn_cast<SLabel>())
+                    break;
+                SNodeCollectGuaranteedLocalDefs(node, defined);
+            }
+            return defined;
+        }
+
+        constexpr size_t kMaxCleanupCloneTotal = 128;
+        constexpr size_t kMaxCleanupCloneHops  = 6;
+
+        bool IsCleanupCall(const clang::CallExpr *call) {
+            if (!call) return false;
+            const clang::FunctionDecl *callee = call->getDirectCallee();
+            if (!callee) return false;
+
+            llvm::StringRef name = callee->getName();
+            return name.contains("unref")
+                || name.contains("free")
+                || name.contains("delete")
+                || name.contains("close")
+                || name.contains("dealloc")
+                || name == "fwrite"
+                || name == "puts"
+                || name == "printf";
+        }
+
+        bool ClangStmtIsCleanupCloneSafe(
+            const clang::Stmt *stmt, bool &has_cleanup_call
+        ) {
+            if (!stmt) return true;
+            if (llvm::isa<clang::LabelStmt>(stmt)
+                || llvm::isa<clang::GotoStmt>(stmt))
+                return false;
+
+            if (auto *call = llvm::dyn_cast<clang::CallExpr>(stmt)) {
+                if (!IsCleanupCall(call)) return false;
+                has_cleanup_call = true;
+            }
+
+            for (const clang::Stmt *child : stmt->children())
+                if (!ClangStmtIsCleanupCloneSafe(child, has_cleanup_call))
+                    return false;
+            return true;
+        }
+
+        bool SNodeIsCleanupCloneSafe(
+            const SNode *node, bool &has_cleanup_call
+        ) {
+            if (!node) return true;
+
+            if (auto *stmt = node->dyn_cast<SStmt>())
+                return ClangStmtIsCleanupCloneSafe(
+                    stmt->Stmt(), has_cleanup_call);
+            if (auto *ret = node->dyn_cast<SReturn>())
+                return ClangStmtIsCleanupCloneSafe(
+                    ret->Value(), has_cleanup_call);
+
+            // Keep this pass focused on straight-line cleanup ladders.  More
+            // complex control is handled by the existing non-call cloners.
+            switch (node->Kind()) {
+                case SNodeKind::kStmt:
+                case SNodeKind::kReturn:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        SNode *CloneCleanupNode(SNode *src, SNodeFactory &factory) {
+            if (!src) return nullptr;
+            if (auto *stmt = src->dyn_cast<SStmt>())
+                return factory.Make<SStmt>(stmt->Stmt());
+            if (auto *ret = src->dyn_cast<SReturn>())
+                return factory.Make<SReturn>(ret->Value());
+            return nullptr;
+        }
+
+        bool FindLabelIndex(const LabelEntry &entry, size_t &index) {
+            if (!entry.parent_seq) return false;
+            auto &seq = *entry.parent_seq;
+            for (size_t i = 0; i < seq.size(); ++i) {
+                if (seq[i] == entry.label) {
+                    index = i;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool AppendCleanupLabelBody(
+            const LabelEntry &entry,
+            SNodeFactory &factory,
+            std::vector<SNode *> &clone,
+            std::string_view &next_target,
+            bool &has_cleanup_call
+        ) {
+            next_target = {};
+            for (SNode *child : entry.label->BodyList()) {
+                if (auto target = DirectGotoTarget(child); !target.empty()) {
+                    next_target = target;
+                    return true;
+                }
+
+                if (!SNodeIsCleanupCloneSafe(child, has_cleanup_call))
+                    return false;
+                SNode *cloned = CloneCleanupNode(child, factory);
+                if (!cloned) return false;
+                clone.push_back(cloned);
+                if (CountCloneSeq(clone) > kMaxCloneStmts)
+                    return false;
+            }
+
+            if (SeqAlwaysTerminates(clone))
+                return true;
+
+            size_t label_idx = 0;
+            if (!FindLabelIndex(entry, label_idx)) return false;
+            auto &parent_seq = *entry.parent_seq;
+            if (label_idx + 1 >= parent_seq.size()) return false;
+            auto *next_label = parent_seq[label_idx + 1]->dyn_cast<SLabel>();
+            if (!next_label) return false;
+            next_target = next_label->Name();
+            return true;
+        }
+
+        std::vector<SNode *> TryCloneCleanupReturnTarget(
+            std::string_view target_label,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            SNodeFactory &factory
+        ) {
+            std::vector<SNode *> clone;
+            std::unordered_set<std::string_view> visited;
+            std::string_view current = target_label;
+            bool has_cleanup_call = false;
+
+            for (size_t hop = 0; hop < kMaxCleanupCloneHops; ++hop) {
+                if (!visited.insert(current).second) return {};
+                auto it = labels.find(current);
+                if (it == labels.end()) return {};
+
+                std::string_view next_target;
+                if (!AppendCleanupLabelBody(
+                        it->second, factory, clone, next_target,
+                        has_cleanup_call))
+                    return {};
+
+                if (SeqAlwaysTerminates(clone))
+                    break;
+                if (next_target.empty())
+                    return {};
+                current = next_target;
+            }
+
+            if (!SeqAlwaysTerminates(clone)) return {};
+            if (!has_cleanup_call) return {};
+            if (SeqHasGoto(clone)) return {};
+            if (SeqHasBreakContinue(clone)) return {};
+            if (CountCloneSeq(clone) > kMaxCloneStmts) return {};
+            return clone;
+        }
+
+        bool SpliceCleanupReturnTargetsInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            size_t &cloned_total,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+
+            for (auto *child : seq) {
+                ForEachBodyList(child, [&](std::vector<SNode *> &body) {
+                    if (SpliceCleanupReturnTargetsInSeq(
+                            body, factory, labels, cloned_total, ctx))
+                        changed = true;
+                });
+            }
+
+            for (size_t i = 0; i < seq.size(); ++i) {
+                if (auto *stmt_node = seq[i]->dyn_cast<SStmt>()) {
+                    if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(
+                            stmt_node->Stmt())) {
+                        auto defs_before = GuaranteedLocalDefsBefore(seq, i);
+                        auto try_replace_arm = [&](clang::Stmt *arm,
+                                                   bool is_then) -> bool {
+                            auto info = ExtractIfArmGoto(arm);
+                            if (!info.gs || !info.gs->getLabel()) return false;
+
+                            std::vector<SNode *> clone =
+                                TryCloneCleanupReturnTarget(
+                                    info.gs->getLabel()->getName(), labels,
+                                    factory);
+                            if (clone.empty()) return false;
+
+                            auto arm_defs = defs_before;
+                            CollectCompoundPrefixDefs(
+                                info.compound, arm_defs);
+                            if (!LiveInsSatisfiedBy(clone, arm_defs))
+                                return false;
+
+                            size_t clone_size = CountCloneSeq(clone);
+                            if (cloned_total + clone_size
+                                > kMaxCleanupCloneTotal)
+                                return false;
+
+                            std::vector<clang::Stmt *> replacement_stmts;
+                            if (!FlattenClonedSeqToStmts(
+                                    clone, ctx, replacement_stmts))
+                                return false;
+
+                            clang::CompoundStmt *replacement =
+                                BuildReplacementArm(
+                                    ctx, info.compound, replacement_stmts);
+                            if (is_then)
+                                ifs->setThen(replacement);
+                            else
+                                ifs->setElse(replacement);
+                            cloned_total += clone_size;
+                            return true;
+                        };
+
+                        if (try_replace_arm(ifs->getThen(), true))
+                            changed = true;
+                        if (try_replace_arm(ifs->getElse(), false))
+                            changed = true;
+                    }
+                }
+
+                auto target = DirectGotoTarget(seq[i]);
+                if (target.empty()) continue;
+
+                std::vector<SNode *> clone =
+                    TryCloneCleanupReturnTarget(target, labels, factory);
+                if (clone.empty()) continue;
+
+                auto defined = GuaranteedLocalDefsBefore(seq, i);
+                if (!LiveInsSatisfiedBy(clone, defined))
+                    continue;
+
+                size_t clone_size = CountCloneSeq(clone);
+                if (cloned_total + clone_size > kMaxCleanupCloneTotal)
+                    continue;
+
+                cloned_total += clone_size;
+                SpliceAndAdvance(seq, i, clone);
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        struct SwitchFallthroughTarget {
+            std::vector<SNode *> body;
+        };
+
+        bool OpensBreakScope(const SNode *node) {
+            if (!node) return false;
+            switch (node->Kind()) {
+                case SNodeKind::kSwitch:
+                case SNodeKind::kWhile:
+                case SNodeKind::kDoWhile:
+                case SNodeKind::kFor:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        bool IsSmallSwitchFallthroughBody(const std::vector<SNode *> &body) {
+            if (body.empty()) return false;
+            if (SeqAlwaysTerminates(body)) return false;
+            if (SeqHasGoto(body)) return false;
+            if (SeqHasBreakContinue(body)) return false;
+            if (SeqHasLocalLiveIns(body)) return false;
+            if (CountCloneSeq(body) > kMaxCloneStmts) return false;
+            for (SNode *child : body)
+                if (!SubtreeIsSafeToClone(child))
+                    return false;
+            return true;
+        }
+
+        void CollectSwitchFallthroughTargetsInSeq(
+            std::vector<SNode *> &seq,
+            std::unordered_map<std::string_view, SwitchFallthroughTarget> &targets
+        ) {
+            for (size_t i = 0; i < seq.size(); ++i) {
+                SNode *child = seq[i];
+                bool reaches_switch_break = i + 1 == seq.size();
+
+                if (auto *label = child->dyn_cast<SLabel>()) {
+                    if (reaches_switch_break
+                        && IsSmallSwitchFallthroughBody(label->BodyList()))
+                        targets[label->Name()] = {label->BodyList()};
+                    if (reaches_switch_break)
+                        CollectSwitchFallthroughTargetsInSeq(
+                            label->BodyList(), targets);
+                    continue;
+                }
+
+                if (!reaches_switch_break || OpensBreakScope(child))
+                    continue;
+
+                if (auto *ite = child->dyn_cast<SIfThenElse>()) {
+                    CollectSwitchFallthroughTargetsInSeq(
+                        ite->ThenList(), targets);
+                    CollectSwitchFallthroughTargetsInSeq(
+                        ite->ElseList(), targets);
+                }
+            }
+        }
+
+        std::vector<SNode *> CloneSwitchFallthroughTarget(
+            std::string_view target,
+            const std::unordered_map<std::string_view, SwitchFallthroughTarget> &targets,
+            SNodeFactory &factory
+        ) {
+            auto it = targets.find(target);
+            if (it == targets.end()) return {};
+            std::vector<SNode *> clone = CloneSeq(it->second.body, factory);
+            if (clone.empty()) return {};
+            clone.push_back(factory.Make<SBreak>());
+            return clone;
+        }
+
+        bool SpliceSwitchFallthroughTargetsInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            const std::unordered_map<std::string_view, SwitchFallthroughTarget> &targets,
+            size_t &cloned_total,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+
+            for (SNode *child : seq) {
+                if (OpensBreakScope(child))
+                    continue;
+                ForEachBodyList(child, [&](std::vector<SNode *> &body) {
+                    if (SpliceSwitchFallthroughTargetsInSeq(
+                            body, factory, targets, cloned_total, ctx))
+                        changed = true;
+                });
+            }
+
+            for (size_t i = 0; i < seq.size(); ++i) {
+                if (auto *stmt_node = seq[i]->dyn_cast<SStmt>()) {
+                    if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(
+                            stmt_node->Stmt())) {
+                        auto try_replace_arm = [&](clang::Stmt *arm,
+                                                   bool is_then) -> bool {
+                            auto info = ExtractIfArmGoto(arm);
+                            if (!info.gs || !info.gs->getLabel()) return false;
+
+                            std::vector<SNode *> clone =
+                                CloneSwitchFallthroughTarget(
+                                    info.gs->getLabel()->getName(), targets,
+                                    factory);
+                            if (clone.empty()) return false;
+
+                            size_t clone_size = CountCloneSeq(clone);
+                            if (cloned_total + clone_size
+                                > kMaxGeneralCloneTotal)
+                                return false;
+
+                            std::vector<clang::Stmt *> replacement_stmts;
+                            if (!FlattenClonedSeqToStmts(
+                                    clone, ctx, replacement_stmts))
+                                return false;
+
+                            clang::CompoundStmt *replacement =
+                                BuildReplacementArm(
+                                    ctx, info.compound, replacement_stmts);
+                            if (is_then)
+                                ifs->setThen(replacement);
+                            else
+                                ifs->setElse(replacement);
+                            cloned_total += clone_size;
+                            return true;
+                        };
+
+                        if (try_replace_arm(ifs->getThen(), true))
+                            changed = true;
+                        if (try_replace_arm(ifs->getElse(), false))
+                            changed = true;
+                    }
+                }
+
+                auto target = DirectGotoTarget(seq[i]);
+                if (target.empty()) continue;
+
+                std::vector<SNode *> clone =
+                    CloneSwitchFallthroughTarget(target, targets, factory);
+                if (clone.empty()) continue;
+
+                size_t clone_size = CountCloneSeq(clone);
+                if (cloned_total + clone_size > kMaxGeneralCloneTotal)
+                    continue;
+
+                cloned_total += clone_size;
+                SpliceAndAdvance(seq, i, clone);
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        bool FindLabelEntryIndex(const LabelEntry &entry, size_t &index) {
+            if (!entry.parent_seq || !entry.label)
+                return false;
+            auto &seq = *entry.parent_seq;
+            for (size_t i = 0; i < seq.size(); ++i) {
+                if (seq[i] == entry.label) {
+                    index = i;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool MoveSwitchLocalBodyIsSafe(const std::vector<SNode *> &body) {
+            if (body.empty()) return false;
+            if (!SeqAlwaysTerminates(body)) return false;
+            if (SeqHasLabel(body)) return false;
+            if (SeqHasGoto(body)) return false;
+            if (SeqHasBreakContinue(body)) return false;
+            if (CountCloneSeq(body) > kMaxCloneStmts) return false;
+
+            std::function<bool(const SNode *)> safe_node =
+                [&](const SNode *node) -> bool {
+                    if (!node) return true;
+                    if (auto *stmt = node->dyn_cast<SStmt>()) {
+                        std::function<bool(const clang::Stmt *)> safe_stmt =
+                            [&](const clang::Stmt *stmt) -> bool {
+                                if (!stmt) return true;
+                                if (llvm::isa<clang::LabelStmt>(stmt)
+                                    || llvm::isa<clang::BreakStmt>(stmt)
+                                    || llvm::isa<clang::ContinueStmt>(stmt)
+                                    || llvm::isa<clang::SwitchStmt>(stmt)
+                                    || llvm::isa<clang::WhileStmt>(stmt)
+                                    || llvm::isa<clang::DoStmt>(stmt)
+                                    || llvm::isa<clang::ForStmt>(stmt))
+                                    return false;
+                                for (const clang::Stmt *child : stmt->children())
+                                    if (!safe_stmt(child))
+                                        return false;
+                                return true;
+                            };
+                        return safe_stmt(stmt->Stmt());
+                    }
+                    switch (node->Kind()) {
+                        case SNodeKind::kLabel:
+                        case SNodeKind::kBreak:
+                        case SNodeKind::kContinue:
+                        case SNodeKind::kWhile:
+                        case SNodeKind::kDoWhile:
+                        case SNodeKind::kFor:
+                        case SNodeKind::kSwitch:
+                            return false;
+                        default:
+                            break;
+                    }
+                    bool safe = true;
+                    node->for_each_child([&](SNode *child) {
+                        if (safe && !safe_node(child))
+                            safe = false;
+                    });
+                    return safe;
+                };
+
+            for (SNode *child : body)
+                if (!safe_node(child))
+                    return false;
+            return true;
+        }
+
+        bool PrepareSwitchLocalMoveTarget(
+            std::string_view target,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            const std::unordered_map<std::string_view, int> &refs,
+            LabelEntry &entry,
+            std::vector<SNode *> &body
+        ) {
+            auto ref_it = refs.find(target);
+            if (ref_it == refs.end() || ref_it->second != 1)
+                return false;
+
+            auto label_it = labels.find(target);
+            if (label_it == labels.end())
+                return false;
+
+            size_t label_idx = 0;
+            if (!FindLabelEntryIndex(label_it->second, label_idx))
+                return false;
+            if (label_idx == 0)
+                return false;
+            if (!SNodeAlwaysTerminates(
+                    (*label_it->second.parent_seq)[label_idx - 1]))
+                return false;
+
+            body = label_it->second.label->BodyList();
+            if (!MoveSwitchLocalBodyIsSafe(body))
+                return false;
+
+            entry = label_it->second;
+            return true;
+        }
+
+        // Returns the index from which the label was erased, or CNode::kNone
+        // if not found.  Callers iterating the same parent_seq with a stale
+        // outer index must adjust when the removed index precedes theirs.
+        size_t RemoveMovedSwitchLocalLabel(const LabelEntry &entry) {
+            size_t label_idx = 0;
+            if (!FindLabelEntryIndex(entry, label_idx))
+                return CNode::kNone;
+            entry.parent_seq->erase(
+                entry.parent_seq->begin()
+                    + static_cast<ptrdiff_t>(label_idx));
+            return label_idx;
+        }
+
+        bool MoveSwitchLocalTargetsInSeq(
+            std::vector<SNode *> &seq,
+            clang::ASTContext &ctx,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            const std::unordered_map<std::string_view, int> &refs
+        ) {
+            bool changed = false;
+
+            for (SNode *child : seq) {
+                if (OpensBreakScope(child))
+                    continue;
+                ForEachBodyList(child, [&](std::vector<SNode *> &body) {
+                    if (MoveSwitchLocalTargetsInSeq(
+                            body, ctx, labels, refs))
+                        changed = true;
+                });
+            }
+
+            for (size_t i = 0; i < seq.size(); ++i) {
+                if (auto *stmt_node = seq[i]->dyn_cast<SStmt>()) {
+                    if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(
+                            stmt_node->Stmt())) {
+                        auto try_replace_arm = [&](clang::Stmt *arm,
+                                                   bool is_then) -> bool {
+                            auto info = ExtractIfArmGoto(arm);
+                            if (!info.gs || !info.gs->getLabel()) return false;
+
+                            LabelEntry entry;
+                            std::vector<SNode *> body;
+                            if (!PrepareSwitchLocalMoveTarget(
+                                    info.gs->getLabel()->getName(), labels,
+                                    refs, entry, body))
+                                return false;
+
+                            std::vector<clang::Stmt *> replacement_stmts;
+                            if (!FlattenClonedSeqToStmts(
+                                    body, ctx, replacement_stmts))
+                                return false;
+
+                            size_t removed_idx =
+                                RemoveMovedSwitchLocalLabel(entry);
+                            // If the label lived in our own seq at an
+                            // earlier index, decrement i so the outer
+                            // loop doesn't skip past the now-shifted
+                            // sibling at i+1.
+                            if (entry.parent_seq == &seq
+                                && removed_idx != CNode::kNone
+                                && removed_idx <= i) {
+                                --i;
+                            }
+                            clang::CompoundStmt *replacement =
+                                BuildReplacementArm(
+                                    ctx, info.compound, replacement_stmts);
+                            if (is_then)
+                                ifs->setThen(replacement);
+                            else
+                                ifs->setElse(replacement);
+                            return true;
+                        };
+
+                        if (try_replace_arm(ifs->getThen(), true))
+                            changed = true;
+                        if (try_replace_arm(ifs->getElse(), false))
+                            changed = true;
+                    }
+                }
+
+                auto target = DirectGotoTarget(seq[i]);
+                if (target.empty()) continue;
+
+                LabelEntry entry;
+                std::vector<SNode *> body;
+                if (!PrepareSwitchLocalMoveTarget(
+                        target, labels, refs, entry, body))
+                    continue;
+
+                size_t removed_idx = RemoveMovedSwitchLocalLabel(entry);
+                // If the label was in our seq before our goto, the erase
+                // shifted us — adjust i so we operate on the correct goto.
+                if (entry.parent_seq == &seq
+                    && removed_idx != CNode::kNone
+                    && removed_idx < i) {
+                    --i;
+                }
+                SpliceAndAdvance(seq, i, body);
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        bool MoveSwitchLocalTargetsInSwitch(
+            SSwitch *sw,
+            clang::ASTContext &ctx,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            const std::unordered_map<std::string_view, int> &refs
+        ) {
+            bool changed = false;
+            for (auto &c : sw->Cases()) {
+                if (MoveSwitchLocalTargetsInSeq(
+                        c.body_list, ctx, labels, refs))
+                    changed = true;
+            }
+            if (MoveSwitchLocalTargetsInSeq(
+                    sw->DefaultBodyList(), ctx, labels, refs))
+                changed = true;
+            return changed;
+        }
+
+        bool WalkAndMoveSwitchLocalTargets(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            clang::ASTContext &ctx,
+            const std::unordered_map<std::string_view, LabelEntry> &labels,
+            const std::unordered_map<std::string_view, int> &refs
+        ) {
+            bool changed = false;
+            for (SNode *node : seq) {
+                if (auto *sw = node->dyn_cast<SSwitch>())
+                    if (MoveSwitchLocalTargetsInSwitch(
+                            sw, ctx, labels, refs))
+                        changed = true;
+                ForEachBodyList(node, [&](std::vector<SNode *> &body) {
+                    if (WalkAndMoveSwitchLocalTargets(
+                            body, factory, ctx, labels, refs))
+                        changed = true;
+                });
+            }
+            return changed;
+        }
+
+        bool DuplicateInSwitchFallthroughTargets(
+            SSwitch *sw, SNodeFactory &factory, clang::ASTContext &ctx
+        ) {
+            std::unordered_map<std::string_view, SwitchFallthroughTarget> targets;
+            for (auto &c : sw->Cases())
+                CollectSwitchFallthroughTargetsInSeq(c.body_list, targets);
+            CollectSwitchFallthroughTargetsInSeq(sw->DefaultBodyList(), targets);
+            if (targets.empty()) return false;
+
+            bool changed = false;
+            size_t cloned_total = 0;
+            for (auto &c : sw->Cases())
+                if (SpliceSwitchFallthroughTargetsInSeq(
+                        c.body_list, factory, targets, cloned_total, ctx))
+                    changed = true;
+            if (SpliceSwitchFallthroughTargetsInSeq(
+                    sw->DefaultBodyList(), factory, targets, cloned_total, ctx))
+                changed = true;
+            return changed;
+        }
+
+        bool WalkAndDuplicateSwitchFallthroughTargets(
+            std::vector<SNode *> &seq, SNodeFactory &factory,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+            for (SNode *node : seq) {
+                if (auto *sw = node->dyn_cast<SSwitch>())
+                    if (DuplicateInSwitchFallthroughTargets(sw, factory, ctx))
+                        changed = true;
+                ForEachBodyList(node, [&](std::vector<SNode *> &body) {
+                    if (WalkAndDuplicateSwitchFallthroughTargets(
+                            body, factory, ctx))
+                        changed = true;
+                });
+            }
+            return changed;
+        }
+
+        struct LoopContinueTarget {
+            std::vector<SNode *> body;
+        };
+
+        bool OpensContinueScope(const SNode *node) {
+            if (!node) return false;
+            switch (node->Kind()) {
+                case SNodeKind::kWhile:
+                case SNodeKind::kDoWhile:
+                case SNodeKind::kFor:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        bool ClangStmtEndsInContinue(const clang::Stmt *stmt) {
+            if (!stmt) return false;
+            if (llvm::isa<clang::ContinueStmt>(stmt)) return true;
+            if (auto *compound = llvm::dyn_cast<clang::CompoundStmt>(stmt)) {
+                if (compound->body_empty()) return false;
+                return ClangStmtEndsInContinue(compound->body_back());
+            }
+            if (auto *label = llvm::dyn_cast<clang::LabelStmt>(stmt))
+                return ClangStmtEndsInContinue(label->getSubStmt());
+            if (auto *ifs = llvm::dyn_cast<clang::IfStmt>(stmt)) {
+                if (!ifs->getThen() || !ifs->getElse()) return false;
+                return ClangStmtEndsInContinue(ifs->getThen())
+                    && ClangStmtEndsInContinue(ifs->getElse());
+            }
+            return false;
+        }
+
+        bool SNodeEndsInContinue(const SNode *node);
+
+        bool SeqEndsInContinue(const std::vector<SNode *> &seq) {
+            if (seq.empty()) return false;
+            return SNodeEndsInContinue(seq.back());
+        }
+
+        bool SNodeEndsInContinue(const SNode *node) {
+            if (!node) return false;
+            if (node->dyn_cast<SContinue>()) return true;
+            if (auto *st = node->dyn_cast<SStmt>())
+                return ClangStmtEndsInContinue(st->Stmt());
+            if (auto *label = node->dyn_cast<SLabel>())
+                return SeqEndsInContinue(label->BodyList());
+            if (auto *ite = node->dyn_cast<SIfThenElse>())
+                return SeqEndsInContinue(ite->ThenList())
+                    && SeqEndsInContinue(ite->ElseList());
+            return false;
+        }
+
+        bool SubtreeHasBreak(const SNode *node) {
+            if (!node) return false;
+            if (node->dyn_cast<SBreak>()) return true;
+            bool found = false;
+            node->for_each_child([&](SNode *child) {
+                if (!found && SubtreeHasBreak(child))
+                    found = true;
+            });
+            return found;
+        }
+
+        bool SeqHasBreak(const std::vector<SNode *> &seq) {
+            for (SNode *child : seq)
+                if (SubtreeHasBreak(child))
+                    return true;
+            return false;
+        }
+
+        bool IsSmallLoopContinueBody(const std::vector<SNode *> &body) {
+            if (body.empty()) return false;
+            if (!SeqEndsInContinue(body)) return false;
+            if (!SeqAlwaysTerminates(body)) return false;
+            if (SeqHasGoto(body)) return false;
+            if (SeqHasBreak(body)) return false;
+            if (CountCloneSeq(body) > kMaxCloneStmts) return false;
+            for (SNode *child : body)
+                if (!SubtreeIsSafeToClone(child))
+                    return false;
+            return true;
+        }
+
+        std::vector<SNode *> BuildLoopContinueTail(
+            std::vector<SNode *> &seq, size_t label_index
+        ) {
+            auto *label = seq[label_index]->dyn_cast<SLabel>();
+            if (!label) return {};
+
+            std::vector<SNode *> tail;
+            tail.insert(
+                tail.end(), label->BodyList().begin(), label->BodyList().end());
+
+            for (size_t i = label_index + 1;
+                 !SeqAlwaysTerminates(tail) && i < seq.size(); ++i) {
+                SNode *next = seq[i];
+                if (next->dyn_cast<SLabel>() || OpensContinueScope(next))
+                    return {};
+                tail.push_back(next);
+            }
+
+            if (!IsSmallLoopContinueBody(tail))
+                return {};
+            return tail;
+        }
+
+        void CollectLoopContinueTargetsInSeq(
+            std::vector<SNode *> &seq,
+            std::unordered_map<std::string_view, LoopContinueTarget> &targets
+        ) {
+            for (size_t i = 0; i < seq.size(); ++i) {
+                SNode *child = seq[i];
+                if (auto *label = child->dyn_cast<SLabel>()) {
+                    std::vector<SNode *> tail =
+                        BuildLoopContinueTail(seq, i);
+                    if (!tail.empty())
+                        targets[label->Name()] = {std::move(tail)};
+                }
+
+                if (OpensContinueScope(child))
+                    continue;
+                ForEachBodyList(child, [&](std::vector<SNode *> &body) {
+                    CollectLoopContinueTargetsInSeq(body, targets);
+                });
+            }
+        }
+
+        std::vector<SNode *> CloneLoopContinueTarget(
+            std::string_view target,
+            const std::unordered_map<std::string_view, LoopContinueTarget> &targets,
+            SNodeFactory &factory
+        ) {
+            auto it = targets.find(target);
+            if (it == targets.end()) return {};
+            return CloneSeq(it->second.body, factory);
+        }
+
+        bool SpliceLoopContinueTargetsInSeq(
+            std::vector<SNode *> &seq,
+            SNodeFactory &factory,
+            const std::unordered_map<std::string_view, LoopContinueTarget> &targets,
+            size_t &cloned_total,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+
+            for (SNode *child : seq) {
+                if (OpensContinueScope(child))
+                    continue;
+                ForEachBodyList(child, [&](std::vector<SNode *> &body) {
+                    if (SpliceLoopContinueTargetsInSeq(
+                            body, factory, targets, cloned_total, ctx))
+                        changed = true;
+                });
+            }
+
+            for (size_t i = 0; i < seq.size(); ++i) {
+                if (auto *stmt_node = seq[i]->dyn_cast<SStmt>()) {
+                    if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(
+                            stmt_node->Stmt())) {
+                        auto try_replace_arm = [&](clang::Stmt *arm,
+                                                   bool is_then) -> bool {
+                            auto info = ExtractIfArmGoto(arm);
+                            if (!info.gs || !info.gs->getLabel()) return false;
+
+                            std::vector<SNode *> clone =
+                                CloneLoopContinueTarget(
+                                    info.gs->getLabel()->getName(), targets,
+                                    factory);
+                            if (clone.empty()) return false;
+
+                            size_t clone_size = CountCloneSeq(clone);
+                            if (cloned_total + clone_size
+                                > kMaxGeneralCloneTotal)
+                                return false;
+
+                            std::vector<clang::Stmt *> replacement_stmts;
+                            if (!FlattenClonedSeqToStmts(
+                                    clone, ctx, replacement_stmts))
+                                return false;
+
+                            clang::CompoundStmt *replacement =
+                                BuildReplacementArm(
+                                    ctx, info.compound, replacement_stmts);
+                            if (is_then)
+                                ifs->setThen(replacement);
+                            else
+                                ifs->setElse(replacement);
+                            cloned_total += clone_size;
+                            return true;
+                        };
+
+                        if (try_replace_arm(ifs->getThen(), true))
+                            changed = true;
+                        if (try_replace_arm(ifs->getElse(), false))
+                            changed = true;
+                    }
+                }
+
+                auto target = DirectGotoTarget(seq[i]);
+                if (target.empty()) continue;
+
+                std::vector<SNode *> clone =
+                    CloneLoopContinueTarget(target, targets, factory);
+                if (clone.empty()) continue;
+
+                size_t clone_size = CountCloneSeq(clone);
+                if (cloned_total + clone_size > kMaxGeneralCloneTotal)
+                    continue;
+
+                cloned_total += clone_size;
+                SpliceAndAdvance(seq, i, clone);
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        bool DuplicateInLoopContinueTargets(
+            std::vector<SNode *> &body, SNodeFactory &factory,
+            clang::ASTContext &ctx
+        ) {
+            std::unordered_map<std::string_view, LoopContinueTarget> targets;
+            CollectLoopContinueTargetsInSeq(body, targets);
+            if (targets.empty()) return false;
+
+            size_t cloned_total = 0;
+            return SpliceLoopContinueTargetsInSeq(
+                body, factory, targets, cloned_total, ctx);
+        }
+
+        bool DuplicateInLoopContinueTargets(
+            SNode *node, SNodeFactory &factory, clang::ASTContext &ctx
+        ) {
+            if (auto *w = node->dyn_cast<SWhile>())
+                return DuplicateInLoopContinueTargets(
+                    w->BodyList(), factory, ctx);
+            if (auto *dw = node->dyn_cast<SDoWhile>())
+                return DuplicateInLoopContinueTargets(
+                    dw->BodyList(), factory, ctx);
+            if (auto *f = node->dyn_cast<SFor>())
+                return DuplicateInLoopContinueTargets(
+                    f->BodyList(), factory, ctx);
+            return false;
+        }
+
+        bool WalkAndDuplicateLoopContinueTargets(
+            std::vector<SNode *> &seq, SNodeFactory &factory,
+            clang::ASTContext &ctx
+        ) {
+            bool changed = false;
+            for (SNode *node : seq) {
+                if (OpensContinueScope(node))
+                    if (DuplicateInLoopContinueTargets(node, factory, ctx))
+                        changed = true;
+                ForEachBodyList(node, [&](std::vector<SNode *> &body) {
+                    if (WalkAndDuplicateLoopContinueTargets(
+                            body, factory, ctx))
+                        changed = true;
+                });
+            }
+            return changed;
+        }
+
         bool DuplicateInSwitch(
             SSwitch *sw, SNodeFactory &factory,
             const std::unordered_map<std::string_view, LabelEntry> &labels
@@ -4361,6 +8400,21 @@ namespace patchestry::ast {
                 c.body_list = std::move(spliced);
                 cloned_total += clone_size;
                 changed = true;
+                if (SpliceTerminatingGotoTargetsInSeq(
+                        c.body_list, factory, labels, cloned_total,
+                        kMaxSwitchCloneTotal,
+                        /*descend_into_labels=*/false,
+                        /*require_goto_free_clone=*/false))
+                    changed = true;
+                continue;
+            }
+            for (auto &c : sw->Cases()) {
+                if (SpliceTerminatingGotoTargetsInSeq(
+                        c.body_list, factory, labels, cloned_total,
+                        kMaxSwitchCloneTotal,
+                        /*descend_into_labels=*/false,
+                        /*require_goto_free_clone=*/false))
+                    changed = true;
             }
             if (!sw->DefaultBodyList().empty()) {
                 auto target = TrailingGotoTargetSeq(sw->DefaultBodyList());
@@ -4378,6 +8432,12 @@ namespace patchestry::ast {
                         }
                     }
                 }
+                if (SpliceTerminatingGotoTargetsInSeq(
+                        sw->DefaultBodyList(), factory, labels, cloned_total,
+                        kMaxSwitchCloneTotal,
+                        /*descend_into_labels=*/false,
+                        /*require_goto_free_clone=*/false))
+                    changed = true;
             }
             return changed;
         }
@@ -4404,14 +8464,41 @@ namespace patchestry::ast {
         /// Debug assertion: every remaining goto target resolves to a
         /// live SLabel.  Runs only in debug builds; aborts on failure
         /// so misbehaviour is caught before a broken TU ships.
+        void CollectClangLabelNames(
+            clang::Stmt *stmt,
+            std::unordered_set<std::string_view> &labels
+        ) {
+            if (!stmt) return;
+            if (auto *label = llvm::dyn_cast<clang::LabelStmt>(stmt))
+                if (label->getDecl())
+                    labels.insert(label->getDecl()->getName());
+            for (clang::Stmt *child : stmt->children())
+                CollectClangLabelNames(child, labels);
+        }
+
+        void CollectAllLabelNames(
+            std::vector<SNode *> &seq,
+            std::unordered_set<std::string_view> &labels
+        ) {
+            for (SNode *node : seq) {
+                if (auto *label = node->dyn_cast<SLabel>())
+                    labels.insert(label->Name());
+                if (auto *stmt = node->dyn_cast<SStmt>())
+                    CollectClangLabelNames(stmt->Stmt(), labels);
+                ForEachBodyList(node, [&](std::vector<SNode *> &body) {
+                    CollectAllLabelNames(body, labels);
+                });
+            }
+        }
+
         void VerifyGotoLabelPairing(std::vector<SNode *> &root) {
 #ifndef NDEBUG
-            std::unordered_map<std::string_view, LabelEntry> labels;
-            CollectLabels(root, labels);
-            std::unordered_set<std::string_view> refs;
-            CountAllGotoRefs(root, refs);
-            for (auto name : refs) {
-                if (labels.find(name) == labels.end()) {
+            std::unordered_set<std::string_view> labels;
+            CollectAllLabelNames(root, labels);
+            std::unordered_map<std::string_view, int> refs;
+            CountGotoRefs(root, refs);
+            for (auto &[name, _] : refs) {
+                if (!labels.contains(name)) {
                     LOG(ERROR) << "DuplicateSwitchCaseTargets: dangling "
                                << "goto target '" << std::string(name)
                                << "' after duplication\n";
@@ -4424,6 +8511,45 @@ namespace patchestry::ast {
         }
 
     } // anonymous namespace
+
+    bool FoldGuardedFallthroughTargets(std::vector<SNode *> &root,
+                                       SNodeFactory & /*factory*/,
+                                       clang::ASTContext &ctx) {
+        bool any_changed = false;
+        for (int pass = 0; pass < 4; ++pass) {
+            std::unordered_map<std::string_view, int> refs;
+            CountGotoRefs(root, refs);
+            bool did = ForEachSeqPostOrder(
+                root, [&](std::vector<SNode *> &seq) {
+                    return FoldGuardedFallthroughInSeq(seq, refs, ctx);
+                });
+            if (!did)
+                break;
+            any_changed = true;
+        }
+        if (any_changed) VerifyGotoLabelPairing(root);
+        return any_changed;
+    }
+
+    bool RepairCrossScopeLabelEntries(std::vector<SNode *> &root,
+                                      SNodeFactory &factory,
+                                      clang::ASTContext &ctx) {
+        bool any_changed = false;
+        for (int pass = 0; pass < 4; ++pass) {
+            std::unordered_map<std::string_view, int> refs;
+            CountGotoRefs(root, refs);
+            bool did = ForEachSeqPostOrder(
+                root, [&](std::vector<SNode *> &seq) {
+                    return RepairCrossScopeEntriesInSeq(
+                        seq, factory, ctx, refs);
+                });
+            if (!did)
+                break;
+            any_changed = true;
+        }
+        if (any_changed) VerifyGotoLabelPairing(root);
+        return any_changed;
+    }
 
     bool DuplicateSwitchCaseTargets(std::vector<SNode *> &root,
                                     SNodeFactory &factory) {
@@ -4443,6 +8569,463 @@ namespace patchestry::ast {
         }
         if (any_changed) VerifyGotoLabelPairing(root);
         return any_changed;
+    }
+
+    bool FoldSwitchLocalCaseTargets(std::vector<SNode *> &root,
+                                    SNodeFactory &factory,
+                                    clang::ASTContext &ctx) {
+        bool any_changed = false;
+        for (int pass = 0; pass < 4; ++pass) {
+            std::unordered_map<std::string_view, LabelEntry> labels;
+            CollectLabels(root, labels);
+            std::unordered_map<std::string_view, int> refs;
+            CountGotoRefs(root, refs);
+            bool did = WalkAndMoveSwitchLocalTargets(
+                root, factory, ctx, labels, refs);
+            if (!did)
+                break;
+            any_changed = true;
+        }
+        if (any_changed) VerifyGotoLabelPairing(root);
+        return any_changed;
+    }
+
+    bool DuplicateSmallTerminatingTargets(std::vector<SNode *> &root,
+                                          SNodeFactory &factory) {
+        bool any_changed = false;
+
+        // Re-scan labels after each pass: cloning one target can expose a
+        // trailing goto to another small terminating target.
+        for (int pass = 0; pass < 4; ++pass) {
+            std::unordered_map<std::string_view, LabelEntry> labels;
+            CollectLabels(root, labels);
+            size_t cloned_total = 0;
+            bool did = SpliceTerminatingGotoTargetsInSeq(
+                root, factory, labels, cloned_total, kMaxGeneralCloneTotal,
+                /*descend_into_labels=*/true,
+                /*require_goto_free_clone=*/true);
+            if (!did)
+                break;
+            any_changed = true;
+        }
+
+        if (any_changed) VerifyGotoLabelPairing(root);
+        return any_changed;
+    }
+
+    bool DuplicateSmallEpilogueTargets(std::vector<SNode *> &root,
+                                       SNodeFactory &factory,
+                                       clang::ASTContext &ctx) {
+        bool any_changed = false;
+
+        for (int pass = 0; pass < 4; ++pass) {
+            std::unordered_map<std::string_view, LabelEntry> labels;
+            CollectLabels(root, labels);
+            size_t cloned_total = 0;
+            bool did = SpliceSmallEpilogueTargetsInSeq(
+                root, factory, labels, cloned_total, ctx);
+            if (!did)
+                break;
+            any_changed = true;
+        }
+
+        if (any_changed) VerifyGotoLabelPairing(root);
+        return any_changed;
+    }
+
+    bool DuplicateSwitchFallthroughTargets(std::vector<SNode *> &root,
+                                           SNodeFactory &factory,
+                                           clang::ASTContext &ctx) {
+        bool any_changed = false;
+
+        for (int pass = 0; pass < 4; ++pass) {
+            bool did =
+                WalkAndDuplicateSwitchFallthroughTargets(root, factory, ctx);
+            if (!did)
+                break;
+            any_changed = true;
+        }
+
+        if (any_changed) VerifyGotoLabelPairing(root);
+        return any_changed;
+    }
+
+    bool DuplicateLoopContinueTargets(std::vector<SNode *> &root,
+                                      SNodeFactory &factory,
+                                      clang::ASTContext &ctx) {
+        bool any_changed = false;
+
+        for (int pass = 0; pass < 4; ++pass) {
+            bool did =
+                WalkAndDuplicateLoopContinueTargets(root, factory, ctx);
+            if (!did)
+                break;
+            any_changed = true;
+        }
+
+        if (any_changed) VerifyGotoLabelPairing(root);
+        return any_changed;
+    }
+
+    bool DuplicateStackGuardReturnTargets(std::vector<SNode *> &root,
+                                          SNodeFactory &factory,
+                                          clang::ASTContext &ctx) {
+        bool any_changed = false;
+
+        for (int pass = 0; pass < 4; ++pass) {
+            std::unordered_map<std::string_view, LabelEntry> labels;
+            CollectLabels(root, labels);
+            std::unordered_set<const clang::VarDecl *> ambient_defs =
+                CollectEntryPrefixDefs(root);
+            size_t cloned_total = 0;
+            bool did = SpliceStackGuardReturnTargetsInSeq(
+                root, factory, labels, cloned_total, ctx, ambient_defs);
+            if (!did)
+                break;
+            any_changed = true;
+        }
+
+        if (any_changed) VerifyGotoLabelPairing(root);
+        return any_changed;
+    }
+
+    bool DuplicateCleanupReturnTargets(std::vector<SNode *> &root,
+                                       SNodeFactory &factory,
+                                       clang::ASTContext &ctx) {
+        bool any_changed = false;
+
+        for (int pass = 0; pass < 4; ++pass) {
+            std::unordered_map<std::string_view, LabelEntry> labels;
+            CollectLabels(root, labels);
+            size_t cloned_total = 0;
+            bool did = SpliceCleanupReturnTargetsInSeq(
+                root, factory, labels, cloned_total, ctx);
+            if (!did)
+                break;
+            any_changed = true;
+        }
+
+        if (any_changed) VerifyGotoLabelPairing(root);
+        return any_changed;
+    }
+
+    // NormalizeRawControlFlow — lift raw clang control flow into SNodes
+    //
+    // Raw clang::GotoStmt / clang::LabelStmt embedded inside opaque
+    // SStmt leaf SNodes are invisible to the SNode-layer cleanup passes
+    // (which only act on SGoto/SLabel SNodes).  This pass lifts the two
+    // simplest payload shapes — a bare `goto` and a bare `label` — into
+    // first-class SGoto/SLabel SNodes.
+    //
+    // Commit B scope: bare goto and label.
+    // Commit C scope: additionally lift a clang::IfStmt whose then/else
+    // arms are each a bare goto / null / absent into an SIfThenElse.
+    // Commit D scope: additionally lift a clang::SwitchStmt whose body is
+    // a CompoundStmt of CaseStmt/DefaultStmt, each case sub-statement a
+    // bare goto / break / null, into an SSwitch.
+    // Commit E scope: additionally decompose a clang::CompoundStmt that
+    // transitively contains control flow (goto / label) — each child
+    // becomes its own normalized SNode and the list is spliced into the
+    // parent body in place of the single SStmt.  The if- and switch-
+    // lifters recurse into compound arms / case bodies via the shared
+    // recursive helper NormalizeClangStmt, so e.g.
+    //   if (c) { x = 1; goto L; }
+    // lifts to SIfThenElse(c, [SStmt(x=1), SGoto(L)], []).
+    // A CompoundStmt with NO control flow inside is left as a single
+    // opaque SStmt (decomposing it would strip a brace level for no
+    // funnel benefit — conservative).  Any clang stmt shape still not
+    // recognized is left as a plain SStmt — never guess, never drop.
+    // Goto/label pairing is preserved verbatim: no rename, no synthesis.
+
+    namespace {
+
+        // True if a raw clang::Stmt subtree transitively contains control
+        // flow that the SNode-layer cleanup passes need to see — i.e. a
+        // clang::GotoStmt or clang::LabelStmt anywhere inside.  Used to
+        // decide whether a CompoundStmt is worth decomposing: a compound
+        // with no goto/label inside is left as a single opaque SStmt
+        // (decomposing it would strip a brace level for no funnel gain).
+        bool ClangStmtContainsControlFlow(clang::Stmt *stmt) {
+            if (!stmt) { return false; }
+            if (llvm::isa< clang::GotoStmt >(stmt)
+                || llvm::isa< clang::LabelStmt >(stmt))
+            {
+                return true;
+            }
+            for (clang::Stmt *child : stmt->children()) {
+                if (ClangStmtContainsControlFlow(child)) { return true; }
+            }
+            return false;
+        }
+
+        // Forward declaration — NormalizeClangStmt and TryLiftSwitch are
+        // mutually recursive (a switch case body may itself be a compound
+        // or if that recurses back through NormalizeClangStmt).
+        std::vector< SNode * > NormalizeClangStmt(clang::Stmt *stmt,
+                                                  SNodeFactory &factory);
+
+        // Try to lift a clang::SwitchStmt of the switch-of-gotos shape
+        // into an SSwitch.  Returns the SSwitch on success, or nullptr to
+        // signal "leave the SStmt untouched".
+        //
+        // Accepted shape: body is a CompoundStmt whose children are all
+        // CaseStmt / DefaultStmt.  Each case's terminal sub-statement is
+        // normalized recursively via NormalizeClangStmt — so a bare goto /
+        // break / null, OR a CompoundStmt body (Commit E), all lift.
+        // Fallthrough chains (a CaseStmt directly nesting another CaseStmt,
+        // e.g. `case 1: case 2: goto X;`) are handled by attaching the
+        // same body to each case value — matching the goto-path SSwitch
+        // builder, which emits one SCase entry per value.  Case order is
+        // preserved.  A BreakStmt terminal lowers to SBreak; that case is
+        // handled inside NormalizeClangStmt.
+        SSwitch *TryLiftSwitch(clang::SwitchStmt *sws, SNodeFactory &factory) {
+            clang::Stmt *body = sws->getBody();
+            auto *compound = llvm::dyn_cast_or_null< clang::CompoundStmt >(body);
+            if (!compound) {
+                return nullptr;
+            }
+            // Discriminant reused directly — clang AST nodes are
+            // arena-allocated and freely shared.  No clone, no width
+            // recomputation.
+            auto *sw = factory.Make< SSwitch >(sws->getCond());
+            bool saw_default = false;
+            for (clang::Stmt *child : compound->body()) {
+                if (!child || llvm::isa< clang::NullStmt >(child)) {
+                    continue;
+                }
+                auto *swc = llvm::dyn_cast< clang::SwitchCase >(child);
+                if (!swc) {
+                    // Non-case child in the switch body — not the clean
+                    // shape; leave the whole SStmt untouched.
+                    return nullptr;
+                }
+                // Walk a fallthrough chain: collect leading case values
+                // (CaseStmt nesting CaseStmt) until the terminal body.
+                std::vector< clang::Expr * > chain_values;
+                bool chain_has_default = false;
+                clang::SwitchCase *cur = swc;
+                clang::Stmt *terminal  = nullptr;
+                for (;;) {
+                    if (auto *cs = llvm::dyn_cast< clang::CaseStmt >(cur)) {
+                        // case value reused directly — NO width recompute.
+                        chain_values.push_back(cs->getLHS());
+                        clang::Stmt *next = cs->getSubStmt();
+                        if (auto *nested =
+                                llvm::dyn_cast_or_null< clang::SwitchCase >(next))
+                        {
+                            cur = nested;
+                            continue;
+                        }
+                        terminal = next;
+                    } else {
+                        // DefaultStmt — terminates the chain.
+                        chain_has_default = true;
+                        terminal = llvm::cast< clang::DefaultStmt >(cur)
+                                       ->getSubStmt();
+                        if (auto *nested =
+                                llvm::dyn_cast_or_null< clang::SwitchCase >(
+                                    terminal))
+                        {
+                            cur = nested;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                // Normalize the terminal recursively.  A fresh SNode body
+                // is built per slot (NormalizeClangStmt below) so the
+                // SSwitch owns distinct children — goto/break/null/compound
+                // all lift.  Attach the body to each case value in the
+                // chain; one SCase per value, matching the goto-path
+                // SSwitch builder.
+                for (clang::Expr *val : chain_values) {
+                    sw->AddCase(val, NormalizeClangStmt(terminal, factory));
+                }
+                if (chain_has_default) {
+                    if (saw_default) {
+                        // Two default arms — malformed; bail out.
+                        return nullptr;
+                    }
+                    saw_default = true;
+                    sw->SetDefaultBody(NormalizeClangStmt(terminal, factory));
+                }
+            }
+            return sw;
+        }
+
+        // Recursive per-statement normalizer — the shared core of
+        // NormalizeRawControlFlow.  Maps one clang::Stmt* to a vector of
+        // SNodes (one statement -> one-or-more SNodes).  Used by the
+        // top-level worker, the if-arm lifter, the switch-case lifter, and
+        // compound decomposition, so goto/label/if/switch/compound
+        // handling stays consistent and recursive.
+        //
+        //   null / NullStmt  -> []                       (empty body)
+        //   GotoStmt         -> [SGoto(target)]
+        //   BreakStmt        -> [SBreak]
+        //   LabelStmt        -> [SLabel(name, recurse(substmt))]
+        //   IfStmt           -> [SIfThenElse(cond, recurse(then),
+        //                                          recurse(else))]
+        //   SwitchStmt       -> [SSwitch] via TryLiftSwitch, or [SStmt]
+        //                       if TryLiftSwitch declines
+        //   CompoundStmt     -> if it transitively contains control flow,
+        //                       splice: concat recurse(child) for each
+        //                       child; otherwise [SStmt(compound)] (leave
+        //                       opaque — conservative, no brace stripping)
+        //   otherwise        -> [SStmt(stmt)]             (left opaque)
+        //
+        // Invariant: every non-null clang::Stmt* reachable here ends up as
+        // an SStmt or a typed SNode — nothing is dropped.  Goto/label
+        // pairing is preserved verbatim (no rename, no synthesis).
+        std::vector< SNode * > NormalizeClangStmt(clang::Stmt *stmt,
+                                                  SNodeFactory &factory) {
+            if (!stmt || llvm::isa< clang::NullStmt >(stmt)) {
+                return {};
+            }
+            if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                assert(gs->getLabel()
+                       && "clang::GotoStmt missing target label");
+                return { factory.Make< SGoto >(
+                    factory.Intern(gs->getLabel()->getName())) };
+            }
+            if (llvm::isa< clang::BreakStmt >(stmt)) {
+                return { factory.Make< SBreak >() };
+            }
+            if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                return { factory.Make< SLabel >(
+                    factory.Intern(ls->getDecl()->getName()),
+                    NormalizeClangStmt(ls->getSubStmt(), factory)) };
+            }
+            if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
+                // Arm order preserved verbatim: then = taken, else =
+                // not-taken (matches create_cbranch).  cond reused
+                // directly — clang AST nodes are arena-allocated and
+                // freely shared.  Each arm normalized recursively, so a
+                // CompoundStmt arm decomposes (Commit E) rather than
+                // blocking the lift.
+                return { factory.Make< SIfThenElse >(
+                    ifs->getCond(),
+                    NormalizeClangStmt(ifs->getThen(), factory),
+                    NormalizeClangStmt(ifs->getElse(), factory)) };
+            }
+            if (auto *sws = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
+                if (auto *sw = TryLiftSwitch(sws, factory)) {
+                    return { sw };
+                }
+                // TryLiftSwitch declined — not the clean shape.  Leave the
+                // switch as an opaque SStmt (conservative fallback).
+                return { factory.Make< SStmt >(stmt) };
+            }
+            if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                // A compound with no goto/label inside is left opaque —
+                // decomposing it would strip a brace level for no funnel
+                // benefit.  A compound that transitively contains control
+                // flow is decomposed: each child normalized recursively
+                // and the results concatenated (spliced) in source order.
+                if (!ClangStmtContainsControlFlow(cs)) {
+                    return { factory.Make< SStmt >(cs) };
+                }
+                std::vector< SNode * > out;
+                for (clang::Stmt *child : cs->body()) {
+                    std::vector< SNode * > child_nodes =
+                        NormalizeClangStmt(child, factory);
+                    out.insert(out.end(), child_nodes.begin(),
+                               child_nodes.end());
+                }
+                return out;
+            }
+            // Any other clang stmt shape — left opaque (conservative).
+            return { factory.Make< SStmt >(stmt) };
+        }
+
+    } // anonymous namespace (NormalizeRawControlFlow helpers)
+
+    void NormalizeRawControlFlow(std::vector< SNode * > &root,
+                                 SNodeFactory &factory,
+                                 clang::ASTContext & /*ctx*/) {
+        // Per-body-vector worker.  For each SStmt slot whose opaque
+        // clang::Stmt payload is a recognized control-flow shape, run the
+        // shared recursive normalizer NormalizeClangStmt and splice the
+        // result into `seq` in place of the single slot.
+        //
+        // Splicing — 1:N replacement — is needed because a CompoundStmt
+        // with control flow inside decomposes into multiple SNodes
+        // (Commit E).  Commits B/C/D were all 1:1; this is the first 1:N
+        // case for NormalizeRawControlFlow.
+        //
+        // Iterator safety: rather than erase/insert mid-iteration, the
+        // worker rebuilds `seq` into a fresh vector and swaps it in once,
+        // exactly once, at the end.  No live iterator into `seq` survives
+        // the swap.  Decomposed payloads were opaque SStmt leaves — their
+        // inner clang stmts were never SNodes — so the freshly created
+        // child SNodes have NOT been visited by the post-order traversal;
+        // there is no suspended ancestor loop over a vector mutated here.
+        // For belt-and-braces (the recursive lift may create new SLabel
+        // body-vectors that a *later* worker invocation should still see),
+        // the pass is driven with stop_after_change=true under an outer
+        // fixed-point loop, matching the cross-scope inliner.
+        //
+        // Decision rule per SStmt slot: only attempt the lift when the
+        // payload's top-level shape is one this pass recognizes (goto,
+        // label, if, switch, or a control-flow-bearing compound).  A
+        // plain compound with no goto/label inside, or any unrecognized
+        // shape, is left as its original SStmt verbatim — never guessed,
+        // never dropped.
+        auto worker = [&](std::vector< SNode * > &seq) -> bool {
+            bool changed = false;
+            std::vector< SNode * > rebuilt;
+            rebuilt.reserve(seq.size());
+            for (auto *slot : seq) {
+                auto *st = slot ? slot->dyn_cast< SStmt >() : nullptr;
+                clang::Stmt *s = st ? st->Stmt() : nullptr;
+                // Recognize the top-level payload shape.  A CompoundStmt
+                // is only a lift candidate if it transitively contains
+                // control flow (otherwise NormalizeClangStmt would just
+                // hand back the same opaque SStmt — no change, but we
+                // skip the call to keep `changed` precise).
+                bool is_candidate = s != nullptr
+                    && (llvm::isa< clang::GotoStmt >(s)
+                        || llvm::isa< clang::LabelStmt >(s)
+                        || llvm::isa< clang::IfStmt >(s)
+                        || llvm::isa< clang::SwitchStmt >(s)
+                        || (llvm::isa< clang::CompoundStmt >(s)
+                            && ClangStmtContainsControlFlow(s)));
+                if (!is_candidate) {
+                    rebuilt.push_back(slot);
+                    continue;
+                }
+                std::vector< SNode * > lifted =
+                    NormalizeClangStmt(s, factory);
+                // Detect a genuine no-op lift: exactly one node back and
+                // it is still an opaque SStmt wrapping the same payload
+                // (TryLiftSwitch declined, etc.).  Keep the original slot
+                // so `changed` is not spuriously set.
+                if (lifted.size() == 1) {
+                    if (auto *only = lifted.front()->dyn_cast< SStmt >()) {
+                        if (only->Stmt() == s) {
+                            rebuilt.push_back(slot);
+                            continue;
+                        }
+                    }
+                }
+                rebuilt.insert(rebuilt.end(), lifted.begin(), lifted.end());
+                changed = true;
+            }
+            if (changed) {
+                seq.swap(rebuilt);
+            }
+            return changed;
+        };
+
+        // Fixed-point under stop_after_change: each pass unwinds on the
+        // first mutated body-vector, then re-runs from the root so any
+        // newly created nested body-vectors are themselves normalized.
+        // NormalizeClangStmt is fully recursive, so in practice one pass
+        // already normalizes every reachable nested body — the loop is a
+        // safety net and terminates because each iteration that mutates
+        // strictly decreases the count of liftable opaque SStmt payloads.
+        while (ForEachSeqPostOrder(root, worker, /*stop_after_change=*/true)) {
+        }
     }
 
 } // namespace patchestry::ast

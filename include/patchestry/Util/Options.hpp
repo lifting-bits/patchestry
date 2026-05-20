@@ -13,13 +13,15 @@ namespace patchestry {
 
     struct Options
     {
-        bool emit_cir             = false;
-        bool emit_mlir            = false;
-        bool emit_llvm            = false;
-        bool emit_asm             = false;
-        bool emit_obj             = false;
-        bool verbose              = false;
-        bool use_structuring_pass = false;
+        bool emit_cir                       = false;
+        bool emit_mlir                      = false;
+        bool emit_llvm                      = false;
+        bool emit_asm                       = false;
+        bool emit_obj                       = false;
+        bool verbose                        = false;
+        bool use_structuring_pass           = false;
+        bool verify_no_node_loss            = false;
+        bool structuring_improvement_report = false;
 
         std::string output_file;
         std::string input_file;

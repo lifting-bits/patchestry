@@ -92,6 +92,22 @@ namespace {
         llvm::cl::init(false)
     );
 
+    const llvm::cl::opt< bool > verify_no_node_loss( // NOLINT(cert-err58-cpp)
+        "verify-no-node-loss",
+        llvm::cl::desc(
+            "Validate the structured SNode tree: cross-check labels, "
+            "switches, and goto counts against the source CGraph (node "
+            "retention) and report structural defects (dangling gotos, "
+            "duplicate labels, unreachable nodes)"),
+        llvm::cl::init(false)
+    );
+
+    const llvm::cl::opt< bool > structuring_improvement_report( // NOLINT(cert-err58-cpp)
+        "structuring-improvement-report",
+        llvm::cl::desc("Report residual goto cleanup opportunities after structuring"),
+        llvm::cl::init(false)
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -105,6 +121,8 @@ namespace {
             .emit_obj                   = emit_obj.getValue(),
             .verbose                    = verbose.getValue(),
             .use_structuring_pass       = use_structuring_pass.getValue(),
+            .verify_no_node_loss        = verify_no_node_loss.getValue(),
+            .structuring_improvement_report = structuring_improvement_report.getValue(),
             .output_file                = output_filename.getValue(),
             .input_file                 = input_filename.getValue(),
             .print_tu                   = print_tu.getValue(),
