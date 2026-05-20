@@ -3620,9 +3620,6 @@ namespace patchestry::ast {
 
     namespace {
 
-        // Forward declaration — defined in InlineCrossScopeSingleRef namespace.
-        bool SNodeAlwaysTerminates(SNode *node);
-
         /// Chase through SLabel nesting to find the deepest trailing
         /// SIfThenElse that has no else branch.
         SIfThenElse *DeepTrailingIfThen(SNode *node) {
@@ -4834,80 +4831,6 @@ namespace patchestry::ast {
         return ReplaceGotoInSeq(root, factory, ctx, labels);
     }
 
-    // RemoveUnreferencedLabels — drop SLabel nodes with zero refs.
-    //
-    // After ConvertGotoToReturn inlines return bodies at goto sites,
-    // the original labels may have zero remaining references.  Their
-    // bodies are dead code (only reachable via the now-removed label).
-    // This pass removes such SLabel+body from the SNode tree.
-
-    namespace {
-
-        // Collect ALL label references: SGoto targets + clang::GotoStmt
-        // targets inside SStmt stmts.
-        void CountAllGotoRefs(
-            const SNode *node,
-            std::unordered_set<std::string_view> &refs
-        ) {
-            if (!node) return;
-            if (auto *g = node->dyn_cast<SGoto>()) {
-                refs.insert(g->Target());
-                return;
-            }
-            if (auto *st = node->dyn_cast<SStmt>()) {
-                // Recursively walk the clang::Stmt tree for GotoStmt.
-                std::function<void(clang::Stmt *)> walk =
-                    [&](clang::Stmt *s) {
-                    if (!s) return;
-                    if (auto *gs = llvm::dyn_cast<clang::GotoStmt>(s)) {
-                        refs.insert(gs->getLabel()->getName());
-                        return;
-                    }
-                    for (auto *child : s->children()) walk(child);
-                };
-                walk(st->Stmt());
-                return;
-            }
-            // All other kinds: recurse uniformly via the visitor API.
-            node->for_each_child([&](SNode *c) { CountAllGotoRefs(c, refs); });
-        }
-
-        void CountAllGotoRefs(
-            const std::vector<SNode *> &seq,
-            std::unordered_set<std::string_view> &refs
-        ) {
-            for (auto *c : seq) CountAllGotoRefs(c, refs);
-        }
-
-        // Remove unreferenced SLabel children from a sequence.
-        bool RemoveDeadLabelsInSeq(
-            std::vector<SNode *> &seq,
-            const std::unordered_set<std::string_view> &refs
-        ) {
-            bool changed = false;
-            for (size_t i = 0; i < seq.size(); ) {
-                auto *lbl = seq[i]->dyn_cast<SLabel>();
-                if (lbl && refs.count(lbl->Name()) == 0) {
-                    seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
-                    changed = true;
-                } else {
-                    ++i;
-                }
-            }
-            return changed;
-        }
-
-    } // anonymous namespace
-
-    bool RemoveUnreferencedLabels(std::vector<SNode *> &root, SNodeFactory &) {
-        std::unordered_set<std::string_view> refs;
-        CountAllGotoRefs(root, refs);
-        return ForEachSeqPostOrder(
-            root, [&](std::vector<SNode *> &seq) {
-                return RemoveDeadLabelsInSeq(seq, refs);
-            });
-    }
-
     // CollapsePassThroughLabels / SimplifyEmptyControlFlow /
     // MergeRedundantGotoGuards.
     //
@@ -5521,8 +5444,7 @@ namespace patchestry::ast {
     // subtree that defines an SLabel or clang::LabelStmt — that would
     // duplicate a label definition and break Clang's one-decl-per-label
     // rule.  Outbound gotos *from* the clone are allowed: they add a
-    // new reference to an already-live label, and RemoveUnreferencedLabels
-    // recomputes liveness from scratch after the pass.
+    // new reference to an already-live label.
 
     namespace {
 

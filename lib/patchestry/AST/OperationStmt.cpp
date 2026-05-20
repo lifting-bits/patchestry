@@ -983,8 +983,6 @@ namespace patchestry::ast {
             return {};
         }
 
-        // TODO(kumarak): Could there be case where conditional statement is missing?? In
-        // such case treat it as branch instruction.
         auto loc = SourceLocation(ctx.getSourceManager(), op.key);
         auto *condition_expr =
             AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.condition), op.key);
@@ -1324,8 +1322,6 @@ namespace patchestry::ast {
         // The callee return type may be missing or incorrect during representing high pcode
         // into JSON format. Double check the function return type with operation type and fix
         // if there is any mismatch.
-        // TODO(kumarak): Switch to delay the creation of AST node for function declaration and
-        // fix return type during creating the node.
         if (op.type) {
             auto op_type_opt = lookup_op_type(op);
             if (!op_type_opt) {

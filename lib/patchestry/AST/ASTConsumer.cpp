@@ -339,11 +339,6 @@ namespace patchestry::ast {
                             post_cleanup_gotos = CountSNodeGotos(root_body);
                         }
 
-                        // RemoveUnreferencedLabels is intentionally NOT
-                        // called: CountAllGotoRefs misses gotos embedded
-                        // in some SNode kinds, so it would drop live
-                        // labels on some fixtures.
-
                         // Structural verification of the structured SNode
                         // tree after cleanup and before Clang AST emission.
                         // This catches SNode-level damage (dangling gotos,

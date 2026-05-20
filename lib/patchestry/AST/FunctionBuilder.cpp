@@ -33,22 +33,8 @@ namespace patchestry::ast {
 
     namespace {
 
-        /**
-         * @brief Retrieves a list of `Operation` objects declared as parameters within the
-         * entry block of a given function.
-         *
-         * This function examines the `entry_block` of the provided `Function` object,
-         * identifies operations marked with the mnemonic `OP_DECLARE_PARAMETER`, and collects
-         * them into a vector.
-         *
-         * @param function A reference to a `Function` object containing an `entry_block` and
-         * `basic_blocks`.
-         *
-         * @return A `std::vector` objects representing declared parameters. If the function has
-         * no valid entry block or no parameter declarations, the vector is empty.
-         *
-         */
-
+        // Collect OP_DECLARE_PARAMETER operations from the function's
+        // entry block.  Returns empty if entry is missing or malformed.
         std::vector< std::shared_ptr< Operation > > getParameters(const Function &function) {
             if (function.entry_block.empty() && function.basic_blocks.empty()) {
                 return {};
@@ -118,19 +104,10 @@ namespace patchestry::ast {
         }
     }
 
-    /**
-     * @brief Creates a `FunctionDecl` object for the given function, including its type,
-     * parameters, and optional attributes, and adds it to the translation unit declaration
-     * context. This method builds a function declaration (or definition) based on the provided
-     * function metadata.
-     *
-     * @param ctx Reference to the `clang::ASTContext`.
-     * @param is_definition Boolean flag indicating whether the function is a definition
-     * (`true`) or just a declaration (`false`).
-     *
-     * @return A pointer to the created `clang::FunctionDecl` object. Returns `nullptr` if the
-     * creation fails due to errors such as an empty function name or an invalid type.
-     */
+    // Build a clang::FunctionDecl from the current function metadata and
+    // register it on the translation-unit decl context.  Returns nullptr
+    // on missing name or invalid function type.  is_definition selects
+    // between a declaration and a definition shell.
     clang::FunctionDecl *FunctionBuilder::create_declaration(
         clang::ASTContext &ctx, const clang::QualType &function_type, bool is_definition
     ) {
@@ -233,35 +210,9 @@ namespace patchestry::ast {
         return func_decl;
     }
 
-    /**
-     * @brief Creates a function type based on the provided function prototype.
-     *
-     * This function constructs a `clang::QualType` representing a function type. The function
-     * type is determined by its return type, parameter types, and additional properties such as
-     * whether it is variadic or marked as `noreturn`. The method utilizes serialized type
-     * from the `TypeBuilder` to resolve return and parameter types.
-     *
-     * @param ctx A reference to the Clang AST context.
-     * @param proto The function prototype, containing:
-     *              - `rttype_key`: The key representing the return type.
-     *              - `parameters`: A list of keys for the parameter types.
-     *              - `is_variadic`: Boolean indicating if the function is variadic.
-     *              - `is_noreturn`: Boolean indicating if the function has a `noreturn`
-     * specifier.
-     *
-     * @return A `clang::QualType` representing the function type.
-     *
-     * @example
-     * ```cpp
-     * FunctionPrototype proto = {
-     *     .rttype_key = "int",
-     *     .parameters = {"float", "double"},
-     *     .is_variadic = false,
-     *     .is_noreturn = false
-     * };
-     * clang::QualType funcType = create_function_type(ctx, proto);
-     * ```
-     */
+    // Build a clang::QualType for the function from the prototype's
+    // return-type key, parameter keys, variadic and noreturn flags.
+    // Types are resolved through TypeBuilder.
     clang::QualType FunctionBuilder::create_function_type(
         clang::ASTContext &ctx, const FunctionPrototype &proto
     ) {
@@ -300,22 +251,9 @@ namespace patchestry::ast {
         return ctx.getFunctionType(rttype, args_vector, ext_proto_info);
     }
 
-    /**
-     * @brief Creates default parameter declarations for a function based on a given prototype.
-     *
-     * This function generates a list of parameter declarations (`clang::ParmVarDecl`)
-     * for a function declaration (`clang::FunctionDecl`) based on the provided function
-     * prototype (`FunctionPrototype`).
-     *
-     * @param ctx The `clang::ASTContext` used to create AST nodes.
-     * @param func_decl The `clang::FunctionDecl` representing the function to which
-     *                  the parameters will be added.
-     * @param proto The `FunctionPrototype` containing the parameter type keys to
-     *              determine the parameter types.
-     *
-     * @return A vector of pointers to `clang::ParmVarDecl` representing the
-     *         parameters for the function.
-     */
+    // Create one clang::ParmVarDecl per entry in `proto.parameters`,
+    // attached to `func_decl`.  Each is named param_N and marked as
+    // used.  Returns empty when proto.parameters is empty.
     std::vector< clang::ParmVarDecl * > FunctionBuilder::create_default_paramaters(
         clang::ASTContext &ctx, clang::FunctionDecl *func_decl, const FunctionPrototype &proto
     ) {
@@ -354,15 +292,10 @@ namespace patchestry::ast {
         return parameter_vec;
     }
 
-    /**
-     * @brief Creates a `clang::FunctionDecl` representing the definition of a function,
-     * including its body.
-     *
-     * @param ctx The `clang::ASTContext` used to create AST nodes.
-     * @return A pointer to the created `clang::FunctionDecl` representing the function
-     * definition. Returns `nullptr` if the function name is empty, the function has no basic
-     * blocks, or if the function definition cannot be created.
-     */
+    // Build a fully-instantiated function definition (FunctionDecl with
+    // body) from the current Function metadata.  Returns nullptr when
+    // the name is empty, basic_blocks is empty, or definition creation
+    // fails downstream.
     clang::FunctionDecl *FunctionBuilder::create_definition(clang::ASTContext &ctx) {
         const auto &c_name = GetCName();
         if (c_name.empty()) {
@@ -521,12 +454,9 @@ namespace patchestry::ast {
         return op_builder->make_cast(ctx, expr, to_type, loc);
     }
 
-    /**
-     * @brief Creates and registers label declarations for basic blocks in a function.
-     *
-     * @param ctx The Clang ASTContext used to create label declarations.
-     * @param func_decl The Clang function declaration to which the labels belong.
-     */
+    // Create and register a clang::LabelDecl for every non-entry basic
+    // block, attached to `func_decl`.  Entry blocks are skipped (they
+    // are synthesized during recovery and never branched to).
     void
     FunctionBuilder::create_labels(clang::ASTContext &ctx, clang::FunctionDecl *func_decl) {
         if (function.get().basic_blocks.empty()) {
@@ -639,18 +569,8 @@ namespace patchestry::ast {
         }
     }
 
-    /**
-     * @brief Creates a Clang AST representation of a given operation based on its mnemonic.
-     *
-     * This function takes an operation and generates the corresponding Clang AST node,
-     * which represents the operation in the target AST.
-     *
-     * @param ctx The Clang ASTContext for creating AST nodes.
-     * @param op The operation to be translated into a Clang AST node.
-     * @return A pair consisting of:
-     *         - A pointer to the generated Clang Stmt representing the operation.
-     *         - A boolean indicating if stmt should be merged with previous one.
-     */
+    // Dispatch op.mnemonic to the matching OpBuilder method and return
+    // the resulting (clang::Stmt*, merge-with-previous flag) pair.
     std::pair< clang::Stmt *, bool >
     FunctionBuilder::create_operation(clang::ASTContext &ctx, const Operation &op) {
         if (op.mnemonic == Mnemonic::OP_UNKNOWN) {
