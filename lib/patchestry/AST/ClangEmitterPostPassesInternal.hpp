@@ -58,7 +58,7 @@ namespace patchestry::ast {
     std::unordered_set< clang::LabelDecl * > CollectCrossScopeGotoTargets(clang::Stmt *stmt);
     bool ContainsSwitchStmt(clang::Stmt *st);
 
-    // --- F1 — inline a terminal label's payload to its goto site ------------
+    // --- inline a terminal label's payload to its goto site ----------------
     clang::Stmt *CloneTerminalLabelGotos(
         clang::ASTContext &ctx, clang::Stmt *body, bool &mutated
     );
@@ -79,7 +79,7 @@ namespace patchestry::ast {
         const std::unordered_map< clang::LabelDecl *, unsigned > &refs, bool &changed
     );
 
-    // --- F2 — fold goto forwarders / diamonds -------------------------------
+    // --- fold goto forwarders / diamonds ------------------------------------
     clang::Stmt *FoldGotoDiamonds(clang::ASTContext &ctx, clang::Stmt *body, bool &mutated);
     clang::Stmt *FoldConditionalFallthroughChains(
         clang::ASTContext &ctx, clang::Stmt *stmt,
@@ -102,13 +102,13 @@ namespace patchestry::ast {
         const std::unordered_map< clang::LabelDecl *, unsigned > &refs, bool &changed
     );
 
-    // --- F3 — eliminate goto to the immediately-following label -------------
+    // --- eliminate goto to the immediately-following label -----------------
     clang::Stmt *EliminateGotoToNextLabel(
         clang::ASTContext &ctx, clang::Stmt *s,
         const std::unordered_set< clang::LabelDecl * > *live
     );
 
-    // --- F4 — remove dead control flow --------------------------------------
+    // --- remove dead control flow -------------------------------------------
     clang::Stmt *RemoveDeadControlFlow(
         clang::ASTContext &ctx, clang::Stmt *body, bool &mutated
     );
@@ -123,27 +123,27 @@ namespace patchestry::ast {
         bool in_switch_case
     );
 
-    // --- F5 — scope-ify conditional gotos -----------------------------------
+    // --- scope-ify conditional gotos ----------------------------------------
     clang::Stmt *ScopeifyIfGotos(
         clang::ASTContext &ctx, clang::Stmt *s,
         const std::unordered_map< clang::LabelDecl *, unsigned > &refs
     );
 
-    // --- F6 — hoist cross-scope label entries -------------------------------
+    // --- hoist cross-scope label entries ------------------------------------
     clang::Stmt *HoistCrossScopeLabels(
         clang::ASTContext &ctx, clang::FunctionDecl *fn, clang::Stmt *body, bool &mutated
     );
 
-    // --- F7 — recover loops -------------------------------------------------
+    // --- recover loops ------------------------------------------------------
     clang::Stmt *RecoverLoop(clang::ASTContext &ctx, clang::Stmt *body, bool &mutated);
 
-    // --- F8 — fold switch-case-target gotos ---------------------------------
+    // --- fold switch-case-target gotos --------------------------------------
     clang::Stmt *FoldClangSwitchLocalCaseTargets(
         clang::ASTContext &ctx, clang::Stmt *stmt,
         const std::unordered_map< clang::LabelDecl *, unsigned > &refs
     );
 
-    // --- cosmetic passes ----------------------------------------------------
+    // --- condition / loop / label readability passes ------------------------
     clang::Stmt *PromoteSimpleCounterWhileToFor(
         clang::ASTContext &ctx, clang::Stmt *stmt, bool &mutated
     );

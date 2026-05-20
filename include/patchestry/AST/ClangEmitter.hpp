@@ -29,8 +29,8 @@ namespace patchestry::ast {
     void EmitClangAST(const std::vector< SNode * > &root_children,
                       clang::FunctionDecl *fn, clang::ASTContext &ctx);
 
-    // Post-emission Clang-AST cleanup driver.  Runs the F1-F8 pass
-    // pipeline (terminal-label inlining, goto-forwarder folds,
+    // Post-emission Clang-AST cleanup driver.  Runs the post-emission
+    // pass pipeline (terminal-label inlining, goto-forwarder folds,
     // goto-to-next-label elimination, dead-control removal, if-goto
     // scopeification, cross-scope label hoist, loop recovery, switch-
     // local case folds) plus cosmetic normalizers (while->for promotion,

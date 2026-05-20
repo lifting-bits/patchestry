@@ -488,8 +488,8 @@ namespace patchestry::ast {
 
                 EmitClangAST(root_body, fn, ctx);
 
-                // Clang-AST post-emission cleanup pipeline (F1-F8 +
-                // cosmetics).  Gated by --clang-ast-cleanup (default on).
+                // Clang-AST post-emission cleanup pipeline.
+                // Gated by --clang-ast-cleanup (default on).
                 // Toggle to bisect any structuring drift introduced by
                 // these post-passes vs the SNode-layer cleanup alone.
                 if (options.clang_ast_cleanup) {

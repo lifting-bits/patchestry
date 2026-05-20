@@ -7036,7 +7036,7 @@ namespace patchestry::ast {
 
 
     // ---------------------------------------------------------------
-    // F4 — RemoveDeadControlFlow: the consolidated dead-control-flow
+    // RemoveDeadControlFlow: the consolidated dead-control-flow
     // transform.  Composes the three monotone deletion sub-rewrites
     // behind one entry point with an honest changed-contract:
     //
@@ -7082,7 +7082,7 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
-    // F6 — HoistCrossScopeLabels: the consolidated cross-scope label
+    // HoistCrossScopeLabels: the consolidated cross-scope label
     // transform.  Composes the two sub-rewrites in fixed order:
     //
     //   1. RepairCrossScopeLabelEntries — rewrite `if(c) goto L; ...;
@@ -7120,7 +7120,7 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
-    // F7 — RecoverLoop: the consolidated loop-recovery transform.
+    // RecoverLoop: the consolidated loop-recovery transform.
     // Composes the two sub-rewrites in fixed order:
     //
     //   1. ConvertImmediateLoopExitGotosToBreak — rewrite a goto that
@@ -7156,7 +7156,7 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
-    // F2 (part) — FoldGotoDiamonds: consolidated goto-diamond fold.
+    // FoldGotoDiamonds: consolidated goto-diamond fold.
     // Composes the two diamond-fold sub-rewrites in fixed order:
     //
     //   1. FoldLocalGotoDiamonds — recover if/else from a goto diamond
@@ -7196,7 +7196,7 @@ namespace patchestry::ast {
     }
 
     // ---------------------------------------------------------------
-    // F1 (part) — CloneTerminalLabelGotos: consolidated terminal-label
+    // CloneTerminalLabelGotos: consolidated terminal-label
     // goto-inlining.  Composes the two complementary clone sub-rewrites
     // in fixed order:
     //

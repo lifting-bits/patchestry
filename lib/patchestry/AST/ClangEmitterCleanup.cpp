@@ -107,7 +107,7 @@ namespace patchestry::ast {
             body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
             if (body) { fn->setBody(body); }
         };
-        // F4 — consolidated dead-control-flow cleanup (strip dead
+        // Consolidated dead-control-flow cleanup (strip dead
         // labels, drop orphaned gotos, remove empty blocks).
         auto run_dead_control_flow = [&]() {
             bool mutated = false;

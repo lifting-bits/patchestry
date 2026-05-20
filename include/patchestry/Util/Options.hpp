@@ -22,8 +22,8 @@ namespace patchestry {
         bool use_structuring_pass           = false;
         bool verify_no_node_loss            = false;
         bool structuring_improvement_report = false;
-        // Run the Clang-AST post-emission cleanup pipeline
-        // (F1-F8 + cosmetic passes) in CleanupPrettyPrint.
+        // Run the Clang-AST post-emission cleanup pipeline in
+        // CleanupPrettyPrint.
         // Default on; flip off via --clang-ast-cleanup=false to
         // compare the structured C output without the AST-layer
         // passes (useful for bisecting structuring drift).
