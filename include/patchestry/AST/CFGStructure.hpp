@@ -135,14 +135,27 @@ namespace patchestry::ast {
 
     /// Lift raw clang control flow embedded in opaque SStmt leaf SNodes
     /// into first-class SNodes so the SNode-layer cleanup passes can see
-    /// it.  This commit handles only the two simplest payload shapes:
-    ///   - an SStmt holding a bare `clang::GotoStmt`  -> `SGoto`
-    ///   - an SStmt holding a `clang::LabelStmt`      -> `SLabel`
-    /// The label body is normalized recursively (goto -> SGoto, nested
-    /// label -> SLabel, null/NullStmt -> empty, anything else left as
-    /// SStmt).  Every other SStmt payload (assignments, calls, if,
-    /// switch, compounds) is left untouched.  Goto/label pairing is
-    /// preserved verbatim — no rename, no synthesis.
+    /// it.  Payload shapes lifted (each handled by the shared recursive
+    /// helper `NormalizeClangStmt`):
+    ///   - `clang::GotoStmt`       -> `SGoto`
+    ///   - `clang::LabelStmt`      -> `SLabel` (body normalized recursively)
+    ///   - `clang::BreakStmt`      -> `SBreak`
+    ///   - `clang::IfStmt`         -> `SIfThenElse` (arms normalized recursively)
+    ///   - `clang::SwitchStmt`     -> `SSwitch` when the body matches the
+    ///                                 switch-of-CaseStmt/DefaultStmt shape;
+    ///                                 each case body normalized recursively,
+    ///                                 fallthrough chains preserved.  A
+    ///                                 non-matching switch is left as a
+    ///                                 single SStmt.
+    ///   - `clang::CompoundStmt`   -> decomposed into a sequence of SNodes
+    ///                                 ONLY if it transitively contains a
+    ///                                 goto or label; otherwise left as a
+    ///                                 single opaque SStmt so emission keeps
+    ///                                 its brace level.
+    ///   - `clang::NullStmt` / null -> dropped.
+    /// Any other clang::Stmt shape is left as a plain SStmt — never guess,
+    /// never drop.  Goto/label pairing is preserved verbatim: no rename,
+    /// no synthesis, no case-value width recompute.
     void NormalizeRawControlFlow(std::vector< SNode * > &root,
                                  SNodeFactory &factory,
                                  clang::ASTContext &ctx);

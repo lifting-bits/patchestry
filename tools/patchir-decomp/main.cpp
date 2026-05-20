@@ -94,7 +94,11 @@ namespace {
 
     const llvm::cl::opt< bool > verify_no_node_loss( // NOLINT(cert-err58-cpp)
         "verify-no-node-loss",
-        llvm::cl::desc("Verify the structured SNode tree for structural defects"),
+        llvm::cl::desc(
+            "Validate the structured SNode tree: cross-check labels, "
+            "switches, and goto counts against the source CGraph (node "
+            "retention) and report structural defects (dangling gotos, "
+            "duplicate labels, unreachable nodes)"),
         llvm::cl::init(false)
     );
 
