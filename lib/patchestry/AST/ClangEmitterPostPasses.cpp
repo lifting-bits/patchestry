@@ -4032,59 +4032,89 @@ namespace patchestry::ast {
                 return replaced != before ? detail::MakeCompound(ctx, children) : stmt;
             }
 
+            // Stage child results in locals and only commit the
+            // in-place writes after every recursive call succeeds.
+            // Mirrors the CompoundStmt path above (children are
+            // collected into `children` and only re-wrapped if no
+            // failure occurred) and matches the bot's W-warning on
+            // PR #246: today the recursive call returns the
+            // unmodified child on failure deep in the tree, so an
+            // eager setThen/setSubStmt/setBody is a harmless no-op,
+            // but the asymmetry would silently corrupt the AST if
+            // CloneStraightLineSeqAsStmt is later extended to
+            // produce a non-identity replacement before detecting
+            // failure deeper down.
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(ReplaceGotoWithClonedJoinTail(
+                clang::Stmt *new_then = ReplaceGotoWithClonedJoinTail(
                     ctx, ifs->getThen(), target, join, tail, replaced, failed
-                ));
+                );
                 if (failed) { return stmt; }
+                clang::Stmt *new_else = nullptr;
                 if (ifs->getElse()) {
-                    ifs->setElse(ReplaceGotoWithClonedJoinTail(
+                    new_else = ReplaceGotoWithClonedJoinTail(
                         ctx, ifs->getElse(), target, join, tail, replaced, failed
-                    ));
+                    );
+                    if (failed) { return stmt; }
                 }
+                ifs->setThen(new_then);
+                if (new_else) { ifs->setElse(new_else); }
                 return stmt;
             }
 
             if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                label->setSubStmt(ReplaceGotoWithClonedJoinTail(
+                clang::Stmt *new_sub = ReplaceGotoWithClonedJoinTail(
                     ctx, label->getSubStmt(), target, join, tail, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                label->setSubStmt(new_sub);
                 return label;
             }
             if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
-                sw->setBody(ReplaceGotoWithClonedJoinTail(
+                clang::Stmt *new_body = ReplaceGotoWithClonedJoinTail(
                     ctx, sw->getBody(), target, join, tail, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                sw->setBody(new_body);
                 return sw;
             }
             if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
-                case_stmt->setSubStmt(ReplaceGotoWithClonedJoinTail(
+                clang::Stmt *new_sub = ReplaceGotoWithClonedJoinTail(
                     ctx, case_stmt->getSubStmt(), target, join, tail, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                case_stmt->setSubStmt(new_sub);
                 return case_stmt;
             }
             if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
-                default_stmt->setSubStmt(ReplaceGotoWithClonedJoinTail(
+                clang::Stmt *new_sub = ReplaceGotoWithClonedJoinTail(
                     ctx, default_stmt->getSubStmt(), target, join, tail, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                default_stmt->setSubStmt(new_sub);
                 return default_stmt;
             }
             if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
-                ws->setBody(ReplaceGotoWithClonedJoinTail(
+                clang::Stmt *new_body = ReplaceGotoWithClonedJoinTail(
                     ctx, ws->getBody(), target, join, tail, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                ws->setBody(new_body);
                 return ws;
             }
             if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
-                ds->setBody(ReplaceGotoWithClonedJoinTail(
+                clang::Stmt *new_body = ReplaceGotoWithClonedJoinTail(
                     ctx, ds->getBody(), target, join, tail, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                ds->setBody(new_body);
                 return ds;
             }
             if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
-                fs->setBody(ReplaceGotoWithClonedJoinTail(
+                clang::Stmt *new_body = ReplaceGotoWithClonedJoinTail(
                     ctx, fs->getBody(), target, join, tail, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                fs->setBody(new_body);
                 return fs;
             }
 
@@ -4119,58 +4149,83 @@ namespace patchestry::ast {
                 }
                 return replaced != before ? detail::MakeCompound(ctx, children) : stmt;
             }
+            // See the matching comment in
+            // ReplaceGotoWithClonedJoinTail above — stage child
+            // results in locals, check `failed` after each, and only
+            // commit the in-place writes once every recursive call
+            // succeeds, so a future non-identity-then-fail extension
+            // of CloneGotoFreeSeqAsStmt can never leave behind a
+            // half-mutated parent statement.
             if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(stmt)) {
-                ifs->setThen(ReplaceGotoWithClonedGotoFreeSeq(
+                clang::Stmt *new_then = ReplaceGotoWithClonedGotoFreeSeq(
                     ctx, ifs->getThen(), target, replacement_stmts, replaced, failed
-                ));
+                );
                 if (failed) { return stmt; }
+                clang::Stmt *new_else = nullptr;
                 if (ifs->getElse()) {
-                    ifs->setElse(ReplaceGotoWithClonedGotoFreeSeq(
+                    new_else = ReplaceGotoWithClonedGotoFreeSeq(
                         ctx, ifs->getElse(), target, replacement_stmts, replaced, failed
-                    ));
+                    );
+                    if (failed) { return stmt; }
                 }
+                ifs->setThen(new_then);
+                if (new_else) { ifs->setElse(new_else); }
                 return stmt;
             }
             if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                label->setSubStmt(ReplaceGotoWithClonedGotoFreeSeq(
+                clang::Stmt *new_sub = ReplaceGotoWithClonedGotoFreeSeq(
                     ctx, label->getSubStmt(), target, replacement_stmts, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                label->setSubStmt(new_sub);
                 return label;
             }
             if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(stmt)) {
-                sw->setBody(ReplaceGotoWithClonedGotoFreeSeq(
+                clang::Stmt *new_body = ReplaceGotoWithClonedGotoFreeSeq(
                     ctx, sw->getBody(), target, replacement_stmts, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                sw->setBody(new_body);
                 return sw;
             }
             if (auto *case_stmt = llvm::dyn_cast< clang::CaseStmt >(stmt)) {
-                case_stmt->setSubStmt(ReplaceGotoWithClonedGotoFreeSeq(
+                clang::Stmt *new_sub = ReplaceGotoWithClonedGotoFreeSeq(
                     ctx, case_stmt->getSubStmt(), target, replacement_stmts, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                case_stmt->setSubStmt(new_sub);
                 return case_stmt;
             }
             if (auto *default_stmt = llvm::dyn_cast< clang::DefaultStmt >(stmt)) {
-                default_stmt->setSubStmt(ReplaceGotoWithClonedGotoFreeSeq(
+                clang::Stmt *new_sub = ReplaceGotoWithClonedGotoFreeSeq(
                     ctx, default_stmt->getSubStmt(), target, replacement_stmts, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                default_stmt->setSubStmt(new_sub);
                 return default_stmt;
             }
             if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(stmt)) {
-                ws->setBody(ReplaceGotoWithClonedGotoFreeSeq(
+                clang::Stmt *new_body = ReplaceGotoWithClonedGotoFreeSeq(
                     ctx, ws->getBody(), target, replacement_stmts, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                ws->setBody(new_body);
                 return ws;
             }
             if (auto *ds = llvm::dyn_cast< clang::DoStmt >(stmt)) {
-                ds->setBody(ReplaceGotoWithClonedGotoFreeSeq(
+                clang::Stmt *new_body = ReplaceGotoWithClonedGotoFreeSeq(
                     ctx, ds->getBody(), target, replacement_stmts, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                ds->setBody(new_body);
                 return ds;
             }
             if (auto *fs = llvm::dyn_cast< clang::ForStmt >(stmt)) {
-                fs->setBody(ReplaceGotoWithClonedGotoFreeSeq(
+                clang::Stmt *new_body = ReplaceGotoWithClonedGotoFreeSeq(
                     ctx, fs->getBody(), target, replacement_stmts, replaced, failed
-                ));
+                );
+                if (failed) { return stmt; }
+                fs->setBody(new_body);
                 return fs;
             }
             return stmt;
