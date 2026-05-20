@@ -1094,6 +1094,15 @@ namespace patchestry::ast {
                 // silently inert for every function this pass mutates.
                 a.branch_roles.swapped           = true;
                 a.branch_roles.condition_negated = true;
+                // ClassifyRegions wrote merge/body/exit using pre-swap
+                // node IDs and intentionally left `normalized` false for
+                // the ipd==succs[1] arm, deferring the flip to this pass.
+                // merge/body/exit are node IDs (not slot indices), so the
+                // swap above does not invalidate them — merge still equals
+                // the post-dominator, which now sits at the new succs[0].
+                // Setting `normalized` here lets ValidateCGraph count this
+                // node and run the "merge on succs[0]" invariant on it.
+                a.branch_roles.normalized        = true;
 
                 if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(a.terminal)) {
                     auto loc = ifs->getIfLoc();
