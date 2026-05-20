@@ -493,7 +493,8 @@ namespace patchestry::ast {
 
                 EmitClangAST(root_body, fn, ctx);
 
-                CleanupPrettyPrint(fn, ctx);
+                CleanupPrettyPrint(
+                    fn, ctx, options.structuring_improvement_report, fn_name);
 
                 // Goto-funnel report: per-function goto-elimination metrics
                 // for the structured path.  Gated by
