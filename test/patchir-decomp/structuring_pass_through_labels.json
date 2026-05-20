@@ -1,0 +1,115 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -structuring-improvement-report -emit-cir -output %t.report > %t.report.stdout 2> %t.report.stderr
+// RUN: %file-check -vv -check-prefix=REPORT %s --input-file %t.report.stderr
+// C-LABEL: void pass_through_switch_labels(void)
+// C: switch (
+// C: case {{1U?:}}
+// C: return;
+// C: case {{2U?:}}
+// C: return;
+// C: default:
+// C: return;
+// The pass-through blocks (case 1/2 -> shared return) collapse with no goto chains.
+// C-NOT: goto
+// REPORT: STRUCTURING_IMPROVEMENT_REPORT function=pass_through_switch_labels {{.*}}dangling_gotos=0 duplicate_labels=0
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:19000000": {
+      "name": "pass_through_switch_labels",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:19000000:entry": {
+          "operations": {
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:19000000:0:basic" }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:19000000:0:basic": {
+          "operations": {
+            "sel": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "inputs": [
+                { "type": "type_int", "kind": "constant", "value": 0 },
+                { "type": "type_int", "kind": "constant", "value": 0 }
+              ]
+            },
+            "ind": {
+              "mnemonic": "BRANCHIND",
+              "inputs": [
+                { "type": "type_ptr", "kind": "constant", "value": 0 }
+              ],
+              "switch_input": {
+                "type": "type_int",
+                "kind": "temporary",
+                "operation": "sel"
+              },
+              "switch_cases": [
+                {
+                  "value": 1,
+                  "target_block": "ram:19000010:1:basic",
+                  "has_exit": true
+                },
+                {
+                  "value": 2,
+                  "target_block": "ram:19000020:2:basic",
+                  "has_exit": true
+                }
+              ],
+              "fallback_block": "ram:19000040:4:basic"
+            }
+          },
+          "ordered_operations": ["sel", "ind"]
+        },
+        "ram:19000010:1:basic": {
+          "operations": {
+            "br_case1": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:19000030:3:basic"
+            }
+          },
+          "ordered_operations": ["br_case1"]
+        },
+        "ram:19000020:2:basic": {
+          "operations": {
+            "br_case2": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:19000030:3:basic"
+            }
+          },
+          "ordered_operations": ["br_case2"]
+        },
+        "ram:19000030:3:basic": {
+          "operations": {
+            "ret_shared": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["ret_shared"]
+        },
+        "ram:19000040:4:basic": {
+          "operations": {
+            "ret_default": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["ret_default"]
+        }
+      },
+      "entry_block": "ram:19000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" },
+    "type_ptr": { "kind": "pointer", "size": 4, "element_type": "type_void" }
+  }
+}

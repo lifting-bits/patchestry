@@ -6,21 +6,739 @@
  */
 
 #include <patchestry/AST/CGraph.hpp>
+#include <patchestry/Ghidra/PcodeOperations.hpp>
 #include <patchestry/Util/Log.hpp>
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
+#include <cstdint>
 #include <limits>
 #include <list>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace patchestry::ast {
 
-    // ---------------------------------------------------------------
+    namespace {
+
+        std::string NodeLabel(size_t id) {
+            if (id == CNode::kNone) return "none";
+            std::ostringstream os;
+            os << id;
+            return os.str();
+        }
+
+        void AddDiagnostic(
+            std::vector<std::string> &diagnostics,
+            const std::string &message
+        ) {
+            diagnostics.push_back(message);
+        }
+
+        bool ContainsId(const std::vector<size_t> &ids, size_t id) {
+            return std::find(ids.begin(), ids.end(), id) != ids.end();
+        }
+
+        std::string EdgeKey(const std::string &from, const std::string &to) {
+            return from + " -> " + to;
+        }
+
+        /// Parse the hex address out of a P-Code basic block key of the form
+        /// "...:HEX:...".  Minimal helper local to CGraph validation (the
+        /// project-wide Utils::ParseBlockAddress is not yet on this branch).
+        std::optional<uint64_t> ParseBlockAddress(const std::string &key) {
+            auto p1 = key.find(':');
+            if (p1 == std::string::npos) {
+                return std::nullopt;
+            }
+            auto p2 = key.find(':', p1 + 1);
+            if (p2 == std::string::npos) {
+                return std::nullopt;
+            }
+            auto hex_str = key.substr(p1 + 1, p2 - p1 - 1);
+            if (hex_str.empty()) {
+                return std::nullopt;
+            }
+            try {
+                return std::stoull(hex_str, nullptr, 16);
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+
+        std::string SwitchCaseKey(
+            const std::string &switch_block,
+            bool is_default,
+            int64_t value,
+            const std::string &target_block,
+            bool has_exit
+        ) {
+            std::ostringstream os;
+            os << switch_block << " :: ";
+            if (is_default)
+                os << "default";
+            else
+                os << "case " << value;
+            os << " -> " << target_block
+               << " exit=" << (has_exit ? "true" : "false");
+            return os.str();
+        }
+
+        void AppendSourceSuccs(const ghidra::Function &function,
+                               const std::string &block_key,
+                               std::vector<std::string> &succs) {
+            if (!function.basic_blocks.contains(block_key)) return;
+
+            const auto &block = function.basic_blocks.at(block_key);
+            for (const auto &op_key : block.ordered_operations) {
+                if (!block.operations.contains(op_key)) continue;
+                const auto &op = block.operations.at(op_key);
+                const auto &blocks = function.basic_blocks;
+                if (op.taken_block && blocks.contains(*op.taken_block))
+                    succs.push_back(*op.taken_block);
+                if (op.not_taken_block && blocks.contains(*op.not_taken_block))
+                    succs.push_back(*op.not_taken_block);
+                if (op.target_block && blocks.contains(*op.target_block))
+                    succs.push_back(*op.target_block);
+                for (const auto &s : op.successor_blocks) {
+                    if (blocks.contains(s)) succs.push_back(s);
+                }
+                for (const auto &sc : op.switch_cases) {
+                    if (blocks.contains(sc.target_block))
+                        succs.push_back(sc.target_block);
+                }
+                if (op.fallback_block && blocks.contains(*op.fallback_block))
+                    succs.push_back(*op.fallback_block);
+            }
+        }
+
+        std::vector<std::string>
+        ComputeSourceRPO(const ghidra::Function &function) {
+            std::unordered_set<std::string> visited;
+            std::vector<std::string> post_order;
+
+            struct Frame {
+                std::string key;
+                size_t child_idx = 0;
+                std::vector<std::string> succs;
+            };
+            std::vector<Frame> stack;
+
+            if (!function.entry_block.empty()
+                && function.basic_blocks.contains(function.entry_block)) {
+                Frame entry;
+                entry.key = function.entry_block;
+                AppendSourceSuccs(function, entry.key, entry.succs);
+                stack.push_back(std::move(entry));
+                visited.insert(function.entry_block);
+            }
+
+            while (!stack.empty()) {
+                auto &top = stack.back();
+                if (top.child_idx < top.succs.size()) {
+                    std::string child = top.succs[top.child_idx++];
+                    if (visited.insert(child).second) {
+                        Frame next;
+                        next.key = std::move(child);
+                        AppendSourceSuccs(function, next.key, next.succs);
+                        stack.push_back(std::move(next));
+                    }
+                } else {
+                    post_order.push_back(top.key);
+                    stack.pop_back();
+                }
+            }
+
+            std::reverse(post_order.begin(), post_order.end());
+
+            if (post_order.size() < function.basic_blocks.size()) {
+                std::vector<std::string> unreachable;
+                for (const auto &[key, _] : function.basic_blocks) {
+                    if (!visited.contains(key)) unreachable.push_back(key);
+                }
+                std::sort(unreachable.begin(), unreachable.end());
+                post_order.insert(post_order.end(), unreachable.begin(),
+                                  unreachable.end());
+            }
+
+            return post_order;
+        }
+
+        void AddOracleEdge(
+            std::unordered_map<std::string, unsigned> &edges,
+            const std::string &from,
+            const std::string &to
+        ) {
+            // The oracle is a source edge set. Multiple switch cases may
+            // target the same block, but CGraph intentionally stores one
+            // successor edge per distinct target.
+            edges.try_emplace(EdgeKey(from, to), 1);
+        }
+
+        std::unordered_map<std::string, unsigned>
+        BuildOracleEdges(const ghidra::Function &function,
+                         std::vector<std::string> &diagnostics) {
+            std::unordered_map<std::string, unsigned> edges;
+            auto rpo = ComputeSourceRPO(function);
+            std::unordered_map<std::string, size_t> rpo_pos;
+            for (size_t i = 0; i < rpo.size(); ++i)
+                rpo_pos.emplace(rpo[i], i);
+
+            auto add_if_valid = [&](const std::string &from,
+                                    const std::optional<std::string> &to,
+                                    const char *kind) {
+                if (!to) return false;
+                if (!function.basic_blocks.contains(*to)) {
+                    AddDiagnostic(diagnostics,
+                                  "source " + std::string(kind)
+                                      + " edge from " + from
+                                      + " targets missing block " + *to);
+                    return false;
+                }
+                AddOracleEdge(edges, from, *to);
+                return true;
+            };
+
+            for (const auto &block_key : rpo) {
+                if (!function.basic_blocks.contains(block_key)) continue;
+                const auto &block = function.basic_blocks.at(block_key);
+                const auto *term = FindSourceTerminal(block);
+                if (!term) {
+                    auto pos = rpo_pos.find(block_key);
+                    if (pos != rpo_pos.end() && pos->second + 1 < rpo.size())
+                        AddOracleEdge(edges, block_key, rpo[pos->second + 1]);
+                    continue;
+                }
+
+                using M = ghidra::Mnemonic;
+                if (term->mnemonic == M::OP_BRANCH) {
+                    add_if_valid(block_key, term->target_block, "branch");
+                } else if (term->mnemonic == M::OP_CBRANCH) {
+                    if (!add_if_valid(block_key, term->not_taken_block,
+                                      "conditional-not-taken")) {
+                        auto pos = rpo_pos.find(block_key);
+                        if (pos != rpo_pos.end() && pos->second + 1 < rpo.size())
+                            AddOracleEdge(edges, block_key,
+                                          rpo[pos->second + 1]);
+                    }
+                    add_if_valid(block_key, term->taken_block,
+                                 "conditional-taken");
+                } else if (term->mnemonic == M::OP_BRANCHIND) {
+                    for (const auto &sc : term->switch_cases) {
+                        if (!function.basic_blocks.contains(sc.target_block)) {
+                            AddDiagnostic(
+                                diagnostics,
+                                "source switch-case edge from " + block_key
+                                    + " targets missing block "
+                                    + sc.target_block);
+                            continue;
+                        }
+                        AddOracleEdge(edges, block_key, sc.target_block);
+                    }
+                    add_if_valid(block_key, term->fallback_block,
+                                 "switch-default");
+                    for (const auto &succ : term->successor_blocks) {
+                        if (!function.basic_blocks.contains(succ)) {
+                            AddDiagnostic(
+                                diagnostics,
+                                "source switch-successor-block edge from "
+                                    + block_key + " targets missing block "
+                                    + succ);
+                            continue;
+                        }
+                        AddOracleEdge(edges, block_key, succ);
+                    }
+                }
+            }
+
+            return edges;
+        }
+
+        std::unordered_map<std::string, unsigned>
+        BuildOracleSwitchCases(
+            const ghidra::Function &function,
+            std::unordered_set<std::string> &switch_blocks,
+            std::vector<std::string> &diagnostics
+        ) {
+            std::unordered_map<std::string, unsigned> cases;
+            for (const auto &[block_key, block] : function.basic_blocks) {
+                const auto *term = FindSourceTerminal(block);
+                if (!term || term->mnemonic != ghidra::Mnemonic::OP_BRANCHIND)
+                    continue;
+
+                switch_blocks.insert(block_key);
+
+                for (const auto &sc : term->switch_cases) {
+                    if (!function.basic_blocks.contains(sc.target_block)) {
+                        AddDiagnostic(
+                            diagnostics,
+                            "source switch case from " + block_key
+                                + " targets missing block "
+                                + sc.target_block);
+                        continue;
+                    }
+                    ++cases[SwitchCaseKey(block_key, /*is_default=*/false,
+                                          sc.value, sc.target_block,
+                                          sc.has_exit)];
+                }
+
+                if (term->fallback_block) {
+                    if (!function.basic_blocks.contains(*term->fallback_block)) {
+                        AddDiagnostic(
+                            diagnostics,
+                            "source switch default from " + block_key
+                                + " targets missing block "
+                                + *term->fallback_block);
+                    } else {
+                        ++cases[SwitchCaseKey(block_key, /*is_default=*/true,
+                                              0, *term->fallback_block,
+                                              /*has_exit=*/false)];
+                    }
+                }
+
+                for (const auto &succ : term->successor_blocks) {
+                    if (!function.basic_blocks.contains(succ)) {
+                        AddDiagnostic(
+                            diagnostics,
+                            "source switch successor-block case from "
+                                + block_key + " targets missing block "
+                                + succ);
+                        continue;
+                    }
+                    auto addr = ParseBlockAddress(succ);
+                    if (!addr) {
+                        AddDiagnostic(
+                            diagnostics,
+                            "source switch successor-block case from "
+                                + block_key
+                                + " has unparseable target address " + succ);
+                        continue;
+                    }
+                    ++cases[SwitchCaseKey(
+                        block_key, /*is_default=*/false,
+                        static_cast<int64_t>(*addr), succ,
+                        /*has_exit=*/false)];
+                }
+            }
+            return cases;
+        }
+
+        std::unordered_map<std::string, unsigned>
+        BuildActualSwitchCases(
+            const CGraph &g,
+            std::unordered_set<std::string> &switch_blocks,
+            std::vector<std::string> &diagnostics
+        ) {
+            std::unordered_map<std::string, unsigned> cases;
+            for (const auto &node : g.nodes) {
+                if (!node.switch_cases.empty() || node.IsSwitchOut()) {
+                    if (!node.source_key.empty())
+                        switch_blocks.insert(node.source_key);
+                }
+
+                if (node.switch_cases.empty())
+                    continue;
+                if (node.source_key.empty())
+                    continue;
+
+                for (const auto &sc : node.switch_cases) {
+                    if (sc.succ_index >= node.succs.size()) {
+                        // Core structural validation reports this too.
+                        continue;
+                    }
+                    size_t succ = node.succs[sc.succ_index];
+                    if (succ >= g.nodes.size()) continue;
+                    const auto &target = g.nodes[succ];
+                    if (target.source_key.empty()) {
+                        AddDiagnostic(
+                            diagnostics,
+                            "emitted switch case from " + node.source_key
+                                + " targets node " + NodeLabel(succ)
+                                + " without source block key");
+                        continue;
+                    }
+
+                    ++cases[SwitchCaseKey(node.source_key, sc.is_default,
+                                          sc.value, target.source_key,
+                                          sc.has_exit)];
+                }
+            }
+            return cases;
+        }
+
+    } // namespace
+
+    const ghidra::Operation *FindSourceTerminal(const ghidra::BasicBlock &block) {
+        if (block.ordered_operations.empty()) {
+            return nullptr;
+        }
+        const auto &last_key = block.ordered_operations.back();
+        if (!block.operations.contains(last_key)) {
+            return nullptr;
+        }
+        const auto &op = block.operations.at(last_key);
+        using M        = ghidra::Mnemonic;
+        if (op.mnemonic == M::OP_BRANCH || op.mnemonic == M::OP_CBRANCH
+            || op.mnemonic == M::OP_BRANCHIND || op.mnemonic == M::OP_RETURN
+            || op.mnemonic == M::OP_TAIL_CALL)
+        {
+            return &op;
+        }
+        return nullptr;
+    }
+
+    CGraphValidationReport ValidateCGraph(
+        const CGraph &g,
+        const ghidra::Function *source
+    ) {
+        CGraphValidationReport report;
+        report.node_count = g.nodes.size();
+
+        if (g.nodes.empty()) {
+            AddDiagnostic(report.diagnostics, "graph has no nodes");
+            return report;
+        }
+
+        if (g.entry >= g.nodes.size()) {
+            AddDiagnostic(report.diagnostics,
+                          "entry node " + NodeLabel(g.entry)
+                              + " is outside node range");
+        }
+
+        for (size_t id = 0; id < g.nodes.size(); ++id) {
+            const auto &node = g.nodes[id];
+            if (node.id != id) {
+                AddDiagnostic(report.diagnostics,
+                              "node slot " + NodeLabel(id)
+                                  + " has mismatched node.id "
+                                  + NodeLabel(node.id));
+            }
+            if (node.source_key.empty()) {
+                AddDiagnostic(report.diagnostics,
+                              "node " + NodeLabel(id)
+                                  + " has no source block key");
+            } else {
+                ++report.emitted_blocks;
+            }
+
+            if (node.IsCollapsed()) {
+                ++report.collapsed_nodes;
+                if (node.collapsed_into >= g.nodes.size()) {
+                    AddDiagnostic(report.diagnostics,
+                                  "node " + NodeLabel(id)
+                                      + " collapsed_into invalid node "
+                                      + NodeLabel(node.collapsed_into));
+                } else if (node.collapsed_into == id) {
+                    AddDiagnostic(report.diagnostics,
+                                  "node " + NodeLabel(id)
+                                      + " is collapsed into itself");
+                }
+            } else {
+                ++report.active_nodes;
+            }
+
+            if (node.edge_flags.size() != node.succs.size()) {
+                AddDiagnostic(report.diagnostics,
+                              "node " + NodeLabel(id)
+                                  + " has " + NodeLabel(node.succs.size())
+                                  + " successor(s) but "
+                                  + NodeLabel(node.edge_flags.size())
+                                  + " edge flag(s)");
+            }
+
+            report.edge_count += node.succs.size();
+            report.emitted_edges += node.succs.size();
+            if (node.is_conditional) {
+                ++report.conditional_nodes;
+                if (node.succs.size() != 2) {
+                    AddDiagnostic(report.diagnostics,
+                                  "conditional node " + NodeLabel(id)
+                                      + " has " + NodeLabel(node.succs.size())
+                                      + " successor(s)");
+                }
+                if (!node.branch_cond) {
+                    AddDiagnostic(report.diagnostics,
+                                  "conditional node " + NodeLabel(id)
+                                      + " has no branch condition");
+                }
+                if (node.branch_roles.normalized) {
+                    ++report.normalized_conditions;
+                    if (node.branch_roles.merge >= g.nodes.size()) {
+                        AddDiagnostic(report.diagnostics,
+                                      "normalized conditional node "
+                                          + NodeLabel(id)
+                                          + " has invalid merge role "
+                                          + NodeLabel(node.branch_roles.merge));
+                    } else if (node.succs.size() == 2
+                               && node.branch_roles.merge != node.succs[0]) {
+                        AddDiagnostic(report.diagnostics,
+                                      "normalized conditional node "
+                                          + NodeLabel(id)
+                                          + " does not have merge on succs[0]");
+                    }
+                }
+                if (node.branch_roles.swapped)
+                    ++report.branch_swaps;
+                if (node.branch_roles.condition_negated)
+                    ++report.condition_negations;
+                if (node.branch_roles.condition_negated
+                    && !node.branch_roles.swapped) {
+                    AddDiagnostic(report.diagnostics,
+                                  "conditional node " + NodeLabel(id)
+                                      + " negated condition without branch swap");
+                }
+            }
+
+            if (node.region_kind == CNode::RegionKind::kIrreducible)
+                ++report.irreducible_regions;
+
+            if (node.IsSwitchOut()) {
+                ++report.switch_nodes;
+                if (!node.branch_cond) {
+                    AddDiagnostic(report.diagnostics,
+                                  "switch node " + NodeLabel(id)
+                                      + " has no discriminant");
+                }
+            }
+
+            for (size_t si = 0; si < node.succs.size(); ++si) {
+                size_t succ = node.succs[si];
+                if (succ >= g.nodes.size()) {
+                    AddDiagnostic(report.diagnostics,
+                                  "node " + NodeLabel(id)
+                                      + " has invalid successor "
+                                      + NodeLabel(succ));
+                    continue;
+                }
+                const auto &succ_node = g.nodes[succ];
+                if (!ContainsId(succ_node.preds, id)) {
+                    AddDiagnostic(report.diagnostics,
+                                  "node " + NodeLabel(id)
+                                      + " successor " + NodeLabel(succ)
+                                      + " does not list reverse predecessor");
+                }
+            }
+
+            for (size_t pred : node.preds) {
+                if (pred >= g.nodes.size()) {
+                    AddDiagnostic(report.diagnostics,
+                                  "node " + NodeLabel(id)
+                                      + " has invalid predecessor "
+                                      + NodeLabel(pred));
+                    continue;
+                }
+                const auto &pred_node = g.nodes[pred];
+                if (!ContainsId(pred_node.succs, id)) {
+                    AddDiagnostic(report.diagnostics,
+                                  "node " + NodeLabel(id)
+                                      + " predecessor " + NodeLabel(pred)
+                                      + " does not list forward successor");
+                }
+            }
+
+            std::unordered_set<size_t> seen_preds;
+            for (size_t pred : node.preds) {
+                if (!seen_preds.insert(pred).second) {
+                    AddDiagnostic(report.diagnostics,
+                                  "node " + NodeLabel(id)
+                                      + " has duplicate predecessor "
+                                      + NodeLabel(pred));
+                }
+            }
+
+            for (const auto &sc : node.switch_cases) {
+                if (sc.succ_index >= node.succs.size()) {
+                    AddDiagnostic(report.diagnostics,
+                                  "switch node " + NodeLabel(id)
+                                      + " case target index "
+                                      + NodeLabel(sc.succ_index)
+                                      + " is outside successor range "
+                                      + NodeLabel(node.succs.size()));
+                }
+            }
+        }
+
+        std::unordered_map<std::string, unsigned> expected_edges;
+        if (source) {
+            report.input_blocks = source->basic_blocks.size();
+            std::unordered_set<std::string> emitted_blocks;
+            for (const auto &node : g.nodes) {
+                if (!node.source_key.empty())
+                    emitted_blocks.insert(node.source_key);
+            }
+            for (const auto &[block_key, _] : source->basic_blocks) {
+                if (!emitted_blocks.contains(block_key)) {
+                    report.missing_blocks.push_back(block_key);
+                    AddDiagnostic(report.diagnostics,
+                                  "missing source block " + block_key);
+                }
+            }
+            for (const auto &block_key : emitted_blocks) {
+                if (!source->basic_blocks.contains(block_key)) {
+                    report.extra_blocks.push_back(block_key);
+                    AddDiagnostic(report.diagnostics,
+                                  "extra graph block " + block_key);
+                }
+            }
+            std::sort(report.missing_blocks.begin(),
+                      report.missing_blocks.end());
+            std::sort(report.extra_blocks.begin(), report.extra_blocks.end());
+
+            expected_edges = BuildOracleEdges(*source, report.diagnostics);
+
+            std::unordered_set<std::string> expected_switches;
+            auto expected_cases = BuildOracleSwitchCases(
+                *source, expected_switches, report.diagnostics);
+            std::unordered_set<std::string> actual_switches;
+            auto actual_cases = BuildActualSwitchCases(
+                g, actual_switches, report.diagnostics);
+
+            report.input_switches = expected_switches.size();
+            report.emitted_switches = actual_switches.size();
+            report.input_cases = 0;
+            for (const auto &[_, count] : expected_cases)
+                report.input_cases += count;
+            report.emitted_cases = 0;
+            for (const auto &[_, count] : actual_cases)
+                report.emitted_cases += count;
+
+            for (const auto &sw : expected_switches) {
+                if (!actual_switches.contains(sw)) {
+                    report.missing_switches.push_back(sw);
+                    AddDiagnostic(report.diagnostics,
+                                  "missing emitted switch for source block "
+                                      + sw);
+                }
+            }
+            for (const auto &sw : actual_switches) {
+                if (!expected_switches.contains(sw)) {
+                    report.extra_switches.push_back(sw);
+                    AddDiagnostic(report.diagnostics,
+                                  "extra emitted switch for source block "
+                                      + sw);
+                }
+            }
+
+            for (const auto &[case_key, expected_count] : expected_cases) {
+                unsigned actual_count = 0;
+                if (auto it = actual_cases.find(case_key);
+                    it != actual_cases.end())
+                    actual_count = it->second;
+                if (actual_count < expected_count) {
+                    report.missing_cases.push_back(case_key);
+                    AddDiagnostic(report.diagnostics,
+                                  "missing switch case " + case_key
+                                      + " expected "
+                                      + NodeLabel(expected_count)
+                                      + " occurrence(s), saw "
+                                      + NodeLabel(actual_count));
+                }
+            }
+            for (const auto &[case_key, actual_count] : actual_cases) {
+                unsigned expected_count = 0;
+                if (auto it = expected_cases.find(case_key);
+                    it != expected_cases.end())
+                    expected_count = it->second;
+                if (expected_count == 0) {
+                    report.extra_cases.push_back(case_key);
+                    AddDiagnostic(report.diagnostics,
+                                  "extra emitted switch case " + case_key);
+                } else if (actual_count > expected_count) {
+                    report.duplicated_cases.push_back(case_key);
+                    AddDiagnostic(report.diagnostics,
+                                  "duplicated emitted switch case "
+                                      + case_key + " expected "
+                                      + NodeLabel(expected_count)
+                                      + " occurrence(s), saw "
+                                      + NodeLabel(actual_count));
+                }
+                if (actual_count > 1) {
+                    if (std::find(report.duplicated_cases.begin(),
+                                  report.duplicated_cases.end(),
+                                  case_key)
+                        == report.duplicated_cases.end()) {
+                        report.duplicated_cases.push_back(case_key);
+                    }
+                }
+            }
+
+            std::sort(report.missing_switches.begin(),
+                      report.missing_switches.end());
+            std::sort(report.extra_switches.begin(),
+                      report.extra_switches.end());
+            std::sort(report.missing_cases.begin(),
+                      report.missing_cases.end());
+            std::sort(report.extra_cases.begin(), report.extra_cases.end());
+            std::sort(report.duplicated_cases.begin(),
+                      report.duplicated_cases.end());
+        } else {
+            for (const auto &edge : g.source_edges) {
+                if (edge.from_key.empty() || edge.to_key.empty()) {
+                    AddDiagnostic(report.diagnostics,
+                                  "source edge has empty endpoint for reason "
+                                      + edge.reason);
+                    continue;
+                }
+                ++expected_edges[EdgeKey(edge.from_key, edge.to_key)];
+            }
+        }
+        report.input_edges = expected_edges.size();
+
+        std::unordered_map<std::string, unsigned> actual_edges;
+        for (const auto &node : g.nodes) {
+            if (node.source_key.empty()) continue;
+            for (size_t succ : node.succs) {
+                if (succ >= g.nodes.size()) continue;
+                const auto &succ_node = g.nodes[succ];
+                if (succ_node.source_key.empty()) continue;
+                ++actual_edges[EdgeKey(node.source_key, succ_node.source_key)];
+            }
+        }
+
+        for (const auto &[edge, expected_count] : expected_edges) {
+            unsigned actual_count = 0;
+            if (auto it = actual_edges.find(edge); it != actual_edges.end())
+                actual_count = it->second;
+            if (actual_count < expected_count) {
+                report.missing_edges.push_back(edge);
+                AddDiagnostic(report.diagnostics,
+                              "missing source edge " + edge + " expected "
+                                  + NodeLabel(expected_count) + " occurrence(s), saw "
+                                  + NodeLabel(actual_count));
+            }
+        }
+        for (const auto &[edge, actual_count] : actual_edges) {
+            unsigned expected_count = 0;
+            if (auto it = expected_edges.find(edge); it != expected_edges.end())
+                expected_count = it->second;
+            if (expected_count == 0) {
+                report.extra_edges.push_back(edge);
+                AddDiagnostic(report.diagnostics,
+                              "extra graph edge " + edge);
+            } else if (actual_count > expected_count) {
+                report.duplicated_edges.push_back(edge);
+                AddDiagnostic(report.diagnostics,
+                              "duplicated graph edge " + edge + " expected "
+                                  + NodeLabel(expected_count)
+                                  + " occurrence(s), saw "
+                                  + NodeLabel(actual_count));
+            }
+        }
+        std::sort(report.missing_edges.begin(), report.missing_edges.end());
+        std::sort(report.extra_edges.begin(), report.extra_edges.end());
+        std::sort(report.duplicated_edges.begin(),
+                  report.duplicated_edges.end());
+
+        return report;
+    }
+
     // IdentifyInternal — absorb component nodes into a hierarchical
     // structured block (structural).
-    // ---------------------------------------------------------------
     size_t CGraph::IdentifyInternal(const std::vector<size_t> &ids,
                                         CNode::BlockType type,
                                         std::vector< SNode * > snodes) {
@@ -28,6 +746,7 @@ namespace patchestry::ast {
         size_t rep = ids[0];
         nodes[rep].structured = std::move(snodes);
         nodes[rep].block_type = type;
+        nodes[rep].branch_roles = CNode::BranchRoles{};
 
         std::unordered_set<size_t> idset(ids.begin(), ids.end());
 
@@ -100,7 +819,6 @@ namespace patchestry::ast {
             sf.resize(write);
         }
 
-        // ---------------------------------------------------------------
         // Deduplicate convergent ext_succs.
         //
         // When two collapsed nodes independently exit to different
@@ -113,7 +831,6 @@ namespace patchestry::ast {
         // through single-in/single-out blocks.  If B is reachable, A→B
         // is sequential — drop B from ext_succs (A will eventually
         // reach it via the graph).
-        // ---------------------------------------------------------------
         if (ext_succs.size() == 2) {
             // Check if `target` is reachable from `from` through a
             // bounded forward walk.  Follows single-successor chains
@@ -228,6 +945,19 @@ namespace patchestry::ast {
         }
 
         nodes[rep].is_conditional = !ext_succs.empty() && ext_succs.size() == 2;
+        switch (type) {
+            case CNode::BlockType::kWhile:
+            case CNode::BlockType::kDoWhile:
+            case CNode::BlockType::kInfLoop:
+                nodes[rep].region_kind = CNode::RegionKind::kLoop;
+                break;
+            case CNode::BlockType::kSwitch:
+                nodes[rep].region_kind = CNode::RegionKind::kSwitch;
+                break;
+            default:
+                nodes[rep].region_kind = CNode::RegionKind::kAcyclic;
+                break;
+        }
 
         nodes[rep].stmts.clear();
         nodes[rep].label.clear();
@@ -300,9 +1030,7 @@ namespace patchestry::ast {
         }
     }
 
-    // -------------------------------------------------------------------
     // LoopBody core methods
-    // -------------------------------------------------------------------
 
     void ClearMarks(CGraph &g, const std::vector<size_t> &body) {
         for (size_t id : body) {
@@ -426,14 +1154,12 @@ namespace patchestry::ast {
             [](const LoopBody *a, const LoopBody *b) { return *a < *b; });
     }
 
-    // -------------------------------------------------------------------
     // LoopBody exit detection, tail ordering, extension, exit labeling
-    // -------------------------------------------------------------------
 
     void LoopBody::FindExit(CGraph &g, const std::vector<size_t> &body) {
         std::vector<size_t> candidates;
 
-        // Phase 1: scan tails for exits
+        // Scan tails for exits
         for (size_t t : tails) {
             const auto &tn = g.Node(t);
             for (size_t i = 0; i < tn.succs.size(); ++i) {
@@ -448,7 +1174,7 @@ namespace patchestry::ast {
             }
         }
 
-        // Phase 2: scan head and middle body nodes
+        // Scan head and middle body nodes
         {
             const auto &hd = g.Node(body[0]);
             for (size_t i = 0; i < hd.succs.size(); ++i) {
@@ -486,7 +1212,7 @@ namespace patchestry::ast {
             return;
         }
 
-        // Phase 3: Container filtering (structural)
+        // Container filtering (structural)
         std::vector<size_t> container_body;
         {
             g.Node(immed_container->head).visit_count = 1;
@@ -590,9 +1316,7 @@ namespace patchestry::ast {
         }
     }
 
-    // -------------------------------------------------------------------
     // OrderLoopBodies: orchestrate full loop detection pipeline
-    // -------------------------------------------------------------------
 
     void OrderLoopBodies(CGraph &g, std::list<LoopBody> &loopbody) {
         std::vector<LoopBody *> looporder;
@@ -610,9 +1334,7 @@ namespace patchestry::ast {
         }
     }
 
-    // -------------------------------------------------------------------
     // LoopBody: exit mark management and update
-    // -------------------------------------------------------------------
 
     void LoopBody::SetExitMarks(CGraph &g, const std::vector<size_t> &body) const {
         std::unordered_set<size_t> bodyset(body.begin(), body.end());
@@ -637,9 +1359,7 @@ namespace patchestry::ast {
 
     bool LoopBody::Update(const CGraph &g) const { return !g.Node(head).IsCollapsed(); }
 
-    // -------------------------------------------------------------------
     // FloatingEdge
-    // -------------------------------------------------------------------
 
     std::pair<size_t, size_t> FloatingEdge::GetCurrentEdge(const CGraph &g) const {
         size_t top = top_id;
@@ -669,9 +1389,7 @@ namespace patchestry::ast {
         return {CNode::kNone, 0};
     }
 
-    // -------------------------------------------------------------------
     // TraceDAG implementation
-    // -------------------------------------------------------------------
 
     TraceDAG::~TraceDAG() {
         for (auto *bp : branchlist_) {

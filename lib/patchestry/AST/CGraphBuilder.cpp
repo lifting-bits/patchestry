@@ -154,23 +154,14 @@ namespace patchestry::ast {
             }
         }
 
-        /// Find the terminal operation (BRANCH/CBRANCH/BRANCHIND/RETURN) in a block.
-        /// Assumes the terminal is the last entry in ordered_operations, which
-        /// holds for P-Code serialization (Ghidra always places the branch last).
-        /// If non-terminal ops follow the branch, the terminal won't be found
-        /// and the block will be treated as a fallthrough.
-        const ghidra::Operation *find_terminal_op(const ghidra::BasicBlock &block) {
-            if (block.ordered_operations.empty()) return nullptr;
-            const auto &last_key = block.ordered_operations.back();
-            if (!block.operations.contains(last_key)) return nullptr;
-            const auto &op = block.operations.at(last_key);
-            using M = ghidra::Mnemonic;
-            if (op.mnemonic == M::OP_BRANCH || op.mnemonic == M::OP_CBRANCH
-                || op.mnemonic == M::OP_BRANCHIND || op.mnemonic == M::OP_RETURN
-                || op.mnemonic == M::OP_TAIL_CALL) {
-                return &op;
-            }
-            return nullptr;
+        /// Add a successor edge to `node` and record the corresponding
+        /// source-level edge on the graph for CGraph validation.
+        void add_source_edge(CGraph &g, CNode &node, const std::string &from_key,
+                             const std::string &to_key, size_t target_id,
+                             const char *reason) {
+            node.succs.push_back(target_id);
+            node.edge_flags.push_back(0);
+            g.source_edges.push_back(CSourceEdge{from_key, to_key, reason});
         }
 
     } // anonymous namespace
@@ -201,6 +192,7 @@ namespace patchestry::ast {
 
             auto &node = g.nodes[i];
             node.id = i;
+            node.source_key = key;
 
             // Set label (skip entry block)
             if (!block.is_entry_block) {
@@ -212,12 +204,12 @@ namespace patchestry::ast {
             node.stmts = builder.create_block_stmts(ctx, block);
 
             // Process terminal operation to determine edges
-            const auto *term = find_terminal_op(block);
+            const auto *term = FindSourceTerminal(block);
             if (!term) {
                 // No terminal: fallthrough to next block in RPO
                 if (i + 1 < rpo.size()) {
-                    node.succs.push_back(i + 1);
-                    node.edge_flags.push_back(0);
+                    add_source_edge(g, node, key, rpo[i + 1], i + 1,
+                                    "implicit-fallthrough");
                 }
                 continue;
             }
@@ -227,8 +219,8 @@ namespace patchestry::ast {
             if (term->mnemonic == M::OP_BRANCH) {
                 // Unconditional branch
                 if (term->target_block && key_to_index.contains(*term->target_block)) {
-                    node.succs.push_back(key_to_index[*term->target_block]);
-                    node.edge_flags.push_back(0);
+                    add_source_edge(g, node, key, *term->target_block,
+                                    key_to_index[*term->target_block], "branch");
                 }
 
                 // Build terminal GotoStmt for goto reconstruction
@@ -257,12 +249,12 @@ namespace patchestry::ast {
                 }
 
                 if (not_taken != CNode::kNone) {
-                    node.succs.push_back(not_taken);
-                    node.edge_flags.push_back(0);
+                    add_source_edge(g, node, key, rpo[not_taken], not_taken,
+                                    "conditional-not-taken");
                 }
                 if (taken != CNode::kNone) {
-                    node.succs.push_back(taken);
-                    node.edge_flags.push_back(0);
+                    add_source_edge(g, node, key, rpo[taken], taken,
+                                    "conditional-taken");
                 }
 
                 node.is_conditional = (node.succs.size() == 2);
@@ -319,8 +311,8 @@ namespace patchestry::ast {
                         if (!key_to_index.contains(sc.target_block)) continue;
                         size_t target_idx = key_to_index[sc.target_block];
                         if (seen_succs.insert(target_idx).second) {
-                            node.succs.push_back(target_idx);
-                            node.edge_flags.push_back(0);
+                            add_source_edge(g, node, key, sc.target_block,
+                                            target_idx, "switch-case");
                         }
                         // Map to succ index
                         size_t succ_idx = 0;
@@ -337,8 +329,8 @@ namespace patchestry::ast {
                     if (term->fallback_block && key_to_index.contains(*term->fallback_block)) {
                         size_t fb_idx = key_to_index[*term->fallback_block];
                         if (seen_succs.insert(fb_idx).second) {
-                            node.succs.push_back(fb_idx);
-                            node.edge_flags.push_back(0);
+                            add_source_edge(g, node, key, *term->fallback_block,
+                                            fb_idx, "switch-default");
                         }
                         // Find succ index for fallback
                         size_t fb_succ_idx = 0;
@@ -374,8 +366,8 @@ namespace patchestry::ast {
                         if (!key_to_index.contains(block_key)) continue;
                         size_t target_idx = key_to_index[block_key];
                         if (seen_succs.insert(target_idx).second) {
-                            node.succs.push_back(target_idx);
-                            node.edge_flags.push_back(0);
+                            add_source_edge(g, node, key, block_key, target_idx,
+                                            "switch-successor-block");
                         }
                         // Parse block address from key for case value
                         auto addr = parse_block_addr(block_key);
