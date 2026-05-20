@@ -85,6 +85,7 @@ namespace patchestry::ast {
             apply_body(rewrite(refs));
         };
         auto run_goto_to_next_label_fixed_point = [&]() {
+            bool reached_fixed_point = false;
             for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
                 std::unordered_set< clang::LabelDecl * > goto_targets;
                 std::unordered_set< clang::Stmt * > seen;
@@ -93,8 +94,21 @@ namespace patchestry::ast {
                 if (body) {
                     fn->setBody(body);
                 } else {
+                    reached_fixed_point = true;
                     break;
                 }
+            }
+            // Mirror the SNode-cleanup cap-hit diagnostic at
+            // ASTConsumer.cpp:308-333 — silently exhausting the cap
+            // could hide a future pass-oscillation regression at this
+            // layer.  Cap-hit isn't fatal because the surrounding
+            // schedule has its own Stmt::Profile convergence check.
+            if (!reached_fixed_point) {
+                LOG(WARNING)
+                    << "Clang-AST goto-to-next-label fixed-point hit cap of "
+                    << kMaxGotoEliminationPasses << " passes for "
+                    << CleanupReportName(function_name)
+                    << " — possible pass oscillation\n";
             }
         };
         auto run_goto_to_next_label_once = [&]() {
@@ -213,15 +227,26 @@ namespace patchestry::ast {
         // The terminating no-op pass that proves convergence is not
         // counted, so the value reported in CLANG_CLEANUP_SUMMARY
         // reflects the work actually done, not work attempted.
-        int schedule_iterations = 0;
+        int schedule_iterations          = 0;
+        bool schedule_reached_fixed_point = false;
         for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
             llvm::FoldingSetNodeID before;
             fn->getBody()->Profile(before, ctx, /*Canonical=*/false);
             for (const auto &step : fixed_point_cleanup_schedule) { step(); }
             llvm::FoldingSetNodeID after;
             fn->getBody()->Profile(after, ctx, /*Canonical=*/false);
-            if (before == after) { break; }
+            if (before == after) {
+                schedule_reached_fixed_point = true;
+                break;
+            }
             ++schedule_iterations;
+        }
+        if (!schedule_reached_fixed_point) {
+            LOG(WARNING)
+                << "Clang-AST cleanup schedule hit cap of "
+                << kMaxGotoEliminationPasses << " iterations for "
+                << CleanupReportName(function_name)
+                << " — possible pass oscillation\n";
         }
 
         // Remove labels that are not the target of any goto.

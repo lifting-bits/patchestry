@@ -5,6 +5,29 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+// Clang-AST post-emission cleanup pipeline.
+//
+// AST ownership contract:
+//   These passes mutate the Clang AST in place via setBody / setThen /
+//   setElse / setSubStmt / setCond, on the FunctionDecl produced by
+//   EmitClangAST.  This works because the patchir-decomp pipeline holds
+//   exclusive ownership of that body between EmitClangAST and the final
+//   `print(...)` / CIR lowering — no other Clang infrastructure (sema,
+//   ASTConsumer hooks, plugins, source-location caches) observes the
+//   body during this window.  Any code adding a mid-pipeline observer
+//   would see Stmt* pointers invalidated by these passes.  If you need
+//   to introduce one, switch the pipeline to a rebuild-only model
+//   (return a fresh Stmt*; do not mutate in place) before doing so.
+//
+// All non-driver passes follow the same contract:
+//   * Return the input unchanged when given nullptr (`if (!stmt) return
+//     stmt;`).
+//   * Otherwise return a non-null Stmt* — either the original (when no
+//     change) or a freshly-built replacement.
+//   * Callers chain `body = pass(body, ...)` relying on that
+//     non-nullable invariant.  See HoistCrossScopeLabels / RecoverLoop /
+//     FoldGotoDiamonds / CloneTerminalLabelGotos / RemoveDeadControlFlow.
+
 #include <patchestry/AST/ClangEmitter.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Util/Log.hpp>
@@ -12,6 +35,7 @@
 #include "ClangEmitterPostPassesInternal.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <functional>
 #include <string>
@@ -84,6 +108,7 @@ namespace patchestry::ast {
 
             // Direct GotoStmt
             if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                assert(gs->getLabel() && "clang::GotoStmt missing target label");
                 std::string name = gs->getLabel()->getName().str();
                 if (!break_label.empty() && name == break_label) {
                     return new (ctx) clang::BreakStmt(VirtualLoc(ctx));
@@ -147,11 +172,14 @@ namespace patchestry::ast {
             auto getTrailingGotoLabel = [](clang::Stmt *s) -> std::string {
                 if (!s) { return {}; }
                 if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                    assert(gs->getLabel() && "clang::GotoStmt missing target label");
                     return gs->getLabel()->getName().str();
                 }
                 if (auto *c = llvm::dyn_cast< clang::CompoundStmt >(s)) {
                     if (!c->body_empty()) {
                         if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(c->body_back())) {
+                            assert(gs->getLabel()
+                                   && "clang::GotoStmt missing target label");
                             return gs->getLabel()->getName().str();
                         }
                     }
@@ -234,6 +262,7 @@ namespace patchestry::ast {
                     && (llvm::isa< clang::WhileStmt >(sub) || llvm::isa< clang::DoStmt >(sub)
                         || llvm::isa< clang::ForStmt >(sub)))
                 {
+                    assert(ls->getDecl() && "LabelStmt has null LabelDecl");
                     new_cont = ls->getDecl()->getName().str();
                 }
                 ls->setSubStmt(
@@ -304,6 +333,7 @@ namespace patchestry::ast {
                     if (i + 1 < children.size()) {
                         if (auto *next_ls = llvm::dyn_cast< clang::LabelStmt >(children[i + 1]))
                         {
+                            assert(next_ls->getDecl() && "LabelStmt has null LabelDecl");
                             break_label = next_ls->getDecl()->getName().str();
                         }
                     }
@@ -323,9 +353,13 @@ namespace patchestry::ast {
                             // Find the LabelDecl for the common target by scanning
                             // the function body for a matching goto.
                             clang::LabelDecl *target_decl = nullptr;
-                            std::function< void(clang::Stmt *) > findLabel =
-                                [&](clang::Stmt *st) {
+                            // Bounded recursion (matches RemoveOrphanedGotos
+                            // precedent at line ~5994) — guards against
+                            // pathological deep nesting in obfuscated input.
+                            std::function< void(clang::Stmt *, unsigned) > findLabel =
+                                [&](clang::Stmt *st, unsigned depth) {
                                     if (!st || target_decl) { return; }
+                                    if (depth > 256) { return; }
                                     if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(st)) {
                                         if (gs->getLabel()->getName().str() == common) {
                                             target_decl = gs->getLabel();
@@ -337,10 +371,12 @@ namespace patchestry::ast {
                                             target_decl = ls2->getDecl();
                                         }
                                     }
-                                    for (auto *c : st->children()) { findLabel(c); }
+                                    for (auto *c : st->children()) {
+                                        findLabel(c, depth + 1);
+                                    }
                                 };
                             // Scan the entire children vector for the label
-                            for (auto *c : children) { findLabel(c); }
+                            for (auto *c : children) { findLabel(c, 0); }
                             if (target_decl) {
                                 auto loc = VirtualLoc(ctx);
                                 auto *hoisted_goto =
@@ -410,15 +446,17 @@ namespace patchestry::ast {
                     ++i;
                     continue;
                 }
-                bool has_live_label                        = false;
-                std::function< void(clang::Stmt *) > check = [&](clang::Stmt *st) {
-                    if (!st || has_live_label) { return; }
-                    if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(st)) {
-                        if (live.count(ls->getDecl())) { has_live_label = true; }
-                    }
-                    for (auto *c : st->children()) { check(c); }
-                };
-                check(children[i]);
+                bool has_live_label = false;
+                std::function< void(clang::Stmt *, unsigned) > check =
+                    [&](clang::Stmt *st, unsigned depth) {
+                        if (!st || has_live_label) { return; }
+                        if (depth > 256) { return; }
+                        if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(st)) {
+                            if (live.count(ls->getDecl())) { has_live_label = true; }
+                        }
+                        for (auto *c : st->children()) { check(c, depth + 1); }
+                    };
+                check(children[i], 0);
                 if (has_live_label) {
                     ++i;
                     continue;
@@ -498,31 +536,36 @@ namespace patchestry::ast {
         };
 
         auto contains_decl_stmt = [](clang::Stmt *stmt) {
-            std::function< bool(clang::Stmt *) > walk = [&](clang::Stmt *cur) -> bool {
-                if (!cur) { return false; }
-                if (llvm::isa< clang::DeclStmt >(cur)) { return true; }
-                for (clang::Stmt *sub : cur->children()) {
-                    if (walk(sub)) { return true; }
-                }
-                return false;
-            };
-            return walk(stmt);
+            std::function< bool(clang::Stmt *, unsigned) > walk =
+                [&](clang::Stmt *cur, unsigned depth) -> bool {
+                    if (!cur) { return false; }
+                    if (depth > 256) { return false; }
+                    if (llvm::isa< clang::DeclStmt >(cur)) { return true; }
+                    for (clang::Stmt *sub : cur->children()) {
+                        if (walk(sub, depth + 1)) { return true; }
+                    }
+                    return false;
+                };
+            return walk(stmt, 0);
         };
 
         auto contains_label_stmt = [](clang::Stmt *stmt) {
-            std::function< bool(clang::Stmt *) > walk = [&](clang::Stmt *cur) -> bool {
-                if (!cur) { return false; }
-                if (llvm::isa< clang::LabelStmt >(cur) || llvm::isa< clang::CaseStmt >(cur)
-                    || llvm::isa< clang::DefaultStmt >(cur))
-                {
-                    return true;
-                }
-                for (clang::Stmt *sub : cur->children()) {
-                    if (walk(sub)) { return true; }
-                }
-                return false;
-            };
-            return walk(stmt);
+            std::function< bool(clang::Stmt *, unsigned) > walk =
+                [&](clang::Stmt *cur, unsigned depth) -> bool {
+                    if (!cur) { return false; }
+                    if (depth > 256) { return false; }
+                    if (llvm::isa< clang::LabelStmt >(cur)
+                        || llvm::isa< clang::CaseStmt >(cur)
+                        || llvm::isa< clang::DefaultStmt >(cur))
+                    {
+                        return true;
+                    }
+                    for (clang::Stmt *sub : cur->children()) {
+                        if (walk(sub, depth + 1)) { return true; }
+                    }
+                    return false;
+                };
+            return walk(stmt, 0);
         };
 
         auto append_stmt_sequence = [&](clang::Stmt *stmt, std::vector< clang::Stmt * > &out) {
@@ -795,9 +838,12 @@ namespace patchestry::ast {
     // ---------------------------------------------------------------
 
 
-        /// Get label name from a LabelStmt, empty otherwise.
+        /// Get label name from a LabelStmt, empty otherwise.  Asserts
+        /// the LabelDecl is non-null (well-formed Clang AST invariant —
+        /// matches the defensive asserts at CFGStructure.cpp:4904 etc.).
         llvm::StringRef GotoElimGetLabel(clang::Stmt *s) {
             if (auto *ls = llvm::dyn_cast_or_null< clang::LabelStmt >(s)) {
+                assert(ls->getDecl() && "LabelStmt has null LabelDecl");
                 return ls->getDecl()->getName();
             }
             if (auto *cs = llvm::dyn_cast_or_null< clang::CompoundStmt >(s)) {
@@ -806,9 +852,11 @@ namespace patchestry::ast {
             return {};
         }
 
-        /// Get goto target name, empty if not a GotoStmt.
+        /// Get goto target name, empty if not a GotoStmt.  Asserts the
+        /// GotoStmt's target LabelDecl is non-null.
         llvm::StringRef GotoElimGetTarget(clang::Stmt *s) {
             if (auto *gs = llvm::dyn_cast_or_null< clang::GotoStmt >(s)) {
+                assert(gs->getLabel() && "clang::GotoStmt missing target label");
                 return gs->getLabel()->getName();
             }
             return {};
@@ -999,19 +1047,21 @@ namespace patchestry::ast {
             if (llvm::isa< clang::WhileStmt >(stmt) || llvm::isa< clang::DoStmt >(stmt)
                 || llvm::isa< clang::ForStmt >(stmt) || llvm::isa< clang::SwitchStmt >(stmt))
             {
-                std::function< bool(clang::Stmt *) > has_label_or_goto =
-                    [&](clang::Stmt *cur) -> bool {
-                    if (!cur) { return false; }
-                    if (llvm::isa< clang::LabelStmt >(cur) || llvm::isa< clang::GotoStmt >(cur))
-                    {
-                        return true;
-                    }
-                    for (clang::Stmt *child : cur->children()) {
-                        if (has_label_or_goto(child)) { return true; }
-                    }
-                    return false;
-                };
-                return !has_label_or_goto(stmt);
+                std::function< bool(clang::Stmt *, unsigned) > has_label_or_goto =
+                    [&](clang::Stmt *cur, unsigned depth) -> bool {
+                        if (!cur) { return false; }
+                        if (depth > 256) { return false; }
+                        if (llvm::isa< clang::LabelStmt >(cur)
+                            || llvm::isa< clang::GotoStmt >(cur))
+                        {
+                            return true;
+                        }
+                        for (clang::Stmt *child : cur->children()) {
+                            if (has_label_or_goto(child, depth + 1)) { return true; }
+                        }
+                        return false;
+                    };
+                return !has_label_or_goto(stmt, 0);
             }
             if (llvm::isa< clang::LabelStmt >(stmt) || llvm::isa< clang::GotoStmt >(stmt)
                 || llvm::isa< clang::DeclStmt >(stmt) || llvm::isa< clang::CaseStmt >(stmt)
@@ -1891,16 +1941,20 @@ namespace patchestry::ast {
             std::unordered_set< clang::LabelDecl * > labels;
             std::unordered_map< clang::LabelDecl *, unsigned > region_refs;
 
-            std::function< void(clang::Stmt *) > collect_labels = [&](clang::Stmt *stmt) {
-                if (!stmt) { return; }
-                if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
-                    labels.insert(label->getDecl());
-                }
-                for (clang::Stmt *child : stmt->children()) { collect_labels(child); }
-            };
+            std::function< void(clang::Stmt *, unsigned) > collect_labels =
+                [&](clang::Stmt *stmt, unsigned depth) {
+                    if (!stmt) { return; }
+                    if (depth > 256) { return; }
+                    if (auto *label = llvm::dyn_cast< clang::LabelStmt >(stmt)) {
+                        labels.insert(label->getDecl());
+                    }
+                    for (clang::Stmt *child : stmt->children()) {
+                        collect_labels(child, depth + 1);
+                    }
+                };
 
             for (clang::Stmt *stmt : region) {
-                collect_labels(stmt);
+                collect_labels(stmt, 0);
                 CountGotoDeclRefs(stmt, region_refs);
             }
 
