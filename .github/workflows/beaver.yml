@@ -1,0 +1,25 @@
+name: Daily GitHub Summary
+
+# Beaver — https://github.com/trailofbits/github-slack-summary
+# Posts a daily activity digest (default-branch commits, PRs, issues from the
+# last 24h) to Slack as one parent message plus threaded replies. If nothing
+# changed in the window, nothing is posted.
+
+on:
+  schedule:
+    - cron: "0 14 * * *"  # Every day at 14:00 UTC (9 AM ET / 3 PM CET).
+  workflow_dispatch:      # Manual trigger for testing; safe to remove later.
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  post-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: trailofbits/github-slack-summary@v1
+        with:
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          slack-channel-id: C06SUT88X0E
