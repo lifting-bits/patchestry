@@ -273,7 +273,7 @@ namespace patchestry::passes {
                 std::string callee_name = extract_callee_name(call_op);
                 LOG(INFO) << "Obtained callee name: '" << callee_name << "'\n";
                 if (!matches_pattern(callee_name, match.name)) {
-                    LOG(ERROR
+                    LOG(DEBUG
                     ) << "Callee name did not match expected match name! Ending match check\n";
                     return false;
                 }
@@ -281,14 +281,14 @@ namespace patchestry::passes {
 
             // Check function context match (the function containing the call)
             if (!matches_function_context(func, match.function_context)) {
-                LOG(ERROR) << "Callee function context did not match expected function "
+                LOG(DEBUG) << "Callee function context did not match expected function "
                               "context! Ending match check\n";
                 return false;
             }
 
             // Check argument matches for function calls
             if (!matches_arguments(op, match.argument_matches)) {
-                LOG(ERROR) << "Callee function arguments did not match expected function "
+                LOG(DEBUG) << "Callee function arguments did not match expected function "
                               "arguments! Ending match check\n";
                 return false;
             }
@@ -296,7 +296,7 @@ namespace patchestry::passes {
             LOG(INFO) << "got past matches_arguments\n";
             // Check variable matches as one of the arguments
             if (!matches_variables(op, match.variable_matches)) {
-                LOG(ERROR) << "Callee function variables did not match expected function "
+                LOG(DEBUG) << "Callee function variables did not match expected function "
                               "variables! Ending match check\n";
                 return false;
             }
@@ -345,14 +345,14 @@ namespace patchestry::passes {
             LOG(INFO) << "Checking '" << func_name << "' against '" << context.name << "'\n";
             // Check function name match
             if (!matches_pattern(func_name, context.name)) {
-                LOG(ERROR) << "Function name '" << func_name << "' did not match context name '"
+                LOG(DEBUG) << "Function name '" << func_name << "' did not match context name '"
                            << context.name << "'\n";
                 continue;
             }
 
             // Check function type match if specified
             if (!context.type.empty() && !matches_pattern(func_name, context.type)) {
-                LOG(ERROR) << "Function type pattern did not match\n";
+                LOG(DEBUG) << "Function type pattern did not match\n";
                 continue;
             } else {
                 LOG(INFO) << "Matched type pattern\n";
@@ -361,7 +361,7 @@ namespace patchestry::passes {
             return true;
         }
 
-        LOG(ERROR) << "Function '" << func_name << "' did not match any function context\n";
+        LOG(DEBUG) << "Function '" << func_name << "' did not match any function context\n";
         return false;
     }
 

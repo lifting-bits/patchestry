@@ -14,9 +14,10 @@
 
 namespace patchestry::passes {
 
-    // Helper to build PredicateAttr from parsed Predicate struct
+    // `pass` is threaded so predicate errors can signal_failure (#244).
     static std::optional< ::contracts::PredicateAttr > buildPredicateAttr(
-        mlir::MLIRContext *ctx, mlir::Operation *op, const contract::Predicate &pred
+        InstrumentationPass &pass, mlir::MLIRContext *ctx, mlir::Operation *op,
+        const contract::Predicate &pred
     ) {
         (void) op; // Currently unused, but kept for future extensibility
 
@@ -35,6 +36,7 @@ namespace patchestry::passes {
                 if (pred.target == ::contracts::TargetKind::Arg) {
                     if (!pred.arg_index) {
                         LOG(ERROR) << "Argument target requires arg_index\n";
+                        pass.signal_failure();
                         return std::nullopt;
                     }
                     targetAttr = ::contracts::TargetAttr::get(
@@ -47,6 +49,7 @@ namespace patchestry::passes {
                 } else if (pred.target == ::contracts::TargetKind::Symbol) {
                     if (!pred.symbol) {
                         LOG(ERROR) << "Symbol target requires a symbol name\n";
+                        pass.signal_failure();
                         return std::nullopt;
                     }
                     auto symRef = mlir::FlatSymbolRefAttr::get(ctx, *pred.symbol);
@@ -59,6 +62,7 @@ namespace patchestry::passes {
                 if (pred.target == ::contracts::TargetKind::Arg) {
                     if (!pred.arg_index) {
                         LOG(ERROR) << "Argument target requires arg_index\n";
+                        pass.signal_failure();
                         return std::nullopt;
                     }
                     targetAttr = ::contracts::TargetAttr::get(
@@ -71,6 +75,7 @@ namespace patchestry::passes {
                 } else if (pred.target == ::contracts::TargetKind::Symbol) {
                     if (!pred.symbol) {
                         LOG(ERROR) << "Symbol target requires a symbol name\n";
+                        pass.signal_failure();
                         return std::nullopt;
                     }
                     auto symRef = mlir::FlatSymbolRefAttr::get(ctx, *pred.symbol);
@@ -85,6 +90,7 @@ namespace patchestry::passes {
                             mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 64), constVal);
                     } catch (...) {
                         LOG(ERROR) << "Invalid constant value: " << *pred.value << "\n";
+                        pass.signal_failure();
                         return std::nullopt;
                     }
                 }
@@ -96,6 +102,7 @@ namespace patchestry::passes {
                     alignAttr = ::contracts::ContractAlignmentAttr::get(ctx, *pred.align);
                 } else {
                     LOG(ERROR) << "Alignment predicate requires align value\n";
+                    pass.signal_failure();
                     return std::nullopt;
                 }
                 break;
@@ -106,6 +113,7 @@ namespace patchestry::passes {
                     exprAttr = mlir::StringAttr::get(ctx, *pred.expr);
                 } else {
                     LOG(ERROR) << "Expression predicate requires expr value\n";
+                    pass.signal_failure();
                     return std::nullopt;
                 }
                 break;
@@ -115,6 +123,7 @@ namespace patchestry::passes {
                 if (pred.target == ::contracts::TargetKind::Arg) {
                     if (!pred.arg_index) {
                         LOG(ERROR) << "Argument target requires arg_index\n";
+                        pass.signal_failure();
                         return std::nullopt;
                     }
                     targetAttr = ::contracts::TargetAttr::get(
@@ -127,6 +136,7 @@ namespace patchestry::passes {
                 } else if (pred.target == ::contracts::TargetKind::Symbol) {
                     if (!pred.symbol) {
                         LOG(ERROR) << "Symbol target requires a symbol name\n";
+                        pass.signal_failure();
                         return std::nullopt;
                     }
                     auto symRef = mlir::FlatSymbolRefAttr::get(ctx, *pred.symbol);
@@ -145,10 +155,12 @@ namespace patchestry::passes {
                         rangeAttr = ::contracts::ContractRangeAttr::get(ctx, minAttr, maxAttr);
                     } catch (...) {
                         LOG(ERROR) << "Invalid range values\n";
+                        pass.signal_failure();
                         return std::nullopt;
                     }
                 } else {
                     LOG(ERROR) << "Range predicate requires range value\n";
+                    pass.signal_failure();
                     return std::nullopt;
                 }
                 break;
@@ -162,11 +174,13 @@ namespace patchestry::passes {
 
     // apply static contract to the target operation
     void ContractOperationImpl::emitStaticContract(
-        mlir::Operation *targetOp, const ContractInformation &contract
+        InstrumentationPass &pass, mlir::Operation *targetOp,
+        const ContractInformation &contract
     ) {
         // check if the target operation is null
         if (targetOp == nullptr) {
             LOG(ERROR) << "emitStaticContract: the passed function to be instrumented was null";
+            pass.signal_failure();
             return;
         }
 
@@ -183,7 +197,7 @@ namespace patchestry::passes {
                     continue;
                 }
 
-                auto predAttr = buildPredicateAttr(ctx, targetOp, *precondition.pred);
+                auto predAttr = buildPredicateAttr(pass, ctx, targetOp, *precondition.pred);
                 if (predAttr) {
                     auto idAttr  = mlir::StringAttr::get(ctx, precondition.id);
                     auto preAttr = ::contracts::PreconditionAttr::get(ctx, idAttr, *predAttr);
@@ -202,7 +216,7 @@ namespace patchestry::passes {
                     continue;
                 }
 
-                auto predAttr = buildPredicateAttr(ctx, targetOp, *postcondition.pred);
+                auto predAttr = buildPredicateAttr(pass, ctx, targetOp, *postcondition.pred);
                 if (predAttr) {
                     auto idAttr   = mlir::StringAttr::get(ctx, postcondition.id);
                     auto postAttr = ::contracts::PostconditionAttr::get(ctx, idAttr, *predAttr);
@@ -236,26 +250,30 @@ namespace patchestry::passes {
     }
 
     void ContractOperationImpl::applyContractBefore(
-        mlir::Operation *target_op, const ContractInformation &contract
+        InstrumentationPass &pass, mlir::Operation *target_op,
+        const ContractInformation &contract
     ) {
         if (target_op == nullptr) {
             LOG(ERROR
             ) << "applyContractBefore: the passed function to be instrumented was null";
+            pass.signal_failure();
             return;
         }
 
-        emitStaticContract(target_op, contract);
+        emitStaticContract(pass, target_op, contract);
     }
 
     void ContractOperationImpl::applyContractAfter(
-        mlir::Operation *target_op, const ContractInformation &contract
+        InstrumentationPass &pass, mlir::Operation *target_op,
+        const ContractInformation &contract
     ) {
         if (target_op == nullptr) {
             LOG(ERROR) << "applyContractAfter: the passed function to be instrumented was null";
+            pass.signal_failure();
             return;
         }
 
-        emitStaticContract(target_op, contract);
+        emitStaticContract(pass, target_op, contract);
     }
 
 } // namespace patchestry::passes

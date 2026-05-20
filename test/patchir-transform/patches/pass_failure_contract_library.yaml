@@ -1,0 +1,18 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: pass_failure_contract_library
+  description: "Library with a contract whose predicate is malformed at the schema-permissible layer."
+  version: 1.0.0
+  author: Security Team
+  kind: PatchLibrary
+contract_definitions:
+- name: malformed_contract_def
+  description: |
+    Expression predicate without an `expr:` value.  Schema accepts this
+    (expr is mapOptional); buildPredicateAttr rejects at runtime via
+    "Expression predicate requires expr value".
+  category: test
+  preconditions:
+  - id: bad_expr
+    pred:
+      kind: expr

@@ -1,0 +1,23 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: dropped_patch
+  description: "#244 regression: spec referencing a patch that will be dropped."
+  version: 1.0.0
+  author: Security Team
+  kind: PatchSpec
+target:
+  binary: test_binary.bin
+  arch: ARM:LE:32
+libraries:
+- patches/missing_patch_file.yaml
+patches:
+- name: dropped_patch_action
+  id: ISSUE-244-DROPPED-001
+  description: "Apply-before action whose patch symbol will be missing."
+  match:
+    name: minimal_func
+    kind: function
+  action:
+    mode: apply_before
+    patch: drop_patch
+    arguments: []
