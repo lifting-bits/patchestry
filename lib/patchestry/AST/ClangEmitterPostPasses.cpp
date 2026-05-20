@@ -355,12 +355,16 @@ namespace patchestry::ast {
                                     if (!st || target_decl) { return; }
                                     if (depth > 256) { return; }
                                     if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(st)) {
+                                        assert(gs->getLabel()
+                                               && "clang::GotoStmt missing target label");
                                         if (gs->getLabel()->getName().str() == common) {
                                             target_decl = gs->getLabel();
                                         }
                                         return;
                                     }
                                     if (auto *ls2 = llvm::dyn_cast< clang::LabelStmt >(st)) {
+                                        assert(ls2->getDecl()
+                                               && "LabelStmt has null LabelDecl");
                                         if (ls2->getDecl()->getName().str() == common) {
                                             target_decl = ls2->getDecl();
                                         }

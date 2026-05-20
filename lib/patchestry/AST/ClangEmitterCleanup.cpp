@@ -11,24 +11,15 @@
 
 #include "ClangEmitterPostPassesInternal.hpp"
 
-#include <algorithm>
-#include <cctype>
 #include <functional>
-#include <string>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include <clang/AST/ASTContext.h>
-#include <clang/AST/Expr.h>
-#include <clang/AST/PrettyPrinter.h>
 #include <clang/AST/Stmt.h>
 
-#include <llvm/ADT/APInt.h>
 #include <llvm/ADT/FoldingSet.h>
-#include <llvm/ADT/StringRef.h>
-#include <llvm/Support/raw_ostream.h>
 
 namespace patchestry::ast {
 
@@ -258,10 +249,10 @@ namespace patchestry::ast {
         if (body) { fn->setBody(body); }
         bool recovered_loop = false;
         body = RecoverLoop(ctx, fn->getBody(), recovered_loop);
-        if (body) { fn->setBody(body); }
+        if (recovered_loop && body) { fn->setBody(body); }
         bool folded_diamonds = false;
         body = FoldGotoDiamonds(ctx, fn->getBody(), folded_diamonds);
-        if (body) { fn->setBody(body); }
+        if (folded_diamonds && body) { fn->setBody(body); }
 
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
@@ -270,7 +261,7 @@ namespace patchestry::ast {
 
         bool cloned_terminal = false;
         body = CloneTerminalLabelGotos(ctx, fn->getBody(), cloned_terminal);
-        if (body) { fn->setBody(body); }
+        if (cloned_terminal && body) { fn->setBody(body); }
 
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
@@ -289,7 +280,7 @@ namespace patchestry::ast {
 
         bool cloned_terminal_late = false;
         body = CloneTerminalLabelGotos(ctx, fn->getBody(), cloned_terminal_late);
-        if (body) { fn->setBody(body); }
+        if (cloned_terminal_late && body) { fn->setBody(body); }
 
         run_goto_to_next_label_fixed_point();
         run_dead_control_flow();
@@ -316,7 +307,7 @@ namespace patchestry::ast {
 
         bool folded_diamonds_late = false;
         body = FoldGotoDiamonds(ctx, fn->getBody(), folded_diamonds_late);
-        if (body) { fn->setBody(body); }
+        if (folded_diamonds_late && body) { fn->setBody(body); }
 
         if (!ContainsSwitchStmt(fn->getBody())) {
             refs.clear();
