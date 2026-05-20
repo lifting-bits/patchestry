@@ -24,6 +24,9 @@
 
 namespace patchestry::ast {
 
+    // Forward decl — defined later in this file; AppendSourceSuccs needs it.
+    const ghidra::Operation *FindSourceTerminal(const ghidra::BasicBlock &block);
+
     namespace {
 
         std::string NodeLabel(size_t id) {
@@ -95,26 +98,24 @@ namespace patchestry::ast {
             if (!function.basic_blocks.contains(block_key)) return;
 
             const auto &block = function.basic_blocks.at(block_key);
-            for (const auto &op_key : block.ordered_operations) {
-                if (!block.operations.contains(op_key)) continue;
-                const auto &op = block.operations.at(op_key);
-                const auto &blocks = function.basic_blocks;
-                if (op.taken_block && blocks.contains(*op.taken_block))
-                    succs.push_back(*op.taken_block);
-                if (op.not_taken_block && blocks.contains(*op.not_taken_block))
-                    succs.push_back(*op.not_taken_block);
-                if (op.target_block && blocks.contains(*op.target_block))
-                    succs.push_back(*op.target_block);
-                for (const auto &s : op.successor_blocks) {
-                    if (blocks.contains(s)) succs.push_back(s);
-                }
-                for (const auto &sc : op.switch_cases) {
-                    if (blocks.contains(sc.target_block))
-                        succs.push_back(sc.target_block);
-                }
-                if (op.fallback_block && blocks.contains(*op.fallback_block))
-                    succs.push_back(*op.fallback_block);
+            const auto *op = FindSourceTerminal(block);
+            if (!op) return;
+            const auto &blocks = function.basic_blocks;
+            if (op->taken_block && blocks.contains(*op->taken_block))
+                succs.push_back(*op->taken_block);
+            if (op->not_taken_block && blocks.contains(*op->not_taken_block))
+                succs.push_back(*op->not_taken_block);
+            if (op->target_block && blocks.contains(*op->target_block))
+                succs.push_back(*op->target_block);
+            for (const auto &s : op->successor_blocks) {
+                if (blocks.contains(s)) succs.push_back(s);
             }
+            for (const auto &sc : op->switch_cases) {
+                if (blocks.contains(sc.target_block))
+                    succs.push_back(sc.target_block);
+            }
+            if (op->fallback_block && blocks.contains(*op->fallback_block))
+                succs.push_back(*op->fallback_block);
         }
 
         std::vector<std::string>
@@ -161,7 +162,30 @@ namespace patchestry::ast {
                 for (const auto &[key, _] : function.basic_blocks) {
                     if (!visited.contains(key)) unreachable.push_back(key);
                 }
-                std::sort(unreachable.begin(), unreachable.end());
+                // Sort by parsed (addr, idx) to match CGraphBuilder's
+                // ordering — purely-lexicographic sort puts "ram:10:..."
+                // before "ram:2:..." and the validator oracle would
+                // disagree with the actual graph.
+                auto parse_key = [](const std::string &k)
+                    -> std::pair<uint64_t, uint64_t> {
+                    auto p1 = k.find(':');
+                    if (p1 == std::string::npos) return {0, 0};
+                    auto p2 = k.find(':', p1 + 1);
+                    if (p2 == std::string::npos) return {0, 0};
+                    auto p3 = k.find(':', p2 + 1);
+                    uint64_t addr = 0, idx = 0;
+                    try { addr = std::stoull(k.substr(p1 + 1, p2 - p1 - 1), nullptr, 16); }
+                    catch (...) {}
+                    try {
+                        size_t end_pos = p3 == std::string::npos ? k.size() : p3;
+                        idx = std::stoull(k.substr(p2 + 1, end_pos - p2 - 1));
+                    } catch (...) {}
+                    return {addr, idx};
+                };
+                std::sort(unreachable.begin(), unreachable.end(),
+                    [&](const std::string &a, const std::string &b) {
+                        return parse_key(a) < parse_key(b);
+                    });
                 post_order.insert(post_order.end(), unreachable.begin(),
                                   unreachable.end());
             }

@@ -7885,13 +7885,17 @@ namespace patchestry::ast {
             return true;
         }
 
-        void RemoveMovedSwitchLocalLabel(const LabelEntry &entry) {
+        // Returns the index from which the label was erased, or CNode::kNone
+        // if not found.  Callers iterating the same parent_seq with a stale
+        // outer index must adjust when the removed index precedes theirs.
+        size_t RemoveMovedSwitchLocalLabel(const LabelEntry &entry) {
             size_t label_idx = 0;
             if (!FindLabelEntryIndex(entry, label_idx))
-                return;
+                return CNode::kNone;
             entry.parent_seq->erase(
                 entry.parent_seq->begin()
                     + static_cast<ptrdiff_t>(label_idx));
+            return label_idx;
         }
 
         bool MoveSwitchLocalTargetsInSeq(
@@ -7933,7 +7937,17 @@ namespace patchestry::ast {
                                     body, ctx, replacement_stmts))
                                 return false;
 
-                            RemoveMovedSwitchLocalLabel(entry);
+                            size_t removed_idx =
+                                RemoveMovedSwitchLocalLabel(entry);
+                            // If the label lived in our own seq at an
+                            // earlier index, decrement i so the outer
+                            // loop doesn't skip past the now-shifted
+                            // sibling at i+1.
+                            if (entry.parent_seq == &seq
+                                && removed_idx != CNode::kNone
+                                && removed_idx <= i) {
+                                --i;
+                            }
                             clang::CompoundStmt *replacement =
                                 BuildReplacementArm(
                                     ctx, info.compound, replacement_stmts);
@@ -7960,7 +7974,14 @@ namespace patchestry::ast {
                         target, labels, refs, entry, body))
                     continue;
 
-                RemoveMovedSwitchLocalLabel(entry);
+                size_t removed_idx = RemoveMovedSwitchLocalLabel(entry);
+                // If the label was in our seq before our goto, the erase
+                // shifted us — adjust i so we operate on the correct goto.
+                if (entry.parent_seq == &seq
+                    && removed_idx != CNode::kNone
+                    && removed_idx < i) {
+                    --i;
+                }
                 seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
                 seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
                            body.begin(), body.end());
