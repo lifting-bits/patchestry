@@ -493,9 +493,7 @@ namespace patchestry::ast {
                 // Toggle to bisect any structuring drift introduced by
                 // these post-passes vs the SNode-layer cleanup alone.
                 if (options.clang_ast_cleanup) {
-                    CleanupPrettyPrint(fn, ctx,
-                                       options.structuring_improvement_report,
-                                       fn_name);
+                    CleanupPrettyPrint(fn, ctx);
                 }
 
                 // Goto-funnel report: per-function goto-elimination metrics

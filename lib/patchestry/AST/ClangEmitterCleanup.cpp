@@ -32,55 +32,10 @@
 
 namespace patchestry::ast {
 
-        struct ClangCleanupMetrics
-        {
-            size_t gotos       = 0;
-            size_t labels      = 0;
-            size_t dangling    = 0;
-            size_t cross_scope = 0;
-        };
-
-        ClangCleanupMetrics MeasureClangCleanup(clang::Stmt *stmt) {
-            ClangCleanupMetrics metrics;
-
-            std::unordered_map< clang::LabelDecl *, unsigned > refs;
-            CountGotoDeclRefs(stmt, refs);
-            for (const auto &kv : refs) { metrics.gotos += kv.second; }
-
-            std::unordered_set< clang::LabelDecl * > defined;
-            CollectDefinedLabels(stmt, defined);
-            metrics.labels = defined.size();
-
-            for (const auto &[label, count] : refs) {
-                if (!defined.contains(label)) { metrics.dangling += count; }
-            }
-
-            metrics.cross_scope = CollectCrossScopeGotoTargets(stmt).size();
-            return metrics;
-        }
-
-        llvm::StringRef CleanupReportName(std::string_view name) {
-            if (name.empty()) { return "<unknown>"; }
-            return llvm::StringRef(name.data(), name.size());
-        }
-
-    void CleanupPrettyPrint(
-        clang::FunctionDecl *fn, clang::ASTContext &ctx, bool report_cleanup,
-        std::string_view function_name
-    ) {
+    void CleanupPrettyPrint(clang::FunctionDecl *fn, clang::ASTContext &ctx) {
         if (!fn || !fn->hasBody()) { return; }
-        // Gate initial-metrics capture on the report flag.
-        // MeasureClangCleanup walks the body — for the default
-        // (report_cleanup=false) path we skip the redundant traversal.
-        ClangCleanupMetrics initial_metrics;
-        if (report_cleanup) {
-            initial_metrics = MeasureClangCleanup(fn->getBody());
-        }
         auto *body = CleanupStmtTree(ctx, fn->getBody());
         if (body) { fn->setBody(body); }
-        // Phase-7 Step-0: capture how much statement-adjacency the
-        // emission-adjacent prologue manufactured (premise pin).
-        auto cleanup_stmt_tree_stats = TakeCleanupStmtTreeStats();
 
         auto apply_body = [&](clang::Stmt *next) {
             if (next) { fn->setBody(next); }
@@ -124,7 +79,7 @@ namespace patchestry::ast {
                 LOG(WARNING)
                     << "Clang-AST goto-to-next-label fixed-point hit cap of "
                     << kMaxGotoEliminationPasses << " passes for "
-                    << CleanupReportName(function_name)
+                    << fn->getNameAsString()
                     << " — possible pass oscillation\n";
             }
         };
@@ -239,12 +194,6 @@ namespace patchestry::ast {
         // so the loop always ran the full cap.  Output-identical: a schedule
         // pass reporting no structural change is a true fixed point, and the
         // schedule is deterministic, so any further passes are no-ops.
-        // `schedule_iterations` counts only productive passes — passes
-        // that left the body structurally changed (Profile differs).
-        // The terminating no-op pass that proves convergence is not
-        // counted, so the value reported in CLANG_CLEANUP_SUMMARY
-        // reflects the work actually done, not work attempted.
-        int schedule_iterations          = 0;
         bool schedule_reached_fixed_point = false;
         for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
             llvm::FoldingSetNodeID before;
@@ -256,13 +205,12 @@ namespace patchestry::ast {
                 schedule_reached_fixed_point = true;
                 break;
             }
-            ++schedule_iterations;
         }
         if (!schedule_reached_fixed_point) {
             LOG(WARNING)
                 << "Clang-AST cleanup schedule hit cap of "
                 << kMaxGotoEliminationPasses << " iterations for "
-                << CleanupReportName(function_name)
+                << fn->getNameAsString()
                 << " — possible pass oscillation\n";
         }
 
@@ -415,25 +363,6 @@ namespace patchestry::ast {
         // if/while/do/for conditions.  Runs last — purely a readability
         // pass, no effect on goto/label structure.
         NormalizeConditions(ctx, fn->getBody());
-
-        if (report_cleanup) {
-            auto final_metrics = MeasureClangCleanup(fn->getBody());
-            llvm::errs() << "CLANG_CLEANUP_SUMMARY function="
-                         << CleanupReportName(function_name)
-                         << " initial_gotos=" << initial_metrics.gotos
-                         << " final_gotos=" << final_metrics.gotos
-                         << " initial_labels=" << initial_metrics.labels
-                         << " final_labels=" << final_metrics.labels
-                         << " initial_dangling=" << initial_metrics.dangling
-                         << " final_dangling=" << final_metrics.dangling
-                         << " initial_cross_scope=" << initial_metrics.cross_scope
-                         << " final_cross_scope=" << final_metrics.cross_scope
-                         << " schedule_iterations=" << schedule_iterations
-                         << " prologue_compound_splices="
-                         << cleanup_stmt_tree_stats.compound_splices
-                         << " prologue_label_pushes="
-                         << cleanup_stmt_tree_stats.label_pushes << "\n";
-        }
     }
 
 } // namespace patchestry::ast

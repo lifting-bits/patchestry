@@ -9,8 +9,6 @@
 
 #include <patchestry/AST/SNode.hpp>
 
-#include <string_view>
-
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
 #include <clang/AST/Stmt.h>
@@ -35,10 +33,7 @@ namespace patchestry::ast {
     // scopeification, cross-scope label hoist, loop recovery, switch-
     // local case folds) plus cosmetic normalizers (while->for promotion,
     // condition normalization, label-into-compound pushes).  Only call
-    // for patchir-decomp path.  When `report_cleanup` is set, emits a
-    // CLANG_CLEANUP_SUMMARY diagnostic tagged with `function_name`.
-    void CleanupPrettyPrint(
-        clang::FunctionDecl *fn, clang::ASTContext &ctx,
-        bool report_cleanup = false, std::string_view function_name = {});
+    // for patchir-decomp path.
+    void CleanupPrettyPrint(clang::FunctionDecl *fn, clang::ASTContext &ctx);
 
 } // namespace patchestry::ast
