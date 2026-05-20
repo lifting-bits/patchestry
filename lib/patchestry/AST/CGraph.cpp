@@ -783,11 +783,15 @@ namespace patchestry::ast {
         // Invariant: succs[] and edge_flags[] are indexed in parallel.
         // The validator (Validate, ~line 469) reports a diagnostic when
         // this breaks, so guard the OOB read at line 794 below before
-        // we trust the indices.
+        // we trust the indices.  Guarded by NDEBUG so the loop variable
+        // is not flagged as unused under -Werror=unused-variable in
+        // release builds where assert() becomes a no-op.
+#ifndef NDEBUG
         for (size_t nid : ids) {
             assert(nodes[nid].succs.size() == nodes[nid].edge_flags.size()
                    && "CNode succs/edge_flags size mismatch");
         }
+#endif
 
         // Collect external predecessors
         std::vector<size_t> ext_preds;
