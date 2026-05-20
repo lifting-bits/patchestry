@@ -631,6 +631,16 @@ namespace patchestry::ast {
 
         std::vector< SNode * > &BodyList() { return body_; }
 
+        // Append a child to the label body, keeping the parent_
+        // back-link consistent.  Prefer this over BodyList().push_back
+        // — bare push_back skips SetParent and leaves a stale parent_
+        // pointer that any future reader of Parent() will trip over.
+        void AppendChild(SNode *n) {
+            if (!n) return;
+            body_.push_back(n);
+            n->SetParent(this);
+        }
+
         void for_each_child(const ChildFn &fn) const override {
             for (auto *c : body_) {
                 if (c) { fn(c); }

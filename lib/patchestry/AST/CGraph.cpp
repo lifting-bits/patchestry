@@ -701,6 +701,11 @@ namespace patchestry::ast {
             std::sort(report.duplicated_cases.begin(),
                       report.duplicated_cases.end());
         } else {
+            // Dedupe by distinct (from, to) to match AddOracleEdge above
+            // and actual_edges below — CGraph stores one successor edge
+            // per distinct target, so multiplicities in source_edges
+            // (e.g., switch cases sharing a target) must not inflate
+            // the expected count.
             for (const auto &edge : g.source_edges) {
                 if (edge.from_key.empty() || edge.to_key.empty()) {
                     AddDiagnostic(report.diagnostics,
@@ -708,7 +713,8 @@ namespace patchestry::ast {
                                       + edge.reason);
                     continue;
                 }
-                ++expected_edges[EdgeKey(edge.from_key, edge.to_key)];
+                expected_edges.try_emplace(
+                    EdgeKey(edge.from_key, edge.to_key), 1);
             }
         }
         report.input_edges = expected_edges.size();
@@ -720,7 +726,8 @@ namespace patchestry::ast {
                 if (succ >= g.nodes.size()) continue;
                 const auto &succ_node = g.nodes[succ];
                 if (succ_node.source_key.empty()) continue;
-                ++actual_edges[EdgeKey(node.source_key, succ_node.source_key)];
+                actual_edges.try_emplace(
+                    EdgeKey(node.source_key, succ_node.source_key), 1);
             }
         }
 
@@ -773,6 +780,15 @@ namespace patchestry::ast {
         nodes[rep].branch_roles = CNode::BranchRoles{};
 
         std::unordered_set<size_t> idset(ids.begin(), ids.end());
+
+        // Invariant: succs[] and edge_flags[] are indexed in parallel.
+        // The validator (Validate, ~line 469) reports a diagnostic when
+        // this breaks, so guard the OOB read at line 794 below before
+        // we trust the indices.
+        for (size_t nid : ids) {
+            assert(nodes[nid].succs.size() == nodes[nid].edge_flags.size()
+                   && "CNode succs/edge_flags size mismatch");
+        }
 
         // Collect external predecessors
         std::vector<size_t> ext_preds;
@@ -1032,17 +1048,21 @@ namespace patchestry::ast {
         color[g.entry] = GRAY;
 
         while (!stack.empty()) {
-            // Note: u and i are references into stack.back() and must not be
-            // read after push_back (which may reallocate the stack vector).
-            auto &[u, i] = stack.back();
+            // Copy out u and i — stack.push_back below may reallocate
+            // the vector and dangle any reference into the previous
+            // storage.  We write the advanced `i` back through the
+            // index since the prior frame might have moved.
+            const size_t top = stack.size() - 1;
+            size_t u = stack[top].u;
+            size_t i = stack[top].i;
             auto &nd = g.Node(u);
             if (i < nd.succs.size()) {
                 size_t v = nd.succs[i];
-                ++i;
+                stack[top].i = i + 1;
                 // Skip collapsed nodes — not part of the active graph.
                 if (g.Node(v).IsCollapsed()) continue;
                 if (color[v] == GRAY) {
-                    nd.edge_flags[i - 1] |= CNode::kBack;
+                    nd.edge_flags[i] |= CNode::kBack;
                 } else if (color[v] == WHITE) {
                     color[v] = GRAY;
                     stack.push_back({v, 0});

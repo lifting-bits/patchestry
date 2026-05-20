@@ -272,6 +272,7 @@ namespace patchestry::ast {
                         // Re-running the cross-region resolvers here is
                         // load-bearing: cloning one target can expose a
                         // fresh cross-region goto for another.
+                        bool reached_fixed_point = false;
                         for (int pass = 0;
                              pass < kMaxGotoEliminationPasses; ++pass) {
                             bool did_absorb = AbsorbFallthroughIntoElse(
@@ -309,8 +310,22 @@ namespace patchestry::ast {
                                 && !did_fold_sw && !did_dup_term
                                 && !did_dup_epi && !did_dup_swf && !did_dup_lc
                                 && !did_fold_gf && !did_repair && !did_dup_sg
-                                && !did_dup_cl && !did_inline && !did_cross)
+                                && !did_dup_cl && !did_inline && !did_cross) {
+                                reached_fixed_point = true;
                                 break;
+                            }
+                        }
+                        if (!reached_fixed_point) {
+                            // Cap hit without convergence — surface so a
+                            // regression introducing oscillation between
+                            // these 14 passes is visible.  Empirically the
+                            // loop converges in <=3 iterations on the
+                            // current corpus.
+                            LOG(WARNING)
+                                << "goto-elimination cleanup hit cap of "
+                                << kMaxGotoEliminationPasses
+                                << " passes for " << fn_name
+                                << " — possible pass oscillation\n";
                         }
 
                         // Post-pass: remove unreachable children after

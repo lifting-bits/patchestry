@@ -67,6 +67,24 @@ namespace patchestry::ast {
         dst.insert(dst.end(), src.begin(), src.end());
     }
 
+    // Replace seq[i] with the contents of `repl` and advance `i` so the
+    // outer iterator lands on the last inserted element (the next
+    // `++i` in the surrounding loop steps to the first node after the
+    // splice).  Asserts `repl` is non-empty: a zero-length replacement
+    // would underflow `i` (size_t arithmetic) and livelock the loop.
+    // Replaces an 8-site copy of erase + insert + `i += repl.size() - 1`
+    // across CFGStructure.cpp.
+    static void SpliceAndAdvance(std::vector< SNode * > &seq,
+                                 size_t &i,
+                                 const std::vector< SNode * > &repl) {
+        assert(!repl.empty()
+               && "SpliceAndAdvance requires non-empty replacement");
+        seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
+        seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
+                   repl.begin(), repl.end());
+        i += repl.size() - 1;
+    }
+
     // Spill raw clang::Stmt* into individual SStmt SNodes appended to
     // `out`.  Null statements are dropped.
     static void AppendStmts(SNodeFactory &factory,
@@ -1830,10 +1848,16 @@ namespace patchestry::ast {
     //          Collapse {A, T, F} with exit to M.
 
     /// Helper: check if node d is dominated by node root via idom_ chain.
+    /// Bounded by idom_.size() so a hypothetical idom_ cycle (which
+    /// shouldn't happen in a well-formed dominator tree, but the
+    /// validator at CGraph.cpp:469 confirms parallel invariants can
+    /// break) does not livelock the structurer.
     bool CFGStructure::IsDominatedBy(size_t d, size_t root) const {
         constexpr size_t kNone = CNode::kNone;
-        while (d != root) {
+        const size_t max_steps = idom_.size();
+        for (size_t steps = 0; d != root; ++steps) {
             if (d == kNone) return false;
+            if (steps >= max_steps) return false;  // cycle guard
             size_t up = idom_[d];
             if (up == d) return false;  // reached entry without finding root
             d = up;
@@ -4754,10 +4778,7 @@ namespace patchestry::ast {
                 AppendStmts(factory, repl, body);
                 if (repl.empty()) continue;
 
-                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
-                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
-                           repl.begin(), repl.end());
-                i += repl.size() - 1; // skip the just-inserted siblings
+                SpliceAndAdvance(seq, i, repl);
                 changed = true;
             }
             return changed;
@@ -4880,6 +4901,8 @@ namespace patchestry::ast {
             if (auto *st = body.front()->dyn_cast<SStmt>()) {
                 if (auto *gs = llvm::dyn_cast_or_null<clang::GotoStmt>(
                         st->Stmt())) {
+                    assert(gs->getLabel()
+                           && "clang::GotoStmt missing target label");
                     target = gs->getLabel()->getName().str();
                     return true;
                 }
@@ -4989,8 +5012,7 @@ namespace patchestry::ast {
                     if (labels.size() < 2)
                         continue;
                     for (size_t k = labels.size() - 1; k > 0; --k) {
-                        labels[k - 1]->BodyList().push_back(labels[k]);
-                        labels[k]->SetParent(labels[k - 1]);
+                        labels[k - 1]->AppendChild(labels[k]);
                     }
                     seq.erase(seq.begin() + static_cast<ptrdiff_t>(i + 1),
                               seq.end());
@@ -5001,8 +5023,7 @@ namespace patchestry::ast {
                 SNode *child = seq[j];
                 for (size_t k = labels.size(); k > 0; --k) {
                     auto *lbl = labels[k - 1];
-                    lbl->BodyList().push_back(child);
-                    child->SetParent(lbl);
+                    lbl->AppendChild(child);
                     child = lbl;
                 }
                 seq.erase(seq.begin() + static_cast<ptrdiff_t>(i + 1),
@@ -5072,6 +5093,8 @@ namespace patchestry::ast {
             if (auto *st = body.front()->dyn_cast<SStmt>()) {
                 if (auto *gs = llvm::dyn_cast_or_null<clang::GotoStmt>(
                         st->Stmt())) {
+                    assert(gs->getLabel()
+                           && "clang::GotoStmt missing target label");
                     target = gs->getLabel()->getName();
                     return true;
                 }
@@ -6944,11 +6967,8 @@ namespace patchestry::ast {
                 if (cloned_total + clone_size > max_clone_total)
                     continue;
 
-                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
-                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
-                           clone.begin(), clone.end());
                 cloned_total += clone_size;
-                i += clone.size() - 1;
+                SpliceAndAdvance(seq, i, clone);
                 changed = true;
             }
 
@@ -7058,11 +7078,8 @@ namespace patchestry::ast {
                 if (cloned_total + clone_size > kMaxGeneralCloneTotal)
                     continue;
 
-                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
-                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
-                           clone.begin(), clone.end());
                 cloned_total += clone_size;
-                i += clone.size() - 1;
+                SpliceAndAdvance(seq, i, clone);
                 changed = true;
             }
 
@@ -7354,11 +7371,8 @@ namespace patchestry::ast {
                 if (cloned_total + clone_size > kMaxStackGuardCloneTotal)
                     continue;
 
-                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
-                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
-                           clone.begin(), clone.end());
                 cloned_total += clone_size;
-                i += clone.size() - 1;
+                SpliceAndAdvance(seq, i, clone);
                 changed = true;
             }
 
@@ -7616,11 +7630,8 @@ namespace patchestry::ast {
                 if (cloned_total + clone_size > kMaxCleanupCloneTotal)
                     continue;
 
-                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
-                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
-                           clone.begin(), clone.end());
                 cloned_total += clone_size;
-                i += clone.size() - 1;
+                SpliceAndAdvance(seq, i, clone);
                 changed = true;
             }
 
@@ -7773,11 +7784,8 @@ namespace patchestry::ast {
                 if (cloned_total + clone_size > kMaxGeneralCloneTotal)
                     continue;
 
-                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
-                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
-                           clone.begin(), clone.end());
                 cloned_total += clone_size;
-                i += clone.size() - 1;
+                SpliceAndAdvance(seq, i, clone);
                 changed = true;
             }
 
@@ -7982,10 +7990,7 @@ namespace patchestry::ast {
                     && removed_idx < i) {
                     --i;
                 }
-                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
-                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
-                           body.begin(), body.end());
-                i += body.size() - 1;
+                SpliceAndAdvance(seq, i, body);
                 changed = true;
             }
 
@@ -8282,11 +8287,8 @@ namespace patchestry::ast {
                 if (cloned_total + clone_size > kMaxGeneralCloneTotal)
                     continue;
 
-                seq.erase(seq.begin() + static_cast<ptrdiff_t>(i));
-                seq.insert(seq.begin() + static_cast<ptrdiff_t>(i),
-                           clone.begin(), clone.end());
                 cloned_total += clone_size;
-                i += clone.size() - 1;
+                SpliceAndAdvance(seq, i, clone);
                 changed = true;
             }
 
@@ -8844,6 +8846,8 @@ namespace patchestry::ast {
                 return {};
             }
             if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(stmt)) {
+                assert(gs->getLabel()
+                       && "clang::GotoStmt missing target label");
                 return { factory.Make< SGoto >(
                     factory.Intern(gs->getLabel()->getName())) };
             }
