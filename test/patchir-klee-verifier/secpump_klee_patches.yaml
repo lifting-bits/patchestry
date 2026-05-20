@@ -56,4 +56,8 @@ contract_definitions:
       kind: relation
       target: arg2
       relation: le
-      value: arg3
+      # dest_cap (arg3) is bound to the constant 4 by SECPUMP-PATCH-001's
+      # action arguments, so n <= dest_cap is equivalent to n <= 4 here.
+      # The contract framework's `value:` only accepts integer constants;
+      # arg-to-arg comparison (`value: arg3`) is not supported.
+      value: '4'

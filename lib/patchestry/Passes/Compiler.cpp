@@ -367,6 +367,9 @@ namespace patchestry::passes {
             return {};
         }
         clang::ParseAST(ci->getSema());
+        // Don't gate on hasErrorOccurred — clang recovery may still emit a
+        // usable patch symbol. Hard failures surface downstream via
+        // ensurePatchFunctionAvailable -> signal_failure. #244
         auto codegen = std::make_unique< patchestry::codegen::CodeGenerator >(*ci);
         auto module  = codegen->lower_ast_to_mlir(ci->getASTContext());
         if (!module.has_value()) {

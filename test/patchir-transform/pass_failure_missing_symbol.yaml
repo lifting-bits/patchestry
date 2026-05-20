@@ -1,0 +1,25 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: pass_failure_missing_symbol
+  description: "Test A: patch C compiles but doesn't define the named symbol."
+  version: 1.0.0
+  author: Security Team
+  kind: PatchSpec
+target:
+  binary: test_binary.bin
+  arch: ARM:LE:32
+libraries:
+- patches/pass_failure_helper.yaml
+patches:
+- name: missing_symbol_action
+  id: PASS-FAIL-MISSING-001
+  description: "Apply-before action whose patch symbol is absent from the patch module."
+  match:
+    name: gpio_set
+    kind: function
+  action:
+    mode: apply_before
+    patch: missing_patch
+    arguments:
+    - { name: a, source: operand, index: 0 }
+    - { name: b, source: operand, index: 1 }

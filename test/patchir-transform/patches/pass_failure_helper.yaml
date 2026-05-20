@@ -1,0 +1,26 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: pass_failure_helper
+  description: "Library for pass_failure_tests.json — defines one patch symbol."
+  version: 1.0.0
+  author: Security Team
+  kind: PatchLibrary
+patch_definitions:
+- name: present_patch
+  description: "Patch that exists and compiles cleanly."
+  category: test
+  function_name: patch::before::present_symbol
+  code_file: patches/pass_failure_helper.c
+  parameters:
+  - { name: a, type: unsigned int,   description: arg0 }
+  - { name: b, type: unsigned short, description: arg1 }
+- name: missing_patch
+  description: |
+    Patch whose function_name is NOT defined by the C body.  Exercises
+    the missing-symbol branch in ensurePatchFunctionAvailable.
+  category: test
+  function_name: patch::before::missing_symbol
+  code_file: patches/pass_failure_helper.c
+  parameters:
+  - { name: a, type: unsigned int,   description: arg0 }
+  - { name: b, type: unsigned short, description: arg1 }

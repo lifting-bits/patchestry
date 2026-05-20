@@ -316,6 +316,7 @@ namespace patchestry::passes {
         {
             LOG(ERROR) << "Error: Failed to parse Patchestry configuration file: "
                        << configuration_file << "\n";
+            patch_failed = true;
             return;
         }
 
@@ -323,6 +324,7 @@ namespace patchestry::passes {
         if (!buffer_or_err) {
             LOG(ERROR) << "Error: Failed to read Patchestry configuration file: "
                        << configuration_file << "\n";
+            patch_failed = true;
             return;
         }
 
@@ -332,6 +334,7 @@ namespace patchestry::passes {
         if (!config_or_err) {
             LOG(ERROR) << "Error: Failed to parse Patchestry configuration file: "
                        << configuration_file << "\n";
+            patch_failed = true;
             return;
         }
 
@@ -342,6 +345,9 @@ namespace patchestry::passes {
             spec.patch_module = emitModuleAsString(patches_file_path, config->target.arch);
             if (!spec.patch_module) {
                 LOG(ERROR) << "Failed to load patch file: " << patches_file_path << "\n";
+                // Continue so every broken patch is reported; runOnOperation
+                // epilogue gates on patch_failed for non-zero exit. #244
+                patch_failed = true;
                 continue;
             }
         }
@@ -362,13 +368,13 @@ namespace patchestry::passes {
         llvm::SmallVector< cir::FuncOp, 8 > function_worklist;
         llvm::SmallVector< mlir::Operation *, 8 > operation_worklist;
 
-        // check if the configuration is loaded; if not, signal failure
+        // Config missing → constructor already set `patch_failed`; the
+        // end-of-run gate logs the summary and signals failure. #244
         if (!config) {
             LOG(ERROR) << "No Patchestry configuration loaded. Skipping instrumentation.\n";
             mod.emitError("InstrumentationPass: failed to load config");
-            signalPassFailure();
-            return;
-        }
+            patch_failed = true;
+        } else {
 
         // gather all functions for later instrumentation
         mod.walk([&](cir::FuncOp op) { function_worklist.push_back(op); });
@@ -417,6 +423,15 @@ namespace patchestry::passes {
             if (fn && mlir::SymbolTable::symbolKnownUseEmpty(fn, mod)) {
                 fn.erase();
             }
+        }
+        }
+
+        // #244: propagate any dropped patch / failed YAML parse to exit code.
+        if (patch_failed) {
+            LOG(ERROR) << "patchir-transform: one or more patches were not applied "
+                          "(compile failure or unresolved patch symbol); see [ERROR] "
+                          "lines above.\n";
+            signalPassFailure();
         }
     }
 
@@ -529,6 +544,7 @@ namespace patchestry::passes {
                         LOG(ERROR)
                             << "Failed to load patch module for function: "
                             << func.getSymName().str() << "\n";
+                        signal_failure();
                         continue;
                     }
 
@@ -576,6 +592,7 @@ namespace patchestry::passes {
                     if (!patch_module) {
                         LOG(ERROR) << "Failed to load patch module for function: "
                                    << callee_name << "\n";
+                        signal_failure();
                         return;
                     }
 
@@ -671,6 +688,7 @@ namespace patchestry::passes {
                 if (!patch_module) {
                     LOG(ERROR) << "Failed to load patch module for operation: "
                                << op->getName().getStringRef().str() << "\n";
+                    signal_failure();
                     continue;
                 }
 
@@ -705,6 +723,7 @@ namespace patchestry::passes {
                             LOG(ERROR) << "REPLACE mode requires an op with results; "
                                        << op->getName().getStringRef().str()
                                        << " has none. Use erase or apply_before/after.\n";
+                            signalPassFailure();
                         }
                         break;
                     default:
@@ -760,6 +779,7 @@ namespace patchestry::passes {
         auto results = cast_op->getResults();
         if (results.empty()) {
             LOG(ERROR) << "Cast operation produced no results\n";
+            signalPassFailure();
             return {};
         }
         return results.front();
@@ -834,6 +854,7 @@ namespace patchestry::passes {
                            << "' has no fixed parameters; cannot determine argument "
                               "type for index "
                            << i << " — declare at least one fixed parameter.\n";
+                signalPassFailure();
                 continue;
             }
 
@@ -891,12 +912,14 @@ namespace patchestry::passes {
 
         if (!patch.patch_action.has_value()) {
             LOG(ERROR) << "Patch action is missing\n";
+            signalPassFailure();
             return;
         }
         const auto &patch_action = patch.patch_action.value();
         if (patch_action.action.empty()) {
             LOG(ERROR) << "Patch action '" << patch_action.action_id
                        << "' has empty action list\n";
+            signalPassFailure();
             return;
         }
 
@@ -972,6 +995,7 @@ namespace patchestry::passes {
     ) {
         if (!arg_spec.index.has_value()) {
             LOG(ERROR) << "OPERAND source requires index field\n";
+            signalPassFailure();
             return;
         }
         unsigned idx = arg_spec.index.value();
@@ -986,18 +1010,21 @@ namespace patchestry::passes {
                 LOG(ERROR) << "OPERAND index " << idx
                            << " out of range for enclosing function (has "
                            << func_args.size() << " argument(s))\n";
+                signalPassFailure();
                 return;
             }
             operand_value = func_args[idx];
         } else if (auto orig_call_op = mlir::dyn_cast< cir::CallOp >(call_op)) {
             if (idx >= orig_call_op.getArgOperands().size()) {
                 LOG(ERROR) << "Operand index " << idx << " out of range\n";
+                signalPassFailure();
                 return;
             }
             operand_value = orig_call_op.getArgOperands()[idx];
         } else {
             if (idx >= call_op->getNumOperands()) {
                 LOG(ERROR) << "Operand index " << idx << " out of range\n";
+                signalPassFailure();
                 return;
             }
             operand_value = call_op->getOperand(idx);
@@ -1005,6 +1032,7 @@ namespace patchestry::passes {
 
         if (!operand_value) {
             LOG(ERROR) << "Failed to resolve operand value at index " << idx << "\n";
+            signalPassFailure();
             return;
         }
 
@@ -1096,6 +1124,7 @@ namespace patchestry::passes {
     ) {
         if (!arg_spec.symbol.has_value()) {
             LOG(ERROR) << "VARIABLE source requires symbol field\n";
+            signalPassFailure();
             return;
         }
 
@@ -1136,6 +1165,7 @@ namespace patchestry::passes {
     ) {
         if (!arg_spec.symbol.has_value()) {
             LOG(ERROR) << "SYMBOL source requires symbol field\n";
+            signalPassFailure();
             return;
         }
 
@@ -1176,11 +1206,13 @@ namespace patchestry::passes {
                           "the call result is only defined at the matched call site, "
                           "not at the function entrypoint. Use 'variable', 'symbol', "
                           "or 'constant' instead.\n";
+            signalPassFailure();
             return;
         }
 
         if (call_op->getNumResults() == 0) {
             LOG(ERROR) << "Operation/function does not have a return value\n";
+            signalPassFailure();
             return;
         }
 
@@ -1203,6 +1235,7 @@ namespace patchestry::passes {
     ) {
         if (!arg_spec.value.has_value()) {
             LOG(ERROR) << "CONSTANT source requires value field\n";
+            signalPassFailure();
             return;
         }
 
@@ -1232,22 +1265,26 @@ namespace patchestry::passes {
                           "captures are only bound at the matched call site, not at "
                           "the function entrypoint. Use 'variable', 'symbol', or "
                           "'constant' instead.\n";
+            signalPassFailure();
             return;
         }
 
         if (arg_spec.name.empty()) {
             LOG(ERROR) << "CAPTURE source requires 'name' field\n";
+            signalPassFailure();
             return;
         }
         auto it = patch.captures.find(arg_spec.name);
         if (it == patch.captures.end()) {
             LOG(ERROR) << "Capture '" << arg_spec.name
                        << "' not bound at this match site\n";
+            signalPassFailure();
             return;
         }
         mlir::Value captured = it->second;
         if (!captured) {
             LOG(ERROR) << "Capture '" << arg_spec.name << "' resolved to null\n";
+            signalPassFailure();
             return;
         }
 
@@ -1273,6 +1310,7 @@ namespace patchestry::passes {
                     << patch::infoModeToString(mode)
                     << "' insertion point. Use 'mode: apply_after', or capture an "
                        "operand (which always dominates the match site).\n";
+                signalPassFailure();
                 return;
             }
         }
@@ -1308,6 +1346,7 @@ namespace patchestry::passes {
             } catch (const std::exception &e) {
                 LOG(ERROR) << "Failed to parse integer constant '" << value << "': " << e.what()
                            << "\n";
+                signalPassFailure();
                 return nullptr;
             }
         } else if (auto ptr_type = mlir::dyn_cast< cir::PointerType >(target_type)) {
@@ -1328,10 +1367,12 @@ namespace patchestry::passes {
             } catch (const std::exception &e) {
                 LOG(ERROR) << "Failed to parse pointer constant '" << value << "': " << e.what()
                            << "\n";
+                signalPassFailure();
                 return nullptr;
             }
         } else {
             LOG(ERROR) << "Unsupported constant type for value '" << value << "'\n";
+            signalPassFailure();
             return nullptr;
         }
     }
@@ -1343,6 +1384,7 @@ namespace patchestry::passes {
         auto func = call_op->getParentOfType< cir::FuncOp >();
         if (!func) {
             LOG(ERROR) << "Cannot find parent function for local variable lookup\n";
+            signalPassFailure();
             return std::nullopt;
         }
 
@@ -1398,6 +1440,7 @@ namespace patchestry::passes {
         auto module = call_op->getParentOfType< mlir::ModuleOp >();
         if (!module) {
             LOG(ERROR) << "Cannot find parent module for symbol lookup\n";
+            signalPassFailure();
             return std::nullopt;
         }
 
@@ -1581,6 +1624,7 @@ namespace patchestry::passes {
                     auto maybe_new_name = src_sym_table.renameToUnique(op, { &dest_sym_table });
                     if (mlir::failed(maybe_new_name)) {
                         LOG(ERROR) << "Failed to rename symbol " << sym_name << "\n";
+                        signalPassFailure();
                         return;
                     }
                     LOG(INFO) << "Renamed symbol: " << sym_name << " -> "
@@ -2141,17 +2185,18 @@ namespace patchestry::passes {
                     switch (action.mode) {
                         case contract::InfoMode::APPLY_BEFORE:
                             ContractOperationImpl::applyContractBefore(
-                                call_op, contract_to_apply
+                                *this, call_op, contract_to_apply
                             );
                             break;
                         case contract::InfoMode::APPLY_AFTER:
                             ContractOperationImpl::applyContractAfter(
-                                call_op, contract_to_apply
+                                *this, call_op, contract_to_apply
                             );
                             break;
                         default:
                             LOG(ERROR) << "Unsupported contract mode (see ContractSpec for "
                                           "details on support)\n";
+                            signalPassFailure();
                             break;
                     }
                 } else {

@@ -1,0 +1,27 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: pass_failure_bad_index
+  description: "Test B: OPERAND index out of range — every arg-resolution failure is the same shape."
+  version: 1.0.0
+  author: Security Team
+  kind: PatchSpec
+target:
+  binary: test_binary.bin
+  arch: ARM:LE:32
+libraries:
+- patches/pass_failure_helper.yaml
+patches:
+- name: bad_index_action
+  id: PASS-FAIL-INDEX-001
+  description: |
+    `source: operand, index: 99` on gpio_set (which has 2 args).
+    `handle_operand_argument` signals failure on out-of-range index.
+  match:
+    name: gpio_set
+    kind: function
+  action:
+    mode: apply_before
+    patch: present_patch
+    arguments:
+    - { name: a, source: operand, index: 99 }
+    - { name: b, source: operand, index: 1  }

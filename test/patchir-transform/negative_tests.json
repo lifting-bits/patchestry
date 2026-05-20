@@ -22,6 +22,13 @@
 // RUN: not %patchir-transform %t1.cir --spec %S/duplicate_within_lib_reject.yaml -o %t7.cir 2>&1 | \
 // RUN:   %file-check -check-prefix=DUP_WITHIN %s
 // DUP_WITHIN: {{duplicate patch definition|dup_patch}}
+//
+// Test 5 (#244): missing patch C file -> non-zero exit + summary line.
+// RUN: not %patchir-transform %t1.cir --spec %S/dropped_patch.yaml -o %t8.cir 2> %t8.err
+// RUN: %file-check -check-prefix=ISSUE_LOAD_ERR %s --input-file %t8.err
+// RUN: %file-check -check-prefix=ISSUE_SUMMARY %s --input-file %t8.err
+// ISSUE_LOAD_ERR: Failed to load patch file:
+// ISSUE_SUMMARY: one or more patches were not applied
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

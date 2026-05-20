@@ -13,6 +13,8 @@
 
 namespace patchestry::passes {
 
+    class InstrumentationPass;
+
     struct ContractInformation
     {
         std::optional< contract::ContractSpec >   spec;
@@ -26,20 +28,24 @@ namespace patchestry::passes {
 
         // Static contracts attach a `contract.static` MLIR attribute on the
         // matched op — no call is emitted and no insertion point is needed,
-        // so the signature is intentionally narrow.
+        // so the signature is intentionally narrow.  `pass` is threaded so
+        // predicate errors can `signal_failure()` (#244).
         static void emitStaticContract(
-            mlir::Operation *target_op, const ContractInformation &contract
+            InstrumentationPass &pass, mlir::Operation *target_op,
+            const ContractInformation &contract
         );
 
         // apply* entry points match the dispatch in
         // `InstrumentationPass::apply_contract_action_to_targets`; both
         // currently delegate to `emitStaticContract` on the matched op.
         static void applyContractBefore(
-            mlir::Operation *target_op, const ContractInformation &contract
+            InstrumentationPass &pass, mlir::Operation *target_op,
+            const ContractInformation &contract
         );
 
         static void applyContractAfter(
-            mlir::Operation *target_op, const ContractInformation &contract
+            InstrumentationPass &pass, mlir::Operation *target_op,
+            const ContractInformation &contract
         );
     };
 

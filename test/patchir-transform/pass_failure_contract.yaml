@@ -1,0 +1,22 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: pass_failure_contract
+  description: "Test C: contract predicate missing required field (expr value)."
+  version: 1.0.0
+  author: Security Team
+  kind: PatchSpec
+target:
+  binary: test_binary.bin
+  arch: ARM:LE:32
+libraries:
+- patches/pass_failure_contract_library.yaml
+patches: []
+contracts:
+- name: malformed_contract_action
+  id: PASS-FAIL-CONTRACT-001
+  description: "Attach malformed_contract_def to gpio_set; predicate build fails."
+  match:
+    name: gpio_set
+  action:
+    mode: apply_before
+    contract: malformed_contract_def

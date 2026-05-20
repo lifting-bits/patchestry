@@ -26,7 +26,8 @@
 // Post-fix: the tool logs the refusal on stderr and the output CIR
 // has the original cir.binop intact with NO patch__probe__void_mul
 // call anywhere.
-// RUN: %patchir-transform %t1.cir --spec %S/replace_binop_void_reject.yaml -o %t5.cir 2> %t5.err
+// #244: void REPLACE is a spec error -> non-zero exit; IR still rolled back.
+// RUN: not %patchir-transform %t1.cir --spec %S/replace_binop_void_reject.yaml -o %t5.cir 2> %t5.err
 // RUN: %file-check -vv -check-prefix=VOID_REJECT_ERR %s --input-file %t5.err
 // RUN: %file-check -vv -check-prefix=VOID_REJECT_CIR %s --input-file %t5.cir
 // VOID_REJECT_ERR: patch function {{.*}}void_mul{{.*}} returns 0 result(s)

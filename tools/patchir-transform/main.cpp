@@ -80,6 +80,9 @@ namespace patchestry::instrumentation {
             return mlir::failure();
         }
 
+        // Defer failure return until after writing output so the rolled-back
+        // CIR is still inspectable; exit code stays non-zero. #244
+        bool pass_failed = false;
         if (enable_instrumentation.getValue()) {
             patchestry::passes::InstrumentationOptions inline_options = { enable_inlining.getValue() };
             mlir::PassManager pm(&context);
@@ -88,7 +91,7 @@ namespace patchestry::instrumentation {
             ));
             if (mlir::failed(pm.run(*module))) {
                 LOG(ERROR) << "Failed to run instrumentation passes\n";
-                return mlir::failure();
+                pass_failed = true;
             }
         }
 
@@ -104,7 +107,7 @@ namespace patchestry::instrumentation {
         }
         module->print(os);
         os.flush();
-        return mlir::success();
+        return pass_failed ? mlir::failure() : mlir::success();
     }
 
 } // namespace patchestry::instrumentation

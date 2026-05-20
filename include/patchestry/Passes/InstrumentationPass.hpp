@@ -133,6 +133,9 @@ namespace patchestry::passes { // NOLINT
         /** @brief Reference to inlining configuration options */
         const InstrumentationOptions &options;
 
+        // Sticky flag: patch failed to load or its symbol was missing. #244
+        bool patch_failed = false;
+
       public:
         /**
          * @brief Constructs an InstrumentationPass with the given configuration file and
@@ -173,12 +176,16 @@ namespace patchestry::passes { // NOLINT
          */
         void erase_op(mlir::Operation *op);
 
-        // Thin public wrapper for `mlir::Pass::signalPassFailure` so friend
-        // helpers (PatchOperationImpl, ContractOperationImpl) can report a
-        // pass-level failure without re-declaring the protected inherited
-        // member for every caller. Equivalent to calling `signalPassFailure`
-        // directly from within the pass.
-        void signal_failure() { signalPassFailure(); }
+        // Single failure entry point for friend helpers (PatchOperationImpl,
+        // ContractOperationImpl) and `runOnOperation`. Sticky and idempotent:
+        // sets `patch_failed` (so the end-of-run summary fires) AND calls
+        // signalPassFailure (so pm.run fails immediately). The constructor
+        // can't use this — `signalPassFailure` is invalid before the pass
+        // runs — and sets `patch_failed` directly instead.
+        void signal_failure() {
+            patch_failed = true;
+            signalPassFailure();
+        }
 
         /**
          * @brief Applies meta patches in execution order.

@@ -1,0 +1,14 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: missing_patch_file
+  description: "#244 negative test: library pointing at a missing patch C file."
+  version: 1.0.0
+  author: Security Team
+  kind: PatchLibrary
+patch_definitions:
+- name: drop_patch
+  description: "code_file points at a nonexistent path -> constructor sets patch_failed."
+  category: test
+  function_name: patch::before::minimal_func
+  code_file: patches/nonexistent.c
+  parameters: []

@@ -41,13 +41,16 @@ namespace patchestry {
         ) {
             const auto prefix = make_log_prefix(context_label);
 
+            // Each early-return below = a dropped patch -> non-zero exit. #244
             if (!patch_module) {
                 LOG(ERROR) << prefix << "patch module is null";
+                pass.signal_failure();
                 return {};
             }
 
             if (patch_function_name.empty()) {
                 LOG(ERROR) << prefix << "patch function name is empty";
+                pass.signal_failure();
                 return {};
             }
 
@@ -56,11 +59,13 @@ namespace patchestry {
             if (!patch_func_from_module) {
                 LOG(ERROR) << prefix << "patch function " << patch_function_name
                            << " not defined in patch module";
+                pass.signal_failure();
                 return {};
             }
 
             if (!target_module) {
                 LOG(ERROR) << prefix << "target module is null";
+                pass.signal_failure();
                 return {};
             }
 
@@ -71,6 +76,7 @@ namespace patchestry {
                 if (mlir::failed(merge_result)) {
                     LOG(ERROR) << prefix << "failed to merge patch function "
                                << patch_function_name;
+                    pass.signal_failure();
                     return {};
                 }
 
@@ -78,6 +84,7 @@ namespace patchestry {
                 if (!patch_func) {
                     LOG(ERROR) << prefix << "patch function " << patch_function_name
                                << " missing after merge";
+                    pass.signal_failure();
                     return {};
                 }
             } else {
@@ -94,6 +101,7 @@ namespace patchestry {
         ) {
             if (target_op == nullptr) {
                 LOG(ERROR) << "Patch before: Operation is null";
+                pass.signal_failure();
                 return;
             }
 
@@ -155,6 +163,7 @@ namespace patchestry {
         ) {
             if (target_op == nullptr) {
                 LOG(ERROR) << "Patch after: Operation is null";
+                pass.signal_failure();
                 return;
             }
 
@@ -259,8 +268,7 @@ namespace patchestry {
                 if (wrap_num_results == 0) {
                     LOG(ERROR) << "Patch function returns void but original function has "
                                << call_num_results << " result(s)\n";
-                    // For void replacement, we can't replace the uses, so this is an error
-                    // But we'll try to continue by removing the old call if it's unused
+                    pass.signal_failure(); // #244 — rollback still runs below
                 } else {
                     unsigned result_index = 0;
                     for (auto result : wrap_call_op.getResults()) {
@@ -332,6 +340,7 @@ namespace patchestry {
             if (op->getNumResults() == 0) {
                 LOG(ERROR) << "REPLACE mode requires an operation with results, got: "
                            << op->getName().getStringRef().str() << "\n";
+                pass.signal_failure();
                 return;
             }
 
@@ -386,6 +395,7 @@ namespace patchestry {
                     << op->getName().getStringRef().str()
                     << "'; refusing replacement (would leave both the patch "
                        "call and the original op in IR).\n";
+                pass.signal_failure();
                 return;
             }
 
@@ -452,6 +462,7 @@ namespace patchestry {
                            << "'; rolling back patch call to preserve the "
                               "'op unchanged on error' invariant.\n";
                 patch_call_op->erase();
+                pass.signal_failure();
                 return;
             }
 
@@ -593,6 +604,7 @@ namespace patchestry {
         void PatchOperationImpl::eraseOperation(InstrumentationPass &pass, mlir::Operation *op) {
             if (op == nullptr) {
                 LOG(ERROR) << "Erase: operation is null\n";
+                pass.signal_failure();
                 return;
             }
 
@@ -628,6 +640,7 @@ namespace patchestry {
                         for (auto *c : llvm::reverse(new_constants)) {
                             pass.erase_op(c);
                         }
+                        pass.signal_failure();
                         return;
                     }
                     substitutions.emplace_back(result, default_val);
@@ -647,6 +660,7 @@ namespace patchestry {
         ) {
             if (call_op == nullptr) {
                 LOG(ERROR) << "applyPatchAtEntrypoint: the matched call was null";
+                pass.signal_failure();
                 return;
             }
 
@@ -655,6 +669,7 @@ namespace patchestry {
             // future caller could skip that check. `.value()` throws bad_optional_access.
             if (!patch.spec.has_value()) {
                 LOG(ERROR) << "applyPatchAtEntrypoint: patch.spec is empty\n";
+                pass.signal_failure();
                 return;
             }
             const auto &patch_spec = patch.spec.value();
@@ -672,10 +687,12 @@ namespace patchestry {
             auto enclosing_func = call_op->getParentOfType< cir::FuncOp >();
             if (!enclosing_func) {
                 LOG(ERROR) << "applyPatchAtEntrypoint: cannot find enclosing function\n";
+                pass.signal_failure();
                 return;
             }
             if (enclosing_func.getBody().empty()) {
                 LOG(ERROR) << "applyPatchAtEntrypoint: enclosing function has no body\n";
+                pass.signal_failure();
                 return;
             }
 
