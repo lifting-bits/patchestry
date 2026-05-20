@@ -69,7 +69,13 @@ namespace patchestry::ast {
         std::string_view function_name
     ) {
         if (!fn || !fn->hasBody()) { return; }
-        auto initial_metrics = MeasureClangCleanup(fn->getBody());
+        // Gate initial-metrics capture on the report flag.
+        // MeasureClangCleanup walks the body — for the default
+        // (report_cleanup=false) path we skip the redundant traversal.
+        ClangCleanupMetrics initial_metrics;
+        if (report_cleanup) {
+            initial_metrics = MeasureClangCleanup(fn->getBody());
+        }
         auto *body = CleanupStmtTree(ctx, fn->getBody());
         if (body) { fn->setBody(body); }
         // Phase-7 Step-0: capture how much statement-adjacency the
@@ -84,25 +90,36 @@ namespace patchestry::ast {
             CountGotoDeclRefs(fn->getBody(), refs);
             apply_body(rewrite(refs));
         };
+        // EliminateGotoToNextLabel always returns a non-null Stmt* on
+        // non-null input (it rebuilds the CompoundStmt unconditionally),
+        // so we can't use nullptr as a fixed-point sentinel.  Detect
+        // convergence via Stmt::Profile, matching the outer schedule
+        // loop below.  Without this check the loop would run the full
+        // kMaxGotoEliminationPasses on every function regardless of
+        // whether work remained — wasted cycles, and a cap-hit warning
+        // that fires for everyone.
         auto run_goto_to_next_label_fixed_point = [&]() {
             bool reached_fixed_point = false;
             for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                llvm::FoldingSetNodeID before;
+                fn->getBody()->Profile(before, ctx, /*Canonical=*/false);
+
                 std::unordered_set< clang::LabelDecl * > goto_targets;
                 std::unordered_set< clang::Stmt * > seen;
                 CollectGotoTargets(fn->getBody(), goto_targets, seen);
                 body = EliminateGotoToNextLabel(ctx, fn->getBody(), &goto_targets);
-                if (body) {
-                    fn->setBody(body);
-                } else {
+                if (body) { fn->setBody(body); }
+
+                llvm::FoldingSetNodeID after;
+                fn->getBody()->Profile(after, ctx, /*Canonical=*/false);
+                if (before == after) {
                     reached_fixed_point = true;
                     break;
                 }
             }
             // Mirror the SNode-cleanup cap-hit diagnostic at
-            // ASTConsumer.cpp:308-333 — silently exhausting the cap
-            // could hide a future pass-oscillation regression at this
-            // layer.  Cap-hit isn't fatal because the surrounding
-            // schedule has its own Stmt::Profile convergence check.
+            // ASTConsumer.cpp:308-333.  With the Profile-based check
+            // above, this only fires on genuine pass oscillation.
             if (!reached_fixed_point) {
                 LOG(WARNING)
                     << "Clang-AST goto-to-next-label fixed-point hit cap of "
