@@ -493,8 +493,15 @@ namespace patchestry::ast {
 
                 EmitClangAST(root_body, fn, ctx);
 
-                CleanupPrettyPrint(
-                    fn, ctx, options.structuring_improvement_report, fn_name);
+                // Clang-AST post-emission cleanup pipeline (F1-F8 +
+                // cosmetics).  Gated by --clang-ast-cleanup (default on).
+                // Toggle to bisect any structuring drift introduced by
+                // these post-passes vs the SNode-layer cleanup alone.
+                if (options.clang_ast_cleanup) {
+                    CleanupPrettyPrint(fn, ctx,
+                                       options.structuring_improvement_report,
+                                       fn_name);
+                }
 
                 // Goto-funnel report: per-function goto-elimination metrics
                 // for the structured path.  Gated by
