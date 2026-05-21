@@ -1266,6 +1266,39 @@ namespace patchestry::ast {
             node.structured = { factory_.Make<SLabel>(
                 factory_.Intern(node.original_label), node.structured) };
         }
+
+        // Invariant: no two SLabel nodes in the active SNode trees may
+        // share a name.  Two would emit two LabelStmt's that share one
+        // LabelDecl (via ClangEmitter::GetOrCreateLabel) and trip
+        // CIRGen's mapBlockAddress assertion at CIRGenModule.cpp:2718.
+        // Loud-fail here via a real Clang diag — diag_errors increments
+        // and main.cpp's hasErrorOccurred() gate aborts codegen cleanly,
+        // rather than SIGABRT'ing deep in CIRGen with the offending
+        // label name buried in an assert message (#251).
+        {
+            std::unordered_map<std::string_view, int> label_counts;
+            std::function<void(const SNode *)> walk =
+                [&](const SNode *n) {
+                    if (!n) return;
+                    if (auto *l = n->dyn_cast<SLabel>())
+                        ++label_counts[l->Name()];
+                    n->for_each_child([&](const SNode *c) { walk(c); });
+                };
+            for (auto &node : graph_.nodes) {
+                if (node.IsCollapsed()) continue;
+                for (auto *n : node.structured) walk(n);
+            }
+            auto &diags = ctx_.getDiagnostics();
+            unsigned diag_id = diags.getCustomDiagID(
+                clang::DiagnosticsEngine::Error,
+                "CFGStructure: duplicate SLabel '%0' (%1 instances) "
+                "would crash CIRGen mapBlockAddress (#251)");
+            for (auto &kv : label_counts) {
+                if (kv.second <= 1) continue;
+                diags.Report(clang::SourceLocation(), diag_id)
+                    << std::string(kv.first) << kv.second;
+            }
+        }
     }
 
     // OrderLoops
