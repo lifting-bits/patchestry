@@ -596,48 +596,52 @@ namespace patchestry::ast {
         clang::QualType input_type  = input_expr->getType();
         clang::QualType output_type = output_expr->getType();
 
-        // Scalar → array: make_cast would route through make_reinterpret_cast
-        // and emit `*(T(*)[N])&temp = ...` — element-wise copy off a temp
-        // backed by a narrower scalar, UB at runtime.  Issue #223
-        // (FUN_0000f69c) and #225's widened-buffer case.  When the input
-        // width matches one element of the output array, prefer
-        // `arr[0] = input`; otherwise refuse loudly.
+        // Scalar → array: lower as a pointer-cast partial store
+        // `*(input_type *)&output[0] = input`.  Width-agnostic — the
+        // overflow case (input wider than buffer) is preserved
+        // faithfully for downstream transform passes.
         const bool output_is_array = output_type->isArrayType();
         const bool input_is_array  = input_type->isArrayType();
         if (output_is_array && !input_is_array
             && !ctx.hasSameUnqualifiedType(input_type, output_type)) {
-            if (const auto *array_type = ctx.getAsArrayType(output_type)) {
-                auto elem_type = array_type->getElementType();
-                auto elem_bits = ctx.getTypeSize(elem_type);
-                if (elem_type->isIntegerType() && input_type->isIntegerType()
-                    && elem_bits == ctx.getTypeSize(input_type)
-                    && elem_bits > 0
-                    && ctx.getTypeSize(output_type) >= elem_bits)
-                {
-                    auto *zero = clang::IntegerLiteral::Create(
-                        ctx,
-                        llvm::APInt(ctx.getIntWidth(ctx.IntTy), 0),
-                        ctx.IntTy, loc);
-                    auto subscript = sema().CreateBuiltinArraySubscriptExpr(
-                        output_expr, loc, zero, loc);
-                    if (!subscript.isInvalid()) {
-                        auto *narrow_out = subscript.getAs< clang::Expr >();
-                        auto *cast_input = make_cast(
-                            ctx, input_expr, narrow_out->getType(), loc);
-                        if (cast_input) {
-                            auto assign = sema().CreateBuiltinBinOp(
-                                loc, clang::BO_Assign, narrow_out, cast_input);
-                            if (!assign.isInvalid()) {
-                                return assign.getAs< clang::Stmt >();
+            const auto *array_type = ctx.getAsArrayType(output_type);
+            if (array_type != nullptr
+                && input_type->isIntegerType()
+                && ctx.getTypeSize(input_type) > 0)
+            {
+                auto *zero = clang::IntegerLiteral::Create(
+                    ctx,
+                    llvm::APInt(ctx.getIntWidth(ctx.IntTy), 0),
+                    ctx.IntTy, loc);
+                auto subscript_res = sema().CreateBuiltinArraySubscriptExpr(
+                    output_expr, loc, zero, loc);
+                if (!subscript_res.isInvalid()) {
+                    auto *first_elem = subscript_res.getAs< clang::Expr >();
+                    if (first_elem != nullptr) {
+                        auto *reinterpreted = make_reinterpret_cast(
+                            ctx, first_elem, input_type, loc);
+                        if (reinterpreted != nullptr) {
+                            auto assign_res = sema().CreateBuiltinBinOp(
+                                loc, clang::BO_Assign, reinterpreted,
+                                input_expr);
+                            if (!assign_res.isInvalid()) {
+                                return assign_res.getAs< clang::Stmt >();
                             }
                         }
                     }
                 }
             }
-            LOG(ERROR) << "create_assign_operation: refusing "
-                       << input_type.getAsString() << " → "
-                       << output_type.getAsString()
-                       << " (scalar→array would reinterpret past temp end)";
+
+            // Residual: AST construction failed.  Real diag so
+            // diag_errors bumps and main aborts codegen.
+            auto &diags      = sema().getDiagnostics();
+            unsigned diag_id = diags.getCustomDiagID(
+                clang::DiagnosticsEngine::Error,
+                "create_assign_operation: scalar→array lowering failed "
+                "for '%0' → '%1'");
+            diags.Report(loc, diag_id)
+                << input_type.getAsString()
+                << output_type.getAsString();
             return nullptr;
         }
 
