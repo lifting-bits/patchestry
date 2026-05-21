@@ -8517,7 +8517,8 @@ namespace patchestry::ast {
             }
         }
 
-        void VerifyGotoLabelPairing(std::vector<SNode *> &root) {
+        void VerifyGotoLabelPairing(std::vector<SNode *> &root,
+                                    const char *caller_tag) {
 #ifndef NDEBUG
             std::unordered_set<std::string_view> labels;
             CollectAllLabelNames(root, labels);
@@ -8525,7 +8526,7 @@ namespace patchestry::ast {
             CountGotoRefs(root, refs);
             for (auto &[name, _] : refs) {
                 if (!labels.contains(name)) {
-                    LOG(ERROR) << "DuplicateSwitchCaseTargets: dangling "
+                    LOG(ERROR) << caller_tag << ": dangling "
                                << "goto target '" << std::string(name)
                                << "' after duplication\n";
                     assert(false && "dangling goto target after duplication");
@@ -8533,6 +8534,7 @@ namespace patchestry::ast {
             }
 #else
             (void)root;
+            (void)caller_tag;
 #endif
         }
 
@@ -8553,7 +8555,7 @@ namespace patchestry::ast {
                 break;
             any_changed = true;
         }
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "FoldGuardedFallthroughTargets");
         return any_changed;
     }
 
@@ -8573,7 +8575,7 @@ namespace patchestry::ast {
                 break;
             any_changed = true;
         }
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "RepairCrossScopeLabelEntries");
         return any_changed;
     }
 
@@ -8593,7 +8595,7 @@ namespace patchestry::ast {
             if (!did) break;
             any_changed = true;
         }
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateSwitchCaseTargets");
         return any_changed;
     }
 
@@ -8612,7 +8614,7 @@ namespace patchestry::ast {
                 break;
             any_changed = true;
         }
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "FoldSwitchLocalCaseTargets");
         return any_changed;
     }
 
@@ -8635,7 +8637,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateSmallTerminatingTargets");
         return any_changed;
     }
 
@@ -8655,7 +8657,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateSmallEpilogueTargets");
         return any_changed;
     }
 
@@ -8672,7 +8674,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateSwitchFallthroughTargets");
         return any_changed;
     }
 
@@ -8689,7 +8691,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateLoopContinueTargets");
         return any_changed;
     }
 
@@ -8711,7 +8713,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateStackGuardReturnTargets");
         return any_changed;
     }
 
@@ -8731,7 +8733,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateCleanupReturnTargets");
         return any_changed;
     }
 
