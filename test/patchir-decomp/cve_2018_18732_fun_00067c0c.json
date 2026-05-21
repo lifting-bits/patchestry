@@ -3,7 +3,7 @@
 // RUN: test -e %t.c
 // RUN: test -s %t.cir
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
-// RUN: %file-check -vv -check-prefix=STDERR %s --input-file %t.stderr
+// RUN: %file-check -vv --allow-empty -check-prefix=STDERR %s --input-file %t.stderr
 //
 // #250 regression — cve-2018-18732 FUN_00067c0c lifts cleanly after
 // PcodeSerializer demotes umbrella signed-char[4] PIECE outputs.
