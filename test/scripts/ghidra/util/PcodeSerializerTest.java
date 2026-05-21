@@ -248,6 +248,76 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
             PcodeSerializer.AnalyticalTierMode.AUTO, null));
     }
 
+    // -------- #250: scalar-op Array demotion --------
+
+    @Test
+    public void testIsScalarPcodeOp_PositiveCases() throws Exception {
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.PIECE));
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.SUBPIECE));
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.INT_ADD));
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.INT_OR));
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.INT_AND));
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.INT_LEFT));
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.INT_RIGHT));
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.INT_ZEXT));
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.INT_SEXT));
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.BOOL_AND));
+        assertTrue(PcodeSerializer.isScalarPcodeOp(PcodeOp.FLOAT_ADD));
+    }
+
+    // Storage / call / control flow may carry record or array values.
+    @Test
+    public void testIsScalarPcodeOp_NegativeCases() throws Exception {
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.COPY));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.LOAD));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.STORE));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.MULTIEQUAL));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.INDIRECT));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.CALL));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.CALLIND));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.CALLOTHER));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.CAST));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.PTRSUB));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.PTRADD));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.BRANCH));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.CBRANCH));
+        assertFalse(PcodeSerializer.isScalarPcodeOp(PcodeOp.RETURN));
+    }
+
+    @Test
+    public void testDemoteArrayIfMatching_DemotesMatchingWidthArray()
+            throws Exception {
+        DataType charArr4 = new ArrayDataType(
+            CharDataType.dataType, 4,
+            CharDataType.dataType.getLength());
+        DataType demoted = PcodeSerializer.demoteArrayIfMatching(
+            charArr4, 4, dataTypeManager);
+        assertNotNull(demoted);
+        assertEquals(4, demoted.getLength());
+        assertFalse(demoted instanceof Array);
+    }
+
+    @Test
+    public void testDemoteArrayIfMatching_LeavesNonArrayUnchanged()
+            throws Exception {
+        DataType u4 = Undefined.getUndefinedDataType(4);
+        assertSame(u4, PcodeSerializer.demoteArrayIfMatching(
+            u4, 4, dataTypeManager));
+        assertNull(PcodeSerializer.demoteArrayIfMatching(
+            null, 4, dataTypeManager));
+    }
+
+    // Width mismatch — demotion must be same-width only.
+    @Test
+    public void testDemoteArrayIfMatching_LeavesMismatchedWidthArrayUnchanged()
+            throws Exception {
+        DataType charArr4 = new ArrayDataType(
+            CharDataType.dataType, 4,
+            CharDataType.dataType.getLength());
+        assertSame(charArr4, PcodeSerializer.demoteArrayIfMatching(
+            charArr4, 1, dataTypeManager));
+    }
+
     // End-to-end detection on the real bloodlight firmware: the sanitizer
     // should report bl_usb__send_message's extraout_r1 candidate.
     //

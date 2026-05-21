@@ -755,6 +755,72 @@ public class PcodeSerializer {
 			return null;
 		}
 
+		// Strictly scalar P-code opcodes — their varnodes must not carry
+		// Array DataTypes (issue #250).  Storage-flow / call / control-flow
+		// opcodes are excluded; they can legitimately carry records/arrays.
+		static boolean isScalarPcodeOp(int opcode) {
+			switch (opcode) {
+				case PcodeOp.PIECE:
+				case PcodeOp.SUBPIECE:
+				case PcodeOp.EXTRACT:        case PcodeOp.INSERT:
+				case PcodeOp.INT_ADD:        case PcodeOp.INT_SUB:
+				case PcodeOp.INT_MULT:       case PcodeOp.INT_DIV:
+				case PcodeOp.INT_REM:        case PcodeOp.INT_SDIV:
+				case PcodeOp.INT_SREM:
+				case PcodeOp.INT_AND:        case PcodeOp.INT_OR:
+				case PcodeOp.INT_XOR:
+				case PcodeOp.INT_NEGATE:     case PcodeOp.INT_2COMP:
+				case PcodeOp.INT_LEFT:       case PcodeOp.INT_RIGHT:
+				case PcodeOp.INT_SRIGHT:
+				case PcodeOp.INT_EQUAL:      case PcodeOp.INT_NOTEQUAL:
+				case PcodeOp.INT_LESS:       case PcodeOp.INT_SLESS:
+				case PcodeOp.INT_LESSEQUAL:  case PcodeOp.INT_SLESSEQUAL:
+				case PcodeOp.INT_CARRY:      case PcodeOp.INT_SCARRY:
+				case PcodeOp.INT_SBORROW:
+				case PcodeOp.INT_ZEXT:       case PcodeOp.INT_SEXT:
+				case PcodeOp.BOOL_AND:       case PcodeOp.BOOL_OR:
+				case PcodeOp.BOOL_XOR:       case PcodeOp.BOOL_NEGATE:
+				case PcodeOp.POPCOUNT:       case PcodeOp.LZCOUNT:
+				case PcodeOp.FLOAT_ADD:      case PcodeOp.FLOAT_SUB:
+				case PcodeOp.FLOAT_MULT:     case PcodeOp.FLOAT_DIV:
+				case PcodeOp.FLOAT_NEG:      case PcodeOp.FLOAT_ABS:
+				case PcodeOp.FLOAT_SQRT:
+				case PcodeOp.FLOAT_EQUAL:    case PcodeOp.FLOAT_NOTEQUAL:
+				case PcodeOp.FLOAT_LESS:     case PcodeOp.FLOAT_LESSEQUAL:
+				case PcodeOp.FLOAT_NAN:
+				case PcodeOp.FLOAT_INT2FLOAT: case PcodeOp.FLOAT_FLOAT2FLOAT:
+				case PcodeOp.FLOAT_TRUNC:    case PcodeOp.FLOAT_CEIL:
+				case PcodeOp.FLOAT_FLOOR:    case PcodeOp.FLOAT_ROUND:
+					return true;
+				default:
+					return false;
+			}
+		}
+
+		// Depth bound when peeling TypeDef chains; guards against cyclic
+		// typedefs in a corrupted database.  Matches RESOLVE_BUFFER_MAX_DEPTH.
+		private static final int TYPEDEF_PEEL_MAX_DEPTH = 16;
+
+		// Demote an Array DataType of exactly `varBytes` bytes (after peeling
+		// TypeDefs) to a same-width scalar surrogate; else return `t` as-is.
+		static DataType demoteArrayIfMatching(
+				DataType t, int varBytes, DataTypeManager dtm) {
+			if (t == null) {
+				return t;
+			}
+			DataType base = t;
+			for (int depth = 0;
+				 depth < TYPEDEF_PEEL_MAX_DEPTH && base instanceof TypeDef;
+				 ++depth) {
+				base = ((TypeDef) base).getBaseDataType();
+			}
+			if (!(base instanceof Array) || t.getLength() != varBytes) {
+				return t;
+			}
+			DataType surrogate = sizedSurrogate(varBytes, dtm);
+			return surrogate != null ? surrogate : t;
+		}
+
 		// Pick the most precise non-null DataType to label a varnode with.
 		// Uses the declared type when widths match, else walks the layout
 		// for a same-width subcomponent, else a sized integer surrogate.
@@ -1517,7 +1583,17 @@ public class PcodeSerializer {
 					nodeDefPcodeOp = highVariable.getRepresentative().getDef();
 				}
 
-				writer.name("type").value(label(chooseEmittedType(node, highVariable)));
+				// #250: scalar-op varnode must not carry an Array type.
+				// `type` labels are per-occurrence, not canonical for the
+				// varnode — the same varnode may emit as Array when it's a
+				// COPY output and as scalar when it's a PIECE input.
+				DataType emitted = chooseEmittedType(node, highVariable);
+				if (isScalarPcodeOp(pcodeOp.getOpcode())) {
+					emitted = demoteArrayIfMatching(
+						emitted, node.getSize(),
+						currentProgram.getDataTypeManager());
+				}
+				writer.name("type").value(label(emitted));
 				writer.name("size").value(node.getSize());
 			} else {
 				writer.name("size").value(node.getSize());
@@ -3075,7 +3151,14 @@ public class PcodeSerializer {
 
 			HighVariable outputHighVariable = variableOf(output);
 			if (outputHighVariable != null) {
-				writer.name("type").value(label(chooseEmittedType(output, outputHighVariable)));
+				// #250: scalar-op output must not carry an Array type.
+				DataType emitted = chooseEmittedType(output, outputHighVariable);
+				if (isScalarPcodeOp(pcodeOp.getOpcode())) {
+					emitted = demoteArrayIfMatching(
+						emitted, output.getSize(),
+						currentProgram.getDataTypeManager());
+				}
+				writer.name("type").value(label(emitted));
 				writer.name("size").value(output.getSize());
 			} else {
 				writer.name("size").value(output.getSize());

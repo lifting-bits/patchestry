@@ -2104,6 +2104,18 @@ namespace patchestry::ast {
         }
         auto location = SourceLocation(ctx.getSourceManager(), op.key);
 
+        // #250 guard: PIECE is scalar — Array-typed operands trip Sema.
+        if (input0_expr->getType()->isArrayType()
+            || input1_expr->getType()->isArrayType()
+            || type_it->second->isArrayType()) {
+            LOG(ERROR) << "PIECE: array-typed operand/result (issue #250). "
+                       << "input0='" << input0_expr->getType().getAsString()
+                       << "' input1='" << input1_expr->getType().getAsString()
+                       << "' op='" << type_it->second.getAsString()
+                       << "' key: " << op.key;
+            return {};
+        }
+
         // Record (struct/union) types cannot participate in bitwise shift/or
         // arithmetic.  When PIECE involves a record type, emit a simple
         // assignment of the low part (input1) to the output.
@@ -2266,6 +2278,16 @@ namespace patchestry::ast {
             LOG(ERROR) << "SUBPIECE: input varnode is not an Expr. key: " << op.key;
             return {};
         }
+
+        // #250 guard: SUBPIECE is scalar — Array-typed operands trip Sema.
+        if (expr->getType()->isArrayType() || op_type->isArrayType()) {
+            LOG(ERROR) << "SUBPIECE: array-typed operand/result (issue #250). "
+                       << "input='" << expr->getType().getAsString()
+                       << "' op='" << op_type.getAsString()
+                       << "' key: " << op.key;
+            return {};
+        }
+
         // Record (struct/union) types cannot participate in bitwise shift/mask
         // arithmetic.  When SUBPIECE operates on a record type, emit a
         // reinterpret-cast to the output type and skip the arithmetic path.
