@@ -2440,19 +2440,14 @@ namespace patchestry::ast {
             LOG(ERROR) << "SUBPIECE: output varnode is not an Expr. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
-        auto out_result = sema().CreateBuiltinBinOp(
-            op_location, clang::BO_Assign, out_expr, result_expr
-        );
-
-        if (out_result.isInvalid()) {
-            LOG(ERROR) << "SUBPIECE invalid output assignment. key: " << op.key;
-            return std::make_pair(nullptr, false);
-        }
-
-        auto *out_stmt = out_result.getAs< clang::Stmt >();
+        // Route through create_assign_operation for scalar → byte-array (#248).
+        // The helper picks the right lowering: BO_Assign for same-type scalar,
+        // element-wise copy for same-type array, pointer-cast partial store
+        // for scalar → array.  SUBPIECE outputs are scalar in practice, but
+        // the helper handles all shapes uniformly.
+        auto *out_stmt = create_assign_operation(ctx, result_expr, out_expr, op_location);
         if (!out_stmt) {
-            LOG(ERROR) << "SUBPIECE: output assignment yielded null Stmt. key: "
-                       << op.key;
+            LOG(ERROR) << "SUBPIECE invalid output assignment. key: " << op.key;
             return std::make_pair(nullptr, false);
         }
         return std::make_pair(out_stmt, merge_to_next);

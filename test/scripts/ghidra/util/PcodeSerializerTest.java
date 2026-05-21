@@ -318,6 +318,120 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
             charArr4, 1, dataTypeManager));
     }
 
+    // sizedSurrogate (#248): same-width for bytes > 0.
+
+    @Test
+    public void testSizedSurrogate_PreservesScalarForStandardWidths()
+            throws Exception {
+        for (int n : new int[] {1, 2, 4, 8}) {
+            DataType s = PcodeSerializer.sizedSurrogate(n, dataTypeManager);
+            assertNotNull(s);
+            assertFalse(s instanceof Array);
+            assertEquals(n, s.getLength());
+        }
+    }
+
+    @Test
+    public void testSizedSurrogate_FallsBackToUnsignedCharArrayForNonStandardWidth()
+            throws Exception {
+        // Width 17: no uintN in any DataTypeManager — forces the byte-array
+        // fallback path so the test name matches what is exercised.
+        DataType s = PcodeSerializer.sizedSurrogate(17, dataTypeManager);
+        assertNotNull(s);
+        assertEquals(17, s.getLength());
+        assertTrue(s instanceof Array,
+            "17-byte surrogate must be Array, got " + s.getClass());
+        assertTrue(((Array) s).getDataType() instanceof UnsignedCharDataType,
+            "element type must be unsigned char");
+    }
+
+    @Test
+    public void testSizedSurrogate_NonPositiveBytesReturnsNull()
+            throws Exception {
+        assertNull(PcodeSerializer.sizedSurrogate(0, dataTypeManager));
+        assertNull(PcodeSerializer.sizedSurrogate(-1, dataTypeManager));
+    }
+
+    // demoteUndefinedAggregate (#248): canonicalise undefined1-only umbrellas.
+
+    @Test
+    public void testDemoteUndefinedAggregate_DemotesUndefined1ArrayOfStandardWidth()
+            throws Exception {
+        DataType u1 = Undefined.getUndefinedDataType(1);
+        DataType u1Arr4 = new ArrayDataType(u1, 4, u1.getLength());
+        DataType demoted = PcodeSerializer.demoteUndefinedAggregate(
+            u1Arr4, 4, dataTypeManager);
+        assertEquals(4, demoted.getLength());
+        assertFalse(demoted instanceof Array);
+    }
+
+    @Test
+    public void testDemoteUndefinedAggregate_DemotesUndefined1ArrayOfNonStandardWidth()
+            throws Exception {
+        DataType u1 = Undefined.getUndefinedDataType(1);
+        DataType u1Arr5 = new ArrayDataType(u1, 5, u1.getLength());
+        DataType demoted = PcodeSerializer.demoteUndefinedAggregate(
+            u1Arr5, 5, dataTypeManager);
+        assertEquals(5, demoted.getLength());
+        // Either a scalar (uintN) or unsigned char[N] — both are valid
+        // canonicalisations, but the undefined1 element must be gone.
+        boolean undefined_remains = demoted instanceof Array
+            && ((Array) demoted).getDataType() instanceof Undefined;
+        assertFalse(undefined_remains,
+            "demotion must strip the undefined1 element type");
+    }
+
+    @Test
+    public void testDemoteUndefinedAggregate_DemotesStructOfUndefined1Fields()
+            throws Exception {
+        DataType u1 = Undefined.getUndefinedDataType(1);
+        StructureDataType s = new StructureDataType(
+            "struct_undefined5_synthetic", 0, dataTypeManager);
+        for (int i = 0; i < 5; ++i) s.add(u1, 1, "field_" + i, null);
+        DataType demoted = PcodeSerializer.demoteUndefinedAggregate(
+            s, 5, dataTypeManager);
+        assertEquals(5, demoted.getLength());
+        assertFalse(demoted instanceof Structure);
+    }
+
+    @Test
+    public void testDemoteUndefinedAggregate_LeavesUserStructWithNamedFieldsAlone()
+            throws Exception {
+        StructureDataType s = new StructureDataType(
+            "user_struct_with_uint_field", 0, dataTypeManager);
+        s.add(UnsignedIntegerDataType.dataType, 4, "count", null);
+        assertSame(s, PcodeSerializer.demoteUndefinedAggregate(
+            s, 4, dataTypeManager));
+    }
+
+    @Test
+    public void testDemoteUndefinedAggregate_LeavesUserCharArrayAlone()
+            throws Exception {
+        DataType charArr4 = new ArrayDataType(
+            CharDataType.dataType, 4, CharDataType.dataType.getLength());
+        assertSame(charArr4, PcodeSerializer.demoteUndefinedAggregate(
+            charArr4, 4, dataTypeManager));
+    }
+
+    @Test
+    public void testDemoteUndefinedAggregate_LeavesScalarUndefinedAlone()
+            throws Exception {
+        DataType u4 = Undefined.getUndefinedDataType(4);
+        assertSame(u4, PcodeSerializer.demoteUndefinedAggregate(
+            u4, 4, dataTypeManager));
+    }
+
+    @Test
+    public void testDemoteUndefinedAggregate_NullOrMismatchedWidth()
+            throws Exception {
+        assertNull(PcodeSerializer.demoteUndefinedAggregate(
+            null, 4, dataTypeManager));
+        DataType u1 = Undefined.getUndefinedDataType(1);
+        DataType u1Arr5 = new ArrayDataType(u1, 5, u1.getLength());
+        assertSame(u1Arr5, PcodeSerializer.demoteUndefinedAggregate(
+            u1Arr5, 4, dataTypeManager));
+    }
+
     // End-to-end detection on the real bloodlight firmware: the sanitizer
     // should report bl_usb__send_message's extraout_r1 candidate.
     //

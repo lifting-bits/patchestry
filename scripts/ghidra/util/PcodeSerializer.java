@@ -737,22 +737,27 @@ public class PcodeSerializer {
 			}
 		}
 
-		// Bit-width-faithful surrogate when no structural narrowing applies.
-		// Returns null when no DataType of exactly `bytes` bytes exists.
-		private static DataType sizedSurrogate(int bytes, DataTypeManager dtm) {
+		// Same-width surrogate for `bytes > 0`: scalar `Undefined<N>` for
+		// {1,2,4,8}, sized unsigned int when available, else `unsigned char[N]`.
+		// The byte-array fallback fires only when the DataTypeManager has no
+		// `uintN` for the requested width — rare in practice.  Such results
+		// still trip the C++ `isArrayType` guard in scalar-op handlers (#250)
+		// for a loud failure rather than silent corruption.
+		// Package-private for `PcodeSerializerTest`.
+		static DataType sizedSurrogate(int bytes, DataTypeManager dtm) {
 			if (bytes <= 0) {
 				return null;
 			}
 			if (bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8) {
 				return Undefined.getUndefinedDataType(bytes);
 			}
-			// AbstractIntegerDataType can return a nearest-match (or null)
-			// for non-power-of-two widths; verify length before accepting.
 			DataType wider = AbstractIntegerDataType.getUnsignedDataType(bytes, dtm);
 			if (wider != null && wider.getLength() == bytes) {
 				return wider;
 			}
-			return null;
+			return new ArrayDataType(
+				UnsignedCharDataType.dataType, bytes,
+				UnsignedCharDataType.dataType.getLength());
 		}
 
 		// Strictly scalar P-code opcodes — their varnodes must not carry
@@ -821,27 +826,103 @@ public class PcodeSerializer {
 			return surrogate != null ? surrogate : t;
 		}
 
+		// 1-byte `undefined`/`DefaultDataType` only — char/uint8 carry user intent.
+		private static boolean isUndefinedAtom(DataType t) {
+			if (t == null) {
+				return false;
+			}
+			DataType base = t;
+			for (int depth = 0;
+				 depth < TYPEDEF_PEEL_MAX_DEPTH && base instanceof TypeDef;
+				 ++depth) {
+				base = ((TypeDef) base).getBaseDataType();
+			}
+			if (base instanceof Undefined && base.getLength() == 1) {
+				return true;
+			}
+			return base instanceof DefaultDataType;
+		}
+
+		// Struct whose every field is an undefined atom or Array of atoms
+		// (matches `struct_undefinedN`).
+		private static boolean isUndefinedOnlyStructure(Structure s) {
+			if (s == null) {
+				return false;
+			}
+			DataTypeComponent[] comps = s.getComponents();
+			if (comps.length == 0) {
+				return false;
+			}
+			for (DataTypeComponent c : comps) {
+				DataType field = c.getDataType();
+				DataType fieldBase = field;
+				for (int depth = 0;
+					 depth < TYPEDEF_PEEL_MAX_DEPTH && fieldBase instanceof TypeDef;
+					 ++depth) {
+					fieldBase = ((TypeDef) fieldBase).getBaseDataType();
+				}
+				if (fieldBase instanceof Array) {
+					if (!isUndefinedAtom(((Array) fieldBase).getDataType())) {
+						return false;
+					}
+				} else if (!isUndefinedAtom(fieldBase)) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		// Demote `undefined<N>`-only aggregates to sizedSurrogate of matching
+		// width (#248).  Unconditional — these umbrellas have no semantic
+		// content at any op kind.
+		static DataType demoteUndefinedAggregate(
+				DataType t, int varBytes, DataTypeManager dtm) {
+			if (t == null || t.getLength() != varBytes) {
+				return t;
+			}
+			DataType base = t;
+			for (int depth = 0;
+				 depth < TYPEDEF_PEEL_MAX_DEPTH && base instanceof TypeDef;
+				 ++depth) {
+				base = ((TypeDef) base).getBaseDataType();
+			}
+			boolean trivial = false;
+			if (base instanceof Array) {
+				trivial = isUndefinedAtom(((Array) base).getDataType());
+			} else if (base instanceof Structure) {
+				trivial = isUndefinedOnlyStructure((Structure) base);
+			}
+			if (!trivial) {
+				return t;
+			}
+			DataType surrogate = sizedSurrogate(varBytes, dtm);
+			return surrogate != null ? surrogate : t;
+		}
+
 		// Pick the most precise non-null DataType to label a varnode with.
 		// Uses the declared type when widths match, else walks the layout
-		// for a same-width subcomponent, else a sized integer surrogate.
-		// Last-resort DefaultDataType (1 byte) keeps `size` authoritative
-		// rather than re-emitting the wrong-width declared type.
+		// for a same-width subcomponent, else a sized integer or byte-array
+		// surrogate.  Last-resort DefaultDataType keeps `size` authoritative
+		// for varBytes <= 0; sizedSurrogate is exact-width for varBytes > 0.
+		// Both same-width and narrowed returns route through
+		// demoteUndefinedAggregate to canonicalise umbrella types (#248).
 		private DataType chooseEmittedType(Varnode v, HighVariable hv) {
 			DataType chosen = (hv == null) ? null : hv.getDataType();
 			int varBytes = v.getSize();
+			DataTypeManager dtm = currentProgram.getDataTypeManager();
 			if (chosen != null && chosen.getLength() == varBytes) {
-				return chosen;
+				return demoteUndefinedAggregate(chosen, varBytes, dtm);
 			}
 			if (chosen != null) {
 				int offsetInContainer = offsetWithin(v, hv);
 				if (offsetInContainer >= 0) {
 					DataType narrowed = componentAt(chosen, offsetInContainer, varBytes);
 					if (narrowed != null && narrowed.getLength() == varBytes) {
-						return narrowed;
+						return demoteUndefinedAggregate(narrowed, varBytes, dtm);
 					}
 				}
 			}
-			DataType surrogate = sizedSurrogate(varBytes, currentProgram.getDataTypeManager());
+			DataType surrogate = sizedSurrogate(varBytes, dtm);
 			if (surrogate != null) {
 				return surrogate;
 			}
