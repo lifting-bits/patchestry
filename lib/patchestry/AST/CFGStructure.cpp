@@ -1636,7 +1636,8 @@ namespace patchestry::ast {
                     return false;
                 };
 
-                if (!f.original_label.empty() && merge_is_safe_goto_target()) {
+                if (!f.original_label.empty() && merge_is_safe_goto_target()
+                    && !TargetHasCollapsedGotoRefs(t.original_label)) {
                     // Form (a): disjunctive, goto F (merge).
                     // A.cond FALSE -> F directly, so outer = !a.cond.
                     // If T.succs[1] (taken) is F, t.cond TRUE -> F, so
@@ -1673,7 +1674,8 @@ namespace patchestry::ast {
                 // Form (b): original conjunctive, goto non-merge.
                 size_t goto_target = t_s0_is_merge ? t.succs[1] : t.succs[0];
                 auto &target_node = graph_.Node(goto_target);
-                if (!target_node.original_label.empty()) {
+                if (!target_node.original_label.empty()
+                    && !TargetHasCollapsedGotoRefs(t.original_label)) {
                     // succs[1] = taken (cond true).  If taken goes to merge,
                     // the goto fires when cond is false — negate.  Clone
                     // the raw branch_cond pointers so this merged condition
@@ -1752,7 +1754,8 @@ namespace patchestry::ast {
                     return false;
                 };
 
-                if (!t.original_label.empty() && merge_is_safe_goto_target()) {
+                if (!t.original_label.empty() && merge_is_safe_goto_target()
+                    && !TargetHasCollapsedGotoRefs(f.original_label)) {
                     // Form (a): disjunctive, goto T (merge).
                     // A.cond TRUE -> T directly, no negation on outer.
                     // If F.succs[1] (taken) is T, f.cond TRUE -> T, so
@@ -1786,7 +1789,8 @@ namespace patchestry::ast {
                 // Form (b): original conjunctive, goto non-merge.
                 size_t goto_target = f_s0_is_merge ? f.succs[1] : f.succs[0];
                 auto &target_node = graph_.Node(goto_target);
-                if (!target_node.original_label.empty()) {
+                if (!target_node.original_label.empty()
+                    && !TargetHasCollapsedGotoRefs(f.original_label)) {
                     // Outer condition: F is the not-taken arm, so body
                     // executes when c1 is false — negate outer.  Clone
                     // raw branch_cond pointers — see Case 1b.
