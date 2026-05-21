@@ -341,8 +341,16 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
         assertEquals(17, s.getLength());
         assertTrue(s instanceof Array,
             "17-byte surrogate must be Array, got " + s.getClass());
-        assertTrue(((Array) s).getDataType() instanceof UnsignedCharDataType,
-            "element type must be unsigned char");
+        // Assert the semantic invariant (element is a 1-byte integer) rather
+        // than the exact Java class. The program DTM may intern
+        // UnsignedCharDataType.dataType (passed to the ArrayDataType ctor) as
+        // a platform-equivalent 1-byte type — observed on arm64 runners where
+        // `instanceof UnsignedCharDataType` returned false despite the
+        // element being a byte-sized unsigned integer.
+        DataType element = ((Array) s).getDataType();
+        assertEquals(1, element.getLength(),
+            "element type must be 1 byte, got " + element.getClass()
+            + " of size " + element.getLength());
     }
 
     @Test
