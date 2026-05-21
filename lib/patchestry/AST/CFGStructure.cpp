@@ -1421,6 +1421,37 @@ namespace patchestry::ast {
         return true;
     }
 
+    // When `h.structured` is spliced into a loop body that will then be
+    // wrapped in SLabel(h.original_label, …), strip a leading
+    // SLabel(h.original_label, …) so the outer wrap uniquely owns the
+    // label.  Without this, an earlier if-rule's WrapWithPriorContent
+    // can leave SLabel(X, …) at the head of h.structured and the loop
+    // rule wraps another SLabel(X, …) outside the SWhile → CIRGen's
+    // mapBlockAddress fires on the second LabelStmt (#251).
+    //
+    // Handles both shapes:
+    //   - `[SLabel(X, body)]` (single-element wrap from
+    //     WrapWithPriorContent) → returns `body`.
+    //   - `[SLabel(X, body), other_stmt, …]` (multi-element with
+    //     leading SLabel) → returns `body + other_stmt + …`.
+    static std::vector< SNode * > StripLeadingHeaderLabel(
+        const std::vector< SNode * > &src, std::string_view header_label
+    ) {
+        if (src.empty() || header_label.empty() || src[0] == nullptr) {
+            return src;
+        }
+        auto *lbl = src[0]->dyn_cast<SLabel>();
+        if (!lbl || lbl->Name() != header_label) {
+            return src;
+        }
+        if (src.size() == 1) {
+            return lbl->BodyList();
+        }
+        std::vector< SNode * > result = lbl->BodyList();
+        result.insert(result.end(), src.begin() + 1, src.end());
+        return result;
+    }
+
     // WrapWithPriorContent — shared helper for all if/if-else rules
 
     std::vector< SNode * > CFGStructure::WrapWithPriorContent(
@@ -2330,7 +2361,10 @@ namespace patchestry::ast {
 
             std::vector<SNode *> inner_children;
             if (!h.structured.empty()) {
-                SeqAppend(inner_children, h.structured);
+                // Strip leading SLabel(h.original_label, …) — the outer
+                // SLabel wrap below will re-create it uniquely (#251).
+                SeqAppend(inner_children,
+                          StripLeadingHeaderLabel(h.structured, h.original_label));
             } else {
                 AppendStmts(factory_, inner_children, h.stmts);
             }
@@ -2391,7 +2425,10 @@ namespace patchestry::ast {
             // 1. Header content (re-execute each iteration).
             std::vector< SNode * > inner;
             if (!h.structured.empty()) {
-                SeqAppend(inner, h.structured);
+                // Strip leading SLabel(h.original_label, …) — the outer
+                // SLabel wrap below will re-create it uniquely (#251).
+                SeqAppend(inner,
+                          StripLeadingHeaderLabel(h.structured, h.original_label));
             } else {
                 AppendStmts(factory_, inner, h.stmts);
             }
@@ -2483,7 +2520,10 @@ namespace patchestry::ast {
         std::vector< SNode * > full_body;
         if (!h.structured.empty() || !h.stmts.empty()) {
             if (!h.structured.empty()) {
-                SeqAppend(full_body, h.structured);
+                // Strip leading SLabel(h.original_label, …) — the outer
+                // SLabel wrap below will re-create it uniquely (#251).
+                SeqAppend(full_body,
+                          StripLeadingHeaderLabel(h.structured, h.original_label));
             } else {
                 AppendStmts(factory_, full_body, h.stmts);
             }
@@ -2582,7 +2622,10 @@ namespace patchestry::ast {
         std::vector< SNode * > full_body;
         if (!h.structured.empty() || !h.stmts.empty()) {
             if (!h.structured.empty()) {
-                SeqAppend(full_body, h.structured);
+                // Strip leading SLabel(h.original_label, …) — the outer
+                // SLabel wrap below will re-create it uniquely (#251).
+                SeqAppend(full_body,
+                          StripLeadingHeaderLabel(h.structured, h.original_label));
             } else {
                 AppendStmts(factory_, full_body, h.stmts);
             }
