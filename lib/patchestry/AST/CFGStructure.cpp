@@ -1429,6 +1429,30 @@ namespace patchestry::ast {
     // if all the extra ones are goto edges or collapsed nodes, the
     // node is effectively single-predecessor for structuring purposes.
 
+    bool CFGStructure::TargetHasCollapsedGotoRefs(
+        std::string_view target_label) const
+    {
+        if (target_label.empty()) return false;
+        std::function<bool(const SNode *)> has_goto =
+            [&](const SNode *n) -> bool {
+                if (!n) return false;
+                if (auto *g = n->dyn_cast<SGoto>())
+                    return g->Target() == target_label;
+                bool found = false;
+                n->for_each_child([&](const SNode *c) {
+                    if (!found && has_goto(c)) found = true;
+                });
+                return found;
+            };
+        for (auto &nd : graph_.nodes) {
+            if (!nd.IsCollapsed()) continue;
+            for (auto *s : nd.structured) {
+                if (has_goto(s)) return true;
+            }
+        }
+        return false;
+    }
+
     bool CFGStructure::HasSoleRealPredecessor(size_t node_id,
                                                     size_t expected_pred) {
         auto &node = graph_.Node(node_id);

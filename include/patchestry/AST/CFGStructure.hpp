@@ -92,6 +92,15 @@ namespace patchestry::ast {
         /// of node_id is expected_pred.
         bool HasSoleRealPredecessor(size_t node_id, size_t expected_pred);
 
+        /// True iff any collapsed node's structured SNode tree holds an
+        /// SGoto targeting `target_label`.  Live-pred SGotos are NOT
+        /// counted (the existing succs/preds graph already encodes
+        /// them via HasSoleRealPredecessor).  Used by RuleBlockProperIf
+        /// Case 1b/2b to refuse forwarder absorption when an earlier
+        /// rule's collapsed tree would dangle after the forwarder's
+        /// SLabel is discarded (#252).
+        bool TargetHasCollapsedGotoRefs(std::string_view target_label) const;
+
         /// Wrap child SNode with node's prior content (structured or stmts)
         /// and label.  Used by all if/if-else/if-return rules.
         /// Returns the resulting SNode sequence.
