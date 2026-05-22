@@ -3171,6 +3171,12 @@ namespace patchestry::ast {
         constexpr size_t kMaxConditionalFallthroughBodyStmts = 8;
         constexpr size_t kMaxTerminalPrefixStmts             = 12;
         constexpr unsigned kMaxClonedTailUses                = 4;
+        // Tighter cap for a terminal block re-joined across a dead
+        // phantom label (see ExtractLocalLabelBlock).  Such a block is
+        // only visible to the clone passes because of the dead-label
+        // see-through, so duplicating it must stay a clear win — only
+        // genuinely small tails are worth copying into every goto site.
+        constexpr size_t kMaxDeadLabelSpannedClonedStmts     = 4;
 
         void AppendStmtSequence(clang::Stmt *stmt, std::vector< clang::Stmt * > &out) {
             if (!stmt) { return; }
@@ -3187,11 +3193,31 @@ namespace patchestry::ast {
             size_t begin           = 0;
             size_t end             = 0;
             std::vector< clang::Stmt * > stmts;
+            // True when extraction saw through one or more dead phantom
+            // labels to re-join the block (ExtractLocalLabelBlock with
+            // a non-null live_refs argument).
+            bool spanned_dead_label = false;
         };
 
+        // Extract the terminal-label block starting at `body[label_idx]`:
+        // the label's own statements plus every following sibling up to
+        // (but not including) the next label.
+        //
+        // When `live_refs` is supplied, a *dead* label encountered while
+        // scanning forward — one with zero goto references, e.g. a
+        // `__patchestry_scope_join_*` phantom left behind once its gotos
+        // were eliminated — does not stop the block.  Its body is
+        // reachable only by fallthrough from the statements above it, so
+        // unwrapping it (dropping the LabelStmt, keeping its sub-stmts)
+        // re-joins a terminal block that the phantom had split in two.
+        // Without this a block like `L: x = -1; <dead>: return x;` is
+        // truncated to `x = -1` — no terminator — and the terminal-label
+        // clone passes refuse it.  Live labels still stop the block: a
+        // real CFG entry point must not be absorbed.
         bool ExtractLocalLabelBlock(
             clang::ASTContext &ctx, const std::vector< clang::Stmt * > &body, size_t label_idx,
-            LocalLabelBlock &block
+            LocalLabelBlock &block,
+            const std::unordered_map< clang::LabelDecl *, unsigned > *live_refs = nullptr
         ) {
             if (label_idx >= body.size()) { return false; }
 
@@ -3206,9 +3232,25 @@ namespace patchestry::ast {
             block.begin = label_idx;
             AppendStmtSequence(entry, block.stmts);
 
+            auto label_is_dead = [&](clang::LabelDecl *d) {
+                if (!live_refs) { return false; }
+                auto it = live_refs->find(d);
+                return it == live_refs->end() || it->second == 0;
+            };
+
             size_t end = label_idx + 1;
             while (end < body.size()) {
-                if (LeadingLabelDecl(body[end])) { break; }
+                if (clang::LabelDecl *next = LeadingLabelDecl(body[end])) {
+                    // Only see through a *bare* dead LabelStmt — a
+                    // compound-wrapped label would need deeper
+                    // restructuring; treat it as a hard stop.
+                    auto *bare = llvm::dyn_cast< clang::LabelStmt >(body[end]);
+                    if (!bare || !label_is_dead(next)) { break; }
+                    AppendStmtSequence(bare->getSubStmt(), block.stmts);
+                    block.spanned_dead_label = true;
+                    ++end;
+                    continue;
+                }
                 block.stmts.push_back(body[end]);
                 ++end;
             }
@@ -3944,7 +3986,7 @@ namespace patchestry::ast {
                     if (!LabelHasNoFallthroughPredecessor(body, label_idx)) { continue; }
 
                     LocalLabelBlock block;
-                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, block)) { continue; }
+                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, block, &refs)) { continue; }
                     if (block.stmts.size() > kMaxTerminalPrefixStmts) { continue; }
                     if (!SeqEndsWithTerminator(ctx, block.stmts)) { continue; }
 
@@ -4339,8 +4381,13 @@ namespace patchestry::ast {
                 if (LabelHasNoFallthroughPredecessor(body, label_idx)) { continue; }
 
                 LocalLabelBlock block;
-                if (!ExtractLocalLabelBlock(ctx, body, label_idx, block)) { continue; }
+                if (!ExtractLocalLabelBlock(ctx, body, label_idx, block, &refs)) { continue; }
                 if (block.stmts.size() > kMaxTerminalPrefixStmts) { continue; }
+                if (block.spanned_dead_label
+                    && block.stmts.size() > kMaxDeadLabelSpannedClonedStmts)
+                {
+                    continue;
+                }
                 if (!SeqEndsWithTerminator(ctx, block.stmts)) { continue; }
                 if (CountAllGotos(StmtFromSeq(ctx, block.stmts)) != 0) { continue; }
                 if (SeqHasUnsafeStructure(
@@ -4428,8 +4475,13 @@ namespace patchestry::ast {
                     if (!LabelHasNoFallthroughPredecessor(body, label_idx)) { continue; }
 
                     LocalLabelBlock block;
-                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, block)) { continue; }
+                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, block, &refs)) { continue; }
                     if (block.stmts.size() > kMaxTerminalPrefixStmts) { continue; }
+                    if (block.spanned_dead_label
+                        && block.stmts.size() > kMaxDeadLabelSpannedClonedStmts)
+                    {
+                        continue;
+                    }
                     if (!SeqEndsWithTerminator(ctx, block.stmts)) { continue; }
                     if (CountAllGotos(StmtFromSeq(ctx, block.stmts)) != 0) { continue; }
                     if (SeqHasUnsafeStructure(
