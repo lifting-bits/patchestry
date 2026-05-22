@@ -948,17 +948,36 @@ namespace patchestry::ast {
                 // Check if both reach a common descendant — if so,
                 // they're fan-out paths to a shared merge point.
                 // Find common target by checking 1-hop successors.
+                //
+                // A node is "stale" while IdentifyInternal is mid-collapse
+                // if it is `rep` or a collapse-set member: their succs[]
+                // are not rewired until the "Install edges" step below,
+                // and they are the loop being formed — never a valid
+                // downstream merge point.  first_succ must neither read
+                // their succs[] nor return them as a target, or it drops
+                // a loop's real exit edge (same hazard as issue #259).
+                auto is_stale = [&](size_t nid) {
+                    return nid == rep || idset.count(nid) != 0;
+                };
                 auto first_succ = [&](size_t nid) -> size_t {
                     auto &n = nodes[nid];
                     if (n.IsCollapsed() || n.succs.empty()) return CNode::kNone;
-                    if (n.succs.size() == 1) return n.succs[0];
+                    if (n.succs.size() == 1) {
+                        return is_stale(n.succs[0]) ? CNode::kNone : n.succs[0];
+                    }
                     // For conditionals, check if both branches go to same target
                     if (n.succs.size() == 2) {
+                        // Bail if either branch is `rep`/collapse-set:
+                        // their succs[] are stale mid-rewrite (#259).
+                        if (is_stale(n.succs[0]) || is_stale(n.succs[1])) {
+                            return CNode::kNone;
+                        }
                         auto &s0 = nodes[n.succs[0]];
                         auto &s1 = nodes[n.succs[1]];
                         if (!s0.IsCollapsed() && s0.succs.size() == 1
                             && !s1.IsCollapsed() && s1.succs.size() == 1
-                            && s0.succs[0] == s1.succs[0]) {
+                            && s0.succs[0] == s1.succs[0]
+                            && !is_stale(s0.succs[0])) {
                             return s0.succs[0];
                         }
                     }
