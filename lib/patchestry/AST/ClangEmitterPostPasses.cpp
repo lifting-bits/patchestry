@@ -2454,19 +2454,76 @@ namespace patchestry::ast {
             }
 
             if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                std::vector< clang::Stmt * > body(
+                    compound->body_begin(), compound->body_end()
+                );
                 std::vector< clang::Stmt * > children;
-                for (auto *child : compound->body()) {
+                for (size_t k = 0; k < body.size(); ++k) {
+                    // A target label sitting directly in this compound owns
+                    // its sub-stmt PLUS every following non-label sibling up
+                    // to the next label — that whole run is its block.
+                    // CleanupStmtTree flattens a label's CompoundStmt
+                    // sub-stmt into sibling position, so hoisting only
+                    // getSubStmt() would strand the rest of the block after
+                    // the injected goto, where it dies as unreachable code.
+                    // Gather the whole run so the hoist carries every
+                    // statement.
+                    auto *lbl = llvm::dyn_cast< clang::LabelStmt >(body[k]);
+                    if (under_structured_scope && lbl
+                        && targets.contains(lbl->getDecl()))
+                    {
+                        std::vector< clang::Stmt * > run;
+                        if (auto *sub_c = llvm::dyn_cast_or_null< clang::CompoundStmt >(
+                                lbl->getSubStmt()
+                            ))
+                        {
+                            for (clang::Stmt *s : sub_c->body()) { run.push_back(s); }
+                        } else if (lbl->getSubStmt()) {
+                            run.push_back(lbl->getSubStmt());
+                        }
+                        size_t m = k + 1;
+                        while (m < body.size()
+                               && !llvm::isa< clang::LabelStmt >(body[m]))
+                        {
+                            run.push_back(body[m]);
+                            ++m;
+                        }
+
+                        bool run_safe = true;
+                        for (clang::Stmt *s : run) {
+                            if (!HoistedLabelBodyIsSafe(s)) {
+                                run_safe = false;
+                                break;
+                            }
+                        }
+                        if (run_safe) {
+                            extracted.decl = lbl->getDecl();
+                            extracted.body =
+                                run.empty()
+                                    ? static_cast< clang::Stmt * >(
+                                          new (ctx) clang::NullStmt(VirtualLoc(ctx))
+                                      )
+                                : run.size() == 1
+                                    ? run.front()
+                                    : detail::MakeCompound(ctx, run);
+                            changed = true;
+                            children.push_back(new (ctx) clang::GotoStmt(
+                                extracted.decl, VirtualLoc(ctx), VirtualLoc(ctx)
+                            ));
+                            for (size_t r = m; r < body.size(); ++r) {
+                                children.push_back(body[r]);
+                            }
+                            break;
+                        }
+                    }
+
                     children.push_back(ExtractFirstNestedTargetLabel(
-                        ctx, child, targets, under_structured_scope, extracted, changed
+                        ctx, body[k], targets, under_structured_scope, extracted,
+                        changed
                     ));
                     if (changed) {
-                        for (auto it = std::next(
-                                 compound->body_begin(),
-                                 static_cast< ptrdiff_t >(children.size())
-                             );
-                             it != compound->body_end(); ++it)
-                        {
-                            children.push_back(*it);
+                        for (size_t r = k + 1; r < body.size(); ++r) {
+                            children.push_back(body[r]);
                         }
                         break;
                     }
