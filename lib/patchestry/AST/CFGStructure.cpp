@@ -1429,6 +1429,36 @@ namespace patchestry::ast {
     // if all the extra ones are goto edges or collapsed nodes, the
     // node is effectively single-predecessor for structuring purposes.
 
+    // Plain recursive helper — avoids the per-call heap allocation and
+    // indirect calls of a std::function recursive lambda.  SNode trees
+    // are acyclic (as the other SNode walkers in this file assume), so
+    // no visited set is needed.
+    static bool SNodeSubtreeHasGotoTo(
+        const SNode *n, std::string_view target_label)
+    {
+        if (!n) return false;
+        if (auto *g = n->dyn_cast<SGoto>())
+            return g->Target() == target_label;
+        bool found = false;
+        n->for_each_child([&](const SNode *c) {
+            if (!found && SNodeSubtreeHasGotoTo(c, target_label)) found = true;
+        });
+        return found;
+    }
+
+    bool CFGStructure::TargetHasCollapsedGotoRefs(
+        std::string_view target_label) const
+    {
+        if (target_label.empty()) return false;
+        for (auto &nd : graph_.nodes) {
+            if (!nd.IsCollapsed()) continue;
+            for (auto *s : nd.structured) {
+                if (SNodeSubtreeHasGotoTo(s, target_label)) return true;
+            }
+        }
+        return false;
+    }
+
     bool CFGStructure::HasSoleRealPredecessor(size_t node_id,
                                                     size_t expected_pred) {
         auto &node = graph_.Node(node_id);
@@ -1612,7 +1642,8 @@ namespace patchestry::ast {
                     return false;
                 };
 
-                if (!f.original_label.empty() && merge_is_safe_goto_target()) {
+                if (!f.original_label.empty() && merge_is_safe_goto_target()
+                    && !TargetHasCollapsedGotoRefs(t.original_label)) {
                     // Form (a): disjunctive, goto F (merge).
                     // A.cond FALSE -> F directly, so outer = !a.cond.
                     // If T.succs[1] (taken) is F, t.cond TRUE -> F, so
@@ -1649,7 +1680,8 @@ namespace patchestry::ast {
                 // Form (b): original conjunctive, goto non-merge.
                 size_t goto_target = t_s0_is_merge ? t.succs[1] : t.succs[0];
                 auto &target_node = graph_.Node(goto_target);
-                if (!target_node.original_label.empty()) {
+                if (!target_node.original_label.empty()
+                    && !TargetHasCollapsedGotoRefs(t.original_label)) {
                     // succs[1] = taken (cond true).  If taken goes to merge,
                     // the goto fires when cond is false — negate.  Clone
                     // the raw branch_cond pointers so this merged condition
@@ -1728,7 +1760,8 @@ namespace patchestry::ast {
                     return false;
                 };
 
-                if (!t.original_label.empty() && merge_is_safe_goto_target()) {
+                if (!t.original_label.empty() && merge_is_safe_goto_target()
+                    && !TargetHasCollapsedGotoRefs(f.original_label)) {
                     // Form (a): disjunctive, goto T (merge).
                     // A.cond TRUE -> T directly, no negation on outer.
                     // If F.succs[1] (taken) is T, f.cond TRUE -> T, so
@@ -1762,7 +1795,8 @@ namespace patchestry::ast {
                 // Form (b): original conjunctive, goto non-merge.
                 size_t goto_target = f_s0_is_merge ? f.succs[1] : f.succs[0];
                 auto &target_node = graph_.Node(goto_target);
-                if (!target_node.original_label.empty()) {
+                if (!target_node.original_label.empty()
+                    && !TargetHasCollapsedGotoRefs(f.original_label)) {
                     // Outer condition: F is the not-taken arm, so body
                     // executes when c1 is false — negate outer.  Clone
                     // raw branch_cond pointers — see Case 1b.
@@ -8489,7 +8523,8 @@ namespace patchestry::ast {
             }
         }
 
-        void VerifyGotoLabelPairing(std::vector<SNode *> &root) {
+        void VerifyGotoLabelPairing(std::vector<SNode *> &root,
+                                    const char *caller_tag) {
 #ifndef NDEBUG
             std::unordered_set<std::string_view> labels;
             CollectAllLabelNames(root, labels);
@@ -8497,7 +8532,7 @@ namespace patchestry::ast {
             CountGotoRefs(root, refs);
             for (auto &[name, _] : refs) {
                 if (!labels.contains(name)) {
-                    LOG(ERROR) << "DuplicateSwitchCaseTargets: dangling "
+                    LOG(ERROR) << caller_tag << ": dangling "
                                << "goto target '" << std::string(name)
                                << "' after duplication\n";
                     assert(false && "dangling goto target after duplication");
@@ -8505,6 +8540,7 @@ namespace patchestry::ast {
             }
 #else
             (void)root;
+            (void)caller_tag;
 #endif
         }
 
@@ -8525,7 +8561,7 @@ namespace patchestry::ast {
                 break;
             any_changed = true;
         }
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "FoldGuardedFallthroughTargets");
         return any_changed;
     }
 
@@ -8545,7 +8581,7 @@ namespace patchestry::ast {
                 break;
             any_changed = true;
         }
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "RepairCrossScopeLabelEntries");
         return any_changed;
     }
 
@@ -8565,7 +8601,7 @@ namespace patchestry::ast {
             if (!did) break;
             any_changed = true;
         }
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateSwitchCaseTargets");
         return any_changed;
     }
 
@@ -8584,7 +8620,7 @@ namespace patchestry::ast {
                 break;
             any_changed = true;
         }
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "FoldSwitchLocalCaseTargets");
         return any_changed;
     }
 
@@ -8607,7 +8643,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateSmallTerminatingTargets");
         return any_changed;
     }
 
@@ -8627,7 +8663,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateSmallEpilogueTargets");
         return any_changed;
     }
 
@@ -8644,7 +8680,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateSwitchFallthroughTargets");
         return any_changed;
     }
 
@@ -8661,7 +8697,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateLoopContinueTargets");
         return any_changed;
     }
 
@@ -8683,7 +8719,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateStackGuardReturnTargets");
         return any_changed;
     }
 
@@ -8703,7 +8739,7 @@ namespace patchestry::ast {
             any_changed = true;
         }
 
-        if (any_changed) VerifyGotoLabelPairing(root);
+        if (any_changed) VerifyGotoLabelPairing(root, "DuplicateCleanupReturnTargets");
         return any_changed;
     }
 
