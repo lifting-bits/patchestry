@@ -2515,6 +2515,29 @@ namespace patchestry::ast {
                             }
                             break;
                         }
+
+                        // The run is not safely hoistable as a unit (a
+                        // following sibling is a goto/break/loop/decl/...).
+                        // Keep the label in place and recurse only into its
+                        // body for deeper targets — do NOT fall through to
+                        // the generic recursion below, which would re-enter
+                        // the LabelStmt case, extract only getSubStmt(), and
+                        // strand the unsafe tail after the injected goto
+                        // (the statement loss the run-gathering avoids).
+                        if (lbl->getSubStmt()) {
+                            lbl->setSubStmt(ExtractFirstNestedTargetLabel(
+                                ctx, lbl->getSubStmt(), targets,
+                                under_structured_scope, extracted, changed
+                            ));
+                        }
+                        children.push_back(lbl);
+                        if (changed) {
+                            for (size_t r = k + 1; r < body.size(); ++r) {
+                                children.push_back(body[r]);
+                            }
+                            break;
+                        }
+                        continue;
                     }
 
                     children.push_back(ExtractFirstNestedTargetLabel(
