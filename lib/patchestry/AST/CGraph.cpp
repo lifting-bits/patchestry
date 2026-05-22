@@ -884,6 +884,14 @@ namespace patchestry::ast {
                 for (size_t step = 0; step < limit; ++step) {
                     auto &cn = nodes[cur];
                     if (cn.IsCollapsed()) break;
+                    // Never reason through the node being formed or any
+                    // member of the collapse set: their succs[] are
+                    // mid-rewrite and still carry pre-collapse edges.  A
+                    // walk that crosses a loop back-edge into `rep` would
+                    // read a stale successor and wrongly conclude two
+                    // external exits are sequential — dropping a loop's
+                    // real exit edge (issue #259).
+                    if (cur == rep || idset.count(cur)) break;
                     for (size_t s : cn.succs) {
                         if (s == target) return true;
                     }
@@ -898,8 +906,10 @@ namespace patchestry::ast {
                         bool all_reach = true;
                         for (size_t s : cn.succs) {
                             bool found = (s == target);
-                            if (!found) {
-                                // One-hop check from each branch
+                            if (!found && s != rep && idset.count(s) == 0) {
+                                // One-hop check from each branch.  Skip
+                                // `rep` / collapse-set members — their
+                                // succs[] are stale mid-rewrite (#259).
                                 auto &sn = nodes[s];
                                 if (!sn.IsCollapsed()) {
                                     for (size_t ss : sn.succs) {
