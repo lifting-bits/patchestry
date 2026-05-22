@@ -1812,10 +1812,12 @@ namespace patchestry::ast {
                 {
                     size_t merge_target =
                         f_s0_is_merge ? f.succs[1] : f.succs[0];
+                    // T is guaranteed non-collapsed by the early guard
+                    // at the top of RuleBlockProperIf (line ~1574),
+                    // so the loop-header check only needs the head match.
                     bool t_is_loop_header = false;
                     for (auto *lb : loop_order_) {
-                        if (lb->head == t_id
-                            && !graph_.Node(t_id).IsCollapsed()) {
+                        if (lb->head == t_id) {
                             t_is_loop_header = true;
                             break;
                         }
