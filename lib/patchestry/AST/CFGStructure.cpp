@@ -1429,25 +1429,31 @@ namespace patchestry::ast {
     // if all the extra ones are goto edges or collapsed nodes, the
     // node is effectively single-predecessor for structuring purposes.
 
+    // Plain recursive helper — avoids the per-call heap allocation and
+    // indirect calls of a std::function recursive lambda.  SNode trees
+    // are acyclic (as the other SNode walkers in this file assume), so
+    // no visited set is needed.
+    static bool SNodeSubtreeHasGotoTo(
+        const SNode *n, std::string_view target_label)
+    {
+        if (!n) return false;
+        if (auto *g = n->dyn_cast<SGoto>())
+            return g->Target() == target_label;
+        bool found = false;
+        n->for_each_child([&](const SNode *c) {
+            if (!found && SNodeSubtreeHasGotoTo(c, target_label)) found = true;
+        });
+        return found;
+    }
+
     bool CFGStructure::TargetHasCollapsedGotoRefs(
         std::string_view target_label) const
     {
         if (target_label.empty()) return false;
-        std::function<bool(const SNode *)> has_goto =
-            [&](const SNode *n) -> bool {
-                if (!n) return false;
-                if (auto *g = n->dyn_cast<SGoto>())
-                    return g->Target() == target_label;
-                bool found = false;
-                n->for_each_child([&](const SNode *c) {
-                    if (!found && has_goto(c)) found = true;
-                });
-                return found;
-            };
         for (auto &nd : graph_.nodes) {
             if (!nd.IsCollapsed()) continue;
             for (auto *s : nd.structured) {
-                if (has_goto(s)) return true;
+                if (SNodeSubtreeHasGotoTo(s, target_label)) return true;
             }
         }
         return false;
