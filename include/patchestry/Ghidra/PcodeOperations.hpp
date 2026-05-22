@@ -226,6 +226,15 @@ namespace patchestry::ghidra {
         std::string end;
     };
 
+    // Switch arm.  Fall-through groups ("case 1: case 2:" → {1, 2}).
+    // Default arms have empty case_values, is_default=true.
+    struct SwitchArm
+    {
+        std::vector< std::int64_t > case_values;
+        bool is_default = false;
+        std::string target;
+    };
+
     struct Function
     {
         std::string name;         // original (possibly mangled) symbol name
@@ -238,6 +247,9 @@ namespace patchestry::ghidra {
         // Optional schema fields; empty on older serializer outputs.
         std::string entry_point;
         std::vector< AddressRange > address_ranges;
+
+        // BRANCHIND op label → arms.  Empty on older outputs.
+        std::unordered_map< std::string, std::vector< SwitchArm > > switch_hints;
     };
 
     struct Program

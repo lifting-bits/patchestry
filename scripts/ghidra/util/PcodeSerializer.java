@@ -82,6 +82,10 @@ import ghidra.program.model.pcode.HighSymbol;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.LocalSymbolMap;
 import ghidra.program.model.pcode.PartialUnion;
+import ghidra.app.decompiler.ClangCaseToken;
+import ghidra.app.decompiler.ClangNode;
+import ghidra.app.decompiler.ClangTokenGroup;
+
 import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
@@ -246,6 +250,9 @@ public class PcodeSerializer {
 		// Jump table index for the current function, keyed by SequenceNumber.
 		// Built once when currentFunction is set and cleared when it is reset.
 		private Map<SequenceNumber, JumpTable> jumpTableIndex;
+
+		// Reached by op serializers (Tier 0b) for getCCodeMarkup().
+		private DecompileResults currentDecompResults;
 		
 		// We invent an entry block for each `HighFunction` to be serialized.
 		// The operations within this entry block are custom `CALLOTHER`s, that
@@ -415,6 +422,7 @@ public class PcodeSerializer {
 			this.typesToSerialize = new ArrayList<>();
 			this.currentFunction = null;
 			this.currentBlock = null;
+			this.currentDecompResults = null;
 			this.jumpTableIndex = null;
 			this.nextSeqNum = 0;
 			this.entryBlock = new ArrayList<>();
@@ -3893,48 +3901,120 @@ public class PcodeSerializer {
 			writer.name("fallback_block").value(defaultBlock);
 		}
 
+		// jt may be null — the JumpTable-free recovery paths still fire.
 		JumpTable jt = jumpTableIndex.get(pcodeOp.getSeqnum());
-		Varnode discriminant = (jt != null) ? traceSwitchDiscriminant(pcodeOp.getInput(0)) : null;
-		if (jt != null && discriminant != null) {
-			serializeSwitchCases(pcodeOp, discriminant, jt, n);
+		Varnode discriminant = traceSwitchDiscriminant(pcodeOp.getInput(0));
+		if (discriminant != null) {
+			serializeSwitchCases(pcodeOp, discriminant, jt, n, defaultBlock);
 		}
 	}
 
 
-	// Emits "switch_input" and "switch_cases" JSON fields for a resolved BRANCHIND.
-	// Case values are recovered using a 3-tier strategy:
-	//   Tier 0a – decompiler's own integer label values from JumpTable API (most authoritative).
-	//   Tier 0  – Ghidra's own "caseD_HEX" block labels.
-	//   Tier 1  – block-entry P-Code ops that compare the discriminant against a constant.
-	// Both fields are omitted entirely when no tier produces a complete case map,
-	// allowing the C++ side to fall back to successor_blocks-based dispatch.
+	// Collects {target_block → case_value} from ClangCaseToken nodes whose
+	// getSwitchOp() matches branchOp.  Last-value-wins for fall-through —
+	// the lossless grouping lives in switch_hints.
+	private Map<String,Long> recoverCaseValuesFromMarkup(PcodeOp branchOp) {
+		if (currentDecompResults == null) {
+			return null;
+		}
+		ClangTokenGroup markup = currentDecompResults.getCCodeMarkup();
+		if (markup == null) {
+			return null;
+		}
+		java.util.ArrayList<ClangNode> flat = new java.util.ArrayList<>();
+		markup.flatten(flat);
+
+		Map<String,Long> caseMap = new HashMap<>();
+		for (ClangNode node : flat) {
+			if (!(node instanceof ClangCaseToken)) {
+				continue;
+			}
+			ClangCaseToken caseTok = (ClangCaseToken) node;
+			if (caseTok.getSwitchOp() != branchOp) {
+				continue;
+			}
+			PcodeOp caseStartOp = caseTok.getPcodeOp();
+			if (caseStartOp == null) {
+				continue;
+			}
+			PcodeBlockBasic target = caseStartOp.getParent();
+			if (target == null) {
+				continue;
+			}
+			Scalar scalar = caseTok.getScalar();
+			if (scalar == null) {
+				continue;
+			}
+			try {
+				caseMap.put(label(target), scalar.getValue());
+			} catch (Exception e) {
+				// non-fatal — other recovery paths will cover this arm
+			}
+		}
+		return caseMap;
+	}
+
+	// Recovers switch case values from four sources in order:
+	//   1. JumpTable.getLabelValues()    (when jt != null)
+	//   2. ClangCaseToken markup         (catches switches with no JumpTable)
+	//   3. caseD_HEX block label symbols
+	//   4. INT_EQUAL scan at each arm's entry
+	// First source returning a complete (or n-1 + fallbackBlock) map wins.
+	// All paths omit switch_cases entirely on failure, letting the consumer
+	// fall back to successor_blocks-based dispatch.
 	private void serializeSwitchCases(PcodeOp pcodeOp, Varnode discriminant,
-			JumpTable jt, int n) throws Exception {
+			JumpTable jt, int n, String fallbackBlock) throws Exception {
 
 		Map<String,Long> caseMap = new HashMap<>();
 		boolean caseMapOk = false;
 
-		// Tier 0a: use the decompiler's own integer label values — most authoritative source.
-		// getLabelValues()[i] and getCases()[i] are aligned: the i-th label routes to the
-		// i-th case address.
-		Integer[] labels = jt.getLabelValues();
-		Address[] cases  = jt.getCases();
-		if (labels != null && cases != null && labels.length > 0
-				&& labels.length == cases.length) {
-			for (int i = 0; i < labels.length; i++) {
-				for (int j = 0; j < n; j++) {
-					if (currentBlock.getOut(j).getStart().equals(cases[i])) {
-						caseMap.put(label(currentBlock.getOut(j)), (long)(int) labels[i]);
+		// (1) JumpTable.getLabelValues() — authoritative when jt exists.
+		if (jt != null) {
+			Integer[] labels = jt.getLabelValues();
+			Address[] cases  = jt.getCases();
+			if (labels != null && cases != null && labels.length > 0
+					&& labels.length == cases.length) {
+				for (int i = 0; i < labels.length; i++) {
+					for (int j = 0; j < n; j++) {
+						if (currentBlock.getOut(j).getStart().equals(cases[i])) {
+							caseMap.put(label(currentBlock.getOut(j)), (long)(int) labels[i]);
+							break;
+						}
+					}
+				}
+				caseMapOk = !caseMap.isEmpty();
+			}
+		}
+
+		// (2) ClangCaseToken markup.  Accept full coverage, or n-1
+		// with the missing successor being fallbackBlock — default arms
+		// have no ClangCaseToken so the consumer reads fallback_block.
+		if (!caseMapOk) {
+			caseMap = recoverCaseValuesFromMarkup(pcodeOp);
+			if (caseMap == null) {
+				caseMap = new HashMap<>();
+			} else if (caseMap.size() == n) {
+				caseMapOk = true;
+			} else if (caseMap.size() == n - 1 && fallbackBlock != null) {
+				// Verify the single uncovered successor is the default arm.
+				boolean missingIsDefault = false;
+				for (int i = 0; i < n; i++) {
+					String succLabel = label(currentBlock.getOut(i));
+					if (!caseMap.containsKey(succLabel)) {
+						missingIsDefault = succLabel.equals(fallbackBlock);
 						break;
 					}
 				}
+				caseMapOk = missingIsDefault;
+				if (!caseMapOk) {
+					caseMap = new HashMap<>();
+				}
+			} else {
+				caseMap = new HashMap<>();
 			}
-			caseMapOk = !caseMap.isEmpty();
 		}
 
-		// Tier 0: read Ghidra's own "caseD_HEX" block labels — reliable for any
-		// compiled switch since Ghidra's analysis stores the correct case values
-		// in the symbol name.
+		// (3) Ghidra's "caseD_HEX" block label symbols.
 		if (!caseMapOk) {
 			caseMap = new HashMap<>();
 			caseMapOk = true;
@@ -3949,9 +4029,8 @@ public class PcodeSerializer {
 			}
 		}
 
-		// Tier 1: scan first P-Code ops at each case-target block for a
-		// comparison of the discriminant against a constant.  Handles
-		// computed-goto dispatch where blocks start with INT_EQUAL etc.
+		// (4) INT_EQUAL(disc, const) at each arm's entry — covers
+		// computed-goto dispatch.
 		if (!caseMapOk) {
 			caseMap = new HashMap<>();
 			caseMapOk = true;
@@ -3970,9 +4049,12 @@ public class PcodeSerializer {
 			}
 		}
 
-		// If no tier recovered real case values, or the map is partial,
-		// emit nothing — the C++ side will fall back to successor_blocks (Priority 2).
-		if (!caseMapOk || caseMap.size() != n) {
+		// Partial map only acceptable when the missing successor is the
+		// default arm (consumer reads fallback_block separately).
+		boolean allowPartialForDefault = caseMapOk
+			&& caseMap.size() == n - 1
+			&& fallbackBlock != null;
+		if (!caseMapOk || (caseMap.size() != n && !allowPartialForDefault)) {
 			return;
 		}
 
@@ -4656,7 +4738,7 @@ public class PcodeSerializer {
 		// fully lift, i.e. visit all the high p-code.
 		void serializeFunction(
 				HighFunction highFunction, Function functionToSerialize,
-				boolean shouldVisitPcode) throws Exception {
+				boolean shouldVisitPcode, DecompileResults decompResults) throws Exception {
 			
 			temporaryAddressMap.clear();
 			oldLocalsMap.clear();
@@ -4741,6 +4823,8 @@ public class PcodeSerializer {
 						}
 					}
 
+					currentDecompResults = decompResults;
+
 					writer.name("basic_blocks").beginObject();
 					for (PcodeBlockBasic basicBlock : highFunction.getBasicBlocks()) {
 						if (firstPcodeBasicBlock == null) {
@@ -4762,6 +4846,7 @@ public class PcodeSerializer {
 					writer.endObject();  // End of `basic_blocks`.
 					currentFunction = null;
 					jumpTableIndex = null;
+					currentDecompResults = null;
 					
 					if (entryLabel != null) {
 						writer.name("entry_block").value(entryLabel);
@@ -4769,6 +4854,8 @@ public class PcodeSerializer {
 					} else if (firstPcodeBasicBlock != null) {
 						writer.name("entry_block").value(label(firstPcodeBasicBlock));
 					}
+
+					serializeSwitchHints(decompResults, highFunction);
 				}
 			} else {
 				writer.name("type").beginObject();
@@ -4979,6 +5066,107 @@ public class PcodeSerializer {
 		// NOTE(pag): As we serialize functions, we might discover references
 		//			  to other functions, causing `functions` will grow over
 		// 			  time.
+		// Function-level {BRANCHIND label → [arms]} map of switch arms
+		// recovered from ClangCaseToken nodes.  Fall-through values
+		// ("case 1: case 2:") group into one arm.  Default arms (no
+		// ClangCaseToken) are emitted with empty case_values, default=true.
+		void serializeSwitchHints(DecompileResults decompResults,
+				HighFunction hf) throws Exception {
+			writer.name("switch_hints").beginObject();
+			if (decompResults == null || hf == null) {
+				writer.endObject();
+				return;
+			}
+			ClangTokenGroup markup = decompResults.getCCodeMarkup();
+			if (markup == null) {
+				writer.endObject();
+				return;
+			}
+
+			java.util.ArrayList<ClangNode> flat = new java.util.ArrayList<>();
+			markup.flatten(flat);
+
+			// LinkedHashMap for reproducible JSON ordering.
+			Map<PcodeOp, java.util.LinkedHashMap<PcodeBlockBasic,
+					java.util.ArrayList<Long>>> bySwitchByTarget =
+				new java.util.LinkedHashMap<>();
+
+			for (ClangNode node : flat) {
+				if (!(node instanceof ClangCaseToken)) {
+					continue;
+				}
+				ClangCaseToken caseTok = (ClangCaseToken) node;
+				PcodeOp switchOp = caseTok.getSwitchOp();
+				PcodeOp caseStartOp = caseTok.getPcodeOp();
+				if (switchOp == null || caseStartOp == null) {
+					continue;
+				}
+				PcodeBlockBasic target = caseStartOp.getParent();
+				if (target == null) {
+					continue;
+				}
+
+				// Null on pointer-typed discriminants; rare, drop.
+				Scalar scalar = caseTok.getScalar();
+				if (scalar == null) {
+					continue;
+				}
+
+				java.util.LinkedHashMap<PcodeBlockBasic,
+						java.util.ArrayList<Long>> byTarget =
+					bySwitchByTarget.computeIfAbsent(switchOp,
+						k -> new java.util.LinkedHashMap<>());
+				java.util.ArrayList<Long> values =
+					byTarget.computeIfAbsent(target,
+						k -> new java.util.ArrayList<>());
+				values.add(scalar.getValue());
+			}
+
+			for (Map.Entry<PcodeOp, java.util.LinkedHashMap<PcodeBlockBasic,
+					java.util.ArrayList<Long>>> entry : bySwitchByTarget.entrySet()) {
+				PcodeOp switchOp = entry.getKey();
+				java.util.LinkedHashMap<PcodeBlockBasic,
+						java.util.ArrayList<Long>> byTarget = entry.getValue();
+
+				// Default arms: successors with no associated ClangCaseToken.
+				PcodeBlockBasic switchBlock = switchOp.getParent();
+				java.util.LinkedHashSet<PcodeBlockBasic> defaultArms =
+					new java.util.LinkedHashSet<>();
+				if (switchBlock != null) {
+					for (int i = 0; i < switchBlock.getOutSize(); ++i) {
+						PcodeBlock out = switchBlock.getOut(i);
+						if (out instanceof PcodeBlockBasic
+								&& !byTarget.containsKey(out)) {
+							defaultArms.add((PcodeBlockBasic) out);
+						}
+					}
+				}
+
+				writer.name(label(switchOp)).beginArray();
+				for (Map.Entry<PcodeBlockBasic, java.util.ArrayList<Long>> arm
+						: byTarget.entrySet()) {
+					writer.beginObject();
+					writer.name("case_values").beginArray();
+					for (Long v : arm.getValue()) {
+						writer.value(v);
+					}
+					writer.endArray();
+					writer.name("default").value(false);
+					writer.name("target").value(label(arm.getKey()));
+					writer.endObject();
+				}
+				for (PcodeBlockBasic def : defaultArms) {
+					writer.beginObject();
+					writer.name("case_values").beginArray().endArray();
+					writer.name("default").value(true);
+					writer.name("target").value(label(def));
+					writer.endObject();
+				}
+				writer.endArray();
+			}
+			writer.endObject();
+		}
+
 		void serializeFunctions() throws Exception {
 			for (int i = 0; i < functions.size(); ++i) {
 				Function function = functions.get(i);
@@ -4994,7 +5182,7 @@ public class PcodeSerializer {
 				DecompileResults functionDecompResults = decompInterface.decompileFunction(function, DECOMPILATION_TIMEOUT, this.monitor);
 				HighFunction highFunction = functionDecompResults.getHighFunction();
 				writer.name(functionLabel).beginObject();
-				serializeFunction(highFunction, function, shouldVisitPcode);
+				serializeFunction(highFunction, function, shouldVisitPcode, functionDecompResults);
 				writer.endObject();
 			}
 

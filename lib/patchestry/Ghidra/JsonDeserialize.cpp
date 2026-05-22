@@ -766,6 +766,54 @@ namespace patchestry::ghidra {
             deserialize_blocks(*blocks_array, function.basic_blocks, function.entry_block);
         }
 
+        if (const auto *hints_obj = func_obj.getObject("switch_hints")) {
+            for (const auto &kv : *hints_obj) {
+                const auto *arms_arr = kv.second.getAsArray();
+                if (arms_arr == nullptr) {
+                    LOG(WARNING) << "Function '" << function.name
+                                 << "' switch_hints['" << kv.first.str()
+                                 << "'] is not an array; dropping.\n";
+                    continue;
+                }
+                std::vector< SwitchArm > arms;
+                arms.reserve(arms_arr->size());
+                for (const auto &arm_val : *arms_arr) {
+                    const auto *arm_obj = arm_val.getAsObject();
+                    if (arm_obj == nullptr) {
+                        LOG(WARNING) << "Function '" << function.name
+                                     << "' switch_hints['" << kv.first.str()
+                                     << "'] has a non-object arm; dropping.\n";
+                        continue;
+                    }
+                    SwitchArm arm;
+                    arm.is_default = arm_obj->getBoolean("default").value_or(false);
+                    if (auto target = get_string_if_valid(*arm_obj, "target")) {
+                        arm.target = *target;
+                    }
+                    if (const auto *values_arr = arm_obj->getArray("case_values")) {
+                        arm.case_values.reserve(values_arr->size());
+                        for (const auto &v : *values_arr) {
+                            if (auto i = v.getAsInteger()) {
+                                arm.case_values.push_back(*i);
+                            } else {
+                                LOG(WARNING) << "Function '" << function.name
+                                             << "' switch_hints['" << kv.first.str()
+                                             << "'] has a non-integer case_value; dropping that value.\n";
+                            }
+                        }
+                    }
+                    if (arm.target.empty()) {
+                        LOG(WARNING) << "Function '" << function.name
+                                     << "' switch_hints['" << kv.first.str()
+                                     << "'] has an arm with empty target; dropping.\n";
+                        continue;
+                    }
+                    arms.push_back(std::move(arm));
+                }
+                function.switch_hints.emplace(kv.first.str(), std::move(arms));
+            }
+        }
+
         return function;
     }
 
