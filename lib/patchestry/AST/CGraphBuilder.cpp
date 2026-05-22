@@ -325,14 +325,30 @@ namespace patchestry::ast {
                         node.switch_cases.push_back(SwitchCaseEntry{
                             sc.value, succ_idx, sc.has_exit, /*is_default=*/false});
                     }
-                    // Fallback edge (default arm)
-                    if (term->fallback_block && key_to_index.contains(*term->fallback_block)) {
-                        size_t fb_idx = key_to_index[*term->fallback_block];
+                    // Default arm: prefer switch_hints (Ghidra's
+                    // ClangCaseToken markup identifies the source-level
+                    // default authoritatively) and fall back to the
+                    // fallback_block heuristic when hints are absent.
+                    std::optional<std::string> default_target;
+                    auto hints_it = func.switch_hints.find(term->key);
+                    if (hints_it != func.switch_hints.end()) {
+                        for (const auto &arm : hints_it->second) {
+                            if (arm.is_default) {
+                                default_target = arm.target;
+                                break;
+                            }
+                        }
+                    }
+                    if (!default_target && term->fallback_block) {
+                        default_target = *term->fallback_block;
+                    }
+
+                    if (default_target && key_to_index.contains(*default_target)) {
+                        size_t fb_idx = key_to_index[*default_target];
                         if (seen_succs.insert(fb_idx).second) {
-                            add_source_edge(g, node, key, *term->fallback_block,
+                            add_source_edge(g, node, key, *default_target,
                                             fb_idx, "switch-default");
                         }
-                        // Find succ index for fallback
                         size_t fb_succ_idx = 0;
                         for (size_t si = 0; si < node.succs.size(); ++si) {
                             if (node.succs[si] == fb_idx) {
