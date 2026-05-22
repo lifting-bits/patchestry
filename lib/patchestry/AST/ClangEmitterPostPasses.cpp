@@ -2454,19 +2454,99 @@ namespace patchestry::ast {
             }
 
             if (auto *compound = llvm::dyn_cast< clang::CompoundStmt >(stmt)) {
+                std::vector< clang::Stmt * > body(
+                    compound->body_begin(), compound->body_end()
+                );
                 std::vector< clang::Stmt * > children;
-                for (auto *child : compound->body()) {
+                for (size_t k = 0; k < body.size(); ++k) {
+                    // A target label sitting directly in this compound owns
+                    // its sub-stmt PLUS every following non-label sibling up
+                    // to the next label — that whole run is its block.
+                    // CleanupStmtTree flattens a label's CompoundStmt
+                    // sub-stmt into sibling position, so hoisting only
+                    // getSubStmt() would strand the rest of the block after
+                    // the injected goto, where it dies as unreachable code.
+                    // Gather the whole run so the hoist carries every
+                    // statement.
+                    auto *lbl = llvm::dyn_cast< clang::LabelStmt >(body[k]);
+                    if (under_structured_scope && lbl
+                        && targets.contains(lbl->getDecl()))
+                    {
+                        std::vector< clang::Stmt * > run;
+                        if (auto *sub_c = llvm::dyn_cast_or_null< clang::CompoundStmt >(
+                                lbl->getSubStmt()
+                            ))
+                        {
+                            for (clang::Stmt *s : sub_c->body()) { run.push_back(s); }
+                        } else if (lbl->getSubStmt()) {
+                            run.push_back(lbl->getSubStmt());
+                        }
+                        size_t m = k + 1;
+                        while (m < body.size()
+                               && !llvm::isa< clang::LabelStmt >(body[m]))
+                        {
+                            run.push_back(body[m]);
+                            ++m;
+                        }
+
+                        bool run_safe = true;
+                        for (clang::Stmt *s : run) {
+                            if (!HoistedLabelBodyIsSafe(s)) {
+                                run_safe = false;
+                                break;
+                            }
+                        }
+                        if (run_safe) {
+                            extracted.decl = lbl->getDecl();
+                            extracted.body =
+                                run.empty()
+                                    ? static_cast< clang::Stmt * >(
+                                          new (ctx) clang::NullStmt(VirtualLoc(ctx))
+                                      )
+                                : run.size() == 1
+                                    ? run.front()
+                                    : detail::MakeCompound(ctx, run);
+                            changed = true;
+                            children.push_back(new (ctx) clang::GotoStmt(
+                                extracted.decl, VirtualLoc(ctx), VirtualLoc(ctx)
+                            ));
+                            for (size_t r = m; r < body.size(); ++r) {
+                                children.push_back(body[r]);
+                            }
+                            break;
+                        }
+
+                        // The run is not safely hoistable as a unit (a
+                        // following sibling is a goto/break/loop/decl/...).
+                        // Keep the label in place and recurse only into its
+                        // body for deeper targets — do NOT fall through to
+                        // the generic recursion below, which would re-enter
+                        // the LabelStmt case, extract only getSubStmt(), and
+                        // strand the unsafe tail after the injected goto
+                        // (the statement loss the run-gathering avoids).
+                        if (lbl->getSubStmt()) {
+                            lbl->setSubStmt(ExtractFirstNestedTargetLabel(
+                                ctx, lbl->getSubStmt(), targets,
+                                under_structured_scope, extracted, changed
+                            ));
+                        }
+                        children.push_back(lbl);
+                        if (changed) {
+                            for (size_t r = k + 1; r < body.size(); ++r) {
+                                children.push_back(body[r]);
+                            }
+                            break;
+                        }
+                        continue;
+                    }
+
                     children.push_back(ExtractFirstNestedTargetLabel(
-                        ctx, child, targets, under_structured_scope, extracted, changed
+                        ctx, body[k], targets, under_structured_scope, extracted,
+                        changed
                     ));
                     if (changed) {
-                        for (auto it = std::next(
-                                 compound->body_begin(),
-                                 static_cast< ptrdiff_t >(children.size())
-                             );
-                             it != compound->body_end(); ++it)
-                        {
-                            children.push_back(*it);
+                        for (size_t r = k + 1; r < body.size(); ++r) {
+                            children.push_back(body[r]);
                         }
                         break;
                     }
@@ -3114,6 +3194,12 @@ namespace patchestry::ast {
         constexpr size_t kMaxConditionalFallthroughBodyStmts = 8;
         constexpr size_t kMaxTerminalPrefixStmts             = 12;
         constexpr unsigned kMaxClonedTailUses                = 4;
+        // Tighter cap for a terminal block re-joined across a dead
+        // phantom label (see ExtractLocalLabelBlock).  Such a block is
+        // only visible to the clone passes because of the dead-label
+        // see-through, so duplicating it must stay a clear win — only
+        // genuinely small tails are worth copying into every goto site.
+        constexpr size_t kMaxDeadLabelSpannedClonedStmts     = 4;
 
         void AppendStmtSequence(clang::Stmt *stmt, std::vector< clang::Stmt * > &out) {
             if (!stmt) { return; }
@@ -3130,11 +3216,31 @@ namespace patchestry::ast {
             size_t begin           = 0;
             size_t end             = 0;
             std::vector< clang::Stmt * > stmts;
+            // True when extraction saw through one or more dead phantom
+            // labels to re-join the block (ExtractLocalLabelBlock with
+            // a non-null live_refs argument).
+            bool spanned_dead_label = false;
         };
 
+        // Extract the terminal-label block starting at `body[label_idx]`:
+        // the label's own statements plus every following sibling up to
+        // (but not including) the next label.
+        //
+        // When `live_refs` is supplied, a *dead* label encountered while
+        // scanning forward — one with zero goto references, e.g. a
+        // `__patchestry_scope_join_*` phantom left behind once its gotos
+        // were eliminated — does not stop the block.  Its body is
+        // reachable only by fallthrough from the statements above it, so
+        // unwrapping it (dropping the LabelStmt, keeping its sub-stmts)
+        // re-joins a terminal block that the phantom had split in two.
+        // Without this a block like `L: x = -1; <dead>: return x;` is
+        // truncated to `x = -1` — no terminator — and the terminal-label
+        // clone passes refuse it.  Live labels still stop the block: a
+        // real CFG entry point must not be absorbed.
         bool ExtractLocalLabelBlock(
             clang::ASTContext &ctx, const std::vector< clang::Stmt * > &body, size_t label_idx,
-            LocalLabelBlock &block
+            LocalLabelBlock &block,
+            const std::unordered_map< clang::LabelDecl *, unsigned > *live_refs = nullptr
         ) {
             if (label_idx >= body.size()) { return false; }
 
@@ -3149,9 +3255,25 @@ namespace patchestry::ast {
             block.begin = label_idx;
             AppendStmtSequence(entry, block.stmts);
 
+            auto label_is_dead = [&](clang::LabelDecl *d) {
+                if (!live_refs) { return false; }
+                auto it = live_refs->find(d);
+                return it == live_refs->end() || it->second == 0;
+            };
+
             size_t end = label_idx + 1;
             while (end < body.size()) {
-                if (LeadingLabelDecl(body[end])) { break; }
+                if (clang::LabelDecl *next = LeadingLabelDecl(body[end])) {
+                    // Only see through a *bare* dead LabelStmt — a
+                    // compound-wrapped label would need deeper
+                    // restructuring; treat it as a hard stop.
+                    auto *bare = llvm::dyn_cast< clang::LabelStmt >(body[end]);
+                    if (!bare || !label_is_dead(next)) { break; }
+                    AppendStmtSequence(bare->getSubStmt(), block.stmts);
+                    block.spanned_dead_label = true;
+                    ++end;
+                    continue;
+                }
                 block.stmts.push_back(body[end]);
                 ++end;
             }
@@ -3887,7 +4009,7 @@ namespace patchestry::ast {
                     if (!LabelHasNoFallthroughPredecessor(body, label_idx)) { continue; }
 
                     LocalLabelBlock block;
-                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, block)) { continue; }
+                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, block, &refs)) { continue; }
                     if (block.stmts.size() > kMaxTerminalPrefixStmts) { continue; }
                     if (!SeqEndsWithTerminator(ctx, block.stmts)) { continue; }
 
@@ -4282,8 +4404,13 @@ namespace patchestry::ast {
                 if (LabelHasNoFallthroughPredecessor(body, label_idx)) { continue; }
 
                 LocalLabelBlock block;
-                if (!ExtractLocalLabelBlock(ctx, body, label_idx, block)) { continue; }
+                if (!ExtractLocalLabelBlock(ctx, body, label_idx, block, &refs)) { continue; }
                 if (block.stmts.size() > kMaxTerminalPrefixStmts) { continue; }
+                if (block.spanned_dead_label
+                    && block.stmts.size() > kMaxDeadLabelSpannedClonedStmts)
+                {
+                    continue;
+                }
                 if (!SeqEndsWithTerminator(ctx, block.stmts)) { continue; }
                 if (CountAllGotos(StmtFromSeq(ctx, block.stmts)) != 0) { continue; }
                 if (SeqHasUnsafeStructure(
@@ -4371,8 +4498,13 @@ namespace patchestry::ast {
                     if (!LabelHasNoFallthroughPredecessor(body, label_idx)) { continue; }
 
                     LocalLabelBlock block;
-                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, block)) { continue; }
+                    if (!ExtractLocalLabelBlock(ctx, body, label_idx, block, &refs)) { continue; }
                     if (block.stmts.size() > kMaxTerminalPrefixStmts) { continue; }
+                    if (block.spanned_dead_label
+                        && block.stmts.size() > kMaxDeadLabelSpannedClonedStmts)
+                    {
+                        continue;
+                    }
                     if (!SeqEndsWithTerminator(ctx, block.stmts)) { continue; }
                     if (CountAllGotos(StmtFromSeq(ctx, block.stmts)) != 0) { continue; }
                     if (SeqHasUnsafeStructure(
