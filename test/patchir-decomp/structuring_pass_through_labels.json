@@ -1,8 +1,6 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -emit-cir -print-tu -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -print-tu -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
-// RUN: %patchir-decomp -input %t.json -use-structuring-pass -verify-no-node-loss -structuring-improvement-report -emit-cir -output %t.report > %t.report.stdout 2> %t.report.stderr
-// RUN: %file-check -vv -check-prefix=REPORT %s --input-file %t.report.stderr
 // C-LABEL: void pass_through_switch_labels(void)
 // C: switch (
 // C: case {{1U?:}}
@@ -13,7 +11,6 @@
 // C: return;
 // The pass-through blocks (case 1/2 -> shared return) collapse with no goto chains.
 // C-NOT: goto
-// REPORT: STRUCTURING_IMPROVEMENT_REPORT function=pass_through_switch_labels {{.*}}dangling_gotos=0 duplicate_labels=0
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

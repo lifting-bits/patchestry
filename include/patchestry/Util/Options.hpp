@@ -27,8 +27,6 @@ namespace patchestry {
         // on as of Phase 7 — pass --use-ghidra-region=false to revert
         // per-run.
         bool use_ghidra_region              = true;
-        bool verify_no_node_loss            = false;
-        bool structuring_improvement_report = false;
         // Run the Clang-AST post-emission cleanup pipeline in
         // CleanupPrettyPrint.
         // Default on; flip off via --clang-ast-cleanup=false to

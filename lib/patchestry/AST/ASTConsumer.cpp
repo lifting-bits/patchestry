@@ -48,68 +48,6 @@
 
 namespace patchestry::ast {
 
-    namespace {
-
-        // Emit a bounded list of report diagnostics — caps the number of
-        // lines printed to avoid flooding the log on pathological inputs.
-        void LogReportDiagnostics(
-            const std::vector< std::string > &diagnostics, std::string_view kind
-        ) {
-            constexpr size_t kMaxReportDiagnostics = 20;
-            for (size_t i = 0;
-                 i < std::min(diagnostics.size(), kMaxReportDiagnostics); ++i)
-            {
-                LOG(ERROR) << "  " << diagnostics[i] << "\n";
-            }
-            if (diagnostics.size() > kMaxReportDiagnostics) {
-                LOG(ERROR) << "  ... "
-                           << (diagnostics.size() - kMaxReportDiagnostics)
-                           << " more " << kind << " diagnostic(s)\n";
-            }
-        }
-
-        // Log a summary line + diagnostics for a failed SNode-tree
-        // structural verification.
-        void LogSNodeVerificationFailure(
-            std::string_view verifier_name, std::string_view fn_name,
-            const SNodeValidationReport &report
-        ) {
-            LOG(ERROR) << verifier_name << " failed for " << fn_name
-                       << " input_blocks=" << report.input_blocks
-                       << " emitted_labels=" << report.emitted_labels
-                       << " missing_labels=" << report.missing_labels.size()
-                       << " extra_labels=" << report.extra_labels.size()
-                       << " input_switches=" << report.input_switches
-                       << " emitted_switches=" << report.emitted_switches
-                       << " missing_switches=" << report.missing_switches.size()
-                       << " extra_switches=" << report.extra_switches.size()
-                       << " input_gotos=" << report.input_gotos
-                       << " emitted_gotos=" << report.emitted_gotos
-                       << " dangling_gotos=" << report.dangling_gotos.size()
-                       << " diagnostics=" << report.diagnostics.size() << "\n";
-            LogReportDiagnostics(report.diagnostics, "SNode");
-        }
-
-        // Count SGoto nodes anywhere in an SNode forest.  Used to report the
-        // goto-funnel stages (post-collapse vs post-cleanup) in
-        // STRUCTURING_IMPROVEMENT_REPORT.
-        size_t CountSNodeGotos(SNode *node) {
-            if (!node) { return 0; }
-            size_t count = (node->Kind() == SNodeKind::kGoto) ? 1u : 0u;
-            node->for_each_child([&](SNode *child) {
-                count += CountSNodeGotos(child);
-            });
-            return count;
-        }
-
-        size_t CountSNodeGotos(const std::vector< SNode * > &body) {
-            size_t count = 0;
-            for (SNode *node : body) { count += CountSNodeGotos(node); }
-            return count;
-        }
-
-    } // namespace
-
     void PcodeASTConsumer::HandleTranslationUnit(clang::ASTContext &ctx) {
         type_builder = std::make_unique< TypeBuilder >(ci.getASTContext());
         if (!get_program().serialized_types.empty()) {
@@ -175,14 +113,6 @@ namespace patchestry::ast {
                 // The function body is a sequence of SNodes.
                 std::vector<SNode *> root_body;
                 bool have_structured = false;
-                // Goto-funnel instrumentation (gated by
-                // --structuring-improvement-report; default off so a normal
-                // structuring run is byte-identical).  pre_cleanup_gotos is
-                // the SGoto count straight out of CFGStructure collapse,
-                // before any SNode-level cleanup; post_cleanup_gotos is the
-                // count after the cleanup schedule and before EmitClangAST.
-                size_t pre_cleanup_gotos  = 0;
-                size_t post_cleanup_gotos = 0;
 
                 if (options.use_structuring_pass) {
                     // Structured path: fold the CGraph into hierarchical
@@ -223,13 +153,6 @@ namespace patchestry::ast {
                         // SStmt leaves into first-class SNodes so the
                         // SNode-layer cleanup passes below can act on them.
                         NormalizeRawControlFlow(root_body, factory, ctx);
-
-                        // Funnel stage 1: SGoto count of the SNode tree
-                        // after raw-control-flow normalization and before
-                        // any SNode-level cleanup.
-                        if (options.structuring_improvement_report) {
-                            pre_cleanup_gotos = CountSNodeGotos(root_body);
-                        }
 
                         // Post-pass: replace goto→break/continue for loop labels.
                         ConvertGotoToBreakContinue(root_body, factory);
@@ -348,32 +271,6 @@ namespace patchestry::ast {
                         // sequencing).
                         RemoveDeadSSeqChildren(root_body);
 
-                        // Funnel stage 2: SGoto count after the SNode-level
-                        // cleanup schedule, before EmitClangAST.
-                        if (options.structuring_improvement_report) {
-                            post_cleanup_gotos = CountSNodeGotos(root_body);
-                        }
-
-                        // Structural verification of the structured SNode
-                        // tree after cleanup and before Clang AST emission.
-                        // This catches SNode-level damage (dangling gotos,
-                        // duplicate labels, ...) introduced after the
-                        // JSON->CGraph verifier has already passed.  Gated
-                        // behind --verify-no-node-loss so a normal
-                        // structuring run is not perturbed.
-                        if (options.verify_no_node_loss) {
-                            auto snode_report =
-                                ValidateSNodeTree(root_body, &flow_graph);
-                            if (!snode_report.ok()) {
-                                LogSNodeVerificationFailure(
-                                    "Structured SNode verification", fn_name,
-                                    snode_report);
-                                LOG(FATAL)
-                                    << "Structured SNode verification failed "
-                                       "for "
-                                    << fn_name << "\n";
-                            }
-                        }
                     }
                 }
 
@@ -483,24 +380,6 @@ namespace patchestry::ast {
                     }
                 }
 
-                // When --verify-no-node-loss is set, also structurally
-                // verify the goto-baseline SNode tree (the unstructured
-                // path produces root_body directly).  A failure here
-                // means the baseline emission — not the structuring
-                // engine — is the source of the defect.
-                if (options.verify_no_node_loss && !have_structured) {
-                    auto baseline_report =
-                        ValidateSNodeTree(root_body, &flow_graph);
-                    if (!baseline_report.ok()) {
-                        LogSNodeVerificationFailure(
-                            "Goto baseline SNode verification", fn_name,
-                            baseline_report);
-                        LOG(FATAL)
-                            << "Goto baseline SNode verification failed for "
-                            << fn_name << "\n";
-                    }
-                }
-
                 EmitClangAST(root_body, fn, ctx);
 
                 // Clang-AST post-emission cleanup pipeline.
@@ -509,29 +388,6 @@ namespace patchestry::ast {
                 // these post-passes vs the SNode-layer cleanup alone.
                 if (options.clang_ast_cleanup) {
                     CleanupPrettyPrint(fn, ctx);
-                }
-
-                // Goto-funnel report: per-function goto-elimination metrics
-                // for the structured path.  Gated by
-                // --structuring-improvement-report (default off) so default
-                // runs and the lit suite are unperturbed.  pre/post cleanup
-                // gotos are the SNode funnel stages; the residual counts are
-                // read back from a structural scan of the final SNode tree.
-                if (options.structuring_improvement_report && have_structured) {
-                    auto residual = ValidateSNodeTree(root_body);
-                    size_t eliminated = pre_cleanup_gotos >= post_cleanup_gotos
-                        ? pre_cleanup_gotos - post_cleanup_gotos
-                        : 0;
-                    llvm::errs()
-                        << "STRUCTURING_IMPROVEMENT_REPORT function=" << fn_name
-                        << " pre_cleanup_gotos=" << pre_cleanup_gotos
-                        << " post_cleanup_gotos=" << post_cleanup_gotos
-                        << " eliminated_gotos=" << eliminated
-                        << " residual_gotos=" << residual.emitted_gotos
-                        << " emitted_labels=" << residual.emitted_labels
-                        << " dangling_gotos=" << residual.dangling_gotos.size()
-                        << " duplicate_labels="
-                        << residual.duplicate_labels.size() << "\n";
                 }
             }
         }

@@ -353,36 +353,4 @@ namespace patchestry::ast {
     /// Bottom-up recursive.
     bool RemoveDeadSSeqChildren(std::vector< SNode * > &root);
 
-    /// Structural verification report for a (post-cleanup) SNode tree.
-    /// Counts labels/gotos/switches and records any structural defect
-    /// that would produce invalid Clang AST (dangling gotos, duplicate
-    /// labels, break/continue outside their enclosing construct, empty
-    /// bodies, unreachable siblings, switch-count drift, ...).
-    struct SNodeValidationReport {
-        size_t input_blocks    = 0;
-        size_t emitted_labels  = 0;
-        size_t input_switches  = 0;
-        size_t emitted_switches = 0;
-        size_t input_gotos     = 0;
-        size_t emitted_gotos   = 0;
-        std::vector< std::string > missing_labels;
-        std::vector< std::string > extra_labels;
-        std::vector< std::string > missing_switches;
-        std::vector< std::string > extra_switches;
-        std::vector< std::string > dangling_gotos;
-        std::vector< std::string > duplicate_labels;
-        std::vector< std::string > diagnostics;
-
-        bool ok() const { return diagnostics.empty(); }
-    };
-
-    /// Verify the structured SNode tree after structuring cleanup and
-    /// before Clang AST emission.  This catches SNode-level damage that
-    /// can be introduced after the JSON->CGraph verifier has passed.
-    /// When `source_graph` is supplied, the report also cross-checks
-    /// emitted labels/switches against the source CGraph.
-    SNodeValidationReport
-    ValidateSNodeTree(const std::vector< SNode * > &root,
-                      const CGraph *source_graph = nullptr);
-
 } // namespace patchestry::ast
