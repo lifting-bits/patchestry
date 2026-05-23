@@ -35,6 +35,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/AST/BuildSNodeFromStructure.hpp>
 #include <patchestry/AST/CfgDotEmitter.hpp>
 #include <patchestry/AST/ClangEmitter.hpp>
 #include <patchestry/AST/CFGStructure.hpp>
@@ -195,10 +196,8 @@ namespace patchestry::ast {
                     // the same SNode shape.
                     bool seeded_from_ghidra = false;
                     if (options.use_ghidra_structure && func.structure.has_value()) {
-                        // TODO(stage 2): translate func.structure into
-                        // flow_graph.nodes[*].structured vectors.  For
-                        // now the seeded_from_ghidra path is unwired and
-                        // we always fall back.
+                        BuildSNodeFromStructure translator(func, flow_graph, factory, ctx);
+                        seeded_from_ghidra = translator.TryBuild();
                     }
                     if (!seeded_from_ghidra) {
                         CFGStructure cfg_structure(flow_graph, factory, ctx);
