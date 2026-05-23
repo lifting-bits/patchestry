@@ -3920,7 +3920,7 @@ public class PcodeSerializer {
 	// missing-case fallthrough) destination.  Empty when ClangCaseToken
 	// markup is unavailable or the switch has no default arm.
 	private java.util.LinkedHashSet<String>
-			recoverDefaultArmsFromMarkup(PcodeOp branchOp) {
+			recoverDefaultArmsFromMarkup(PcodeOp branchOp) throws Exception {
 		java.util.LinkedHashSet<String> defaults = new java.util.LinkedHashSet<>();
 		if (currentDecompResults == null) { return defaults; }
 		ClangTokenGroup markup = currentDecompResults.getCCodeMarkup();
