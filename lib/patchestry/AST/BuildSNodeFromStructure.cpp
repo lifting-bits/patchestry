@@ -126,6 +126,9 @@ namespace patchestry::ast {
         if (node.kind == "ifgoto") {
             return TranslateIfGoto(node);
         }
+        if (node.kind == "ifelse") {
+            return TranslateIfElse(node);
+        }
         return std::nullopt;
     }
 
@@ -438,6 +441,83 @@ namespace patchestry::ast {
             factory_.Intern(target.original_label));
         auto *if_node = factory_.Make< SIfThenElse >(
             cond.branch_cond, goto_node, nullptr);
+        auto out = std::move(*pre);
+        out.push_back(if_node);
+        return out;
+    }
+
+    BuildSNodeFromStructure::SNodeSeq
+    BuildSNodeFromStructure::TranslateIfElse(const ghidra::StructureNode &node) {
+        if (node.children.size() != 3) {
+            return std::nullopt;
+        }
+        const auto &cond_struct = node.children[0];
+        const auto &arm1_struct = node.children[1];
+        const auto &arm2_struct = node.children[2];
+
+        if (cond_struct.kind != "plain" || !cond_struct.block.has_value()) {
+            return std::nullopt;
+        }
+        auto cond_idx = FindCNode(*cond_struct.block);
+        if (!cond_idx.has_value()) {
+            return std::nullopt;
+        }
+        const auto &cond = graph_.Node(*cond_idx);
+        if (!cond.is_conditional || cond.succs.size() != 2
+            || cond.branch_cond == nullptr)
+        {
+            return std::nullopt;
+        }
+
+        auto pre = TranslatePlain(cond_struct);
+        if (!pre.has_value()) {
+            return std::nullopt;
+        }
+
+        auto arm1_seq = Translate(arm1_struct);
+        if (!arm1_seq.has_value()) {
+            return std::nullopt;
+        }
+        auto arm2_seq = Translate(arm2_struct);
+        if (!arm2_seq.has_value()) {
+            return std::nullopt;
+        }
+
+        auto arm1_lbl = FirstBlockLabel(arm1_struct);
+        auto arm2_lbl = FirstBlockLabel(arm2_struct);
+        if (!arm1_lbl.has_value() || !arm2_lbl.has_value()) {
+            return std::nullopt;
+        }
+        auto arm1_entry = FindCNode(*arm1_lbl);
+        auto arm2_entry = FindCNode(*arm2_lbl);
+        if (!arm1_entry.has_value() || !arm2_entry.has_value()) {
+            return std::nullopt;
+        }
+
+        // succs[0] = not-taken (cond false), succs[1] = taken (cond true).
+        // Assign the arm whose entry is succs[1] to the then-branch and
+        // the arm whose entry is succs[0] to the else-branch.  Using the
+        // raw branch_cond — no NegateExpr — keeps the condition shape
+        // identical to what CGraphBuilder extracted from the CBRANCH.
+        std::vector< SNode * > then_body;
+        std::vector< SNode * > else_body;
+        if (*arm1_entry == cond.succs[1] && *arm2_entry == cond.succs[0]) {
+            then_body = std::move(*arm1_seq);
+            else_body = std::move(*arm2_seq);
+        } else if (*arm2_entry == cond.succs[1]
+                   && *arm1_entry == cond.succs[0])
+        {
+            then_body = std::move(*arm2_seq);
+            else_body = std::move(*arm1_seq);
+        } else {
+            LOG(WARNING) << "ifelse arms (" << *arm1_lbl << ", " << *arm2_lbl
+                         << ") do not cover both cond successors in "
+                         << function_.name << "; falling back\n";
+            return std::nullopt;
+        }
+
+        auto *if_node = factory_.Make< SIfThenElse >(
+            cond.branch_cond, std::move(then_body), std::move(else_body));
         auto out = std::move(*pre);
         out.push_back(if_node);
         return out;

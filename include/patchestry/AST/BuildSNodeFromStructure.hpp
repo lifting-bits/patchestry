@@ -83,6 +83,12 @@ namespace patchestry::ast {
         /// Emits SIfThenElse(cond, SGoto(target_label), nullptr).
         SNodeSeq TranslateIfGoto(const ghidra::StructureNode &node);
 
+        /// `ifelse`: child[0] is the cond block, child[1]/child[2] are
+        /// the two arms.  Match each arm's first plain-leaf entry
+        /// against cond.succs[0/1] to pick which is then vs else
+        /// without negating branch_cond.
+        SNodeSeq TranslateIfElse(const ghidra::StructureNode &node);
+
         /// Resolve a Ghidra block label to a CNode index in the graph.
         std::optional< size_t > FindCNode(const std::string &block_label) const;
 
