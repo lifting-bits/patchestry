@@ -89,6 +89,18 @@ namespace {
         llvm::cl::init(true)
     );
 
+    const llvm::cl::opt< bool > use_ghidra_structure( // NOLINT(cert-err58-cpp)
+        "use-ghidra-structure",
+        llvm::cl::desc(
+            "Seed the SNode tree from Function.structure (Ghidra's "
+            "BlockGraph captured by the new Ghidra-side serializer) "
+            "instead of running CFGStructure's Rule* discovery loop. "
+            "Falls back to CFGStructure on functions without structure. "
+            "Existing post-passes still run. Off by default."
+        ),
+        llvm::cl::init(false)
+    );
+
     const llvm::cl::opt< bool > emit_dot_cfg( // NOLINT(cert-err58-cpp)
         "emit-dot-cfg",
         llvm::cl::desc("Dump DOT graphs at phase boundaries (debug)"),
@@ -133,6 +145,7 @@ namespace {
             .emit_obj                   = emit_obj.getValue(),
             .verbose                    = verbose.getValue(),
             .use_structuring_pass       = use_structuring_pass.getValue(),
+            .use_ghidra_structure       = use_ghidra_structure.getValue(),
             .verify_no_node_loss        = verify_no_node_loss.getValue(),
             .structuring_improvement_report = structuring_improvement_report.getValue(),
             .clang_ast_cleanup          = clang_ast_cleanup.getValue(),

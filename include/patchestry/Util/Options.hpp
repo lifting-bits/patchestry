@@ -20,6 +20,11 @@ namespace patchestry {
         bool emit_obj                       = false;
         bool verbose                        = false;
         bool use_structuring_pass           = true;
+        // Seed SNode tree from Function.structure (Ghidra-supplied) and
+        // skip CFGStructure's Rule* discovery loop when present.  Falls
+        // back per-function when structure is absent or translation
+        // fails.  Existing post-passes still run.
+        bool use_ghidra_structure           = false;
         bool verify_no_node_loss            = false;
         bool structuring_improvement_report = false;
         // Run the Clang-AST post-emission cleanup pipeline in

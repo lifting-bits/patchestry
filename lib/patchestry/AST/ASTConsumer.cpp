@@ -184,10 +184,26 @@ namespace patchestry::ast {
                 size_t post_cleanup_gotos = 0;
 
                 if (options.use_structuring_pass) {
-                    // Structured path: run CFGStructure to fold the
-                    // CGraph into hierarchical SNodes.
-                    CFGStructure cfg_structure(flow_graph, factory, ctx);
-                    cfg_structure.StructureAll();
+                    // Structured path: fold the CGraph into hierarchical
+                    // SNodes.  If --use-ghidra-structure is on AND the
+                    // function has a Function.structure tree (Ghidra-
+                    // supplied via DecompInterface.structureGraph), seed
+                    // SNodes from that tree directly.  Otherwise (or on
+                    // translation failure for this function) fall back
+                    // to CFGStructure's Rule* discovery loop.  Either
+                    // way, every subsequent post-pass below operates on
+                    // the same SNode shape.
+                    bool seeded_from_ghidra = false;
+                    if (options.use_ghidra_structure && func.structure.has_value()) {
+                        // TODO(stage 2): translate func.structure into
+                        // flow_graph.nodes[*].structured vectors.  For
+                        // now the seeded_from_ghidra path is unwired and
+                        // we always fall back.
+                    }
+                    if (!seeded_from_ghidra) {
+                        CFGStructure cfg_structure(flow_graph, factory, ctx);
+                        cfg_structure.StructureAll();
+                    }
 
                     // Build the root sequence from the remaining active
                     // (uncollapsed) nodes.  After StructureAll, each
