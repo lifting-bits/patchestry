@@ -129,6 +129,15 @@ namespace patchestry::ast {
         if (node.kind == "ifelse") {
             return TranslateIfElse(node);
         }
+        if (node.kind == "whiledo") {
+            return TranslateWhileDo(node);
+        }
+        if (node.kind == "dowhile") {
+            return TranslateDoWhile(node);
+        }
+        if (node.kind == "infloop") {
+            return TranslateInfLoop(node);
+        }
         return std::nullopt;
     }
 
@@ -520,6 +529,159 @@ namespace patchestry::ast {
             cond.branch_cond, std::move(then_body), std::move(else_body));
         auto out = std::move(*pre);
         out.push_back(if_node);
+        return out;
+    }
+
+    BuildSNodeFromStructure::SNodeSeq
+    BuildSNodeFromStructure::TranslateWhileDo(const ghidra::StructureNode &node) {
+        if (node.children.size() != 2) {
+            return std::nullopt;
+        }
+        const auto &cond_struct = node.children[0];
+        const auto &body_struct = node.children[1];
+
+        if (cond_struct.kind != "plain" || !cond_struct.block.has_value()) {
+            return std::nullopt;
+        }
+        auto cond_idx = FindCNode(*cond_struct.block);
+        if (!cond_idx.has_value()) {
+            return std::nullopt;
+        }
+        const auto &cond = graph_.Node(*cond_idx);
+        if (!cond.is_conditional || cond.succs.size() != 2
+            || cond.branch_cond == nullptr)
+        {
+            return std::nullopt;
+        }
+
+        // Phase 5 simplification: the cond block must have no
+        // non-terminal stmts.  Otherwise those stmts would have to
+        // re-execute before each iteration's test — a transformation
+        // we don't perform here.  Fall back for those.
+        if (!cond.stmts.empty()) {
+            LOG(WARNING) << "whiledo cond block " << *cond_struct.block
+                         << " has " << cond.stmts.size()
+                         << " pre-cond stmts in " << function_.name
+                         << "; falling back\n";
+            return std::nullopt;
+        }
+
+        // Mark cond CNode covered (we drained its stmts as "empty body";
+        // TranslatePlain would do this but we want to skip its empty
+        // SStmt accumulation).
+        if (!covered_cnodes_.insert(*cond_idx).second) {
+            LOG(WARNING) << "whiledo cond block " << *cond_struct.block
+                         << " referenced twice in " << function_.name
+                         << "; falling back\n";
+            return std::nullopt;
+        }
+
+        auto body_seq = Translate(body_struct);
+        if (!body_seq.has_value()) {
+            return std::nullopt;
+        }
+
+        auto body_lbl = FirstBlockLabel(body_struct);
+        if (!body_lbl.has_value()) {
+            return std::nullopt;
+        }
+        auto body_entry = FindCNode(*body_lbl);
+        if (!body_entry.has_value()) {
+            return std::nullopt;
+        }
+
+        // succs[0] = not-taken (cond false, exit), succs[1] = taken
+        // (cond true, body).  Negate when body sits on succs[0].
+        clang::Expr *while_cond = cond.branch_cond;
+        if (cond.succs[1] == *body_entry) {
+            // body on taken arm — branch_cond as-is.
+        } else if (cond.succs[0] == *body_entry) {
+            while_cond = NegateExpr(ctx_, cond.branch_cond);
+        } else {
+            LOG(WARNING) << "whiledo body entry " << *body_lbl
+                         << " doesn't match cond succs in "
+                         << function_.name << "; falling back\n";
+            return std::nullopt;
+        }
+
+        auto *w = factory_.Make< SWhile >(while_cond, std::move(*body_seq));
+        std::vector< SNode * > out;
+        out.push_back(w);
+        return out;
+    }
+
+    BuildSNodeFromStructure::SNodeSeq
+    BuildSNodeFromStructure::TranslateDoWhile(const ghidra::StructureNode &node) {
+        // Single-block self-loop: child[0] is the block carrying both
+        // body stmts and the CBRANCH whose taken arm is the back-edge.
+        if (node.children.size() != 1) {
+            return std::nullopt;
+        }
+        const auto &block_struct = node.children[0];
+        if (block_struct.kind != "plain" || !block_struct.block.has_value()) {
+            return std::nullopt;
+        }
+        auto idx = FindCNode(*block_struct.block);
+        if (!idx.has_value()) {
+            return std::nullopt;
+        }
+        const auto &cnode = graph_.Node(*idx);
+        if (!cnode.is_conditional || cnode.succs.size() != 2
+            || cnode.branch_cond == nullptr)
+        {
+            return std::nullopt;
+        }
+
+        // Must be a self-loop on one arm.
+        bool s0_self = cnode.succs[0] == *idx;
+        bool s1_self = cnode.succs[1] == *idx;
+        if (!s0_self && !s1_self) {
+            LOG(WARNING) << "dowhile block " << *block_struct.block
+                         << " is not a self-loop in " << function_.name
+                         << "; falling back\n";
+            return std::nullopt;
+        }
+
+        // TranslatePlain wraps stmts and registers the CNode as covered.
+        auto body_seq = TranslatePlain(block_struct);
+        if (!body_seq.has_value()) {
+            return std::nullopt;
+        }
+
+        // Polarity: taken-arm-is-self → branch_cond keeps the loop
+        // running (cond=true continues).  not-taken-self → negate.
+        clang::Expr *do_cond = cnode.branch_cond;
+        if (s1_self) {
+            // already cond as-is
+        } else {
+            do_cond = NegateExpr(ctx_, cnode.branch_cond);
+        }
+
+        auto *dw = factory_.Make< SDoWhile >(std::move(*body_seq), do_cond);
+        std::vector< SNode * > out;
+        out.push_back(dw);
+        return out;
+    }
+
+    BuildSNodeFromStructure::SNodeSeq
+    BuildSNodeFromStructure::TranslateInfLoop(const ghidra::StructureNode &node) {
+        if (node.children.size() != 1) {
+            return std::nullopt;
+        }
+        const auto &body_struct = node.children[0];
+
+        auto body_seq = Translate(body_struct);
+        if (!body_seq.has_value()) {
+            return std::nullopt;
+        }
+
+        // while (1) — the IntegerLiteral type matches `int`.
+        auto *one = clang::IntegerLiteral::Create(
+            ctx_, llvm::APInt(ctx_.getIntWidth(ctx_.IntTy), 1, true),
+            ctx_.IntTy, VirtualLoc(ctx_));
+        auto *w = factory_.Make< SWhile >(one, std::move(*body_seq));
+        std::vector< SNode * > out;
+        out.push_back(w);
         return out;
     }
 

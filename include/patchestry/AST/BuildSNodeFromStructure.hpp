@@ -89,6 +89,30 @@ namespace patchestry::ast {
         /// without negating branch_cond.
         SNodeSeq TranslateIfElse(const ghidra::StructureNode &node);
 
+        /// `whiledo`: child[0] = cond block (CBRANCH at end), child[1] =
+        /// body subtree.  Build SWhile(cond, body) with polarity
+        /// determined by which succ matches the body entry.  Falls back
+        /// when the cond block has non-terminal stmts (those would have
+        /// to run before each iteration's test — a more complex
+        /// transformation not handled in Phase 5).
+        SNodeSeq TranslateWhileDo(const ghidra::StructureNode &node);
+
+        /// `dowhile`: child[0] = the loop block (self-loop with stmts
+        /// and CBRANCH).  Body = the block's stmts; cond = the block's
+        /// branch_cond.  Falls back when the block isn't a self-loop
+        /// or when the tree has more than one child.
+        SNodeSeq TranslateDoWhile(const ghidra::StructureNode &node);
+
+        /// `infloop`: child[0] = body subtree (no exit condition in the
+        /// structure tree — break/continue exits are handled by the
+        /// post-pass ConvertGotoToBreakContinue).  Build
+        /// SWhile(IntegerLiteral(1), body) → emitted as `while(1)`.
+        /// This is the issue #259 fix path: Ghidra emits whiledo for
+        /// that function, but bloodview structure data exists; the
+        /// LIT fixture predates structure serialization and will fall
+        /// back until re-extracted.
+        SNodeSeq TranslateInfLoop(const ghidra::StructureNode &node);
+
         /// Resolve a Ghidra block label to a CNode index in the graph.
         std::optional< size_t > FindCNode(const std::string &block_label) const;
 
