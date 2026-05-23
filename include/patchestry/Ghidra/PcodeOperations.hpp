@@ -256,6 +256,12 @@ namespace patchestry::ghidra {
         std::optional< std::string > block;
         // Non-leaf: ordered child subtree.
         std::vector< StructureNode > children;
+        // Goto-wrapper metadata: BlockGoto carries one target;
+        // BlockMultiGoto carries N.  Each entry is the source-level
+        // basic-block label of the goto destination (resolved by the
+        // serializer down to the first BlockCopy leaf).  Empty for
+        // every kind except `goto` and `multigoto`.
+        std::vector< std::string > goto_targets;
     };
 
     struct Function

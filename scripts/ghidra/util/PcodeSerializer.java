@@ -87,7 +87,9 @@ import ghidra.app.decompiler.ClangNode;
 import ghidra.app.decompiler.ClangTokenGroup;
 
 import ghidra.program.model.pcode.BlockCopy;
+import ghidra.program.model.pcode.BlockGoto;
 import ghidra.program.model.pcode.BlockGraph;
+import ghidra.program.model.pcode.BlockMultiGoto;
 import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
@@ -5305,7 +5307,140 @@ public class PcodeSerializer {
 					writer.endObject();
 				}
 				writer.endArray();
+
+				// Goto-target metadata: BlockGoto carries one explicit goto
+				// destination (BlockGoto.getGotoTarget()); BlockMultiGoto
+				// carries N (BlockMultiGoto.getGotoTarget(i) / getGotoSize()).
+				// The structureGraph algorithm emits these wrapper nodes
+				// around blocks whose branches couldn't be folded into
+				// structured control flow.  Without this metadata the
+				// consumer can only guess the goto destination from CFG
+				// successors, which fails when the wrapper sits over a
+				// non-leaf child.
+				if (b instanceof BlockGoto) {
+					BlockGoto bgo = (BlockGoto) b;
+					writer.name("goto_targets").beginArray();
+					String lbl = resolveStructureBlockLabel(bgo.getGotoTarget(), originalBbs);
+					if (lbl == null) {
+						writer.nullValue();
+					} else {
+						writer.value(lbl);
+					}
+					writer.endArray();
+				} else if (b instanceof BlockMultiGoto) {
+					BlockMultiGoto bmg = (BlockMultiGoto) b;
+					writer.name("goto_targets").beginArray();
+					java.util.List<PcodeBlock> targets =
+							getBlockMultiGotoTargets(bmg);
+					for (PcodeBlock tgt : targets) {
+						String lbl = resolveStructureBlockLabel(tgt, originalBbs);
+						if (lbl == null) {
+							writer.nullValue();
+						} else {
+							writer.value(lbl);
+						}
+					}
+					writer.endArray();
+				}
 			}
+		}
+
+		// Extract goto-target blocks from BlockMultiGoto via reflection.
+		// Ghidra's public API across 11.x versions varies on this class:
+		// some expose getGotoSize()/getGotoTarget(int), others numGotos()/
+		// getGoto(int), others only a private ArrayList field.  Try the
+		// known variants in order, falling back to inspecting all
+		// PcodeBlock-typed fields if none match.
+		@SuppressWarnings("unchecked")
+		private java.util.List<PcodeBlock> getBlockMultiGotoTargets(BlockMultiGoto bmg) {
+			// Try common field names first.
+			for (String fname : new String[]{"gotos", "targets", "gotoTargets",
+					"gotoblocks", "gotoBlocks"}) {
+				try {
+					java.lang.reflect.Field f =
+							BlockMultiGoto.class.getDeclaredField(fname);
+					f.setAccessible(true);
+					Object raw = f.get(bmg);
+					if (raw instanceof java.util.List) {
+						java.util.List<?> lst = (java.util.List<?>) raw;
+						if (!lst.isEmpty()) {
+							return (java.util.List<PcodeBlock>) lst;
+						}
+					}
+				} catch (Throwable t) { /* try next */ }
+			}
+			// Try common getter methods.
+			for (String mname : new String[]{"getGotos", "getTargets",
+					"getGotoTargets", "getGotoBlocks"}) {
+				try {
+					java.lang.reflect.Method m =
+							BlockMultiGoto.class.getDeclaredMethod(mname);
+					m.setAccessible(true);
+					Object raw = m.invoke(bmg);
+					if (raw instanceof java.util.List) {
+						java.util.List<?> lst = (java.util.List<?>) raw;
+						if (!lst.isEmpty()) {
+							return (java.util.List<PcodeBlock>) lst;
+						}
+					}
+				} catch (Throwable t) { /* try next */ }
+			}
+			// Last resort: scan declared fields of BlockMultiGoto + its
+			// superclasses for the first ArrayList<PcodeBlock>-like list
+			// whose element type is PcodeBlock.
+			for (Class<?> c = BlockMultiGoto.class; c != null; c = c.getSuperclass()) {
+				for (java.lang.reflect.Field f : c.getDeclaredFields()) {
+					if (!java.util.List.class.isAssignableFrom(f.getType())) continue;
+					try {
+						f.setAccessible(true);
+						Object raw = f.get(bmg);
+						if (raw instanceof java.util.List) {
+							java.util.List<?> lst = (java.util.List<?>) raw;
+							if (!lst.isEmpty() && lst.get(0) instanceof PcodeBlock) {
+								// "blocks" is the BlockGraph children list —
+								// skip; we want the goto-target list, which
+								// is a distinct ArrayList<PcodeBlock> field.
+								if ("blocks".equals(f.getName())) continue;
+								return (java.util.List<PcodeBlock>) lst;
+							}
+						}
+					} catch (Throwable t) { /* skip */ }
+				}
+			}
+			return java.util.Collections.emptyList();
+		}
+
+		// Walk a structured-graph PcodeBlock to the first leaf BlockCopy
+		// and return its source-level block label.  Used for goto-target
+		// emission where the target may itself be a wrapper (BlockGoto,
+		// BlockMultiGoto, BlockList, ...) rather than a raw BlockCopy.
+		private String resolveStructureBlockLabel(PcodeBlock b,
+				java.util.ArrayList<PcodeBlockBasic> originalBbs) throws Exception {
+			if (b == null) return null;
+			if (b instanceof BlockCopy) {
+				BlockCopy bc = (BlockCopy) b;
+				Object ref = bc.getRef();
+				PcodeBlockBasic resolved = null;
+				if (ref instanceof PcodeBlockBasic) {
+					resolved = (PcodeBlockBasic) ref;
+				} else {
+					int alt = -1;
+					try {
+						alt = BLOCKCOPY_ALTINDEX.getInt(bc);
+					} catch (Throwable t) { /* ignore */ }
+					if (alt >= 0 && alt < originalBbs.size()) {
+						resolved = originalBbs.get(alt);
+					}
+				}
+				return resolved == null ? null : label(resolved);
+			}
+			if (b instanceof BlockGraph) {
+				BlockGraph bg = (BlockGraph) b;
+				if (bg.getSize() > 0) {
+					return resolveStructureBlockLabel(bg.getBlock(0), originalBbs);
+				}
+			}
+			return null;
 		}
 
 		void serializeFunctions() throws Exception {

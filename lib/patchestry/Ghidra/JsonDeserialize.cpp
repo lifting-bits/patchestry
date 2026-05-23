@@ -859,6 +859,17 @@ namespace patchestry::ghidra {
                 node.children.push_back(std::move(child));
             }
         }
+        // goto_targets is present only on `goto` / `multigoto` kinds; we
+        // accept it on any node for forward-compatibility with serializer
+        // schema bumps.  Null entries (unresolved targets) are dropped.
+        if (const auto *targets = node_obj.getArray("goto_targets")) {
+            node.goto_targets.reserve(targets->size());
+            for (const auto &target_val : *targets) {
+                if (auto target_str = target_val.getAsString()) {
+                    node.goto_targets.emplace_back(target_str->str());
+                }
+            }
+        }
         return true;
     }
 
