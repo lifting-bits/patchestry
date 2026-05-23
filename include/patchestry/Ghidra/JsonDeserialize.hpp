@@ -101,6 +101,14 @@ namespace patchestry::ghidra {
         // Deserialize global variables from serialized json
         void
         deserialize_globals(const JsonObject &global_array, VariableMap &serialized_globals);
+
+        // Recursive parse of the Ghidra-supplied structured BlockGraph
+        // tree (Function::structure).  Returns false and logs on
+        // malformed input — caller drops the whole tree.
+        bool deserialize_structure_node(
+            const JsonObject &node_obj, StructureNode &node,
+            const std::string &fn_name
+        );
     };
 
 } // namespace patchestry::ghidra

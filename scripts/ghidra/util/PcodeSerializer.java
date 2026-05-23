@@ -86,6 +86,8 @@ import ghidra.app.decompiler.ClangCaseToken;
 import ghidra.app.decompiler.ClangNode;
 import ghidra.app.decompiler.ClangTokenGroup;
 
+import ghidra.program.model.pcode.BlockCopy;
+import ghidra.program.model.pcode.BlockGraph;
 import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
@@ -4856,6 +4858,7 @@ public class PcodeSerializer {
 					}
 
 					serializeSwitchHints(decompResults, highFunction);
+					serializeStructureTree(highFunction);
 				}
 			} else {
 				writer.name("type").beginObject();
@@ -5165,6 +5168,144 @@ public class PcodeSerializer {
 				writer.endArray();
 			}
 			writer.endObject();
+		}
+
+		// Ghidra exposes its structured block tree only via
+		// DecompInterface.structureGraph(BlockGraph, ...), which expects an
+		// input graph of BlockCopy nodes with altindex set so the result's
+		// leaves can be paired back to the original PcodeBlockBasic via
+		// BlockGraph.transferObjectRef.  altindex is a private field with
+		// no setter — one reflection write per BlockCopy is the only way.
+		// Null on Ghidra versions where the field shape changed; emission
+		// silently degrades to an absent "structure" field, which the
+		// consumer treats as "no Ghidra structure available."
+		private static final java.lang.reflect.Field BLOCKCOPY_ALTINDEX = initAltIndex();
+		private static java.lang.reflect.Field initAltIndex() {
+			try {
+				java.lang.reflect.Field f = BlockCopy.class.getDeclaredField("altindex");
+				f.setAccessible(true);
+				return f;
+			} catch (Throwable t) {
+				return null;
+			}
+		}
+
+		// Emit Ghidra's structured BlockGraph tree as a single JSON
+		// object rooted at the function's outermost graph node.
+		//
+		// Each node:
+		//   "kind"     — PcodeBlock.typeToName(getType()).  Vocabulary:
+		//                graph, list, properif, ifelse, ifgoto, whiledo,
+		//                dowhile, switch, infloop, goto, multigoto,
+		//                condition, plain (= BlockCopy leaves, references
+		//                an original basic block).  See block.cc:1383-1393
+		//                for Ghidra's own kind-by-shape disambiguation.
+		//   "index"   — getIndex() within the parent (debug/order info).
+		//   "block"   — leaves only.  basic_block label.
+		//   "children" — non-leaves only.  Ordered array of node objects.
+		//
+		// Absent when DecompInterface.structureGraph isn't usable for any
+		// reason: the consumer must treat absence as "fall back to
+		// CFG-based structuring."
+		void serializeStructureTree(HighFunction hf) throws Exception {
+			if (BLOCKCOPY_ALTINDEX == null || hf == null) {
+				return;
+			}
+			java.util.ArrayList<PcodeBlockBasic> bbs = hf.getBasicBlocks();
+			if (bbs == null || bbs.isEmpty()) {
+				return;
+			}
+
+			java.util.HashMap<PcodeBlockBasic, Integer> idx = new java.util.HashMap<>();
+			for (int i = 0; i < bbs.size(); i++) {
+				idx.put(bbs.get(i), i);
+			}
+
+			BlockGraph in = new BlockGraph();
+			java.util.ArrayList<BlockCopy> copies = new java.util.ArrayList<>();
+			try {
+				for (int i = 0; i < bbs.size(); i++) {
+					BlockCopy c = new BlockCopy(bbs.get(i), bbs.get(i).getStart());
+					BLOCKCOPY_ALTINDEX.setInt(c, i);
+					in.addBlock(c);
+					copies.add(c);
+				}
+				in.setIndices();
+				for (int i = 0; i < bbs.size(); i++) {
+					PcodeBlockBasic bb = bbs.get(i);
+					for (int e = 0; e < bb.getOutSize(); e++) {
+						PcodeBlock out = bb.getOut(e);
+						Integer tgt = (out instanceof PcodeBlockBasic)
+							? idx.get((PcodeBlockBasic) out) : null;
+						if (tgt != null) {
+							in.addEdge(copies.get(i), copies.get(tgt));
+						}
+					}
+				}
+			} catch (Throwable t) {
+				// Degraded — the consumer falls back.  Don't emit a
+				// partial structure tree.
+				return;
+			}
+
+			BlockGraph structured;
+			try {
+				structured = decompInterface.structureGraph(in, 30, monitor);
+			} catch (Throwable t) {
+				return;
+			}
+			if (structured == null) {
+				return;
+			}
+
+			writer.name("structure").beginObject();
+			emitStructureNode(structured, bbs);
+			writer.endObject();
+		}
+
+		private void emitStructureNode(PcodeBlock b,
+				java.util.ArrayList<PcodeBlockBasic> originalBbs) throws Exception {
+			String kind = PcodeBlock.typeToName(b.getType());
+			if (kind == null) {
+				throw new Exception(
+					"PcodeSerializer: structureGraph returned unknown "
+					+ "PcodeBlock type=" + b.getType()
+					+ " — extend the kind vocabulary or fall back.");
+			}
+			writer.name("kind").value(kind);
+			writer.name("index").value(b.getIndex());
+
+			if (b instanceof BlockCopy) {
+				BlockCopy bc = (BlockCopy) b;
+				Object ref = bc.getRef();
+				PcodeBlockBasic resolved = null;
+				if (ref instanceof PcodeBlockBasic) {
+					resolved = (PcodeBlockBasic) ref;
+				} else {
+					// transferObjectRef didn't pair — fall back to altindex.
+					int alt = -1;
+					try {
+						alt = BLOCKCOPY_ALTINDEX.getInt(bc);
+					} catch (Throwable t) { /* ignore */ }
+					if (alt >= 0 && alt < originalBbs.size()) {
+						resolved = originalBbs.get(alt);
+					}
+				}
+				if (resolved == null) {
+					writer.name("block").nullValue();
+				} else {
+					writer.name("block").value(label(resolved));
+				}
+			} else if (b instanceof BlockGraph) {
+				BlockGraph bg = (BlockGraph) b;
+				writer.name("children").beginArray();
+				for (int i = 0; i < bg.getSize(); i++) {
+					writer.beginObject();
+					emitStructureNode(bg.getBlock(i), originalBbs);
+					writer.endObject();
+				}
+				writer.endArray();
+			}
 		}
 
 		void serializeFunctions() throws Exception {

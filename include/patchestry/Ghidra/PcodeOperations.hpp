@@ -235,6 +235,29 @@ namespace patchestry::ghidra {
         std::string target;
     };
 
+    // Mirror of Ghidra's structured BlockGraph tree, surfaced via
+    // DecompInterface.structureGraph.  Leaves (kind == "plain") name an
+    // original basic block; interior nodes carry children.
+    //
+    // Kind vocabulary (PcodeBlock::typeToName):
+    //   plain     — leaf (BlockCopy referencing a basic block)
+    //   graph     — outermost wrapper
+    //   list      — sequential sub-blocks
+    //   condition — compound boolean (sub-conditions)
+    //   properif, ifelse, ifgoto    — conditional branches
+    //   whiledo, dowhile, infloop   — loops
+    //   switch                      — switch statement
+    //   goto, multigoto             — unconditional / multi-target gotos
+    struct StructureNode
+    {
+        std::string kind;
+        int ghidra_index = 0;
+        // Leaf-only: name of the original basic block this leaf points to.
+        std::optional< std::string > block;
+        // Non-leaf: ordered child subtree.
+        std::vector< StructureNode > children;
+    };
+
     struct Function
     {
         std::string name;         // original (possibly mangled) symbol name
@@ -250,6 +273,11 @@ namespace patchestry::ghidra {
 
         // BRANCHIND op label → arms.  Empty on older outputs.
         std::unordered_map< std::string, std::vector< SwitchArm > > switch_hints;
+
+        // Ghidra's structured BlockGraph tree (DecompInterface.structureGraph).
+        // Absent when Ghidra didn't produce one; consumers fall back to
+        // CFG-based structuring in that case.
+        std::optional< StructureNode > structure;
     };
 
     struct Program

@@ -814,7 +814,52 @@ namespace patchestry::ghidra {
             }
         }
 
+        if (const auto *struct_obj = func_obj.getObject("structure")) {
+            StructureNode root;
+            if (deserialize_structure_node(*struct_obj, root, function.name)) {
+                function.structure = std::move(root);
+            }
+        }
+
         return function;
+    }
+
+    // Recursive parse of the Ghidra structured BlockGraph tree.  Returns
+    // false on malformed input (logged and the whole tree is dropped, so
+    // the consumer falls back to CFG-based structuring rather than acting
+    // on partial data).
+    bool JsonParser::deserialize_structure_node(const JsonObject &node_obj,
+            StructureNode &node, const std::string &fn_name) {
+        auto kind = get_string_if_valid(node_obj, "kind");
+        if (!kind) {
+            LOG(WARNING) << "Function '" << fn_name
+                         << "' structure node missing 'kind'; dropping tree.\n";
+            return false;
+        }
+        node.kind = *kind;
+        if (auto i = node_obj.getInteger("index")) {
+            node.ghidra_index = static_cast< int >(*i);
+        }
+        if (auto b = get_string_if_valid(node_obj, "block")) {
+            node.block = *b;
+        }
+        if (const auto *children = node_obj.getArray("children")) {
+            node.children.reserve(children->size());
+            for (const auto &child_val : *children) {
+                const auto *child_obj = child_val.getAsObject();
+                if (child_obj == nullptr) {
+                    LOG(WARNING) << "Function '" << fn_name
+                                 << "' structure child is not an object; dropping tree.\n";
+                    return false;
+                }
+                StructureNode child;
+                if (!deserialize_structure_node(*child_obj, child, fn_name)) {
+                    return false;
+                }
+                node.children.push_back(std::move(child));
+            }
+        }
+        return true;
     }
 
     void JsonParser::deserialize_call_operation(const JsonObject &call_obj, Operation &op) {
