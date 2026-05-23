@@ -153,36 +153,6 @@ namespace patchestry::ast {
         }
     };
 
-    struct CGraphValidationReport {
-        size_t node_count = 0;
-        size_t active_nodes = 0;
-        size_t edge_count = 0;
-        size_t conditional_nodes = 0;
-        size_t switch_nodes = 0;
-        size_t collapsed_nodes = 0;
-        size_t input_edges = 0;
-        size_t emitted_edges = 0;
-        size_t input_blocks = 0;
-        size_t emitted_blocks = 0;
-        size_t input_switches = 0;
-        size_t emitted_switches = 0;
-        size_t input_cases = 0;
-        size_t emitted_cases = 0;
-        std::vector<std::string> missing_blocks;
-        std::vector<std::string> extra_blocks;
-        std::vector<std::string> missing_edges;
-        std::vector<std::string> extra_edges;
-        std::vector<std::string> duplicated_edges;
-        std::vector<std::string> missing_switches;
-        std::vector<std::string> extra_switches;
-        std::vector<std::string> missing_cases;
-        std::vector<std::string> extra_cases;
-        std::vector<std::string> duplicated_cases;
-        std::vector<std::string> diagnostics;
-
-        bool ok() const { return diagnostics.empty(); }
-    };
-
     /// The flow graph — single graph type used for both CFG representation
     /// and in-place structuring.  Replaces the Cfg→CGraph two-step pipeline.
     struct CGraph {
@@ -247,13 +217,6 @@ namespace patchestry::ast {
     /// Build CGraph directly from P-Code JSON via FunctionBuilder.
     /// This is the structural path: JSON → CGraph (no intermediate Clang AST gotos).
     CGraph BuildCGraph(FunctionBuilder &builder, clang::ASTContext &ctx);
-
-    /// Verify structural invariants at the JSON -> CGraph boundary and
-    /// after graph rewrites: node ids, edge flag cardinality, predecessor /
-    /// successor symmetry, collapsed representatives, and switch case target
-    /// indexes.
-    CGraphValidationReport ValidateCGraph(const CGraph &g,
-                                          const ghidra::Function *source = nullptr);
 
     /// Detect back-edges using DFS and mark them in the graph.
     void MarkBackEdges(CGraph &g);
