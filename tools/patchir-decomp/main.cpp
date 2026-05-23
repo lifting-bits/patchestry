@@ -96,9 +96,10 @@ namespace {
             "BlockGraph captured by the new Ghidra-side serializer) "
             "instead of running CFGStructure's Rule* discovery loop. "
             "Falls back to CFGStructure on functions without structure. "
-            "Existing post-passes still run. Off by default."
+            "Existing post-passes still run. On by default; pass "
+            "=false to revert to CFGStructure for the whole run."
         ),
-        llvm::cl::init(false)
+        llvm::cl::init(true)
     );
 
     const llvm::cl::opt< bool > emit_dot_cfg( // NOLINT(cert-err58-cpp)
