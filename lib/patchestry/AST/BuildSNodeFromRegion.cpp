@@ -720,37 +720,69 @@ namespace patchestry::ast {
             return std::nullopt;
         }
         const auto &src_struct = node.children[0];
-        if (src_struct.kind != "plain" || !src_struct.block.has_value()) {
-            return std::nullopt;
-        }
-        auto src_idx = FindCNode(*src_struct.block);
-        if (!src_idx.has_value()) {
-            return std::nullopt;
-        }
-        const auto &src = graph_.Node(*src_idx);
-        if (src.succs.size() != 1) {
-            LOG(WARNING) << "goto source " << *src_struct.block << " has "
-                         << src.succs.size() << " successors in "
-                         << function_.name << "; falling back\n";
-            return std::nullopt;
+
+        // Prefer the explicit goto target from Ghidra's BlockGoto
+        // metadata (commit 03e679e) when present — that path supports
+        // arbitrary child kinds because the destination is resolved
+        // structurally by the Ghidra serializer (walks to the first
+        // BlockCopy leaf), not inferred from the child's CFG successor.
+        std::optional< std::string > target_label;
+        if (node.goto_targets.size() == 1
+            && !node.goto_targets[0].empty())
+        {
+            target_label = node.goto_targets[0];
+        } else {
+            // Fallback for JSON predating 03e679e: only plain children
+            // are translatable, and the target comes from the child
+            // CNode's sole successor.
+            if (src_struct.kind != "plain"
+                || !src_struct.block.has_value())
+            {
+                return std::nullopt;
+            }
+            auto src_idx = FindCNode(*src_struct.block);
+            if (!src_idx.has_value()) {
+                return std::nullopt;
+            }
+            const auto &src = graph_.Node(*src_idx);
+            if (src.succs.size() != 1) {
+                LOG(WARNING) << "goto source " << *src_struct.block
+                             << " has " << src.succs.size()
+                             << " successors in " << function_.name
+                             << "; falling back\n";
+                return std::nullopt;
+            }
+            const auto &target = graph_.Node(src.succs[0]);
+            if (target.original_label.empty()) {
+                LOG(WARNING) << "goto target " << target.source_key
+                             << " lacks label in " << function_.name
+                             << "; falling back\n";
+                return std::nullopt;
+            }
+            target_label = target.original_label;
         }
 
-        auto pre = TranslatePlain(src_struct);
-        if (!pre.has_value()) {
-            return std::nullopt;
-        }
-
-        const auto &target = graph_.Node(src.succs[0]);
-        if (target.original_label.empty()) {
-            LOG(WARNING) << "goto target " << target.source_key
-                         << " lacks label in " << function_.name
+        // Validate the target label resolves to a CNode — otherwise the
+        // SGoto would dangle and the dead-goto sweep would silently drop it.
+        if (!FindCNode(*target_label).has_value()) {
+            LOG(WARNING) << "goto target " << *target_label
+                         << " is not a known CNode in " << function_.name
                          << "; falling back\n";
             return std::nullopt;
         }
 
+        // Translate the child subtree as any kind — recursive Translate
+        // handles plain/list/graph/properif/whiledo/etc.  The structured
+        // result executes, then the appended SGoto transfers control to
+        // the wrapped block's escape destination.
+        auto body = Translate(src_struct);
+        if (!body.has_value()) {
+            return std::nullopt;
+        }
+
         auto *goto_node = factory_.Make< SGoto >(
-            factory_.Intern(target.original_label));
-        auto out = std::move(*pre);
+            factory_.Intern(*target_label));
+        auto out = std::move(*body);
         out.push_back(goto_node);
         return out;
     }
