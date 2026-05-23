@@ -65,15 +65,26 @@ namespace patchestry::ast {
         /// translation.
         SNodeSeq TranslateChildSeq(const ghidra::StructureNode &node);
 
+        /// `switch`: child[0] is the dispatcher block (BRANCHIND), and
+        /// children[1..N] are arm bodies in dispatch order.  Discriminant
+        /// + case-value labeling come from the dispatcher CNode's
+        /// `branch_cond` + `switch_cases` (already populated by
+        /// CGraphBuilder from `func.switch_hints`).
+        SNodeSeq TranslateSwitch(const ghidra::StructureNode &node);
+
         /// Resolve a Ghidra block label to a CNode index in the graph.
         std::optional< size_t > FindCNode(const std::string &block_label) const;
+
+        /// Walk a structure subtree to its first `plain` leaf and return
+        /// the block label.  Used to associate a `switch` arm body with
+        /// its dispatcher successor.
+        std::optional< std::string >
+        FirstBlockLabel(const ghidra::StructureNode &node) const;
 
         const ghidra::Function &function_;
         CGraph &graph_;
         SNodeFactory &factory_;
-        // Held for kind handlers that need it (currently unused);
-        // remove the attribute when a handler consumes it.
-        [[maybe_unused]] clang::ASTContext &ctx_;
+        clang::ASTContext &ctx_;
         // CNode ids referenced by `plain` leaves during one TryBuild
         // call.  Reset at TryBuild entry.  Used by the coverage check
         // — if Ghidra's structure tree doesn't account for every CNode
