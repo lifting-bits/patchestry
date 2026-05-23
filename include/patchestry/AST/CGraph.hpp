@@ -77,26 +77,6 @@ namespace patchestry::ast {
         clang::Expr *branch_cond = nullptr;
         bool is_conditional = false;
 
-        enum class RegionKind : uint8_t {
-            kUnknown,
-            kAcyclic,
-            kLoop,
-            kSwitch,
-            kIrreducible,
-        };
-
-        struct BranchRoles {
-            size_t merge = kNone;
-            size_t body = kNone;
-            size_t exit = kNone;
-            bool normalized = false;
-            bool swapped = false;
-            bool condition_negated = false;
-        };
-
-        RegionKind region_kind = RegionKind::kUnknown;
-        BranchRoles branch_roles;
-
         /// Terminal control-flow stmt (goto/if-goto/switch) popped by
         /// edge construction.  Stored separately from content stmts
         /// (structural: operations and edges are decoupled).
@@ -188,10 +168,6 @@ namespace patchestry::ast {
         size_t emitted_switches = 0;
         size_t input_cases = 0;
         size_t emitted_cases = 0;
-        size_t normalized_conditions = 0;
-        size_t branch_swaps = 0;
-        size_t condition_negations = 0;
-        size_t irreducible_regions = 0;
         std::vector<std::string> missing_blocks;
         std::vector<std::string> extra_blocks;
         std::vector<std::string> missing_edges;

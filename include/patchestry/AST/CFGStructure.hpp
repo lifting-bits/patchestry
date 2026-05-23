@@ -60,8 +60,6 @@ namespace patchestry::ast {
         void ComputeDominatorTree();
         void ComputePostDominatorTree();
         void NormalizeConditionPolarityIPdom();
-        void ClassifyRegions();
-        bool MarkIrreducibleSCCs();
         void CanonicalizeTopology();
         void OrderLoops();
 

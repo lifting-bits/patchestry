@@ -523,135 +523,6 @@ namespace patchestry::ast {
         }
     }
 
-    // MarkIrreducibleSCCs — region classification
-    //
-    // A reducible loop-like SCC has one entry node from outside the
-    // component.  Multiple-entry components are recorded so fallback
-    // and diagnostics can keep them visible instead of silently treating
-    // them as ordinary natural loops.
-
-    bool CFGStructure::MarkIrreducibleSCCs() {
-        const size_t n = graph_.nodes.size();
-        std::vector<int> index(n, -1);
-        std::vector<int> lowlink(n, 0);
-        std::vector<bool> on_stack(n, false);
-        std::vector<size_t> stack;
-        int next_index = 0;
-        bool found_irreducible = false;
-
-        auto mark_component = [&](const std::vector<size_t> &component) {
-            std::unordered_set<size_t> member(component.begin(),
-                                             component.end());
-            std::unordered_set<size_t> entry_nodes;
-            for (size_t nid : component) {
-                for (size_t pred : graph_.Node(nid).preds) {
-                    if (pred >= graph_.nodes.size()) continue;
-                    if (graph_.Node(pred).IsCollapsed()) continue;
-                    if (!member.contains(pred))
-                        entry_nodes.insert(nid);
-                }
-            }
-            if (entry_nodes.size() <= 1) return;
-
-            found_irreducible = true;
-            for (size_t nid : component) {
-                graph_.Node(nid).region_kind =
-                    CNode::RegionKind::kIrreducible;
-            }
-        };
-
-        std::function<void(size_t)> strongconnect = [&](size_t v) {
-            index[v] = lowlink[v] = next_index++;
-            stack.push_back(v);
-            on_stack[v] = true;
-
-            for (size_t w : graph_.Node(v).succs) {
-                if (w >= n || graph_.Node(w).IsCollapsed()) continue;
-                if (index[w] == -1) {
-                    strongconnect(w);
-                    lowlink[v] = std::min(lowlink[v], lowlink[w]);
-                } else if (on_stack[w]) {
-                    lowlink[v] = std::min(lowlink[v], index[w]);
-                }
-            }
-
-            if (lowlink[v] != index[v]) return;
-
-            std::vector<size_t> component;
-            while (!stack.empty()) {
-                size_t w = stack.back();
-                stack.pop_back();
-                on_stack[w] = false;
-                component.push_back(w);
-                if (w == v) break;
-            }
-
-            if (component.size() > 1)
-                mark_component(component);
-        };
-
-        for (const auto &node : graph_.nodes) {
-            if (node.IsCollapsed()) continue;
-            if (index[node.id] == -1)
-                strongconnect(node.id);
-        }
-        return found_irreducible;
-    }
-
-    // ClassifyRegions — region classification
-
-    void CFGStructure::ClassifyRegions() {
-        for (auto &node : graph_.nodes) {
-            node.region_kind = CNode::RegionKind::kUnknown;
-            node.branch_roles = CNode::BranchRoles{};
-        }
-
-        for (auto &node : graph_.nodes) {
-            if (node.IsCollapsed()) continue;
-            if (node.IsSwitchOut())
-                node.region_kind = CNode::RegionKind::kSwitch;
-        }
-
-        for (auto *lb : loop_order_) {
-            if (!lb) continue;
-            std::vector<size_t> body;
-            lb->FindBase(graph_, body);
-            for (size_t nid : body) {
-                auto &node = graph_.Node(nid);
-                if (node.IsCollapsed()) continue;
-                if (node.region_kind == CNode::RegionKind::kSwitch)
-                    continue;
-                node.region_kind = CNode::RegionKind::kLoop;
-            }
-            for (size_t nid : body)
-                graph_.Node(nid).mark = false;
-        }
-
-        MarkIrreducibleSCCs();
-
-        constexpr size_t kNone = CNode::kNone;
-        for (auto &node : graph_.nodes) {
-            if (node.IsCollapsed()) continue;
-            if (node.region_kind == CNode::RegionKind::kUnknown)
-                node.region_kind = CNode::RegionKind::kAcyclic;
-
-            if (!node.is_conditional || node.succs.size() != 2)
-                continue;
-
-            size_t ipd = (node.id < ipdom_.size()) ? ipdom_[node.id] : kNone;
-            if (ipd == node.succs[0]) {
-                node.branch_roles.merge = node.succs[0];
-                node.branch_roles.body = node.succs[1];
-                node.branch_roles.exit = node.succs[0];
-                node.branch_roles.normalized = true;
-            } else if (ipd == node.succs[1]) {
-                node.branch_roles.merge = node.succs[1];
-                node.branch_roles.body = node.succs[0];
-                node.branch_roles.exit = node.succs[1];
-            }
-        }
-    }
-
     // NormalizeConditionPolarityIPdom — pre-pass 5
     //
     // Refine conditional polarity using the post-dominator tree.
@@ -679,25 +550,6 @@ namespace patchestry::ast {
                 std::swap(a.succs[0], a.succs[1]);
                 std::swap(a.edge_flags[0], a.edge_flags[1]);
                 a.branch_cond = NegateExpr(ctx_, a.branch_cond);
-                // Record what we did so ValidateCGraph's branch_swaps /
-                // condition_negations counters and the "negated condition
-                // without branch swap" invariant check at CGraph.cpp:513
-                // see actual transitions.  These flags default to false
-                // on construction and no other pass writes them, so
-                // omitting the assignment here leaves the validator
-                // silently inert for every function this pass mutates.
-                a.branch_roles.swapped           = true;
-                a.branch_roles.condition_negated = true;
-                // ClassifyRegions wrote merge/body/exit using pre-swap
-                // node IDs and intentionally left `normalized` false for
-                // the ipd==succs[1] arm, deferring the flip to this pass.
-                // merge/body/exit are node IDs (not slot indices), so the
-                // swap above does not invalidate them — merge still equals
-                // the post-dominator, which now sits at the new succs[0].
-                // Setting `normalized` here lets ValidateCGraph count this
-                // node and run the "merge on succs[0]" invariant on it.
-                a.branch_roles.normalized        = true;
-
                 if (auto *ifs = llvm::dyn_cast_or_null<clang::IfStmt>(a.terminal)) {
                     auto loc = ifs->getIfLoc();
                     a.terminal = clang::IfStmt::Create(
@@ -739,12 +591,9 @@ namespace patchestry::ast {
         MarkBackEdges(graph_);
         OrderLoops();
 
-        // Pre-pass 5: classify regions and refine polarity using ipdom.
-        // Runs AFTER loop detection so loop body membership is stable.
-        // ClassifyRegions records loop/switch/irreducible kinds and
-        // branch roles for diagnostics and residual goto fallback.
-        // Loop rules handle both polarities dynamically (s1_in_body check).
-        ClassifyRegions();
+        // Pre-pass 5: refine conditional polarity using ipdom so
+        // succs[1] = body for every conditional.  Loop rules handle
+        // both polarities dynamically (s1_in_body check).
         NormalizeConditionPolarityIPdom();
         CanonicalizeTopology();
 

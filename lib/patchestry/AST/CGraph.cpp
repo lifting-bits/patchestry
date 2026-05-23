@@ -490,36 +490,7 @@ namespace patchestry::ast {
                                   "conditional node " + NodeLabel(id)
                                       + " has no branch condition");
                 }
-                if (node.branch_roles.normalized) {
-                    ++report.normalized_conditions;
-                    if (node.branch_roles.merge >= g.nodes.size()) {
-                        AddDiagnostic(report.diagnostics,
-                                      "normalized conditional node "
-                                          + NodeLabel(id)
-                                          + " has invalid merge role "
-                                          + NodeLabel(node.branch_roles.merge));
-                    } else if (node.succs.size() == 2
-                               && node.branch_roles.merge != node.succs[0]) {
-                        AddDiagnostic(report.diagnostics,
-                                      "normalized conditional node "
-                                          + NodeLabel(id)
-                                          + " does not have merge on succs[0]");
-                    }
-                }
-                if (node.branch_roles.swapped)
-                    ++report.branch_swaps;
-                if (node.branch_roles.condition_negated)
-                    ++report.condition_negations;
-                if (node.branch_roles.condition_negated
-                    && !node.branch_roles.swapped) {
-                    AddDiagnostic(report.diagnostics,
-                                  "conditional node " + NodeLabel(id)
-                                      + " negated condition without branch swap");
-                }
             }
-
-            if (node.region_kind == CNode::RegionKind::kIrreducible)
-                ++report.irreducible_regions;
 
             if (node.IsSwitchOut()) {
                 ++report.switch_nodes;
@@ -776,7 +747,6 @@ namespace patchestry::ast {
         size_t rep = ids[0];
         nodes[rep].structured = std::move(snodes);
         nodes[rep].block_type = type;
-        nodes[rep].branch_roles = CNode::BranchRoles{};
 
         std::unordered_set<size_t> idset(ids.begin(), ids.end());
 
@@ -1017,19 +987,6 @@ namespace patchestry::ast {
         }
 
         nodes[rep].is_conditional = !ext_succs.empty() && ext_succs.size() == 2;
-        switch (type) {
-            case CNode::BlockType::kWhile:
-            case CNode::BlockType::kDoWhile:
-            case CNode::BlockType::kInfLoop:
-                nodes[rep].region_kind = CNode::RegionKind::kLoop;
-                break;
-            case CNode::BlockType::kSwitch:
-                nodes[rep].region_kind = CNode::RegionKind::kSwitch;
-                break;
-            default:
-                nodes[rep].region_kind = CNode::RegionKind::kAcyclic;
-                break;
-        }
 
         nodes[rep].stmts.clear();
         nodes[rep].label.clear();
