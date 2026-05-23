@@ -96,10 +96,6 @@ namespace patchestry::codegen {
             auto llvm_mod = cir::direct::lowerDirectlyFromCIRToLLVMIR(*maybe_mod, lctx);
             Serializer::SerializeToFile(llvm_mod.get(), options.output_file + ".ll");
         }
-
-        if (options.emit_asm) {
-            LOG_FATAL("Support for lowering to asm not implemented.");
-        }
     }
 
 } // namespace patchestry::codegen

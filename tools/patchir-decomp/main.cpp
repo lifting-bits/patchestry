@@ -55,14 +55,6 @@ namespace {
         "emit-llvm", llvm::cl::desc("Emit LLVM IR Representation"), llvm::cl::init(false)
     );
 
-    const llvm::cl::opt< bool > emit_asm( // NOLINT(cert-err58-cpp)
-        "emit-asm", llvm::cl::desc("Emit ASM Representation"), llvm::cl::init(false)
-    );
-
-    const llvm::cl::opt< bool > emit_obj( // NOLINT(cert-err58-cpp)
-        "emit-obj", llvm::cl::desc("Emit Object file"), llvm::cl::init(false)
-    );
-
     const llvm::cl::opt< std::string > input_filename( // NOLINT(cert-err58-cpp)
         "input", llvm::cl::desc("Input JSON file"), llvm::cl::Required
     );
@@ -131,8 +123,6 @@ namespace {
             .emit_cir                   = emit_cir.getValue(),
             .emit_mlir                  = emit_mlir.getValue(), // It is set to true by default
             .emit_llvm                  = emit_llvm.getValue(),
-            .emit_asm                   = emit_asm.getValue(),
-            .emit_obj                   = emit_obj.getValue(),
             .verbose                    = verbose.getValue(),
             .use_structuring_pass       = use_structuring_pass.getValue(),
             .use_ghidra_region          = use_ghidra_region.getValue(),
@@ -142,16 +132,6 @@ namespace {
             .print_tu                   = print_tu.getValue(),
             .emit_dot_cfg               = emit_dot_cfg.getValue(),
         };
-    }
-
-    bool validateUnsupportedOptions(const patchestry::Options &options) {
-        if (options.emit_obj) {
-            LOG(ERROR) << "--emit-obj is not implemented. Use --emit-cir, --emit-mlir, "
-                          "--emit-llvm, or --print-tu instead.\n";
-            return false;
-        }
-
-        return true;
     }
 
     bool validateBranchindSwitchMetadata(const patchestry::ghidra::Program &program) {
@@ -310,9 +290,6 @@ namespace {
 
 int main(int argc, char **argv) {
     auto options = parseCommandLineOptions(argc, argv);
-    if (!validateUnsupportedOptions(options)) {
-        return EXIT_FAILURE;
-    }
 
     llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
         llvm::MemoryBuffer::getFile(options.input_file);

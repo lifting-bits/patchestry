@@ -16,8 +16,6 @@ namespace patchestry {
         bool emit_cir                       = false;
         bool emit_mlir                      = false;
         bool emit_llvm                      = false;
-        bool emit_asm                       = false;
-        bool emit_obj                       = false;
         bool verbose                        = false;
         bool use_structuring_pass           = false;
         // Seed SNode tree from Function.region (Ghidra-supplied region
