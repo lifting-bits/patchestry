@@ -72,6 +72,17 @@ namespace patchestry::ast {
         /// CGraphBuilder from `func.switch_hints`).
         SNodeSeq TranslateSwitch(const ghidra::StructureNode &node);
 
+        /// `properif`: child[0] is the cond block (CBRANCH terminator)
+        /// and child[1] is the then-body subtree.  The if condition is
+        /// the cond CNode's `branch_cond`, negated if the body entry
+        /// matches the not-taken successor.
+        SNodeSeq TranslateProperIf(const ghidra::StructureNode &node);
+
+        /// `ifgoto`: child[0] is the cond block; the taken arm exits
+        /// the structure with a goto to the cond's taken successor.
+        /// Emits SIfThenElse(cond, SGoto(target_label), nullptr).
+        SNodeSeq TranslateIfGoto(const ghidra::StructureNode &node);
+
         /// Resolve a Ghidra block label to a CNode index in the graph.
         std::optional< size_t > FindCNode(const std::string &block_label) const;
 

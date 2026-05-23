@@ -120,6 +120,12 @@ namespace patchestry::ast {
         if (node.kind == "switch") {
             return TranslateSwitch(node);
         }
+        if (node.kind == "properif") {
+            return TranslateProperIf(node);
+        }
+        if (node.kind == "ifgoto") {
+            return TranslateIfGoto(node);
+        }
         return std::nullopt;
     }
 
@@ -328,6 +334,112 @@ namespace patchestry::ast {
 
         auto out = std::move(*pre);
         out.push_back(sw);
+        return out;
+    }
+
+    BuildSNodeFromStructure::SNodeSeq
+    BuildSNodeFromStructure::TranslateProperIf(const ghidra::StructureNode &node) {
+        if (node.children.size() != 2) {
+            return std::nullopt;
+        }
+        const auto &cond_struct = node.children[0];
+        const auto &body_struct = node.children[1];
+
+        if (cond_struct.kind != "plain" || !cond_struct.block.has_value()) {
+            return std::nullopt;
+        }
+        auto cond_idx = FindCNode(*cond_struct.block);
+        if (!cond_idx.has_value()) {
+            return std::nullopt;
+        }
+        const auto &cond = graph_.Node(*cond_idx);
+        if (!cond.is_conditional || cond.succs.size() != 2
+            || cond.branch_cond == nullptr)
+        {
+            return std::nullopt;
+        }
+
+        auto pre = TranslatePlain(cond_struct);
+        if (!pre.has_value()) {
+            return std::nullopt;
+        }
+
+        auto body_seq = Translate(body_struct);
+        if (!body_seq.has_value()) {
+            return std::nullopt;
+        }
+
+        auto body_entry_lbl = FirstBlockLabel(body_struct);
+        if (!body_entry_lbl.has_value()) {
+            return std::nullopt;
+        }
+        auto body_entry = FindCNode(*body_entry_lbl);
+        if (!body_entry.has_value()) {
+            return std::nullopt;
+        }
+
+        // succs[0] = not-taken (cond false), succs[1] = taken (cond true).
+        // The body covers ONE of the two arms; the other arm is the merge
+        // (the structure tree's next sibling, handled by the enclosing
+        // list/graph).  Use branch_cond as-is when body is on succs[1]
+        // and negate when body is on succs[0].
+        clang::Expr *if_cond = cond.branch_cond;
+        if (cond.succs[1] == *body_entry) {
+            // Body is taken arm — use cond as-is.
+        } else if (cond.succs[0] == *body_entry) {
+            if_cond = NegateExpr(ctx_, cond.branch_cond);
+        } else {
+            LOG(WARNING) << "properif body entry " << *body_entry_lbl
+                         << " matches neither succ of cond block in "
+                         << function_.name << "; falling back\n";
+            return std::nullopt;
+        }
+
+        auto *if_node = factory_.Make< SIfThenElse >(
+            if_cond, std::move(*body_seq), std::vector< SNode * >{});
+        auto out = std::move(*pre);
+        out.push_back(if_node);
+        return out;
+    }
+
+    BuildSNodeFromStructure::SNodeSeq
+    BuildSNodeFromStructure::TranslateIfGoto(const ghidra::StructureNode &node) {
+        if (node.children.size() != 1) {
+            return std::nullopt;
+        }
+        const auto &cond_struct = node.children[0];
+        if (cond_struct.kind != "plain" || !cond_struct.block.has_value()) {
+            return std::nullopt;
+        }
+        auto cond_idx = FindCNode(*cond_struct.block);
+        if (!cond_idx.has_value()) {
+            return std::nullopt;
+        }
+        const auto &cond = graph_.Node(*cond_idx);
+        if (!cond.is_conditional || cond.succs.size() != 2
+            || cond.branch_cond == nullptr)
+        {
+            return std::nullopt;
+        }
+
+        auto pre = TranslatePlain(cond_struct);
+        if (!pre.has_value()) {
+            return std::nullopt;
+        }
+
+        const auto &target = graph_.Node(cond.succs[1]);
+        if (target.original_label.empty()) {
+            LOG(WARNING) << "ifgoto taken target lacks label in "
+                         << function_.name << "; falling back\n";
+            return std::nullopt;
+        }
+
+        auto *goto_node = factory_.Make< SGoto >(
+            factory_.Intern(target.original_label));
+        auto *if_node = factory_.Make< SIfThenElse >(
+            cond.branch_cond, goto_node, nullptr);
+        auto out = std::move(*pre);
+        out.push_back(if_node);
         return out;
     }
 
