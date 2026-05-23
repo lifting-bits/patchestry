@@ -83,9 +83,9 @@ namespace {
     const llvm::cl::opt< bool > use_structuring_pass( // NOLINT(cert-err58-cpp)
         "use-structuring-pass",
         llvm::cl::desc(
-            "Enable the structuring pass — runs Ghidra-structure (if "
-            "--use-ghidra-structure is on and the input carries a "
-            "Function.structure tree) and/or CFGStructure to fold the "
+            "Enable the structuring pass — runs Ghidra-region (if "
+            "--use-ghidra-region is on and the input carries a "
+            "Function.region tree) and/or CFGStructure to fold the "
             "CFG into hierarchical SNodes.  Off by default: emit the "
             "raw goto-based control flow.  Pass --use-structuring-pass "
             "to enable for a run."
@@ -93,15 +93,16 @@ namespace {
         llvm::cl::init(false)
     );
 
-    const llvm::cl::opt< bool > use_ghidra_structure( // NOLINT(cert-err58-cpp)
-        "use-ghidra-structure",
+    const llvm::cl::opt< bool > use_ghidra_region( // NOLINT(cert-err58-cpp)
+        "use-ghidra-region",
         llvm::cl::desc(
-            "Seed the SNode tree from Function.structure (Ghidra's "
-            "BlockGraph captured by the new Ghidra-side serializer) "
-            "instead of running CFGStructure's Rule* discovery loop. "
-            "Falls back to CFGStructure on functions without structure. "
-            "Existing post-passes still run. On by default; pass "
-            "=false to revert to CFGStructure for the whole run."
+            "Seed the SNode tree from Function.region (Ghidra's "
+            "structured region tree captured by the Ghidra-side "
+            "serializer) instead of running CFGStructure's Rule* "
+            "discovery loop.  Falls back to CFGStructure on functions "
+            "without region. Existing post-passes still run. On by "
+            "default; pass =false to revert to CFGStructure for the "
+            "whole run."
         ),
         llvm::cl::init(true)
     );
@@ -150,7 +151,7 @@ namespace {
             .emit_obj                   = emit_obj.getValue(),
             .verbose                    = verbose.getValue(),
             .use_structuring_pass       = use_structuring_pass.getValue(),
-            .use_ghidra_structure       = use_ghidra_structure.getValue(),
+            .use_ghidra_region          = use_ghidra_region.getValue(),
             .verify_no_node_loss        = verify_no_node_loss.getValue(),
             .structuring_improvement_report = structuring_improvement_report.getValue(),
             .clang_ast_cleanup          = clang_ast_cleanup.getValue(),

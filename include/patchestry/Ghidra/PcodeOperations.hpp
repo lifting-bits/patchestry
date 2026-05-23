@@ -235,7 +235,7 @@ namespace patchestry::ghidra {
         std::string target;
     };
 
-    // Mirror of Ghidra's structured BlockGraph tree, surfaced via
+    // Mirror of Ghidra's structured region tree, surfaced via
     // DecompInterface.structureGraph.  Leaves (kind == "plain") name an
     // original basic block; interior nodes carry children.
     //
@@ -248,14 +248,14 @@ namespace patchestry::ghidra {
     //   whiledo, dowhile, infloop   — loops
     //   switch                      — switch statement
     //   goto, multigoto             — unconditional / multi-target gotos
-    struct StructureNode
+    struct RegionNode
     {
         std::string kind;
         int ghidra_index = 0;
         // Leaf-only: name of the original basic block this leaf points to.
         std::optional< std::string > block;
         // Non-leaf: ordered child subtree.
-        std::vector< StructureNode > children;
+        std::vector< RegionNode > children;
         // Goto-wrapper metadata: BlockGoto carries one target;
         // BlockMultiGoto carries N.  Each entry is the source-level
         // basic-block label of the goto destination (resolved by the
@@ -280,10 +280,10 @@ namespace patchestry::ghidra {
         // BRANCHIND op label → arms.  Empty on older outputs.
         std::unordered_map< std::string, std::vector< SwitchArm > > switch_hints;
 
-        // Ghidra's structured BlockGraph tree (DecompInterface.structureGraph).
+        // Ghidra's structured region tree (DecompInterface.structureGraph).
         // Absent when Ghidra didn't produce one; consumers fall back to
         // CFG-based structuring in that case.
-        std::optional< StructureNode > structure;
+        std::optional< RegionNode > region;
     };
 
     struct Program

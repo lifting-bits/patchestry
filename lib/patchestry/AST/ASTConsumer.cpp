@@ -35,7 +35,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
-#include <patchestry/AST/BuildSNodeFromStructure.hpp>
+#include <patchestry/AST/BuildSNodeFromRegion.hpp>
 #include <patchestry/AST/CfgDotEmitter.hpp>
 #include <patchestry/AST/ClangEmitter.hpp>
 #include <patchestry/AST/CFGStructure.hpp>
@@ -186,8 +186,8 @@ namespace patchestry::ast {
 
                 if (options.use_structuring_pass) {
                     // Structured path: fold the CGraph into hierarchical
-                    // SNodes.  If --use-ghidra-structure is on AND the
-                    // function has a Function.structure tree (Ghidra-
+                    // SNodes.  If --use-ghidra-region is on AND the
+                    // function has a Function.region tree (Ghidra-
                     // supplied via DecompInterface.structureGraph), seed
                     // SNodes from that tree directly.  Otherwise (or on
                     // translation failure for this function) fall back
@@ -195,8 +195,8 @@ namespace patchestry::ast {
                     // way, every subsequent post-pass below operates on
                     // the same SNode shape.
                     bool seeded_from_ghidra = false;
-                    if (options.use_ghidra_structure && func.structure.has_value()) {
-                        BuildSNodeFromStructure translator(func, flow_graph, factory, ctx);
+                    if (options.use_ghidra_region && func.region.has_value()) {
+                        BuildSNodeFromRegion translator(func, flow_graph, factory, ctx);
                         seeded_from_ghidra = translator.TryBuild();
                     }
                     if (!seeded_from_ghidra) {

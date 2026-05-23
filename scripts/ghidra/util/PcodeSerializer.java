@@ -4860,7 +4860,7 @@ public class PcodeSerializer {
 					}
 
 					serializeSwitchHints(decompResults, highFunction);
-					serializeStructureTree(highFunction);
+					serializeRegionTree(highFunction);
 				}
 			} else {
 				writer.name("type").beginObject();
@@ -5172,15 +5172,15 @@ public class PcodeSerializer {
 			writer.endObject();
 		}
 
-		// Ghidra exposes its structured block tree only via
+		// Ghidra exposes its structured region tree only via
 		// DecompInterface.structureGraph(BlockGraph, ...), which expects an
 		// input graph of BlockCopy nodes with altindex set so the result's
 		// leaves can be paired back to the original PcodeBlockBasic via
 		// BlockGraph.transferObjectRef.  altindex is a private field with
 		// no setter — one reflection write per BlockCopy is the only way.
 		// Null on Ghidra versions where the field shape changed; emission
-		// silently degrades to an absent "structure" field, which the
-		// consumer treats as "no Ghidra structure available."
+		// silently degrades to an absent "region" field, which the
+		// consumer treats as "no Ghidra region available."
 		private static final java.lang.reflect.Field BLOCKCOPY_ALTINDEX = initAltIndex();
 		private static java.lang.reflect.Field initAltIndex() {
 			try {
@@ -5192,8 +5192,8 @@ public class PcodeSerializer {
 			}
 		}
 
-		// Emit Ghidra's structured BlockGraph tree as a single JSON
-		// object rooted at the function's outermost graph node.
+		// Emit Ghidra's structured region tree as a single JSON object
+		// rooted at the function's outermost graph node.
 		//
 		// Each node:
 		//   "kind"     — PcodeBlock.typeToName(getType()).  Vocabulary:
@@ -5209,7 +5209,7 @@ public class PcodeSerializer {
 		// Absent when DecompInterface.structureGraph isn't usable for any
 		// reason: the consumer must treat absence as "fall back to
 		// CFG-based structuring."
-		void serializeStructureTree(HighFunction hf) throws Exception {
+		void serializeRegionTree(HighFunction hf) throws Exception {
 			if (BLOCKCOPY_ALTINDEX == null || hf == null) {
 				return;
 			}
@@ -5246,7 +5246,7 @@ public class PcodeSerializer {
 				}
 			} catch (Throwable t) {
 				// Degraded — the consumer falls back.  Don't emit a
-				// partial structure tree.
+				// partial region tree.
 				return;
 			}
 
@@ -5260,12 +5260,12 @@ public class PcodeSerializer {
 				return;
 			}
 
-			writer.name("structure").beginObject();
-			emitStructureNode(structured, bbs);
+			writer.name("region").beginObject();
+			emitRegionNode(structured, bbs);
 			writer.endObject();
 		}
 
-		private void emitStructureNode(PcodeBlock b,
+		private void emitRegionNode(PcodeBlock b,
 				java.util.ArrayList<PcodeBlockBasic> originalBbs) throws Exception {
 			String kind = PcodeBlock.typeToName(b.getType());
 			if (kind == null) {
@@ -5303,7 +5303,7 @@ public class PcodeSerializer {
 				writer.name("children").beginArray();
 				for (int i = 0; i < bg.getSize(); i++) {
 					writer.beginObject();
-					emitStructureNode(bg.getBlock(i), originalBbs);
+					emitRegionNode(bg.getBlock(i), originalBbs);
 					writer.endObject();
 				}
 				writer.endArray();
@@ -5320,7 +5320,7 @@ public class PcodeSerializer {
 				if (b instanceof BlockGoto) {
 					BlockGoto bgo = (BlockGoto) b;
 					writer.name("goto_targets").beginArray();
-					String lbl = resolveStructureBlockLabel(bgo.getGotoTarget(), originalBbs);
+					String lbl = resolveRegionBlockLabel(bgo.getGotoTarget(), originalBbs);
 					if (lbl == null) {
 						writer.nullValue();
 					} else {
@@ -5333,7 +5333,7 @@ public class PcodeSerializer {
 					java.util.List<PcodeBlock> targets =
 							getBlockMultiGotoTargets(bmg);
 					for (PcodeBlock tgt : targets) {
-						String lbl = resolveStructureBlockLabel(tgt, originalBbs);
+						String lbl = resolveRegionBlockLabel(tgt, originalBbs);
 						if (lbl == null) {
 							writer.nullValue();
 						} else {
@@ -5410,11 +5410,11 @@ public class PcodeSerializer {
 			return java.util.Collections.emptyList();
 		}
 
-		// Walk a structured-graph PcodeBlock to the first leaf BlockCopy
+		// Walk a region-tree PcodeBlock to the first leaf BlockCopy
 		// and return its source-level block label.  Used for goto-target
 		// emission where the target may itself be a wrapper (BlockGoto,
 		// BlockMultiGoto, BlockList, ...) rather than a raw BlockCopy.
-		private String resolveStructureBlockLabel(PcodeBlock b,
+		private String resolveRegionBlockLabel(PcodeBlock b,
 				java.util.ArrayList<PcodeBlockBasic> originalBbs) throws Exception {
 			if (b == null) return null;
 			if (b instanceof BlockCopy) {
@@ -5437,7 +5437,7 @@ public class PcodeSerializer {
 			if (b instanceof BlockGraph) {
 				BlockGraph bg = (BlockGraph) b;
 				if (bg.getSize() > 0) {
-					return resolveStructureBlockLabel(bg.getBlock(0), originalBbs);
+					return resolveRegionBlockLabel(bg.getBlock(0), originalBbs);
 				}
 			}
 			return null;

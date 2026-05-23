@@ -814,26 +814,26 @@ namespace patchestry::ghidra {
             }
         }
 
-        if (const auto *struct_obj = func_obj.getObject("structure")) {
-            StructureNode root;
-            if (deserialize_structure_node(*struct_obj, root, function.name)) {
-                function.structure = std::move(root);
+        if (const auto *region_obj = func_obj.getObject("region")) {
+            RegionNode root;
+            if (deserialize_region_node(*region_obj, root, function.name)) {
+                function.region = std::move(root);
             }
         }
 
         return function;
     }
 
-    // Recursive parse of the Ghidra structured BlockGraph tree.  Returns
+    // Recursive parse of the Ghidra structured region tree.  Returns
     // false on malformed input (logged and the whole tree is dropped, so
     // the consumer falls back to CFG-based structuring rather than acting
     // on partial data).
-    bool JsonParser::deserialize_structure_node(const JsonObject &node_obj,
-            StructureNode &node, const std::string &fn_name) {
+    bool JsonParser::deserialize_region_node(const JsonObject &node_obj,
+            RegionNode &node, const std::string &fn_name) {
         auto kind = get_string_if_valid(node_obj, "kind");
         if (!kind) {
             LOG(WARNING) << "Function '" << fn_name
-                         << "' structure node missing 'kind'; dropping tree.\n";
+                         << "' region node missing 'kind'; dropping tree.\n";
             return false;
         }
         node.kind = *kind;
@@ -849,11 +849,11 @@ namespace patchestry::ghidra {
                 const auto *child_obj = child_val.getAsObject();
                 if (child_obj == nullptr) {
                     LOG(WARNING) << "Function '" << fn_name
-                                 << "' structure child is not an object; dropping tree.\n";
+                                 << "' region child is not an object; dropping tree.\n";
                     return false;
                 }
-                StructureNode child;
-                if (!deserialize_structure_node(*child_obj, child, fn_name)) {
+                RegionNode child;
+                if (!deserialize_region_node(*child_obj, child, fn_name)) {
                     return false;
                 }
                 node.children.push_back(std::move(child));

@@ -5,7 +5,7 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include <patchestry/AST/BuildSNodeFromStructure.hpp>
+#include <patchestry/AST/BuildSNodeFromRegion.hpp>
 
 #include <patchestry/AST/CGraph.hpp>
 #include <patchestry/AST/SNode.hpp>
@@ -26,19 +26,19 @@
 
 namespace patchestry::ast {
 
-    BuildSNodeFromStructure::BuildSNodeFromStructure(
+    BuildSNodeFromRegion::BuildSNodeFromRegion(
         const ghidra::Function &function, CGraph &graph,
         SNodeFactory &factory, clang::ASTContext &ctx
     )
         : function_(function), graph_(graph), factory_(factory), ctx_(ctx) {}
 
-    bool BuildSNodeFromStructure::TryBuild() {
-        if (!function_.structure.has_value() || graph_.nodes.empty()) {
+    bool BuildSNodeFromRegion::TryBuild() {
+        if (!function_.region.has_value() || graph_.nodes.empty()) {
             return false;
         }
 
         covered_cnodes_.clear();
-        auto body = Translate(*function_.structure);
+        auto body = Translate(*function_.region);
         if (!body.has_value()) {
             return false;
         }
@@ -75,13 +75,13 @@ namespace patchestry::ast {
         }
 
         // Coverage check: every CNode must be reachable from Ghidra's
-        // structure tree (after synthetic-entry handling above).
+        // region tree (after synthetic-entry handling above).
         // CGraphBuilder and Ghidra may disagree on block boundaries
         // for other reasons too (e.g., unreachable blocks).  Silently
         // dropping uncovered CNodes would lose statements; per loud-
         // failure, we fall back instead.
         if (covered_cnodes_.size() != graph_.nodes.size()) {
-            LOG(WARNING) << "Ghidra structure tree covers "
+            LOG(WARNING) << "Ghidra region tree covers "
                          << covered_cnodes_.size() << "/" << graph_.nodes.size()
                          << " CNodes for " << function_.name
                          << "; falling back to CFGStructure\n";
@@ -106,9 +106,9 @@ namespace patchestry::ast {
         return true;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::Translate(const ghidra::StructureNode &node) {
-        // Kind vocabulary (PcodeBlock::typeToName) lives on StructureNode
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::Translate(const ghidra::RegionNode &node) {
+        // Kind vocabulary (PcodeBlock::typeToName) lives on RegionNode
         // — see Ghidra/PcodeOperations.hpp:243.  Phase 1 handles the
         // straight-line trio; everything else falls back per-function.
         if (node.kind == "plain") {
@@ -146,7 +146,7 @@ namespace patchestry::ast {
         // coverage.  Fall back loudly per loud-failure: the function-
         // level coverage check will redirect to CFGStructure.
         if (node.kind == "multigoto" || node.kind == "condition") {
-            LOG(WARNING) << "BuildSNodeFromStructure: kind '" << node.kind
+            LOG(WARNING) << "BuildSNodeFromRegion: kind '" << node.kind
                          << "' not handled in " << function_.name
                          << "; falling back to CFGStructure\n";
             return std::nullopt;
@@ -154,10 +154,10 @@ namespace patchestry::ast {
         return std::nullopt;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::TranslatePlain(const ghidra::StructureNode &node) {
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::TranslatePlain(const ghidra::RegionNode &node) {
         if (!node.block.has_value()) {
-            LOG(WARNING) << "plain structure node missing block label in "
+            LOG(WARNING) << "plain region node missing block label in "
                          << function_.name << "\n";
             return std::nullopt;
         }
@@ -170,7 +170,7 @@ namespace patchestry::ast {
         if (!covered_cnodes_.insert(*cnode_idx).second) {
             // Same CNode named by two plain leaves — Ghidra's tree
             // shouldn't do this for plain blocks.  Bail loudly.
-            LOG(WARNING) << "Ghidra structure tree references CNode "
+            LOG(WARNING) << "Ghidra region tree references CNode "
                          << *cnode_idx << " twice in " << function_.name
                          << "; falling back to CFGStructure\n";
             return std::nullopt;
@@ -202,8 +202,8 @@ namespace patchestry::ast {
         return out;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::TranslateChildSeq(const ghidra::StructureNode &node) {
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::TranslateChildSeq(const ghidra::RegionNode &node) {
         std::vector< SNode * > out;
         for (const auto &child : node.children) {
             auto child_seq = Translate(child);
@@ -217,8 +217,8 @@ namespace patchestry::ast {
         return out;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::TranslateSwitch(const ghidra::StructureNode &node) {
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::TranslateSwitch(const ghidra::RegionNode &node) {
         if (node.children.empty()) {
             return std::nullopt;
         }
@@ -378,8 +378,8 @@ namespace patchestry::ast {
         return out;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::TranslateProperIf(const ghidra::StructureNode &node) {
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::TranslateProperIf(const ghidra::RegionNode &node) {
         if (node.children.size() != 2) {
             return std::nullopt;
         }
@@ -421,7 +421,7 @@ namespace patchestry::ast {
 
         // succs[0] = not-taken (cond false), succs[1] = taken (cond true).
         // The body covers ONE of the two arms; the other arm is the merge
-        // (the structure tree's next sibling, handled by the enclosing
+        // (the region tree's next sibling, handled by the enclosing
         // list/graph).  Use branch_cond as-is when body is on succs[1]
         // and negate when body is on succs[0].
         clang::Expr *if_cond = cond.branch_cond;
@@ -443,8 +443,8 @@ namespace patchestry::ast {
         return out;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::TranslateIfGoto(const ghidra::StructureNode &node) {
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::TranslateIfGoto(const ghidra::RegionNode &node) {
         if (node.children.size() != 1) {
             return std::nullopt;
         }
@@ -484,8 +484,8 @@ namespace patchestry::ast {
         return out;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::TranslateIfElse(const ghidra::StructureNode &node) {
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::TranslateIfElse(const ghidra::RegionNode &node) {
         if (node.children.size() != 3) {
             return std::nullopt;
         }
@@ -561,8 +561,8 @@ namespace patchestry::ast {
         return out;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::TranslateWhileDo(const ghidra::StructureNode &node) {
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::TranslateWhileDo(const ghidra::RegionNode &node) {
         if (node.children.size() != 2) {
             return std::nullopt;
         }
@@ -639,8 +639,8 @@ namespace patchestry::ast {
         return out;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::TranslateDoWhile(const ghidra::StructureNode &node) {
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::TranslateDoWhile(const ghidra::RegionNode &node) {
         // Single-block self-loop: child[0] is the block carrying both
         // body stmts and the CBRANCH whose taken arm is the back-edge.
         if (node.children.size() != 1) {
@@ -692,8 +692,8 @@ namespace patchestry::ast {
         return out;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::TranslateInfLoop(const ghidra::StructureNode &node) {
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::TranslateInfLoop(const ghidra::RegionNode &node) {
         if (node.children.size() != 1) {
             return std::nullopt;
         }
@@ -714,8 +714,8 @@ namespace patchestry::ast {
         return out;
     }
 
-    BuildSNodeFromStructure::SNodeSeq
-    BuildSNodeFromStructure::TranslateGoto(const ghidra::StructureNode &node) {
+    BuildSNodeFromRegion::SNodeSeq
+    BuildSNodeFromRegion::TranslateGoto(const ghidra::RegionNode &node) {
         if (node.children.size() != 1) {
             return std::nullopt;
         }
@@ -756,7 +756,7 @@ namespace patchestry::ast {
     }
 
     std::optional< std::string >
-    BuildSNodeFromStructure::FirstBlockLabel(const ghidra::StructureNode &node) const {
+    BuildSNodeFromRegion::FirstBlockLabel(const ghidra::RegionNode &node) const {
         if (node.kind == "plain") {
             return node.block;
         }
@@ -769,7 +769,7 @@ namespace patchestry::ast {
     }
 
     std::optional< size_t >
-    BuildSNodeFromStructure::FindCNode(const std::string &block_label) const {
+    BuildSNodeFromRegion::FindCNode(const std::string &block_label) const {
         for (const auto &node : graph_.nodes) {
             if (node.source_key == block_label) {
                 return node.id;

@@ -102,11 +102,11 @@ namespace patchestry::ghidra {
         void
         deserialize_globals(const JsonObject &global_array, VariableMap &serialized_globals);
 
-        // Recursive parse of the Ghidra-supplied structured BlockGraph
-        // tree (Function::structure).  Returns false and logs on
+        // Recursive parse of the Ghidra-supplied structured region
+        // tree (Function::region).  Returns false and logs on
         // malformed input — caller drops the whole tree.
-        bool deserialize_structure_node(
-            const JsonObject &node_obj, StructureNode &node,
+        bool deserialize_region_node(
+            const JsonObject &node_obj, RegionNode &node,
             const std::string &fn_name
         );
     };
