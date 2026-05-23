@@ -1735,10 +1735,18 @@ namespace patchestry::ast {
 
         // Case 2b: F is a conditional forwarder (no stmts, just a branch)
         // with one arm going to T (merge).  Mirror of Case 1b with T as
-        // the merge.  Two emission forms:
+        // the merge.  Emission forms:
         //   (a) Disjunctive targeting merge (T):
         //         if (a.cond || inner_cond) goto T.label;
         //       (A.cond TRUE -> T directly, so outer = a.cond, no negate.)
+        //   (b-absorb) When T is a private, non-conditional body whose
+        //       sole successor is the real merge, absorb T as the
+        //       then-body:  if (a.cond || inner_cond) { T }
+        //       This keeps T inside the if-scope.  A bare guard-goto
+        //       (Form (b)) leaves T as a loose graph successor; a later
+        //       PostDomIf wrap then ejects T from the enclosing
+        //       conditional scope (the load_descriptor_values
+        //       non-equivalent-condition bug).
         //   (b) Conjunctive targeting non-merge (goto_target):
         //         if (!a.cond && inner_cond) goto goto_target.label;
         // See Case 1b for rationale.  Guard: must not have structured SNode.
@@ -1790,6 +1798,69 @@ namespace patchestry::ast {
                     // fallthrough is the non-merge arm.
                     ConsumeGotoEdge(graph_, id, t_id);
                     return true;
+                }
+
+                // Form (b-absorb): T (the convergent target) is a
+                // private, non-conditional body whose sole successor is
+                // the real merge.  Absorb T as the then-body instead of
+                // emitting a guard-goto, producing a complete
+                // `if (a.cond || inner) { T }` that keeps T inside the
+                // if-scope.  Without this, Form (b) below emits a bare
+                // guard-goto and leaves T loose; a later PostDomIf wrap
+                // then ejects the A-dominated T out of `if(A)`, silently
+                // turning the guard `A && (...)` into `!A || (...)`.
+                {
+                    size_t merge_target =
+                        f_s0_is_merge ? f.succs[1] : f.succs[0];
+                    // T is guaranteed non-collapsed by the early guard
+                    // at the top of RuleBlockProperIf (line ~1574),
+                    // so the loop-header check only needs the head match.
+                    bool t_is_loop_header = false;
+                    for (auto *lb : loop_order_) {
+                        if (lb->head == t_id) {
+                            t_is_loop_header = true;
+                            break;
+                        }
+                    }
+                    if (!t.is_conditional && !t.IsSwitchOut()
+                        && t_id != f_id && t.succs.size() == 1
+                        && t.succs[0] == merge_target
+                        && !merge_is_safe_goto_target()
+                        && !t_is_loop_header
+                        && !TargetHasCollapsedGotoRefs(f.original_label)
+                        && !TargetHasCollapsedGotoRefs(t.original_label))
+                    {
+                        // A.cond TRUE -> T directly, so outer = a.cond.
+                        // If F.succs[1] (taken) is T, f.cond TRUE -> T,
+                        // so inner = f.cond; else inner = !f.cond.
+                        // Clone raw branch_cond pointers — see Case 1b.
+                        clang::Expr *outer_cond =
+                            CloneExpr(ctx_, a.branch_cond);
+                        clang::Expr *inner_cond = f_s1_is_merge
+                            ? CloneExpr(ctx_, f.branch_cond)
+                            : NegateExpr(ctx_,
+                                         CloneExpr(ctx_, f.branch_cond));
+                        auto *merged_cond = clang::BinaryOperator::Create(
+                            ctx_,
+                            EnsureRValue(ctx_, outer_cond),
+                            EnsureRValue(ctx_, inner_cond),
+                            clang::BO_LOr, ctx_.BoolTy, clang::VK_PRValue,
+                            clang::OK_Ordinary, VirtualLoc(ctx_),
+                            clang::FPOptionsOverride());
+
+                        auto then_body = BuildLeafSNode(
+                            t_id, /*include_terminal=*/false);
+                        auto *if_node = factory_.Make<SIfThenElse>(
+                            merged_cond, then_body,
+                            std::vector< SNode * >{});
+
+                        std::vector< SNode * > result =
+                            WrapWithPriorContent(id, if_node);
+                        graph_.IdentifyInternal(
+                            {id, f_id, t_id}, CNode::BlockType::kIf,
+                            result);
+                        return true;
+                    }
                 }
 
                 // Form (b): original conjunctive, goto non-merge.
