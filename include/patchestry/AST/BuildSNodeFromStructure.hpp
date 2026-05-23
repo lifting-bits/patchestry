@@ -113,6 +113,13 @@ namespace patchestry::ast {
         /// back until re-extracted.
         SNodeSeq TranslateInfLoop(const ghidra::StructureNode &node);
 
+        /// `goto`: child[0] is the source block (plain leaf) whose
+        /// terminal is an unstructured unconditional branch.  Append
+        /// SGoto(target_label) where target = source block's sole
+        /// successor; the source block's pre-branch stmts emit as the
+        /// prefix.
+        SNodeSeq TranslateGoto(const ghidra::StructureNode &node);
+
         /// Resolve a Ghidra block label to a CNode index in the graph.
         std::optional< size_t > FindCNode(const std::string &block_label) const;
 

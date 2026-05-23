@@ -138,6 +138,19 @@ namespace patchestry::ast {
         if (node.kind == "infloop") {
             return TranslateInfLoop(node);
         }
+        if (node.kind == "goto") {
+            return TranslateGoto(node);
+        }
+        // multigoto/condition: rare in practice (4/0 instances in
+        // bloodview), no clean transformation we trust without test
+        // coverage.  Fall back loudly per loud-failure: the function-
+        // level coverage check will redirect to CFGStructure.
+        if (node.kind == "multigoto" || node.kind == "condition") {
+            LOG(WARNING) << "BuildSNodeFromStructure: kind '" << node.kind
+                         << "' not handled in " << function_.name
+                         << "; falling back to CFGStructure\n";
+            return std::nullopt;
+        }
         return std::nullopt;
     }
 
@@ -163,12 +176,28 @@ namespace patchestry::ast {
             return std::nullopt;
         }
         const auto &cnode = graph_.Node(*cnode_idx);
-        std::vector< SNode * > out;
-        out.reserve(cnode.stmts.size());
+        std::vector< SNode * > stmts;
+        stmts.reserve(cnode.stmts.size());
         for (clang::Stmt *stmt : cnode.stmts) {
             if (stmt != nullptr) {
-                out.push_back(factory_.Make< SStmt >(stmt));
+                stmts.push_back(factory_.Make< SStmt >(stmt));
             }
+        }
+
+        // Wrap the block in SLabel(original_label, stmts) when it has
+        // a label, mirroring what CFGStructure does for active node
+        // representatives at the end of StructureAll.  Without this
+        // wrap, SGoto references emitted elsewhere (ifgoto's taken
+        // arm, the explicit `goto` kind handler) point at no in-tree
+        // label and get dropped by the ClangEmitter dead-goto sweep.
+        // RemoveDeadLabels strips any label not referenced by a goto,
+        // so over-wrapping is safe.
+        std::vector< SNode * > out;
+        if (!cnode.original_label.empty()) {
+            out.push_back(factory_.Make< SLabel >(
+                factory_.Intern(cnode.original_label), std::move(stmts)));
+        } else {
+            out = std::move(stmts);
         }
         return out;
     }
@@ -682,6 +711,47 @@ namespace patchestry::ast {
         auto *w = factory_.Make< SWhile >(one, std::move(*body_seq));
         std::vector< SNode * > out;
         out.push_back(w);
+        return out;
+    }
+
+    BuildSNodeFromStructure::SNodeSeq
+    BuildSNodeFromStructure::TranslateGoto(const ghidra::StructureNode &node) {
+        if (node.children.size() != 1) {
+            return std::nullopt;
+        }
+        const auto &src_struct = node.children[0];
+        if (src_struct.kind != "plain" || !src_struct.block.has_value()) {
+            return std::nullopt;
+        }
+        auto src_idx = FindCNode(*src_struct.block);
+        if (!src_idx.has_value()) {
+            return std::nullopt;
+        }
+        const auto &src = graph_.Node(*src_idx);
+        if (src.succs.size() != 1) {
+            LOG(WARNING) << "goto source " << *src_struct.block << " has "
+                         << src.succs.size() << " successors in "
+                         << function_.name << "; falling back\n";
+            return std::nullopt;
+        }
+
+        auto pre = TranslatePlain(src_struct);
+        if (!pre.has_value()) {
+            return std::nullopt;
+        }
+
+        const auto &target = graph_.Node(src.succs[0]);
+        if (target.original_label.empty()) {
+            LOG(WARNING) << "goto target " << target.source_key
+                         << " lacks label in " << function_.name
+                         << "; falling back\n";
+            return std::nullopt;
+        }
+
+        auto *goto_node = factory_.Make< SGoto >(
+            factory_.Intern(target.original_label));
+        auto out = std::move(*pre);
+        out.push_back(goto_node);
         return out;
     }
 
