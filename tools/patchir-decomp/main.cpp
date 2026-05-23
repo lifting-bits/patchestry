@@ -83,10 +83,14 @@ namespace {
     const llvm::cl::opt< bool > use_structuring_pass( // NOLINT(cert-err58-cpp)
         "use-structuring-pass",
         llvm::cl::desc(
-            "Enable the CFGStructure structuring pass (default on; "
-            "pass =false to fall back to the legacy goto-emitted path)"
+            "Enable the structuring pass — runs Ghidra-structure (if "
+            "--use-ghidra-structure is on and the input carries a "
+            "Function.structure tree) and/or CFGStructure to fold the "
+            "CFG into hierarchical SNodes.  Off by default: emit the "
+            "raw goto-based control flow.  Pass --use-structuring-pass "
+            "to enable for a run."
         ),
-        llvm::cl::init(true)
+        llvm::cl::init(false)
     );
 
     const llvm::cl::opt< bool > use_ghidra_structure( // NOLINT(cert-err58-cpp)

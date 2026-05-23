@@ -19,7 +19,7 @@ namespace patchestry {
         bool emit_asm                       = false;
         bool emit_obj                       = false;
         bool verbose                        = false;
-        bool use_structuring_pass           = true;
+        bool use_structuring_pass           = false;
         // Seed SNode tree from Function.structure (Ghidra-supplied) and
         // skip CFGStructure's Rule* discovery loop when present.  Falls
         // back per-function when structure is absent or translation
