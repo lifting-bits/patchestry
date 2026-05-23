@@ -69,7 +69,8 @@ namespace patchestry::ast {
         /// children[1..N] are arm bodies in dispatch order.  Discriminant
         /// + case-value labeling come from the dispatcher CNode's
         /// `branch_cond` + `switch_cases` (already populated by
-        /// CGraphBuilder from `func.switch_hints`).
+        /// CGraphBuilder from the per-op SwitchCase entries that carry
+        /// `is_default` flags recovered from Ghidra's ClangCaseToken markup).
         SNodeSeq TranslateSwitch(const ghidra::RegionNode &node);
 
         /// `properif`: child[0] is the cond block (CBRANCH terminator)

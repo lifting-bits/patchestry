@@ -3914,9 +3914,48 @@ public class PcodeSerializer {
 	}
 
 
+	// Collects target_block labels of default arms for branchOp from
+	// ClangCaseToken markup.  Default arms are successors that no
+	// ClangCaseToken references, i.e., the source-level `default:` (or
+	// missing-case fallthrough) destination.  Empty when ClangCaseToken
+	// markup is unavailable or the switch has no default arm.
+	private java.util.LinkedHashSet<String>
+			recoverDefaultArmsFromMarkup(PcodeOp branchOp) {
+		java.util.LinkedHashSet<String> defaults = new java.util.LinkedHashSet<>();
+		if (currentDecompResults == null) { return defaults; }
+		ClangTokenGroup markup = currentDecompResults.getCCodeMarkup();
+		if (markup == null) { return defaults; }
+
+		java.util.ArrayList<ClangNode> flat = new java.util.ArrayList<>();
+		markup.flatten(flat);
+
+		java.util.LinkedHashSet<PcodeBlockBasic> nonDefaultTargets =
+			new java.util.LinkedHashSet<>();
+		for (ClangNode node : flat) {
+			if (!(node instanceof ClangCaseToken)) { continue; }
+			ClangCaseToken caseTok = (ClangCaseToken) node;
+			if (caseTok.getSwitchOp() != branchOp) { continue; }
+			PcodeOp caseStartOp = caseTok.getPcodeOp();
+			if (caseStartOp == null) { continue; }
+			PcodeBlockBasic target = caseStartOp.getParent();
+			if (target != null) { nonDefaultTargets.add(target); }
+		}
+
+		PcodeBlockBasic switchBlock = branchOp.getParent();
+		if (switchBlock == null) { return defaults; }
+		for (int i = 0; i < switchBlock.getOutSize(); ++i) {
+			PcodeBlock out = switchBlock.getOut(i);
+			if (out instanceof PcodeBlockBasic
+					&& !nonDefaultTargets.contains(out)) {
+				defaults.add(label(out));
+			}
+		}
+		return defaults;
+	}
+
 	// Collects {target_block → case_value} from ClangCaseToken nodes whose
 	// getSwitchOp() matches branchOp.  Last-value-wins for fall-through —
-	// the lossless grouping lives in switch_hints.
+	// the lossless grouping is recovered per-arm in switch_cases.
 	private Map<String,Long> recoverCaseValuesFromMarkup(PcodeOp branchOp) {
 		if (currentDecompResults == null) {
 			return null;
@@ -4062,6 +4101,9 @@ public class PcodeSerializer {
 			return;
 		}
 
+		java.util.LinkedHashSet<String> defaultArms =
+			recoverDefaultArmsFromMarkup(pcodeOp);
+
 		writer.name("switch_input");
 		serializeInput(pcodeOp, discriminant);
 		writer.name("switch_cases").beginArray();
@@ -4086,6 +4128,39 @@ public class PcodeSerializer {
 				hasExit = !succIsAnotherCase;
 			}
 			writer.name("has_exit").value(hasExit);
+			writer.name("is_default").value(false);
+			writer.endObject();
+		}
+		// Synthetic entry per default arm — identified via ClangCaseToken
+		// markup (a successor with no ClangCaseToken pointing at it is the
+		// source-level `default:` destination).  value is 0 (ignored when
+		// is_default=true); the consumer routes on is_default.
+		for (String defaultBlockLabel : defaultArms) {
+			PcodeBlock caseBlock = null;
+			for (int i = 0; i < n; i++) {
+				if (label(currentBlock.getOut(i)).equals(defaultBlockLabel)) {
+					caseBlock = currentBlock.getOut(i);
+					break;
+				}
+			}
+			if (caseBlock == null) { continue; }
+			writer.beginObject();
+			writer.name("value").value(0);
+			writer.name("target_block").value(defaultBlockLabel);
+			boolean hasExit = false;
+			if (caseBlock.getOutSize() == 1) {
+				PcodeBlock succ = caseBlock.getOut(0);
+				boolean succIsAnotherCase = false;
+				for (int j = 0; j < n; j++) {
+					if (currentBlock.getOut(j) == succ) {
+						succIsAnotherCase = true;
+						break;
+					}
+				}
+				hasExit = !succIsAnotherCase;
+			}
+			writer.name("has_exit").value(hasExit);
+			writer.name("is_default").value(true);
 			writer.endObject();
 		}
 		writer.endArray();
@@ -4859,7 +4934,6 @@ public class PcodeSerializer {
 						writer.name("entry_block").value(label(firstPcodeBasicBlock));
 					}
 
-					serializeSwitchHints(decompResults, highFunction);
 					serializeRegionTree(highFunction);
 				}
 			} else {
@@ -5066,111 +5140,6 @@ public class PcodeSerializer {
 			System.out.println("Total serialized intrinsics: " + Integer.toString(numIntrinsics));
 		}
 		
-		// Serialize all functions.
-		//
-		// NOTE(pag): As we serialize functions, we might discover references
-		//			  to other functions, causing `functions` will grow over
-		// 			  time.
-		// Function-level {BRANCHIND label → [arms]} map of switch arms
-		// recovered from ClangCaseToken nodes.  Fall-through values
-		// ("case 1: case 2:") group into one arm.  Default arms (no
-		// ClangCaseToken) are emitted with empty case_values, default=true.
-		void serializeSwitchHints(DecompileResults decompResults,
-				HighFunction hf) throws Exception {
-			writer.name("switch_hints").beginObject();
-			if (decompResults == null || hf == null) {
-				writer.endObject();
-				return;
-			}
-			ClangTokenGroup markup = decompResults.getCCodeMarkup();
-			if (markup == null) {
-				writer.endObject();
-				return;
-			}
-
-			java.util.ArrayList<ClangNode> flat = new java.util.ArrayList<>();
-			markup.flatten(flat);
-
-			// LinkedHashMap for reproducible JSON ordering.
-			Map<PcodeOp, java.util.LinkedHashMap<PcodeBlockBasic,
-					java.util.ArrayList<Long>>> bySwitchByTarget =
-				new java.util.LinkedHashMap<>();
-
-			for (ClangNode node : flat) {
-				if (!(node instanceof ClangCaseToken)) {
-					continue;
-				}
-				ClangCaseToken caseTok = (ClangCaseToken) node;
-				PcodeOp switchOp = caseTok.getSwitchOp();
-				PcodeOp caseStartOp = caseTok.getPcodeOp();
-				if (switchOp == null || caseStartOp == null) {
-					continue;
-				}
-				PcodeBlockBasic target = caseStartOp.getParent();
-				if (target == null) {
-					continue;
-				}
-
-				// Null on pointer-typed discriminants; rare, drop.
-				Scalar scalar = caseTok.getScalar();
-				if (scalar == null) {
-					continue;
-				}
-
-				java.util.LinkedHashMap<PcodeBlockBasic,
-						java.util.ArrayList<Long>> byTarget =
-					bySwitchByTarget.computeIfAbsent(switchOp,
-						k -> new java.util.LinkedHashMap<>());
-				java.util.ArrayList<Long> values =
-					byTarget.computeIfAbsent(target,
-						k -> new java.util.ArrayList<>());
-				values.add(scalar.getValue());
-			}
-
-			for (Map.Entry<PcodeOp, java.util.LinkedHashMap<PcodeBlockBasic,
-					java.util.ArrayList<Long>>> entry : bySwitchByTarget.entrySet()) {
-				PcodeOp switchOp = entry.getKey();
-				java.util.LinkedHashMap<PcodeBlockBasic,
-						java.util.ArrayList<Long>> byTarget = entry.getValue();
-
-				// Default arms: successors with no associated ClangCaseToken.
-				PcodeBlockBasic switchBlock = switchOp.getParent();
-				java.util.LinkedHashSet<PcodeBlockBasic> defaultArms =
-					new java.util.LinkedHashSet<>();
-				if (switchBlock != null) {
-					for (int i = 0; i < switchBlock.getOutSize(); ++i) {
-						PcodeBlock out = switchBlock.getOut(i);
-						if (out instanceof PcodeBlockBasic
-								&& !byTarget.containsKey(out)) {
-							defaultArms.add((PcodeBlockBasic) out);
-						}
-					}
-				}
-
-				writer.name(label(switchOp)).beginArray();
-				for (Map.Entry<PcodeBlockBasic, java.util.ArrayList<Long>> arm
-						: byTarget.entrySet()) {
-					writer.beginObject();
-					writer.name("case_values").beginArray();
-					for (Long v : arm.getValue()) {
-						writer.value(v);
-					}
-					writer.endArray();
-					writer.name("default").value(false);
-					writer.name("target").value(label(arm.getKey()));
-					writer.endObject();
-				}
-				for (PcodeBlockBasic def : defaultArms) {
-					writer.beginObject();
-					writer.name("case_values").beginArray().endArray();
-					writer.name("default").value(true);
-					writer.name("target").value(label(def));
-					writer.endObject();
-				}
-				writer.endArray();
-			}
-			writer.endObject();
-		}
 
 		// Ghidra exposes its structured region tree only via
 		// DecompInterface.structureGraph(BlockGraph, ...), which expects an

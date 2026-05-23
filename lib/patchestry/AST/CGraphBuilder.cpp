@@ -304,17 +304,23 @@ namespace patchestry::ast {
 
                 if (!term->switch_cases.empty()) {
                     // --- Priority 1: explicit switch_cases ---
+                    // Each entry carries its own is_default flag (the
+                    // Ghidra serializer recovers default arms from
+                    // ClangCaseToken markup and emits a synthetic entry
+                    // with is_default=true).  We just propagate it.
                     node.branch_cond = builder.create_switch_discriminant(ctx, *term);
 
                     std::unordered_set<size_t> seen_succs;
+                    bool any_default = false;
                     for (const auto &sc : term->switch_cases) {
                         if (!key_to_index.contains(sc.target_block)) continue;
                         size_t target_idx = key_to_index[sc.target_block];
                         if (seen_succs.insert(target_idx).second) {
                             add_source_edge(g, node, key, sc.target_block,
-                                            target_idx, "switch-case");
+                                            target_idx,
+                                            sc.is_default ? "switch-default"
+                                                          : "switch-case");
                         }
-                        // Map to succ index
                         size_t succ_idx = 0;
                         for (size_t si = 0; si < node.succs.size(); ++si) {
                             if (node.succs[si] == target_idx) {
@@ -323,30 +329,18 @@ namespace patchestry::ast {
                             }
                         }
                         node.switch_cases.push_back(SwitchCaseEntry{
-                            sc.value, succ_idx, sc.has_exit, /*is_default=*/false});
+                            sc.value, succ_idx, sc.has_exit, sc.is_default});
+                        if (sc.is_default) { any_default = true; }
                     }
-                    // Default arm: prefer switch_hints (Ghidra's
-                    // ClangCaseToken markup identifies the source-level
-                    // default authoritatively) and fall back to the
-                    // fallback_block heuristic when hints are absent.
-                    std::optional<std::string> default_target;
-                    auto hints_it = func.switch_hints.find(term->key);
-                    if (hints_it != func.switch_hints.end()) {
-                        for (const auto &arm : hints_it->second) {
-                            if (arm.is_default) {
-                                default_target = arm.target;
-                                break;
-                            }
-                        }
-                    }
-                    if (!default_target && term->fallback_block) {
-                        default_target = *term->fallback_block;
-                    }
-
-                    if (default_target && key_to_index.contains(*default_target)) {
-                        size_t fb_idx = key_to_index[*default_target];
+                    // Fallback: when no entry in switch_cases is flagged
+                    // as default (older JSON or markup-unavailable cases),
+                    // fall back to the fallback_block CFG heuristic.
+                    if (!any_default && term->fallback_block
+                        && key_to_index.contains(*term->fallback_block))
+                    {
+                        size_t fb_idx = key_to_index[*term->fallback_block];
                         if (seen_succs.insert(fb_idx).second) {
-                            add_source_edge(g, node, key, *default_target,
+                            add_source_edge(g, node, key, *term->fallback_block,
                                             fb_idx, "switch-default");
                         }
                         size_t fb_succ_idx = 0;
