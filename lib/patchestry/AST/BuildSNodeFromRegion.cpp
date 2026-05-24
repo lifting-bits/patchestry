@@ -15,11 +15,14 @@
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Expr.h>
+#include <clang/AST/Stmt.h>
 #include <clang/AST/Type.h>
 #include <llvm/ADT/APInt.h>
+#include <llvm/Support/Casting.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -386,22 +389,14 @@ namespace patchestry::ast {
         const auto &cond_struct = node.children[0];
         const auto &body_struct = node.children[1];
 
-        if (cond_struct.kind != "plain" || !cond_struct.block.has_value()) {
+        auto head = TranslateCondHead(cond_struct, node);
+        if (!head.has_value()) {
             return std::nullopt;
         }
-        auto cond_idx = FindCNode(*cond_struct.block);
-        if (!cond_idx.has_value()) {
-            return std::nullopt;
-        }
-        const auto &cond = graph_.Node(*cond_idx);
+        const auto &cond = graph_.Node(head->cond_idx);
         if (!cond.is_conditional || cond.succs.size() != 2
             || cond.branch_cond == nullptr)
         {
-            return std::nullopt;
-        }
-
-        auto pre = TranslatePlain(cond_struct);
-        if (!pre.has_value()) {
             return std::nullopt;
         }
 
@@ -438,7 +433,7 @@ namespace patchestry::ast {
 
         auto *if_node = factory_.Make< SIfThenElse >(
             if_cond, std::move(*body_seq), std::vector< SNode * >{});
-        auto out = std::move(*pre);
+        auto out = std::move(head->pre);
         out.push_back(if_node);
         return out;
     }
@@ -493,22 +488,14 @@ namespace patchestry::ast {
         const auto &arm1_struct = node.children[1];
         const auto &arm2_struct = node.children[2];
 
-        if (cond_struct.kind != "plain" || !cond_struct.block.has_value()) {
+        auto head = TranslateCondHead(cond_struct, node);
+        if (!head.has_value()) {
             return std::nullopt;
         }
-        auto cond_idx = FindCNode(*cond_struct.block);
-        if (!cond_idx.has_value()) {
-            return std::nullopt;
-        }
-        const auto &cond = graph_.Node(*cond_idx);
+        const auto &cond = graph_.Node(head->cond_idx);
         if (!cond.is_conditional || cond.succs.size() != 2
             || cond.branch_cond == nullptr)
         {
-            return std::nullopt;
-        }
-
-        auto pre = TranslatePlain(cond_struct);
-        if (!pre.has_value()) {
             return std::nullopt;
         }
 
@@ -556,7 +543,7 @@ namespace patchestry::ast {
 
         auto *if_node = factory_.Make< SIfThenElse >(
             cond.branch_cond, std::move(then_body), std::move(else_body));
-        auto out = std::move(*pre);
+        auto out = std::move(head->pre);
         out.push_back(if_node);
         return out;
     }
@@ -785,6 +772,224 @@ namespace patchestry::ast {
         auto out = std::move(*body);
         out.push_back(goto_node);
         return out;
+    }
+
+    std::optional< BuildSNodeFromRegion::CondHead >
+    BuildSNodeFromRegion::TranslateCondHead(
+        const ghidra::RegionNode &cond_struct,
+        const ghidra::RegionNode &enclosing)
+    {
+        // Fast path: a `plain` cond is a single CBRANCH block.  Delegate
+        // to TranslatePlain (which registers coverage and wraps in SLabel
+        // when the block has an original_label).
+        if (cond_struct.kind == "plain") {
+            if (!cond_struct.block.has_value()) {
+                return std::nullopt;
+            }
+            auto idx = FindCNode(*cond_struct.block);
+            if (!idx.has_value()) {
+                return std::nullopt;
+            }
+            auto plain_seq = TranslatePlain(cond_struct);
+            if (!plain_seq.has_value()) {
+                return std::nullopt;
+            }
+            return CondHead{std::move(*plain_seq), *idx};
+        }
+        // `list` cond: one or more pre-cond blocks compute intermediate
+        // values, the final child holds the CBRANCH.  Unifying these
+        // makes properif/ifelse handlers cover Ghidra's common multi-
+        // block-condition output (146 of 176 fallbacks on bloodview).
+        if (cond_struct.kind != "list") {
+            return std::nullopt;
+        }
+        if (cond_struct.children.size() < 2) {
+            return std::nullopt;
+        }
+        const auto &cond_child = cond_struct.children.back();
+        if (cond_child.kind != "plain" || !cond_child.block.has_value()) {
+            return std::nullopt;
+        }
+        auto cond_idx = FindCNode(*cond_child.block);
+        if (!cond_idx.has_value()) {
+            return std::nullopt;
+        }
+
+        // Option (c): TranslatePlain wraps each pre-cond block in an
+        // SLabel when it has a non-empty original_label.  Inside the
+        // if/loop construct, that SLabel is at risk of duplication by
+        // DuplicateStackGuardReturnTargets.  If a goto from outside the
+        // enclosing construct targets one of these labels, duplication
+        // leaves the outside reference dangling and crashes the pass.
+        // Bail in that case.
+        if (PreCondLabelsReferencedFromOutside(cond_struct, enclosing)) {
+            LOG(WARNING) << "list cond in " << function_.name
+                         << " has pre-cond labels referenced from outside"
+                            " the enclosing construct; falling back\n";
+            return std::nullopt;
+        }
+
+        std::vector< SNode * > pre;
+        for (size_t i = 0; i + 1 < cond_struct.children.size(); ++i) {
+            auto seq = Translate(cond_struct.children[i]);
+            if (!seq.has_value()) {
+                return std::nullopt;
+            }
+            for (SNode *s : *seq) {
+                pre.push_back(s);
+            }
+        }
+        auto cond_seq = TranslatePlain(cond_child);
+        if (!cond_seq.has_value()) {
+            return std::nullopt;
+        }
+        for (SNode *s : *cond_seq) {
+            pre.push_back(s);
+        }
+        return CondHead{std::move(pre), *cond_idx};
+    }
+
+    bool BuildSNodeFromRegion::IsAddressInSubtree(
+        const ghidra::RegionNode *needle,
+        const ghidra::RegionNode &subtree) const
+    {
+        if (needle == &subtree) {
+            return true;
+        }
+        for (const auto &c : subtree.children) {
+            if (IsAddressInSubtree(needle, c)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    namespace {
+        // Walk a clang::Stmt subtree and collect GotoStmt target names.
+        void CollectGotoStmtTargets(
+            const clang::Stmt *s,
+            std::vector< std::string > &out)
+        {
+            if (s == nullptr) {
+                return;
+            }
+            if (const auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+                if (const auto *ld = gs->getLabel()) {
+                    out.push_back(ld->getName().str());
+                }
+                return;
+            }
+            for (const clang::Stmt *child : s->children()) {
+                CollectGotoStmtTargets(child, out);
+            }
+        }
+    } // namespace
+
+    bool BuildSNodeFromRegion::PreCondLabelsReferencedFromOutside(
+        const ghidra::RegionNode &cond_struct,
+        const ghidra::RegionNode &enclosing) const
+    {
+        if (cond_struct.kind != "list" || cond_struct.children.size() < 2) {
+            return false;
+        }
+
+        // Step 1: collect labels of pre-cond blocks that would emit an
+        // SLabel wrap.  Recurse into any non-plain pre-cond children
+        // (e.g., nested list) so we don't miss labels inside them.
+        std::unordered_set< std::string > pre_labels;
+        std::function< void(const ghidra::RegionNode &) > collect_labels =
+            [&](const ghidra::RegionNode &n) {
+                if (n.kind == "plain" && n.block.has_value()) {
+                    if (auto idx = FindCNode(*n.block)) {
+                        const auto &cn = graph_.Node(*idx);
+                        if (!cn.original_label.empty()) {
+                            pre_labels.insert(cn.original_label);
+                        }
+                    }
+                }
+                for (const auto &c : n.children) {
+                    collect_labels(c);
+                }
+            };
+        for (size_t i = 0; i + 1 < cond_struct.children.size(); ++i) {
+            collect_labels(cond_struct.children[i]);
+        }
+        if (pre_labels.empty()) {
+            // No SLabel wrap → no duplication risk.
+            return false;
+        }
+
+        // Step 2: walk the whole function region; for every goto
+        // reference, if its target hits pre_labels AND the source region
+        // sits OUTSIDE the enclosing subtree, the reference will dangle.
+        if (!function_.region.has_value()) {
+            return false;
+        }
+
+        bool unsafe = false;
+        std::function< void(const ghidra::RegionNode &) > walk =
+            [&](const ghidra::RegionNode &root) {
+                if (unsafe) {
+                    return;
+                }
+                auto check_target = [&](const std::string &target) {
+                    if (target.empty() || !pre_labels.count(target)) {
+                        return;
+                    }
+                    if (!IsAddressInSubtree(&root, enclosing)) {
+                        unsafe = true;
+                    }
+                };
+
+                // Raw clang::GotoStmts embedded in plain-leaf CNode stmts.
+                if (root.kind == "plain" && root.block.has_value()) {
+                    if (auto idx = FindCNode(*root.block)) {
+                        const auto &cn = graph_.Node(*idx);
+                        std::vector< std::string > targets;
+                        for (const clang::Stmt *s : cn.stmts) {
+                            CollectGotoStmtTargets(s, targets);
+                        }
+                        CollectGotoStmtTargets(cn.terminal, targets);
+                        for (const auto &t : targets) {
+                            check_target(t);
+                            if (unsafe) return;
+                        }
+                    }
+                }
+                // Region-level goto/multigoto wrappers.  Goto-target
+                // strings come from Ghidra in "address:idx:type" (colon)
+                // form, but SLabel names use the "_"-normalized form.
+                // Check both since either could match a pre-cond label.
+                if (root.kind == "goto" || root.kind == "multigoto") {
+                    for (const auto &t : root.goto_targets) {
+                        check_target(t);
+                        check_target(LabelNameFromKey(t));
+                        if (unsafe) return;
+                    }
+                }
+                // ifgoto: synthetic SGoto target is cond.succs[1].original_label.
+                if (root.kind == "ifgoto" && !root.children.empty()) {
+                    const auto &cond_child = root.children[0];
+                    if (cond_child.kind == "plain"
+                        && cond_child.block.has_value())
+                    {
+                        if (auto idx = FindCNode(*cond_child.block)) {
+                            const auto &cn = graph_.Node(*idx);
+                            if (cn.succs.size() == 2) {
+                                const auto &target = graph_.Node(cn.succs[1]);
+                                check_target(target.original_label);
+                                if (unsafe) return;
+                            }
+                        }
+                    }
+                }
+                for (const auto &c : root.children) {
+                    walk(c);
+                    if (unsafe) return;
+                }
+            };
+        walk(*function_.region);
+        return unsafe;
     }
 
     std::optional< std::string >

@@ -73,6 +73,31 @@ namespace patchestry::ast {
         /// `is_default` flags recovered from Ghidra's ClangCaseToken markup).
         SNodeSeq TranslateSwitch(const ghidra::RegionNode &node);
 
+        /// Result of resolving the cond head of an if/loop construct.
+        /// `pre` is the prefix SNode sequence to emit before the
+        /// if/while node (it includes the cond block's own stmts);
+        /// `cond_idx` is the CNode whose `branch_cond`/`succs` drive
+        /// the condition.  Helper unifies the `plain` and `list`
+        /// shapes Ghidra produces for the cond child.
+        struct CondHead {
+            std::vector< SNode * > pre;
+            size_t cond_idx;
+        };
+
+        /// Translate the cond head of a properif/ifelse/whiledo.
+        /// Accepts kind `plain` (single CBRANCH block) or `list` (one
+        /// or more pre-cond blocks ending in a CBRANCH block).
+        ///
+        /// For `list`, applies an Option-(c) safety check: if any
+        /// pre-cond block label is referenced by a goto originating
+        /// OUTSIDE the `enclosing` if/loop subtree, returns nullopt.
+        /// The downstream post-pass `DuplicateStackGuardReturnTargets`
+        /// would otherwise duplicate the SLabel wrap inside the
+        /// construct and leave the outside reference dangling.
+        std::optional< CondHead > TranslateCondHead(
+            const ghidra::RegionNode &cond_struct,
+            const ghidra::RegionNode &enclosing);
+
         /// `properif`: child[0] is the cond block (CBRANCH terminator)
         /// and child[1] is the then-body subtree.  The if condition is
         /// the cond CNode's `branch_cond`, negated if the body entry
@@ -123,6 +148,24 @@ namespace patchestry::ast {
 
         /// Resolve a Ghidra block label to a CNode index in the graph.
         std::optional< size_t > FindCNode(const std::string &block_label) const;
+
+        /// Option-(c) safety check.  Returns true when at least one
+        /// pre-cond block label of `cond_struct` (kind `list`) is
+        /// referenced by a goto whose source region sits OUTSIDE the
+        /// `enclosing` if/loop subtree.  Used by TranslateCondHead to
+        /// reject shapes that would crash DuplicateStackGuardReturnTargets
+        /// after SLabel duplication.
+        bool PreCondLabelsReferencedFromOutside(
+            const ghidra::RegionNode &cond_struct,
+            const ghidra::RegionNode &enclosing) const;
+
+        /// Recursively check pointer identity: is `needle` the same
+        /// node as `subtree` or any of its descendants?  Safe because
+        /// the region tree is value-owned and we never reallocate
+        /// children during a TryBuild call.
+        bool IsAddressInSubtree(
+            const ghidra::RegionNode *needle,
+            const ghidra::RegionNode &subtree) const;
 
         /// Walk a region subtree to its first `plain` leaf and return
         /// the block label.  Used to associate a `switch` arm body with
