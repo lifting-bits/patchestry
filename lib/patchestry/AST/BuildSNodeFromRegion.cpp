@@ -856,28 +856,39 @@ namespace patchestry::ast {
             }
             return CondHead{std::move(*plain_seq), *idx};
         }
-        // `list` cond: one or more pre-cond blocks compute intermediate
-        // values, the final child holds the CBRANCH.  Unifying these
-        // makes properif/ifelse handlers cover Ghidra's common multi-
-        // block-condition output (146 of 176 fallbacks on bloodview).
+        // `list` cond: one or more pre-cond regions compute intermediate
+        // values, terminated by the CBRANCH block.  Ghidra also nests
+        // lists (the last child of a list can itself be a list); walk
+        // the right spine down to the actual plain CBRANCH leaf,
+        // hoisting every earlier sibling at each level into the flat
+        // `pre_regions` sequence in source order.  Without this descent,
+        // the next-level `kind != "plain"` check rejects 29 of the
+        // remaining bloodview fallbacks (53.7% of post-dc76ae5 FAILs).
         if (cond_struct.kind != "list") {
             return std::nullopt;
         }
-        if (cond_struct.children.size() < 2) {
+        std::vector< const ghidra::RegionNode * > pre_regions;
+        const ghidra::RegionNode *cur = &cond_struct;
+        while (cur->kind == "list") {
+            if (cur->children.size() < 2) {
+                return std::nullopt;
+            }
+            for (size_t i = 0; i + 1 < cur->children.size(); ++i) {
+                pre_regions.push_back(&cur->children[i]);
+            }
+            cur = &cur->children.back();
+        }
+        if (cur->kind != "plain" || !cur->block.has_value()) {
             return std::nullopt;
         }
-        const auto &cond_child = cond_struct.children.back();
-        if (cond_child.kind != "plain" || !cond_child.block.has_value()) {
-            return std::nullopt;
-        }
-        auto cond_idx = FindCNode(*cond_child.block);
+        auto cond_idx = FindCNode(*cur->block);
         if (!cond_idx.has_value()) {
             return std::nullopt;
         }
 
         std::vector< SNode * > pre;
-        for (size_t i = 0; i + 1 < cond_struct.children.size(); ++i) {
-            auto seq = Translate(cond_struct.children[i]);
+        for (const auto *region : pre_regions) {
+            auto seq = Translate(*region);
             if (!seq.has_value()) {
                 return std::nullopt;
             }
@@ -885,7 +896,7 @@ namespace patchestry::ast {
                 pre.push_back(s);
             }
         }
-        auto cond_seq = TranslatePlain(cond_child);
+        auto cond_seq = TranslatePlain(*cur);
         if (!cond_seq.has_value()) {
             return std::nullopt;
         }
