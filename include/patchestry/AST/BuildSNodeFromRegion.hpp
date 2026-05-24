@@ -86,17 +86,11 @@ namespace patchestry::ast {
 
         /// Translate the cond head of a properif/ifelse/whiledo.
         /// Accepts kind `plain` (single CBRANCH block) or `list` (one
-        /// or more pre-cond blocks ending in a CBRANCH block).
-        ///
-        /// For `list`, applies an Option-(c) safety check: if any
-        /// pre-cond block label is referenced by a goto originating
-        /// OUTSIDE the `enclosing` if/loop subtree, returns nullopt.
-        /// The downstream post-pass `DuplicateStackGuardReturnTargets`
-        /// would otherwise duplicate the SLabel wrap inside the
-        /// construct and leave the outside reference dangling.
+        /// or more pre-cond blocks ending in a CBRANCH block).  Returns
+        /// nullopt on any unsupported shape (non-plain cond child of
+        /// `list`, unresolvable block label, etc.).
         std::optional< CondHead > TranslateCondHead(
-            const ghidra::RegionNode &cond_struct,
-            const ghidra::RegionNode &enclosing);
+            const ghidra::RegionNode &cond_struct);
 
         /// `properif`: child[0] is the cond block (CBRANCH terminator)
         /// and child[1] is the then-body subtree.  The if condition is
@@ -115,12 +109,12 @@ namespace patchestry::ast {
         /// without negating branch_cond.
         SNodeSeq TranslateIfElse(const ghidra::RegionNode &node);
 
-        /// `whiledo`: child[0] = cond block (CBRANCH at end), child[1] =
-        /// body subtree.  Build SWhile(cond, body) with polarity
-        /// determined by which succ matches the body entry.  Falls back
-        /// when the cond block has non-terminal stmts (those would have
-        /// to run before each iteration's test — a more complex
-        /// transformation not handled in Phase 5).
+        /// `whiledo`: child[0] = cond head (kind `plain` or `list`),
+        /// child[1] = body subtree.  Fast path (plain cond with empty
+        /// pre-test stmts) emits `while (cond) body`; slow path (list
+        /// cond or plain cond with non-empty stmts) emits
+        /// `while (1) { head.pre; if (!cond) break; body }` so the
+        /// pre-cond computation re-executes every iteration.
         SNodeSeq TranslateWhileDo(const ghidra::RegionNode &node);
 
         /// `dowhile`: child[0] = the loop block (self-loop with stmts
@@ -148,24 +142,6 @@ namespace patchestry::ast {
 
         /// Resolve a Ghidra block label to a CNode index in the graph.
         std::optional< size_t > FindCNode(const std::string &block_label) const;
-
-        /// Option-(c) safety check.  Returns true when at least one
-        /// pre-cond block label of `cond_struct` (kind `list`) is
-        /// referenced by a goto whose source region sits OUTSIDE the
-        /// `enclosing` if/loop subtree.  Used by TranslateCondHead to
-        /// reject shapes that would crash DuplicateStackGuardReturnTargets
-        /// after SLabel duplication.
-        bool PreCondLabelsReferencedFromOutside(
-            const ghidra::RegionNode &cond_struct,
-            const ghidra::RegionNode &enclosing) const;
-
-        /// Recursively check pointer identity: is `needle` the same
-        /// node as `subtree` or any of its descendants?  Safe because
-        /// the region tree is value-owned and we never reallocate
-        /// children during a TryBuild call.
-        bool IsAddressInSubtree(
-            const ghidra::RegionNode *needle,
-            const ghidra::RegionNode &subtree) const;
 
         /// Walk a region subtree to its first `plain` leaf and return
         /// the block label.  Used to associate a `switch` arm body with
