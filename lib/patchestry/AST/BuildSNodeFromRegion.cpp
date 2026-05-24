@@ -442,22 +442,15 @@ namespace patchestry::ast {
             return std::nullopt;
         }
         const auto &cond_struct = node.children[0];
-        if (cond_struct.kind != "plain" || !cond_struct.block.has_value()) {
+
+        auto head = TranslateCondHead(cond_struct);
+        if (!head.has_value()) {
             return std::nullopt;
         }
-        auto cond_idx = FindCNode(*cond_struct.block);
-        if (!cond_idx.has_value()) {
-            return std::nullopt;
-        }
-        const auto &cond = graph_.Node(*cond_idx);
+        const auto &cond = graph_.Node(head->cond_idx);
         if (!cond.is_conditional || cond.succs.size() != 2
             || cond.branch_cond == nullptr)
         {
-            return std::nullopt;
-        }
-
-        auto pre = TranslatePlain(cond_struct);
-        if (!pre.has_value()) {
             return std::nullopt;
         }
 
@@ -472,7 +465,7 @@ namespace patchestry::ast {
             factory_.Intern(target.original_label));
         auto *if_node = factory_.Make< SIfThenElse >(
             cond.branch_cond, goto_node, nullptr);
-        auto out = std::move(*pre);
+        auto out = std::move(head->pre);
         out.push_back(if_node);
         return out;
     }
@@ -602,7 +595,23 @@ namespace patchestry::ast {
                     auto *w = factory_.Make< SWhile >(
                         while_cond, std::move(*body_seq));
                     std::vector< SNode * > out;
-                    out.push_back(w);
+                    // Preserve a goto-target for the cond block.  The
+                    // fast path skips TranslatePlain (to avoid an empty
+                    // SStmt accumulation), but a raw clang::GotoStmt
+                    // emitted elsewhere in the function may target this
+                    // block's label (FunctionBuilder creates GotoStmts
+                    // from CFG terminals).  Without the wrap, that goto
+                    // dangles and downstream passes either silently
+                    // drop it or assert.  RemoveDeadLabels strips the
+                    // wrap if nothing references it, so over-wrapping
+                    // is safe.
+                    if (!cond.original_label.empty()) {
+                        out.push_back(factory_.Make< SLabel >(
+                            factory_.Intern(cond.original_label),
+                            std::vector< SNode * >{ w }));
+                    } else {
+                        out.push_back(w);
+                    }
                     return out;
                 }
             }

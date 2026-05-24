@@ -98,9 +98,11 @@ namespace patchestry::ast {
         /// matches the not-taken successor.
         SNodeSeq TranslateProperIf(const ghidra::RegionNode &node);
 
-        /// `ifgoto`: child[0] is the cond block; the taken arm exits
-        /// the structure with a goto to the cond's taken successor.
-        /// Emits SIfThenElse(cond, SGoto(target_label), nullptr).
+        /// `ifgoto`: child[0] is the cond head (kind `plain` or
+        /// nested `list`); the taken arm exits the structure with a
+        /// goto to the cond's taken successor.  Emits
+        /// SIfThenElse(cond, SGoto(target_label), nullptr) prefixed
+        /// by any pre-cond stmts produced by TranslateCondHead.
         SNodeSeq TranslateIfGoto(const ghidra::RegionNode &node);
 
         /// `ifelse`: child[0] is the cond block, child[1]/child[2] are
