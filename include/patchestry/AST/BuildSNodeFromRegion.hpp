@@ -117,10 +117,11 @@ namespace patchestry::ast {
         /// pre-cond computation re-executes every iteration.
         SNodeSeq TranslateWhileDo(const ghidra::RegionNode &node);
 
-        /// `dowhile`: child[0] = the loop block (self-loop with stmts
-        /// and CBRANCH).  Body = the block's stmts; cond = the block's
-        /// branch_cond.  Falls back when the block isn't a self-loop
-        /// or when the tree has more than one child.
+        /// `dowhile`: child[0] = body subtree (kind `plain` or a
+        /// nested `list`).  The CBRANCH-carrying tail is the rightmost
+        /// plain leaf; its taken-arm-succ must equal the body's first
+        /// leaf (the loop entry).  Single-block self-loop is the
+        /// degenerate case where tail == entry.
         SNodeSeq TranslateDoWhile(const ghidra::RegionNode &node);
 
         /// `infloop`: child[0] = body subtree (no exit condition in the

@@ -675,52 +675,92 @@ namespace patchestry::ast {
 
     BuildSNodeFromRegion::SNodeSeq
     BuildSNodeFromRegion::TranslateDoWhile(const ghidra::RegionNode &node) {
-        // Single-block self-loop: child[0] is the block carrying both
-        // body stmts and the CBRANCH whose taken arm is the back-edge.
+        // child[0] is the body subtree.  The CBRANCH-carrying tail
+        // block is always the rightmost plain leaf; for nested `list`
+        // bodies we walk the right spine to find it.  The loop-back
+        // arm of the CBRANCH must target the body's first leaf
+        // (its entry).  Single-block self-loop is the degenerate case
+        // (entry == tail).
         if (node.children.size() != 1) {
             return std::nullopt;
         }
-        const auto &block_struct = node.children[0];
-        if (block_struct.kind != "plain" || !block_struct.block.has_value()) {
+        const auto &body_struct = node.children[0];
+
+        std::vector< const ghidra::RegionNode * > pre_regions;
+        const ghidra::RegionNode *cur = &body_struct;
+        while (cur->kind == "list") {
+            if (cur->children.empty()) {
+                return std::nullopt;
+            }
+            for (size_t i = 0; i + 1 < cur->children.size(); ++i) {
+                pre_regions.push_back(&cur->children[i]);
+            }
+            cur = &cur->children.back();
+        }
+        if (cur->kind != "plain" || !cur->block.has_value()) {
             return std::nullopt;
         }
-        auto idx = FindCNode(*block_struct.block);
-        if (!idx.has_value()) {
+
+        auto tail_idx = FindCNode(*cur->block);
+        if (!tail_idx.has_value()) {
             return std::nullopt;
         }
-        const auto &cnode = graph_.Node(*idx);
-        if (!cnode.is_conditional || cnode.succs.size() != 2
-            || cnode.branch_cond == nullptr)
+        const auto &tail_cnode = graph_.Node(*tail_idx);
+        if (!tail_cnode.is_conditional || tail_cnode.succs.size() != 2
+            || tail_cnode.branch_cond == nullptr)
         {
             return std::nullopt;
         }
 
-        // Must be a self-loop on one arm.
-        bool s0_self = cnode.succs[0] == *idx;
-        bool s1_self = cnode.succs[1] == *idx;
-        if (!s0_self && !s1_self) {
-            LOG(WARNING) << "dowhile block " << *block_struct.block
-                         << " is not a self-loop in " << function_.name
-                         << "; falling back\n";
+        auto entry_lbl = FirstBlockLabel(body_struct);
+        if (!entry_lbl.has_value()) {
+            return std::nullopt;
+        }
+        auto entry_idx = FindCNode(*entry_lbl);
+        if (!entry_idx.has_value()) {
             return std::nullopt;
         }
 
-        // TranslatePlain wraps stmts and registers the CNode as covered.
-        auto body_seq = TranslatePlain(block_struct);
-        if (!body_seq.has_value()) {
+        // Loop-back arm: the CBRANCH succ that targets the body entry.
+        bool s0_loop = tail_cnode.succs[0] == *entry_idx;
+        bool s1_loop = tail_cnode.succs[1] == *entry_idx;
+        if (!s0_loop && !s1_loop) {
+            LOG(WARNING) << "dowhile tail block " << *cur->block
+                         << " doesn't loop back to body entry in "
+                         << function_.name << "; falling back\n";
             return std::nullopt;
         }
 
-        // Polarity: taken-arm-is-self → branch_cond keeps the loop
-        // running (cond=true continues).  not-taken-self → negate.
-        clang::Expr *do_cond = cnode.branch_cond;
-        if (s1_self) {
+        // Translate pre-tail body regions (each via Translate so any
+        // structured sub-tree dispatches normally), then the plain tail.
+        std::vector< SNode * > body_seq;
+        for (const auto *r : pre_regions) {
+            auto seq = Translate(*r);
+            if (!seq.has_value()) {
+                return std::nullopt;
+            }
+            for (SNode *s : *seq) {
+                body_seq.push_back(s);
+            }
+        }
+        auto tail_seq = TranslatePlain(*cur);
+        if (!tail_seq.has_value()) {
+            return std::nullopt;
+        }
+        for (SNode *s : *tail_seq) {
+            body_seq.push_back(s);
+        }
+
+        // Polarity: taken-arm-loops → branch_cond as-is keeps the loop
+        // running (cond=true continues).  not-taken-loops → negate.
+        clang::Expr *do_cond = tail_cnode.branch_cond;
+        if (s1_loop) {
             // already cond as-is
         } else {
-            do_cond = NegateExpr(ctx_, cnode.branch_cond);
+            do_cond = NegateExpr(ctx_, tail_cnode.branch_cond);
         }
 
-        auto *dw = factory_.Make< SDoWhile >(std::move(*body_seq), do_cond);
+        auto *dw = factory_.Make< SDoWhile >(std::move(body_seq), do_cond);
         std::vector< SNode * > out;
         out.push_back(dw);
         return out;
