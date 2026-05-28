@@ -290,31 +290,26 @@ namespace patchestry::ast {
                 }
 
             } else if (term->mnemonic == M::OP_BRANCHIND) {
-                // Indirect branch — always build a switch.
-                //
-                // Priority 1: switch_cases present — recovered case
-                //   values with a discriminant from switch_input or inputs[0].
-                //
-                // Priority 2: successor_blocks only — address-based jump table
-                //   where each successor block address becomes a case value
-                //   and the discriminant is the BRANCHIND input cast to uintptr.
-                //
-                // Both paths populate node.switch_cases and node.branch_cond
-                // so FoldSwitch can produce a proper SSwitch.
+                // BRANCHIND → always a switch. Priority 1: recovered
+                // switch_cases. Priority 2: successor_blocks as a
+                // jump table keyed by hex address.
 
                 if (!term->switch_cases.empty()) {
-                    // --- Priority 1: explicit switch_cases ---
+                    // Each entry carries its own is_default flag from
+                    // the Ghidra ClangCaseToken markup recovery.
                     node.branch_cond = builder.create_switch_discriminant(ctx, *term);
 
                     std::unordered_set<size_t> seen_succs;
+                    bool any_default = false;
                     for (const auto &sc : term->switch_cases) {
                         if (!key_to_index.contains(sc.target_block)) continue;
                         size_t target_idx = key_to_index[sc.target_block];
                         if (seen_succs.insert(target_idx).second) {
                             add_source_edge(g, node, key, sc.target_block,
-                                            target_idx, "switch-case");
+                                            target_idx,
+                                            sc.is_default ? "switch-default"
+                                                          : "switch-case");
                         }
-                        // Map to succ index
                         size_t succ_idx = 0;
                         for (size_t si = 0; si < node.succs.size(); ++si) {
                             if (node.succs[si] == target_idx) {
@@ -323,16 +318,19 @@ namespace patchestry::ast {
                             }
                         }
                         node.switch_cases.push_back(SwitchCaseEntry{
-                            sc.value, succ_idx, sc.has_exit, /*is_default=*/false});
+                            sc.value, succ_idx, sc.has_exit, sc.is_default});
+                        if (sc.is_default) { any_default = true; }
                     }
-                    // Fallback edge (default arm)
-                    if (term->fallback_block && key_to_index.contains(*term->fallback_block)) {
+                    // Older JSON without is_default markers falls back to
+                    // the fallback_block CFG heuristic.
+                    if (!any_default && term->fallback_block
+                        && key_to_index.contains(*term->fallback_block))
+                    {
                         size_t fb_idx = key_to_index[*term->fallback_block];
                         if (seen_succs.insert(fb_idx).second) {
                             add_source_edge(g, node, key, *term->fallback_block,
                                             fb_idx, "switch-default");
                         }
-                        // Find succ index for fallback
                         size_t fb_succ_idx = 0;
                         for (size_t si = 0; si < node.succs.size(); ++si) {
                             if (node.succs[si] == fb_idx) {
@@ -345,16 +343,13 @@ namespace patchestry::ast {
                     }
 
                 } else if (!term->successor_blocks.empty()) {
-                    // --- Priority 2: successor_blocks as jump table ---
-                    // Discriminant is inputs[0] cast to uintptr_t.
-                    // Case values are the hex addresses from block keys.
+                    // Address-keyed jump table: discriminant is inputs[0]
+                    // cast to uintptr_t; cases are block hex addresses.
                     auto loc = SourceLocation(ctx.getSourceManager(), term->key);
                     auto disc_type = ctx.getUIntPtrType();
 
-                    // Build discriminant from inputs[0]
                     clang::Expr *disc = builder.create_switch_discriminant(ctx, *term);
                     if (disc) {
-                        // Cast to uintptr_t if needed
                         if (!ctx.hasSameUnqualifiedType(disc->getType(), disc_type)) {
                             disc = builder.create_cast(ctx, disc, disc_type, loc);
                         }
@@ -369,7 +364,6 @@ namespace patchestry::ast {
                             add_source_edge(g, node, key, block_key, target_idx,
                                             "switch-successor-block");
                         }
-                        // Parse block address from key for case value
                         auto addr = parse_block_addr(block_key);
                         if (!addr) continue;
 

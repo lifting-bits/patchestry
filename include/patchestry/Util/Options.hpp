@@ -16,17 +16,11 @@ namespace patchestry {
         bool emit_cir                       = false;
         bool emit_mlir                      = false;
         bool emit_llvm                      = false;
-        bool emit_asm                       = false;
-        bool emit_obj                       = false;
         bool verbose                        = false;
-        bool use_structuring_pass           = true;
-        bool verify_no_node_loss            = false;
-        bool structuring_improvement_report = false;
-        // Run the Clang-AST post-emission cleanup pipeline in
-        // CleanupPrettyPrint.
-        // Default on; flip off via --clang-ast-cleanup=false to
-        // compare the structured C output without the AST-layer
-        // passes (useful for bisecting structuring drift).
+        // Debug goto baseline: skip the SNode structuring/cleanup chain
+        // and emit raw flat CGraph. Set via --emit-flat-baseline.
+        bool emit_flat_baseline             = false;
+        // Flip off via --clang-ast-cleanup=false to bisect structuring drift.
         bool clang_ast_cleanup              = true;
 
         std::string output_file;
@@ -35,6 +29,9 @@ namespace patchestry {
         bool print_tu = false;
 
         bool emit_dot_cfg = false;
+
+        // Emit per-function structuring/goto counters to stderr.
+        bool structuring_stats              = false;
     };
 
 } // namespace patchestry

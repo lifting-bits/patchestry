@@ -1,5 +1,5 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 
@@ -31,15 +31,15 @@
   "id": "AARCH64:LE:64:v8A",
   "format": "Executable and Linking Format (ELF)",
   "functions": {
-    "ram:10010290": {
+    "ram:10010158": {
       "name": "probe_dmb",
       "display_name": "probe_dmb",
       "is_intrinsic": false,
-      "entry_point": "ram:10010290",
+      "entry_point": "ram:10010158",
       "address_ranges": [
         {
-          "start": "ram:10010290",
-          "end": "ram:10010297"
+          "start": "ram:10010158",
+          "end": "ram:1001015f"
         }
       ],
       "type": {
@@ -50,9 +50,9 @@
         "parameter_types": []
       },
       "basic_blocks": {
-        "ram:10010290:0:basic": {
+        "ram:10010158:0:basic": {
           "operations": {
-            "ram:10010290:0:0": {
+            "ram:10010158:0:0": {
               "mnemonic": "CALLOTHER",
               "target": {
                 "kind": "intrinsic",
@@ -75,28 +75,39 @@
                 }
               ]
             },
-            "ram:10010294:2:1": {
+            "ram:1001015c:2:1": {
               "mnemonic": "RETURN",
               "inputs": []
             }
           },
           "ordered_operations": [
-            "ram:10010290:0:0",
-            "ram:10010294:2:1"
+            "ram:10010158:0:0",
+            "ram:1001015c:2:1"
           ]
         }
       },
-      "entry_block": "ram:10010290:0:basic"
+      "entry_block": "ram:10010158:0:basic",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:10010158:0:basic"
+          }
+        ]
+      }
     },
-    "ram:10010298": {
+    "ram:10010160": {
       "name": "probe_dsb",
       "display_name": "probe_dsb",
       "is_intrinsic": false,
-      "entry_point": "ram:10010298",
+      "entry_point": "ram:10010160",
       "address_ranges": [
         {
-          "start": "ram:10010298",
-          "end": "ram:1001029f"
+          "start": "ram:10010160",
+          "end": "ram:10010167"
         }
       ],
       "type": {
@@ -107,9 +118,9 @@
         "parameter_types": []
       },
       "basic_blocks": {
-        "ram:10010298:0:basic": {
+        "ram:10010160:0:basic": {
           "operations": {
-            "ram:10010298:0:0": {
+            "ram:10010160:0:0": {
               "mnemonic": "CALLOTHER",
               "target": {
                 "kind": "intrinsic",
@@ -138,28 +149,39 @@
                 }
               ]
             },
-            "ram:1001029c:2:1": {
+            "ram:10010164:2:1": {
               "mnemonic": "RETURN",
               "inputs": []
             }
           },
           "ordered_operations": [
-            "ram:10010298:0:0",
-            "ram:1001029c:2:1"
+            "ram:10010160:0:0",
+            "ram:10010164:2:1"
           ]
         }
       },
-      "entry_block": "ram:10010298:0:basic"
+      "entry_block": "ram:10010160:0:basic",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:10010160:0:basic"
+          }
+        ]
+      }
     },
-    "ram:100102a0": {
+    "ram:10010168": {
       "name": "probe_isb",
       "display_name": "probe_isb",
       "is_intrinsic": false,
-      "entry_point": "ram:100102a0",
+      "entry_point": "ram:10010168",
       "address_ranges": [
         {
-          "start": "ram:100102a0",
-          "end": "ram:100102a7"
+          "start": "ram:10010168",
+          "end": "ram:1001016f"
         }
       ],
       "type": {
@@ -170,9 +192,9 @@
         "parameter_types": []
       },
       "basic_blocks": {
-        "ram:100102a0:0:basic": {
+        "ram:10010168:0:basic": {
           "operations": {
-            "ram:100102a0:1:0": {
+            "ram:10010168:1:0": {
               "mnemonic": "CALLOTHER",
               "target": {
                 "kind": "intrinsic",
@@ -182,28 +204,39 @@
               },
               "inputs": []
             },
-            "ram:100102a4:3:1": {
+            "ram:1001016c:3:1": {
               "mnemonic": "RETURN",
               "inputs": []
             }
           },
           "ordered_operations": [
-            "ram:100102a0:1:0",
-            "ram:100102a4:3:1"
+            "ram:10010168:1:0",
+            "ram:1001016c:3:1"
           ]
         }
       },
-      "entry_block": "ram:100102a0:0:basic"
+      "entry_block": "ram:10010168:0:basic",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:10010168:0:basic"
+          }
+        ]
+      }
     },
-    "ram:100102a8": {
+    "ram:10010170": {
       "name": "probe_clrex",
       "display_name": "probe_clrex",
       "is_intrinsic": false,
-      "entry_point": "ram:100102a8",
+      "entry_point": "ram:10010170",
       "address_ranges": [
         {
-          "start": "ram:100102a8",
-          "end": "ram:100102af"
+          "start": "ram:10010170",
+          "end": "ram:10010177"
         }
       ],
       "type": {
@@ -214,9 +247,9 @@
         "parameter_types": []
       },
       "basic_blocks": {
-        "ram:100102a8:0:basic": {
+        "ram:10010170:0:basic": {
           "operations": {
-            "ram:100102a8:0:0": {
+            "ram:10010170:0:0": {
               "mnemonic": "CALLOTHER",
               "target": {
                 "kind": "intrinsic",
@@ -226,28 +259,39 @@
               },
               "inputs": []
             },
-            "ram:100102ac:2:1": {
+            "ram:10010174:2:1": {
               "mnemonic": "RETURN",
               "inputs": []
             }
           },
           "ordered_operations": [
-            "ram:100102a8:0:0",
-            "ram:100102ac:2:1"
+            "ram:10010170:0:0",
+            "ram:10010174:2:1"
           ]
         }
       },
-      "entry_block": "ram:100102a8:0:basic"
+      "entry_block": "ram:10010170:0:basic",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:10010170:0:basic"
+          }
+        ]
+      }
     },
-    "ram:100102b0": {
+    "ram:10010178": {
       "name": "probe_ldxr",
       "display_name": "probe_ldxr",
       "is_intrinsic": false,
-      "entry_point": "ram:100102b0",
+      "entry_point": "ram:10010178",
       "address_ranges": [
         {
-          "start": "ram:100102b0",
-          "end": "ram:100102b7"
+          "start": "ram:10010178",
+          "end": "ram:1001017f"
         }
       ],
       "type": {
@@ -260,9 +304,9 @@
         ]
       },
       "basic_blocks": {
-        "ram:100102b0:0:basic": {
+        "ram:10010178:0:basic": {
           "operations": {
-            "ram:100102b0:0:0": {
+            "ram:10010178:0:0": {
               "mnemonic": "LOAD",
               "type": "t2",
               "size": 4,
@@ -275,7 +319,7 @@
                 }
               ]
             },
-            "ram:100102b4:4:1": {
+            "ram:1001017c:4:1": {
               "mnemonic": "COPY",
               "type": "t2",
               "size": 4,
@@ -284,29 +328,29 @@
                   "type": "t2",
                   "size": 4,
                   "kind": "temporary",
-                  "operation": "ram:100102b0:0:0"
+                  "operation": "ram:10010178:0:0"
                 }
               ]
             },
-            "ram:100102b4:3:2": {
+            "ram:1001017c:3:2": {
               "mnemonic": "RETURN",
               "inputs": [
                 {
                   "type": "t2",
                   "size": 4,
                   "kind": "temporary",
-                  "operation": "ram:100102b4:4:1"
+                  "operation": "ram:1001017c:4:1"
                 }
               ]
             }
           },
           "ordered_operations": [
-            "ram:100102b0:0:0",
-            "ram:100102b4:4:1",
-            "ram:100102b4:3:2"
+            "ram:10010178:0:0",
+            "ram:1001017c:4:1",
+            "ram:1001017c:3:2"
           ]
         },
-        "ram:100102b0:entry": {
+        "ram:10010178:entry": {
           "operations": {
             "unique:00410200:0:0": {
               "mnemonic": "DECLARE_PARAMETER",
@@ -317,7 +361,7 @@
             },
             "entry.exit": {
               "mnemonic": "BRANCH",
-              "target_block": "ram:100102b0:0:basic"
+              "target_block": "ram:10010178:0:basic"
             }
           },
           "ordered_operations": [
@@ -326,17 +370,28 @@
           ]
         }
       },
-      "entry_block": "ram:100102b0:entry"
+      "entry_block": "ram:10010178:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:10010178:0:basic"
+          }
+        ]
+      }
     },
-    "ram:100102b8": {
+    "ram:10010180": {
       "name": "probe_ldaxr",
       "display_name": "probe_ldaxr",
       "is_intrinsic": false,
-      "entry_point": "ram:100102b8",
+      "entry_point": "ram:10010180",
       "address_ranges": [
         {
-          "start": "ram:100102b8",
-          "end": "ram:100102bf"
+          "start": "ram:10010180",
+          "end": "ram:10010187"
         }
       ],
       "type": {
@@ -349,9 +404,9 @@
         ]
       },
       "basic_blocks": {
-        "ram:100102b8:0:basic": {
+        "ram:10010180:0:basic": {
           "operations": {
-            "ram:100102b8:0:0": {
+            "ram:10010180:0:0": {
               "mnemonic": "LOAD",
               "type": "t2",
               "size": 4,
@@ -364,7 +419,7 @@
                 }
               ]
             },
-            "ram:100102bc:4:1": {
+            "ram:10010184:4:1": {
               "mnemonic": "COPY",
               "type": "t2",
               "size": 4,
@@ -373,29 +428,29 @@
                   "type": "t2",
                   "size": 4,
                   "kind": "temporary",
-                  "operation": "ram:100102b8:0:0"
+                  "operation": "ram:10010180:0:0"
                 }
               ]
             },
-            "ram:100102bc:3:2": {
+            "ram:10010184:3:2": {
               "mnemonic": "RETURN",
               "inputs": [
                 {
                   "type": "t2",
                   "size": 4,
                   "kind": "temporary",
-                  "operation": "ram:100102bc:4:1"
+                  "operation": "ram:10010184:4:1"
                 }
               ]
             }
           },
           "ordered_operations": [
-            "ram:100102b8:0:0",
-            "ram:100102bc:4:1",
-            "ram:100102bc:3:2"
+            "ram:10010180:0:0",
+            "ram:10010184:4:1",
+            "ram:10010184:3:2"
           ]
         },
-        "ram:100102b8:entry": {
+        "ram:10010180:entry": {
           "operations": {
             "unique:00410201:1:0": {
               "mnemonic": "DECLARE_PARAMETER",
@@ -406,7 +461,7 @@
             },
             "entry.exit": {
               "mnemonic": "BRANCH",
-              "target_block": "ram:100102b8:0:basic"
+              "target_block": "ram:10010180:0:basic"
             }
           },
           "ordered_operations": [
@@ -415,17 +470,28 @@
           ]
         }
       },
-      "entry_block": "ram:100102b8:entry"
+      "entry_block": "ram:10010180:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:10010180:0:basic"
+          }
+        ]
+      }
     },
-    "ram:100102c0": {
+    "ram:10010188": {
       "name": "probe_ldar",
       "display_name": "probe_ldar",
       "is_intrinsic": false,
-      "entry_point": "ram:100102c0",
+      "entry_point": "ram:10010188",
       "address_ranges": [
         {
-          "start": "ram:100102c0",
-          "end": "ram:100102c7"
+          "start": "ram:10010188",
+          "end": "ram:1001018f"
         }
       ],
       "type": {
@@ -438,9 +504,9 @@
         ]
       },
       "basic_blocks": {
-        "ram:100102c0:0:basic": {
+        "ram:10010188:0:basic": {
           "operations": {
-            "ram:100102c0:0:0": {
+            "ram:10010188:0:0": {
               "mnemonic": "LOAD",
               "type": "t2",
               "size": 4,
@@ -453,7 +519,7 @@
                 }
               ]
             },
-            "ram:100102c4:4:1": {
+            "ram:1001018c:4:1": {
               "mnemonic": "COPY",
               "type": "t2",
               "size": 4,
@@ -462,29 +528,29 @@
                   "type": "t2",
                   "size": 4,
                   "kind": "temporary",
-                  "operation": "ram:100102c0:0:0"
+                  "operation": "ram:10010188:0:0"
                 }
               ]
             },
-            "ram:100102c4:3:2": {
+            "ram:1001018c:3:2": {
               "mnemonic": "RETURN",
               "inputs": [
                 {
                   "type": "t2",
                   "size": 4,
                   "kind": "temporary",
-                  "operation": "ram:100102c4:4:1"
+                  "operation": "ram:1001018c:4:1"
                 }
               ]
             }
           },
           "ordered_operations": [
-            "ram:100102c0:0:0",
-            "ram:100102c4:4:1",
-            "ram:100102c4:3:2"
+            "ram:10010188:0:0",
+            "ram:1001018c:4:1",
+            "ram:1001018c:3:2"
           ]
         },
-        "ram:100102c0:entry": {
+        "ram:10010188:entry": {
           "operations": {
             "unique:00410202:2:0": {
               "mnemonic": "DECLARE_PARAMETER",
@@ -495,7 +561,7 @@
             },
             "entry.exit": {
               "mnemonic": "BRANCH",
-              "target_block": "ram:100102c0:0:basic"
+              "target_block": "ram:10010188:0:basic"
             }
           },
           "ordered_operations": [
@@ -504,7 +570,18 @@
           ]
         }
       },
-      "entry_block": "ram:100102c0:entry"
+      "entry_block": "ram:10010188:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:10010188:0:basic"
+          }
+        ]
+      }
     },
     "DataMemoryBarrier:t0": {
       "name": "DataMemoryBarrier",

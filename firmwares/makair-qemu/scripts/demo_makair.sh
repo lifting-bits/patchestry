@@ -144,7 +144,7 @@ fi
 if stage_le cir "$stage_target"; then
     banner "stage 2/8: JSON -> CIR"
     "$PATCHIR_DECOMP" -input "$out_dir/${TARGET_FUNCTION}.json" \
-        -use-structuring-pass -emit-cir \
+        -emit-cir \
         -output "$out_dir/${TARGET_FUNCTION}"
 fi
 

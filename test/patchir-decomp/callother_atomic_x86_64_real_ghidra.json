@@ -1,5 +1,5 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 
@@ -61,7 +61,18 @@
           ]
         }
       },
-      "entry_block": "ram:00401163:0:basic"
+      "entry_block": "ram:00401163:0:basic",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00401163:0:basic"
+          }
+        ]
+      }
     },
     "ram:00401170": {
       "name": "probe_lfence",
@@ -94,7 +105,18 @@
           ]
         }
       },
-      "entry_block": "ram:00401173:0:basic"
+      "entry_block": "ram:00401173:0:basic",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00401173:0:basic"
+          }
+        ]
+      }
     },
     "ram:00401180": {
       "name": "probe_sfence",
@@ -127,7 +149,18 @@
           ]
         }
       },
-      "entry_block": "ram:00401183:0:basic"
+      "entry_block": "ram:00401183:0:basic",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00401183:0:basic"
+          }
+        ]
+      }
     },
     "ram:00401190": {
       "name": "probe_pause",
@@ -160,7 +193,18 @@
           ]
         }
       },
-      "entry_block": "ram:00401192:0:basic"
+      "entry_block": "ram:00401192:0:basic",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00401192:0:basic"
+          }
+        ]
+      }
     },
     "ram:004011a0": {
       "name": "probe_lock_xadd",
@@ -357,7 +401,18 @@
           ]
         }
       },
-      "entry_block": "ram:004011a0:entry"
+      "entry_block": "ram:004011a0:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:004011a0:0:basic"
+          }
+        ]
+      }
     },
     "ram:004011b0": {
       "name": "probe_lock_cmpxchg",
@@ -596,7 +651,40 @@
           ]
         }
       },
-      "entry_block": "ram:004011b0:entry"
+      "entry_block": "ram:004011b0:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "list",
+            "index": 0,
+            "children": [
+              {
+                "kind": "properif",
+                "index": 0,
+                "children": [
+                  {
+                    "kind": "plain",
+                    "index": 0,
+                    "block": "ram:004011b0:0:basic"
+                  },
+                  {
+                    "kind": "plain",
+                    "index": 1,
+                    "block": "ram:004011b2:1:basic"
+                  }
+                ]
+              },
+              {
+                "kind": "plain",
+                "index": 2,
+                "block": "ram:004011b2:2:basic"
+              }
+            ]
+          }
+        ]
+      }
     },
     "ram:004011c0": {
       "name": "probe_lock_xchg",
@@ -759,7 +847,18 @@
           ]
         }
       },
-      "entry_block": "ram:004011c0:entry"
+      "entry_block": "ram:004011c0:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:004011c0:0:basic"
+          }
+        ]
+      }
     },
     "ram:004011d0": {
       "name": "probe_lock_inc",
@@ -894,7 +993,18 @@
           ]
         }
       },
-      "entry_block": "ram:004011d0:entry"
+      "entry_block": "ram:004011d0:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:004011d0:0:basic"
+          }
+        ]
+      }
     },
     "ram:004011e0": {
       "name": "probe_lock_dec",
@@ -1029,7 +1139,18 @@
           ]
         }
       },
-      "entry_block": "ram:004011e0:entry"
+      "entry_block": "ram:004011e0:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:004011e0:0:basic"
+          }
+        ]
+      }
     },
     "ram:004011f0": {
       "name": "probe_lock_or",
@@ -1180,7 +1301,18 @@
           ]
         }
       },
-      "entry_block": "ram:004011f0:entry"
+      "entry_block": "ram:004011f0:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:004011f0:0:basic"
+          }
+        ]
+      }
     },
     "LOCK:t0": {
       "name": "LOCK",

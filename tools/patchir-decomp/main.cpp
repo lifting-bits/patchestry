@@ -55,14 +55,6 @@ namespace {
         "emit-llvm", llvm::cl::desc("Emit LLVM IR Representation"), llvm::cl::init(false)
     );
 
-    const llvm::cl::opt< bool > emit_asm( // NOLINT(cert-err58-cpp)
-        "emit-asm", llvm::cl::desc("Emit ASM Representation"), llvm::cl::init(false)
-    );
-
-    const llvm::cl::opt< bool > emit_obj( // NOLINT(cert-err58-cpp)
-        "emit-obj", llvm::cl::desc("Emit Object file"), llvm::cl::init(false)
-    );
-
     const llvm::cl::opt< std::string > input_filename( // NOLINT(cert-err58-cpp)
         "input", llvm::cl::desc("Input JSON file"), llvm::cl::Required
     );
@@ -80,34 +72,21 @@ namespace {
         "print-tu", llvm::cl::desc("Pretty print translation unit"), llvm::cl::init(false)
     );
 
-    const llvm::cl::opt< bool > use_structuring_pass( // NOLINT(cert-err58-cpp)
-        "use-structuring-pass",
+    const llvm::cl::opt< bool > emit_flat_baseline( // NOLINT(cert-err58-cpp)
+        "emit-flat-baseline",
         llvm::cl::desc(
-            "Enable the CFGStructure structuring pass (default on; "
-            "pass =false to fall back to the legacy goto-emitted path)"
+            "Emit the raw flat CGraph with goto-based control flow "
+            "(skips the structuring pass and all post-pass cleanup). "
+            "Debug-only — used by /patchir-inspect --debug for parity "
+            "diffs against the structured output."
         ),
-        llvm::cl::init(true)
+        llvm::cl::init(false),
+        llvm::cl::Hidden
     );
 
     const llvm::cl::opt< bool > emit_dot_cfg( // NOLINT(cert-err58-cpp)
         "emit-dot-cfg",
         llvm::cl::desc("Dump DOT graphs at phase boundaries (debug)"),
-        llvm::cl::init(false)
-    );
-
-    const llvm::cl::opt< bool > verify_no_node_loss( // NOLINT(cert-err58-cpp)
-        "verify-no-node-loss",
-        llvm::cl::desc(
-            "Validate the structured SNode tree: cross-check labels, "
-            "switches, and goto counts against the source CGraph (node "
-            "retention) and report structural defects (dangling gotos, "
-            "duplicate labels, unreachable nodes)"),
-        llvm::cl::init(false)
-    );
-
-    const llvm::cl::opt< bool > structuring_improvement_report( // NOLINT(cert-err58-cpp)
-        "structuring-improvement-report",
-        llvm::cl::desc("Report residual goto cleanup opportunities after structuring"),
         llvm::cl::init(false)
     );
 
@@ -120,6 +99,15 @@ namespace {
         llvm::cl::init(true)
     );
 
+    const llvm::cl::opt< bool > structuring_stats( // NOLINT(cert-err58-cpp)
+        "structuring-stats",
+        llvm::cl::desc(
+            "Emit per-function structuring and residual goto counters "
+            "to stderr (debug instrumentation)."),
+        llvm::cl::init(false),
+        llvm::cl::Hidden
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -129,28 +117,15 @@ namespace {
             .emit_cir                   = emit_cir.getValue(),
             .emit_mlir                  = emit_mlir.getValue(), // It is set to true by default
             .emit_llvm                  = emit_llvm.getValue(),
-            .emit_asm                   = emit_asm.getValue(),
-            .emit_obj                   = emit_obj.getValue(),
             .verbose                    = verbose.getValue(),
-            .use_structuring_pass       = use_structuring_pass.getValue(),
-            .verify_no_node_loss        = verify_no_node_loss.getValue(),
-            .structuring_improvement_report = structuring_improvement_report.getValue(),
+            .emit_flat_baseline         = emit_flat_baseline.getValue(),
             .clang_ast_cleanup          = clang_ast_cleanup.getValue(),
             .output_file                = output_filename.getValue(),
             .input_file                 = input_filename.getValue(),
             .print_tu                   = print_tu.getValue(),
             .emit_dot_cfg               = emit_dot_cfg.getValue(),
+            .structuring_stats          = structuring_stats.getValue(),
         };
-    }
-
-    bool validateUnsupportedOptions(const patchestry::Options &options) {
-        if (options.emit_obj) {
-            LOG(ERROR) << "--emit-obj is not implemented. Use --emit-cir, --emit-mlir, "
-                          "--emit-llvm, or --print-tu instead.\n";
-            return false;
-        }
-
-        return true;
     }
 
     bool validateBranchindSwitchMetadata(const patchestry::ghidra::Program &program) {
@@ -309,9 +284,6 @@ namespace {
 
 int main(int argc, char **argv) {
     auto options = parseCommandLineOptions(argc, argv);
-    if (!validateUnsupportedOptions(options)) {
-        return EXIT_FAILURE;
-    }
 
     llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
         llvm::MemoryBuffer::getFile(options.input_file);

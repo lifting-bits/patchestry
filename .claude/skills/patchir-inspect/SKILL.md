@@ -3,9 +3,10 @@ name: patchir-inspect
 description: >
   This skill should be used when the user asks to verify, debug, or
   generate regression tests for the patchir-decomp structuring pipeline.
-  Operates in two modes: --debug verifies that --use-structuring-pass
-  produces functionally equivalent C output compared to the goto-based
-  baseline and performs JSON ground-truth audit. --test-gen extracts
+  Operates in two modes: --debug verifies that the default structuring
+  pipeline produces functionally equivalent C output compared to the
+  goto-based baseline (produced via the hidden --emit-flat-baseline
+  flag) and performs JSON ground-truth audit. --test-gen extracts
   P-Code from a binary via Ghidra headless and generates a LIT test
   with FileCheck patterns.
 
@@ -26,9 +27,10 @@ description: >
 
 Two modes for the patchir-decomp pipeline:
 
-- **`--debug`**: verify `--use-structuring-pass` produces functionally
-  equivalent C output compared to the goto-based baseline, and audit
-  both outputs against the input P-Code JSON for emission bugs.
+- **`--debug`**: verify the default structuring pipeline produces
+  functionally equivalent C output compared to the goto-based baseline
+  (emitted via the hidden `--emit-flat-baseline` flag), and audit both
+  outputs against the input P-Code JSON for emission bugs.
 - **`--test-gen`**: extract P-Code from a binary function via Ghidra
   headless and generate a complete LIT test with FileCheck patterns.
 
@@ -74,8 +76,8 @@ Workflow:
 
 1. For each input fixture (one file or every JSON in test/patchir-decomp/
    when --batch), strip // comments with the strip script and run
-   patchir-decomp twice — once without --use-structuring-pass (goto
-   baseline) and once with it (structured output). Capture stderr.
+   patchir-decomp twice — once with --emit-flat-baseline (goto baseline)
+   and once without it (default structured output). Capture stderr.
 
 2. Run the Step 2 functional equivalence checks on both .c outputs:
    - 2.5 Condition preservation (if/while/switch counts, &&/|| merge
@@ -146,7 +148,7 @@ Workflow:
    Stop on extraction failure and report stderr.
 
 3. Generate baseline outputs from the extracted JSON:
-      <decomp> -input <extracted> -use-structuring-pass \
+      <decomp> -input <extracted> \
         -emit-cir -emit-llvm -print-tu -output <baseline>
 
 4. Build FileCheck patterns from the baseline:
@@ -159,7 +161,7 @@ Workflow:
 5. Assemble test/patchir-decomp/<FUNCTION>.json with this header,
    followed by the raw extracted JSON as-is:
        // RUN: bash %strip-json-comments %s > %t.json
-       // RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+       // RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
        // RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
        // FN: cir.func @<FUNCTION>(
        // RUN: %gen-call-checks %t.json > %t.call.checks

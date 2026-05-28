@@ -63,6 +63,9 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, clang::Stmt *stmt,
         const std::unordered_map< clang::LabelDecl *, unsigned > &refs, bool &changed
     );
+    clang::Stmt *FoldSmallCrossScopeGotoTargets(
+        clang::ASTContext &ctx, clang::FunctionDecl *fn, clang::Stmt *body, bool &mutated
+    );
 
     // --- fold goto forwarders / diamonds ------------------------------------
     clang::Stmt *FoldGotoDiamonds(clang::ASTContext &ctx, clang::Stmt *body, bool &mutated);
@@ -116,6 +119,9 @@ namespace patchestry::ast {
     // --- hoist cross-scope label entries ------------------------------------
     clang::Stmt *HoistCrossScopeLabels(
         clang::ASTContext &ctx, clang::FunctionDecl *fn, clang::Stmt *body, bool &mutated
+    );
+    clang::Stmt *FoldScopeJoinIfElseChain(
+        clang::ASTContext &ctx, clang::Stmt *body, bool &mutated
     );
 
     // --- recover loops ------------------------------------------------------

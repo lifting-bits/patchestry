@@ -77,26 +77,6 @@ namespace patchestry::ast {
         clang::Expr *branch_cond = nullptr;
         bool is_conditional = false;
 
-        enum class RegionKind : uint8_t {
-            kUnknown,
-            kAcyclic,
-            kLoop,
-            kSwitch,
-            kIrreducible,
-        };
-
-        struct BranchRoles {
-            size_t merge = kNone;
-            size_t body = kNone;
-            size_t exit = kNone;
-            bool normalized = false;
-            bool swapped = false;
-            bool condition_negated = false;
-        };
-
-        RegionKind region_kind = RegionKind::kUnknown;
-        BranchRoles branch_roles;
-
         /// Terminal control-flow stmt (goto/if-goto/switch) popped by
         /// edge construction.  Stored separately from content stmts
         /// (structural: operations and edges are decoupled).
@@ -173,40 +153,6 @@ namespace patchestry::ast {
         }
     };
 
-    struct CGraphValidationReport {
-        size_t node_count = 0;
-        size_t active_nodes = 0;
-        size_t edge_count = 0;
-        size_t conditional_nodes = 0;
-        size_t switch_nodes = 0;
-        size_t collapsed_nodes = 0;
-        size_t input_edges = 0;
-        size_t emitted_edges = 0;
-        size_t input_blocks = 0;
-        size_t emitted_blocks = 0;
-        size_t input_switches = 0;
-        size_t emitted_switches = 0;
-        size_t input_cases = 0;
-        size_t emitted_cases = 0;
-        size_t normalized_conditions = 0;
-        size_t branch_swaps = 0;
-        size_t condition_negations = 0;
-        size_t irreducible_regions = 0;
-        std::vector<std::string> missing_blocks;
-        std::vector<std::string> extra_blocks;
-        std::vector<std::string> missing_edges;
-        std::vector<std::string> extra_edges;
-        std::vector<std::string> duplicated_edges;
-        std::vector<std::string> missing_switches;
-        std::vector<std::string> extra_switches;
-        std::vector<std::string> missing_cases;
-        std::vector<std::string> extra_cases;
-        std::vector<std::string> duplicated_cases;
-        std::vector<std::string> diagnostics;
-
-        bool ok() const { return diagnostics.empty(); }
-    };
-
     /// The flow graph — single graph type used for both CFG representation
     /// and in-place structuring.  Replaces the Cfg→CGraph two-step pipeline.
     struct CGraph {
@@ -260,24 +206,14 @@ namespace patchestry::ast {
 
     class FunctionBuilder;
 
-    /// Find the terminal operation (BRANCH/CBRANCH/BRANCHIND/RETURN/TAIL_CALL)
-    /// in a block.  Assumes the terminal is the last entry in ordered_operations,
-    /// which holds for P-Code serialization (Ghidra always places the branch
-    /// last).  If non-terminal ops follow the branch, the terminal won't be
-    /// found and the block is treated as a fallthrough.  Returns nullptr when
-    /// the block has no terminal.
+    /// Terminal op (BRANCH/CBRANCH/BRANCHIND/RETURN/TAIL_CALL) of a block.
+    /// Assumes the terminal is last in ordered_operations; otherwise the
+    /// block is treated as a fallthrough. nullptr when none.
     const ghidra::Operation *FindSourceTerminal(const ghidra::BasicBlock &block);
 
     /// Build CGraph directly from P-Code JSON via FunctionBuilder.
     /// This is the structural path: JSON → CGraph (no intermediate Clang AST gotos).
     CGraph BuildCGraph(FunctionBuilder &builder, clang::ASTContext &ctx);
-
-    /// Verify structural invariants at the JSON -> CGraph boundary and
-    /// after graph rewrites: node ids, edge flag cardinality, predecessor /
-    /// successor symmetry, collapsed representatives, and switch case target
-    /// indexes.
-    CGraphValidationReport ValidateCGraph(const CGraph &g,
-                                          const ghidra::Function *source = nullptr);
 
     /// Detect back-edges using DFS and mark them in the graph.
     void MarkBackEdges(CGraph &g);

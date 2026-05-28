@@ -63,6 +63,10 @@ else:
     config.patchestry_build_type = "Debug"
 
 def patchestry_tool_path(tool):
+    single_config_path = os.path.join(config.patchestry_tools_dir, tool, tool)
+    if os.path.exists(single_config_path):
+        return single_config_path
+
     path = [config.patchestry_tools_dir, tool, config.patchestry_build_type]
     return os.path.join(*path, tool)
 

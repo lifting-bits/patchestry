@@ -15,7 +15,6 @@ import ghidra.app.decompiler.component.DecompilerUtils;
 
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
-import ghidra.app.decompiler.DecompileResults;
 
 import ghidra.app.plugin.processors.sleigh.SleighLanguage;
 
@@ -68,6 +67,7 @@ import ghidra.program.model.listing.Data;
 import ghidra.program.model.mem.MemBuffer;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBufferImpl;
+import ghidra.program.model.mem.MemoryAccessException;
 
 import ghidra.program.model.pcode.FunctionPrototype;
 import ghidra.program.model.pcode.GlobalSymbolMap;
@@ -82,6 +82,13 @@ import ghidra.program.model.pcode.HighSymbol;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.LocalSymbolMap;
 import ghidra.program.model.pcode.PartialUnion;
+
+import ghidra.program.model.pcode.BlockCopy;
+import ghidra.program.model.pcode.BlockCondition;
+import ghidra.program.model.pcode.BlockGoto;
+import ghidra.program.model.pcode.BlockGraph;
+import ghidra.program.model.pcode.BlockIfGoto;
+import ghidra.program.model.pcode.BlockMultiGoto;
 import ghidra.program.model.pcode.PcodeBlock;
 import ghidra.program.model.pcode.PcodeBlockBasic;
 import ghidra.program.model.pcode.PcodeOp;
@@ -116,6 +123,8 @@ import ghidra.program.model.data.UnsignedCharDataType;
 import ghidra.program.model.data.Union;
 import ghidra.program.model.data.VoidDataType;
 import ghidra.program.model.data.WideCharDataType;
+import ghidra.program.model.data.WideChar16DataType;
+import ghidra.program.model.data.WideChar32DataType;
 
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.Reference;
@@ -246,7 +255,7 @@ public class PcodeSerializer {
 		// Jump table index for the current function, keyed by SequenceNumber.
 		// Built once when currentFunction is set and cleared when it is reset.
 		private Map<SequenceNumber, JumpTable> jumpTableIndex;
-		
+
 		// We invent an entry block for each `HighFunction` to be serialized.
 		// The operations within this entry block are custom `CALLOTHER`s, that
 		// "declare" variables of various forms. The way to think about this is
@@ -1364,7 +1373,13 @@ public class PcodeSerializer {
 				writer.name("bit_size").value(bitField.getBitSize());
 				writer.name("base_type").value(label(bitField.getBaseDataType()));
 				
-			} else if (dataType instanceof WideCharDataType) {
+			} else if (dataType instanceof WideCharDataType
+					|| dataType instanceof WideChar16DataType
+					|| dataType instanceof WideChar32DataType) {
+				// All three share the same `wchar` kind; consumers can
+				// distinguish 16- vs 32-bit via the `size` field.
+				// WideChar16DataType appears in C++/Qt binaries (e.g.,
+				// the ventilator_gui_app uses char16_t internally).
 				writer.name("kind").value("wchar");
 				writer.name("size").value(dataType.getLength());
 				
@@ -3866,6 +3881,514 @@ public class PcodeSerializer {
 		}
 	}
 
+	// A post-LOAD transform op applied between the table fetch and the
+	// BRANCHIND.  Collected when walking the dataflow backwards; replayed
+	// forward against each table entry to compute the target address.
+	// `op` is one of CPUI_INT_ADD, INT_MULT, INT_LEFT, INT_ZEXT, INT_SEXT,
+	// INT_AND, COPY, CAST.  `constVal` is the constant operand for binary
+	// ops (0 for unary).
+	private static class Transform {
+		final int op;
+		final long constVal;
+		Transform(int op, long constVal) { this.op = op; this.constVal = constVal; }
+	}
+
+	// Result of analyzing the LOW-pcode chain from BRANCHIND back to its
+	// data source.  Two shapes:
+	//   - `hasLoad=true`:  table fetched via LOAD; `base` is the table
+	//     base address, `entrySize` is the per-entry byte size.  Each
+	//     entry's value gets pushed through `transforms` forward to
+	//     produce the target.  (e.g. ARM Thumb TBB)
+	//   - `hasLoad=false`: pure arithmetic dispatch; no memory read.
+	//     The target = applyTransforms(case_value).  The case_value for
+	//     each successor is recovered by inverse-transforming the
+	//     successor's start address.  (e.g. ARM `addls pc,pc,rN,lsl#2`)
+	// `transforms` are collected walking BRANCHIND -> source backwards;
+	// `applyTransforms` replays them in reverse-index order to go forward.
+	private static class TableInfo {
+		final boolean hasLoad;
+		final long base;
+		final int entrySize;
+		final java.util.List<Transform> transforms;
+		TableInfo(boolean hasLoad, long base, int entrySize,
+				java.util.List<Transform> transforms) {
+			this.hasLoad = hasLoad;
+			this.base = base;
+			this.entrySize = entrySize;
+			this.transforms = transforms;
+		}
+	}
+
+	// Return true iff `program` is a 32-bit ARM language (where the
+	// BX/BLX interworking convention uses the low bit of a branch
+	// target to encode Thumb vs ARM mode).  AArch64, x86, RISCV, etc.
+	// do NOT use this convention, so the Thumb-bit mask should not be
+	// applied to their jump-table targets.
+	private boolean isArm32Bit(Program program) {
+		String proc = program.getLanguage().getProcessor().toString();
+		int width = program.getLanguage().getLanguageDescription()
+			.getSize();
+		return proc.equalsIgnoreCase("ARM") && width == 32;
+	}
+
+	// Two varnodes alias if they refer to the same storage location.
+	private boolean varnodesAlias(Varnode a, Varnode b) {
+		if (a == b) { return true; }
+		if (a == null || b == null) { return false; }
+		return a.getAddress().equals(b.getAddress())
+			&& a.getSize() == b.getSize();
+	}
+
+	// Find the most recent op whose output aliases `tracked` within `ops`
+	// (scanning in reverse from `beforeIdx-1`).  Returns null if no such
+	// op exists.  Position-aware so we get the in-scope write at a given
+	// program point, not the latest write in the entire instruction (the
+	// same varnode may be overwritten by later ops within one instruction).
+	private int findDefIndex(PcodeOp[] ops, Varnode tracked, int beforeIdx) {
+		for (int i = beforeIdx - 1; i >= 0; --i) {
+			PcodeOp op = ops[i];
+			Varnode out = op.getOutput();
+			if (out != null && varnodesAlias(out, tracked)) { return i; }
+		}
+		return -1;
+	}
+
+	// Walk the LOW-pcode chain backwards from a BRANCHIND, collecting
+	// post-LOAD transforms, until a LOAD op is reached.  Returns a
+	// TableInfo with the base+entrySize+transforms, or null if the
+	// pattern doesn't match a recognizable jump-table dispatch.
+	//
+	// Handled chain ops:
+	//   COPY, CAST          — propagate (no transform applied)
+	//   INT_ZEXT, INT_SEXT  — propagate (no widening transform recorded)
+	//   INT_AND w/ const    — propagate (mask, usually Thumb bit clear)
+	//   INT_ADD w/ const    — record `+ const`
+	//   INT_MULT w/ const   — record `* const`
+	//   INT_LEFT w/ const   — record `<< const`
+	//   LOAD                — terminate; entrySize = LOAD output size,
+	//                         then solve base from LOAD.input(1)
+	private TableInfo analyzeBranchChain(PcodeOp branchOp) {
+		Address branchAddr = branchOp.getSeqnum().getTarget();
+		Instruction branchInsn = currentProgram.getListing()
+			.getInstructionAt(branchAddr);
+		if (branchInsn == null) { return null; }
+
+		PcodeOp[] insnPcode = branchInsn.getPcode();
+		Varnode tracked = null;
+		int branchIdx = -1;
+		for (int i = 0; i < insnPcode.length; ++i) {
+			int oc = insnPcode[i].getOpcode();
+			if (oc == PcodeOp.BRANCHIND || oc == PcodeOp.CALLIND) {
+				tracked = insnPcode[i].getInput(0);
+				branchIdx = i;
+				break;
+			}
+		}
+		if (tracked == null) { return null; }
+
+		java.util.List<Transform> transforms = new java.util.ArrayList<>();
+		Instruction insn = branchInsn;
+		PcodeOp[] ops = insnPcode;
+		int beforeIdx = branchIdx;
+		int totalHops = 0;
+		while (insn != null && totalHops < 256) {
+			int defIdx = findDefIndex(ops, tracked, beforeIdx);
+			if (defIdx < 0) {
+				// `tracked` isn't redefined further back — it's a live-in
+				// (the discriminant register).  This is the no-LOAD,
+				// pure-arithmetic dispatch shape; the transforms already
+				// describe `target = applyTransforms(discriminant)`.
+				if (!transforms.isEmpty()) {
+					return new TableInfo(false, 0, 0, transforms);
+				}
+				// No transforms collected — the BRANCHIND went straight
+				// from a register; without a discernible pattern there's
+				// nothing to recover.
+				return null;
+			}
+			PcodeOp def = ops[defIdx];
+			int code = def.getOpcode();
+			if (code == PcodeOp.LOAD) {
+				int entrySize = def.getOutput().getSize();
+				Long base = solveLoadAddrBase(def, ops, defIdx);
+				if (base == null) { return null; }
+				return new TableInfo(true, base, entrySize, transforms);
+			}
+			if (code == PcodeOp.COPY || code == PcodeOp.CAST
+				|| code == PcodeOp.INT_ZEXT || code == PcodeOp.INT_SEXT) {
+				tracked = def.getInput(0);
+				beforeIdx = defIdx;
+				totalHops++;
+				continue;
+			}
+			if (code == PcodeOp.INT_ADD || code == PcodeOp.INT_MULT
+				|| code == PcodeOp.INT_LEFT || code == PcodeOp.INT_AND) {
+				Varnode a = def.getInput(0);
+				Varnode b = def.getInput(1);
+				Varnode src = null;
+				long c = 0;
+				if (a.isConstant()) { c = a.getOffset(); src = b; }
+				else if (b.isConstant()) { c = b.getOffset(); src = a; }
+				else {
+					// Neither operand a literal constant; try constant
+					// folding via the local op chain.
+					Long aFold = evalConstant(a, ops, defIdx, 0);
+					Long bFold = evalConstant(b, ops, defIdx, 0);
+					if (aFold != null && bFold == null) {
+						c = aFold; src = b;
+					} else if (bFold != null && aFold == null) {
+						c = bFold; src = a;
+					} else {
+						return null;
+					}
+				}
+				// Shift counts must be a valid Java long-shift amount.
+				// Java masks `<< n` to `<< (n & 63)`, so an out-of-range
+				// constant would silently produce a wrong transform.
+				// Reject such ops rather than recover garbage.
+				if (code == PcodeOp.INT_LEFT && (c < 0 || c >= 64)) {
+					return null;
+				}
+				if (code != PcodeOp.INT_AND) {
+					transforms.add(new Transform(code, c));
+				}
+				tracked = src;
+				beforeIdx = defIdx;
+				totalHops++;
+				continue;
+			}
+			return null;
+		}
+		return null;
+	}
+
+	// Best-effort constant folding for a varnode via the local instruction
+	// op chain.  Returns the resolved constant, or null if the value is
+	// not statically evaluable (e.g. depends on a register live-in) or
+	// the recursion would exceed `kMaxEvalDepth`.
+	private static final int kMaxEvalDepth = 32;
+	private Long evalConstant(Varnode v, PcodeOp[] ops, int beforeIdx, int depth) {
+		if (v == null) { return null; }
+		if (depth >= kMaxEvalDepth) { return null; }
+		if (v.isConstant()) { return v.getOffset(); }
+		int defIdx = findDefIndex(ops, v, beforeIdx);
+		if (defIdx < 0) { return null; }
+		PcodeOp def = ops[defIdx];
+		int code = def.getOpcode();
+		if (code == PcodeOp.COPY || code == PcodeOp.CAST
+			|| code == PcodeOp.INT_ZEXT || code == PcodeOp.INT_SEXT) {
+			return evalConstant(def.getInput(0), ops, defIdx, depth + 1);
+		}
+		if (code == PcodeOp.INT_ADD || code == PcodeOp.INT_SUB
+			|| code == PcodeOp.INT_MULT || code == PcodeOp.INT_LEFT
+			|| code == PcodeOp.INT_AND || code == PcodeOp.INT_OR
+			|| code == PcodeOp.INT_XOR) {
+			Long la = evalConstant(def.getInput(0), ops, defIdx, depth + 1);
+			Long lb = evalConstant(def.getInput(1), ops, defIdx, depth + 1);
+			if (la == null || lb == null) { return null; }
+			switch (code) {
+			case PcodeOp.INT_ADD:  return la + lb;
+			case PcodeOp.INT_SUB:  return la - lb;
+			case PcodeOp.INT_MULT: return la * lb;
+			case PcodeOp.INT_LEFT:
+				// Java masks shift counts; an out-of-range constant
+				// would yield a wrong fold.  Reject instead.
+				if (lb < 0 || lb >= 64) { return null; }
+				return la << lb;
+			case PcodeOp.INT_AND:  return la & lb;
+			case PcodeOp.INT_OR:   return la | lb;
+			case PcodeOp.INT_XOR:  return la ^ lb;
+			}
+		}
+		return null;
+	}
+
+	// Solve the LOAD's address-operand for the constant table_base.
+	// Walks backward through INT_ADD/INT_MULT/COPY/CAST chains, crossing
+	// instruction boundaries when needed (e.g. `ldr r3, [pc, #offset]`
+	// in instruction N then `ldr r0, [r3, r1, lsl#2]` in instruction
+	// N+1 — the LOAD's address-operand register is materialized by a
+	// LOAD in the prior instruction).  Returns the offset or null on
+	// failure.
+	//
+	// Worklist entries carry (varnode, instruction, before_index) so
+	// def lookups happen at the correct program point.  When findDefIndex
+	// returns -1 in the current instruction, step back to the previous
+	// instruction and retry from its end — up to kMaxInsnWalkback
+	// instructions back.
+	private static final int kMaxInsnWalkback = 8;
+	private Long solveLoadAddrBase(PcodeOp loadOp, PcodeOp[] ops, int loadIdx) {
+		Varnode addr = loadOp.getInput(1);
+		if (addr == null) { return null; }
+
+		Address loadAddr = loadOp.getSeqnum().getTarget();
+		Instruction loadInsn = currentProgram.getListing()
+			.getInstructionAt(loadAddr);
+		if (loadInsn == null) { return null; }
+
+		java.util.Deque<Object[]> queue = new java.util.ArrayDeque<>();
+		queue.push(new Object[]{addr, loadInsn, loadIdx, 0});
+		int hops = 0;
+		while (!queue.isEmpty() && hops < 64) {
+			Object[] cur = queue.pop();
+			Varnode v = (Varnode) cur[0];
+			Instruction insn = (Instruction) cur[1];
+			int before = (int) cur[2];
+			int insnHops = (int) cur[3];
+			hops++;
+			if (v.isConstant()) { return v.getOffset(); }
+			PcodeOp[] insnOps = insn.getPcode();
+			int defIdx = findDefIndex(insnOps, v, before);
+			if (defIdx < 0) {
+				// Step back to previous instruction and retry from its
+				// end, up to the walkback limit.
+				if (insnHops >= kMaxInsnWalkback) { continue; }
+				Instruction prev = insn.getPrevious();
+				if (prev == null) { continue; }
+				PcodeOp[] prevOps = prev.getPcode();
+				queue.push(new Object[]{v, prev, prevOps.length, insnHops + 1});
+				continue;
+			}
+			PcodeOp def = insnOps[defIdx];
+			int code = def.getOpcode();
+			if (code == PcodeOp.INT_ADD) {
+				queue.push(new Object[]{def.getInput(0), insn, defIdx, insnHops});
+				queue.push(new Object[]{def.getInput(1), insn, defIdx, insnHops});
+				continue;
+			}
+			if (code == PcodeOp.COPY || code == PcodeOp.CAST
+				|| code == PcodeOp.INT_ZEXT || code == PcodeOp.INT_SEXT) {
+				queue.push(new Object[]{def.getInput(0), insn, defIdx, insnHops});
+				continue;
+			}
+			// A LOAD in the chain materializes the base via a PC-relative
+			// fetch (`ldr r3, [pc, #offset]`).  If its address operand is
+			// a constant, dereference it to recover the table base.
+			if (code == PcodeOp.LOAD) {
+				Varnode subAddr = def.getInput(1);
+				if (subAddr != null && subAddr.isConstant()) {
+					int sz = def.getOutput() != null
+						? def.getOutput().getSize() : 4;
+					Long ptr = readMemoryConst(subAddr.getOffset(), sz);
+					if (ptr != null) { return ptr; }
+				}
+				continue;
+			}
+			// Stop at INT_MULT/INT_LEFT — those are the index-scaling
+			// side, not the base.
+		}
+		return null;
+	}
+
+	// Read a 4/8/2-byte word from binary memory at `addr`.  Used by
+	// solveLoadAddrBase when the table base is materialized via a
+	// PC-relative LOAD whose address operand is a constant.
+	private Long readMemoryConst(long addr, int size) {
+		try {
+			AddressSpace sp = currentProgram.getAddressFactory()
+				.getDefaultAddressSpace();
+			Address a = sp.getAddress(addr);
+			if (size == 4) {
+				return currentProgram.getMemory().getInt(a) & 0xFFFFFFFFL;
+			}
+			if (size == 8) {
+				return currentProgram.getMemory().getLong(a);
+			}
+			if (size == 2) {
+				return (long)(currentProgram.getMemory().getShort(a) & 0xFFFFL);
+			}
+		} catch (Exception e) { /* fall through */ }
+		return null;
+	}
+
+	// Apply the post-LOAD transforms forward to compute a target address
+	// from a table entry value.  `transforms` is in REVERSE collection
+	// order (we walked backwards from BRANCHIND to LOAD), so we replay
+	// them in REVERSE-index order to go forward (LOAD → BRANCHIND).
+	private long applyTransforms(long entryValue, java.util.List<Transform> transforms) {
+		long val = entryValue;
+		for (int i = transforms.size() - 1; i >= 0; --i) {
+			Transform t = transforms.get(i);
+			switch (t.op) {
+			case PcodeOp.INT_ADD:  val = val + t.constVal; break;
+			case PcodeOp.INT_MULT: val = val * t.constVal; break;
+			case PcodeOp.INT_LEFT:
+				// Defensive: analyzeBranchChain already filters out
+				// out-of-range shift constants, but guard anyway so a
+				// future caller can't accidentally feed in bad data.
+				if (t.constVal < 0 || t.constVal >= 64) { break; }
+				val = val << t.constVal;
+				break;
+			default: break;
+			}
+		}
+		return val;
+	}
+
+	// Recover case values by reading the jump table from binary memory.
+	// Operates on LOW-pcode because high-pcode has the LOAD chain folded
+	// away by JumpModel normalization.  Fires when neither Ghidra's
+	// HighFunction.getJumpTables() nor the symbol/INT_EQUAL heuristics
+	// captured the dispatch.
+	//
+	// Strategy:
+	//   1. Walk back through low-pcode from the BRANCHIND instruction to
+	//      its defining LOAD (the table fetch).
+	//   2. Solve the LOAD's address-operand for a constant table_base.
+	//   3. Read n entries of `stride` bytes each from binary memory.
+	//   4. Match each entry's address to a successor block.start; the
+	//      table index becomes the case value.
+	//
+	// ARM Thumb addresses have the low bit set (BX-style branches);
+	// compare against `entry & ~1` to find the matching successor.
+	// Result of binary-table recovery: case map + the default-arm
+	// successor identified during recovery (null if there isn't one).
+	// The default arm is the single successor that doesn't appear in the
+	// recovered table, when n-1 of n successors matched table entries.
+	private static class BinaryTableResult {
+		final Map<String,Long> caseMap;
+		final String defaultArm;
+		BinaryTableResult(Map<String,Long> caseMap, String defaultArm) {
+			this.caseMap = caseMap;
+			this.defaultArm = defaultArm;
+		}
+	}
+
+	private BinaryTableResult recoverCaseValuesFromBinaryTable(
+			PcodeOp branchOp, int n, String fallbackBlock) throws Exception {
+		if (currentFunction == null || currentBlock == null || n == 0) {
+			return null;
+		}
+
+		TableInfo info = analyzeBranchChain(branchOp);
+		if (info == null) { return null; }
+
+		Program program = currentProgram;
+		// Thumb-bit masking is specific to ARM 32-bit (the BX/BLX
+		// interworking convention encodes the target instruction set
+		// in bit 0 of the branch target).  AArch64 branches don't use
+		// the low bit, and other architectures encode it as part of
+		// the address.  Only mask when we're on a 32-bit ARM language
+		// — never on AArch64 or any other processor.
+		boolean isArm32 = isArm32Bit(program);
+
+		// Build (target start → successor index), excluding a known
+		// fallback successor.
+		Map<Long,Integer> startToSucc = new HashMap<>();
+		java.util.Set<Integer> remainingSuccs = new java.util.HashSet<>();
+		int tableEntries = n;
+		for (int j = 0; j < n; j++) {
+			PcodeBlock succ = currentBlock.getOut(j);
+			if (fallbackBlock != null && label(succ).equals(fallbackBlock)) {
+				tableEntries--;
+				continue;
+			}
+			startToSucc.put(succ.getStart().getOffset(), j);
+			remainingSuccs.add(j);
+		}
+		if (tableEntries == 0) { return null; }
+
+		Map<String,Long> caseMap = new HashMap<>();
+
+		if (info.hasLoad) {
+			// LOAD-based table: read N entries from memory and forward-
+			// transform each to a target address; match to successor.
+			if (info.entrySize != 1 && info.entrySize != 2
+				&& info.entrySize != 4 && info.entrySize != 8) {
+				return null;
+			}
+			Memory mem = program.getMemory();
+			AddressSpace defaultSpace =
+				program.getAddressFactory().getDefaultAddressSpace();
+			int matched = 0;
+			for (int i = 0; i < tableEntries; i++) {
+				long entryVal;
+				Address entryAddr;
+				try {
+					entryAddr = defaultSpace.getAddress(
+						info.base + (long)i * info.entrySize);
+				} catch (AddressOutOfBoundsException e) { break; }
+				try {
+					if (info.entrySize == 4) {
+						entryVal = mem.getInt(entryAddr) & 0xFFFFFFFFL;
+					} else if (info.entrySize == 8) {
+						entryVal = mem.getLong(entryAddr);
+					} else if (info.entrySize == 2) {
+						entryVal = mem.getShort(entryAddr) & 0xFFFFL;
+					} else {
+						entryVal = mem.getByte(entryAddr) & 0xFFL;
+					}
+				} catch (MemoryAccessException e) { break; }
+				long target = applyTransforms(entryVal, info.transforms);
+				long matchKey = isArm32 ? (target & ~1L) : target;
+				Integer succIdx = startToSucc.get(matchKey);
+				if (succIdx == null) { break; }
+				caseMap.put(label(currentBlock.getOut(succIdx)), (long) i);
+				remainingSuccs.remove(succIdx);
+				matched++;
+			}
+			if (matched == tableEntries && remainingSuccs.isEmpty()) {
+				return new BinaryTableResult(caseMap, fallbackBlock);
+			}
+			if (remainingSuccs.size() == 1 && fallbackBlock == null
+					&& (matched > 0 || n == 1)) {
+				int defIdx = remainingSuccs.iterator().next();
+				return new BinaryTableResult(
+					caseMap, label(currentBlock.getOut(defIdx)));
+			}
+			return null;
+		}
+
+		// No-LOAD pure arithmetic dispatch: each successor's start
+		// address inverse-transforms to its case value.  Forward is
+		//   target = applyTransforms(value, transforms)
+		// which (for our transform vocabulary INT_ADD/INT_MULT/INT_LEFT)
+		// is a monotonic linear function we can invert.
+		for (Map.Entry<Long,Integer> e : startToSucc.entrySet()) {
+			long target = e.getKey();
+			Long value = inverseTransforms(target, info.transforms, isArm32);
+			if (value == null) { return null; }
+			caseMap.put(label(currentBlock.getOut(e.getValue())), value);
+			remainingSuccs.remove(e.getValue());
+		}
+		if (remainingSuccs.isEmpty()) {
+			return new BinaryTableResult(caseMap, fallbackBlock);
+		}
+		return null;
+	}
+
+	// Inverse of applyTransforms.  Returns null if `target` isn't
+	// reachable via the (linear) transform chain — e.g. the inverse
+	// requires non-integer division.  ARM Thumb's low-bit-set targets
+	// are matched after masking on both sides.
+	private Long inverseTransforms(long target,
+			java.util.List<Transform> transforms, boolean isArm32) {
+		long v = isArm32 ? (target & ~1L) : target;
+		// applyTransforms iterates i = size-1 down to 0 (forward).  To
+		// invert, iterate i = 0 to size-1 applying the inverse op.
+		for (int i = 0; i < transforms.size(); ++i) {
+			Transform t = transforms.get(i);
+			switch (t.op) {
+			case PcodeOp.INT_ADD:
+				v = v - t.constVal;
+				break;
+			case PcodeOp.INT_MULT:
+				if (t.constVal == 0 || v % t.constVal != 0) { return null; }
+				v = v / t.constVal;
+				break;
+			case PcodeOp.INT_LEFT:
+				if (t.constVal < 0 || t.constVal >= 64) { return null; }
+				long mask = (1L << t.constVal) - 1L;
+				if ((v & mask) != 0) { return null; }
+				v = v >> t.constVal;
+				break;
+			default:
+				return null;
+			}
+		}
+		return v;
+	}
+
 	// Serialize an indirect branch (BRANCHIND). This records the computed
 	// target expression and, when Ghidra has resolved the jump table, the
 	// set of possible successor blocks, the default block, and the original
@@ -3886,55 +4409,77 @@ public class PcodeSerializer {
 		}
 		writer.endArray();
 
-		// Emit the fallback block recovered from the bounds-check predecessor.
-		// The C++ consumer jumps to this block when no switch case matches.
+		// The fallback block (default arm) is emitted by serializeSwitchCases
+		// so path 5 can register a default arm it discovered itself when the
+		// bounds-check predecessor heuristic misses it (e.g. ARM Thumb TBB
+		// folds the bounds check into the dispatch instruction).
 		String defaultBlock = findDefaultBlock();
-		if (defaultBlock != null) {
-			writer.name("fallback_block").value(defaultBlock);
-		}
 
+		// jt may be null — the JumpTable-free recovery paths still fire.
 		JumpTable jt = jumpTableIndex.get(pcodeOp.getSeqnum());
-		Varnode discriminant = (jt != null) ? traceSwitchDiscriminant(pcodeOp.getInput(0)) : null;
-		if (jt != null && discriminant != null) {
-			serializeSwitchCases(pcodeOp, discriminant, jt, n);
+		Varnode discriminant = traceSwitchDiscriminant(pcodeOp.getInput(0));
+		if (discriminant != null) {
+			serializeSwitchCases(pcodeOp, discriminant, jt, n, defaultBlock);
+		} else if (defaultBlock != null) {
+			writer.name("fallback_block").value(defaultBlock);
 		}
 	}
 
 
-	// Emits "switch_input" and "switch_cases" JSON fields for a resolved BRANCHIND.
-	// Case values are recovered using a 3-tier strategy:
-	//   Tier 0a – decompiler's own integer label values from JumpTable API (most authoritative).
-	//   Tier 0  – Ghidra's own "caseD_HEX" block labels.
-	//   Tier 1  – block-entry P-Code ops that compare the discriminant against a constant.
-	// Both fields are omitted entirely when no tier produces a complete case map,
-	// allowing the C++ side to fall back to successor_blocks-based dispatch.
+	// Recovers switch case values from four sources in order:
+	//   1. JumpTable.getLabelValues()        (when jt != null)
+	//   2. Binary jump-table memory read     (BRANCHIND.input0 dataflow)
+	//   3. caseD_HEX block label symbols
+	//   4. INT_EQUAL scan at each arm's entry
+	// First source returning a complete (or n-1 + fallbackBlock) map wins.
+	// All paths omit switch_cases entirely on failure, letting the consumer
+	// fall back to successor_blocks-based dispatch.  Default arms are
+	// communicated via the top-level fallback_block field; this method
+	// never emits is_default=true entries (no Clang-token-based recovery).
 	private void serializeSwitchCases(PcodeOp pcodeOp, Varnode discriminant,
-			JumpTable jt, int n) throws Exception {
+			JumpTable jt, int n, String fallbackBlock) throws Exception {
 
 		Map<String,Long> caseMap = new HashMap<>();
 		boolean caseMapOk = false;
 
-		// Tier 0a: use the decompiler's own integer label values — most authoritative source.
-		// getLabelValues()[i] and getCases()[i] are aligned: the i-th label routes to the
-		// i-th case address.
-		Integer[] labels = jt.getLabelValues();
-		Address[] cases  = jt.getCases();
-		if (labels != null && cases != null && labels.length > 0
-				&& labels.length == cases.length) {
-			for (int i = 0; i < labels.length; i++) {
-				for (int j = 0; j < n; j++) {
-					if (currentBlock.getOut(j).getStart().equals(cases[i])) {
-						caseMap.put(label(currentBlock.getOut(j)), (long)(int) labels[i]);
-						break;
+		// (1) JumpTable.getLabelValues() — authoritative when jt exists.
+		if (jt != null) {
+			Integer[] labels = jt.getLabelValues();
+			Address[] cases  = jt.getCases();
+			if (labels != null && cases != null && labels.length > 0
+					&& labels.length == cases.length) {
+				for (int i = 0; i < labels.length; i++) {
+					for (int j = 0; j < n; j++) {
+						if (currentBlock.getOut(j).getStart().equals(cases[i])) {
+							caseMap.put(label(currentBlock.getOut(j)), (long)(int) labels[i]);
+							break;
+						}
 					}
 				}
+				caseMapOk = !caseMap.isEmpty();
 			}
-			caseMapOk = !caseMap.isEmpty();
 		}
 
-		// Tier 0: read Ghidra's own "caseD_HEX" block labels — reliable for any
-		// compiled switch since Ghidra's analysis stores the correct case values
-		// in the symbol name.
+		// (2) Binary jump-table read — works when Ghidra didn't register
+		// a JumpTable for this BRANCHIND but the table is still in
+		// readable memory (the common case for switches Ghidra renders
+		// as a switch-in-C-output but doesn't formally model).  The
+		// fallback_block (default arm) is excluded from per-entry
+		// matching since it isn't part of the table; if no fallback was
+		// provided, path 5 may discover one by elimination.
+		if (!caseMapOk) {
+			BinaryTableResult res =
+				recoverCaseValuesFromBinaryTable(pcodeOp, n, fallbackBlock);
+			if (res != null && !res.caseMap.isEmpty()) {
+				caseMap = res.caseMap;
+				caseMapOk = true;
+				if (fallbackBlock == null && res.defaultArm != null) {
+					fallbackBlock = res.defaultArm;
+				}
+			}
+		}
+
+		// (3) Ghidra's "caseD_HEX" block label symbols.
 		if (!caseMapOk) {
 			caseMap = new HashMap<>();
 			caseMapOk = true;
@@ -3949,9 +4494,8 @@ public class PcodeSerializer {
 			}
 		}
 
-		// Tier 1: scan first P-Code ops at each case-target block for a
-		// comparison of the discriminant against a constant.  Handles
-		// computed-goto dispatch where blocks start with INT_EQUAL etc.
+		// (4) INT_EQUAL(disc, const) at each arm's entry — covers
+		// computed-goto dispatch.
 		if (!caseMapOk) {
 			caseMap = new HashMap<>();
 			caseMapOk = true;
@@ -3970,12 +4514,21 @@ public class PcodeSerializer {
 			}
 		}
 
-		// If no tier recovered real case values, or the map is partial,
-		// emit nothing — the C++ side will fall back to successor_blocks (Priority 2).
-		if (!caseMapOk || caseMap.size() != n) {
+		// Partial map only acceptable when the missing successor is the
+		// default arm (consumer reads fallback_block separately).
+		boolean allowPartialForDefault = caseMapOk
+			&& caseMap.size() == n - 1
+			&& fallbackBlock != null;
+		if (!caseMapOk || (caseMap.size() != n && !allowPartialForDefault)) {
+			if (fallbackBlock != null) {
+				writer.name("fallback_block").value(fallbackBlock);
+			}
 			return;
 		}
 
+		if (fallbackBlock != null) {
+			writer.name("fallback_block").value(fallbackBlock);
+		}
 		writer.name("switch_input");
 		serializeInput(pcodeOp, discriminant);
 		writer.name("switch_cases").beginArray();
@@ -4000,6 +4553,7 @@ public class PcodeSerializer {
 				hasExit = !succIsAnotherCase;
 			}
 			writer.name("has_exit").value(hasExit);
+			writer.name("is_default").value(false);
 			writer.endObject();
 		}
 		writer.endArray();
@@ -4762,13 +5316,15 @@ public class PcodeSerializer {
 					writer.endObject();  // End of `basic_blocks`.
 					currentFunction = null;
 					jumpTableIndex = null;
-					
+
 					if (entryLabel != null) {
 						writer.name("entry_block").value(entryLabel);
 
 					} else if (firstPcodeBasicBlock != null) {
 						writer.name("entry_block").value(label(firstPcodeBasicBlock));
 					}
+
+					serializeRegionTree(highFunction);
 				}
 			} else {
 				writer.name("type").beginObject();
@@ -4974,11 +5530,294 @@ public class PcodeSerializer {
 			System.out.println("Total serialized intrinsics: " + Integer.toString(numIntrinsics));
 		}
 		
-		// Serialize all functions.
+
+		// Ghidra exposes its structured region tree only via
+		// DecompInterface.structureGraph(BlockGraph, ...), which expects an
+		// input graph of BlockCopy nodes with altindex set so the result's
+		// leaves can be paired back to the original PcodeBlockBasic via
+		// BlockGraph.transferObjectRef.  altindex is a private field with
+		// no setter — one reflection write per BlockCopy is the only way.
+		// Null on Ghidra versions where the field shape changed; emission
+		// silently degrades to an absent "region" field, which the
+		// consumer treats as "no Ghidra region available."
+		private static final java.lang.reflect.Field BLOCKCOPY_ALTINDEX = initAltIndex();
+		private static java.lang.reflect.Field initAltIndex() {
+			try {
+				java.lang.reflect.Field f = BlockCopy.class.getDeclaredField("altindex");
+				f.setAccessible(true);
+				return f;
+			} catch (Throwable t) {
+				return null;
+			}
+		}
+
+		// Emit Ghidra's structured region tree as a single JSON object
+		// rooted at the function's outermost graph node.
 		//
-		// NOTE(pag): As we serialize functions, we might discover references
-		//			  to other functions, causing `functions` will grow over
-		// 			  time.
+		// Each node:
+		//   "kind"     — PcodeBlock.typeToName(getType()).  Vocabulary:
+		//                graph, list, properif, ifelse, ifgoto, whiledo,
+		//                dowhile, switch, infloop, goto, multigoto,
+		//                condition, plain (= BlockCopy leaves, references
+		//                an original basic block).  See block.cc:1383-1393
+		//                for Ghidra's own kind-by-shape disambiguation.
+		//   "index"   — getIndex() within the parent (debug/order info).
+		//   "block"   — leaves only.  basic_block label.
+		//   "children" — non-leaves only.  Ordered array of node objects.
+		//
+		// Absent when DecompInterface.structureGraph isn't usable for any
+		// reason: the consumer must treat absence as "fall back to
+		// CFG-based structuring."
+		void serializeRegionTree(HighFunction hf) throws Exception {
+			if (BLOCKCOPY_ALTINDEX == null || hf == null) {
+				return;
+			}
+			java.util.ArrayList<PcodeBlockBasic> bbs = hf.getBasicBlocks();
+			if (bbs == null || bbs.isEmpty()) {
+				return;
+			}
+
+			java.util.HashMap<PcodeBlockBasic, Integer> idx = new java.util.HashMap<>();
+			for (int i = 0; i < bbs.size(); i++) {
+				idx.put(bbs.get(i), i);
+			}
+
+			BlockGraph in = new BlockGraph();
+			java.util.ArrayList<BlockCopy> copies = new java.util.ArrayList<>();
+			try {
+				for (int i = 0; i < bbs.size(); i++) {
+					BlockCopy c = new BlockCopy(bbs.get(i), bbs.get(i).getStart());
+					BLOCKCOPY_ALTINDEX.setInt(c, i);
+					in.addBlock(c);
+					copies.add(c);
+				}
+				in.setIndices();
+				for (int i = 0; i < bbs.size(); i++) {
+					PcodeBlockBasic bb = bbs.get(i);
+					for (int e = 0; e < bb.getOutSize(); e++) {
+						PcodeBlock out = bb.getOut(e);
+						Integer tgt = (out instanceof PcodeBlockBasic)
+							? idx.get((PcodeBlockBasic) out) : null;
+						if (tgt != null) {
+							in.addEdge(copies.get(i), copies.get(tgt));
+						}
+					}
+				}
+			} catch (Throwable t) {
+				// Degraded — the consumer falls back.  Don't emit a
+				// partial region tree.
+				return;
+			}
+
+			BlockGraph structured;
+			try {
+				structured = decompInterface.structureGraph(in, 30, monitor);
+			} catch (Throwable t) {
+				return;
+			}
+			if (structured == null) {
+				return;
+			}
+
+			writer.name("region").beginObject();
+			emitRegionNode(structured, bbs);
+			writer.endObject();
+		}
+
+		private void emitRegionNode(PcodeBlock b,
+				java.util.ArrayList<PcodeBlockBasic> originalBbs) throws Exception {
+			String kind = PcodeBlock.typeToName(b.getType());
+			if (kind == null) {
+				throw new Exception(
+					"PcodeSerializer: structureGraph returned unknown "
+					+ "PcodeBlock type=" + b.getType()
+					+ " — extend the kind vocabulary or fall back.");
+			}
+			writer.name("kind").value(kind);
+			writer.name("index").value(b.getIndex());
+			if (b instanceof BlockCondition) {
+				BlockCondition bc = (BlockCondition) b;
+				writer.name("condition_opcode")
+						.value(PcodeOp.getMnemonic(bc.getOpcode()));
+			}
+
+			if (b instanceof BlockCopy) {
+				BlockCopy bc = (BlockCopy) b;
+				Object ref = bc.getRef();
+				PcodeBlockBasic resolved = null;
+				if (ref instanceof PcodeBlockBasic) {
+					resolved = (PcodeBlockBasic) ref;
+				} else {
+					// transferObjectRef didn't pair — fall back to altindex.
+					int alt = -1;
+					try {
+						alt = BLOCKCOPY_ALTINDEX.getInt(bc);
+					} catch (Throwable t) { /* ignore */ }
+					if (alt >= 0 && alt < originalBbs.size()) {
+						resolved = originalBbs.get(alt);
+					}
+				}
+				if (resolved == null) {
+					writer.name("block").nullValue();
+				} else {
+					writer.name("block").value(label(resolved));
+				}
+			} else if (b instanceof BlockGraph) {
+				BlockGraph bg = (BlockGraph) b;
+				writer.name("children").beginArray();
+				for (int i = 0; i < bg.getSize(); i++) {
+					writer.beginObject();
+					emitRegionNode(bg.getBlock(i), originalBbs);
+					writer.endObject();
+				}
+				writer.endArray();
+
+				// Goto-target metadata: BlockGoto and BlockIfGoto carry one
+				// explicit goto destination; BlockMultiGoto carries N. The
+				// structureGraph algorithm emits these wrapper nodes
+				// around blocks whose branches couldn't be folded into
+				// structured control flow.  Without this metadata the
+				// consumer can only guess the goto destination from CFG
+				// successors, which fails when the wrapper sits over a
+				// non-leaf child.
+				if (b instanceof BlockGoto) {
+					BlockGoto bgo = (BlockGoto) b;
+					writer.name("goto_targets").beginArray();
+					String lbl = resolveRegionBlockLabel(bgo.getGotoTarget(), originalBbs);
+					if (lbl == null) {
+						writer.nullValue();
+					} else {
+						writer.value(lbl);
+					}
+					writer.endArray();
+					writer.name("goto_type").value(bgo.getGotoType());
+				} else if (b instanceof BlockIfGoto) {
+					BlockIfGoto big = (BlockIfGoto) b;
+					writer.name("goto_targets").beginArray();
+					String lbl = resolveRegionBlockLabel(big.getGotoTarget(), originalBbs);
+					if (lbl == null) {
+						writer.nullValue();
+					} else {
+						writer.value(lbl);
+					}
+					writer.endArray();
+					writer.name("goto_type").value(big.getGotoType());
+				} else if (b instanceof BlockMultiGoto) {
+					BlockMultiGoto bmg = (BlockMultiGoto) b;
+					writer.name("goto_targets").beginArray();
+					java.util.List<PcodeBlock> targets =
+							getBlockMultiGotoTargets(bmg);
+					for (PcodeBlock tgt : targets) {
+						String lbl = resolveRegionBlockLabel(tgt, originalBbs);
+						if (lbl == null) {
+							writer.nullValue();
+						} else {
+							writer.value(lbl);
+						}
+					}
+					writer.endArray();
+				}
+			}
+		}
+
+		// Extract goto-target blocks from BlockMultiGoto via reflection.
+		// Ghidra's public API across 11.x versions varies on this class:
+		// some expose getGotoSize()/getGotoTarget(int), others numGotos()/
+		// getGoto(int), others only a private ArrayList field.  Try the
+		// known variants in order, falling back to inspecting all
+		// PcodeBlock-typed fields if none match.
+		@SuppressWarnings("unchecked")
+		private java.util.List<PcodeBlock> getBlockMultiGotoTargets(BlockMultiGoto bmg) {
+			// Try common field names first.
+			for (String fname : new String[]{"gotos", "targets", "gotoTargets",
+					"gotoblocks", "gotoBlocks"}) {
+				try {
+					java.lang.reflect.Field f =
+							BlockMultiGoto.class.getDeclaredField(fname);
+					f.setAccessible(true);
+					Object raw = f.get(bmg);
+					if (raw instanceof java.util.List) {
+						java.util.List<?> lst = (java.util.List<?>) raw;
+						if (!lst.isEmpty()) {
+							return (java.util.List<PcodeBlock>) lst;
+						}
+					}
+				} catch (Throwable t) { /* try next */ }
+			}
+			// Try common getter methods.
+			for (String mname : new String[]{"getGotos", "getTargets",
+					"getGotoTargets", "getGotoBlocks"}) {
+				try {
+					java.lang.reflect.Method m =
+							BlockMultiGoto.class.getDeclaredMethod(mname);
+					m.setAccessible(true);
+					Object raw = m.invoke(bmg);
+					if (raw instanceof java.util.List) {
+						java.util.List<?> lst = (java.util.List<?>) raw;
+						if (!lst.isEmpty()) {
+							return (java.util.List<PcodeBlock>) lst;
+						}
+					}
+				} catch (Throwable t) { /* try next */ }
+			}
+			// Last resort: scan declared fields of BlockMultiGoto + its
+			// superclasses for the first ArrayList<PcodeBlock>-like list
+			// whose element type is PcodeBlock.
+			for (Class<?> c = BlockMultiGoto.class; c != null; c = c.getSuperclass()) {
+				for (java.lang.reflect.Field f : c.getDeclaredFields()) {
+					if (!java.util.List.class.isAssignableFrom(f.getType())) continue;
+					try {
+						f.setAccessible(true);
+						Object raw = f.get(bmg);
+						if (raw instanceof java.util.List) {
+							java.util.List<?> lst = (java.util.List<?>) raw;
+							if (!lst.isEmpty() && lst.get(0) instanceof PcodeBlock) {
+								// "blocks" is the BlockGraph children list —
+								// skip; we want the goto-target list, which
+								// is a distinct ArrayList<PcodeBlock> field.
+								if ("blocks".equals(f.getName())) continue;
+								return (java.util.List<PcodeBlock>) lst;
+							}
+						}
+					} catch (Throwable t) { /* skip */ }
+				}
+			}
+			return java.util.Collections.emptyList();
+		}
+
+		// Walk a region-tree PcodeBlock to the first leaf BlockCopy
+		// and return its source-level block label.  Used for goto-target
+		// emission where the target may itself be a wrapper (BlockGoto,
+		// BlockMultiGoto, BlockList, ...) rather than a raw BlockCopy.
+		private String resolveRegionBlockLabel(PcodeBlock b,
+				java.util.ArrayList<PcodeBlockBasic> originalBbs) throws Exception {
+			if (b == null) return null;
+			if (b instanceof BlockCopy) {
+				BlockCopy bc = (BlockCopy) b;
+				Object ref = bc.getRef();
+				PcodeBlockBasic resolved = null;
+				if (ref instanceof PcodeBlockBasic) {
+					resolved = (PcodeBlockBasic) ref;
+				} else {
+					int alt = -1;
+					try {
+						alt = BLOCKCOPY_ALTINDEX.getInt(bc);
+					} catch (Throwable t) { /* ignore */ }
+					if (alt >= 0 && alt < originalBbs.size()) {
+						resolved = originalBbs.get(alt);
+					}
+				}
+				return resolved == null ? null : label(resolved);
+			}
+			if (b instanceof BlockGraph) {
+				BlockGraph bg = (BlockGraph) b;
+				if (bg.getSize() > 0) {
+					return resolveRegionBlockLabel(bg.getBlock(0), originalBbs);
+				}
+			}
+			return null;
+		}
+
 		void serializeFunctions() throws Exception {
 			for (int i = 0; i < functions.size(); ++i) {
 				Function function = functions.get(i);
@@ -4991,8 +5830,9 @@ public class PcodeSerializer {
 									  !function.isThunk() &&
 									  !IGNORED_NAMES.contains(function.getName());
 
-				DecompileResults functionDecompResults = decompInterface.decompileFunction(function, DECOMPILATION_TIMEOUT, this.monitor);
-				HighFunction highFunction = functionDecompResults.getHighFunction();
+				HighFunction highFunction = decompInterface
+					.decompileFunction(function, DECOMPILATION_TIMEOUT, this.monitor)
+					.getHighFunction();
 				writer.name(functionLabel).beginObject();
 				serializeFunction(highFunction, function, shouldVisitPcode);
 				writer.endObject();
