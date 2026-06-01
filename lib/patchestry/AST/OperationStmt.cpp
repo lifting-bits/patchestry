@@ -1890,8 +1890,12 @@ namespace patchestry::ast {
             auto *arg_expr =
                 AS_EXPR_OR_NULL(create_varnode(ctx, function, input), op.key);
             if (!arg_expr) {
-                index++;
-                continue;
+                // Bail rather than drop the argument: silently skipping it would
+                // shift every later argument into the wrong parameter slot (the
+                // remaining args are still cast to getParamType(index)).
+                LOG(ERROR) << "CALLIND: failed to build argument " << index
+                           << ". key: " << op.key;
+                return {};
             }
             // Variadic / trailing args (index >= num_params) pass through uncast.
             if (fn_proto && index < num_params) {
