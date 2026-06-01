@@ -2336,8 +2336,45 @@ namespace patchestry::ast {
             return std::make_pair(out_stmt, merge_to_next);
         }
 
-        if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
-            if (auto *casted_expr = make_cast(ctx, expr, op_type, op_location)) {
+        // SUBPIECE is a bit-extraction: shift the source right by the byte
+        // offset, then mask to the output width.  C/C++ define neither `>>` nor
+        // `&` on pointer operands, so the arithmetic must run in an integer
+        // domain.  Pick that domain (`arith_type`):
+        //   * output is a pointer  -> a same-width unsigned integer surrogate,
+        //     converting the final result back to the pointer type below.  This
+        //     is the issue #264 case: Ghidra types the SUBPIECE result as a
+        //     pointer while the source is an integer.
+        //   * a pointer-typed source -> a same-width unsigned integer via
+        //     cast_pointer_to_int (mirrors the INT_ZEXT pointer guard, #224).
+        //   * otherwise              -> the output type (existing behaviour).
+        bool output_is_pointer = op_type->isPointerType();
+        clang::QualType arith_type = op_type;
+        if (output_is_pointer) {
+            auto ptr_width = static_cast< unsigned >(ctx.getTypeSize(op_type));
+            arith_type     = ctx.getIntTypeForBitwidth(ptr_width, /*Signed=*/false);
+            if (arith_type.isNull()) {
+                arith_type = ctx.getUIntPtrType();
+            }
+        }
+
+        if (expr->getType()->isPointerType()) {
+            auto src_width = static_cast< unsigned >(ctx.getTypeSize(expr->getType()));
+            auto src_int   = ctx.getIntTypeForBitwidth(src_width, /*Signed=*/false);
+            if (src_int.isNull()) {
+                src_int = ctx.getUIntPtrType();
+            }
+            expr = cast_pointer_to_int(
+                ctx, expr, src_int, op_location, PtrToIntExtension::kZero, op.key
+            );
+            if (!expr) {
+                LOG(ERROR) << "SUBPIECE: failed to cast pointer source to integer. key: "
+                           << op.key;
+                return {};
+            }
+        }
+
+        if (!ctx.hasSameUnqualifiedType(expr->getType(), arith_type)) {
+            if (auto *casted_expr = make_cast(ctx, expr, arith_type, op_location)) {
                 expr = casted_expr;
             }
         }
@@ -2425,6 +2462,20 @@ namespace patchestry::ast {
 
         result_expr =
             new (ctx) clang::ParenExpr(op_location, op_location, result_expr);
+
+        // The shift/mask ran in an integer surrogate domain.  When the SUBPIECE
+        // output type is a pointer (issue #264), convert the integer result back
+        // to that pointer type (CK_IntegralToPointer) so the merge/assignment
+        // sees the declared type.
+        if (output_is_pointer) {
+            auto *as_ptr = make_cast(ctx, result_expr, op_type, op_location);
+            if (!as_ptr) {
+                LOG(ERROR) << "SUBPIECE: failed to cast integer result to pointer output. key: "
+                           << op.key;
+                return std::make_pair(nullptr, false);
+            }
+            result_expr = as_ptr;
+        }
 
         if (merge_to_next) {
             return std::make_pair(result_expr, merge_to_next);
