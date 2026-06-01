@@ -2374,9 +2374,15 @@ namespace patchestry::ast {
         }
 
         if (!ctx.hasSameUnqualifiedType(expr->getType(), arith_type)) {
-            if (auto *casted_expr = make_cast(ctx, expr, arith_type, op_location)) {
-                expr = casted_expr;
+            auto *casted_expr = make_cast(ctx, expr, arith_type, op_location);
+            if (!casted_expr) {
+                // Loud-fail rather than shifting/masking an operand of the wrong
+                // type, which would either trip Sema downstream or miscompile.
+                LOG(ERROR) << "SUBPIECE: failed to cast operand to arithmetic type '"
+                           << arith_type.getAsString() << "'. key: " << op.key;
+                return {};
             }
+            expr = casted_expr;
         }
 
         // SUBPIECE uses bitwise shift and mask which are invalid on floating-point
@@ -2407,8 +2413,21 @@ namespace patchestry::ast {
         }
 
         clang::Expr *result_expr = expr;
-        // Apply right-shift only when byte_offset > 0 (skip ">> 0").
-        if (shift_bits != 0) {
+        // The byte offset selects the output-sized window starting `byte_offset`
+        // bytes into the operand.  When that offset reaches or exceeds the
+        // operand width, every selected bit lies past the value, so the result
+        // is 0.  Emitting `x >> N` with N >= width would be UB in C and lower to
+        // a poison `lshr` in LLVM, so synthesize the zero directly.
+        // Use getIntWidth (not getTypeSize): they differ for _Bool (1 vs 8) and
+        // _BitInt(N), and IntegerLiteral::Create asserts the APInt width equals
+        // getIntWidth(type).
+        unsigned operand_bits = ctx.getIntWidth(expr->getType());
+        if (operand_bits != 0 && shift_bits >= operand_bits) {
+            result_expr = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(operand_bits, 0), expr->getType(), op_location
+            );
+        } else if (shift_bits != 0) {
+            // Apply right-shift only when byte_offset > 0 (skip ">> 0").
             auto *expr_with_paren = new (ctx)
                 clang::ParenExpr(op_location, op_location, expr);
 
