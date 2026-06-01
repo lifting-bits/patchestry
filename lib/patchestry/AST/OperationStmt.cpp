@@ -606,10 +606,11 @@ namespace patchestry::ast {
             && !ctx.hasSameUnqualifiedType(input_type, output_type)) {
             const auto *array_type = ctx.getAsArrayType(output_type);
             if (array_type != nullptr
-                && input_type->isIntegerType()
+                && (input_type->isIntegerType() || input_type->isPointerType())
                 && ctx.getTypeSize(input_type) > 0)
             {
-                auto *zero = clang::IntegerLiteral::Create(
+                auto elem_type = array_type->getElementType();
+                auto *zero     = clang::IntegerLiteral::Create(
                     ctx,
                     llvm::APInt(ctx.getIntWidth(ctx.IntTy), 0),
                     ctx.IntTy, loc);
@@ -618,12 +619,26 @@ namespace patchestry::ast {
                 if (!subscript_res.isInvalid()) {
                     auto *first_elem = subscript_res.getAs< clang::Expr >();
                     if (first_elem != nullptr) {
-                        auto *reinterpreted = make_reinterpret_cast(
-                            ctx, first_elem, input_type, loc);
-                        if (reinterpreted != nullptr) {
+                        // When the scalar exactly fills one element, emit a clean
+                        // element assignment `output[0] = (elem)input` — what
+                        // Ghidra's own HighVariable model recovers.  Otherwise the
+                        // scalar is wider/narrower than the element, so fall back
+                        // to a width-faithful pointer-cast partial store
+                        // `*(input_type *)&output[0] = input`, which preserves the
+                        // exact byte width (and any overflow into following
+                        // elements) for downstream transform passes.
+                        clang::Expr *lhs = first_elem;
+                        clang::Expr *rhs = input_expr;
+                        if (ctx.getTypeSize(input_type) == ctx.getTypeSize(elem_type)) {
+                            if (!ctx.hasSameUnqualifiedType(input_type, elem_type)) {
+                                rhs = make_cast(ctx, input_expr, elem_type, loc);
+                            }
+                        } else {
+                            lhs = make_reinterpret_cast(ctx, first_elem, input_type, loc);
+                        }
+                        if (lhs != nullptr && rhs != nullptr) {
                             auto assign_res = sema().CreateBuiltinBinOp(
-                                loc, clang::BO_Assign, reinterpreted,
-                                input_expr);
+                                loc, clang::BO_Assign, lhs, rhs);
                             if (!assign_res.isInvalid()) {
                                 return assign_res.getAs< clang::Stmt >();
                             }
