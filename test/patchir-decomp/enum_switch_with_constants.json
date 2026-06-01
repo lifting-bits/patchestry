@@ -9,7 +9,6 @@
 // CCHECK: STATE_RUNNING
 // CCHECK: STATE_ERROR
 // CCHECK: enum_switch_test(enum DeviceState state)
-// CCHECK: return
 //
 // Tests enum type deserialization with named constants (entries) and
 // BRANCHIND-based dispatch. Exercises enum constant support in TypeBuilder

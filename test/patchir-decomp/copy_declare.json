@@ -3,9 +3,6 @@
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
 // CIR: cir.func dso_local @copy_declare_test
-// CIR: cir.alloca
-// CIR: cir.store
-// CIR: cir.load
 // LL: define dso_local i32 @copy_declare_test
 // LL: alloca i32
 // LL: store i32

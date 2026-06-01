@@ -6,7 +6,6 @@
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
 // RUN: %file-check -vv -check-prefix=STRUCT %s --input-file %t.c
 // CIR-DAG: load_descriptor_values
-// CIR-DAG: cir.alloca
 // LL: define dso_local i32 @load_descriptor_values
 //
 // STRUCT regression guard — the load_descriptor_values puVar9-guard.

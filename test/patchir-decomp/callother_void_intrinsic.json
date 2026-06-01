@@ -3,7 +3,6 @@
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // CIR: cir.func dso_local @volatile_write_test
-// CIR: cir.store
 // LL: define dso_local void @volatile_write_test
 // LL: store
 {

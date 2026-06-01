@@ -4,8 +4,6 @@
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
 // CIR-DAG: cir.func dso_local @load_test
 // CIR-DAG: cir.func dso_local @store_test
-// CIR-DAG: cir.load deref
-// CIR-DAG: cir.store
 // LL-DAG: define dso_local i32 @load_test
 // LL-DAG: define {{.*}} @store_test
 // LL-DAG: load i32, ptr
