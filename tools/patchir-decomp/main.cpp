@@ -99,15 +99,6 @@ namespace {
         llvm::cl::init(true)
     );
 
-    const llvm::cl::opt< bool > structuring_stats( // NOLINT(cert-err58-cpp)
-        "structuring-stats",
-        llvm::cl::desc(
-            "Emit per-function structuring and residual goto counters "
-            "to stderr (debug instrumentation)."),
-        llvm::cl::init(false),
-        llvm::cl::Hidden
-    );
-
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -124,7 +115,6 @@ namespace {
             .input_file                 = input_filename.getValue(),
             .print_tu                   = print_tu.getValue(),
             .emit_dot_cfg               = emit_dot_cfg.getValue(),
-            .structuring_stats          = structuring_stats.getValue(),
         };
     }
 

@@ -1,59 +1,10 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
-// RUN: %patchir-decomp -input %t.json -emit-cir -output %t.default-stats > %t.default-stats.out 2>&1
-// RUN: not %file-check -check-prefix=STATS %s --input-file %t.default-stats.out
-// RUN: %patchir-decomp -input %t.json -emit-cir -output %t.stats -structuring-stats > %t.stats.out 2>&1
-// RUN: %file-check -vv -check-prefix=STATS %s --input-file %t.stats.out
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=FN %s --input-file %t.cir
 // FN: cir.func dso_local @load_descriptor_values(
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
 // RUN: %file-check -vv -check-prefix=STRUCT %s --input-file %t.c
-// STATS:      [structuring-stats] function=load_descriptor_values stage=ghidra-region
-// STATS-SAME: region_nodes=48
-// STATS-SAME: kind_ifgoto=1
-// STATS-SAME: kind_goto=2
-// STATS-SAME: explicit_goto_targets=3
-// STATS:      [structuring-stats] function=load_descriptor_values stage=snode-normalized
-// STATS-SAME: total_gotos=3
-// STATS-SAME: total_labels=25
-// STATS:      [structuring-stats] function=load_descriptor_values stage=snode-normalized-patterns
-// STATS-SAME: unresolved_gotos=0
-// STATS-SAME: single_ref_gotos=3
-// STATS-SAME: goto_to_next_label=0
-// STATS:      [structuring-stats] function=load_descriptor_values stage=snode-final
-// STATS-SAME: total_gotos=2
-// STATS-SAME: total_labels=22
-// STATS:      [structuring-stats] function=load_descriptor_values stage=snode-final-patterns
-// STATS-SAME: labels=22
-// STATS-SAME: gotos=2
-// STATS-SAME: unresolved_gotos=0
-// STATS:      [structuring-stats] function=load_descriptor_values stage=pre-lowering-region-verifier
-// STATS-SAME: gotos=2
-// STATS-SAME: outward_gotos=2
-// STATS-SAME: cross_scope_entry_gotos=0
-// STATS-SAME: unresolved_gotos=0
-// STATS-SAME: ok=1
-// STATS:      [structuring-stats] function=load_descriptor_values flat_baseline=0 had_region=1 seeded_from_ghidra=1
-// STATS-SAME: snode_cleanup_iterations=2
-// STATS-SAME: snode_cleanup_fixed_point=1
-// STATS:      [structuring-stats] function=load_descriptor_values stage=clang-emitted-patterns
-// STATS-SAME: labels=22
-// STATS-SAME: gotos=2
-// STATS-SAME: single_ref_gotos=2
-// STATS-SAME: goto_to_next_label=0
-// STATS:      [structuring-stats] function=load_descriptor_values stage=clang-cleaned clang_gotos=0 clang_labels=0
-// STATS:      [structuring-stats] function=load_descriptor_values stage=clang-cleaned-patterns
-// STATS-SAME: labels=0
-// STATS-SAME: gotos=0
-// STATS-SAME: unresolved_gotos=0
-// STATS:      [structuring-stats] summary functions=1
-// STATS-SAME: region_present_functions=1
-// STATS-SAME: region_seeded_functions=1
-// STATS-SAME: snode_cleanup_iterations=2
-// STATS-SAME: snode_cleanup_cap_hits=0
-// STATS-SAME: final_region_repair_changes=0
-// STATS-SAME: pre_lowering_verifier_errors=0
 // CIR-DAG: load_descriptor_values
 // CIR-DAG: cir.alloca
 // LL: define dso_local i32 @load_descriptor_values

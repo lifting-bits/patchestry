@@ -29,9 +29,6 @@ namespace patchestry {
         bool print_tu = false;
 
         bool emit_dot_cfg = false;
-
-        // Emit per-function structuring/goto counters to stderr.
-        bool structuring_stats              = false;
     };
 
 } // namespace patchestry
