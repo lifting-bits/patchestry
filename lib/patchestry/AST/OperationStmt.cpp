@@ -629,7 +629,13 @@ namespace patchestry::ast {
                         // elements) for downstream transform passes.
                         clang::Expr *lhs = first_elem;
                         clang::Expr *rhs = input_expr;
-                        if (ctx.getTypeSize(input_type) == ctx.getTypeSize(elem_type)) {
+                        // The clean `output[0] = (elem)input` form is only valid
+                        // when the element is a scalar.  For an aggregate element
+                        // (e.g. a 2-D array or array-of-struct), `output[0]` is an
+                        // array/record lvalue that cannot take a scalar assignment,
+                        // so keep the width-faithful reinterpret partial store.
+                        if (ctx.getTypeSize(input_type) == ctx.getTypeSize(elem_type)
+                            && elem_type->isScalarType()) {
                             if (!ctx.hasSameUnqualifiedType(input_type, elem_type)) {
                                 rhs = make_cast(ctx, input_expr, elem_type, loc);
                             }
