@@ -175,12 +175,31 @@ namespace patchestry::ast {
         }
 
         // Uncovered CNodes would silently drop statements — fall back loudly.
-        if (covered_cnodes_.size() != graph_.nodes.size()) {
-            LOG(WARNING) << "Ghidra region tree covers "
-                         << covered_cnodes_.size() << "/" << graph_.nodes.size()
-                         << " CNodes for " << function_.name
-                         << "; falling back to CFGStructure\n";
-            return false;
+        // Only reachable CNodes matter: CGraphBuilder appends unreachable blocks
+        // to graph_.nodes (see CGraphBuilder.cpp compute_rpo_from_function), but
+        // Ghidra's region tree only covers blocks reachable from the entry.
+        // Comparing against the full node count would spuriously fall back on any
+        // function containing dead code, so count nodes reachable from the entry.
+        std::unordered_set< size_t > reachable;
+        std::vector< size_t > worklist{ graph_.entry };
+        reachable.insert(graph_.entry);
+        while (!worklist.empty()) {
+            const size_t id = worklist.back();
+            worklist.pop_back();
+            for (size_t succ : graph_.Node(id).succs) {
+                if (reachable.insert(succ).second) {
+                    worklist.push_back(succ);
+                }
+            }
+        }
+        for (size_t id : reachable) {
+            if (!covered_cnodes_.count(id)) {
+                LOG(WARNING) << "Ghidra region tree covers "
+                             << covered_cnodes_.size() << "/" << reachable.size()
+                             << " reachable CNodes for " << function_.name
+                             << "; falling back to CFGStructure\n";
+                return false;
+            }
         }
 
         // Collapse every CNode into the entry; entry-first so IdentifyInternal
