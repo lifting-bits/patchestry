@@ -1979,9 +1979,11 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
                     continue;
                 }
                 Varnode out = op.getOutput();
-                if (out != null && out.getDescendants() != null
-                        && out.getDescendants().hasNext()) {
-                    return true;
+                if (out != null) {
+                    Iterator<PcodeOp> descendants = out.getDescendants();
+                    if (descendants != null && descendants.hasNext()) {
+                        return true;
+                    }
                 }
             }
         } catch (Exception e) {
