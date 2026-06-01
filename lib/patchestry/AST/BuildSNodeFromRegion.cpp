@@ -1370,6 +1370,14 @@ namespace patchestry::ast {
                              << "; falling back\n";
                 return std::nullopt;
             }
+            // Both A-true (lhs->succs[1]) and B-true (rhs->succs[1]) must
+            // reach the same destination for `A || B` to fold into one
+            // 2-way conditional; the combined head exports lhs->succs[1].
+            if (lhs->succs[1] != rhs->succs[1]) {
+                LOG(WARNING) << "condition OR true edges differ in "
+                             << function_.name << "; falling back\n";
+                return std::nullopt;
+            }
             return CondHead{
                 std::move(pre),
                 rhs->cond_idx,
@@ -1385,6 +1393,14 @@ namespace patchestry::ast {
                 LOG(WARNING) << "condition AND true edge does not enter rhs "
                              << "condition in " << function_.name
                              << "; falling back\n";
+                return std::nullopt;
+            }
+            // Both A-false (lhs->succs[0]) and B-false (rhs->succs[0]) must
+            // reach the same destination for `A && B` to fold into one
+            // 2-way conditional; the combined head exports lhs->succs[0].
+            if (lhs->succs[0] != rhs->succs[0]) {
+                LOG(WARNING) << "condition AND false edges differ in "
+                             << function_.name << "; falling back\n";
                 return std::nullopt;
             }
             return CondHead{
