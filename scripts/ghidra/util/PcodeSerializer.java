@@ -317,6 +317,12 @@ public class PcodeSerializer {
 		// having to aggressively rewrite things, especially output operands.
 		private Map<PcodeOp, PcodeOp> replacementOperationsMap;
 
+		// Cache of whether a HighVariable is defined (in part) by a MULTIEQUAL
+		// (SSA phi) — see isPhiMerged.  Phi-merged variables are forced to a
+		// declared (named-temporary) classification instead of an inline
+		// TEMPORARY, so the un-serialized phi op is never referenced.
+		private Map<HighVariable, Boolean> phiMergedCache;
+
 		// branch address -> callee Address.toString(true). Space-qualified
 		// string preserves overlay/EXTERNAL/harvard spaces.
 		private ghidra.program.model.util.StringPropertyMap tailCallSiteMap;
@@ -431,6 +437,7 @@ public class PcodeSerializer {
 			this.oldLocalsMap = new HashMap<>();
 			this.temporaryAddressMap = new HashMap<>();
 			this.replacementOperationsMap = new HashMap<>();
+			this.phiMergedCache = new HashMap<>();
 			this.prefixOperationsMap = new HashMap<>();
 			this.addressOfGlobalMap = new HashMap<>();
 			this.callotherUsePcodeOps = new ArrayList<>();
@@ -1632,7 +1639,13 @@ public class PcodeSerializer {
 				//			  introduce a kind of code motion risk into the
 				//			  lifted representation.
 				if (highVariableRepresentativeVarnode.isRegister() || highVariableRepresentativeVarnode.isUnique() || highVariable instanceof HighOther) {
-					if (highVariableRepresentativeVarnode.getLoneDescend() != null) {
+					// A phi-merged variable (defined by a MULTIEQUAL) cannot be an
+					// inline TEMPORARY: its producer (the phi) is never serialized,
+					// and its value arrives from multiple paths.  Force a declared
+					// NAMED_TEMPORARY so reads (phi output) and writes (phi inputs)
+					// all route through one declaration.  See isPhiMerged.
+					if (highVariableRepresentativeVarnode.getLoneDescend() != null
+							&& !isPhiMerged(highVariable)) {
 						return VariableClassification.TEMPORARY;
 					} else {
 						return VariableClassification.NAMED_TEMPORARY;
@@ -3533,6 +3546,37 @@ public class PcodeSerializer {
 
 		// Get or create a local variable pseudo definition op for the high
 		// variable `var`.
+		// Strategy A for MULTIEQUAL (SSA phi): the phi op is never serialized as
+		// a standalone operation, but its output and all its inputs share one
+		// merged HighVariable.  Such a variable cannot be an inline temporary —
+		// its value arrives from multiple control-flow paths — so it must be
+		// promoted to a declared (named-temporary) variable.  classifyVariable
+		// consults this to avoid the TEMPORARY (inline) classification, which
+		// routes both reads (phi output) and writes (phi inputs) through the
+		// variable's declaration.  Cached per HighVariable.
+		boolean isPhiMerged(HighVariable highVariable) {
+			if (highVariable == null) {
+				return false;
+			}
+			Boolean cached = phiMergedCache.get(highVariable);
+			if (cached != null) {
+				return cached.booleanValue();
+			}
+			boolean merged = false;
+			Varnode[] instances = highVariable.getInstances();
+			if (instances != null) {
+				for (Varnode instance : instances) {
+					PcodeOp def = instance == null ? null : instance.getDef();
+					if (def != null && def.getOpcode() == PcodeOp.MULTIEQUAL) {
+						merged = true;
+						break;
+					}
+				}
+			}
+			phiMergedCache.put(highVariable, Boolean.valueOf(merged));
+			return merged;
+		}
+
 		PcodeOp getOrCreateLocalVariable(
 				HighVariable var, PcodeOp userPcodeOp) throws Exception {
 			
