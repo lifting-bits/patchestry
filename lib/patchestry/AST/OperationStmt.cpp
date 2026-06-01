@@ -1872,14 +1872,41 @@ namespace patchestry::ast {
             }
         }
 
-        // 4. Build argument list from inputs
+        // 4. Build argument list from inputs, casting each to the callee's
+        //    declared parameter type.  A Ghidra-recovered argument expression can
+        //    have a clang type that differs from the (inferred or prototyped)
+        //    function-pointer parameter type — e.g. `&local` typed
+        //    `unsigned short **` passed where the parameter is `undefined4 *` —
+        //    which BuildCallExpr rejects as "incompatible pointer types".  Mirror
+        //    the direct-call path (create_call), which already casts arguments.
+        //    See FUN_000d1e6c (cve-2022-39173).
+        const auto *fn_proto =
+            fn_ptr_expr->getType()->getPointeeType()->getAs< clang::FunctionProtoType >();
+        unsigned num_params = fn_proto ? fn_proto->getNumParams() : 0;
+
         std::vector< clang::Expr * > arguments;
+        unsigned index = 0;
         for (const auto &input : op.inputs) {
             auto *arg_expr =
                 AS_EXPR_OR_NULL(create_varnode(ctx, function, input), op.key);
-            if (arg_expr) {
-                arguments.push_back(arg_expr);
+            if (!arg_expr) {
+                index++;
+                continue;
             }
+            // Variadic / trailing args (index >= num_params) pass through uncast.
+            if (fn_proto && index < num_params) {
+                auto param_type = fn_proto->getParamType(index);
+                if (auto *cast_arg = make_cast(ctx, arg_expr, param_type, op_loc)) {
+                    arg_expr = cast_arg;
+                } else {
+                    // Keep the uncast expr as a fallback (matches create_call).
+                    LOG(ERROR) << "CALLIND: failed to cast argument " << index
+                               << " to parameter type '" << param_type.getAsString()
+                               << "'. key: " << op.key;
+                }
+            }
+            arguments.push_back(arg_expr);
+            index++;
         }
 
         // 5. Build the indirect call expression
