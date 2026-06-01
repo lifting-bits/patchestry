@@ -606,10 +606,11 @@ namespace patchestry::ast {
             && !ctx.hasSameUnqualifiedType(input_type, output_type)) {
             const auto *array_type = ctx.getAsArrayType(output_type);
             if (array_type != nullptr
-                && input_type->isIntegerType()
+                && (input_type->isIntegerType() || input_type->isPointerType())
                 && ctx.getTypeSize(input_type) > 0)
             {
-                auto *zero = clang::IntegerLiteral::Create(
+                auto elem_type = array_type->getElementType();
+                auto *zero     = clang::IntegerLiteral::Create(
                     ctx,
                     llvm::APInt(ctx.getIntWidth(ctx.IntTy), 0),
                     ctx.IntTy, loc);
@@ -618,12 +619,32 @@ namespace patchestry::ast {
                 if (!subscript_res.isInvalid()) {
                     auto *first_elem = subscript_res.getAs< clang::Expr >();
                     if (first_elem != nullptr) {
-                        auto *reinterpreted = make_reinterpret_cast(
-                            ctx, first_elem, input_type, loc);
-                        if (reinterpreted != nullptr) {
+                        // When the scalar exactly fills one element, emit a clean
+                        // element assignment `output[0] = (elem)input` — what
+                        // Ghidra's own HighVariable model recovers.  Otherwise the
+                        // scalar is wider/narrower than the element, so fall back
+                        // to a width-faithful pointer-cast partial store
+                        // `*(input_type *)&output[0] = input`, which preserves the
+                        // exact byte width (and any overflow into following
+                        // elements) for downstream transform passes.
+                        clang::Expr *lhs = first_elem;
+                        clang::Expr *rhs = input_expr;
+                        // The clean `output[0] = (elem)input` form is only valid
+                        // when the element is a scalar.  For an aggregate element
+                        // (e.g. a 2-D array or array-of-struct), `output[0]` is an
+                        // array/record lvalue that cannot take a scalar assignment,
+                        // so keep the width-faithful reinterpret partial store.
+                        if (ctx.getTypeSize(input_type) == ctx.getTypeSize(elem_type)
+                            && elem_type->isScalarType()) {
+                            if (!ctx.hasSameUnqualifiedType(input_type, elem_type)) {
+                                rhs = make_cast(ctx, input_expr, elem_type, loc);
+                            }
+                        } else {
+                            lhs = make_reinterpret_cast(ctx, first_elem, input_type, loc);
+                        }
+                        if (lhs != nullptr && rhs != nullptr) {
                             auto assign_res = sema().CreateBuiltinBinOp(
-                                loc, clang::BO_Assign, reinterpreted,
-                                input_expr);
+                                loc, clang::BO_Assign, lhs, rhs);
                             if (!assign_res.isInvalid()) {
                                 return assign_res.getAs< clang::Stmt >();
                             }
@@ -1872,14 +1893,45 @@ namespace patchestry::ast {
             }
         }
 
-        // 4. Build argument list from inputs
+        // 4. Build argument list from inputs, casting each to the callee's
+        //    declared parameter type.  A Ghidra-recovered argument expression can
+        //    have a clang type that differs from the (inferred or prototyped)
+        //    function-pointer parameter type — e.g. `&local` typed
+        //    `unsigned short **` passed where the parameter is `undefined4 *` —
+        //    which BuildCallExpr rejects as "incompatible pointer types".  Mirror
+        //    the direct-call path (create_call), which already casts arguments.
+        //    See FUN_000d1e6c (cve-2022-39173).
+        const auto *fn_proto =
+            fn_ptr_expr->getType()->getPointeeType()->getAs< clang::FunctionProtoType >();
+        unsigned num_params = fn_proto ? fn_proto->getNumParams() : 0;
+
         std::vector< clang::Expr * > arguments;
+        unsigned index = 0;
         for (const auto &input : op.inputs) {
             auto *arg_expr =
                 AS_EXPR_OR_NULL(create_varnode(ctx, function, input), op.key);
-            if (arg_expr) {
-                arguments.push_back(arg_expr);
+            if (!arg_expr) {
+                // Bail rather than drop the argument: silently skipping it would
+                // shift every later argument into the wrong parameter slot (the
+                // remaining args are still cast to getParamType(index)).
+                LOG(ERROR) << "CALLIND: failed to build argument " << index
+                           << ". key: " << op.key;
+                return {};
             }
+            // Variadic / trailing args (index >= num_params) pass through uncast.
+            if (fn_proto && index < num_params) {
+                auto param_type = fn_proto->getParamType(index);
+                if (auto *cast_arg = make_cast(ctx, arg_expr, param_type, op_loc)) {
+                    arg_expr = cast_arg;
+                } else {
+                    // Keep the uncast expr as a fallback (matches create_call).
+                    LOG(ERROR) << "CALLIND: failed to cast argument " << index
+                               << " to parameter type '" << param_type.getAsString()
+                               << "'. key: " << op.key;
+                }
+            }
+            arguments.push_back(arg_expr);
+            index++;
         }
 
         // 5. Build the indirect call expression
@@ -2336,10 +2388,53 @@ namespace patchestry::ast {
             return std::make_pair(out_stmt, merge_to_next);
         }
 
-        if (!ctx.hasSameUnqualifiedType(expr->getType(), op_type)) {
-            if (auto *casted_expr = make_cast(ctx, expr, op_type, op_location)) {
-                expr = casted_expr;
+        // SUBPIECE is a bit-extraction: shift the source right by the byte
+        // offset, then mask to the output width.  C/C++ define neither `>>` nor
+        // `&` on pointer operands, so the arithmetic must run in an integer
+        // domain.  Pick that domain (`arith_type`):
+        //   * output is a pointer  -> a same-width unsigned integer surrogate,
+        //     converting the final result back to the pointer type below.  This
+        //     is the issue #264 case: Ghidra types the SUBPIECE result as a
+        //     pointer while the source is an integer.
+        //   * a pointer-typed source -> a same-width unsigned integer via
+        //     cast_pointer_to_int (mirrors the INT_ZEXT pointer guard, #224).
+        //   * otherwise              -> the output type (existing behaviour).
+        bool output_is_pointer = op_type->isPointerType();
+        clang::QualType arith_type = op_type;
+        if (output_is_pointer) {
+            auto ptr_width = static_cast< unsigned >(ctx.getTypeSize(op_type));
+            arith_type     = ctx.getIntTypeForBitwidth(ptr_width, /*Signed=*/false);
+            if (arith_type.isNull()) {
+                arith_type = ctx.getUIntPtrType();
             }
+        }
+
+        if (expr->getType()->isPointerType()) {
+            auto src_width = static_cast< unsigned >(ctx.getTypeSize(expr->getType()));
+            auto src_int   = ctx.getIntTypeForBitwidth(src_width, /*Signed=*/false);
+            if (src_int.isNull()) {
+                src_int = ctx.getUIntPtrType();
+            }
+            expr = cast_pointer_to_int(
+                ctx, expr, src_int, op_location, PtrToIntExtension::kZero, op.key
+            );
+            if (!expr) {
+                LOG(ERROR) << "SUBPIECE: failed to cast pointer source to integer. key: "
+                           << op.key;
+                return {};
+            }
+        }
+
+        if (!ctx.hasSameUnqualifiedType(expr->getType(), arith_type)) {
+            auto *casted_expr = make_cast(ctx, expr, arith_type, op_location);
+            if (!casted_expr) {
+                // Loud-fail rather than shifting/masking an operand of the wrong
+                // type, which would either trip Sema downstream or miscompile.
+                LOG(ERROR) << "SUBPIECE: failed to cast operand to arithmetic type '"
+                           << arith_type.getAsString() << "'. key: " << op.key;
+                return {};
+            }
+            expr = casted_expr;
         }
 
         // SUBPIECE uses bitwise shift and mask which are invalid on floating-point
@@ -2370,8 +2465,21 @@ namespace patchestry::ast {
         }
 
         clang::Expr *result_expr = expr;
-        // Apply right-shift only when byte_offset > 0 (skip ">> 0").
-        if (shift_bits != 0) {
+        // The byte offset selects the output-sized window starting `byte_offset`
+        // bytes into the operand.  When that offset reaches or exceeds the
+        // operand width, every selected bit lies past the value, so the result
+        // is 0.  Emitting `x >> N` with N >= width would be UB in C and lower to
+        // a poison `lshr` in LLVM, so synthesize the zero directly.
+        // Use getIntWidth (not getTypeSize): they differ for _Bool (1 vs 8) and
+        // _BitInt(N), and IntegerLiteral::Create asserts the APInt width equals
+        // getIntWidth(type).
+        unsigned operand_bits = ctx.getIntWidth(expr->getType());
+        if (operand_bits != 0 && shift_bits >= operand_bits) {
+            result_expr = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(operand_bits, 0), expr->getType(), op_location
+            );
+        } else if (shift_bits != 0) {
+            // Apply right-shift only when byte_offset > 0 (skip ">> 0").
             auto *expr_with_paren = new (ctx)
                 clang::ParenExpr(op_location, op_location, expr);
 
@@ -2425,6 +2533,20 @@ namespace patchestry::ast {
 
         result_expr =
             new (ctx) clang::ParenExpr(op_location, op_location, result_expr);
+
+        // The shift/mask ran in an integer surrogate domain.  When the SUBPIECE
+        // output type is a pointer (issue #264), convert the integer result back
+        // to that pointer type (CK_IntegralToPointer) so the merge/assignment
+        // sees the declared type.
+        if (output_is_pointer) {
+            auto *as_ptr = make_cast(ctx, result_expr, op_type, op_location);
+            if (!as_ptr) {
+                LOG(ERROR) << "SUBPIECE: failed to cast integer result to pointer output. key: "
+                           << op.key;
+                return std::make_pair(nullptr, false);
+            }
+            result_expr = as_ptr;
+        }
 
         if (merge_to_next) {
             return std::make_pair(result_expr, merge_to_next);
