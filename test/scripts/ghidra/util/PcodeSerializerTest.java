@@ -63,8 +63,11 @@ import java.lang.NullPointerException;
 import java.lang.reflect.Field;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import domain.*;
 // todo why can't we use BaseTest here??
@@ -1935,10 +1938,133 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
         fail();
     }
 
-    @Disabled 
-    @Test 
+    @Disabled
+    @Test
     public void testSerialize() throws Exception {
         // todo writeme
         fail();
+    }
+
+    // -------- MULTIEQUAL (SSA phi) dangling-reference regression --------
+    //
+    // A MULTIEQUAL is P-Code's phi function and is never serialized as a
+    // standalone operation.  When a phi output is consumed by another op (e.g.
+    // a call argument) and classifies as an inline TEMPORARY, the serializer
+    // used to emit a varnode reference to the un-emitted phi op — a dangling
+    // "operation" reference.  Downstream lifting then failed with "Failed to
+    // get operation for key".  This is exactly what wolfSSL_EC_KEY_generate_key
+    // (cve-2022-39173) hit: the wc_ecc_make_key_ex RNG argument piVar4 is a phi
+    // merge of the stack RNG and a fallback RNG.  The fix classifies phi-merged
+    // variables as declared NAMED_TEMPORARYs so every reference resolves to a
+    // serialized declaration (see PcodeSerializer.isPhiMerged / classifyVariable).
+    //
+    // The CVE binary cannot ship in CI, so this exercises the same shape against
+    // the bloodlight firmware: it picks a function whose decompilation contains a
+    // consumed MULTIEQUAL and asserts the serialized JSON has no dangling
+    // operation references.
+
+    // True when f's decompiled high P-Code contains a MULTIEQUAL whose output is
+    // consumed by another operation — the shape that produced the dangling ref.
+    private boolean hasConsumedMultiEqual(Function f) {
+        try {
+            DecompileResults res = decompInterface.decompileFunction(f, 60, fakeMonitor);
+            HighFunction hf = (res == null) ? null : res.getHighFunction();
+            if (hf == null) {
+                return false;
+            }
+            Iterator<PcodeOpAST> it = hf.getPcodeOps();
+            while (it.hasNext()) {
+                PcodeOpAST op = it.next();
+                if (op.getOpcode() != PcodeOp.MULTIEQUAL) {
+                    continue;
+                }
+                Varnode out = op.getOutput();
+                if (out != null && out.getDescendants() != null
+                        && out.getDescendants().hasNext()) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            // Undecompilable function: treat as "no phi" and skip it.
+        }
+        return false;
+    }
+
+    // Recursively collect every "operation" string reference under `element`.
+    private void collectOperationRefs(JsonElement element, List<String> out) {
+        if (element == null) {
+            return;
+        }
+        if (element.isJsonObject()) {
+            for (Map.Entry<String, JsonElement> e : element.getAsJsonObject().entrySet()) {
+                if ("operation".equals(e.getKey()) && e.getValue().isJsonPrimitive()) {
+                    out.add(e.getValue().getAsString());
+                } else {
+                    collectOperationRefs(e.getValue(), out);
+                }
+            }
+        } else if (element.isJsonArray()) {
+            for (JsonElement child : element.getAsJsonArray()) {
+                collectOperationRefs(child, out);
+            }
+        }
+    }
+
+    // "operation" references in `json` that do not resolve to a serialized
+    // operation key in the same function (i.e. dangling references).
+    private List<String> danglingOperationReferences(String json) {
+        List<String> dangling = new ArrayList<>();
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        JsonObject functions = root.getAsJsonObject("functions");
+        if (functions == null) {
+            return dangling;
+        }
+        for (Map.Entry<String, JsonElement> fe : functions.entrySet()) {
+            JsonObject fn = fe.getValue().getAsJsonObject();
+            JsonObject blocks = fn.getAsJsonObject("basic_blocks");
+            if (blocks == null) {
+                continue;
+            }
+            Set<String> defined = new HashSet<>();
+            for (Map.Entry<String, JsonElement> be : blocks.entrySet()) {
+                JsonObject ops = be.getValue().getAsJsonObject().getAsJsonObject("operations");
+                if (ops != null) {
+                    defined.addAll(ops.keySet());
+                }
+            }
+            List<String> refs = new ArrayList<>();
+            collectOperationRefs(fn, refs);
+            for (String ref : refs) {
+                if (!defined.contains(ref)) {
+                    dangling.add(fe.getKey() + " -> " + ref);
+                }
+            }
+        }
+        return dangling;
+    }
+
+    @Test
+    public void testMultiEqualOutputsHaveNoDanglingReference() throws Exception {
+        Function target = null;
+        for (Function f : fns) {
+            if (f.isThunk() || f.isExternal()) {
+                continue;
+            }
+            if (hasConsumedMultiEqual(f)) {
+                target = f;
+                break;
+            }
+        }
+        assumeTrue(target != null,
+            "no bloodlight function exposes a consumed MULTIEQUAL in this harness");
+
+        SanitizerRunResult result = runSanitizerOnFunction(
+            target, /*sanitize=*/true, PcodeSerializer.AnalyticalTierMode.AUTO);
+
+        List<String> dangling = danglingOperationReferences(result.json);
+        assertTrue(dangling.isEmpty(),
+            "serialized function '" + target.getName() + "' has dangling operation "
+            + "references: a MULTIEQUAL (SSA phi) output was not resolved to its "
+            + "variable declaration: " + dangling);
     }
 }
