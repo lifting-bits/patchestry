@@ -128,7 +128,7 @@ banner "1/5" "ghidra :: decompile-headless.sh" \
 banner "2/5" "patchir-decomp" \
        "$OUT/in.json -> $OUT/decomp.cir"
 bash "$STRIP" "$OUT/extract.json" > "$OUT/in.json"
-"$DECOMP" -input "$OUT/in.json" -use-structuring-pass -emit-cir -output "$OUT/decomp"
+"$DECOMP" -input "$OUT/in.json" -emit-cir -output "$OUT/decomp"
 
 banner "3/5" "clang :: KLEE model library" \
        "$MODEL_DIR/{libc_models,usb_hal_models}.c -> $OUT/models.bc (target $MODEL_TARGET)"

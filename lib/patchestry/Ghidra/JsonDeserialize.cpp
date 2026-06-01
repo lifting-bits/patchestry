@@ -766,7 +766,65 @@ namespace patchestry::ghidra {
             deserialize_blocks(*blocks_array, function.basic_blocks, function.entry_block);
         }
 
+        if (const auto *region_obj = func_obj.getObject("region")) {
+            RegionNode root;
+            if (deserialize_region_node(*region_obj, root, function.name)) {
+                function.region = std::move(root);
+            }
+        }
+
         return function;
+    }
+
+    // Returns false on malformed input; the consumer drops the whole tree
+    // and falls back to CFG-based structuring.
+    bool JsonParser::deserialize_region_node(const JsonObject &node_obj,
+            RegionNode &node, const std::string &fn_name) {
+        auto kind = get_string_if_valid(node_obj, "kind");
+        if (!kind) {
+            LOG(WARNING) << "Function '" << fn_name
+                         << "' region node missing 'kind'; dropping tree.\n";
+            return false;
+        }
+        node.kind = *kind;
+        if (auto i = node_obj.getInteger("index")) {
+            node.ghidra_index = static_cast< int >(*i);
+        }
+        if (auto b = get_string_if_valid(node_obj, "block")) {
+            node.block = *b;
+        }
+        if (const auto *children = node_obj.getArray("children")) {
+            node.children.reserve(children->size());
+            for (const auto &child_val : *children) {
+                const auto *child_obj = child_val.getAsObject();
+                if (child_obj == nullptr) {
+                    LOG(WARNING) << "Function '" << fn_name
+                                 << "' region child is not an object; dropping tree.\n";
+                    return false;
+                }
+                RegionNode child;
+                if (!deserialize_region_node(*child_obj, child, fn_name)) {
+                    return false;
+                }
+                node.children.push_back(std::move(child));
+            }
+        }
+        // Accepted on any kind for forward-compat; null entries dropped.
+        if (const auto *targets = node_obj.getArray("goto_targets")) {
+            node.goto_targets.reserve(targets->size());
+            for (const auto &target_val : *targets) {
+                if (auto target_str = target_val.getAsString()) {
+                    node.goto_targets.emplace_back(target_str->str());
+                }
+            }
+        }
+        if (auto gt = node_obj.getInteger("goto_type")) {
+            node.goto_type = static_cast< int >(*gt);
+        }
+        if (auto opcode = get_string_if_valid(node_obj, "condition_opcode")) {
+            node.condition_opcode = *opcode;
+        }
+        return true;
     }
 
     void JsonParser::deserialize_call_operation(const JsonObject &call_obj, Operation &op) {
@@ -876,11 +934,9 @@ namespace patchestry::ghidra {
                 auto val   = obj->getInteger("value");
                 auto block = get_string_if_valid(*obj, "target_block");
                 if (val && block && !block->empty()) {
-                    bool has_exit = false;
-                    if (auto exit_val = obj->getBoolean("has_exit")) {
-                        has_exit = *exit_val;
-                    }
-                    op.switch_cases.push_back({ *val, *block, has_exit });
+                    bool has_exit   = obj->getBoolean("has_exit").value_or(false);
+                    bool is_default = obj->getBoolean("is_default").value_or(false);
+                    op.switch_cases.push_back({ *val, *block, has_exit, is_default });
                 }
             }
         }

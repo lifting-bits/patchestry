@@ -211,18 +211,10 @@ namespace patchestry::ast {
                     ctx_, nullptr, nullptr, disc, Loc(), Loc()
                 );
 
-                // Build the switch body as a compound stmt with cases
-                std::vector< clang::Stmt * > body_stmts;
-
-                // Build a case/default sub-stmt: empty list = fallthrough
-                // stub; otherwise emit children, append a break if needed,
-                // and wrap in CompoundStmt (the slot takes a single Stmt).
-                auto build_case_substmt = [&](const std::vector< SNode * > &body_list)
+                // Emit children, append break if not terminated, wrap in
+                // CompoundStmt. Empty body_list is handled by chaining below.
+                auto build_body_substmt = [&](const std::vector< SNode * > &body_list)
                     -> clang::Stmt * {
-                    if (body_list.empty()) {
-                        // Fallthrough stub.
-                        return new (ctx_) clang::NullStmt(Loc());
-                    }
                     std::vector< clang::Stmt * > stmts;
                     stmts.reserve(body_list.size() + 1);
                     for (const auto *child : body_list)
@@ -234,21 +226,67 @@ namespace patchestry::ast {
                     return detail::MakeCompound(ctx_, stmts);
                 };
 
+                // Two-pass so empty-bodied case labels chain into the
+                // next entry → idiomatic `case A: case B: body; break;`.
+                struct Entry {
+                    clang::SwitchCase *stmt;
+                    const std::vector< SNode * > *body_list;
+                };
+                std::vector< Entry > entries;
+                entries.reserve(sw->Cases().size() + 1);
                 for (const auto &c : sw->Cases()) {
                     auto *case_stmt = clang::CaseStmt::Create(
                         ctx_, c.value, nullptr, Loc(), Loc(), Loc()
                     );
-                    case_stmt->setSubStmt(build_case_substmt(c.body_list));
-                    body_stmts.push_back(case_stmt);
-                    switch_stmt->addSwitchCase(case_stmt);
+                    entries.push_back({case_stmt, &c.body_list});
+                }
+                clang::DefaultStmt *def_stmt = nullptr;
+                if (!sw->DefaultBodyList().empty()) {
+                    def_stmt = new (ctx_) clang::DefaultStmt(
+                        Loc(), Loc(), /*sub-stmt set below=*/nullptr);
+                    entries.push_back({def_stmt, &sw->DefaultBodyList()});
                 }
 
-                if (!sw->DefaultBodyList().empty()) {
-                    auto *def_stmt = new (ctx_) clang::DefaultStmt(
-                        Loc(), Loc(),
-                        build_case_substmt(sw->DefaultBodyList()));
-                    body_stmts.push_back(def_stmt);
-                    switch_stmt->addSwitchCase(def_stmt);
+                // setSubStmt only exists on the derived classes; route here.
+                auto set_sub = [](clang::SwitchCase *sc, clang::Stmt *s) {
+                    if (auto *c = llvm::dyn_cast< clang::CaseStmt >(sc)) {
+                        c->setSubStmt(s);
+                    } else if (auto *d =
+                                   llvm::dyn_cast< clang::DefaultStmt >(sc)) {
+                        d->setSubStmt(s);
+                    }
+                };
+
+                // Empty + next → chain. Empty + last → NullStmt (real
+                // tail fallthrough). Non-empty → emit body.
+                for (size_t i = 0; i < entries.size(); ++i) {
+                    const auto &e = entries[i];
+                    if (e.body_list->empty()) {
+                        if (i + 1 < entries.size()) {
+                            set_sub(e.stmt, entries[i + 1].stmt);
+                        } else {
+                            set_sub(e.stmt, new (ctx_) clang::NullStmt(Loc()));
+                        }
+                    } else {
+                        set_sub(e.stmt, build_body_substmt(*e.body_list));
+                    }
+                }
+
+                // Register every label so case-label resolution sees them
+                // (chain head or chained-into).
+                for (const auto &e : entries) {
+                    switch_stmt->addSwitchCase(e.stmt);
+                }
+
+                // Body holds chain HEADS only — entries reached by
+                // sequential fallthrough, not as another entry's sub-stmt.
+                std::vector< clang::Stmt * > body_stmts;
+                for (size_t i = 0; i < entries.size(); ++i) {
+                    bool is_chain_head =
+                        (i == 0) || !entries[i - 1].body_list->empty();
+                    if (is_chain_head) {
+                        body_stmts.push_back(entries[i].stmt);
+                    }
                 }
 
                 switch_stmt->setBody(detail::MakeCompound(ctx_, body_stmts));

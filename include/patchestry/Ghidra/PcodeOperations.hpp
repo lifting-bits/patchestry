@@ -153,11 +153,15 @@ namespace patchestry::ghidra {
         bool is_noreturn;
     };
 
+    // One arm of a BRANCHIND switch. `value` is meaningful only when
+    // `is_default == false`; for the default arm `target_block` names
+    // the `default:` destination.
     struct SwitchCase
     {
         int64_t value;
         std::string target_block;
         bool has_exit = false;
+        bool is_default = false;
     };
 
     struct Operation
@@ -226,6 +230,23 @@ namespace patchestry::ghidra {
         std::string end;
     };
 
+    // Mirror of Ghidra's structured region tree (DecompInterface.structureGraph).
+    // Leaves (kind == "plain") name an original basic block; interior nodes
+    // carry children. Kinds: PcodeBlock::typeToName.
+    struct RegionNode
+    {
+        std::string kind;
+        int ghidra_index = 0;
+        // Leaf-only.
+        std::optional< std::string > block;
+        std::vector< RegionNode > children;
+        // Non-empty only for `goto`/`ifgoto`/`multigoto`.
+        std::vector< std::string > goto_targets;
+        // Optional so older JSON stays valid.
+        std::optional< int > goto_type;
+        std::optional< std::string > condition_opcode;
+    };
+
     struct Function
     {
         std::string name;         // original (possibly mangled) symbol name
@@ -238,6 +259,10 @@ namespace patchestry::ghidra {
         // Optional schema fields; empty on older serializer outputs.
         std::string entry_point;
         std::vector< AddressRange > address_ranges;
+
+        // Absent when Ghidra didn't produce one; consumers fall back
+        // to CFG-based structuring.
+        std::optional< RegionNode > region;
     };
 
     struct Program

@@ -1,7 +1,8 @@
 # Structuring-Diff: Functional Equivalence Checks
 
-Detailed methodology for verifying that `--use-structuring-pass` produces
-functionally equivalent C output compared to the goto-based baseline.
+Detailed methodology for verifying that the default structured
+pipeline produces functionally equivalent C output compared to the
+goto-based baseline emitted via the hidden `--emit-flat-baseline` flag.
 
 ## Check 2.1: Function Signatures (must be identical)
 

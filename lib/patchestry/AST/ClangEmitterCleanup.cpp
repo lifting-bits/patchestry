@@ -88,6 +88,11 @@ namespace patchestry::ast {
             apply_body(RemoveDeadControlFlow(ctx, fn->getBody(), mutated));
             (void) mutated;
         };
+        auto run_small_cross_scope_targets = [&]() {
+            bool mutated = false;
+            apply_body(FoldSmallCrossScopeGotoTargets(ctx, fn, fn->getBody(), mutated));
+            (void) mutated;
+        };
         // Dead-label sweep only.  A few legacy tail positions run this
         // without the empty-block merge: running RemoveEmptyBlocks there
         // reshapes if/else ahead of downstream goto-elimination passes
@@ -103,6 +108,76 @@ namespace patchestry::ast {
         auto run_late_join_fixups = [&]() {
             run_goto_to_next_label_fixed_point();
             run_dead_control_flow();
+        };
+        auto run_late_join_cleanup_fixed_point = [&]() {
+            bool reached_fixed_point = false;
+            for (int pass = 0; pass < kMaxGotoEliminationPasses; ++pass) {
+                llvm::FoldingSetNodeID before;
+                fn->getBody()->Profile(before, ctx, /*Canonical=*/false);
+
+                run_late_join_fixups();
+
+                run_with_refs([&](const auto &refs) {
+                    return FoldForwardSingleRefLabelRegions(ctx, fn->getBody(), refs);
+                });
+
+                run_with_refs([&](const auto &refs) {
+                    return FoldCrossCompoundDispatchChains(ctx, fn->getBody(), refs);
+                });
+
+                run_with_refs([&](const auto &refs) {
+                    return SinkCommonTerminalEpilogues(ctx, fn->getBody(), refs);
+                });
+
+                std::unordered_map< clang::LabelDecl *, unsigned > refs;
+                CountGotoDeclRefs(fn->getBody(), refs);
+                bool folded_guarded_join = false;
+                body = FoldGuardedJoinLabelChains(
+                    ctx, fn->getBody(), refs, folded_guarded_join
+                );
+                if (folded_guarded_join && body) { fn->setBody(body); }
+
+                refs.clear();
+                CountGotoDeclRefs(fn->getBody(), refs);
+                bool cloned_small_join = false;
+                body = CloneSmallStraightLineLabelBeforeJoinGotos(
+                    ctx, fn->getBody(), refs, cloned_small_join
+                );
+                if (body) { fn->setBody(body); }
+
+                refs.clear();
+                CountGotoDeclRefs(fn->getBody(), refs);
+                bool cloned_cleanup_join = false;
+                body = CloneCleanupLabelBeforeJoinGotos(
+                    ctx, fn->getBody(), refs, cloned_cleanup_join
+                );
+                if (cloned_cleanup_join && body) { fn->setBody(body); }
+
+                bool folded_join_chain = false;
+                body = FoldScopeJoinIfElseChain(ctx, fn->getBody(), folded_join_chain);
+                if (folded_join_chain && body) { fn->setBody(body); }
+
+                bool cloned_terminal = false;
+                body = CloneTerminalLabelGotos(ctx, fn->getBody(), cloned_terminal);
+                if (cloned_terminal && body) { fn->setBody(body); }
+
+                run_small_cross_scope_targets();
+                run_late_join_fixups();
+
+                llvm::FoldingSetNodeID after;
+                fn->getBody()->Profile(after, ctx, /*Canonical=*/false);
+                if (before == after) {
+                    reached_fixed_point = true;
+                    break;
+                }
+            }
+            if (!reached_fixed_point) {
+                LOG(WARNING)
+                    << "Clang-AST late join cleanup hit cap of "
+                    << kMaxGotoEliminationPasses << " iterations for "
+                    << fn->getNameAsString()
+                    << " — possible pass oscillation\n";
+            }
         };
 
         // Eliminate gotos to immediately following labels.  Iterates
@@ -125,6 +200,7 @@ namespace patchestry::ast {
                 apply_body(HoistCrossScopeLabels(ctx, fn, fn->getBody(), mutated));
                 (void) mutated;
             },
+            [&]() { run_small_cross_scope_targets(); },
             [&]() {
                 run_with_refs([&](const auto &refs) {
                     return FoldClangSwitchLocalCaseTargets(ctx, fn->getBody(), refs);
@@ -242,6 +318,7 @@ namespace patchestry::ast {
         bool hoisted_cross_scope = false;
         body = HoistCrossScopeLabels(ctx, fn, fn->getBody(), hoisted_cross_scope);
         if (hoisted_cross_scope && body) { fn->setBody(body); }
+        run_small_cross_scope_targets();
 
         refs.clear();
         CountGotoDeclRefs(fn->getBody(), refs);
@@ -348,6 +425,29 @@ namespace patchestry::ast {
 
         if (cloned_cleanup_join) {
             run_late_join_fixups();
+        }
+
+        // Undo HoistCrossScopeLabels' synthetic-join injection when the
+        // shape matches an if/else-if chain. Runs after all upstream
+        // synthesis, before NormalizeConditions.
+        {
+            bool folded_join_chain = false;
+            body = FoldScopeJoinIfElseChain(ctx, fn->getBody(), folded_join_chain);
+            if (folded_join_chain && body) {
+                fn->setBody(body);
+                run_dead_control_flow();
+            }
+        }
+
+        // Final join/terminal fixed point — late passes above expose
+        // fresh single-ref joins and terminal labels.
+        {
+            bool cloned_terminal_final = false;
+            body = CloneTerminalLabelGotos(ctx, fn->getBody(), cloned_terminal_final);
+            if (cloned_terminal_final && body) {
+                fn->setBody(body);
+            }
+            run_late_join_cleanup_fixed_point();
         }
 
         // Cosmetic: fold double negations and `!(a OP b)` comparisons in

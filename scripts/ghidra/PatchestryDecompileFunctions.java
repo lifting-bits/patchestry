@@ -318,7 +318,9 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         DecompInterface decompiler = new DecompInterface();
 
         decompiler.setOptions(options);
-        decompiler.toggleCCode(false);
+        // Required: getCCodeMarkup() is null otherwise; PcodeSerializer
+        // mines that tree for ClangCaseToken nodes.
+        decompiler.toggleCCode(true);
         decompiler.toggleSyntaxTree(true);
         decompiler.toggleJumpLoads(true);
         decompiler.toggleParamMeasures(false);

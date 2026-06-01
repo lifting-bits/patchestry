@@ -159,11 +159,9 @@ fi
 if stage_le cir "$stage_target"; then
     banner "stage 2/8: JSON -> CIR"
     "$PATCHIR_DECOMP" -input "$out_dir/malicious_memcpy.json" \
-        -use-structuring-pass -emit-cir \
-        -output "$out_dir/malicious_memcpy"
+        -emit-cir -output "$out_dir/malicious_memcpy"
     "$PATCHIR_DECOMP" -input "$out_dir/attribute_modified_cb.json" \
-        -use-structuring-pass -emit-cir \
-        -output "$out_dir/attribute_modified_cb"
+        -emit-cir -output "$out_dir/attribute_modified_cb"
 fi
 
 # ---- stage: patch ----------------------------------------------------------

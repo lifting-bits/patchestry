@@ -10,161 +10,18 @@
 #include <patchestry/AST/CGraph.hpp>
 #include <patchestry/AST/SNode.hpp>
 
-#include <list>
 #include <string>
-#include <unordered_set>
+#include <string_view>
 #include <vector>
 
 namespace clang { class ASTContext; }
 
 namespace patchestry::ast {
 
-    /// Structuring works by repeatedly matching topological patterns in the
-    /// CGraph and collapsing matched node sets into hierarchical SNode trees
-    /// via CGraph::IdentifyInternal.  The algorithm terminates when only a
-    /// single active node remains or when no further progress can be made
-    /// (remaining nodes are emitted with goto-based control flow).
-    class CFGStructure {
-      public:
-        CFGStructure(CGraph &g, SNodeFactory &factory, clang::ASTContext &ctx);
-
-        /// Run full structuring: loops -> iterative rules -> goto fallback.
-        void StructureAll();
-
-      private:
-        CGraph &graph_;
-        SNodeFactory &factory_;
-        clang::ASTContext &ctx_;
-        std::list< LoopBody > loop_body_storage_;
-        std::vector< LoopBody * > loop_order_;
-        std::list< FloatingEdge > likely_goto_;
-
-        // Node IDs that appear as successors of collapsed nodes.
-        // Precomputed per StructureInternal round so RuleBlockCat can
-        // check label reachability in O(1) instead of scanning all nodes.
-        std::unordered_set< size_t > collapsed_succ_targets_;
-
-        // RPO position: rpo_pos_[n] = position of node n in RPO.
-        // Lower value = earlier in RPO.  kNone if collapsed/unreachable.
-        std::vector< size_t > rpo_pos_;
-
-        // Dominator tree: idom_[n] = immediate dominator of node n.
-        // idom_[entry] = entry.  idom_[n] = kNone if unreachable.
-        std::vector< size_t > idom_;
-
-        // Post-dominator tree: ipdom_[n] = immediate post-dominator of node n.
-        // ipdom_[n] = kNone if no post-dominator (e.g. infinite loop).
-        std::vector< size_t > ipdom_;
-
-        // Phase methods
-        void ComputeDominatorTree();
-        void ComputePostDominatorTree();
-        void NormalizeConditionPolarityIPdom();
-        void ClassifyRegions();
-        bool MarkIrreducibleSCCs();
-        void CanonicalizeTopology();
-        void OrderLoops();
-
-        /// Try all collapse rules on every active node.
-        /// Returns true if at least one rule fired.
-        bool StructureInternal();
-
-        // Collapse rules — each returns true if it matched and fired.
-
-        /// Sequential merge: A->B where B has single predecessor A.
-        bool RuleBlockCat(size_t id);
-
-        bool RuleBlockProperIf(size_t id);
-        bool RuleBlockIfElse(size_t id);
-        bool RuleBlockWhileDo(size_t id);
-        bool RuleBlockDoWhile(size_t id);
-        bool RuleBlockInfLoop(size_t id);
-        bool RuleBlockSwitch(size_t id);
-
-        /// If-then-else where both arms terminate (return, no merge point).
-        bool RuleBlockIfReturn(size_t id);
-
-        /// Post-dominator-guided if-then: the merge point is the immediate
-        /// post-dominator of A, and the body arm has sole pred = A.
-        bool RuleBlockPostDomIf(size_t id);
-
-        /// Check if the only "real" (non-collapsed, non-goto) predecessor
-        /// of node_id is expected_pred.
-        bool HasSoleRealPredecessor(size_t node_id, size_t expected_pred);
-
-        /// True iff any collapsed node's structured SNode tree holds an
-        /// SGoto targeting `target_label`.  Live-pred SGotos are NOT
-        /// counted (the existing succs/preds graph already encodes
-        /// them via HasSoleRealPredecessor).  Used by RuleBlockProperIf
-        /// Case 1b/2b to refuse forwarder absorption when an earlier
-        /// rule's collapsed tree would dangle after the forwarder's
-        /// SLabel is discarded (#252).
-        bool TargetHasCollapsedGotoRefs(std::string_view target_label) const;
-
-        /// Wrap child SNode with node's prior content (structured or stmts)
-        /// and label.  Used by all if/if-else/if-return rules.
-        /// Returns the resulting SNode sequence.
-        std::vector< SNode * > WrapWithPriorContent(size_t id, SNode *child);
-
-        /// Check if node d is dominated by node root via idom_ chain.
-        bool IsDominatedBy(size_t d, size_t root) const;
-
-        /// Collect active nodes dominated by root but not by stop.
-        /// Sorted by rpo_pos_.
-        std::vector<size_t> CollectDomRegion(size_t root, size_t stop) const;
-
-        // Helpers
-
-        /// Spill a single CNode's stmts into SStmt siblings, optionally
-        /// wrapped in an SLabel if the node has a label.
-        /// When \p include_terminal is false the node's terminal stmt (goto /
-        /// if-goto) is omitted — used for non-tail nodes in a sequential merge
-        /// where the edge is absorbed by the merge.
-        /// Returns the resulting SNode sequence (or the node's existing
-        /// structured sequence if it was already structured).
-        std::vector< SNode * > BuildLeafSNode(size_t id,
-                                              bool include_terminal = true);
-
-        /// Build a sequence from multiple node ids (each via BuildLeafSNode).
-        std::vector< SNode * > BuildBodySNode(const std::vector<size_t> &ids);
-
-        /// Build the body SNode sequence for a loop, excluding the header.
-        /// Interior node terminals are stripped (edges absorbed by loop).
-        /// Conditional interior nodes with exits outside the body get
-        /// an if-goto to preserve the exit path.
-        std::vector< SNode * > BuildLoopBodySNode(
-                                  const std::vector<size_t> &body,
-                                  size_t header_id,
-                                  const std::unordered_set<size_t> &bodyset);
-
-        /// Use TraceDAG to select the least-disruptive edge and mark it
-        /// as a goto.  Returns true if an edge was selected and marked.
-        bool SelectAndMarkGotoEdge();
-    };
-
-    /// Lift raw clang control flow embedded in opaque SStmt leaf SNodes
-    /// into first-class SNodes so the SNode-layer cleanup passes can see
-    /// it.  Payload shapes lifted (each handled by the shared recursive
-    /// helper `NormalizeClangStmt`):
-    ///   - `clang::GotoStmt`       -> `SGoto`
-    ///   - `clang::LabelStmt`      -> `SLabel` (body normalized recursively)
-    ///   - `clang::BreakStmt`      -> `SBreak`
-    ///   - `clang::IfStmt`         -> `SIfThenElse` (arms normalized recursively)
-    ///   - `clang::SwitchStmt`     -> `SSwitch` when the body matches the
-    ///                                 switch-of-CaseStmt/DefaultStmt shape;
-    ///                                 each case body normalized recursively,
-    ///                                 fallthrough chains preserved.  A
-    ///                                 non-matching switch is left as a
-    ///                                 single SStmt.
-    ///   - `clang::CompoundStmt`   -> decomposed into a sequence of SNodes
-    ///                                 ONLY if it transitively contains a
-    ///                                 goto or label; otherwise left as a
-    ///                                 single opaque SStmt so emission keeps
-    ///                                 its brace level.
-    ///   - `clang::NullStmt` / null -> dropped.
-    /// Any other clang::Stmt shape is left as a plain SStmt — never guess,
-    /// never drop.  Goto/label pairing is preserved verbatim: no rename,
-    /// no synthesis, no case-value width recompute.
+    /// Lift raw clang control flow embedded in opaque SStmt leaves into
+    /// first-class SNodes so later SNode repair passes can see it.
+    /// Unsupported clang statement shapes remain opaque, and goto/label
+    /// names are preserved verbatim.
     void NormalizeRawControlFlow(std::vector< SNode * > &root,
                                  SNodeFactory &factory,
                                  clang::ASTContext &ctx);
@@ -188,6 +45,19 @@ namespace patchestry::ast {
     /// goto and its target.  Recurses into all nested SNode bodies.
     bool ScopeifyIfGotos(std::vector< SNode * > &root, SNodeFactory &factory,
                          clang::ASTContext &ctx);
+
+    /// Cross-scope ifgoto absorption: fold
+    ///     if (outer) { if (inner) goto L; goto L2; } ... L: body
+    /// into
+    ///     if (outer && !inner) goto L2; ... body
+    /// Only fires when L has a single goto reference and the children
+    /// between the outer-if and the L: label are label-free (no goto
+    /// targets stranded by the absorption). Works on the residuals that
+    /// ScopeifyIfGotos leaves behind (where the inner-goto sits in a
+    /// nested if-then rather than at the outer-body tail).
+    bool AbsorbCrossScopeIfGoto(std::vector< SNode * > &root,
+                                SNodeFactory &factory,
+                                clang::ASTContext &ctx);
 
     /// Post-structuring cleanup: inline residual goto-to-label pairs.
     /// When an SGoto's target SLabel is a sibling referenced only by that
@@ -274,6 +144,23 @@ namespace patchestry::ast {
                                       SNodeFactory &factory,
                                       clang::ASTContext &ctx);
 
+    /// Repair sibling-arm label entries:
+    ///
+    ///   if (A) { L: body; } else { ...; if (B) goto L; }
+    ///
+    /// into:
+    ///
+    ///   if (A) { body; } else { ...; if (B) { body; } }
+    ///
+    /// Only fires for single-ref labels, terminal goto paths in the sibling
+    /// arm, and small clone-safe tails.  It also sinks an identical trailing
+    /// statement out of both arms before cloning the target prefix.  This
+    /// covers shared cleanup blocks that Ghidra represents as a label in one
+    /// if/else arm plus a goto from the other arm.
+    bool FoldSiblingArmLabelEntries(std::vector< SNode * > &root,
+                                    SNodeFactory &factory,
+                                    clang::ASTContext &ctx);
+
     /// Move single-ref label targets into switch case arms.
     ///
     /// This complements DuplicateSwitchCaseTargets for switch-local labels that
@@ -293,6 +180,18 @@ namespace patchestry::ast {
     /// Returns true if any duplication was performed.
     bool DuplicateSmallTerminatingTargets(std::vector< SNode * > &root,
                                           SNodeFactory &factory);
+
+    /// Split a label's owning sequence at the label and duplicate the
+    /// terminating, goto-free entry suffix at residual goto sites.
+    ///
+    /// Unlike DuplicateSmallTerminatingTargets, this pass is allowed to copy
+    /// call-containing statement tails when doing so preserves the original
+    /// edge semantics: the copied suffix replaces the goto edge, all local
+    /// live-ins must already be available at the goto site, and the original
+    /// label remains for fallthrough paths until later dead-label cleanup.
+    bool SplitAndCloneCrossScopeEntries(std::vector< SNode * > &root,
+                                        SNodeFactory &factory,
+                                        clang::ASTContext &ctx);
 
     /// Duplicate small producer->epilogue error tails at residual goto sites.
     /// A direct goto to the epilogue is cloned only when all local variables
@@ -353,36 +252,36 @@ namespace patchestry::ast {
     /// Bottom-up recursive.
     bool RemoveDeadSSeqChildren(std::vector< SNode * > &root);
 
-    /// Structural verification report for a (post-cleanup) SNode tree.
-    /// Counts labels/gotos/switches and records any structural defect
-    /// that would produce invalid Clang AST (dangling gotos, duplicate
-    /// labels, break/continue outside their enclosing construct, empty
-    /// bodies, unreachable siblings, switch-count drift, ...).
-    struct SNodeValidationReport {
-        size_t input_blocks    = 0;
-        size_t emitted_labels  = 0;
-        size_t input_switches  = 0;
-        size_t emitted_switches = 0;
-        size_t input_gotos     = 0;
-        size_t emitted_gotos   = 0;
-        std::vector< std::string > missing_labels;
-        std::vector< std::string > extra_labels;
-        std::vector< std::string > missing_switches;
-        std::vector< std::string > extra_switches;
-        std::vector< std::string > dangling_gotos;
-        std::vector< std::string > duplicate_labels;
+    /// Final pre-emission repair fixed point.  This runs the conservative
+    /// goto-repair passes one last time after the main structuring pipeline,
+    /// so any region entry/exit patterns exposed late by earlier cleanup have
+    /// a chance to become structured break/continue/return or cloned targets
+    /// before lowering observes the tree.
+    bool FinalizeRegionRepairs(std::vector< SNode * > &root,
+                               SNodeFactory &factory,
+                               clang::ASTContext &ctx);
+
+    struct RegionRepairVerifierResult
+    {
+        size_t goto_refs                = 0;
+        size_t same_scope_gotos         = 0;
+        size_t outward_gotos            = 0;
+        size_t cross_scope_entry_gotos  = 0;
+        size_t unresolved_gotos         = 0;
         std::vector< std::string > diagnostics;
 
-        bool ok() const { return diagnostics.empty(); }
+        bool hasFatalErrors() const { return unresolved_gotos != 0; }
+
+        bool ok() const {
+            return cross_scope_entry_gotos == 0 && unresolved_gotos == 0;
+        }
     };
 
-    /// Verify the structured SNode tree after structuring cleanup and
-    /// before Clang AST emission.  This catches SNode-level damage that
-    /// can be introduced after the JSON->CGraph verifier has passed.
-    /// When `source_graph` is supplied, the report also cross-checks
-    /// emitted labels/switches against the source CGraph.
-    SNodeValidationReport
-    ValidateSNodeTree(const std::vector< SNode * > &root,
-                      const CGraph *source_graph = nullptr);
+    /// Verify the SNode tree before lowering.  Every residual goto must
+    /// resolve to a live label.  Cross-scope entries are counted separately:
+    /// the repair pipeline should remove reducible cases, but irreducible
+    /// residual gotos are still representable by the lowering path.
+    RegionRepairVerifierResult
+    VerifyRegionRepairedBeforeLowering(const std::vector< SNode * > &root);
 
 } // namespace patchestry::ast

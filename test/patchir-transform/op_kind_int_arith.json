@@ -1,5 +1,5 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -use-structuring-pass -emit-cir -output %t1 >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t1 >> /dev/null 2>&1
 //
 // Baseline: no op_kind filter — all 5 binops are replaced. Each replacement
 // generates a cir.call with the patchestry_operation="cir.binop" attribute.

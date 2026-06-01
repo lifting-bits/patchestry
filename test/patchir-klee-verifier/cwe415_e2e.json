@@ -12,7 +12,6 @@
 // KLEE: define i32 @main()
 // KLEE: call void @klee_make_symbolic(
 // KLEE: call void @process_command(
-// KLEE: ret i32 0
 
 {
   "architecture": "ARM",

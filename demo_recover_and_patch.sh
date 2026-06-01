@@ -101,13 +101,10 @@ echo -e "✓ Successfully extracted P-code to ${OUTPUT_PREFIX}.json"
 
 # Step 2: Lift P-code JSON to Clang IR
 echo -e "Step 2: Lifting P-code to Clang IR..."
-echo "Command: $PATCHIR_DECOMP -input ${OUTPUT_PREFIX}.json -emit-cir -emit-mlir -emit-llvm -print-tu -output $OUTPUT_PREFIX"
+echo "Command: $PATCHIR_DECOMP -input ${OUTPUT_PREFIX}.json -emit-cir -print-tu -output $OUTPUT_PREFIX"
 
-"$PATCHIR_DECOMP" \
-    -input "${OUTPUT_PREFIX}.json" \
-    -emit-cir \
-    -print-tu \
-    -output "$OUTPUT_PREFIX"
+"$PATCHIR_DECOMP" -input "${OUTPUT_PREFIX}.json" \
+    -emit-cir -print-tu -output "$OUTPUT_PREFIX"
 
 echo -e "✓ Successfully lifted to Clang IR!"
 
