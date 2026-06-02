@@ -227,8 +227,11 @@ namespace patchestry::ast {
         if (function_builder().function_list.get().contains(*vnode.function)) {
             auto *function_decl = function_builder().function_list.get().at(*vnode.function);
             auto location       = SourceLocation(ctx.getSourceManager(), *vnode.function);
+            // 3rd arg is TemplateKWLoc: keep invalid, else the printer emits
+            // a spurious `template` keyword on plain C function refs.
             auto *function_ref  = clang::DeclRefExpr::Create(
-                ctx, clang::NestedNameSpecifierLoc(), location, function_decl, false, location,
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+                function_decl, false, location,
                 function_decl->getType(), clang::VK_PRValue
             );
             return function_ref;
