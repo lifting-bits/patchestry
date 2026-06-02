@@ -189,6 +189,8 @@ namespace patchestry::ast {
                     ? func.name : func.display_name;
                 bool seeded_from_ghidra                = false;
                 bool snode_cleanup_reached_fixed_point = true;
+                // Set when the verifier finds a dangling goto.
+                bool unrepaired_region_flow            = false;
 
                 auto *prev_ctx = builder->enter_function_context(fn);
                 CGraph flow_graph = BuildCGraph(*builder, ctx);
@@ -208,10 +210,17 @@ namespace patchestry::ast {
 
                 SNodeFactory factory;
                 std::vector<SNode *> root_body;
+                // Pristine graph for the flat fallback, snapshotted
+                // before seeding collapses nodes / clears labels.  Shallow copy
+                // is safe: it shares leaf clang::Stmt*, but only one SNode tree
+                // is ever emitted and passes never mutate leaf Stmts in place.
+                CGraph flat_snapshot;
 
                 if (options.emit_flat_baseline) {
                     EmitFlatCFG(flow_graph, factory, ctx, root_body);
                 } else {
+                    // Snapshot before seeding mutates flow_graph.
+                    flat_snapshot = flow_graph;
                     // Seed from Function.region when present; fall back
                     // to flat-CFG. Post-pass chain runs on either shape.
                     if (func.region.has_value()) {
@@ -332,45 +341,71 @@ namespace patchestry::ast {
                         // entry/exit goto patterns still get repaired.
                         FinalizeRegionRepairs(root_body, factory, ctx);
 
-                        if (options.emit_cir || options.emit_mlir
-                            || options.emit_llvm)
-                        {
-                            auto verify =
-                                VerifyRegionRepairedBeforeLowering(root_body);
-                            if (verify.hasFatalErrors()) {
-                                auto diag_id = ci.getDiagnostics().getCustomDiagID(
-                                    clang::DiagnosticsEngine::Error,
-                                    "invalid structured-region control flow "
-                                    "before lowering in function %0: %1");
-                                constexpr size_t kMaxReportedVerifierErrors = 5;
-                                for (size_t i = 0;
-                                     i < verify.diagnostics.size()
-                                     && i < kMaxReportedVerifierErrors;
-                                     ++i)
-                                {
-                                    ci.getDiagnostics().Report(diag_id)
-                                        << fn_name << verify.diagnostics[i];
-                                }
-                                if (verify.diagnostics.size()
-                                    > kMaxReportedVerifierErrors)
-                                {
-                                    ci.getDiagnostics().Report(diag_id)
-                                        << fn_name
-                                        << (std::to_string(
-                                                verify.diagnostics.size()
-                                                - kMaxReportedVerifierErrors)
-                                            + " additional unrepaired "
-                                              "region-control-flow issues");
-                                }
+                        // Gate: a dangling goto is a recoverable Diag Error +
+                        // flat fallback below, not an abort.  All output modes,
+                        // so --print-tu is guarded too.
+                        auto verify =
+                            VerifyRegionRepairedBeforeLowering(root_body);
+                        if (verify.hasFatalErrors()) {
+                            unrepaired_region_flow = true;
+                            auto diag_id = ci.getDiagnostics().getCustomDiagID(
+                                clang::DiagnosticsEngine::Error,
+                                "invalid structured-region control flow "
+                                "before lowering in function %0: %1");
+                            constexpr size_t kMaxReportedVerifierErrors = 5;
+                            for (size_t i = 0;
+                                 i < verify.diagnostics.size()
+                                 && i < kMaxReportedVerifierErrors;
+                                 ++i)
+                            {
+                                ci.getDiagnostics().Report(diag_id)
+                                    << fn_name << verify.diagnostics[i];
+                            }
+                            if (verify.diagnostics.size()
+                                > kMaxReportedVerifierErrors)
+                            {
+                                ci.getDiagnostics().Report(diag_id)
+                                    << fn_name
+                                    << (std::to_string(
+                                            verify.diagnostics.size()
+                                            - kMaxReportedVerifierErrors)
+                                        + " additional unrepaired "
+                                          "region-control-flow issues");
                             }
                         }
                     }
                 }
 
-                EmitClangAST(root_body, fn, ctx);
+                if (unrepaired_region_flow) {
+                    // Salvage the function as goto-based flat C instead of
+                    // dropping it.  The Diag Error above already made it loud.
+                    LOG(ERROR)
+                        << "Falling back to flat goto-based AST for " << fn_name
+                        << " (dangling goto, issue #265); see prior diagnostics.\n";
 
-                if (options.clang_ast_cleanup) {
-                    CleanupPrettyPrint(fn, ctx);
+                    std::vector< SNode * > flat_body;
+                    EmitFlatCFG(flat_snapshot, factory, ctx, flat_body);
+
+                    // Flat CFG should never dangle; guard anyway.
+                    auto flat_verify =
+                        VerifyRegionRepairedBeforeLowering(flat_body);
+                    if (flat_verify.hasFatalErrors()) {
+                        LOG(ERROR)
+                            << "Flat fallback for " << fn_name
+                            << " still has unresolved gotos; skipping "
+                               "Clang-AST emission.\n";
+                    } else {
+                        EmitClangAST(flat_body, fn, ctx);
+                        if (options.clang_ast_cleanup) {
+                            CleanupPrettyPrint(fn, ctx);
+                        }
+                    }
+                } else {
+                    EmitClangAST(root_body, fn, ctx);
+
+                    if (options.clang_ast_cleanup) {
+                        CleanupPrettyPrint(fn, ctx);
+                    }
                 }
             }
         }

@@ -7184,6 +7184,9 @@ namespace patchestry::ast {
             }
         }
 
+        // Debug-only: logs (with the caller tag) which pass orphaned a goto.
+        // Non-fatal — the recoverable handling is the pre-lowering gate
+        // VerifyRegionRepairedBeforeLowering in ASTConsumer.
         void VerifyGotoLabelPairing(std::vector<SNode *> &root,
                                     const char *caller_tag) {
 #ifndef NDEBUG
@@ -7193,10 +7196,8 @@ namespace patchestry::ast {
             CountGotoRefs(root, refs);
             for (auto &[name, _] : refs) {
                 if (!labels.contains(name)) {
-                    LOG(ERROR) << caller_tag << ": dangling "
-                               << "goto target '" << std::string(name)
-                               << "' after duplication\n";
-                    assert(false && "dangling goto target after duplication");
+                    LOG(ERROR) << caller_tag << ": dangling goto target '"
+                               << std::string(name) << "' (non-fatal)\n";
                 }
             }
 #else
