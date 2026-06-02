@@ -376,6 +376,13 @@ namespace patchestry::ast {
                     }
                 }
 
+                auto emit_body = [&](std::vector< SNode * > &body) {
+                    EmitClangAST(body, fn, ctx);
+                    if (options.clang_ast_cleanup) {
+                        CleanupPrettyPrint(fn, ctx);
+                    }
+                };
+
                 if (unrepaired_region_flow) {
                     // Salvage the function as goto-based flat C instead of
                     // dropping it.  The Diag Error above already made it loud.
@@ -386,26 +393,26 @@ namespace patchestry::ast {
                     std::vector< SNode * > flat_body;
                     EmitFlatCFG(flat_snapshot, factory, ctx, flat_body);
 
-                    // Flat CFG should never dangle; guard anyway.
+                    // Flat CFG should never dangle; guard anyway.  Report a
+                    // Clang Error too so tools that surface only diagnostics see
+                    // that the body was omitted, not just the stderr log.
                     auto flat_verify =
                         VerifyRegionRepairedBeforeLowering(flat_body);
                     if (flat_verify.hasFatalErrors()) {
+                        auto diag_id = ci.getDiagnostics().getCustomDiagID(
+                            clang::DiagnosticsEngine::Error,
+                            "flat fallback for function %0 still has unresolved "
+                            "gotos; emitting no body");
+                        ci.getDiagnostics().Report(diag_id) << fn_name;
                         LOG(ERROR)
                             << "Flat fallback for " << fn_name
                             << " still has unresolved gotos; skipping "
                                "Clang-AST emission.\n";
                     } else {
-                        EmitClangAST(flat_body, fn, ctx);
-                        if (options.clang_ast_cleanup) {
-                            CleanupPrettyPrint(fn, ctx);
-                        }
+                        emit_body(flat_body);
                     }
                 } else {
-                    EmitClangAST(root_body, fn, ctx);
-
-                    if (options.clang_ast_cleanup) {
-                        CleanupPrettyPrint(fn, ctx);
-                    }
+                    emit_body(root_body);
                 }
             }
         }
