@@ -3513,10 +3513,27 @@ namespace patchestry::ast {
                 return { nullptr, false };
             }
 
-            auto add_result = sema().CreateBuiltinBinOp(
-                op_loc, clang::BO_Add, make_cast(ctx, input_expr, op_type, op_loc), byte_offset
-            );
-            assert(!add_result.isInvalid() && "Invalid ptr_sub expression");
+            // Function/void* arithmetic is invalid in C / NYI in CIRGen (and
+            // crashes); do the byte arithmetic in char* when op_type is one.
+            auto arith_type = op_type;
+            if (op_type->isPointerType()
+                && (op_type->getPointeeType()->isFunctionType()
+                    || op_type->getPointeeType()->isVoidType()))
+            {
+                arith_type = ctx.getPointerType(ctx.CharTy);
+            }
+            auto *arith_base = make_cast(ctx, input_expr, arith_type, op_loc);
+            if (!arith_base) {
+                LOG(ERROR) << "PTRSUB: failed to cast base for arithmetic. key: "
+                           << op.key << "\n";
+                return { nullptr, false };
+            }
+            auto add_result =
+                sema().CreateBuiltinBinOp(op_loc, clang::BO_Add, arith_base, byte_offset);
+            if (add_result.isInvalid()) {
+                LOG(ERROR) << "PTRSUB: invalid add result. key: " << op.key << "\n";
+                return { nullptr, false };
+            }
             ptr_expr = add_result.getAs< clang::Expr >();
         }
 
