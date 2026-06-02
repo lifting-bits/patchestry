@@ -3558,8 +3558,14 @@ namespace patchestry::ast {
         // emit &base[index] (array subscript) instead of raw arithmetic.
         // Otherwise fall back to base + index * scale to preserve correct
         // pointer arithmetic for mismatched scales.
+        // Function/void pointee can't be subscripted; divert such bases to
+        // the char* path below.
         clang::Expr *result_expr = nullptr;
-        if (base->getType()->isPointerType()) {
+        const bool base_is_arith_pointer =
+            base->getType()->isPointerType()
+            && !base->getType()->getPointeeType()->isFunctionType()
+            && !base->getType()->getPointeeType()->isVoidType();
+        if (base_is_arith_pointer) {
             bool scale_matches = false;
             if (auto *scale_lit = clang::dyn_cast< clang::IntegerLiteral >(scale)) {
                 auto pointee_size = ctx.getTypeSizeInChars(
@@ -3581,16 +3587,29 @@ namespace patchestry::ast {
         }
 
         // Fallback to arithmetic when base is not a pointer, scale is not a
-        // constant, or scale does not match the pointee size.
+        // constant, scale does not match the pointee size, or the pointee is a
+        // function/void type (diverted from the subscript path above).
         if (!result_expr) {
             auto mult_result = sema().CreateBuiltinBinOp(op_loc, clang::BO_Mul, index, scale);
             assert(!mult_result.isInvalid());
 
-            // When the base has a record (struct/union) type, cast it to
-            // char* so that pointer arithmetic is valid.
+            // Record / function* / void* bases can't do C pointer arithmetic;
+            // reinterpret as char* for well-defined byte arithmetic.
             clang::Expr *arith_base = base;
+            auto char_ptr_ty        = ctx.getPointerType(ctx.CharTy);
             if (base->getType()->isRecordType()) {
-                arith_base = make_reinterpret_cast(ctx, base, ctx.getPointerType(ctx.CharTy), op_loc);
+                arith_base = make_reinterpret_cast(ctx, base, char_ptr_ty, op_loc);
+            } else if (base->getType()->isPointerType()
+                       && (base->getType()->getPointeeType()->isFunctionType()
+                           || base->getType()->getPointeeType()->isVoidType()))
+            {
+                arith_base = make_cast(ctx, base, char_ptr_ty, op_loc);
+            }
+            if (!arith_base) {
+                LOG(ERROR) << "PTRADD: failed to reinterpret base for "
+                              "arithmetic. key: "
+                           << op.key << "\n";
+                return std::make_pair(nullptr, false);
             }
 
             auto add_result = sema().CreateBuiltinBinOp(
