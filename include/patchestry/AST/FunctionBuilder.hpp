@@ -38,6 +38,8 @@ namespace patchestry::ast {
             std::unordered_map< std::string, clang::FunctionDecl * > &functions,
             std::unordered_map< std::string, clang::VarDecl * > &globals,
             std::unordered_map< std::string, clang::FunctionDecl * > &intrinsics,
+            const std::unordered_map< std::string, clang::QualType > &canonical_returns,
+            const std::unordered_set< std::string > &suffix_names,
             std::string program_arch = {}
         );
 
@@ -163,6 +165,12 @@ namespace patchestry::ast {
                 : function.get().display_name;
         }
 
+        /// Rewrite the return type to the canonical (widest) one for C names
+        /// shared by variants with differing return types, so they emit one CIR
+        /// symbol instead of colliding on a NYI return-value bitcast.
+        clang::QualType
+        CanonicalFunctionType(clang::ASTContext &ctx, clang::QualType function_type) const;
+
         clang::FunctionDecl *prev_decl;
         std::reference_wrapper< const clang::CompilerInstance > cii;
         std::reference_wrapper< const Function > function;
@@ -176,6 +184,13 @@ namespace patchestry::ast {
             global_var_list;
         std::reference_wrapper< std::unordered_map< std::string, clang::FunctionDecl * > >
             intrinsic_list;
+        // Canonical (widest) return type per shared C name; variants normalize
+        // to it to emit one CIR symbol.
+        std::reference_wrapper< const std::unordered_map< std::string, clang::QualType > >
+            canonical_returns;
+        // Shared names whose variants differ in size: kept distinct via a
+        // return-type suffix on the C identifier.
+        std::reference_wrapper< const std::unordered_set< std::string > > suffix_names;
 
         std::unordered_map< std::string, clang::VarDecl * > local_variables;
         std::unordered_map< std::string, clang::LabelDecl * > labels_declaration;

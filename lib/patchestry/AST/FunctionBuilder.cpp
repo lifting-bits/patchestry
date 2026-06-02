@@ -72,6 +72,8 @@ namespace patchestry::ast {
         std::unordered_map< std::string, clang::FunctionDecl * > &functions,
         std::unordered_map< std::string, clang::VarDecl * > &globals,
         std::unordered_map< std::string, clang::FunctionDecl * > &intrinsics,
+        const std::unordered_map< std::string, clang::QualType > &canonical_returns,
+        const std::unordered_set< std::string > &suffix_names,
         std::string program_arch
     )
         : prev_decl(nullptr)
@@ -83,6 +85,8 @@ namespace patchestry::ast {
         , function_list(functions)
         , global_var_list(globals)
         , intrinsic_list(intrinsics)
+        , canonical_returns(canonical_returns)
+        , suffix_names(suffix_names)
         , local_variables({}) {
         if (!function.key.empty()) {
             if (auto *function_decl = create_declaration(
@@ -108,21 +112,71 @@ namespace patchestry::ast {
     // register it on the translation-unit decl context.  Returns nullptr
     // on missing name or invalid function type.  is_definition selects
     // between a declaration and a definition shell.
+    clang::QualType FunctionBuilder::CanonicalFunctionType(
+        clang::ASTContext &ctx, clang::QualType function_type
+    ) const {
+        // Rewrite the return type to the canonical (widest) one when this C
+        // name is shared by variants with differing return types, so they emit
+        // one CIR symbol instead of colliding on a NYI return-value bitcast.
+        auto it = canonical_returns.get().find(GetCName());
+        if (it == canonical_returns.get().end() || it->second.isNull()) {
+            return function_type;
+        }
+        if (const auto *fpt = function_type->getAs< clang::FunctionProtoType >()) {
+            return ctx.getFunctionType(it->second, fpt->getParamTypes(),
+                                       fpt->getExtProtoInfo());
+        }
+        if (const auto *ft = function_type->getAs< clang::FunctionType >()) {
+            return ctx.getFunctionNoProtoType(it->second, ft->getExtInfo());
+        }
+        return function_type;
+    }
+
     clang::FunctionDecl *FunctionBuilder::create_declaration(
         clang::ASTContext &ctx, const clang::QualType &function_type, bool is_definition
     ) {
-        const auto &c_name = GetCName();
+        std::string c_name = GetCName();
 
         if (c_name.empty()) {
             LOG(ERROR) << "Function name is empty. function key " << function.get().key << "\n";
             return {};
         }
 
+        // Same-size variants of a shared name collapse to one decl via a
+        // normalized return type; different-size variants stay distinct by
+        // suffixing the C identifier with the (native) return type, so no call
+        // truncates a wider result.
+        auto fn_type = CanonicalFunctionType(ctx, function_type);
+        if (suffix_names.get().count(c_name) != 0) {
+            if (const auto *ft = function_type->getAs< clang::FunctionType >()) {
+                if (!ft->getReturnType().isNull()) {
+                    c_name += "_" + SanitizeKeyToIdent(ft->getReturnType().getAsString());
+                }
+            }
+        }
+
+        // De-duplicate the forward decl of a collapsed canonical name so it is
+        // emitted once (not once per serialized record). Gated to body-less
+        // decls in the canonical set, so real definitions are never merged.
+        // Reuses the intrinsic decl cache under a non-colliding "decl@" key.
+        const bool collapsible = !is_definition
+            && function.get().basic_blocks.empty()
+            && canonical_returns.get().count(GetCName()) != 0;
+        std::string dedup_key; // built only on the (rare) collapsible path
+        if (collapsible) {
+            dedup_key   = "decl@" + c_name;
+            auto &cache = intrinsic_list.get();
+            auto  cached = cache.find(dedup_key);
+            if (cached != cache.end() && cached->second != nullptr) {
+                return cached->second;
+            }
+        }
+
         auto location   = SourceLocation(ctx.getSourceManager(), function.get().key);
         auto *func_decl = clang::FunctionDecl::Create(
             ctx, ctx.getTranslationUnitDecl(), location, location,
-            &ctx.Idents.get(c_name), function_type,
-            ctx.getTrivialTypeSourceInfo(function_type), clang::SC_None
+            &ctx.Idents.get(c_name), fn_type,
+            ctx.getTrivialTypeSourceInfo(fn_type), clang::SC_None
         );
 
         if (func_decl == nullptr) {
@@ -133,6 +187,12 @@ namespace patchestry::ast {
 
         func_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(func_decl);
+
+        // Cache for reuse by later records of the same collapsed name. Safe:
+        // FunctionBuilders run sequentially, so this decl is complete by reuse.
+        if (collapsible) {
+            intrinsic_list.get()[dedup_key] = func_decl;
+        }
 
         // Add asm label with the binary linker symbol when:
         //   (1) the original name differs from the C identifier, AND

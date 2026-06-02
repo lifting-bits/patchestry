@@ -42,6 +42,7 @@
 #include <patchestry/AST/ClangEmitter.hpp>
 #include <patchestry/AST/SNodePostPasses.hpp>
 #include <patchestry/AST/FunctionBuilder.hpp>
+#include <patchestry/AST/IntrinsicHandlers.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/Pcode.hpp>
@@ -169,10 +170,79 @@ namespace patchestry::ast {
             // without basic blocks get forward declarations only.
             std::vector<std::shared_ptr<FunctionBuilder>> func_builders;
             const auto &program_arch = get_program().arch.value_or(std::string{});
+
+            // For C names shared by >1 function with distinct return types
+            // (e.g. intrinsic variants VectorSignedToFloat:tb / :t12), record a
+            // canonical (widest) return type that FunctionBuilder normalizes
+            // every variant to, so they emit one CIR symbol instead of colliding
+            // on a NYI return-value bitcast. int->float userops additionally get
+            // their undefined<N> result resolved to float/double here.
+            std::unordered_map<std::string, std::unordered_set<std::string>>
+                name_return_types;
+            std::unordered_map<std::string, std::unordered_set<uint64_t>>
+                name_return_sizes;
+            std::unordered_map<std::string, clang::QualType> widest_return;
+            // int->float intrinsic userops (gated on is_intrinsic, not name
+            // alone). float_userop_unresolved = those with an unmappable width,
+            // which fall back to the generic size-aware path.
+            std::unordered_set<std::string> float_userop_names;
+            std::unordered_set<std::string> float_userop_unresolved;
+            const auto &serialized_types = type_builder->GetSerializedTypes();
+            for (const auto &[key, function] : get_program().serialized_functions) {
+                const auto &cname = function.display_name.empty()
+                    ? function.name : function.display_name;
+                if (cname.empty()) continue;
+                auto it = serialized_types.find(function.prototype.rttype_key);
+                if (it == serialized_types.end() || it->second.isNull()) continue;
+
+                // Resolve an int->float userop's undefined<N> result to
+                // float/double; an unmappable width keeps the raw type.
+                clang::QualType ret_type = it->second;
+                if (function.is_intrinsic && IsFloatReturningUserop(cname)) {
+                    float_userop_names.insert(cname);
+                    auto resolved = ResolveUseropFloatReturn(
+                        ctx, cname, ctx.getTypeSize(ret_type));
+                    if (!resolved.isNull()) {
+                        ret_type = resolved;
+                    } else {
+                        float_userop_unresolved.insert(cname);
+                    }
+                }
+
+                name_return_types[cname].insert(ret_type.getAsString());
+                name_return_sizes[cname].insert(ctx.getTypeSize(ret_type));
+                auto cur = widest_return.find(cname);
+                if (cur == widest_return.end()
+                    || ctx.getTypeSize(ret_type) > ctx.getTypeSize(cur->second)) {
+                    widest_return[cname] = ret_type;
+                }
+            }
+            // Per shared name: int->float userops and same-size variants
+            // collapse to one canonical decl; different-size variants stay
+            // distinct via return-type-suffixed symbols (no truncation).
+            std::unordered_map<std::string, clang::QualType> canonical_returns;
+            std::unordered_set<std::string> suffix_names;
+            for (const auto &[cname, rets] : name_return_types) {
+                if (float_userop_names.find(cname) != float_userop_names.end()
+                    && float_userop_unresolved.find(cname)
+                           == float_userop_unresolved.end())
+                {
+                    canonical_returns[cname] = widest_return[cname];
+                    continue;
+                }
+                if (rets.size() <= 1) continue;
+                if (name_return_sizes[cname].size() == 1) {
+                    canonical_returns[cname] = widest_return[cname];
+                } else {
+                    suffix_names.insert(cname);
+                }
+            }
+
             for (const auto &[key, function] : get_program().serialized_functions) {
                 auto builder = std::make_shared<FunctionBuilder>(
                     ci, function, *type_builder, function_declarations,
-                    global_variable_declarations, intrinsic_declarations, program_arch
+                    global_variable_declarations, intrinsic_declarations,
+                    canonical_returns, suffix_names, program_arch
                 );
                 builder->InitializeOpBuilder();
                 func_builders.emplace_back(std::move(builder));

@@ -249,8 +249,9 @@ namespace patchestry::ghidra {
 
     struct Function
     {
-        std::string name;         // original (possibly mangled) symbol name
-        std::string display_name; // C-safe identifier (demangled or same as name)
+        std::string name;          // original (possibly mangled) symbol name
+        std::string display_name;  // C-safe identifier (demangled or same as name)
+        bool is_intrinsic = false; // true for SLEIGH CALLOTHER userop records
         FunctionPrototype prototype;
         std::string key;
         std::string entry_block;

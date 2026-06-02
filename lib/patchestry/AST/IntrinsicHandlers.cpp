@@ -186,6 +186,14 @@ namespace patchestry::ast {
             { "LORelease",                         "atomic_thread_fence_release"    },
         } };
 
+        // int->float conversion userops whose undefined<N> result we resolve to
+        // float/double (see ResolveUseropFloatReturn).
+        // Source: Ghidra ARM/data/languages/ARMneon.sinc (lines 1446-1447).
+        constexpr std::array< std::string_view, 2 > kFloatReturningUserops = { {
+            "VectorSignedToFloat",
+            "VectorUnsignedToFloat",
+        } };
+
         // compiler-rt AArch64 outline-atomic helper bases.
         // Source: compiler-rt/lib/builtins/aarch64/lse.S
         // Symbol shape: __aarch64_<base><size><ordering>
@@ -446,6 +454,33 @@ namespace patchestry::ast {
 
     std::string parse_intrinsic_name(std::string_view arch, std::string_view label) {
         return normalize_intrinsic_name(arch, strip_return_type_suffix(label));
+    }
+
+    bool IsFloatReturningUserop(std::string_view name) {
+        for (auto candidate : kFloatReturningUserops) {
+            if (candidate == name) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    clang::QualType ResolveUseropFloatReturn(
+        clang::ASTContext &ctx, std::string_view name, uint64_t size_bits
+    ) {
+        if (!IsFloatReturningUserop(name)) {
+            return {};
+        }
+        switch (size_bits) {
+            case 32:
+                return ctx.FloatTy;
+            case 64:
+                return ctx.DoubleTy;
+            default:
+                // No standard float type for this width (e.g. 128-bit Q-reg);
+                // keep the raw type via the size-aware path.
+                return {};
+        }
     }
 
     const std::unordered_map< std::string, IntrinsicHandler > &get_intrinsic_handlers() {

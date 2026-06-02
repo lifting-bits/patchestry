@@ -712,6 +712,7 @@ namespace patchestry::ghidra {
         Function function;
 
         function.name = *function_name;
+        function.is_intrinsic = func_obj.getBoolean("is_intrinsic").value_or(false);
 
         // Use display_name from JSON if the serializer provided one;
         // otherwise compute it by demangling/sanitizing the binary name.
