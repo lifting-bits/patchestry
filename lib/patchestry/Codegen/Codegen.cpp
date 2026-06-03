@@ -12,11 +12,16 @@
 #include <optional>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Decl.h>
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/DeclGroup.h>
+#include <clang/AST/Type.h>
+#include <clang/CIR/Dialect/IR/CIRDialect.h>
+#include <clang/CIR/Dialect/IR/CIRTypes.h>
 #include <clang/CIR/LowerToLLVM.h>
 #include <clang/CIR/Passes.h>
 #include <clang/Tooling/Tooling.h>
+#include <llvm/ADT/StringSet.h>
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Builders.h>
@@ -47,9 +52,55 @@ namespace patchestry::codegen {
         }
 
         cirdriver->emitDeferredDecls();
+
+        reconcile_variadic_decls(ctx, cirdriver->getModule());
+
         cirdriver->verifyModule();
 
         return std::make_optional(cirdriver->getModule());
+    }
+
+    void CodeGenerator::reconcile_variadic_decls(
+        clang::ASTContext &ctx, mlir::ModuleOp mod
+    ) {
+        // ClangIR's getOrCreateCIRFunction caches the first-created cir.func for
+        // a given symbol and, for non-definition references, returns it without
+        // upgrading its type (clang/lib/CIR/CodeGen/CIRGenModule.cpp). When a
+        // variadic libc function (e.g. fcntl, printf) is first materialized
+        // through a builtin / no-prototype path, RequiredArgs::All makes its
+        // cir.func non-variadic; every later, correct variadic reference is then
+        // dropped. The CIR verifier subsequently rejects any call site that
+        // passes trailing variadic arguments with "incorrect number of operands
+        // for callee". The Clang FunctionDecl is variadic-correct, so use it as
+        // ground truth and restore the varargs flag on the emitted declaration.
+        llvm::StringSet<> variadic_names;
+        for (const auto *decl : ctx.getTranslationUnitDecl()->noload_decls()) {
+            const auto *fd = llvm::dyn_cast< clang::FunctionDecl >(decl);
+            if (fd == nullptr) {
+                continue;
+            }
+            if (const auto *fpt = fd->getType()->getAs< clang::FunctionProtoType >();
+                fpt != nullptr && fpt->isVariadic())
+            {
+                variadic_names.insert(fd->getName());
+            }
+        }
+
+        mod.walk([&](cir::FuncOp func) {
+            auto func_type = func.getFunctionType();
+            if (func_type.isVarArg() || !variadic_names.contains(func.getSymName())) {
+                return;
+            }
+            // Widening to varargs only relaxes the operand-count check, so
+            // existing call sites stay valid and now match the real variadic
+            // ABI. Preserve inputs and the (optional, possibly void) return type.
+            func.setFunctionType(cir::FuncType::get(
+                func.getContext(), func_type.getInputs(),
+                func_type.getOptionalReturnType(), /*varArg=*/true
+            ));
+            LOG(INFO) << "Restored varargs on cir.func '" << func.getSymName().str()
+                      << "' dropped during CIR lowering\n";
+        });
     }
 
     void
