@@ -513,7 +513,8 @@ namespace patchestry::ast {
     // the same byte size so that it can participate in C arithmetic / bitwise
     // operations.  Returns the expression unchanged if it is not a record type.
     clang::Expr *OpBuilder::coerce_record_to_integer(
-        clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc
+        clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc,
+        bool quiet_oversized
     ) {
         if (!expr || !expr->getType()->isRecordType()) {
             return expr;
@@ -531,10 +532,13 @@ namespace patchestry::ast {
         } else if (size_bits <= 128 && !ctx.UnsignedInt128Ty.isNull()) {
             int_type = ctx.UnsignedInt128Ty;
         } else {
-            // Record too large for integer coercion — return unchanged
-            // and let the caller deal with the record type directly.
-            LOG(WARNING) << "coerce_record_to_integer: record is " << size_bits
-                         << " bits, too large for integer coercion\n";
+            // Too wide for any integer type — return unchanged. Callers that
+            // don't need a scalar (e.g. ADDRESS_OF) pass quiet_oversized to mute
+            // the otherwise-misleading warning.
+            if (!quiet_oversized) {
+                LOG(WARNING) << "coerce_record_to_integer: record is " << size_bits
+                             << " bits, too large for integer coercion\n";
+            }
             return expr;
         }
         return make_reinterpret_cast(ctx, expr, int_type, loc);
@@ -2920,8 +2924,12 @@ namespace patchestry::ast {
             return {};
         }
 
-        // Coerce record (struct/union) operands to integers for C operators.
-        input_expr = coerce_record_to_integer(ctx, input_expr, op_loc);
+        // Coerce record operands to integers for C scalar operators. The
+        // reinterpret is load-bearing even for ADDRESS_OF (it normalizes the
+        // operand into an addressable form), so it always runs; only mute the
+        // oversized-record warning there — `&fd_set` / `&stat` are valid.
+        input_expr = coerce_record_to_integer(
+            ctx, input_expr, op_loc, /*quiet_oversized=*/kind == clang::UO_AddrOf);
 
         clang::Expr *result_expr = nullptr;
         // ADDRESS_OF on an array decays to pointer-to-element (Ghidra's `T*`
