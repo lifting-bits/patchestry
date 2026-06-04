@@ -629,20 +629,22 @@ namespace patchestry::ghidra {
             }
         }
 
-        // Collapse consecutive underscores only when at least one in the run is
-        // synthetic (from character replacement above), carrying the synthetic
-        // flag forward so the edge-trim below can distinguish synthetic from
-        // original underscores.
+        // Collapse a consecutive underscore only when the current one is
+        // synthetic (from character replacement above): a synthetic '_' adjacent
+        // to an existing '_' is redundant, but an original '_' is always kept
+        // (so "bl_usb__send_message" and "::_bar" -> "_bar" both survive).
+        // Carry the synthetic flag forward so the edge-trim below can
+        // distinguish synthetic from original underscores.
         std::string collapsed;
         std::vector< bool > collapsed_synthetic;
         collapsed.reserve(result.size());
         collapsed_synthetic.reserve(result.size());
         for (size_t i = 0; i < result.size(); ++i) {
             if (result[i] == '_' && i > 0 && collapsed.back() == '_') {
-                // Two adjacent underscores — collapse only if the current
-                // or previous underscore was synthetic.
-                if (is_synthetic[i] || collapsed_synthetic.back()) {
-                    continue; // skip this duplicate
+                // Two adjacent underscores — drop the current one only if it is
+                // synthetic; keep original underscores.
+                if (is_synthetic[i]) {
+                    continue; // skip this redundant synthetic underscore
                 }
             }
             collapsed.push_back(result[i]);
