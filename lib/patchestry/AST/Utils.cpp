@@ -68,14 +68,25 @@ namespace patchestry::ast {
         }
 
         switch (bit_size) {
+            case 16:
+                return ctx.Float16Ty;
             case 32:
                 return ctx.FloatTy;
             case 64:
                 return ctx.DoubleTy;
             case 80:
                 return ctx.LongDoubleTy;
+            case 128:
+                // 128-bit IEEE quad (Ghidra's 16-byte 'float16'; aarch64 long
+                // double).  Ghidra carries this as a native wide-float type
+                // rather than lowering it, so map it instead of aborting.
+                return ctx.Float128Ty;
             default:
-                llvm_unreachable("Unsupported float bit size in GetTypeFromSize");
+                // Mirror the integer branch's graceful fallback: fail loudly but
+                // do not abort the whole lift on an unexpected float width.
+                LOG(ERROR) << "GetTypeFromSize: unsupported float bit size "
+                           << bit_size << "; falling back to double\n";
+                return ctx.DoubleTy;
         }
     }
 
