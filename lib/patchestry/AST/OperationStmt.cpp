@@ -394,6 +394,19 @@ namespace patchestry::ast {
             (void) ctx;
         };
 
+        // A function designator (e.g. a VARNODE_FUNCTION operand used as a
+        // value) has function type and cannot be materialized or addressed as
+        // an object — doing so builds a function-typed lvalue temporary that
+        // classifies as CL_Function and aborts CheckAddressOfOperand. Apply the
+        // C function-to-pointer decay so we reinterpret the function *pointer*.
+        if (expr->getType()->isFunctionType()) {
+            expr = clang::ImplicitCastExpr::Create(
+                ctx, ctx.getPointerType(expr->getType()),
+                clang::CK_FunctionToPointerDecay, expr, /*BasePath=*/nullptr,
+                clang::VK_PRValue, clang::FPOptionsOverride()
+            );
+        }
+
         auto *temp_expr  = create_temporary_expr(ctx, expr);
         auto addrof_expr = sema().CreateBuiltinUnaryOp(loc, clang::UO_AddrOf, temp_expr);
         if (addrof_expr.isInvalid()) {
