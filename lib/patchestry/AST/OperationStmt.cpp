@@ -917,6 +917,35 @@ namespace patchestry::ast {
                  false };
     }
 
+    // The address operand of a STORE must be a dereferenceable pointer, but
+    // Ghidra can hand us a bare integer address (e.g. 'unsigned int') or a
+    // void*, both of which fail Sema's indirection check.  Cast such operands
+    // to a pointer of the stored value's type so the store lowers to
+    // *(T *)addr = value.  A genuine, non-void pointer is returned unchanged so
+    // existing pointer-arithmetic stores keep their shape.  Returns nullptr on
+    // an unrepresentable cast (caller bails loudly).
+    clang::Expr *OpBuilder::coerce_store_address(
+        clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
+        const Operation &op, clang::SourceLocation op_loc
+    ) {
+        auto addr_type = addr->getType();
+        if (addr_type->isPointerType() && !addr_type->isVoidPointerType()) {
+            return addr;
+        }
+
+        clang::QualType pointee = value != nullptr ? value->getType() : clang::QualType();
+        if (pointee.isNull() || pointee->isVoidType()) {
+            pointee = ctx.UnsignedCharTy;
+        }
+
+        auto *casted = make_cast(ctx, addr, ctx.getPointerType(pointee), op_loc);
+        if (!casted) {
+            LOG(ERROR) << "Failed to cast STORE address to pointer. key: " << op.key;
+            return nullptr;
+        }
+        return casted;
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_store(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -938,6 +967,10 @@ namespace patchestry::ast {
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
             if (!deref_expr) {
+                lhs_expr = coerce_store_address(ctx, lhs_expr, rhs_expr, op, op_loc);
+                if (!lhs_expr) {
+                    return {};
+                }
                 // Parenthesize pointer arithmetic so the deref binds the whole
                 // expression: *(ptr + offset) instead of *ptr + offset.
                 if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
@@ -945,7 +978,11 @@ namespace patchestry::ast {
                 }
                 auto deref_result =
                     sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
-                assert(!deref_result.isInvalid());
+                if (deref_result.isInvalid()) {
+                    LOG(ERROR) << "Failed to create deref expression for STORE. key: "
+                               << op.key;
+                    return {};
+                }
                 deref_expr = deref_result.getAs< clang::Expr >();
             }
 
@@ -968,6 +1005,10 @@ namespace patchestry::ast {
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
             if (!deref_expr) {
+                lhs_expr = coerce_store_address(ctx, lhs_expr, rhs_expr, op, op_loc);
+                if (!lhs_expr) {
+                    return {};
+                }
                 if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
                     lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
                 }

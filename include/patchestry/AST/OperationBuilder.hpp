@@ -49,6 +49,14 @@ namespace patchestry::ast {
         std::pair< clang::Stmt *, bool >
         create_store(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
+        // Coerce a STORE address operand into a dereferenceable pointer (see
+        // definition).  Returns the operand unchanged when it is already a
+        // non-void pointer, or nullptr if the cast cannot be built.
+        clang::Expr *coerce_store_address(
+            clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
+            const Operation &op, clang::SourceLocation op_loc
+        );
+
         std::pair< clang::Stmt *, bool >
         create_branch(clang::ASTContext &ctx, const Operation &op);
 
