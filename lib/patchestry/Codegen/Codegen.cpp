@@ -50,25 +50,12 @@
 namespace patchestry::codegen {
 
     std::optional< mlir::ModuleOp > CodeGenerator::lower_ast_to_mlir(clang::ASTContext &ctx) {
-        // Emit top-level decls in a deterministic order: non-function decls and
-        // body-less function declarations first (keeping their original relative
-        // order), then function definitions sorted by name — which, because
-        // Ghidra names functions FUN_<address>, is ascending program-address
-        // order.
-        //
-        // The AST that ASTConsumer hands us is already correct and stable; the
-        // problem is purely emission order.  The vendored CIRGen lazily
-        // materializes a `cir.func` for a function the first time it is touched,
-        // and under some orders it creates one whose entry block has fewer
-        // arguments than the function's parameter list (observed: a 2-parameter
-        // function getting a one-fixed-arg variadic `cir.func`).  The subsequent
-        // definition's emitFunctionProlog then zips its 2 ParmVarDecls against 1
-        // block argument, so the trailing parameter never enters localDeclMap;
-        // the body's reference to it aborts with CIRGen's
-        // `emitDeclRefLValue: static local` NYI (seen on FUN_0000a2a8 in
-        // cve-2016-6563).  Because the previous order followed unordered_map
-        // iteration, the abort was non-deterministic across runs.  Emitting in a
-        // fixed program-address order removes the run-to-run variance.
+        // Emit declarations first, then definitions in name (= program-address)
+        // order. CIRGen caches the first cir.func it lazily creates for a symbol;
+        // an unordered emission order let a caller materialize a callee with too
+        // few args before the definition, dropping a parameter from localDeclMap
+        // and aborting (emitDeclRefLValue: static local). A fixed order removes
+        // the run-to-run variance.
         std::vector< clang::Decl * > pre;
         std::vector< clang::Decl * > defs;
         for (auto *decl : ctx.getTranslationUnitDecl()->noload_decls()) {
@@ -103,16 +90,11 @@ namespace patchestry::codegen {
     void CodeGenerator::reconcile_variadic_decls(
         clang::ASTContext &ctx, mlir::ModuleOp mod
     ) {
-        // ClangIR's getOrCreateCIRFunction caches the first-created cir.func for
-        // a given symbol and, for non-definition references, returns it without
-        // upgrading its type (clang/lib/CIR/CodeGen/CIRGenModule.cpp). When a
-        // variadic libc function (e.g. fcntl, printf) is first materialized
-        // through a builtin / no-prototype path, RequiredArgs::All makes its
-        // cir.func non-variadic; every later, correct variadic reference is then
-        // dropped. The CIR verifier subsequently rejects any call site that
-        // passes trailing variadic arguments with "incorrect number of operands
-        // for callee". The Clang FunctionDecl is variadic-correct, so use it as
-        // ground truth and restore the varargs flag on the emitted declaration.
+        // CIRGen can emit a variadic libc function (fcntl, printf, ...) as a
+        // non-variadic cir.func when it first materializes through a builtin /
+        // no-prototype path, making its variadic call sites fail verification.
+        // Use the (variadic-correct) Clang FunctionDecl as ground truth and
+        // restore the varargs flag on the emitted declaration.
         llvm::StringSet<> variadic_names;
         for (const auto *decl : ctx.getTranslationUnitDecl()->noload_decls()) {
             const auto *fd = llvm::dyn_cast< clang::FunctionDecl >(decl);
@@ -132,8 +114,7 @@ namespace patchestry::codegen {
                 return;
             }
             // Widening to varargs only relaxes the operand-count check, so
-            // existing call sites stay valid and now match the real variadic
-            // ABI. Preserve inputs and the (optional, possibly void) return type.
+            // existing call sites stay valid. Preserve inputs and return type.
             func.setFunctionType(cir::FuncType::get(
                 func.getContext(), func_type.getInputs(),
                 func_type.getOptionalReturnType(), /*varArg=*/true
