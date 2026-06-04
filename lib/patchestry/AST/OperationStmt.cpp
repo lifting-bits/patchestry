@@ -2355,7 +2355,13 @@ namespace patchestry::ast {
                     /*Signed=*/false
                 );
                 if (arith_type.isNull()) {
-                    arith_type = ctx.UnsignedIntTy;
+                    // No integer type matches the result width.  Falling back to
+                    // a narrower int would make the later reinterpret read past
+                    // the temporary (*(wide *)&narrow) — UB.  Skip the op.
+                    LOG(ERROR) << "PIECE: no integer type for result width "
+                               << ctx.getTypeSize(piece_result_type)
+                               << "; skipping. key: " << op.key;
+                    return {};
                 }
                 reinterpret_result = true;
             }

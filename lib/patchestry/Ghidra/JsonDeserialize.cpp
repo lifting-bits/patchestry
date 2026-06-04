@@ -641,7 +641,7 @@ namespace patchestry::ghidra {
             if (result[i] == '_' && i > 0 && collapsed.back() == '_') {
                 // Two adjacent underscores — collapse only if the current
                 // or previous underscore was synthetic.
-                if (is_synthetic[i] || is_synthetic[i - 1]) {
+                if (is_synthetic[i] || collapsed_synthetic.back()) {
                     continue; // skip this duplicate
                 }
             }
