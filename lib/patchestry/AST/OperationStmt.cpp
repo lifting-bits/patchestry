@@ -2207,13 +2207,11 @@ namespace patchestry::ast {
                      false };
         }
 
-        // Shift the high part by the number of bits the low part occupies.
-        // Prefer the Ghidra varnode byte size (* 8) over the clang type size:
-        // clang rounds a non-power-of-two width (e.g. a 3-byte `uint3`) up to the
-        // next storage size (32 bits), which makes the shift count meet/exceed
-        // the result width and trips clang's "shift count >= width of type"
-        // diagnostic.  Fall back to the (possibly rounded) type size only when
-        // the varnode size is absent.
+        // Shift the high part by the low part's bit width.  Prefer the varnode
+        // byte size (* 8) over the clang type size: clang rounds non-power-of-two
+        // widths (e.g. 3-byte uint3 -> 32 bits) up, which can push the shift
+        // count >= the result width and trip a warning.  Fall back to the type
+        // size only when the varnode size is absent.
         unsigned low_width = op.inputs[1].size * 8U;
         if (low_width == 0) {
             auto low_type_it =
