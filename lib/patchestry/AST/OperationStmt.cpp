@@ -113,8 +113,20 @@ namespace patchestry::ast {
             } else if (param_type->isBooleanType()) {
                 return new (ctx)
                     clang::CXXBoolLiteralExpr(true, param_type, VirtualLoc(ctx));
+            } else if (param_type->isEnumeralType()) {
+                // IntegerLiteral asserts on non-integer types; emit (E)0 as an
+                // integral cast over an int-typed 0.
+                auto *zero = new (ctx) clang::IntegerLiteral(
+                    ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), 0), ctx.IntTy,
+                    VirtualLoc(ctx)
+                );
+                return clang::ImplicitCastExpr::Create(
+                    ctx, param_type, clang::CK_IntegralCast, zero,
+                    /*BasePath=*/nullptr, clang::VK_PRValue, clang::FPOptionsOverride()
+                );
             } else {
-                LOG(ERROR) << "Failed to create default value for paramer\n";
+                LOG(ERROR) << "Failed to create default value for parameter of type '"
+                           << param_type.getAsString() << "'\n";
                 return nullptr;
             }
         }
@@ -1358,15 +1370,28 @@ namespace patchestry::ast {
         return { result_stmt, false };
     }
 
-    void OpBuilder::extend_callexpr_agruments(
+    bool OpBuilder::extend_callexpr_agruments(
         clang::ASTContext &ctx, clang::FunctionDecl *fndecl,
         std::vector< clang::Expr * > &arguments
     ) {
         auto minargs = fndecl->getMinRequiredArguments();
         for (auto i = static_cast< unsigned >(arguments.size()); i < minargs; i++) {
-            auto *param = fndecl->getParamDecl(i);
-            arguments.emplace_back(createDefaultArgument(ctx, param));
+            auto *param       = fndecl->getParamDecl(i);
+            auto *default_arg = createDefaultArgument(ctx, param);
+            if (default_arg == nullptr) {
+                // No representable default for this parameter type (e.g. a
+                // by-value record).  A null Expr* here would crash
+                // Sema::CheckArgsForPlaceholders, and a short argument list
+                // would make BuildCallExpr emit a hard "too few arguments"
+                // error that poisons codegen for the whole module.  Signal
+                // failure so the caller drops just this call.
+                LOG(ERROR) << "Cannot synthesize default argument " << i << " for '"
+                           << fndecl->getNameAsString() << "'. key dropped\n";
+                return false;
+            }
+            arguments.emplace_back(default_arg);
         }
+        return true;
     }
 
     clang::Expr *OpBuilder::build_callexpr_from_function(
@@ -1549,7 +1574,19 @@ namespace patchestry::ast {
         // extend it with the default value.
         unsigned min_args = callee->getMinRequiredArguments();
         if (arguments.size() < min_args) {
-            extend_callexpr_agruments(ctx, callee, arguments);
+            if (!extend_callexpr_agruments(ctx, callee, arguments)) {
+                LOG(ERROR) << "Dropping under-applied call to '"
+                           << callee->getNameAsString() << "'. key: " << op.key << "\n";
+                return nullptr;
+            }
+        }
+
+        // A null Expr* in the argument list dereferences to a crash inside
+        // Sema::CheckArgsForPlaceholders.  Refuse loudly instead.
+        if (llvm::is_contained(arguments, nullptr)) {
+            LOG(ERROR) << "Null argument in call to '" << callee->getNameAsString()
+                       << "'. key: " << op.key << "\n";
+            return nullptr;
         }
 
         auto *refexpr = clang::DeclRefExpr::Create(

@@ -311,7 +311,11 @@ namespace patchestry::ast {
             clang::SourceLocation loc = clang::SourceLocation()
         );
 
-        void extend_callexpr_agruments(
+        // Pad `arguments` up to fndecl's minimum required count with synthesized
+        // defaults.  Returns false if a required parameter has no representable
+        // default (so the caller can drop the call instead of building one that
+        // would fail Sema with "too few arguments").
+        [[nodiscard]] bool extend_callexpr_agruments(
             clang::ASTContext &ctx, clang::FunctionDecl *fndecl,
             std::vector< clang::Expr * > &arguments
         );
