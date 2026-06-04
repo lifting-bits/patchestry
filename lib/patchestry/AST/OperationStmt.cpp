@@ -2310,18 +2310,36 @@ namespace patchestry::ast {
 
         auto merge_to_next = !op.output.has_value();
 
-        // If Operation has type, convert expression to operation type and perform bit-shift and
-        // or operation.
+        // PIECE is a bit-level concatenation (high << low_width | low) and must be
+        // computed in an integer domain.  When the result type is non-integral
+        // (e.g. the reconstructed 32-bit value is a float register), shifting the
+        // operands as that type would make the BO_Shl below 'float << int', which
+        // C rejects.  Compute in an unsigned integer of the result's width and
+        // reinterpret the bits back to the result type afterwards (a value
+        // conversion would be wrong — the bytes are a raw bit pattern).
+        clang::QualType piece_result_type;
+        bool reinterpret_result = false;
         if (op.type) {
-            auto op_type           = type_it->second;
-            auto *cast_expr_input0 = make_cast(ctx, input0_expr, op_type, location);
+            piece_result_type   = type_it->second;
+            auto arith_type     = piece_result_type;
+            if (!piece_result_type->isIntegerType()) {
+                arith_type = ctx.getIntTypeForBitwidth(
+                    static_cast< unsigned >(ctx.getTypeSize(piece_result_type)),
+                    /*Signed=*/false
+                );
+                if (arith_type.isNull()) {
+                    arith_type = ctx.UnsignedIntTy;
+                }
+                reinterpret_result = true;
+            }
+            auto *cast_expr_input0 = make_cast(ctx, input0_expr, arith_type, location);
             if (!cast_expr_input0) {
                 LOG(ERROR) << "Failed to create cast expression for PIECE input0. key: "
                            << op.key;
                 return {};
             }
             input0_expr            = cast_expr_input0;
-            auto *cast_expr_input1 = make_cast(ctx, input1_expr, op_type, location);
+            auto *cast_expr_input1 = make_cast(ctx, input1_expr, arith_type, location);
             if (!cast_expr_input1) {
                 LOG(ERROR) << "Failed to create cast expression for PIECE input1. key: "
                            << op.key;
@@ -2362,6 +2380,17 @@ namespace patchestry::ast {
         if (!or_expr) {
             LOG(ERROR) << "PIECE: OR result yielded null Expr. key: " << op.key;
             return {};
+        }
+
+        // The concatenation was computed as an integer; reinterpret its bits as
+        // the (non-integral) result type when one was requested.
+        if (reinterpret_result) {
+            or_expr = make_reinterpret_cast(ctx, or_expr, piece_result_type, location);
+            if (!or_expr) {
+                LOG(ERROR) << "PIECE: reinterpret to result type yielded null Expr. key: "
+                           << op.key;
+                return {};
+            }
         }
 
         if (merge_to_next) {
