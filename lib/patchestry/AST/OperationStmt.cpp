@@ -625,6 +625,17 @@ namespace patchestry::ast {
         clang::QualType input_type  = input_expr->getType();
         clang::QualType output_type = output_expr->getType();
 
+        // A function designator is not an assignable lvalue (e.g. a
+        // VARNODE_FUNCTION used as a store target).  Attempting `func = value`
+        // makes CreateBuiltinBinOp emit a hard "expression is not assignable"
+        // diagnostic that poisons codegen; bail loudly instead.
+        if (output_type->isFunctionType()) {
+            LOG(ERROR) << "create_assign_operation: assignment target has function "
+                          "type '" << output_type.getAsString()
+                       << "'; dropping non-assignable store\n";
+            return nullptr;
+        }
+
         // Scalar → array: lower as a pointer-cast partial store
         // `*(input_type *)&output[0] = input`.  Width-agnostic — the
         // overflow case (input wider than buffer) is preserved
