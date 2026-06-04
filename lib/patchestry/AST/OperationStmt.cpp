@@ -2211,10 +2211,13 @@ namespace patchestry::ast {
                      false };
         }
 
-        // Determine low-part bit width from input1's type.  The Varnode::size
-        // field is not populated for operation inputs, so look up the type.
-        unsigned low_width = 0;
-        {
+        // Shift the high part by the low part's bit width.  Prefer the varnode
+        // byte size (* 8) over the clang type size: clang rounds non-power-of-two
+        // widths (e.g. 3-byte uint3 -> 32 bits) up, which can push the shift
+        // count >= the result width and trip a warning.  Fall back to the type
+        // size only when the varnode size is absent.
+        unsigned low_width = op.inputs[1].size * 8U;
+        if (low_width == 0) {
             auto low_type_it =
                 type_builder().GetSerializedTypes().find(op.inputs[1].type_key);
             if (low_type_it != type_builder().GetSerializedTypes().end()) {

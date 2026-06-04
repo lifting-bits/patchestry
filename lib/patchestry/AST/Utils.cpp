@@ -312,6 +312,12 @@ namespace patchestry::ast {
                 ctx, il->getValue(), il->getType(), loc
             );
         }
+        if (auto *sl = llvm::dyn_cast< clang::StringLiteral >(expr)) {
+            return clang::StringLiteral::Create(
+                ctx, sl->getBytes(), sl->getKind(), sl->isPascal(), sl->getType(),
+                sl->getBeginLoc()
+            );
+        }
         if (auto *dre = llvm::dyn_cast< clang::DeclRefExpr >(expr)) {
             return clang::DeclRefExpr::Create(
                 ctx, dre->getQualifierLoc(), dre->getTemplateKeywordLoc(),
