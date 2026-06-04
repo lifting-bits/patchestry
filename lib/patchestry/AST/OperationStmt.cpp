@@ -2192,7 +2192,18 @@ namespace patchestry::ast {
             auto cast_result = sema().BuildCStyleCastExpr(
                 location, ctx.getTrivialTypeSourceInfo(ret_type), location, zero
             );
-            assert(!cast_result.isInvalid());
+            // `(T)0` is ill-formed when T is a record/reference/opaque type
+            // (common for C++ by-value returns, e.g. a QString). Fall back to a
+            // bare `return;` rather than aborting — this path is the typically
+            // unreachable empty return after a noreturn call.
+            if (cast_result.isInvalid()) {
+                LOG(ERROR) << "create_return: cannot build (T)0 for return type '"
+                           << ret_type.getAsString() << "'; emitting bare return. key: "
+                           << op.key << "\n";
+                return std::make_pair(
+                    clang::ReturnStmt::Create(ctx, location, nullptr, nullptr), false
+                );
+            }
             return std::make_pair(
                 clang::ReturnStmt::Create(
                     ctx, location, cast_result.getAs< clang::Expr >(), nullptr
