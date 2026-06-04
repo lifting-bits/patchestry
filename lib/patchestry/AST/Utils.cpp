@@ -14,6 +14,7 @@
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/SourceManager.h>
+#include <clang/Basic/TargetInfo.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/MemoryBuffer.h>
 
@@ -69,7 +70,15 @@ namespace patchestry::ast {
 
         switch (bit_size) {
             case 16:
-                return ctx.Float16Ty;
+                // _Float16 is not supported on every target; only emit it where
+                // the target genuinely has it, otherwise fall back to float so
+                // we never hand CIRGen an unusable type.
+                if (ctx.getTargetInfo().hasFloat16Type()) {
+                    return ctx.Float16Ty;
+                }
+                LOG(ERROR) << "GetTypeFromSize: _Float16 unsupported on target; "
+                              "falling back to float\n";
+                return ctx.FloatTy;
             case 32:
                 return ctx.FloatTy;
             case 64:
