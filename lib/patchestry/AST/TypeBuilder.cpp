@@ -497,20 +497,26 @@ namespace patchestry::ast {
             bit_width       = TypeBuilder::kNumBitsUint;
         }
 
-        // Populate enum with actual serialized constants.
+        // Populate enum with actual serialized constants.  Build each value
+        // with implicitTrunc=true: unsigned flag enumerators (e.g. Qt's
+        // InputMethodQuery::ImQueryAll = 0xFFFFFFFF in a 4-byte enum) are not
+        // valid *signed* bit_width values, so the APInt ctor would otherwise
+        // assert (isIntN).  Truncation keeps the low bit_width bits, which
+        // already hold the full value here, preserving the bit pattern.
         const auto &constants = enum_type.GetConstants();
         for (const auto &c : constants) {
+            auto make_apint = [&] {
+                return llvm::APInt(
+                    bit_width, static_cast< uint64_t >(c.value),
+                    /*isSigned=*/true, /*implicitTrunc=*/true
+                );
+            };
             auto *val = clang::IntegerLiteral::Create(
-                ctx,
-                llvm::APInt(bit_width, static_cast< uint64_t >(c.value), /*isSigned=*/true),
-                underlying_type, loc
+                ctx, make_apint(), underlying_type, loc
             );
             auto *ecd = clang::EnumConstantDecl::Create(
                 ctx, enum_decl, loc, &ctx.Idents.get(c.name), underlying_type, val,
-                llvm::APSInt(
-                    llvm::APInt(bit_width, static_cast< uint64_t >(c.value), /*isSigned=*/true),
-                    /*isUnsigned=*/false
-                )
+                llvm::APSInt(make_apint(), /*isUnsigned=*/false)
             );
             enum_decl->addDecl(ecd);
         }
