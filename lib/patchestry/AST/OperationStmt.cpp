@@ -532,10 +532,9 @@ namespace patchestry::ast {
         } else if (size_bits <= 128 && !ctx.UnsignedInt128Ty.isNull()) {
             int_type = ctx.UnsignedInt128Ty;
         } else {
-            // Record too large for integer coercion — return unchanged and let
-            // the caller deal with the record type directly.  Callers that don't
-            // need a scalar result (e.g. ADDRESS_OF) pass quiet_oversized to
-            // suppress this otherwise-misleading warning.
+            // Too wide for any integer type — return unchanged. Callers that
+            // don't need a scalar (e.g. ADDRESS_OF) pass quiet_oversized to mute
+            // the otherwise-misleading warning.
             if (!quiet_oversized) {
                 LOG(WARNING) << "coerce_record_to_integer: record is " << size_bits
                              << " bits, too large for integer coercion\n";
@@ -2925,14 +2924,10 @@ namespace patchestry::ast {
             return {};
         }
 
-        // Coerce record (struct/union) operands to integers so C scalar
-        // operators apply.  The coercion's reinterpret is load-bearing even for
-        // ADDRESS_OF — it normalizes the operand (including malformed/rvalue
-        // field accesses) into an addressable form — so it must always run.  But
-        // for an oversized-record ADDRESS_OF the coercion is a no-op (the operand
-        // is returned unchanged and `&record` is taken directly), so suppress its
-        // otherwise-misleading "too large for integer coercion" warning:
-        // `&fd_set` / `&stat` are perfectly valid.
+        // Coerce record operands to integers for C scalar operators. The
+        // reinterpret is load-bearing even for ADDRESS_OF (it normalizes the
+        // operand into an addressable form), so it always runs; only mute the
+        // oversized-record warning there — `&fd_set` / `&stat` are valid.
         input_expr = coerce_record_to_integer(
             ctx, input_expr, op_loc, /*quiet_oversized=*/kind == clang::UO_AddrOf);
 

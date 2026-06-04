@@ -106,11 +106,8 @@ namespace patchestry::ast {
                 );
 
             case VarnodeType::VT_ARRAY:
-                // Undefined byte-blobs (`undefinedN[...]`) are modeled as plain C
-                // arrays (`undefined1[N]`) like any other array — not wrapped in a
-                // `struct struct_undefinedN`.  The array decays to a pointer on
-                // ADDRESS_OF / argument passing (no record-to-integer coercion) and
-                // whole-buffer copies lower through create_array_assignment_operation.
+                // Undefined byte-blobs (`undefinedN[...]`) lift as plain
+                // `undefined1[N]` arrays, not a `struct struct_undefinedN` wrapper.
                 return create_array(ctx, dynamic_cast< const ArrayType & >(*vnode_type));
             case VarnodeType::VT_POINTER:
                 return create_pointer(ctx, dynamic_cast< const PointerType & >(*vnode_type));
