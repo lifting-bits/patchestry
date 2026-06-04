@@ -49,6 +49,13 @@ namespace patchestry::ast {
         std::pair< clang::Stmt *, bool >
         create_store(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
+        // Cast a STORE address operand to a dereferenceable pointer; returns it
+        // unchanged if already a non-void pointer, or nullptr if uncastable.
+        clang::Expr *coerce_store_address(
+            clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
+            const Operation &op, clang::SourceLocation op_loc
+        );
+
         std::pair< clang::Stmt *, bool >
         create_branch(clang::ASTContext &ctx, const Operation &op);
 
@@ -303,7 +310,10 @@ namespace patchestry::ast {
             clang::SourceLocation loc = clang::SourceLocation()
         );
 
-        void extend_callexpr_agruments(
+        // Pad `arguments` to fndecl's minimum required count with synthesized
+        // defaults.  Returns false if a required parameter has no representable
+        // default, so the caller can drop the call rather than under-apply it.
+        [[nodiscard]] bool extend_callexpr_arguments(
             clang::ASTContext &ctx, clang::FunctionDecl *fndecl,
             std::vector< clang::Expr * > &arguments
         );

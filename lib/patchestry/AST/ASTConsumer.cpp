@@ -487,6 +487,37 @@ namespace patchestry::ast {
             }
         }
 
+        // A FunctionDecl and a VarDecl sharing a C identifier collide as one
+        // MLIR symbol and trip an isa<GlobalOp>/isa<FuncOp> assertion in vendored
+        // CIRGen.  The #226 check above covers same-address clashes; this catches
+        // same-name ones (e.g. "__errno" func vs "errno" global).  Fail loudly here.
+        {
+            std::unordered_set< std::string > function_names;
+            std::unordered_set< std::string > variable_names;
+            for (const auto *decl : ctx.getTranslationUnitDecl()->decls()) {
+                const auto *named = llvm::dyn_cast< clang::NamedDecl >(decl);
+                if (!named || !named->getIdentifier()) {
+                    continue;
+                }
+                auto name = named->getName().str();
+                if (llvm::isa< clang::FunctionDecl >(decl)) {
+                    function_names.insert(name);
+                } else if (llvm::isa< clang::VarDecl >(decl)) {
+                    variable_names.insert(name);
+                }
+            }
+            for (const auto &name : function_names) {
+                if (variable_names.count(name)) {
+                    LOG_FATAL("symbol name collision: '{0}' is declared as both a "
+                              "function and a global variable.  These map to a single "
+                              "MLIR module symbol and would trip a CIRGen assertion.  "
+                              "This usually means name sanitization collapsed two "
+                              "distinct binary symbols onto one identifier.",
+                              name);
+                }
+            }
+        }
+
         if (options.print_tu) {
             // Pretty-print before codegen so the C file emits even when
             // CIR lowering later fails.

@@ -113,8 +113,20 @@ namespace patchestry::ast {
             } else if (param_type->isBooleanType()) {
                 return new (ctx)
                     clang::CXXBoolLiteralExpr(true, param_type, VirtualLoc(ctx));
+            } else if (param_type->isEnumeralType()) {
+                // IntegerLiteral asserts on non-integer types; emit (E)0 as an
+                // integral cast over an int-typed 0.
+                auto *zero = new (ctx) clang::IntegerLiteral(
+                    ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), 0), ctx.IntTy,
+                    VirtualLoc(ctx)
+                );
+                return clang::ImplicitCastExpr::Create(
+                    ctx, param_type, clang::CK_IntegralCast, zero,
+                    /*BasePath=*/nullptr, clang::VK_PRValue, clang::FPOptionsOverride()
+                );
             } else {
-                LOG(ERROR) << "Failed to create default value for paramer\n";
+                LOG(ERROR) << "Failed to create default value for parameter of type '"
+                           << param_type.getAsString() << "'\n";
                 return nullptr;
             }
         }
@@ -382,6 +394,19 @@ namespace patchestry::ast {
             (void) ctx;
         };
 
+        // A function designator (e.g. a VARNODE_FUNCTION operand used as a
+        // value) has function type and cannot be materialized or addressed as
+        // an object — doing so builds a function-typed lvalue temporary that
+        // classifies as CL_Function and aborts CheckAddressOfOperand. Apply the
+        // C function-to-pointer decay so we reinterpret the function *pointer*.
+        if (expr->getType()->isFunctionType()) {
+            expr = clang::ImplicitCastExpr::Create(
+                ctx, ctx.getPointerType(expr->getType()),
+                clang::CK_FunctionToPointerDecay, expr, /*BasePath=*/nullptr,
+                clang::VK_PRValue, clang::FPOptionsOverride()
+            );
+        }
+
         auto *temp_expr  = create_temporary_expr(ctx, expr);
         auto addrof_expr = sema().CreateBuiltinUnaryOp(loc, clang::UO_AddrOf, temp_expr);
         if (addrof_expr.isInvalid()) {
@@ -599,6 +624,17 @@ namespace patchestry::ast {
 
         clang::QualType input_type  = input_expr->getType();
         clang::QualType output_type = output_expr->getType();
+
+        // A function designator is not an assignable lvalue (e.g. a
+        // VARNODE_FUNCTION used as a store target).  Attempting `func = value`
+        // makes CreateBuiltinBinOp emit a hard "expression is not assignable"
+        // diagnostic that poisons codegen; bail loudly instead.
+        if (output_type->isFunctionType()) {
+            LOG(ERROR) << "create_assign_operation: assignment target has function "
+                          "type '" << output_type.getAsString()
+                       << "'; dropping non-assignable store\n";
+            return nullptr;
+        }
 
         // Scalar → array: lower as a pointer-cast partial store
         // `*(input_type *)&output[0] = input`.  Width-agnostic — the
@@ -917,6 +953,32 @@ namespace patchestry::ast {
                  false };
     }
 
+    // Ghidra can give a STORE a bare integer address or a void*, which fail
+    // Sema's indirection check.  Cast those to a pointer of the value's type so
+    // the store lowers to *(T *)addr = value; a real non-void pointer passes
+    // through unchanged.  Returns nullptr if the cast cannot be built.
+    clang::Expr *OpBuilder::coerce_store_address(
+        clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
+        const Operation &op, clang::SourceLocation op_loc
+    ) {
+        auto addr_type = addr->getType();
+        if (addr_type->isPointerType() && !addr_type->isVoidPointerType()) {
+            return addr;
+        }
+
+        clang::QualType pointee = value != nullptr ? value->getType() : clang::QualType();
+        if (pointee.isNull() || pointee->isVoidType()) {
+            pointee = ctx.UnsignedCharTy;
+        }
+
+        auto *casted = make_cast(ctx, addr, ctx.getPointerType(pointee), op_loc);
+        if (!casted) {
+            LOG(ERROR) << "Failed to cast STORE address to pointer. key: " << op.key;
+            return nullptr;
+        }
+        return casted;
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_store(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -938,6 +1000,10 @@ namespace patchestry::ast {
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
             if (!deref_expr) {
+                lhs_expr = coerce_store_address(ctx, lhs_expr, rhs_expr, op, op_loc);
+                if (!lhs_expr) {
+                    return {};
+                }
                 // Parenthesize pointer arithmetic so the deref binds the whole
                 // expression: *(ptr + offset) instead of *ptr + offset.
                 if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
@@ -945,7 +1011,11 @@ namespace patchestry::ast {
                 }
                 auto deref_result =
                     sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, lhs_expr);
-                assert(!deref_result.isInvalid());
+                if (deref_result.isInvalid()) {
+                    LOG(ERROR) << "Failed to create deref expression for STORE. key: "
+                               << op.key;
+                    return {};
+                }
                 deref_expr = deref_result.getAs< clang::Expr >();
             }
 
@@ -968,6 +1038,10 @@ namespace patchestry::ast {
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
             if (!deref_expr) {
+                lhs_expr = coerce_store_address(ctx, lhs_expr, rhs_expr, op, op_loc);
+                if (!lhs_expr) {
+                    return {};
+                }
                 if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
                     lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
                 }
@@ -1317,15 +1391,25 @@ namespace patchestry::ast {
         return { result_stmt, false };
     }
 
-    void OpBuilder::extend_callexpr_agruments(
+    bool OpBuilder::extend_callexpr_arguments(
         clang::ASTContext &ctx, clang::FunctionDecl *fndecl,
         std::vector< clang::Expr * > &arguments
     ) {
         auto minargs = fndecl->getMinRequiredArguments();
         for (auto i = static_cast< unsigned >(arguments.size()); i < minargs; i++) {
-            auto *param = fndecl->getParamDecl(i);
-            arguments.emplace_back(createDefaultArgument(ctx, param));
+            auto *param       = fndecl->getParamDecl(i);
+            auto *default_arg = createDefaultArgument(ctx, param);
+            if (default_arg == nullptr) {
+                // No representable default (e.g. a by-value record).  Signal
+                // failure so the caller drops the call: a null arg would crash
+                // Sema and a short list would emit a hard "too few arguments".
+                LOG(ERROR) << "Cannot synthesize default argument " << i << " for '"
+                           << fndecl->getNameAsString() << "'. key dropped\n";
+                return false;
+            }
+            arguments.emplace_back(default_arg);
         }
+        return true;
     }
 
     clang::Expr *OpBuilder::build_callexpr_from_function(
@@ -1508,7 +1592,19 @@ namespace patchestry::ast {
         // extend it with the default value.
         unsigned min_args = callee->getMinRequiredArguments();
         if (arguments.size() < min_args) {
-            extend_callexpr_agruments(ctx, callee, arguments);
+            if (!extend_callexpr_arguments(ctx, callee, arguments)) {
+                LOG(ERROR) << "Dropping under-applied call to '"
+                           << callee->getNameAsString() << "'. key: " << op.key << "\n";
+                return nullptr;
+            }
+        }
+
+        // A null Expr* in the argument list dereferences to a crash inside
+        // Sema::CheckArgsForPlaceholders.  Refuse loudly instead.
+        if (llvm::is_contained(arguments, nullptr)) {
+            LOG(ERROR) << "Null argument in call to '" << callee->getNameAsString()
+                       << "'. key: " << op.key << "\n";
+            return nullptr;
         }
 
         auto *refexpr = clang::DeclRefExpr::Create(
@@ -2120,7 +2216,18 @@ namespace patchestry::ast {
             auto cast_result = sema().BuildCStyleCastExpr(
                 location, ctx.getTrivialTypeSourceInfo(ret_type), location, zero
             );
-            assert(!cast_result.isInvalid());
+            // `(T)0` is ill-formed when T is a record/reference/opaque type
+            // (common for C++ by-value returns, e.g. a QString). Fall back to a
+            // bare `return;` rather than aborting — this path is the typically
+            // unreachable empty return after a noreturn call.
+            if (cast_result.isInvalid()) {
+                LOG(ERROR) << "create_return: cannot build (T)0 for return type '"
+                           << ret_type.getAsString() << "'; emitting bare return. key: "
+                           << op.key << "\n";
+                return std::make_pair(
+                    clang::ReturnStmt::Create(ctx, location, nullptr, nullptr), false
+                );
+            }
             return std::make_pair(
                 clang::ReturnStmt::Create(
                     ctx, location, cast_result.getAs< clang::Expr >(), nullptr
@@ -2232,18 +2339,40 @@ namespace patchestry::ast {
 
         auto merge_to_next = !op.output.has_value();
 
-        // If Operation has type, convert expression to operation type and perform bit-shift and
-        // or operation.
+        // PIECE is a bit concatenation (high << low_width | low), so it must run
+        // in the integer domain.  A non-integral result type (e.g. a float
+        // register) would make the shift below 'float << int', which C rejects:
+        // compute in an unsigned integer of the result width, then reinterpret
+        // the bits (not value-convert) back to the result type.
+        clang::QualType piece_result_type;
+        bool reinterpret_result = false;
         if (op.type) {
-            auto op_type           = type_it->second;
-            auto *cast_expr_input0 = make_cast(ctx, input0_expr, op_type, location);
+            piece_result_type   = type_it->second;
+            auto arith_type     = piece_result_type;
+            if (!piece_result_type->isIntegerType()) {
+                arith_type = ctx.getIntTypeForBitwidth(
+                    static_cast< unsigned >(ctx.getTypeSize(piece_result_type)),
+                    /*Signed=*/false
+                );
+                if (arith_type.isNull()) {
+                    // No integer type matches the result width.  Falling back to
+                    // a narrower int would make the later reinterpret read past
+                    // the temporary (*(wide *)&narrow) — UB.  Skip the op.
+                    LOG(ERROR) << "PIECE: no integer type for result width "
+                               << ctx.getTypeSize(piece_result_type)
+                               << "; skipping. key: " << op.key;
+                    return {};
+                }
+                reinterpret_result = true;
+            }
+            auto *cast_expr_input0 = make_cast(ctx, input0_expr, arith_type, location);
             if (!cast_expr_input0) {
                 LOG(ERROR) << "Failed to create cast expression for PIECE input0. key: "
                            << op.key;
                 return {};
             }
             input0_expr            = cast_expr_input0;
-            auto *cast_expr_input1 = make_cast(ctx, input1_expr, op_type, location);
+            auto *cast_expr_input1 = make_cast(ctx, input1_expr, arith_type, location);
             if (!cast_expr_input1) {
                 LOG(ERROR) << "Failed to create cast expression for PIECE input1. key: "
                            << op.key;
@@ -2284,6 +2413,17 @@ namespace patchestry::ast {
         if (!or_expr) {
             LOG(ERROR) << "PIECE: OR result yielded null Expr. key: " << op.key;
             return {};
+        }
+
+        // The concatenation was computed as an integer; reinterpret its bits as
+        // the (non-integral) result type when one was requested.
+        if (reinterpret_result) {
+            or_expr = make_reinterpret_cast(ctx, or_expr, piece_result_type, location);
+            if (!or_expr) {
+                LOG(ERROR) << "PIECE: reinterpret to result type yielded null Expr. key: "
+                           << op.key;
+                return {};
+            }
         }
 
         if (merge_to_next) {

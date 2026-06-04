@@ -35,7 +35,12 @@ def sanitize_to_c_identifier(name):
 
     - Replace non-alnum characters with '_', preserving runs of '_'
       (do not collapse multiple underscores).
-    - Strip leading/trailing '_'.
+    - Strip leading/trailing '_' only when they are *synthetic* (introduced
+      by the replacement above).  Original ones are meaningful (e.g. "__errno")
+      and are preserved, matching the edge-trim in sanitize_to_c_identifier in
+      lib/patchestry/Ghidra/JsonDeserialize.cpp.  (That C++ helper also collapses
+      interior synthetic underscore runs; this does not — names with replaced
+      interior chars can still differ.)
     - Prepend '_' if the identifier would start with a digit.
     - Apply simple normalization for destructor (~Foo) and operator*
       forms (operator<<, operator new, etc.) before generic cleanup.
@@ -52,15 +57,27 @@ def sanitize_to_c_identifier(name):
         # (the rest will be sanitized char-by-char).
         name = "op" + name[len("operator"):]
 
-    # Generic character-wise sanitization: keep alnum and '_', map others to '_'.
+    # Generic character-wise sanitization: keep alnum and '_', map others to
+    # '_'.  Track which '_' are synthetic (from a replaced non-identifier char)
+    # so only those can be trimmed from the edges below.
     chars = []
+    synthetic = []
     for ch in name:
         if ch.isalnum() or ch == "_":
             chars.append(ch)
+            synthetic.append(False)
         else:
             chars.append("_")
+            synthetic.append(True)
 
-    result = "".join(chars).strip("_")
+    # Trim synthetic edge underscores; keep original ones.
+    start = 0
+    end = len(chars)
+    while start < end and chars[start] == "_" and synthetic[start]:
+        start += 1
+    while end > start and chars[end - 1] == "_" and synthetic[end - 1]:
+        end -= 1
+    result = "".join(chars[start:end])
     if not result:
         return "fn"
     if result[0].isdigit():

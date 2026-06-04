@@ -629,27 +629,39 @@ namespace patchestry::ghidra {
             }
         }
 
-        // Collapse consecutive underscores only when at least one in the
-        // run is synthetic (from character replacement above).
+        // Collapse a consecutive underscore only when the current one is
+        // synthetic (from character replacement above): a synthetic '_' adjacent
+        // to an existing '_' is redundant, but an original '_' is always kept
+        // (so "bl_usb__send_message" and "::_bar" -> "_bar" both survive).
+        // Carry the synthetic flag forward so the edge-trim below can
+        // distinguish synthetic from original underscores.
         std::string collapsed;
+        std::vector< bool > collapsed_synthetic;
         collapsed.reserve(result.size());
+        collapsed_synthetic.reserve(result.size());
         for (size_t i = 0; i < result.size(); ++i) {
             if (result[i] == '_' && i > 0 && collapsed.back() == '_') {
-                // Two adjacent underscores — collapse only if the current
-                // or previous underscore was synthetic.
-                if (is_synthetic[i] || is_synthetic[i - 1]) {
-                    continue; // skip this duplicate
+                // Two adjacent underscores — drop the current one only if it is
+                // synthetic; keep original underscores.
+                if (is_synthetic[i]) {
+                    continue; // skip this redundant synthetic underscore
                 }
             }
             collapsed.push_back(result[i]);
+            collapsed_synthetic.push_back(is_synthetic[i]);
         }
 
-        // Remove leading/trailing underscores
-        while (!collapsed.empty() && collapsed.front() == '_') {
+        // Trim only *synthetic* leading/trailing underscores (from replacing C++
+        // artifacts like "::Foo").  Original ones are meaningful: stripping them
+        // collapses distinct symbols ("__errno" -> "errno") and collides with a
+        // same-named global.  Matches the interior-collapse logic above.
+        while (!collapsed.empty() && collapsed.front() == '_' && collapsed_synthetic.front()) {
             collapsed.erase(collapsed.begin());
+            collapsed_synthetic.erase(collapsed_synthetic.begin());
         }
-        while (!collapsed.empty() && collapsed.back() == '_') {
+        while (!collapsed.empty() && collapsed.back() == '_' && collapsed_synthetic.back()) {
             collapsed.pop_back();
+            collapsed_synthetic.pop_back();
         }
 
         // If stripping produced an empty string (input was all non-alnum),

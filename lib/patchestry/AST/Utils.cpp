@@ -14,6 +14,7 @@
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/SourceManager.h>
+#include <clang/Basic/TargetInfo.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/MemoryBuffer.h>
 
@@ -68,14 +69,33 @@ namespace patchestry::ast {
         }
 
         switch (bit_size) {
+            case 16:
+                // _Float16 is not supported on every target; only emit it where
+                // the target genuinely has it, otherwise fall back to float so
+                // we never hand CIRGen an unusable type.
+                if (ctx.getTargetInfo().hasFloat16Type()) {
+                    return ctx.Float16Ty;
+                }
+                LOG(ERROR) << "GetTypeFromSize: _Float16 unsupported on target; "
+                              "falling back to float\n";
+                return ctx.FloatTy;
             case 32:
                 return ctx.FloatTy;
             case 64:
                 return ctx.DoubleTy;
             case 80:
                 return ctx.LongDoubleTy;
+            case 128:
+                // 128-bit IEEE quad (Ghidra's 16-byte 'float16'; aarch64 long
+                // double).  Ghidra carries this as a native wide-float type
+                // rather than lowering it, so map it instead of aborting.
+                return ctx.Float128Ty;
             default:
-                llvm_unreachable("Unsupported float bit size in GetTypeFromSize");
+                // Mirror the integer branch's graceful fallback: fail loudly but
+                // do not abort the whole lift on an unexpected float width.
+                LOG(ERROR) << "GetTypeFromSize: unsupported float bit size "
+                           << bit_size << "; falling back to double\n";
+                return ctx.DoubleTy;
         }
     }
 
