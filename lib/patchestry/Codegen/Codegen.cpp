@@ -11,7 +11,11 @@
 #include <mlir/Parser/Parser.h>
 #include <optional>
 
+#include <algorithm>
+#include <vector>
+
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Decl.h>
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/DeclGroup.h>
 #include <clang/CIR/LowerToLLVM.h>
@@ -42,7 +46,44 @@
 namespace patchestry::codegen {
 
     std::optional< mlir::ModuleOp > CodeGenerator::lower_ast_to_mlir(clang::ASTContext &ctx) {
-        for (const auto &decl : ctx.getTranslationUnitDecl()->noload_decls()) {
+        // Emit top-level decls in a deterministic order: non-function decls and
+        // body-less function declarations first (keeping their original relative
+        // order), then function definitions sorted by name — which, because
+        // Ghidra names functions FUN_<address>, is ascending program-address
+        // order.
+        //
+        // The AST that ASTConsumer hands us is already correct and stable; the
+        // problem is purely emission order.  The vendored CIRGen lazily
+        // materializes a `cir.func` for a function the first time it is touched,
+        // and under some orders it creates one whose entry block has fewer
+        // arguments than the function's parameter list (observed: a 2-parameter
+        // function getting a one-fixed-arg variadic `cir.func`).  The subsequent
+        // definition's emitFunctionProlog then zips its 2 ParmVarDecls against 1
+        // block argument, so the trailing parameter never enters localDeclMap;
+        // the body's reference to it aborts with CIRGen's
+        // `emitDeclRefLValue: static local` NYI (seen on FUN_0000a2a8 in
+        // cve-2016-6563).  Because the previous order followed unordered_map
+        // iteration, the abort was non-deterministic across runs.  Emitting in a
+        // fixed program-address order removes the run-to-run variance.
+        std::vector< clang::Decl * > pre;
+        std::vector< clang::Decl * > defs;
+        for (auto *decl : ctx.getTranslationUnitDecl()->noload_decls()) {
+            auto *fd = llvm::dyn_cast< clang::FunctionDecl >(decl);
+            if (fd && fd->doesThisDeclarationHaveABody()) {
+                defs.push_back(decl);
+            } else {
+                pre.push_back(decl);
+            }
+        }
+        std::stable_sort(defs.begin(), defs.end(), [](clang::Decl *a, clang::Decl *b) {
+            return llvm::cast< clang::NamedDecl >(a)->getName()
+                 < llvm::cast< clang::NamedDecl >(b)->getName();
+        });
+
+        for (auto *decl : pre) {
+            cirdriver->HandleTopLevelDecl(clang::DeclGroupRef(decl));
+        }
+        for (auto *decl : defs) {
             cirdriver->HandleTopLevelDecl(clang::DeclGroupRef(decl));
         }
 
