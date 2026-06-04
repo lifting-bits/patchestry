@@ -269,8 +269,14 @@ namespace patchestry::ast {
             std::string_view op_key
         );
 
+        // Reinterpret a record (struct/union) operand as a same-width integer so
+        // C scalar operators apply.  Records wider than 128 bits are returned
+        // unchanged; pass quiet_oversized=true (e.g. from ADDRESS_OF, which does
+        // not need a scalar result) to suppress the "too large for integer
+        // coercion" warning on that no-op path.
         clang::Expr *coerce_record_to_integer(
-            clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc
+            clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc,
+            bool quiet_oversized = false
         );
 
         // Narrow an aggregate lvalue to an integer access (#225).  Tries

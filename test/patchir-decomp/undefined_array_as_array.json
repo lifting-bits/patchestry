@@ -1,0 +1,67 @@
+// Undefined byte-blobs (Ghidra `undefinedN[...]`) must be lifted as plain C
+// arrays (`undefined1 x[N]`), NOT wrapped in a `struct struct_undefinedN`.
+//
+// The array model matches Ghidra's own decompiler output and lets `ADDRESS_OF`
+// / argument passing decay the buffer to a pointer naturally, instead of
+// routing through coerce_record_to_integer (which only handles scalars
+// <= 128 bits and otherwise emits "too large for integer coercion").
+//
+// Here `gbuf` is an `undefined1[16]` global; `pass_buf` takes its address and
+// hands it to `sink`.  With the array model the call decays to `sink(gbuf)`
+// with no struct wrapper anywhere in the TU.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t > %t.stdout 2> %t.stderr
+// RUN: test -e %t.c
+// RUN: test -e %t.cir
+// RUN: %file-check -vv -check-prefix=LIFTED --implicit-check-not=struct_undefined %s --input-file %t.c
+//
+// The undefined-array global is a real C array, not a struct wrapper:
+// LIFTED-DAG: extern undefined1 gbuf[16];
+// LIFTED-DAG: void sink(void *param_0);
+// The array argument decays to a pointer at the call site (no `&gbuf`, no cast):
+// LIFTED:     sink(gbuf);
+{
+  "architecture": "ARM", "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:40000000": {
+      "name": "sink", "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_ptr_void"] },
+      "entry_point": "ram:40000000",
+      "address_ranges": [{ "start": "ram:40000000", "end": "ram:40000003" }]
+    },
+    "ram:10000000": {
+      "name": "pass_buf", "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": [] },
+      "basic_blocks": {
+        "ram:10000000:0:basic": {
+          "operations": {
+            "addr": {
+              "mnemonic": "ADDRESS_OF", "type": "type_ptr_undef", "size": 4,
+              "inputs": [{ "type": "type_undef_arr", "size": 16, "kind": "global", "global": "ram:30000000" }]
+            },
+            "call": {
+              "mnemonic": "CALL", "type": "type_void",
+              "target": { "kind": "function", "function": "ram:40000000", "is_variadic": false, "is_noreturn": false },
+              "inputs": [{ "type": "type_ptr_undef", "size": 4, "kind": "temporary", "operation": "addr" }]
+            },
+            "ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["addr", "call", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:0:basic"
+    }
+  },
+  "globals": {
+    "ram:30000000": { "name": "gbuf", "size": 16, "type": "type_undef_arr" }
+  },
+  "types": {
+    "type_void": { "name": "void", "size": 0, "kind": "void" },
+    "type_ptr_void": { "kind": "pointer", "size": 4, "element_type": "type_void" },
+    "type_undef1": { "name": "undefined1", "size": 1, "kind": "undefined" },
+    "type_undef_arr": { "kind": "array", "size": 16, "num_elements": 16, "element_type": "type_undef1" },
+    "type_ptr_undef": { "kind": "pointer", "size": 4, "element_type": "type_undef1" }
+  }
+}
