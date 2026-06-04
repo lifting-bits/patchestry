@@ -929,13 +929,10 @@ namespace patchestry::ast {
                  false };
     }
 
-    // The address operand of a STORE must be a dereferenceable pointer, but
-    // Ghidra can hand us a bare integer address (e.g. 'unsigned int') or a
-    // void*, both of which fail Sema's indirection check.  Cast such operands
-    // to a pointer of the stored value's type so the store lowers to
-    // *(T *)addr = value.  A genuine, non-void pointer is returned unchanged so
-    // existing pointer-arithmetic stores keep their shape.  Returns nullptr on
-    // an unrepresentable cast (caller bails loudly).
+    // Ghidra can give a STORE a bare integer address or a void*, which fail
+    // Sema's indirection check.  Cast those to a pointer of the value's type so
+    // the store lowers to *(T *)addr = value; a real non-void pointer passes
+    // through unchanged.  Returns nullptr if the cast cannot be built.
     clang::Expr *OpBuilder::coerce_store_address(
         clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
         const Operation &op, clang::SourceLocation op_loc
@@ -1370,7 +1367,7 @@ namespace patchestry::ast {
         return { result_stmt, false };
     }
 
-    bool OpBuilder::extend_callexpr_agruments(
+    bool OpBuilder::extend_callexpr_arguments(
         clang::ASTContext &ctx, clang::FunctionDecl *fndecl,
         std::vector< clang::Expr * > &arguments
     ) {
@@ -1379,12 +1376,9 @@ namespace patchestry::ast {
             auto *param       = fndecl->getParamDecl(i);
             auto *default_arg = createDefaultArgument(ctx, param);
             if (default_arg == nullptr) {
-                // No representable default for this parameter type (e.g. a
-                // by-value record).  A null Expr* here would crash
-                // Sema::CheckArgsForPlaceholders, and a short argument list
-                // would make BuildCallExpr emit a hard "too few arguments"
-                // error that poisons codegen for the whole module.  Signal
-                // failure so the caller drops just this call.
+                // No representable default (e.g. a by-value record).  Signal
+                // failure so the caller drops the call: a null arg would crash
+                // Sema and a short list would emit a hard "too few arguments".
                 LOG(ERROR) << "Cannot synthesize default argument " << i << " for '"
                            << fndecl->getNameAsString() << "'. key dropped\n";
                 return false;
@@ -1574,7 +1568,7 @@ namespace patchestry::ast {
         // extend it with the default value.
         unsigned min_args = callee->getMinRequiredArguments();
         if (arguments.size() < min_args) {
-            if (!extend_callexpr_agruments(ctx, callee, arguments)) {
+            if (!extend_callexpr_arguments(ctx, callee, arguments)) {
                 LOG(ERROR) << "Dropping under-applied call to '"
                            << callee->getNameAsString() << "'. key: " << op.key << "\n";
                 return nullptr;
@@ -2310,13 +2304,11 @@ namespace patchestry::ast {
 
         auto merge_to_next = !op.output.has_value();
 
-        // PIECE is a bit-level concatenation (high << low_width | low) and must be
-        // computed in an integer domain.  When the result type is non-integral
-        // (e.g. the reconstructed 32-bit value is a float register), shifting the
-        // operands as that type would make the BO_Shl below 'float << int', which
-        // C rejects.  Compute in an unsigned integer of the result's width and
-        // reinterpret the bits back to the result type afterwards (a value
-        // conversion would be wrong — the bytes are a raw bit pattern).
+        // PIECE is a bit concatenation (high << low_width | low), so it must run
+        // in the integer domain.  A non-integral result type (e.g. a float
+        // register) would make the shift below 'float << int', which C rejects:
+        // compute in an unsigned integer of the result width, then reinterpret
+        // the bits (not value-convert) back to the result type.
         clang::QualType piece_result_type;
         bool reinterpret_result = false;
         if (op.type) {

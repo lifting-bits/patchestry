@@ -487,14 +487,10 @@ namespace patchestry::ast {
             }
         }
 
-        // Loud guard: a FunctionDecl and a VarDecl that share a C identifier
-        // become two ops under one name in the MLIR module symbol table, which
-        // trips an isa<cir::GlobalOp>/isa<cir::FuncOp> assertion deep inside the
-        // vendored CIRGen (CIRGenModule.cpp getOrCreateCIRGlobal /
-        // GetOrCreateCIRFunction).  The #226 check above only covers same-address
-        // clashes; this catches same-name clashes (e.g. the "__errno" accessor
-        // function colliding with the "errno" global after name sanitization).
-        // Fail here with a clear message instead of asserting in vendor code.
+        // A FunctionDecl and a VarDecl sharing a C identifier collide as one
+        // MLIR symbol and trip an isa<GlobalOp>/isa<FuncOp> assertion in vendored
+        // CIRGen.  The #226 check above covers same-address clashes; this catches
+        // same-name ones (e.g. "__errno" func vs "errno" global).  Fail loudly here.
         {
             std::unordered_set< std::string > function_names;
             std::unordered_set< std::string > variable_names;

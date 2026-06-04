@@ -36,11 +36,11 @@ def sanitize_to_c_identifier(name):
     - Replace non-alnum characters with '_', preserving runs of '_'
       (do not collapse multiple underscores).
     - Strip leading/trailing '_' only when they are *synthetic* (introduced
-      by the replacement above).  Original leading/trailing underscores are
-      meaningful (e.g. "__errno", "__stack_chk_fail") and are preserved.
-      This mirrors sanitize_to_c_identifier in
-      lib/patchestry/Ghidra/JsonDeserialize.cpp so the generated checks match
-      the symbols the lifter actually emits.
+      by the replacement above).  Original ones are meaningful (e.g. "__errno")
+      and are preserved, matching the edge-trim in sanitize_to_c_identifier in
+      lib/patchestry/Ghidra/JsonDeserialize.cpp.  (That C++ helper also collapses
+      interior synthetic underscore runs; this does not — names with replaced
+      interior chars can still differ.)
     - Prepend '_' if the identifier would start with a digit.
     - Apply simple normalization for destructor (~Foo) and operator*
       forms (operator<<, operator new, etc.) before generic cleanup.

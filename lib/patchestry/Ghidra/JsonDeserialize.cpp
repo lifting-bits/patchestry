@@ -629,10 +629,10 @@ namespace patchestry::ghidra {
             }
         }
 
-        // Collapse consecutive underscores only when at least one in the
-        // run is synthetic (from character replacement above).  Carry the
-        // synthetic flag forward for each surviving char so the edge-trim
-        // below can tell synthetic underscores from original ones.
+        // Collapse consecutive underscores only when at least one in the run is
+        // synthetic (from character replacement above), carrying the synthetic
+        // flag forward so the edge-trim below can distinguish synthetic from
+        // original underscores.
         std::string collapsed;
         std::vector< bool > collapsed_synthetic;
         collapsed.reserve(result.size());
@@ -649,15 +649,10 @@ namespace patchestry::ghidra {
             collapsed_synthetic.push_back(is_synthetic[i]);
         }
 
-        // Remove leading/trailing underscores only when they are *synthetic*
-        // (introduced by the character replacement above when cleaning up a
-        // demangled C++ name, e.g. "::Foo" -> "_Foo").  Original leading/
-        // trailing underscores are valid, semantically significant C
-        // identifier characters: stripping them is lossy and collapses
-        // distinct symbols onto one name ("__errno" -> "errno"), which then
-        // collides with a same-named global and trips a CIRGen symbol-table
-        // assertion.  This mirrors the interior-collapse logic above, which
-        // already preserves intentional underscores via is_synthetic.
+        // Trim only *synthetic* leading/trailing underscores (from replacing C++
+        // artifacts like "::Foo").  Original ones are meaningful: stripping them
+        // collapses distinct symbols ("__errno" -> "errno") and collides with a
+        // same-named global.  Matches the interior-collapse logic above.
         while (!collapsed.empty() && collapsed.front() == '_' && collapsed_synthetic.front()) {
             collapsed.erase(collapsed.begin());
             collapsed_synthetic.erase(collapsed_synthetic.begin());
