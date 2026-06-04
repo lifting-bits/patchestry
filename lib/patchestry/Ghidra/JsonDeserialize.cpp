@@ -630,9 +630,13 @@ namespace patchestry::ghidra {
         }
 
         // Collapse consecutive underscores only when at least one in the
-        // run is synthetic (from character replacement above).
+        // run is synthetic (from character replacement above).  Carry the
+        // synthetic flag forward for each surviving char so the edge-trim
+        // below can tell synthetic underscores from original ones.
         std::string collapsed;
+        std::vector< bool > collapsed_synthetic;
         collapsed.reserve(result.size());
+        collapsed_synthetic.reserve(result.size());
         for (size_t i = 0; i < result.size(); ++i) {
             if (result[i] == '_' && i > 0 && collapsed.back() == '_') {
                 // Two adjacent underscores — collapse only if the current
@@ -642,14 +646,25 @@ namespace patchestry::ghidra {
                 }
             }
             collapsed.push_back(result[i]);
+            collapsed_synthetic.push_back(is_synthetic[i]);
         }
 
-        // Remove leading/trailing underscores
-        while (!collapsed.empty() && collapsed.front() == '_') {
+        // Remove leading/trailing underscores only when they are *synthetic*
+        // (introduced by the character replacement above when cleaning up a
+        // demangled C++ name, e.g. "::Foo" -> "_Foo").  Original leading/
+        // trailing underscores are valid, semantically significant C
+        // identifier characters: stripping them is lossy and collapses
+        // distinct symbols onto one name ("__errno" -> "errno"), which then
+        // collides with a same-named global and trips a CIRGen symbol-table
+        // assertion.  This mirrors the interior-collapse logic above, which
+        // already preserves intentional underscores via is_synthetic.
+        while (!collapsed.empty() && collapsed.front() == '_' && collapsed_synthetic.front()) {
             collapsed.erase(collapsed.begin());
+            collapsed_synthetic.erase(collapsed_synthetic.begin());
         }
-        while (!collapsed.empty() && collapsed.back() == '_') {
+        while (!collapsed.empty() && collapsed.back() == '_' && collapsed_synthetic.back()) {
             collapsed.pop_back();
+            collapsed_synthetic.pop_back();
         }
 
         // If stripping produced an empty string (input was all non-alnum),

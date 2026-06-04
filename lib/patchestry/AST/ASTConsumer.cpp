@@ -487,6 +487,41 @@ namespace patchestry::ast {
             }
         }
 
+        // Loud guard: a FunctionDecl and a VarDecl that share a C identifier
+        // become two ops under one name in the MLIR module symbol table, which
+        // trips an isa<cir::GlobalOp>/isa<cir::FuncOp> assertion deep inside the
+        // vendored CIRGen (CIRGenModule.cpp getOrCreateCIRGlobal /
+        // GetOrCreateCIRFunction).  The #226 check above only covers same-address
+        // clashes; this catches same-name clashes (e.g. the "__errno" accessor
+        // function colliding with the "errno" global after name sanitization).
+        // Fail here with a clear message instead of asserting in vendor code.
+        {
+            std::unordered_set< std::string > function_names;
+            std::unordered_set< std::string > variable_names;
+            for (const auto *decl : ctx.getTranslationUnitDecl()->decls()) {
+                const auto *named = llvm::dyn_cast< clang::NamedDecl >(decl);
+                if (!named || !named->getIdentifier()) {
+                    continue;
+                }
+                auto name = named->getName().str();
+                if (llvm::isa< clang::FunctionDecl >(decl)) {
+                    function_names.insert(name);
+                } else if (llvm::isa< clang::VarDecl >(decl)) {
+                    variable_names.insert(name);
+                }
+            }
+            for (const auto &name : function_names) {
+                if (variable_names.count(name)) {
+                    LOG_FATAL("symbol name collision: '{0}' is declared as both a "
+                              "function and a global variable.  These map to a single "
+                              "MLIR module symbol and would trip a CIRGen assertion.  "
+                              "This usually means name sanitization collapsed two "
+                              "distinct binary symbols onto one identifier.",
+                              name);
+                }
+            }
+        }
+
         if (options.print_tu) {
             // Pretty-print before codegen so the C file emits even when
             // CIR lowering later fails.
