@@ -61,6 +61,12 @@ namespace patchestry::codegen {
       private:
         void emit_cir(clang::ASTContext &ctx, const patchestry::Options &options);
 
+        // Restore the varargs flag on cir.func declarations that ClangIR
+        // lowering emitted as non-variadic, using the Clang FunctionDecl as
+        // ground truth (works around first-materialization caching in
+        // getOrCreateCIRFunction).
+        void reconcile_variadic_decls(clang::ASTContext &ctx, mlir::ModuleOp mod);
+
         void visit_locations(clang::ASTContext &ctx);
 
         clang::CompilerInstance &ci;

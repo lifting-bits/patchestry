@@ -364,7 +364,13 @@ namespace patchestry::ghidra {
     ) {
         const auto *field_array = composite_obj.getArray("fields");
         if (field_array == nullptr || field_array->empty()) {
-            LOG(ERROR) << "No fields found in composite type object\n";
+            // Opaque / forward-declared composites (libc DIR, FILE, pthread
+            // internals) export no members — legitimate for pointer-only types.
+            // Leave it as an empty record; the AST layer emits a valid opaque
+            // struct via complete_definition(). Mirrors the empty-enum case.
+            LOG(WARNING) << "Composite type '" << varnode.name
+                         << "' (key: " << varnode.key
+                         << ") has no fields; treating as opaque/empty record\n";
             return;
         }
 
