@@ -357,6 +357,27 @@ public class PcodeSerializer {
 		// the `PcodeOp`s representing those `CALLOTHER`s.
 		private List<PcodeOp> callotherUsePcodeOps;
 
+		// Missing-intrinsic inventory: distinct userop name -> manifest entry.
+		// Populated by the low-pcode instruction walk (origin "low") and
+		// upgraded to "high"/"synthetic" for userops that reach serialization.
+		// Emitted as the top-level `intrinsic_manifest`.
+		private java.util.LinkedHashMap<String, ManifestEntry> intrinsicManifest;
+
+		private static final class ManifestEntry {
+			final String klass;
+			final int index;
+			final boolean mapped;
+			int count;
+			String origin;
+			ManifestEntry(String klass, int index, boolean mapped, String origin) {
+				this.klass  = klass;
+				this.index  = index;
+				this.mapped = mapped;
+				this.origin = origin;
+				this.count  = 0;
+			}
+		}
+
 		// Maps external function label → mangled name discovered at the call
 		// site (thunk/PLT stub) before dethunking.  Populated by
 		// buildExternalMangledNameMap (pre-pass) and serializeCallOp (per-call).
@@ -455,6 +476,7 @@ public class PcodeSerializer {
 			this.prefixOperationsMap = new HashMap<>();
 			this.addressOfGlobalMap = new HashMap<>();
 			this.callotherUsePcodeOps = new ArrayList<>();
+			this.intrinsicManifest = new java.util.LinkedHashMap<>();
 			this.seenDataMap = new HashMap<>();
 
 			// Extraout sanitizer wiring.
@@ -1280,6 +1302,12 @@ public class PcodeSerializer {
 			return null;  // Unknown userop
 		}
 
+		// Opaque, clearly-named placeholder for a CALLOTHER whose userop index
+		// the language doesn't name. Used instead of dropping the whole function.
+		static String unknownUseropName(int index) {
+			return "__patchestry_unknown_0x" + Integer.toHexString(index);
+		}
+
 		// Return the label of an intrinsic with `CALLOTHER`. This is based
 		// off of the return value.
 		String intrinsicLabel(PcodeOp pcodeOp) throws Exception {
@@ -1287,8 +1315,9 @@ public class PcodeSerializer {
 				int index = (int) pcodeOp.getInput(0).getOffset();
 				String name = resolveUseropName(index);
 				if (name == null) {
-					throw new UnsupportedOperationException(
-						"Unknown CALLOTHER index: 0x" + Integer.toHexString(index));
+					// Unknown userop index: emit an opaque placeholder rather
+					// than aborting; the manifest flags it as unmapped.
+					name = unknownUseropName(index);
 				}
 				return intrinsicLabel(name, intrinsicReturnType(pcodeOp));
 			} else {
@@ -3283,13 +3312,16 @@ public class PcodeSerializer {
 							if (callotherIndex >= MIN_CALLOTHER && callotherIndex < BUILTIN_STRINGDATA) {
 								break;
 							}
-							// Process SLEIGH userops and decompiler built-ins as intrinsics
+							// Process SLEIGH userops and decompiler built-ins as
+							// intrinsics. An unknown index is kept as an opaque
+							// __patchestry_unknown placeholder (flagged in the
+							// manifest) rather than dropping the whole function.
 							String userDefinedOpName = resolveUseropName(callotherIndex);
-							if (userDefinedOpName != null) {
-								callotherUsePcodeOps.add(pcodeOp);
-							} else {
-								System.out.println("Unsupported CALLOTHER at " + label(pcodeOp) + ": " + pcodeOp.toString());
-								return false;
+							callotherUsePcodeOps.add(pcodeOp);
+							if (userDefinedOpName == null) {
+								System.out.println("Unknown CALLOTHER (kept opaque) at "
+									+ label(pcodeOp) + ": index 0x"
+									+ Integer.toHexString(callotherIndex));
 							}
 							break;
 						case PcodeOp.CALL:
@@ -4854,6 +4886,24 @@ public class PcodeSerializer {
 			writer.endArray();
 		}
 		
+		// Emit the UseropClassifier taxonomy on a CALLOTHER target so the C++
+		// AST layer can spell recognized ARM/AArch64 system userops as ACLE /
+		// CMSIS intrinsics. Only recognized (mapped) ops get the fields; others
+		// are left untagged and flow through the existing name-based dispatch.
+		void serializeIntrinsicClass(PcodeOp pcodeOp) throws Exception {
+			int index = (int) pcodeOp.getInput(0).getOffset();
+			String name = resolveUseropName(index);
+			if (name == null) { name = unknownUseropName(index); }
+			util.firmware.UseropClassifier.Result r =
+				util.firmware.UseropClassifier.classify(name);
+			if (!r.mapped) { return; }
+			writer.name("intrinsic_class").value(r.klass);
+			if (r.register != null && !r.register.isEmpty()) {
+				writer.name("system_register").value(r.register);
+			}
+			writer.name("mapped").value(true);
+		}
+
 		// Serialize a `CALLOTHER` as a call to an intrinsic.
 		void serializeIntrinsicCallOp(PcodeOp pcodeOp) throws Exception {
 			serializeOutput(pcodeOp);
@@ -4863,6 +4913,7 @@ public class PcodeSerializer {
 			writer.name("function").value(intrinsicLabel(pcodeOp));
 			writer.name("is_variadic").value(true);
 			writer.name("is_noreturn").value(false);
+			serializeIntrinsicClass(pcodeOp);
 			writer.endObject();  // End of `target`.
 
 			// For BUILTIN_STRINGDATA, look up the actual string literal
@@ -5792,15 +5843,24 @@ public class PcodeSerializer {
 			for (PcodeOp pcodeOp : callotherUsePcodeOps) {
 				int index = (int) pcodeOp.getInput(0).getOffset();
 				String name = resolveUseropName(index);
+				if (name == null) { name = unknownUseropName(index); }
 				DataType returnType = intrinsicReturnType(pcodeOp);
 				String label = intrinsicLabel(name, returnType);
 				if (!seenIntrinsics.add(label)) {
 					continue;
 				}
-				
+
 				writer.name(label).beginObject();
 				writer.name("name").value(name);
 				writer.name("is_intrinsic").value(true);
+				util.firmware.UseropClassifier.Result rc =
+					util.firmware.UseropClassifier.classify(name);
+				if (rc.mapped) {
+					writer.name("intrinsic_class").value(rc.klass);
+					if (rc.register != null && !rc.register.isEmpty()) {
+						writer.name("system_register").value(rc.register);
+					}
+				}
 				writer.name("type").beginObject();
 				writer.name("return_type").value(label(returnType));
 				writer.name("is_variadic").value(true);
@@ -5813,6 +5873,108 @@ public class PcodeSerializer {
 			}
 			
 			System.out.println("Total serialized intrinsics: " + Integer.toString(numIntrinsics));
+		}
+
+		// Layer 2 of the missing-intrinsic discovery: walk the raw (low) p-code
+		// of every instruction in the program. This sees every SLEIGH CALLOTHER
+		// userop actually present -- including ones in functions the decompiler
+		// skipped and ops it later eliminated -- which a high-p-code-only walk
+		// would miss. Synthetic decompiler builtins (>= BUILTIN_STRINGDATA) do
+		// not appear here; they are added by finalizeManifestOrigins() from the
+		// high pass.
+		private void discoverIntrinsicManifest() {
+			InstructionIterator it = currentProgram.getListing().getInstructions(true);
+			while (it.hasNext()) {
+				Instruction insn = it.next();
+				PcodeOp[] ops;
+				try {
+					ops = insn.getPcode();
+				} catch (Exception e) {
+					continue;
+				}
+				if (ops == null) { continue; }
+				for (PcodeOp op : ops) {
+					if (op.getOpcode() != PcodeOp.CALLOTHER || op.getNumInputs() < 1) {
+						continue;
+					}
+					int index = (int) op.getInput(0).getOffset();
+					String name = resolveUseropName(index);
+					if (name == null) { name = unknownUseropName(index); }
+					recordManifestLow(name, index);
+				}
+			}
+		}
+
+		private void recordManifestLow(String name, int index) {
+			ManifestEntry e = intrinsicManifest.get(name);
+			if (e == null) {
+				util.firmware.UseropClassifier.Result r =
+					util.firmware.UseropClassifier.classify(name);
+				e = new ManifestEntry(r.klass, index, r.mapped, "low");
+				intrinsicManifest.put(name, e);
+			}
+			e.count++;
+		}
+
+		// Mark userops that reached serialization: present at high p-code level
+		// (origin "high") or decompiler-synthesized builtins (origin "synthetic",
+		// which the low-pcode walk cannot see).
+		private void finalizeManifestOrigins() {
+			for (PcodeOp pcodeOp : callotherUsePcodeOps) {
+				int index = (int) pcodeOp.getInput(0).getOffset();
+				String name = resolveUseropName(index);
+				if (name == null) { name = unknownUseropName(index); }
+				boolean synthetic = index >= BUILTIN_STRINGDATA;
+				ManifestEntry e = intrinsicManifest.get(name);
+				if (e == null) {
+					// Synthetic builtins (volatile_read, exception_return,
+					// builtin_memcpy, atomics, ...) are decompiler-injected and
+					// have dedicated C++ handlers, so they are handled even
+					// though the ARM UseropClassifier does not name them.
+					util.firmware.UseropClassifier.Result r =
+						util.firmware.UseropClassifier.classify(name);
+					String klass  = synthetic ? "builtin" : r.klass;
+					boolean mapped = synthetic ? true : r.mapped;
+					e = new ManifestEntry(klass, index, mapped,
+						synthetic ? "synthetic" : "high");
+					e.count = 1;
+					intrinsicManifest.put(name, e);
+				} else {
+					e.origin = synthetic ? "synthetic" : "high";
+				}
+			}
+		}
+
+		// Emit the missing-intrinsic inventory at top level.
+		private void serializeManifest() throws Exception {
+			discoverIntrinsicManifest();
+			finalizeManifestOrigins();
+
+			int unmapped = 0;
+			for (ManifestEntry e : intrinsicManifest.values()) {
+				if (!e.mapped) { unmapped++; }
+			}
+
+			writer.name("intrinsic_manifest").beginObject();
+			writer.name("total_distinct").value(intrinsicManifest.size());
+			writer.name("unmapped_count").value(unmapped);
+			writer.name("entries").beginArray();
+			for (java.util.Map.Entry<String, ManifestEntry> kv : intrinsicManifest.entrySet()) {
+				ManifestEntry e = kv.getValue();
+				writer.beginObject();
+				writer.name("name").value(kv.getKey());
+				writer.name("index").value(e.index);
+				writer.name("class").value(e.klass);
+				writer.name("count").value(e.count);
+				writer.name("mapped").value(e.mapped);
+				writer.name("origin").value(e.origin);
+				writer.endObject();
+			}
+			writer.endArray();
+			writer.endObject();
+
+			System.out.println("Intrinsic manifest: " + intrinsicManifest.size()
+				+ " distinct userops, " + unmapped + " unmapped.");
 		}
 		
 
@@ -6189,6 +6351,9 @@ public class PcodeSerializer {
 
 			// TailCallAnalysis findings (empty when pass disabled / no hits).
 			serializeBoundaryRepairs();
+
+			// Missing-intrinsic inventory (layered low/high p-code discovery).
+			serializeManifest();
 
 			writer.endObject();
 

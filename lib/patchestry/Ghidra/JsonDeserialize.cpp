@@ -893,6 +893,23 @@ namespace patchestry::ghidra {
         }
 
         target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
+
+        // ARM system-userop classification from the Ghidra UseropClassifier
+        // pre-pass (optional; older JSON omits these).
+        if (auto klass = maybe_target->getString("intrinsic_class");
+            klass.has_value() && !klass->empty())
+        {
+            target.intrinsic_class = klass->str();
+        }
+        if (auto reg = maybe_target->getString("system_register");
+            reg.has_value() && !reg->empty())
+        {
+            target.system_register = reg->str();
+        }
+        if (auto mapped = maybe_target->getBoolean("mapped"); mapped.has_value()) {
+            target.mapped = *mapped;
+        }
+
         op.target           = std::move(target);
         op.has_return_value = call_obj.getBoolean("has_return_value").value_or(false);
 

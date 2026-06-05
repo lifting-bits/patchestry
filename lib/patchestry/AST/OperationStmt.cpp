@@ -2119,6 +2119,15 @@ namespace patchestry::ast {
         const auto &label = *op.target->function;
         auto name         = parse_intrinsic_name(function_builder().program_arch(), label);
 
+        // ARM system userops the Ghidra UseropClassifier tagged with an
+        // `intrinsic_class` map to a CMSIS/ACLE spelling (__disable_irq,
+        // __get_BASEPRI, __arm_ldc, ...). Returns nullopt for classes this
+        // layer does not spell (barriers -> C11 fence below, coproc MCR/MRC
+        // pending reorder, unknown), so they fall through unchanged.
+        if (auto sys = emit_arm_system_intrinsic(*this, ctx, function, op)) {
+            return *sys;
+        }
+
         // Custom-semantics handlers (volatile_read → *(volatile T*)addr
         // deref, etc.) take precedence so they can rewrite the op
         // instead of building a call.

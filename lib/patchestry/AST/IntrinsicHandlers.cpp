@@ -521,6 +521,76 @@ namespace patchestry::ast {
             return b.create_intrinsic_call(ctx, fn, op, "__patchestry_" + name);
         }
 
+        // === ARM system-userop class -> compiler-intrinsic spelling ==========
+        //
+        // Maps the arch-neutral `intrinsic_class` (assigned by the Ghidra
+        // UseropClassifier pre-pass) to the name the compiler understands:
+        // CMSIS-Core for Cortex-M special registers and interrupt masking, ACLE
+        // builtins for hints and the directly-mappable coprocessor LDC/STC. The
+        // read/write/return shape is carried by the serialized op, so once the
+        // name is known a plain create_intrinsic_call is enough (as for the
+        // atomic_* families). Returns nullopt for any class this layer does not
+        // spell, so the caller falls through to the existing dispatch.
+
+        // Cortex-M special registers exposed by CMSIS as __get_<R>()/__set_<R>().
+        bool is_known_cmsis_sysreg(std::string_view reg) {
+            static constexpr std::array< std::string_view, 12 > regs = {
+                "BASEPRI", "BASEPRI_MAX", "PRIMASK", "FAULTMASK", "CONTROL", "IPSR",
+                "MSP",     "PSP",         "MSPLIM",  "PSPLIM",     "APSR",    "XPSR"
+            };
+            for (auto candidate : regs) {
+                if (reg == candidate) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        std::optional< std::string >
+        arm_canonical_for(std::string_view klass, const std::optional< std::string > &reg) {
+            // Interrupt masking (CPSID/CPSIE). Only PRIMASK (CPS i) and FAULTMASK
+            // (CPS f, == __*_fault_irq on M) have a CMSIS spelling; other CPS
+            // forms (e.g. the A/R abort-mask `a` bit) fall through rather than
+            // mis-spell as __disable_irq.
+            if (klass == "irq_mask_set" || klass == "irq_mask_clear") {
+                bool set = (klass == "irq_mask_set");
+                if (reg && *reg == "PRIMASK") {
+                    return set ? "__disable_irq" : "__enable_irq";
+                }
+                if (reg && *reg == "FAULTMASK") {
+                    return set ? "__disable_fault_irq" : "__enable_fault_irq";
+                }
+                return std::nullopt;
+            }
+            // Named Cortex-M special registers -> CMSIS accessors.
+            if (klass == "sysreg_read" && reg && is_known_cmsis_sysreg(*reg)) {
+                return "__get_" + *reg;
+            }
+            if (klass == "sysreg_write" && reg && is_known_cmsis_sysreg(*reg)) {
+                return "__set_" + *reg;
+            }
+            // Hints -> ACLE nullary builtins.
+            if (klass == "hint_wfi") { return "__wfi"; }
+            if (klass == "hint_wfe") { return "__wfe"; }
+            if (klass == "hint_sev") { return "__sev"; }
+            if (klass == "hint_yield") { return "__yield"; }
+            if (klass == "hint_nop") { return "__nop"; }
+            // Coprocessor LDC/STC map 1:1 to ACLE: verified SLEIGH operand order
+            // coprocessor_load(cpn, CRd, addr) == __arm_ldc(coproc, CRd, p).
+            if (klass == "coproc_load") { return "__arm_ldc"; }
+            if (klass == "coproc_loadl") { return "__arm_ldcl"; }
+            if (klass == "coproc_store") { return "__arm_stc"; }
+            if (klass == "coproc_storel") { return "__arm_stcl"; }
+            // Fall through (caller keeps existing behavior):
+            //   - barrier_* : handled by the C11 atomic-fence mapping.
+            //   - coproc_read/write/function : need an ACLE arg reorder
+            //     (coprocessor_moveto(cpn,op1,op2,Rt,CRn,CRm) vs
+            //      __arm_mcr(coproc,op1,Rt,CRn,CRm,op2)); deferred, kept on the
+            //     registered-call path so they are preserved + visible.
+            //   - un-named sysreg, trap, mode_switch, query, unknown.
+            return std::nullopt;
+        }
+
     } // anonymous namespace
 
     std::string parse_intrinsic_name(std::string_view arch, std::string_view label) {
@@ -594,6 +664,25 @@ namespace patchestry::ast {
             return result;
         }();
         return handlers;
+    }
+
+    std::optional< std::pair< clang::Stmt *, bool > > emit_arm_system_intrinsic(
+        OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
+        const ghidra::Operation &op
+    ) {
+        if (!op.target || !op.target->intrinsic_class) {
+            return std::nullopt;
+        }
+        auto canonical =
+            arm_canonical_for(*op.target->intrinsic_class, op.target->system_register);
+        if (!canonical) {
+            return std::nullopt;
+        }
+        // create_intrinsic_call synthesizes the extern decl and wires args from
+        // op.inputs + the output assignment from op.output, so a sysreg read
+        // becomes `out = __get_BASEPRI()`, a write `__set_BASEPRI(v)`, CPS
+        // `__disable_irq()`, and LDC `__arm_ldc(cpn, CRd, addr)`.
+        return b.create_intrinsic_call(ctx, fn, op, *canonical);
     }
 
 } // namespace patchestry::ast

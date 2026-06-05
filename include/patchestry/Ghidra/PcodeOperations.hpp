@@ -156,6 +156,16 @@ namespace patchestry::ghidra {
         // Literal address for kind:"address" targets (unresolved callee).
         std::optional< std::string > address;
         bool is_noreturn;
+
+        // ARM system-userop classification, set by the Ghidra UseropClassifier
+        // pre-pass (absent on older serializer output, so all optional).
+        // `intrinsic_class` is the arch-neutral taxonomy tag (e.g.
+        // "irq_mask_set", "sysreg_read", "coproc_load"); `system_register` names
+        // the decoded register where resolvable (e.g. "BASEPRI", "PRIMASK");
+        // `mapped` is false when the classifier could not assign a class.
+        std::optional< std::string > intrinsic_class;
+        std::optional< std::string > system_register;
+        std::optional< bool > mapped;
     };
 
     // One arm of a BRANCHIND switch. `value` is meaningful only when

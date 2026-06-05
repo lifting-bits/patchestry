@@ -1,0 +1,118 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// ARM system userops the Ghidra UseropClassifier tagged with an intrinsic_class
+// map to CMSIS-Core / ACLE spellings. Verifies CPS masking, a sysreg write, a
+// sysreg read (return), an ACLE coprocessor LDC, and the WFI hint.
+//
+// CIR: cir.func dso_local @arm_sys_test
+// LL: define dso_local i32 @arm_sys_test
+// LL-DAG: call {{.*}}@__disable_irq()
+// LL-DAG: call {{.*}}@__set_BASEPRI(
+// LL-DAG: call {{.*}}@__get_IPSR()
+// LL-DAG: call {{.*}}@__arm_ldc(
+// LL-DAG: call {{.*}}@__wfi()
+// LL-DAG: call {{.*}}@__enable_irq()
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "arm_sys_test",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "v", "type": "type_int", "kind": "parameter", "index": 0 },
+            "temp0": { "mnemonic": "DECLARE_TEMPORARY", "name": "exc", "kind": "temporary", "type": "type_int", "address": "ram:10000000:0:basic:read_ipsr" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "temp0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "cpsid": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic", "function": "disableIRQinterrupts",
+                "is_variadic": false, "is_noreturn": false,
+                "intrinsic_class": "irq_mask_set", "system_register": "PRIMASK", "mapped": true
+              },
+              "inputs": []
+            },
+            "set_basepri": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic", "function": "setBasePriority",
+                "is_variadic": false, "is_noreturn": false,
+                "intrinsic_class": "sysreg_write", "system_register": "BASEPRI", "mapped": true
+              },
+              "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "p0" }]
+            },
+            "read_ipsr": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_int",
+              "output": { "kind": "temporary", "operation": "temp0", "type": "type_int" },
+              "target": {
+                "kind": "intrinsic", "function": "getCurrentExceptionNumber",
+                "is_variadic": false, "is_noreturn": false,
+                "intrinsic_class": "sysreg_read", "system_register": "IPSR", "mapped": true
+              },
+              "inputs": []
+            },
+            "ldc": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic", "function": "coprocessor_load",
+                "is_variadic": false, "is_noreturn": false,
+                "intrinsic_class": "coproc_load", "mapped": true
+              },
+              "inputs": [
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 11 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 0 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 0 }
+              ]
+            },
+            "wfi": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic", "function": "WaitForInterrupt",
+                "is_variadic": false, "is_noreturn": false,
+                "intrinsic_class": "hint_wfi", "mapped": true
+              },
+              "inputs": []
+            },
+            "cpsie": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic", "function": "enableIRQinterrupts",
+                "is_variadic": false, "is_noreturn": false,
+                "intrinsic_class": "irq_mask_clear", "system_register": "PRIMASK", "mapped": true
+              },
+              "inputs": []
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "read_ipsr" }]
+            }
+          },
+          "ordered_operations": ["cpsid", "set_basepri", "read_ipsr", "ldc", "wfi", "cpsie", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" }
+  }
+}
