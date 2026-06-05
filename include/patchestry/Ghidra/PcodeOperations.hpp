@@ -261,6 +261,16 @@ namespace patchestry::ghidra {
         std::string entry_point;
         std::vector< AddressRange > address_ranges;
 
+        // Interrupt/exception handler metadata (set by the Ghidra
+        // InterruptAnalysis pass from the `ISR` function tag). When true the
+        // function is emitted with a void(void) prototype and an interrupt
+        // attribute, and its exception-return terminator is honored as a clean
+        // return (or an opaque exception_return intrinsic). `interrupt_kind` is
+        // the Clang ARMInterruptAttr kind string: "" (Generic / M-profile) or
+        // one of "IRQ"/"FIQ"/"SWI"/"ABORT"/"UNDEF" (classic A/R-profile).
+        bool is_interrupt = false;
+        std::optional< std::string > interrupt_kind;
+
         // Absent when Ghidra didn't produce one; consumers fall back
         // to CFG-based structuring.
         std::optional< RegionNode > region;
