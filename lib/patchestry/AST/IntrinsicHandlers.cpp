@@ -450,6 +450,21 @@ namespace patchestry::ast {
             return { decayed ? decayed : lit, true };
         }
 
+        // Opaque, side-effecting exception return. On M-profile this is the
+        // EXC_RETURN magic branch (`bx` to 0xFFFFFFFx); on A/R-profile it is a
+        // CPSR/SPSR-restoring return (`subs pc,lr,#N` / `ldm{..pc}^` / `rfe`).
+        // The unstack/mode-switch cannot be faithfully modeled in P-Code, so we
+        // emit a call to an extern `__patchestry_<name>` that no pass folds,
+        // reorders, or elides -- preserving the control-flow side effect instead
+        // of collapsing it to a plain return. Any inputs the serializer attached
+        // (e.g. the M-profile magic value) ride along as call arguments.
+        std::pair< clang::Stmt *, bool > handle_exception_return(
+            OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
+            const ghidra::Operation &op, const std::string &name
+        ) {
+            return b.create_intrinsic_call(ctx, fn, op, "__patchestry_" + name);
+        }
+
     } // anonymous namespace
 
     std::string parse_intrinsic_name(std::string_view arch, std::string_view label) {
@@ -492,6 +507,10 @@ namespace patchestry::ast {
                 {        "builtin_strncpy",        handle_builtin_memcpy }, // Same impl as memcpy
                 {        "builtin_wcsncpy",        handle_builtin_memcpy },
                 {             "stringdata",            handle_stringdata },
+                // Exception returns (ARM EXC_RETURN / CPSR-restoring return).
+                // Emitted opaque so the control-flow side effect is preserved.
+                {       "exception_return",      handle_exception_return },
+                {  "exception_return_cpsr",      handle_exception_return },
                 // Bare-named synchronization primitives that have no C11
                 // memory-ordering parameter. ClearExclusiveLocal resets the
                 // local exclusive monitor; ISB is a pipeline sync, not a

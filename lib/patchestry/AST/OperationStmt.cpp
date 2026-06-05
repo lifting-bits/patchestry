@@ -1383,6 +1383,24 @@ namespace patchestry::ast {
             return { switch_stmt, false };
         }
 
+        // Loud-fail guard: a constant branch target in the ARM EXC_RETURN range
+        // (0xFFFFFFE0-0xFFFFFFFF) means an exception return reached codegen
+        // without being reclassified to a RETURN (or rewritten to an
+        // exception_return intrinsic) by the InterruptAnalysis pass. Emitting a
+        // goto to that unmapped address would be junk; refuse loudly instead.
+        // The value is read from the raw constant varnode rather than the
+        // (already pointer-cast) input_expr.
+        if (op.inputs[0].kind == Varnode::VARNODE_CONSTANT && op.inputs[0].value
+            && *op.inputs[0].value >= 0xFFFFFFE0U)
+        {
+            LOG(ERROR)
+                << "BRANCHIND target " << *op.inputs[0].value
+                << " is an un-reclassified ARM EXC_RETURN value; InterruptAnalysis "
+                << "should have rewritten this exception return. Refusing to emit a "
+                << "goto to an unmapped address. key: " << op.key << "\n";
+            return { nullptr, false };
+        }
+
         // Priority 3: no successor info at all — emit IndirectGotoStmt as the only
         // fallback when there are no resolved successors.
         auto *result_stmt = new (ctx) clang::IndirectGotoStmt(loc, loc, input_expr);

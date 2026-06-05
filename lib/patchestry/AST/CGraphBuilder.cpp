@@ -377,6 +377,23 @@ namespace patchestry::ast {
                         node.switch_cases.push_back(SwitchCaseEntry{
                             static_cast<int64_t>(*addr), succ_idx, false});
                     }
+                } else {
+                    // No switch_cases and no successor_blocks. If the indirect
+                    // target is a constant in the ARM EXC_RETURN range, this is
+                    // an exception return that escaped InterruptAnalysis
+                    // reclassification. Loud-fail rather than silently dropping
+                    // the terminator (which would emit an empty handler body).
+                    if (!term->inputs.empty()
+                        && term->inputs[0].kind == ghidra::Varnode::VARNODE_CONSTANT
+                        && term->inputs[0].value
+                        && *term->inputs[0].value >= 0xFFFFFFE0U)
+                    {
+                        LOG(ERROR)
+                            << "BRANCHIND target " << *term->inputs[0].value
+                            << " is an un-reclassified ARM EXC_RETURN value; "
+                            << "InterruptAnalysis should have rewritten this "
+                            << "exception return. key: " << term->key << "\n";
+                    }
                 }
 
             } else if (term->mnemonic == M::OP_RETURN

@@ -1,0 +1,40 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -print-tu -output %t 2> %t.err
+// RUN: %file-check -check-prefix=ERR %s --input-file %t.err
+// RUN: %file-check -check-prefix=COUT %s --input-file %t.c
+
+// Negative: a BRANCHIND whose target is a constant in the ARM EXC_RETURN range
+// (0xFFFFFFF9) that was NOT reclassified by InterruptAnalysis. The lifter must
+// loud-fail rather than silently drop the terminator or emit a goto to the
+// unmapped magic address.
+
+// ERR: un-reclassified ARM EXC_RETURN value
+
+// COUT-NOT: goto
+// COUT-NOT: 4294967289
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000000": {
+      "name": "bad_handler", "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": [] },
+      "basic_blocks": {
+        "ram:20000000:entry": { "operations": { "e_br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" } }, "ordered_operations": ["e_br"] },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "bi": { "mnemonic": "BRANCHIND", "inputs": [ { "type": "type_uint", "kind": "constant", "value": 4294967289 } ] }
+          },
+          "ordered_operations": ["bi"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_uint": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

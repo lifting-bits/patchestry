@@ -33,6 +33,46 @@ namespace patchestry::ast {
 
     namespace {
 
+        // Map the serialized interrupt_kind string to a Clang ARMInterruptAttr
+        // kind and attach it. "" / unset -> Generic (M-profile, prints as
+        // __attribute__((interrupt))); "IRQ"/"FIQ"/"SWI"/"ABORT"/"UNDEF" -> the
+        // matching classic A/R-profile kind (prints as
+        // __attribute__((interrupt("IRQ"))) etc.). An unrecognized non-empty
+        // string is a serializer contract violation -> loud warning, Generic.
+        // The attribute is only recompile-meaningful on an ARM target triple;
+        // it is attached regardless (documents intent) and the round-trip path
+        // regenerates the exception entry/exit from it.
+        void attach_interrupt_attribute(
+            clang::ASTContext &ctx, clang::FunctionDecl *func_decl,
+            const std::optional< std::string > &interrupt_kind
+        ) {
+            using IT  = clang::ARMInterruptAttr::InterruptType;
+            IT kind   = IT::Generic;
+            if (interrupt_kind && !interrupt_kind->empty()) {
+                const auto &k = *interrupt_kind;
+                if (k == "IRQ") {
+                    kind = IT::IRQ;
+                } else if (k == "FIQ") {
+                    kind = IT::FIQ;
+                } else if (k == "SWI") {
+                    kind = IT::SWI;
+                } else if (k == "ABORT") {
+                    kind = IT::ABORT;
+                } else if (k == "UNDEF") {
+                    kind = IT::UNDEF;
+                } else {
+                    LOG(WARNING) << "Unknown interrupt_kind '" << k
+                                 << "'; defaulting to Generic for function "
+                                 << func_decl->getNameAsString() << "\n";
+                }
+            }
+            if (auto *attr =
+                    clang::ARMInterruptAttr::Create(ctx, kind, func_decl->getSourceRange()))
+            {
+                func_decl->addAttr(attr);
+            }
+        }
+
         // Collect OP_DECLARE_PARAMETER operations from the function's
         // entry block.  Returns empty if entry is missing or malformed.
         std::vector< std::shared_ptr< Operation > > getParameters(const Function &function) {
@@ -222,6 +262,32 @@ namespace patchestry::ast {
             {
                 func_decl->addAttr(nr_attr);
             }
+        }
+
+        // Interrupt/exception handlers take the hardware-stacked frame, not C
+        // arguments, and return via an exception-return a recompiler must
+        // regenerate. Force a void(void) prototype (dropping any phantom r0-r3
+        // params Ghidra inferred) and attach the interrupt attribute, then
+        // return before parameter synthesis. A non-void/parametered prototype
+        // here means upstream detection didn't normalize the ISR -- override
+        // loudly rather than emit phantom parameters.
+        if (function.get().is_interrupt) {
+            const auto *ft  = fn_type->getAs< clang::FunctionType >();
+            const auto *fpt = fn_type->getAs< clang::FunctionProtoType >();
+            if ((ft != nullptr && !ft->getReturnType()->isVoidType())
+                || (fpt != nullptr && fpt->getNumParams() > 0))
+            {
+                LOG(WARNING) << "ISR '" << c_name
+                             << "' had a non-void/parametered prototype; "
+                             << "overriding to void(void).\n";
+            }
+            clang::FunctionProtoType::ExtProtoInfo epi;
+            epi.ExceptionSpec.Type = clang::EST_None;
+            auto void_void = ctx.getFunctionType(ctx.VoidTy, {}, epi);
+            func_decl->setType(void_void);
+            func_decl->setParams({});
+            attach_interrupt_attribute(ctx, func_decl, function.get().interrupt_kind);
+            return func_decl;
         }
 
         auto parameters     = getParameters(function);
