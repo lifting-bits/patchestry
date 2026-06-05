@@ -324,13 +324,40 @@ namespace patchestry::ast {
                 return {};
             }
 
-            // Determine result type from output
+            // Determine result type. Ghidra serializes a `local` volatile_read
+            // output without an inline type (the type lives on the operation),
+            // so the output varnode resolves to a null type; fall back to
+            // op.type, then a sane default. Never leave result_type null --
+            // getVolatileType(null) below would abort.
             clang::QualType result_type = ctx.IntTy;
-            if (op.output) { result_type = b.get_varnode_type(ctx, *op.output); }
+            clang::QualType from_output;
+            if (op.output) { from_output = b.get_varnode_type(ctx, *op.output); }
+            if (!from_output.isNull()) {
+                result_type = from_output;
+            } else if (op.type) {
+                auto t = b.type_builder().GetSerializedType(*op.type);
+                if (!t.isNull()) { result_type = t; }
+            }
 
             // Cast to volatile pointer and dereference: *(volatile T*)addr
             auto vol_ptr = ctx.getPointerType(ctx.getVolatileType(result_type));
-            auto *cast   = b.make_cast(ctx, addr, vol_ptr, op_loc);
+            // Force an explicit C-style cast (not make_cast): for a PRValue
+            // address — e.g. a constant MMIO register address 0x40020000 —
+            // make_cast emits an *implicit* cast, which the C pretty-printer
+            // renders invisibly, dropping the `volatile` qualifier from the
+            // emitted source even though CIR/LLVM retain it. An explicit cast
+            // keeps `(volatile T *)` visible so recompiled patch output cannot
+            // silently lose volatile on peripheral accesses.
+            // A `global` (or other lvalue) operand is the datum itself, not a
+            // pointer to it (Ghidra serializes a recovered data symbol, e.g.
+            // DAT_xxxx). Take its address so the volatile cast targets the
+            // location: *(volatile T *)&DAT_xxxx. A pointer operand (constant
+            // MMIO address / computed pointer) is used directly.
+            if (addr != nullptr && !addr->getType()->isPointerType()) {
+                auto addr_of = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_AddrOf, addr);
+                if (!addr_of.isInvalid()) { addr = addr_of.getAs< clang::Expr >(); }
+            }
+            auto *cast   = b.make_explicit_cast(ctx, addr, vol_ptr, op_loc);
             auto deref   = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, cast);
 
             if (deref.isInvalid()) {
@@ -342,8 +369,29 @@ namespace patchestry::ast {
             // If no output, return the deref expression directly
             if (!op.output) { return { deref.getAs< clang::Stmt >(), true }; }
 
-            // Assign result to output
-            auto *out = clang::dyn_cast< clang::Expr >(b.create_varnode(ctx, fn, *op.output));
+            // When the output is the value this op itself defines (a local with
+            // no separate declaration whose `operation` points back at this op,
+            // as Ghidra emits for a volatile_read feeding a return), return the
+            // read as a mergeable value so consumers resolve it from the op
+            // cache. Resolving it as an assignment target would recurse through
+            // create_varnode trying to re-materialize this same op (stack
+            // overflow).
+            if (op.output->operation && *op.output->operation == op.key) {
+                return { deref.getAs< clang::Stmt >(), true };
+            }
+
+            // Assign result to output. If the output varnode can't be resolved
+            // to an lvalue (e.g. a degenerate self-referential local), loud-fail
+            // and emit just the volatile read rather than dereferencing a null
+            // assignment target.
+            auto *out = clang::dyn_cast_or_null< clang::Expr >(
+                b.create_varnode(ctx, fn, *op.output));
+            if (out == nullptr) {
+                LOG(ERROR) << "volatile_read output could not be resolved to an "
+                              "lvalue; emitting the read without assignment. key: "
+                           << op.key << "\n";
+                return { deref.getAs< clang::Stmt >(), true };
+            }
             return { b.create_assign_operation(ctx, deref.getAs< clang::Expr >(), out, op_loc),
                      false };
         }
@@ -374,7 +422,23 @@ namespace patchestry::ast {
 
             // Cast to volatile pointer: (volatile T*)addr
             auto vol_ptr = ctx.getPointerType(ctx.getVolatileType(val->getType()));
-            auto *cast   = b.make_cast(ctx, addr, vol_ptr, op_loc);
+            // Force an explicit C-style cast (not make_cast): for a PRValue
+            // address — e.g. a constant MMIO register address 0x40020000 —
+            // make_cast emits an *implicit* cast, which the C pretty-printer
+            // renders invisibly, dropping the `volatile` qualifier from the
+            // emitted source even though CIR/LLVM retain it. An explicit cast
+            // keeps `(volatile T *)` visible so recompiled patch output cannot
+            // silently lose volatile on peripheral accesses.
+            // A `global` (or other lvalue) operand is the datum itself, not a
+            // pointer to it (Ghidra serializes a recovered data symbol, e.g.
+            // DAT_xxxx). Take its address so the volatile cast targets the
+            // location: *(volatile T *)&DAT_xxxx. A pointer operand (constant
+            // MMIO address / computed pointer) is used directly.
+            if (addr != nullptr && !addr->getType()->isPointerType()) {
+                auto addr_of = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_AddrOf, addr);
+                if (!addr_of.isInvalid()) { addr = addr_of.getAs< clang::Expr >(); }
+            }
+            auto *cast   = b.make_explicit_cast(ctx, addr, vol_ptr, op_loc);
 
             // Dereference and assign: *(volatile T*)addr = val
             auto deref = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, cast);

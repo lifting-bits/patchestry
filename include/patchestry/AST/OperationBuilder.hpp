@@ -195,6 +195,20 @@ namespace patchestry::ast {
             clang::SourceLocation loc
         );
 
+        // Public so intrinsic handlers can force a *visible* C-style cast
+        // (e.g. the volatile-pointer cast for MMIO) regardless of operand
+        // value category; make_cast would otherwise emit an implicit cast
+        // that the pretty-printer drops.
+        clang::Expr *make_explicit_cast(
+            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+            clang::SourceLocation loc
+        );
+
+        // Public so intrinsic handlers can resolve a serialized type key
+        // (e.g. the operation-level type when an output varnode carries no
+        // inline type, as Ghidra emits for `local` volatile_read outputs).
+        TypeBuilder &type_builder(void) { return builder->type_builder.get(); }
+
         clang::Stmt *create_assign_operation(
             clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
             clang::SourceLocation loc = clang::SourceLocation()
@@ -248,11 +262,6 @@ namespace patchestry::ast {
         clang::Stmt *create_array_assignment_operation(
             clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
             clang::SourceLocation loc = clang::SourceLocation()
-        );
-
-        clang::Expr *make_explicit_cast(
-            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
-            clang::SourceLocation loc
         );
 
         clang::Expr *make_implicit_cast(
@@ -337,8 +346,6 @@ namespace patchestry::ast {
 
         std::optional< clang::QualType >
         lookup_op_type(const Operation &op);
-
-        TypeBuilder &type_builder(void) { return builder->type_builder.get(); }
 
         FunctionBuilder &function_builder(void) { return *builder; }
 

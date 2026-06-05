@@ -4836,6 +4836,80 @@ public class PcodeSerializer {
 			writer.endArray();
 		}
 
+		// Serialize a decompiler read_volatile/write_volatile CALLOTHER.
+		//
+		// Layout: input[0]=userop index, input[1]=the access *location* (a
+		// direct memory-space varnode, e.g. an MMIO register), and for writes
+		// input[2]=the stored value. The generic intrinsic path serializes the
+		// location via serializeInput, which renders a direct memory varnode as
+		// kind:"unknown" -- leaving the C++ volatile handler without a usable
+		// address, so it falls back to an opaque call and the access silently
+		// loses its `volatile` qualifier (no `volatile` in CIR/LLVM). Emit the
+		// location as a typed pointer constant (mirroring serializeLoadStoreAddress)
+		// that handle_volatile_read/write can cast to `volatile T*` and deref.
+		void serializeVolatileOp(PcodeOp pcodeOp) throws Exception {
+			serializeOutput(pcodeOp);
+
+			writer.name("target").beginObject();
+			writer.name("kind").value("intrinsic");
+			writer.name("function").value(intrinsicLabel(pcodeOp));
+			writer.name("is_variadic").value(true);
+			writer.name("is_noreturn").value(false);
+			writer.endObject();
+
+			boolean isWrite =
+				(int) pcodeOp.getInput(0).getOffset() == BUILTIN_VOLATILE_WRITE;
+
+			// Pointee type: the stored-value type for writes, the result type
+			// for reads. Used to give the address a `T *` type so the handler
+			// derefs at the right width.
+			DataType accessType = null;
+			DataTypeManager dtm = currentProgram.getDataTypeManager();
+			if (isWrite && pcodeOp.getNumInputs() > 2) {
+				HighVariable vh = variableOf(pcodeOp.getInput(2).getHigh());
+				if (vh != null) { accessType = vh.getDataType(); }
+			} else if (pcodeOp.getOutput() != null) {
+				HighVariable oh = variableOf(pcodeOp.getOutput().getHigh());
+				if (oh != null) { accessType = oh.getDataType(); }
+			}
+
+			writer.name("inputs").beginArray();
+			Varnode addr = pcodeOp.getNumInputs() > 1 ? pcodeOp.getInput(1) : null;
+			if (addr != null && addr.isAddress()) {
+				Address a = addr.getAddress();
+				// Prefer the recovered data symbol (e.g. DAT_xxxx / a named
+				// global) so the access ties to the program's data object --
+				// mirrors serializeLoadStoreAddress. The C++ handler takes the
+				// address-of this lvalue before the volatile cast.
+				HighVariable globalVar = seenGlobalsMap.get(a);
+				if (globalVar != null) {
+					writer.beginObject();
+					writer.name("type").value(label(globalVar.getDataType()));
+					writer.name("kind").value("global");
+					writer.name("global").value(label(a));
+					writer.endObject();
+				} else {
+					// No recovered data object (raw MMIO): emit (T *)address.
+					writer.beginObject();
+					if (accessType != null) {
+						writer.name("type").value(label(dtm.getPointer(accessType)));
+					} else {
+						writer.name("size").value(addr.getSize());
+					}
+					writer.name("kind").value("constant");
+					writer.name("value").value(a.getOffset());
+					writer.endObject();
+				}
+			} else if (addr != null) {
+				// Already a pointer value (register / temporary / computed).
+				serializeInput(pcodeOp, addr);
+			}
+			if (isWrite && pcodeOp.getNumInputs() > 2) {
+				serializeInput(pcodeOp, pcodeOp.getInput(2));
+			}
+			writer.endArray();
+		}
+
 		// Resolve the literal that a BUILTIN_STRINGDATA pcode loads.
 		// Four fallbacks, in order: refs-from, operand refs, raw read at
 		// the input varnode's constant address, defined-string index.
@@ -5018,6 +5092,10 @@ public class PcodeSerializer {
 				break;
 			case ADDRESS_OF:
 				serializeAddressOfOp(pcodeOp);
+				break;
+			case BUILTIN_VOLATILE_READ:
+			case BUILTIN_VOLATILE_WRITE:
+				serializeVolatileOp(pcodeOp);
 				break;
 			default:
 				serializeIntrinsicCallOp(pcodeOp);
