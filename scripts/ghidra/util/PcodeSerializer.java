@@ -199,6 +199,12 @@ public class PcodeSerializer {
 		public static final int BUILTIN_MEMCPY = 0x10000003;
 		public static final int BUILTIN_STRNCPY = 0x10000004;
 		public static final int BUILTIN_WCSNCPY = 0x10000005;
+		// Synthetic exception-return intrinsics injected from the
+		// InterruptAnalysis EXC_RETURN property map. Placed in the builtin
+		// range (>= BUILTIN_STRINGDATA) so they route through the generic
+		// intrinsic serialization path rather than the synthetic special-case.
+		public static final int BUILTIN_EXCEPTION_RETURN = 0x10000006;
+		public static final int BUILTIN_EXCEPTION_RETURN_CPSR = 0x10000007;
 
 		protected Program currentProgram;
 
@@ -327,6 +333,11 @@ public class PcodeSerializer {
 		// string preserves overlay/EXTERNAL/harvard spaces.
 		private ghidra.program.model.util.StringPropertyMap tailCallSiteMap;
 		private boolean tailCallSiteMapInitialized = false;
+
+		// InterruptAnalysis exception-return sites: return-instruction address ->
+		// "form|value". Lazily loaded; null when absent (non-firmware targets).
+		private ghidra.program.model.util.StringPropertyMap excReturnSiteMap;
+		private boolean excReturnSiteMapInitialized = false;
 
 		// Mirrors --[no-]repair-function-boundaries: suppresses TAIL_CALL
 		// rewrites and boundary_repairs even if prior state survives.
@@ -1228,6 +1239,8 @@ public class PcodeSerializer {
 				case BUILTIN_MEMCPY: return "builtin_memcpy";
 				case BUILTIN_STRNCPY: return "builtin_strncpy";
 				case BUILTIN_WCSNCPY: return "builtin_wcsncpy";
+				case BUILTIN_EXCEPTION_RETURN: return "exception_return";
+				case BUILTIN_EXCEPTION_RETURN_CPSR: return "exception_return_cpsr";
 			}
 
 			return null;  // Unknown userop
@@ -2421,6 +2434,80 @@ public class PcodeSerializer {
 				prefixOperationsMap.put(pcodeOp, ops);
 			}
 			return ops;
+		}
+
+		// Lazily resolve the InterruptAnalysis exception-return property map.
+		private ghidra.program.model.util.StringPropertyMap excReturnSiteMap() {
+			if (!excReturnSiteMapInitialized) {
+				ghidra.program.model.util.PropertyMapManager pmm =
+					currentProgram.getUsrPropertyManager();
+				excReturnSiteMap = pmm == null ? null
+					: pmm.getStringPropertyMap(
+						util.firmware.InterruptAnalysis.EXC_RETURN_PROPMAP);
+				excReturnSiteMapInitialized = true;
+			}
+			return excReturnSiteMap;
+		}
+
+		// Build a synthetic, void-returning CALLOTHER for an exception return.
+		// `value` is the M-profile EXC_RETURN magic (carried as a constant
+		// input) or null for the classic CPSR-restoring form.
+		private PcodeOp buildExceptionReturnOp(int useropIndex, Long value) throws Exception {
+			Varnode[] inputs = new Varnode[value == null ? 1 : 2];
+			inputs[0] = new Varnode(constantSpace.getAddress(useropIndex), 4);
+			if (value != null) {
+				inputs[1] = new Varnode(
+					constantSpace.getAddress(value.longValue() & 0xFFFFFFFFL), 4);
+			}
+			SequenceNumber seq = new SequenceNumber(nextUniqueAddress(), nextSeqNum++);
+			return new PcodeOp(seq, PcodeOp.CALLOTHER, inputs, null);
+		}
+
+		// For each RETURN terminator that InterruptAnalysis flagged as a
+		// non-standard exception return (explicit EXC_RETURN magic on M-profile,
+		// or a CPSR/SPSR-restoring return on A/R), inject a synthetic
+		// exception_return CALLOTHER as a prefix so the side effect is preserved
+		// rather than collapsed to a plain return. Inert unless the property map
+		// has entries (firmware ARM targets only).
+		void injectExceptionReturns() throws Exception {
+			ghidra.program.model.util.StringPropertyMap map = excReturnSiteMap();
+			if (map == null || currentFunction == null) {
+				return;
+			}
+			for (PcodeBlockBasic block : currentFunction.getBasicBlocks()) {
+				Iterator<PcodeOp> it = block.getIterator();
+				while (it.hasNext()) {
+					PcodeOp op = it.next();
+					if (op.getOpcode() != PcodeOp.RETURN) {
+						continue;
+					}
+					Address site = op.getSeqnum().getTarget();
+					if (site == null || !map.hasProperty(site)) {
+						continue;
+					}
+					String encoded = map.getString(site);
+					String form = encoded;
+					Long value = null;
+					int bar = encoded.indexOf('|');
+					if (bar >= 0) {
+						form = encoded.substring(0, bar);
+						String v = encoded.substring(bar + 1);
+						if (!v.isEmpty()) {
+							try {
+								value = Long.valueOf(Long.parseLong(v));
+							} catch (NumberFormatException e) {
+								value = null;
+							}
+						}
+					}
+					int idx = "exception_return_cpsr".equals(form)
+						? BUILTIN_EXCEPTION_RETURN_CPSR : BUILTIN_EXCEPTION_RETURN;
+					PcodeOp synth = buildExceptionReturnOp(idx, value);
+					getOrCreatePrefixOperations(op).add(synth);
+					// Register so serializeIntrinsics emits its declaration.
+					callotherUsePcodeOps.add(synth);
+				}
+			}
 		}
 
 		// Try to fixup direct stack pointer references in `op`.
@@ -5286,6 +5373,36 @@ public class PcodeSerializer {
 			writer.name("display_name").value(displayName);
 			writer.name("is_intrinsic").value(false);
 
+			// Interrupt/exception handler metadata, set by InterruptAnalysis via
+			// the "ISR" function tag and a kind property map. Drives the
+			// void(void) prototype + interrupt attribute on the C++ side. Tags
+			// may be auto-applied (ISR_AUTO companion) or added by an analyst;
+			// either way the "ISR" tag marks the function.
+			boolean isInterrupt = false;
+			for (ghidra.program.model.listing.FunctionTag tag
+					: functionToSerialize.getTags()) {
+				if (util.firmware.InterruptAnalysis.ISR_TAG.equals(tag.getName())) {
+					isInterrupt = true;
+					break;
+				}
+			}
+			if (isInterrupt) {
+				writer.name("is_interrupt").value(true);
+				String interruptKind = "";
+				ghidra.program.model.util.PropertyMapManager pmm =
+					currentProgram.getUsrPropertyManager();
+				if (pmm != null) {
+					ghidra.program.model.util.StringPropertyMap kindMap =
+						pmm.getStringPropertyMap(
+							util.firmware.InterruptAnalysis.KIND_PROPMAP);
+					Address entry = functionToSerialize.getEntryPoint();
+					if (kindMap != null && kindMap.hasProperty(entry)) {
+						interruptKind = kindMap.getString(entry);
+					}
+				}
+				writer.name("interrupt_kind").value(interruptKind);
+			}
+
 			writer.name("entry_point")
 				.value(functionToSerialize.getEntryPoint().toString(true));
 			serializeAddressRanges(functionToSerialize);
@@ -5338,6 +5455,11 @@ public class PcodeSerializer {
 								new SequenceNumber(jt.getSwitchAddress(), 0), jt);
 						}
 					}
+
+					// Inject exception_return CALLOTHERs ahead of RETURN
+					// terminators flagged by InterruptAnalysis. Must run before
+					// block serialization consumes the prefix-operation map.
+					injectExceptionReturns();
 
 					writer.name("basic_blocks").beginObject();
 					for (PcodeBlockBasic basicBlock : highFunction.getBasicBlocks()) {
