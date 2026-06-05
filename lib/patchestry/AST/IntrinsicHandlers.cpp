@@ -583,12 +583,41 @@ namespace patchestry::ast {
             if (klass == "coproc_storel") { return "__arm_stcl"; }
             // Fall through (caller keeps existing behavior):
             //   - barrier_* : handled by the C11 atomic-fence mapping.
-            //   - coproc_read/write/function : need an ACLE arg reorder
-            //     (coprocessor_moveto(cpn,op1,op2,Rt,CRn,CRm) vs
-            //      __arm_mcr(coproc,op1,Rt,CRn,CRm,op2)); deferred, kept on the
-            //     registered-call path so they are preserved + visible.
+            //   - coproc_read/write/cdp : handled by emit_arm_coproc (operand
+            //     reorder), not here.
             //   - un-named sysreg, trap, mode_switch, query, unknown.
             return std::nullopt;
+        }
+
+        // Coprocessor MCR/MRC/CDP: Ghidra's SLEIGH operand order differs from
+        // ACLE, which puts opc2 last. Reorder the serialized inputs (the userop
+        // index is already stripped) before emitting, reusing create_intrinsic_call
+        // for decl synthesis + output assignment. Single-register forms only;
+        // the *2 (MCRR/MRRC) classes and odd-arity movefromRt variants fall
+        // through (nullopt) rather than emit a wrong-shape ACLE call.
+        //   coprocessor_moveto(cpn,op1,op2,Rt,CRn,CRm)    -> __arm_mcr(cpn,op1,Rt,CRn,CRm,op2)
+        //   coprocessor_movefromRt(cpn,op1,op2,CRn,CRm)   -> __arm_mrc(cpn,op1,CRn,CRm,op2)
+        //   coprocessor_function(cpn,op1,op2,CRd,CRn,CRm) -> __arm_cdp(cpn,op1,CRd,CRn,CRm,op2)
+        std::optional< std::pair< clang::Stmt *, bool > > emit_arm_coproc(
+            OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
+            const ghidra::Operation &op, std::string_view klass
+        ) {
+            const auto &in = op.inputs;
+            ghidra::Operation reordered = op;
+            std::string name;
+            if (klass == "coproc_write" && in.size() == 6) {
+                name             = "__arm_mcr";
+                reordered.inputs = { in[0], in[1], in[3], in[4], in[5], in[2] };
+            } else if (klass == "coproc_read" && in.size() == 5) {
+                name             = "__arm_mrc";
+                reordered.inputs = { in[0], in[1], in[3], in[4], in[2] };
+            } else if (klass == "coproc_cdp" && in.size() == 6) {
+                name             = "__arm_cdp";
+                reordered.inputs = { in[0], in[1], in[3], in[4], in[5], in[2] };
+            } else {
+                return std::nullopt;
+            }
+            return b.create_intrinsic_call(ctx, fn, reordered, name);
         }
 
     } // anonymous namespace
@@ -673,8 +702,12 @@ namespace patchestry::ast {
         if (!op.target || !op.target->intrinsic_class) {
             return std::nullopt;
         }
-        auto canonical =
-            arm_canonical_for(*op.target->intrinsic_class, op.target->system_register);
+        const std::string &klass = *op.target->intrinsic_class;
+        // Coprocessor MCR/MRC/CDP need an operand reorder vs ACLE.
+        if (klass == "coproc_write" || klass == "coproc_read" || klass == "coproc_cdp") {
+            return emit_arm_coproc(b, ctx, fn, op, klass);
+        }
+        auto canonical = arm_canonical_for(klass, op.target->system_register);
         if (!canonical) {
             return std::nullopt;
         }

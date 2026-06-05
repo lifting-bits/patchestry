@@ -15,6 +15,11 @@
 // LL-DAG: call {{.*}}@__arm_ldc(
 // LL-DAG: call {{.*}}@__wfi()
 // LL-DAG: call {{.*}}@__enable_irq()
+// Coprocessor MCR/MRC reorder: Ghidra moveto(cpn,op1,op2,Rt,CRn,CRm) ->
+// ACLE __arm_mcr(cpn,op1,Rt,CRn,CRm,op2). opc1=2,opc2=4 distinct so the swap
+// is visible: opc2(4) lands last, value sits at position 3.
+// LL-DAG: call {{.*}}@__arm_mcr(i32 15, i32 2, i32 {{.*}}, i32 1, i32 3, i32 4)
+// LL-DAG: call i32 {{.*}}@__arm_mrc(i32 15, i32 2, i32 1, i32 3, i32 4)
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",
@@ -34,9 +39,10 @@
           "operations": {
             "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "v", "type": "type_int", "kind": "parameter", "index": 0 },
             "temp0": { "mnemonic": "DECLARE_TEMPORARY", "name": "exc", "kind": "temporary", "type": "type_int", "address": "ram:10000000:0:basic:read_ipsr" },
+            "temp1": { "mnemonic": "DECLARE_TEMPORARY", "name": "cpval", "kind": "temporary", "type": "type_int", "address": "ram:10000000:0:basic:mrc" },
             "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
           },
-          "ordered_operations": ["p0", "temp0", "br"]
+          "ordered_operations": ["p0", "temp0", "temp1", "br"]
         },
         "ram:10000000:0:basic": {
           "operations": {
@@ -82,6 +88,39 @@
                 { "type": "type_int", "size": 4, "kind": "constant", "value": 0 }
               ]
             },
+            "mcr": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic", "function": "coprocessor_moveto",
+                "is_variadic": false, "is_noreturn": false,
+                "intrinsic_class": "coproc_write", "mapped": true
+              },
+              "inputs": [
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 15 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 2 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 4 },
+                { "type": "type_int", "kind": "parameter", "operation": "p0" },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 1 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 3 }
+              ]
+            },
+            "mrc": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_int",
+              "output": { "kind": "temporary", "operation": "temp1", "type": "type_int" },
+              "target": {
+                "kind": "intrinsic", "function": "coprocessor_movefromRt",
+                "is_variadic": false, "is_noreturn": false,
+                "intrinsic_class": "coproc_read", "mapped": true
+              },
+              "inputs": [
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 15 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 2 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 4 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 1 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 3 }
+              ]
+            },
             "wfi": {
               "mnemonic": "CALLOTHER",
               "target": {
@@ -105,7 +144,7 @@
               "inputs": [{ "type": "type_int", "kind": "temporary", "operation": "read_ipsr" }]
             }
           },
-          "ordered_operations": ["cpsid", "set_basepri", "read_ipsr", "ldc", "wfi", "cpsie", "ret"]
+          "ordered_operations": ["cpsid", "set_basepri", "read_ipsr", "ldc", "mcr", "mrc", "wfi", "cpsie", "ret"]
         }
       },
       "entry_block": "ram:10000000:entry"

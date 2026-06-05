@@ -103,15 +103,17 @@ public final class UseropClassifier {
         m.put("coprocessor_loadlong",  new Entry("coproc_loadl",  null));
         m.put("coprocessor_store",     new Entry("coproc_store",  null));
         m.put("coprocessor_storelong", new Entry("coproc_storel", null));
-        // Generic MCR/MRC/CDP: classified, but C++ defers the ACLE arg reorder
-        // (kept on the registered-call path, preserved + visible).
-        m.put("coprocessor_moveto",       new Entry("coproc_write", null));
-        m.put("coprocessor_moveto2",      new Entry("coproc_write", null));
-        m.put("coprocessor_movefromRt",   new Entry("coproc_read",  null));
-        m.put("coprocessor_movefromRt2",  new Entry("coproc_read",  null));
-        m.put("coprocessor_movefrom2",    new Entry("coproc_read",  null));
-        m.put("coprocessor_function",     new Entry("coproc_cdp",   null));
-        m.put("coprocessor_function2",    new Entry("coproc_cdp",   null));
+        // Single-register MCR/MRC/CDP -> ACLE __arm_mcr/__arm_mrc/__arm_cdp
+        // (C++ emit_arm_coproc reorders the operands). The *2 forms are
+        // MCRR/MRRC/CDP2 with a different operand shape; classified distinctly
+        // so they stay on the registered-call path until handled.
+        m.put("coprocessor_moveto",       new Entry("coproc_write",  null));
+        m.put("coprocessor_moveto2",      new Entry("coproc_write2", null));
+        m.put("coprocessor_movefromRt",   new Entry("coproc_read",   null));
+        m.put("coprocessor_movefromRt2",  new Entry("coproc_read2",  null));
+        m.put("coprocessor_movefrom2",    new Entry("coproc_read2",  null));
+        m.put("coprocessor_function",     new Entry("coproc_cdp",    null));
+        m.put("coprocessor_function2",    new Entry("coproc_cdp2",   null));
 
         // Supervisor / trap instructions.
         m.put("software_interrupt", new Entry("trap", null));
