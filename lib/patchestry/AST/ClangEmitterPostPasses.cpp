@@ -6214,7 +6214,7 @@ namespace patchestry::ast {
                         clang::LabelDecl *alt_label  = alt_goto->getLabel();
                         clang::LabelDecl *join_label = join_goto->getLabel();
                         auto alt_ref                 = cur_refs.find(alt_label);
-                        if (alt_ref == refs.end() || alt_ref->second != 1) { return false; }
+                        if (alt_ref == cur_refs.end() || alt_ref->second != 1) { return false; }
 
                         // `refs` is computed once per FoldGotoDiamonds call and
                         // goes stale as this loop folds successive diamonds (a
@@ -6340,7 +6340,7 @@ namespace patchestry::ast {
                 if (!then_goto || !then_goto->getLabel()) { continue; }
                 clang::LabelDecl *then_label = then_goto->getLabel();
                 auto then_ref                = cur_refs.find(then_label);
-                if (then_ref == refs.end() || then_ref->second != 1) { continue; }
+                if (then_ref == cur_refs.end() || then_ref->second != 1) { continue; }
 
                 size_t then_label_idx = body.size();
                 for (size_t j = if_idx + 1; j < body.size(); ++j) {
