@@ -3188,6 +3188,28 @@ namespace patchestry::ast {
         lhs = coerce_record_to_integer(ctx, lhs, op_loc);
         rhs = coerce_record_to_integer(ctx, rhs, op_loc);
 
+        // void*/function-pointer arithmetic is a GCC extension the CIR backend
+        // cannot lower ("Not Yet Implemented: void* or function pointer
+        // arithmetic"), and the failed lowering then dereferences a null value
+        // and crashes.  For additive ops, reinterpret such operands as char*
+        // (byte arithmetic) -- well-defined C the backend accepts.  Mirrors the
+        // void*/func-ptr base handling in create_ptradd.
+        if (kind == clang::BO_Add || kind == clang::BO_Sub) {
+            auto char_ptr_ty = ctx.getPointerType(ctx.CharTy);
+            auto to_byte_ptr = [&](clang::Expr *e) -> clang::Expr * {
+                auto t = e->getType();
+                if (t->isPointerType()
+                    && (t->getPointeeType()->isVoidType()
+                        || t->getPointeeType()->isFunctionType()))
+                {
+                    if (auto *c = make_cast(ctx, e, char_ptr_ty, op_loc)) { return c; }
+                }
+                return e;
+            };
+            lhs = to_byte_ptr(lhs);
+            rhs = to_byte_ptr(rhs);
+        }
+
         auto make_paren_expr = [&](clang::ASTContext &ctx, clang::Expr *expr,
                                    clang::SourceLocation loc) -> clang::Expr * {
             if (auto *uo = clang::dyn_cast< clang::UnaryOperator >(expr); uo) {
