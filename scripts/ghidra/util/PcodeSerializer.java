@@ -856,6 +856,33 @@ public class PcodeSerializer {
 			return surrogate != null ? surrogate : t;
 		}
 
+		// Demote a Composite (struct/union) DataType of exactly `varBytes`
+		// bytes (after peeling TypeDefs) to a same-width scalar surrogate; else
+		// return `t` as-is.  Companion to demoteArrayIfMatching (#250): a
+		// strictly-scalar p-code op (INT_ZEXT, INT_NEGATE, ...) can never yield a
+		// record value, but Ghidra's type propagation occasionally attaches a
+		// single-field wrapper struct (e.g. `struct CRC32 {uint m_state;}`) to
+		// such a varnode.  Left intact it reaches the emitter as `(struct CRC32)x`
+		// and hard-fails Sema ("used type 'struct X' where arithmetic or pointer
+		// type is required").
+		static DataType demoteRecordIfMatching(
+				DataType t, int varBytes, DataTypeManager dtm) {
+			if (t == null) {
+				return t;
+			}
+			DataType base = t;
+			for (int depth = 0;
+				depth < TYPEDEF_PEEL_MAX_DEPTH && base instanceof TypeDef;
+				++depth) {
+				base = ((TypeDef) base).getBaseDataType();
+			}
+			if (!(base instanceof Composite) || t.getLength() != varBytes) {
+				return t;
+			}
+			DataType surrogate = sizedSurrogate(varBytes, dtm);
+			return surrogate != null ? surrogate : t;
+		}
+
 		// 1-byte `undefined`/`DefaultDataType` only — char/uint8 carry user intent.
 		private static boolean isUndefinedAtom(DataType t) {
 			if (t == null) {
@@ -1718,9 +1745,9 @@ public class PcodeSerializer {
 				// COPY output and as scalar when it's a PIECE input.
 				DataType emitted = chooseEmittedType(node, highVariable);
 				if (isScalarPcodeOp(pcodeOp.getOpcode())) {
-					emitted = demoteArrayIfMatching(
-						emitted, node.getSize(),
-						currentProgram.getDataTypeManager());
+					DataTypeManager dtm = currentProgram.getDataTypeManager();
+					emitted = demoteArrayIfMatching(emitted, node.getSize(), dtm);
+					emitted = demoteRecordIfMatching(emitted, node.getSize(), dtm);
 				}
 				writer.name("type").value(label(emitted));
 				writer.name("size").value(node.getSize());
@@ -3370,9 +3397,9 @@ public class PcodeSerializer {
 				// #250: scalar-op output must not carry an Array type.
 				DataType emitted = chooseEmittedType(output, outputHighVariable);
 				if (isScalarPcodeOp(pcodeOp.getOpcode())) {
-					emitted = demoteArrayIfMatching(
-						emitted, output.getSize(),
-						currentProgram.getDataTypeManager());
+					DataTypeManager dtm = currentProgram.getDataTypeManager();
+					emitted = demoteArrayIfMatching(emitted, output.getSize(), dtm);
+					emitted = demoteRecordIfMatching(emitted, output.getSize(), dtm);
 				}
 				writer.name("type").value(label(emitted));
 				writer.name("size").value(output.getSize());

@@ -302,6 +302,14 @@ namespace patchestry::ast {
             unsigned target_bytes = 0
         );
 
+        // Coerce a non-arithmetic INT_ZEXT/INT_SEXT target (e.g. a same-width
+        // wrapper struct Ghidra mis-propagated onto a scalar temp) to a
+        // same-width unsigned integer so the extension is valid C.  Returns the
+        // type unchanged when it is already integer/pointer/enum/bool.
+        clang::QualType integer_target_for_int_ext(
+            clang::ASTContext &ctx, clang::QualType target_type, unsigned op_bytes
+        );
+
         /// Materialize a non-void call result into a temporary variable.
         /// Creates VarDecl + DeclStmt (pushed to pending for hoisting),
         /// assignment (call stays in-place), and returns the appropriate

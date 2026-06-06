@@ -484,6 +484,32 @@ namespace patchestry::ast {
         LOG_FATAL("cast_pointer_to_int: unhandled PtrToIntExtension value");
     }
 
+    // INT_ZEXT / INT_SEXT are inherently integer-producing, but Ghidra's type
+    // propagation occasionally labels the result with a same-width record (e.g.
+    // a single-field wrapper `struct CRC32`).  Casting an enum/int to that
+    // struct hard-fails Sema ("converting 'enum X' to incompatible type 'struct
+    // Y'").  When the declared target is not a usable arithmetic/pointer type,
+    // substitute a same-width unsigned integer so the extension is valid C; the
+    // write side reinterprets back into the record if the output truly needs it.
+    // (The serializer's #250 scalar-op demotion now prevents this at the source;
+    // this keeps already-captured JSON working and is defence-in-depth.)
+    clang::QualType OpBuilder::integer_target_for_int_ext(
+        clang::ASTContext &ctx, clang::QualType target_type, unsigned op_bytes
+    ) {
+        if (target_type.isNull()) {
+            return target_type;
+        }
+        if (target_type->isIntegerType() || target_type->isPointerType()
+            || target_type->isEnumeralType() || target_type->isBooleanType())
+        {
+            return target_type;
+        }
+        unsigned bits = op_bytes ? op_bytes * 8u
+                                 : static_cast< unsigned >(ctx.getTypeSize(target_type));
+        auto widened = ctx.getIntTypeForBitwidth(bits, /*Signed=*/false);
+        return widened.isNull() ? target_type : widened;
+    }
+
     clang::Expr *OpBuilder::narrow_aggregate_to_integer(
         clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc,
         unsigned target_bytes
@@ -2774,6 +2800,7 @@ namespace patchestry::ast {
             return {};
         }
         auto target_type = *target_type_opt;
+        target_type = integer_target_for_int_ext(ctx, target_type, op.output ? op.output->size : 0u);
 
         if (input_expr->getType()->isPointerType()) {
             // PerformImplicitConversion asserts inside clang 22 (SemaExprCXX.cpp:4681)
@@ -2837,6 +2864,7 @@ namespace patchestry::ast {
             return {};
         }
         auto target_type = *target_type_opt;
+        target_type = integer_target_for_int_ext(ctx, target_type, op.output ? op.output->size : 0u);
 
         if (input_expr->getType()->isPointerType()) {
             // Sign-extension over a pointer requires the intptr_t intermediate;
