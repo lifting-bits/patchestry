@@ -11,55 +11,59 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 
-import util.firmware.UseropClassifier.Result;
+import util.firmware.IntrinsicClassifier.Result;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class UseropClassifierTest {
+public class IntrinsicClassifierTest {
+
+    private static Result arm(String name) {
+        return IntrinsicClassifier.classify("ARM", name);
+    }
 
     @Test
     public void interruptMasking() {
-        Result disable = UseropClassifier.classify("disableIRQinterrupts");
+        Result disable = arm("disableIRQinterrupts");
         assertEquals("irq_mask_set", disable.klass);
         assertEquals("PRIMASK", disable.register);
         assertTrue(disable.mapped);
 
-        Result enable = UseropClassifier.classify("enableIRQinterrupts");
+        Result enable = arm("enableIRQinterrupts");
         assertEquals("irq_mask_clear", enable.klass);
         assertEquals("PRIMASK", enable.register);
 
-        Result fault = UseropClassifier.classify("disableFIQinterrupts");
+        Result fault = arm("disableFIQinterrupts");
         assertEquals("irq_mask_set", fault.klass);
         assertEquals("FAULTMASK", fault.register);
     }
 
     @Test
     public void specialRegisters() {
-        Result ipsr = UseropClassifier.classify("getCurrentExceptionNumber");
+        Result ipsr = arm("getCurrentExceptionNumber");
         assertEquals("sysreg_read", ipsr.klass);
         assertEquals("IPSR", ipsr.register);
         assertTrue(ipsr.mapped);
 
-        Result basepri = UseropClassifier.classify("setBasePriority");
+        Result basepri = arm("setBasePriority");
         assertEquals("sysreg_write", basepri.klass);
         assertEquals("BASEPRI", basepri.register);
     }
 
     @Test
     public void hints() {
-        assertEquals("hint_wfi", UseropClassifier.classify("WaitForInterrupt").klass);
-        assertEquals("hint_wfe", UseropClassifier.classify("WaitForEvent").klass);
-        assertEquals("hint_sev", UseropClassifier.classify("SendEvent").klass);
+        assertEquals("hint_wfi", arm("WaitForInterrupt").klass);
+        assertEquals("hint_wfe", arm("WaitForEvent").klass);
+        assertEquals("hint_sev", arm("SendEvent").klass);
     }
 
     @Test
     public void coprocessorDirectAndNamed() {
-        Result ldc = UseropClassifier.classify("coprocessor_load");
+        Result ldc = arm("coprocessor_load");
         assertEquals("coproc_load", ldc.klass);
         assertNull(ldc.register);
         assertTrue(ldc.mapped);
 
         // Named CP15 form resolves the register from the name suffix.
-        Result named = UseropClassifier.classify("coproc_moveto_Control");
+        Result named = arm("coproc_moveto_Control");
         assertEquals("coproc_write", named.klass);
         assertEquals("Control", named.register);
         assertTrue(named.mapped);
@@ -67,18 +71,28 @@ public class UseropClassifierTest {
 
     @Test
     public void barriersClassifiedButLeftToFencePath() {
-        assertEquals("barrier_dmb", UseropClassifier.classify("DataMemoryBarrier").klass);
-        assertEquals("barrier_dsb", UseropClassifier.classify("DataSynchronizationBarrier").klass);
+        assertEquals("barrier_dmb", arm("DataMemoryBarrier").klass);
+        assertEquals("barrier_dsb", arm("DataSynchronizationBarrier").klass);
     }
 
     @Test
     public void unknownAndNullAreUnmapped() {
-        Result neon = UseropClassifier.classify("VectorAbs");
-        assertEquals(UseropClassifier.UNKNOWN, neon.klass);
+        Result neon = arm("VectorAbs");
+        assertEquals(IntrinsicClassifier.UNKNOWN, neon.klass);
         assertFalse(neon.mapped);
 
-        Result nul = UseropClassifier.classify(null);
-        assertEquals(UseropClassifier.UNKNOWN, nul.klass);
+        Result nul = arm(null);
+        assertEquals(IntrinsicClassifier.UNKNOWN, nul.klass);
         assertFalse(nul.mapped);
+    }
+
+    @Test
+    public void archDispatchIsCaseInsensitiveAndScoped() {
+        // Same name resolves under ARM but not under the AArch64 stub or an
+        // unknown processor -- proving per-arch dispatch.
+        assertTrue(IntrinsicClassifier.classify("arm", "disableIRQinterrupts").mapped);
+        assertFalse(IntrinsicClassifier.classify("AARCH64", "disableIRQinterrupts").mapped);
+        assertFalse(IntrinsicClassifier.classify("AARCH64", "SysOp_W").mapped);
+        assertFalse(IntrinsicClassifier.classify("x86", "disableIRQinterrupts").mapped);
     }
 }

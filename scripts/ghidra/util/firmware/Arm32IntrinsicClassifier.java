@@ -11,37 +11,15 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Classifies ARM/AArch64 CALLOTHER userops into an architecture-neutral
- * taxonomy so the C++ AST layer can spell each as a compiler builtin (ACLE) /
- * CMSIS-Core name without re-deriving the vocabulary.
+ * ARM (32-bit) userop vocabulary. Maps Ghidra 12.0.4 ARM SLEIGH
+ * {@code define pcodeop} names (Processors/ARM/data/languages/*.sinc) onto the
+ * shared {@link IntrinsicClassifier} taxonomy.
  *
- * <p>The class is the stable interface between Ghidra (which knows WHAT a
- * userop is) and patchir-decomp (which decides HOW to spell it). Names that
- * carry their identity (the common case) are resolved by a flat map; the named
- * CP15 {@code coproc_movefrom_<X>}/{@code coproc_moveto_<X>} family is resolved
- * by prefix. Anything unrecognized is reported as {@link #UNKNOWN} with
- * {@code mapped == false} so the missing-intrinsic inventory can surface it
- * loudly instead of emitting silently under the raw name.
- *
- * <p>Pure and deterministic: classification depends only on the userop name.
+ * <p>Names that carry their identity (the common case) are resolved by a flat
+ * map; the named CP15 {@code coproc_movefrom_<X>} / {@code coproc_moveto_<X>}
+ * family is resolved by prefix.
  */
-public final class UseropClassifier {
-
-    // Taxonomy class tags (must match the C++ arm_canonical_for switch).
-    public static final String UNKNOWN = "unknown";
-
-    /** Classification result for a single userop. */
-    public static final class Result {
-        public final String klass;     // taxonomy tag, never null ("unknown" when unmapped)
-        public final String register;  // decoded system register, or null
-        public final boolean mapped;   // false when klass == UNKNOWN
-
-        Result(String klass, String register) {
-            this.klass    = klass;
-            this.register = register;
-            this.mapped   = !UNKNOWN.equals(klass);
-        }
-    }
+public final class Arm32IntrinsicClassifier implements ArchIntrinsicClassifier {
 
     private static final class Entry {
         final String klass;
@@ -49,8 +27,6 @@ public final class UseropClassifier {
         Entry(String klass, String register) { this.klass = klass; this.register = register; }
     }
 
-    // Exact-name vocabulary. Source: Ghidra 12.0.4 SLEIGH
-    // Processors/ARM/data/languages/*.sinc `define pcodeop` set.
     private static final Map<String, Entry> NAME_MAP = build();
 
     private static Map<String, Entry> build() {
@@ -98,11 +74,6 @@ public final class UseropClassifier {
         m.put("DataSynchronizationBarrier",        new Entry("barrier_dsb", null));
         m.put("InstructionSynchronizationBarrier", new Entry("barrier_isb", null));
 
-        // Coprocessor LDC/STC -> ACLE __arm_ldc/__arm_stc (verified operand order).
-        m.put("coprocessor_load",      new Entry("coproc_load",   null));
-        m.put("coprocessor_loadlong",  new Entry("coproc_loadl",  null));
-        m.put("coprocessor_store",     new Entry("coproc_store",  null));
-        m.put("coprocessor_storelong", new Entry("coproc_storel", null));
         // Single-register MCR/MRC/CDP -> ACLE __arm_mcr/__arm_mrc/__arm_cdp
         // (C++ emit_arm_coproc reorders the operands). The *2 forms are
         // MCRR/MRRC/CDP2 with a different operand shape; classified distinctly
@@ -114,6 +85,12 @@ public final class UseropClassifier {
         m.put("coprocessor_movefrom2",    new Entry("coproc_read2",  null));
         m.put("coprocessor_function",     new Entry("coproc_cdp",    null));
         m.put("coprocessor_function2",    new Entry("coproc_cdp2",   null));
+
+        // Coprocessor LDC/STC -> ACLE __arm_ldc/__arm_stc (verified operand order).
+        m.put("coprocessor_load",      new Entry("coproc_load",   null));
+        m.put("coprocessor_loadlong",  new Entry("coproc_loadl",  null));
+        m.put("coprocessor_store",     new Entry("coproc_store",  null));
+        m.put("coprocessor_storelong", new Entry("coproc_storel", null));
 
         // Supervisor / trap instructions.
         m.put("software_interrupt", new Entry("trap", null));
@@ -135,31 +112,28 @@ public final class UseropClassifier {
         return m;
     }
 
-    private UseropClassifier() {}
-
-    /**
-     * Classify a userop by name. Returns {@link #UNKNOWN} with
-     * {@code mapped == false} for any name not in the vocabulary.
-     */
-    public static Result classify(String rawName) {
+    @Override
+    public IntrinsicClassifier.Result classify(String rawName) {
         if (rawName == null || rawName.isEmpty()) {
-            return new Result(UNKNOWN, null);
+            return IntrinsicClassifier.unknown();
         }
 
         Entry e = NAME_MAP.get(rawName);
         if (e != null) {
-            return new Result(e.klass, e.register);
+            return IntrinsicClassifier.result(e.klass, e.register);
         }
 
         // Named CP15 system-register accessors: the register is baked into the
-        // name suffix. coproc_moveto_Control -> write SCTLR-ish "Control".
+        // name suffix. coproc_moveto_Control -> write "Control".
         if (rawName.startsWith("coproc_moveto_")) {
-            return new Result("coproc_write", rawName.substring("coproc_moveto_".length()));
+            return IntrinsicClassifier.result(
+                "coproc_write", rawName.substring("coproc_moveto_".length()));
         }
         if (rawName.startsWith("coproc_movefrom_")) {
-            return new Result("coproc_read", rawName.substring("coproc_movefrom_".length()));
+            return IntrinsicClassifier.result(
+                "coproc_read", rawName.substring("coproc_movefrom_".length()));
         }
 
-        return new Result(UNKNOWN, null);
+        return IntrinsicClassifier.unknown();
     }
 }

@@ -2119,12 +2119,14 @@ namespace patchestry::ast {
         const auto &label = *op.target->function;
         auto name         = parse_intrinsic_name(function_builder().program_arch(), label);
 
-        // ARM system userops the Ghidra UseropClassifier tagged with an
-        // `intrinsic_class` map to a CMSIS/ACLE spelling (__disable_irq,
-        // __get_BASEPRI, __arm_ldc, ...). Returns nullopt for classes this
-        // layer does not spell (barriers -> C11 fence below, coproc MCR/MRC
-        // pending reorder, unknown), so they fall through unchanged.
-        if (auto sys = emit_arm_system_intrinsic(*this, ctx, function, op)) {
+        // System userops the Ghidra IntrinsicClassifier tagged with an
+        // `intrinsic_class` map to a compiler intrinsic via the per-architecture
+        // speller selected by program_arch() (ARM -> CMSIS/ACLE: __disable_irq,
+        // __get_BASEPRI, __arm_ldc, ...). Returns nullopt for unhandled classes
+        // / architectures, which then fall through unchanged.
+        if (auto sys = emit_system_intrinsic(
+                *this, ctx, function, op, function_builder().program_arch()))
+        {
             return *sys;
         }
 

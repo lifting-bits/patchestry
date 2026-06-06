@@ -4886,7 +4886,7 @@ public class PcodeSerializer {
 			writer.endArray();
 		}
 		
-		// Emit the UseropClassifier taxonomy on a CALLOTHER target so the C++
+		// Emit the IntrinsicClassifier taxonomy on a CALLOTHER target so the C++
 		// AST layer can spell recognized ARM/AArch64 system userops as ACLE /
 		// CMSIS intrinsics. Only recognized (mapped) ops get the fields; others
 		// are left untagged and flow through the existing name-based dispatch.
@@ -4894,8 +4894,8 @@ public class PcodeSerializer {
 			int index = (int) pcodeOp.getInput(0).getOffset();
 			String name = resolveUseropName(index);
 			if (name == null) { name = unknownUseropName(index); }
-			util.firmware.UseropClassifier.Result r =
-				util.firmware.UseropClassifier.classify(name);
+			util.firmware.IntrinsicClassifier.Result r =
+				util.firmware.IntrinsicClassifier.classify(this.architecture, name);
 			if (!r.mapped) { return; }
 			writer.name("intrinsic_class").value(r.klass);
 			if (r.register != null && !r.register.isEmpty()) {
@@ -5853,8 +5853,8 @@ public class PcodeSerializer {
 				writer.name(label).beginObject();
 				writer.name("name").value(name);
 				writer.name("is_intrinsic").value(true);
-				util.firmware.UseropClassifier.Result rc =
-					util.firmware.UseropClassifier.classify(name);
+				util.firmware.IntrinsicClassifier.Result rc =
+					util.firmware.IntrinsicClassifier.classify(this.architecture, name);
 				if (rc.mapped) {
 					writer.name("intrinsic_class").value(rc.klass);
 					if (rc.register != null && !rc.register.isEmpty()) {
@@ -5908,8 +5908,8 @@ public class PcodeSerializer {
 		private void recordManifestLow(String name, int index) {
 			ManifestEntry e = intrinsicManifest.get(name);
 			if (e == null) {
-				util.firmware.UseropClassifier.Result r =
-					util.firmware.UseropClassifier.classify(name);
+				util.firmware.IntrinsicClassifier.Result r =
+					util.firmware.IntrinsicClassifier.classify(this.architecture, name);
 				e = new ManifestEntry(r.klass, index, r.mapped, "low");
 				intrinsicManifest.put(name, e);
 			}
@@ -5930,9 +5930,9 @@ public class PcodeSerializer {
 					// Synthetic builtins (volatile_read, exception_return,
 					// builtin_memcpy, atomics, ...) are decompiler-injected and
 					// have dedicated C++ handlers, so they are handled even
-					// though the ARM UseropClassifier does not name them.
-					util.firmware.UseropClassifier.Result r =
-						util.firmware.UseropClassifier.classify(name);
+					// though the ARM IntrinsicClassifier does not name them.
+					util.firmware.IntrinsicClassifier.Result r =
+						util.firmware.IntrinsicClassifier.classify(this.architecture, name);
 					String klass  = synthetic ? "builtin" : r.klass;
 					boolean mapped = synthetic ? true : r.mapped;
 					e = new ManifestEntry(klass, index, mapped,

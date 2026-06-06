@@ -575,7 +575,7 @@ namespace patchestry::ast {
             if (klass == "hint_sev") { return "__sev"; }
             if (klass == "hint_yield") { return "__yield"; }
             if (klass == "hint_nop") { return "__nop"; }
-            // (coproc LDC/STC are handled in emit_arm_system_intrinsic, which
+            // (coproc LDC/STC are handled in arm_emit_system_intrinsic, which
             // casts the address arg to a pointer — not via this name map.)
             // Fall through (caller keeps existing behavior):
             //   - barrier_* : handled by the C11 atomic-fence mapping.
@@ -614,6 +614,81 @@ namespace patchestry::ast {
                 return std::nullopt;
             }
             return b.create_intrinsic_call(ctx, fn, reordered, name);
+        }
+
+        // === Per-architecture speller registry =============================
+        //
+        // The taxonomy (intrinsic_class) is architecture-neutral; each arch
+        // plugs in a SpellFn that turns a classified op into a compiler
+        // intrinsic. The speller is selected by the program's processor string
+        // (program_arch() == the JSON `architecture`). To add an architecture:
+        // write a SpellFn and add one registry row.
+        using SpellFn = std::optional< std::pair< clang::Stmt *, bool > > (*)(
+            OpBuilder &, clang::ASTContext &, const ghidra::Function &,
+            const ghidra::Operation &
+        );
+
+        // ARM (32-bit): CMSIS interrupt masking / M-profile special registers,
+        // ACLE hints + coprocessor (MCR/MRC/CDP reorder, LDC/STC pointer cast).
+        // Precondition: op.target->intrinsic_class is set (the dispatcher guards).
+        std::optional< std::pair< clang::Stmt *, bool > > arm_emit_system_intrinsic(
+            OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
+            const ghidra::Operation &op
+        ) {
+            const std::string &klass = *op.target->intrinsic_class;
+            // Coprocessor MCR/MRC/CDP need an operand reorder vs ACLE.
+            if (klass == "coproc_write" || klass == "coproc_read" || klass == "coproc_cdp") {
+                return emit_arm_coproc(b, ctx, fn, op, klass);
+            }
+            // Coprocessor LDC/STC: the address (input 2) is `const void *` in
+            // the ACLE prototype, so cast it to keep the call recompilable.
+            if (klass == "coproc_load" || klass == "coproc_loadl"
+                || klass == "coproc_store" || klass == "coproc_storel")
+            {
+                const std::string ldc_name = (klass == "coproc_load")  ? "__arm_ldc"
+                                           : (klass == "coproc_loadl") ? "__arm_ldcl"
+                                           : (klass == "coproc_store") ? "__arm_stc"
+                                                                       : "__arm_stcl";
+                return b.create_intrinsic_call(ctx, fn, op, ldc_name, /*pointer_arg_index=*/2);
+            }
+            auto canonical = arm_canonical_for(klass, op.target->system_register);
+            if (!canonical) {
+                return std::nullopt;
+            }
+            return b.create_intrinsic_call(ctx, fn, op, *canonical);
+        }
+
+        // AArch64: extension point. Returns nullopt (all classes fall through)
+        // until an AArch64 speller is implemented.
+        std::optional< std::pair< clang::Stmt *, bool > > aarch64_emit_system_intrinsic(
+            OpBuilder &, clang::ASTContext &, const ghidra::Function &,
+            const ghidra::Operation &
+        ) {
+            return std::nullopt;
+        }
+
+        struct ArchSpeller
+        {
+            std::string_view arch; // matches program_arch() (case-insensitive)
+            SpellFn emit;          // classified op -> compiler intrinsic
+            // Reserved for the header-emission follow-up (TU `#include` +
+            // extern suppression); not consumed yet.
+            std::string_view primary_header;
+        };
+
+        constexpr std::array< ArchSpeller, 2 > arch_spellers = { {
+            { "ARM",     &arm_emit_system_intrinsic,     "<arm_acle.h>" },
+            { "AARCH64", &aarch64_emit_system_intrinsic, "<arm_acle.h>" },
+        } };
+
+        const ArchSpeller *get_speller(std::string_view arch) {
+            auto lowered = to_lower_ascii(arch);
+            for (const auto &speller : arch_spellers) {
+                if (to_lower_ascii(speller.arch) == lowered) {
+                    return &speller;
+                }
+            }
+            return nullptr;
         }
 
     } // anonymous namespace
@@ -691,38 +766,22 @@ namespace patchestry::ast {
         return handlers;
     }
 
-    std::optional< std::pair< clang::Stmt *, bool > > emit_arm_system_intrinsic(
+    std::optional< std::pair< clang::Stmt *, bool > > emit_system_intrinsic(
         OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
-        const ghidra::Operation &op
+        const ghidra::Operation &op, std::string_view arch
     ) {
+        // Only classified system userops participate; everything else falls
+        // through to the existing name-based dispatch.
         if (!op.target || !op.target->intrinsic_class) {
             return std::nullopt;
         }
-        const std::string &klass = *op.target->intrinsic_class;
-        // Coprocessor MCR/MRC/CDP need an operand reorder vs ACLE.
-        if (klass == "coproc_write" || klass == "coproc_read" || klass == "coproc_cdp") {
-            return emit_arm_coproc(b, ctx, fn, op, klass);
-        }
-        // Coprocessor LDC/STC: the address (input 2) is `const void *` in the
-        // ACLE prototype, so cast it to keep the emitted call recompilable.
-        if (klass == "coproc_load" || klass == "coproc_loadl"
-            || klass == "coproc_store" || klass == "coproc_storel")
-        {
-            const std::string ldc_name = (klass == "coproc_load")  ? "__arm_ldc"
-                                       : (klass == "coproc_loadl") ? "__arm_ldcl"
-                                       : (klass == "coproc_store") ? "__arm_stc"
-                                                                   : "__arm_stcl";
-            return b.create_intrinsic_call(ctx, fn, op, ldc_name, /*pointer_arg_index=*/2);
-        }
-        auto canonical = arm_canonical_for(klass, op.target->system_register);
-        if (!canonical) {
+        // Select the speller for this program's architecture. Unknown arch (or
+        // an arch whose speller does not cover this class) falls through.
+        const auto *speller = get_speller(arch);
+        if (speller == nullptr) {
             return std::nullopt;
         }
-        // create_intrinsic_call synthesizes the extern decl and wires args from
-        // op.inputs + the output assignment from op.output, so a sysreg read
-        // becomes `out = __get_BASEPRI()`, a write `__set_BASEPRI(v)`, CPS
-        // `__disable_irq()`, and LDC `__arm_ldc(cpn, CRd, addr)`.
-        return b.create_intrinsic_call(ctx, fn, op, *canonical);
+        return speller->emit(b, ctx, fn, op);
     }
 
 } // namespace patchestry::ast
