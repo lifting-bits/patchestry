@@ -49,56 +49,6 @@ namespace patchestry::ast {
 
     namespace {
 
-        // StmtPrinter's integer-literal printer only accepts the standard
-        // signed/unsigned char..int128 builtins (+ wchar); a literal typed
-        // _Bool / char8_t / char16_t / char32_t (or any non-builtin) trips
-        // llvm_unreachable("Unexpected type for integer literal") during
-        // -print-tu.  Build such literals with a printable same-width integer
-        // type instead; callers compare/assign through the usual conversions, so
-        // semantics are unchanged.
-        clang::Expr *make_int_literal_printable(
-            clang::ASTContext &ctx, uint64_t value, clang::QualType operand_type,
-            bool is_signed, clang::SourceLocation loc
-        ) {
-            auto printable = [](clang::QualType t) -> bool {
-                const auto *bt = t->getAs< clang::BuiltinType >();
-                if (bt == nullptr) {
-                    return false;
-                }
-                switch (bt->getKind()) {
-                    case clang::BuiltinType::Char_S:
-                    case clang::BuiltinType::Char_U:
-                    case clang::BuiltinType::SChar:
-                    case clang::BuiltinType::UChar:
-                    case clang::BuiltinType::Short:
-                    case clang::BuiltinType::UShort:
-                    case clang::BuiltinType::Int:
-                    case clang::BuiltinType::UInt:
-                    case clang::BuiltinType::Long:
-                    case clang::BuiltinType::ULong:
-                    case clang::BuiltinType::LongLong:
-                    case clang::BuiltinType::ULongLong:
-                    case clang::BuiltinType::Int128:
-                    case clang::BuiltinType::UInt128:
-                    case clang::BuiltinType::WChar_S:
-                    case clang::BuiltinType::WChar_U:
-                        return true;
-                    default:
-                        return false;
-                }
-            };
-            clang::QualType lit_type = operand_type;
-            if (operand_type.isNull() || !printable(operand_type)) {
-                unsigned w = operand_type.isNull() ? 32U : ctx.getIntWidth(operand_type);
-                auto t     = ctx.getIntTypeForBitwidth(w <= 1U ? 32U : w, is_signed);
-                lit_type   = t.isNull() ? (is_signed ? ctx.IntTy : ctx.UnsignedIntTy) : t;
-            }
-            unsigned lw = ctx.getIntWidth(lit_type);
-            return clang::IntegerLiteral::Create(
-                ctx, llvm::APInt(lw, value, is_signed), lit_type, loc
-            );
-        }
-
         // Simplify *(&expr) → expr.  When PTRADD produces &base[index] and
         // STORE/LOAD dereferences it, this cancels the redundant &/* pair so the
         // output reads base[index] instead of *(&base[index]).
@@ -142,7 +92,7 @@ namespace patchestry::ast {
                 // param_type may be _Bool/enum/char8_t (isIntegerType() is true
                 // for them) — those crash StmtPrinter, so route through the
                 // printable-literal helper.
-                return make_int_literal_printable(
+                return MakeIntLiteralPrintable(
                     ctx, 0, param_type, param_type->isSignedIntegerType(),
                     VirtualLoc(ctx)
                 );
@@ -1290,13 +1240,14 @@ namespace patchestry::ast {
                 disc_type = disc_type->castAs< clang::EnumType >()
                     ->getDecl()->getIntegerType();
             }
-            const auto disc_width = ctx.getIntWidth(disc_type);
 
             auto create_case = [&](const SwitchCase &sc) -> clang::CaseStmt * {
-                auto *case_val = clang::IntegerLiteral::Create(
-                    ctx,
-                    llvm::APInt(disc_width, static_cast< uint64_t >(sc.value), /*isSigned=*/true),
-                    disc_type, loc
+                // disc_type may be _Bool/char32_t (enum is already lowered to
+                // its underlying type above) — route through the printable
+                // helper so the case value never trips StmtPrinter.
+                auto *case_val = MakeIntLiteralPrintable(
+                    ctx, static_cast< uint64_t >(sc.value), disc_type,
+                    /*is_signed=*/true, loc
                 );
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
@@ -1445,7 +1396,6 @@ namespace patchestry::ast {
                 clang::SwitchStmt::Create(ctx, nullptr, nullptr, disc_expr, loc, loc);
 
             std::vector< clang::Stmt * > sw_body;
-            const auto disc_width = ctx.getIntWidth(disc_type);
             for (const auto &block_key : op.successor_blocks) {
                 if (!function_builder().labels_declaration.contains(block_key)) {
                     continue;
@@ -1454,8 +1404,8 @@ namespace patchestry::ast {
                 if (!maybe_addr) {
                     continue;
                 }
-                auto *case_val = clang::IntegerLiteral::Create(
-                    ctx, llvm::APInt(disc_width, *maybe_addr), disc_type, loc
+                auto *case_val = MakeIntLiteralPrintable(
+                    ctx, *maybe_addr, disc_type, /*is_signed=*/false, loc
                 );
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
@@ -2725,7 +2675,7 @@ namespace patchestry::ast {
         // getIntWidth(type).
         unsigned operand_bits = ctx.getIntWidth(expr->getType());
         if (operand_bits != 0 && shift_bits >= operand_bits) {
-            result_expr = make_int_literal_printable(
+            result_expr = MakeIntLiteralPrintable(
                 ctx, 0, expr->getType(), /*is_signed=*/false, op_location
             );
         } else if (shift_bits != 0) {
@@ -3049,7 +2999,7 @@ namespace patchestry::ast {
         assert(!and_result.isInvalid() && "Failed to create and operation");
 
         // scarry = and_result < 0
-        auto *zero = make_int_literal_printable(
+        auto *zero = MakeIntLiteralPrintable(
             ctx, 0, input0->getType(), /*is_signed=*/true, op_loc
         );
         auto scarry = sema().BuildBinOp(
@@ -3119,7 +3069,7 @@ namespace patchestry::ast {
         assert(!and_result.isInvalid() && "Failed to create and operation");
 
         // sborrow = and_result < 0
-        auto *zero = make_int_literal_printable(
+        auto *zero = MakeIntLiteralPrintable(
             ctx, 0, input0->getType(), /*is_signed=*/true, op_loc
         );
         auto sborrow = sema().BuildBinOp(
