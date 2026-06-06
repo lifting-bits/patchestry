@@ -12,7 +12,10 @@
 // LL-DAG: call {{.*}}@__disable_irq()
 // LL-DAG: call {{.*}}@__set_BASEPRI(
 // LL-DAG: call {{.*}}@__get_IPSR()
-// LL-DAG: call {{.*}}@__arm_ldc(
+// LDC address (input 2) is cast to a pointer so __arm_ldc recompiles against
+// <arm_acle.h> (whose 3rd parameter is const void *) instead of failing
+// int->pointer conversion.
+// LL-DAG: call {{.*}}@__arm_ldc(i32 {{.*}}, i32 {{.*}}, ptr
 // LL-DAG: call {{.*}}@__wfi()
 // LL-DAG: call {{.*}}@__enable_irq()
 // Coprocessor MCR/MRC reorder: Ghidra moveto(cpn,op1,op2,Rt,CRn,CRm) ->

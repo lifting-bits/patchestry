@@ -4149,7 +4149,7 @@ namespace patchestry::ast {
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_intrinsic_call(
         clang::ASTContext &ctx, const Function &function, const Operation &op,
-        const std::string &name
+        const std::string &name, std::optional< std::size_t > pointer_arg_index
     ) {
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
@@ -4167,12 +4167,22 @@ namespace patchestry::ast {
 
         // Build arguments from inputs
         std::vector< clang::Expr * > args;
+        std::size_t input_index = 0;
         for (const auto &input : op.inputs) {
             auto *e =
                 AS_EXPR_OR_NULL(create_varnode(ctx, function, input), op.key);
             if (e) {
+                if (pointer_arg_index && *pointer_arg_index == input_index) {
+                    // Force `(const void *)` so a pointer-typed ACLE prototype
+                    // recompiles even when the operand resolves to an integer.
+                    auto void_ptr = ctx.getPointerType(ctx.VoidTy.withConst());
+                    if (auto *casted = make_explicit_cast(ctx, e, void_ptr, op_loc)) {
+                        e = casted;
+                    }
+                }
                 args.push_back(e);
             }
+            ++input_index;
         }
 
         // Build the function prototype from the actual argument types so the

@@ -575,12 +575,8 @@ namespace patchestry::ast {
             if (klass == "hint_sev") { return "__sev"; }
             if (klass == "hint_yield") { return "__yield"; }
             if (klass == "hint_nop") { return "__nop"; }
-            // Coprocessor LDC/STC map 1:1 to ACLE: verified SLEIGH operand order
-            // coprocessor_load(cpn, CRd, addr) == __arm_ldc(coproc, CRd, p).
-            if (klass == "coproc_load") { return "__arm_ldc"; }
-            if (klass == "coproc_loadl") { return "__arm_ldcl"; }
-            if (klass == "coproc_store") { return "__arm_stc"; }
-            if (klass == "coproc_storel") { return "__arm_stcl"; }
+            // (coproc LDC/STC are handled in emit_arm_system_intrinsic, which
+            // casts the address arg to a pointer — not via this name map.)
             // Fall through (caller keeps existing behavior):
             //   - barrier_* : handled by the C11 atomic-fence mapping.
             //   - coproc_read/write/cdp : handled by emit_arm_coproc (operand
@@ -706,6 +702,17 @@ namespace patchestry::ast {
         // Coprocessor MCR/MRC/CDP need an operand reorder vs ACLE.
         if (klass == "coproc_write" || klass == "coproc_read" || klass == "coproc_cdp") {
             return emit_arm_coproc(b, ctx, fn, op, klass);
+        }
+        // Coprocessor LDC/STC: the address (input 2) is `const void *` in the
+        // ACLE prototype, so cast it to keep the emitted call recompilable.
+        if (klass == "coproc_load" || klass == "coproc_loadl"
+            || klass == "coproc_store" || klass == "coproc_storel")
+        {
+            const std::string ldc_name = (klass == "coproc_load")  ? "__arm_ldc"
+                                       : (klass == "coproc_loadl") ? "__arm_ldcl"
+                                       : (klass == "coproc_store") ? "__arm_stc"
+                                                                   : "__arm_stcl";
+            return b.create_intrinsic_call(ctx, fn, op, ldc_name, /*pointer_arg_index=*/2);
         }
         auto canonical = arm_canonical_for(klass, op.target->system_register);
         if (!canonical) {
