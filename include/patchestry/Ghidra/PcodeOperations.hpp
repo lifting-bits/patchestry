@@ -29,6 +29,12 @@ namespace patchestry::ghidra {
 } // namespace patchestry::ghidra
 
 namespace patchestry::ghidra {
+    // ARM EXC_RETURN magic values occupy 0xFFFFFFE0..0xFFFFFFFF; a constant
+    // BRANCHIND target at or above this is an exception return InterruptAnalysis
+    // should have reclassified (downstream emitters loud-fail on it). C++ mirror
+    // of util.firmware.InterruptAnalysis.EXC_RETURN_LOW.
+    inline constexpr std::uint32_t kArmExcReturnLow = 0xFFFFFFE0U;
+
     using TypeMap = std::unordered_map< std::string, std::shared_ptr< VarnodeType > >;
 
     using FunctionMap = std::unordered_map< std::string, Function >;
@@ -261,13 +267,10 @@ namespace patchestry::ghidra {
         std::string entry_point;
         std::vector< AddressRange > address_ranges;
 
-        // Interrupt/exception handler metadata (set by the Ghidra
-        // InterruptAnalysis pass from the `ISR` function tag). When true the
-        // function is emitted with a void(void) prototype and an interrupt
-        // attribute, and its exception-return terminator is honored as a clean
-        // return (or an opaque exception_return intrinsic). `interrupt_kind` is
-        // the Clang ARMInterruptAttr kind string: "" (Generic / M-profile) or
-        // one of "IRQ"/"FIQ"/"SWI"/"ABORT"/"UNDEF" (classic A/R-profile).
+        // Interrupt-handler metadata from the Ghidra InterruptAnalysis pass
+        // (`ISR` tag). When set, the function is emitted void(void) with an
+        // interrupt attribute. interrupt_kind is the ARMInterruptAttr kind: ""
+        // (Generic / M-profile) or IRQ/FIQ/SWI/ABORT/UNDEF (classic A/R).
         bool is_interrupt = false;
         std::optional< std::string > interrupt_kind;
 

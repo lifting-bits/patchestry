@@ -1383,15 +1383,12 @@ namespace patchestry::ast {
             return { switch_stmt, false };
         }
 
-        // Loud-fail guard: a constant branch target in the ARM EXC_RETURN range
-        // (0xFFFFFFE0-0xFFFFFFFF) means an exception return reached codegen
-        // without being reclassified to a RETURN (or rewritten to an
-        // exception_return intrinsic) by the InterruptAnalysis pass. Emitting a
-        // goto to that unmapped address would be junk; refuse loudly instead.
-        // The value is read from the raw constant varnode rather than the
-        // (already pointer-cast) input_expr.
+        // Loud-fail: a constant BRANCHIND target in the ARM EXC_RETURN range is
+        // an exception return InterruptAnalysis should have reclassified. A goto
+        // to that unmapped address would be junk; refuse. Read from the raw
+        // constant varnode, not the (already pointer-cast) input_expr.
         if (op.inputs[0].kind == Varnode::VARNODE_CONSTANT && op.inputs[0].value
-            && *op.inputs[0].value >= 0xFFFFFFE0U)
+            && *op.inputs[0].value >= ghidra::kArmExcReturnLow)
         {
             LOG(ERROR)
                 << "BRANCHIND target " << *op.inputs[0].value

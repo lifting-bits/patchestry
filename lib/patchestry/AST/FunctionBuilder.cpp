@@ -33,15 +33,11 @@ namespace patchestry::ast {
 
     namespace {
 
-        // Map the serialized interrupt_kind string to a Clang ARMInterruptAttr
-        // kind and attach it. "" / unset -> Generic (M-profile, prints as
-        // __attribute__((interrupt))); "IRQ"/"FIQ"/"SWI"/"ABORT"/"UNDEF" -> the
-        // matching classic A/R-profile kind (prints as
-        // __attribute__((interrupt("IRQ"))) etc.). An unrecognized non-empty
-        // string is a serializer contract violation -> loud warning, Generic.
-        // The attribute is only recompile-meaningful on an ARM target triple;
-        // it is attached regardless (documents intent) and the round-trip path
-        // regenerates the exception entry/exit from it.
+        // Attach a Clang ARMInterruptAttr from interrupt_kind: "" / unset ->
+        // Generic (M-profile); "IRQ"/"FIQ"/"SWI"/"ABORT"/"UNDEF" -> the matching
+        // classic A/R kind; anything else is a serializer contract violation
+        // (loud warning, Generic). Attached regardless of target triple to
+        // document intent and drive the round-trip exception entry/exit.
         void attach_interrupt_attribute(
             clang::ASTContext &ctx, clang::FunctionDecl *func_decl,
             const std::optional< std::string > &interrupt_kind
@@ -264,13 +260,11 @@ namespace patchestry::ast {
             }
         }
 
-        // Interrupt/exception handlers take the hardware-stacked frame, not C
-        // arguments, and return via an exception-return a recompiler must
-        // regenerate. Force a void(void) prototype (dropping any phantom r0-r3
-        // params Ghidra inferred) and attach the interrupt attribute, then
-        // return before parameter synthesis. A non-void/parametered prototype
-        // here means upstream detection didn't normalize the ISR -- override
-        // loudly rather than emit phantom parameters.
+        // Interrupt handlers take the hardware-stacked frame, not C arguments.
+        // Force void(void) (dropping any phantom r0-r3 params Ghidra inferred),
+        // attach the interrupt attribute, and return before parameter synthesis.
+        // A non-void/parametered prototype here means upstream didn't normalize
+        // the ISR -- override loudly rather than emit phantom parameters.
         if (function.get().is_interrupt) {
             const auto *ft  = fn_type->getAs< clang::FunctionType >();
             const auto *fpt = fn_type->getAs< clang::FunctionProtoType >();

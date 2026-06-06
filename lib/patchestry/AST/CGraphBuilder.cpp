@@ -378,15 +378,14 @@ namespace patchestry::ast {
                             static_cast<int64_t>(*addr), succ_idx, false});
                     }
                 } else {
-                    // No switch_cases and no successor_blocks. If the indirect
-                    // target is a constant in the ARM EXC_RETURN range, this is
-                    // an exception return that escaped InterruptAnalysis
-                    // reclassification. Loud-fail rather than silently dropping
-                    // the terminator (which would emit an empty handler body).
+                    // Constant BRANCHIND target in the EXC_RETURN range: an
+                    // exception return that escaped InterruptAnalysis. Diagnose
+                    // here (CGraph construction can't drop the terminator); the
+                    // actual goto refusal is in OperationStmt::create_branchind.
                     if (!term->inputs.empty()
                         && term->inputs[0].kind == ghidra::Varnode::VARNODE_CONSTANT
                         && term->inputs[0].value
-                        && *term->inputs[0].value >= 0xFFFFFFE0U)
+                        && *term->inputs[0].value >= ghidra::kArmExcReturnLow)
                     {
                         LOG(ERROR)
                             << "BRANCHIND target " << *term->inputs[0].value

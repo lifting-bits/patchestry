@@ -461,8 +461,18 @@ public final class InterruptAnalysis {
             if (reg == null) {
                 return null;
             }
+            // Bound the backward walk to the function containing `bx`:
+            // getPrevious() follows linear address order, not the CFG, so an
+            // unbounded scan could read into a physically-preceding but
+            // control-flow-unrelated function and pick up an unrelated def.
+            Program program = bx.getProgram();
+            Function fn = program == null ? null
+                : program.getFunctionManager().getFunctionContaining(bx.getAddress());
             Instruction cur = bx.getPrevious();
             for (int steps = 0; cur != null && steps < 16; steps++, cur = cur.getPrevious()) {
+                if (fn != null && !fn.getBody().contains(cur.getAddress())) {
+                    break; // crossed the function boundary — stop scanning
+                }
                 Register dst = cur.getRegister(0);
                 if (dst == null || !dst.getName().equalsIgnoreCase(reg.getName())) {
                     continue;
@@ -533,7 +543,11 @@ public final class InterruptAnalysis {
                 return null;
             }
             String m = instr.getMnemonicString().toLowerCase();
-            if (m.startsWith("b")) {
+            // Unconditional branch to the handler (`B <handler>`). Gate on the
+            // flow type rather than a mnemonic prefix: startsWith("b") would also
+            // match data-processing ops (BIC/BFI) and the BL call, which are not
+            // vector-slot branches.
+            if (instr.getFlowType().isJump()) {
                 Address[] flows = instr.getFlows();
                 if (flows != null && flows.length > 0) {
                     return flows[0];

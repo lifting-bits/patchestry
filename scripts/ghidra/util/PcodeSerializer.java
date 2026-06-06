@@ -199,12 +199,15 @@ public class PcodeSerializer {
 		public static final int BUILTIN_MEMCPY = 0x10000003;
 		public static final int BUILTIN_STRNCPY = 0x10000004;
 		public static final int BUILTIN_WCSNCPY = 0x10000005;
+		// Patchestry-synthesized userops, in their own band clear of Ghidra's
+		// builtin range (0x10000000-0x1FFFFFFF) so a future Ghidra builtin can't
+		// collide. Stays >= BUILTIN_STRINGDATA, so these still route through the
+		// generic intrinsic path, not the synthetic special-case skip.
+		public static final int PATCHESTRY_BUILTIN_BASE = 0x20000000;
 		// Synthetic exception-return intrinsics injected from the
-		// InterruptAnalysis EXC_RETURN property map. Placed in the builtin
-		// range (>= BUILTIN_STRINGDATA) so they route through the generic
-		// intrinsic serialization path rather than the synthetic special-case.
-		public static final int BUILTIN_EXCEPTION_RETURN = 0x10000006;
-		public static final int BUILTIN_EXCEPTION_RETURN_CPSR = 0x10000007;
+		// InterruptAnalysis EXC_RETURN property map.
+		public static final int BUILTIN_EXCEPTION_RETURN = PATCHESTRY_BUILTIN_BASE + 0;
+		public static final int BUILTIN_EXCEPTION_RETURN_CPSR = PATCHESTRY_BUILTIN_BASE + 1;
 
 		protected Program currentProgram;
 
@@ -1231,7 +1234,7 @@ public class PcodeSerializer {
 				case ADDRESS_OF: return "ADDRESS_OF";
 			}
 
-			// Category 3: Ghidra decompiler built-ins (0x10000000+)
+			// Category 3: Ghidra decompiler built-ins (0x10000000 - 0x1FFFFFFF)
 			switch (index) {
 				case BUILTIN_STRINGDATA: return "stringdata";
 				case BUILTIN_VOLATILE_READ: return "volatile_read";
@@ -1239,6 +1242,10 @@ public class PcodeSerializer {
 				case BUILTIN_MEMCPY: return "builtin_memcpy";
 				case BUILTIN_STRNCPY: return "builtin_strncpy";
 				case BUILTIN_WCSNCPY: return "builtin_wcsncpy";
+			}
+
+			// Category 4: Patchestry-synthesized userops (PATCHESTRY_BUILTIN_BASE+)
+			switch (index) {
 				case BUILTIN_EXCEPTION_RETURN: return "exception_return";
 				case BUILTIN_EXCEPTION_RETURN_CPSR: return "exception_return_cpsr";
 			}
@@ -2463,12 +2470,10 @@ public class PcodeSerializer {
 			return new PcodeOp(seq, PcodeOp.CALLOTHER, inputs, null);
 		}
 
-		// For each RETURN terminator that InterruptAnalysis flagged as a
-		// non-standard exception return (explicit EXC_RETURN magic on M-profile,
-		// or a CPSR/SPSR-restoring return on A/R), inject a synthetic
-		// exception_return CALLOTHER as a prefix so the side effect is preserved
-		// rather than collapsed to a plain return. Inert unless the property map
-		// has entries (firmware ARM targets only).
+		// Inject a synthetic exception_return CALLOTHER as a prefix to each
+		// RETURN that InterruptAnalysis flagged as a non-standard exception
+		// return (M-profile EXC_RETURN magic, or A/R CPSR-restoring), so the
+		// side effect survives. Inert unless the propmap has entries.
 		void injectExceptionReturns() throws Exception {
 			ghidra.program.model.util.StringPropertyMap map = excReturnSiteMap();
 			if (map == null || currentFunction == null) {
@@ -4837,16 +4842,12 @@ public class PcodeSerializer {
 		}
 
 		// Serialize a decompiler read_volatile/write_volatile CALLOTHER.
-		//
-		// Layout: input[0]=userop index, input[1]=the access *location* (a
-		// direct memory-space varnode, e.g. an MMIO register), and for writes
-		// input[2]=the stored value. The generic intrinsic path serializes the
-		// location via serializeInput, which renders a direct memory varnode as
-		// kind:"unknown" -- leaving the C++ volatile handler without a usable
-		// address, so it falls back to an opaque call and the access silently
-		// loses its `volatile` qualifier (no `volatile` in CIR/LLVM). Emit the
-		// location as a typed pointer constant (mirroring serializeLoadStoreAddress)
-		// that handle_volatile_read/write can cast to `volatile T*` and deref.
+		// Layout: input[0]=userop index, input[1]=access location (a direct
+		// memory varnode, e.g. an MMIO register), input[2]=stored value (writes).
+		// The generic path renders the location as kind:"unknown", so the C++
+		// handler loses the address and the access silently drops `volatile`.
+		// Emit it as a typed pointer constant (like serializeLoadStoreAddress)
+		// the handler can cast to `volatile T*` and deref.
 		void serializeVolatileOp(PcodeOp pcodeOp) throws Exception {
 			serializeOutput(pcodeOp);
 
@@ -5451,11 +5452,9 @@ public class PcodeSerializer {
 			writer.name("display_name").value(displayName);
 			writer.name("is_intrinsic").value(false);
 
-			// Interrupt/exception handler metadata, set by InterruptAnalysis via
-			// the "ISR" function tag and a kind property map. Drives the
-			// void(void) prototype + interrupt attribute on the C++ side. Tags
-			// may be auto-applied (ISR_AUTO companion) or added by an analyst;
-			// either way the "ISR" tag marks the function.
+			// Interrupt handler metadata from InterruptAnalysis (the "ISR" tag,
+			// auto-applied or analyst-added, plus a kind propmap). Drives the
+			// void(void) prototype + interrupt attribute on the C++ side.
 			boolean isInterrupt = false;
 			for (ghidra.program.model.listing.FunctionTag tag
 					: functionToSerialize.getTags()) {

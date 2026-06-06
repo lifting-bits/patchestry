@@ -195,18 +195,16 @@ namespace patchestry::ast {
             clang::SourceLocation loc
         );
 
-        // Public so intrinsic handlers can force a *visible* C-style cast
-        // (e.g. the volatile-pointer cast for MMIO) regardless of operand
-        // value category; make_cast would otherwise emit an implicit cast
-        // that the pretty-printer drops.
+        // Public for intrinsic handlers: forces a *visible* C-style cast (e.g.
+        // the MMIO volatile-pointer cast) where make_cast would emit an implicit
+        // cast the pretty-printer drops.
         clang::Expr *make_explicit_cast(
             clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
             clang::SourceLocation loc
         );
 
-        // Public so intrinsic handlers can resolve a serialized type key
-        // (e.g. the operation-level type when an output varnode carries no
-        // inline type, as Ghidra emits for `local` volatile_read outputs).
+        // Public for intrinsic handlers: resolves a serialized type key (e.g. an
+        // op-level type when a `local` volatile_read output has no inline type).
         TypeBuilder &type_builder(void) { return builder->type_builder.get(); }
 
         clang::Stmt *create_assign_operation(
