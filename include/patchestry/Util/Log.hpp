@@ -14,10 +14,11 @@
 enum LogLevel { DEBUG, INFO, WARNING, ERROR, FATAL };
 
 namespace patchestry::logging {
-    // Min level a LOG() must meet to emit (glog-style); default suppresses
-    // DEBUG/INFO. Set via --verbose.
+    // Min level a LOG() must meet to emit (glog-style). Default DEBUG keeps the
+    // historical "print everything" behavior for tools that don't opt in;
+    // patchir-decomp raises it to WARNING (INFO off) unless --verbose.
     inline LogLevel &MinLogLevel() {
-        static LogLevel level = WARNING;
+        static LogLevel level = DEBUG;
         return level;
     }
     // Sink for suppressed levels.
