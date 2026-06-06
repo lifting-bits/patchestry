@@ -192,20 +192,27 @@ public class PcodeSerializer {
     	// architecture allowlist above; ON and OFF override it.
     	public enum AnalyticalTierMode { AUTO, ON, OFF }
 
-		// Ghidra decompiler built-in userop indices (from userop.cc)
+		// Ghidra decompiler built-in userop indices (from
+		// Ghidra/Features/Decompiler/src/decompile/cpp/userop.cc). This is the
+		// COMPLETE set Ghidra mints in registerBuiltin() -- 6 contiguous ids,
+		// 0x10000000..0x10000005, unchanged on Ghidra 12.0.4 and HEAD.
 		public static final int BUILTIN_STRINGDATA = 0x10000000;
 		public static final int BUILTIN_VOLATILE_READ = 0x10000001;
 		public static final int BUILTIN_VOLATILE_WRITE = 0x10000002;
 		public static final int BUILTIN_MEMCPY = 0x10000003;
 		public static final int BUILTIN_STRNCPY = 0x10000004;
 		public static final int BUILTIN_WCSNCPY = 0x10000005;
-		// Patchestry-synthesized userops, in their own band clear of Ghidra's
-		// builtin range (0x10000000-0x1FFFFFFF) so a future Ghidra builtin can't
-		// collide. Stays >= BUILTIN_STRINGDATA, so these still route through the
-		// generic intrinsic path, not the synthetic special-case skip.
+		// Highest Ghidra-minted builtin id (inclusive). Anything in the builtin
+		// range above this is either patchestry-synthetic or an unrecognized
+		// future Ghidra builtin (flagged in the manifest, never silently mapped).
+		public static final int GHIDRA_BUILTIN_MAX = BUILTIN_WCSNCPY;
+		// Patchestry-synthetic builtin userops, injected by analysis passes
+		// (here: exception-return, from the InterruptAnalysis EXC_RETURN property
+		// map). Parked well ABOVE Ghidra's builtin range so a future Ghidra
+		// builtin (the next free slot is 0x10000006) cannot collide. Still
+		// >= BUILTIN_STRINGDATA, so they route through the generic intrinsic
+		// serialization path rather than the synthetic special-case.
 		public static final int PATCHESTRY_BUILTIN_BASE = 0x20000000;
-		// Synthetic exception-return intrinsics injected from the
-		// InterruptAnalysis EXC_RETURN property map.
 		public static final int BUILTIN_EXCEPTION_RETURN = PATCHESTRY_BUILTIN_BASE + 0;
 		public static final int BUILTIN_EXCEPTION_RETURN_CPSR = PATCHESTRY_BUILTIN_BASE + 1;
 
@@ -5922,19 +5929,25 @@ public class PcodeSerializer {
 		private void finalizeManifestOrigins() {
 			for (PcodeOp pcodeOp : callotherUsePcodeOps) {
 				int index = (int) pcodeOp.getInput(0).getOffset();
-				String name = resolveUseropName(index);
-				if (name == null) { name = unknownUseropName(index); }
+				String resolved = resolveUseropName(index);
+				boolean known = (resolved != null);
+				String name = known ? resolved : unknownUseropName(index);
 				boolean synthetic = index >= BUILTIN_STRINGDATA;
 				ManifestEntry e = intrinsicManifest.get(name);
 				if (e == null) {
-					// Synthetic builtins (volatile_read, exception_return,
-					// builtin_memcpy, atomics, ...) are decompiler-injected and
-					// have dedicated C++ handlers, so they are handled even
-					// though the ARM IntrinsicClassifier does not name them.
+					// A synthetic/builtin op with a RESOLVED name (a Ghidra
+					// decompiler builtin like volatile_read/builtin_memcpy, or a
+					// patchestry-injected op like exception_return) has a
+					// dedicated C++ handler -> "builtin"/mapped. An UNRESOLVED
+					// index in the synthetic range -- e.g. a future Ghidra
+					// builtin (0x10000006+) we don't yet recognize -- stays
+					// unmapped so the manifest flags it instead of silently
+					// marking it handled.
 					util.firmware.IntrinsicClassifier.Result r =
 						util.firmware.IntrinsicClassifier.classify(this.architecture, name);
-					String klass  = synthetic ? "builtin" : r.klass;
-					boolean mapped = synthetic ? true : r.mapped;
+					boolean builtin = synthetic && known;
+					String klass  = builtin ? "builtin" : r.klass;
+					boolean mapped = builtin ? true : r.mapped;
 					e = new ManifestEntry(klass, index, mapped,
 						synthetic ? "synthetic" : "high");
 					e.count = 1;
