@@ -49,6 +49,56 @@ namespace patchestry::ast {
 
     namespace {
 
+        // StmtPrinter's integer-literal printer only accepts the standard
+        // signed/unsigned char..int128 builtins (+ wchar); a literal typed
+        // _Bool / char8_t / char16_t / char32_t (or any non-builtin) trips
+        // llvm_unreachable("Unexpected type for integer literal") during
+        // -print-tu.  Build such literals with a printable same-width integer
+        // type instead; callers compare/assign through the usual conversions, so
+        // semantics are unchanged.
+        clang::Expr *make_int_literal_printable(
+            clang::ASTContext &ctx, uint64_t value, clang::QualType operand_type,
+            bool is_signed, clang::SourceLocation loc
+        ) {
+            auto printable = [](clang::QualType t) -> bool {
+                const auto *bt = t->getAs< clang::BuiltinType >();
+                if (bt == nullptr) {
+                    return false;
+                }
+                switch (bt->getKind()) {
+                    case clang::BuiltinType::Char_S:
+                    case clang::BuiltinType::Char_U:
+                    case clang::BuiltinType::SChar:
+                    case clang::BuiltinType::UChar:
+                    case clang::BuiltinType::Short:
+                    case clang::BuiltinType::UShort:
+                    case clang::BuiltinType::Int:
+                    case clang::BuiltinType::UInt:
+                    case clang::BuiltinType::Long:
+                    case clang::BuiltinType::ULong:
+                    case clang::BuiltinType::LongLong:
+                    case clang::BuiltinType::ULongLong:
+                    case clang::BuiltinType::Int128:
+                    case clang::BuiltinType::UInt128:
+                    case clang::BuiltinType::WChar_S:
+                    case clang::BuiltinType::WChar_U:
+                        return true;
+                    default:
+                        return false;
+                }
+            };
+            clang::QualType lit_type = operand_type;
+            if (operand_type.isNull() || !printable(operand_type)) {
+                unsigned w = operand_type.isNull() ? 32U : ctx.getIntWidth(operand_type);
+                auto t     = ctx.getIntTypeForBitwidth(w <= 1U ? 32U : w, is_signed);
+                lit_type   = t.isNull() ? (is_signed ? ctx.IntTy : ctx.UnsignedIntTy) : t;
+            }
+            unsigned lw = ctx.getIntWidth(lit_type);
+            return clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(lw, value, is_signed), lit_type, loc
+            );
+        }
+
         // Simplify *(&expr) → expr.  When PTRADD produces &base[index] and
         // STORE/LOAD dereferences it, this cancels the redundant &/* pair so the
         // output reads base[index] instead of *(&base[index]).
@@ -2672,8 +2722,8 @@ namespace patchestry::ast {
         // getIntWidth(type).
         unsigned operand_bits = ctx.getIntWidth(expr->getType());
         if (operand_bits != 0 && shift_bits >= operand_bits) {
-            result_expr = clang::IntegerLiteral::Create(
-                ctx, llvm::APInt(operand_bits, 0), expr->getType(), op_location
+            result_expr = make_int_literal_printable(
+                ctx, 0, expr->getType(), /*is_signed=*/false, op_location
             );
         } else if (shift_bits != 0) {
             // Apply right-shift only when byte_offset > 0 (skip ">> 0").
@@ -2996,9 +3046,8 @@ namespace patchestry::ast {
         assert(!and_result.isInvalid() && "Failed to create and operation");
 
         // scarry = and_result < 0
-        auto *zero = clang::IntegerLiteral::Create(
-            ctx, llvm::APInt(ctx.getIntWidth(input0->getType()), 0, true), input0->getType(),
-            op_loc
+        auto *zero = make_int_literal_printable(
+            ctx, 0, input0->getType(), /*is_signed=*/true, op_loc
         );
         auto scarry = sema().BuildBinOp(
             sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
@@ -3067,9 +3116,8 @@ namespace patchestry::ast {
         assert(!and_result.isInvalid() && "Failed to create and operation");
 
         // sborrow = and_result < 0
-        auto *zero = clang::IntegerLiteral::Create(
-            ctx, llvm::APInt(ctx.getIntWidth(input0->getType()), 0, true), input0->getType(),
-            op_loc
+        auto *zero = make_int_literal_printable(
+            ctx, 0, input0->getType(), /*is_signed=*/true, op_loc
         );
         auto sborrow = sema().BuildBinOp(
             sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
