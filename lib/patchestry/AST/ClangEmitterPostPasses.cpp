@@ -2150,6 +2150,14 @@ namespace patchestry::ast {
     ) {
         std::unordered_set< clang::Stmt * > seen;
         CountGotoDeclRefs(stmt, refs, seen);
+
+        // Coalesce counts by label name: a clone pass can split same-named gotos
+        // across distinct LabelDecls, so a decl-keyed count under-counts a label
+        // and a refs-based fold would erase it while a same-named goto survives.
+        // Give every decl the combined count so such folds stay conservative.
+        std::unordered_map< std::string, unsigned > by_name;
+        for (const auto &kv : refs) { by_name[kv.first->getName().str()] += kv.second; }
+        for (auto &kv : refs) { kv.second = by_name[kv.first->getName().str()]; }
     }
 
     clang::GotoStmt *SingleGotoStmt(clang::Stmt *stmt) {
@@ -5015,7 +5023,7 @@ namespace patchestry::ast {
             return false;
         }
 
-        auto alt_ref  = refs.find(alt_label);
+        auto alt_ref                 = refs.find(alt_label);
         auto join_ref = refs.find(join_label);
         if (alt_ref == refs.end() || alt_ref->second != 1 || join_ref == refs.end()
             || join_ref->second != 2)
@@ -5228,7 +5236,8 @@ namespace patchestry::ast {
     }
 
     bool TryFoldIfThenJoinElseAltAt(
-        clang::ASTContext &ctx, std::vector< clang::Stmt * > &body, size_t if_idx
+        clang::ASTContext &ctx, std::vector< clang::Stmt * > &body, size_t if_idx,
+        const std::unordered_map< clang::LabelDecl *, unsigned > &refs
     ) {
         if (if_idx + 1 >= body.size()) { return false; }
         auto *ifs = llvm::dyn_cast< clang::IfStmt >(body[if_idx]);
@@ -5238,6 +5247,11 @@ namespace patchestry::ast {
 
         clang::LabelDecl *alt_label = LeadingLabelDecl(body[if_idx + 1]);
         if (!alt_label) { return false; }
+        // This fold drops the alt label, so only proceed when nothing jumps to
+        // it (refs is name-coalesced; a non-zero count would strand a goto).
+        if (auto it = refs.find(alt_label); it != refs.end() && it->second > 0) {
+            return false;
+        }
         LocalLabelBlock alt_block;
         if (!ExtractLocalLabelBlock(ctx, body, if_idx + 1, alt_block)) { return false; }
         if (alt_block.end >= body.size()) { return false; }
@@ -5328,7 +5342,7 @@ namespace patchestry::ast {
             for (size_t i = 0; i < body.size(); ++i) {
                 if (TryFoldThreeGuardJoinAt(ctx, body, i, refs)
                     || TryFoldIfGotoAltThenJoinAt(ctx, body, i, refs)
-                    || TryFoldIfThenJoinElseAltAt(ctx, body, i))
+                    || TryFoldIfThenJoinElseAltAt(ctx, body, i, refs))
                 {
                     changed       = true;
                     body_changed  = true;
@@ -5405,6 +5419,28 @@ namespace patchestry::ast {
             auto alt_ref = refs.find(alt_label);
             if (alt_ref == refs.end() || alt_ref->second != alt_gotos) { continue; }
 
+            // refs goes stale as this loop folds; re-count gotos to the alt
+            // label in the current body and bail unless all are the ones folded
+            // here (else a surviving same-named goto is stranded).
+            {
+                unsigned live = 0;
+                llvm::StringRef an = alt_label->getName();
+                std::function< void(clang::Stmt *) > cnt = [&](clang::Stmt *st) {
+                    if (!st) { return; }
+                    if (auto *g = llvm::dyn_cast< clang::GotoStmt >(st)) {
+                        if (g->getLabel()->getName() == an) { ++live; }
+                    }
+                    for (auto *c : st->children()) { cnt(c); }
+                };
+                for (auto *bs : body) { cnt(bs); }
+                if (live != alt_gotos) { continue; }
+            }
+
+            // The fold also drops the join label; join_ref > join_gotos means a
+            // goto outside this `then` still targets it, so skip (would orphan).
+            auto join_ref = refs.find(join_label);
+            if (join_ref != refs.end() && join_ref->second > join_gotos) { continue; }
+
             if (GotoElimGetTarget(DeepTrailingStmt(ifs->getThen())) != join_label->getName()) {
                 continue;
             }
@@ -5433,6 +5469,25 @@ namespace patchestry::ast {
                 body.begin() + static_cast< ptrdiff_t >(alt_block.begin),
                 body.begin() + static_cast< ptrdiff_t >(alt_block.end)
             );
+            // Post-fold safety: if the folded body references a dropped label
+            // name with no surviving LabelStmt, revert (stmt is intact) rather
+            // than emit an orphaned goto.
+            for (clang::LabelDecl *dl : { alt_label, join_label }) {
+                bool g = false, l = false;
+                llvm::StringRef dn = dl->getName();
+                std::function< void(clang::Stmt *) > w = [&](clang::Stmt *st) {
+                    if (!st) { return; }
+                    if (auto *gg = llvm::dyn_cast< clang::GotoStmt >(st)) {
+                        if (gg->getLabel()->getName() == dn) { g = true; }
+                    }
+                    if (auto *ll = llvm::dyn_cast< clang::LabelStmt >(st)) {
+                        if (ll->getDecl()->getName() == dn) { l = true; }
+                    }
+                    for (auto *c : st->children()) { w(c); }
+                };
+                for (auto *bs : body) { w(bs); }
+                if (g && !l) { return stmt; }
+            }
             return detail::MakeCompound(ctx, body);
         }
 
@@ -6112,11 +6167,19 @@ namespace patchestry::ast {
         if (!compound) { return stmt; }
 
         std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
-        for (clang::Stmt *&child : body) { child = FoldLocalGotoDiamonds(ctx, child, refs); }
+        // Recompute refs over the current body before each child so gotos a
+        // prior sibling's fold created are counted (else a stale count strands them).
+        for (size_t ci = 0; ci < body.size(); ++ci) {
+            std::unordered_map< clang::LabelDecl *, unsigned > child_refs;
+            CountGotoDeclRefs(detail::MakeCompound(ctx, body), child_refs);
+            body[ci] = FoldLocalGotoDiamonds(ctx, body[ci], child_refs);
+        }
 
         bool changed = true;
         while (changed) {
             changed = false;
+            std::unordered_map< clang::LabelDecl *, unsigned > cur_refs;
+            CountGotoDeclRefs(detail::MakeCompound(ctx, body), cur_refs);
             for (size_t if_idx = 0; if_idx + 2 < body.size(); ++if_idx) {
                 auto *ifs = llvm::dyn_cast< clang::IfStmt >(body[if_idx]);
                 if (!ifs) { continue; }
@@ -6137,8 +6200,26 @@ namespace patchestry::ast {
 
                         clang::LabelDecl *alt_label  = alt_goto->getLabel();
                         clang::LabelDecl *join_label = join_goto->getLabel();
-                        auto alt_ref                 = refs.find(alt_label);
-                        if (alt_ref == refs.end() || alt_ref->second != 1) { return false; }
+                        auto alt_ref                 = cur_refs.find(alt_label);
+                        if (alt_ref == cur_refs.end() || alt_ref->second != 1) { return false; }
+
+                        // refs goes stale as this loop folds; this fold erases
+                        // alt_label, so re-count gotos to it by name now and bail
+                        // unless it is still the sole reference (else orphaned).
+                        unsigned live_alt_gotos = 0;
+                        llvm::StringRef alt_name = alt_label->getName();
+                        std::function< void(clang::Stmt *) > count_alt =
+                            [&](clang::Stmt *st) {
+                                if (!st) { return; }
+                                if (auto *g = llvm::dyn_cast< clang::GotoStmt >(st)) {
+                                    if (g->getLabel()->getName() == alt_name) {
+                                        ++live_alt_gotos;
+                                    }
+                                }
+                                for (auto *c : st->children()) { count_alt(c); }
+                            };
+                        for (auto *bs : body) { count_alt(bs); }
+                        if (live_alt_gotos != 1) { return false; }
 
                         size_t alt_label_idx  = body.size();
                         size_t join_label_idx = body.size();
@@ -6194,11 +6275,34 @@ namespace patchestry::ast {
                             ifs->getCond(), loc, loc, new_then, loc, new_else
                         );
 
-                        body.erase(
-                            body.begin() + static_cast< ptrdiff_t >(if_idx),
-                            body.begin() + static_cast< ptrdiff_t >(join_label_idx)
+                        std::vector< clang::Stmt * > tentative(body);
+                        tentative.erase(
+                            tentative.begin() + static_cast< ptrdiff_t >(if_idx),
+                            tentative.begin() + static_cast< ptrdiff_t >(join_label_idx)
                         );
-                        body.insert(body.begin() + static_cast< ptrdiff_t >(if_idx), new_if);
+                        tentative.insert(
+                            tentative.begin() + static_cast< ptrdiff_t >(if_idx), new_if
+                        );
+                        // Post-fold safety: decline the fold if the tentative
+                        // result strands any goto (target name with no LabelStmt).
+                        {
+                            std::unordered_set< std::string > labels, gotos;
+                            std::function< void(clang::Stmt *) > w = [&](clang::Stmt *st) {
+                                if (!st) { return; }
+                                if (auto *gg = llvm::dyn_cast< clang::GotoStmt >(st)) {
+                                    gotos.insert(gg->getLabel()->getName().str());
+                                }
+                                if (auto *ll = llvm::dyn_cast< clang::LabelStmt >(st)) {
+                                    labels.insert(ll->getDecl()->getName().str());
+                                }
+                                for (auto *c : st->children()) { w(c); }
+                            };
+                            for (auto *bs : tentative) { w(bs); }
+                            for (const auto &gn : gotos) {
+                                if (!labels.count(gn)) { return false; }
+                            }
+                        }
+                        body = std::move(tentative);
                         return true;
                     };
 
@@ -6214,8 +6318,8 @@ namespace patchestry::ast {
                 clang::GotoStmt *then_goto = SingleGotoStmt(ifs->getThen());
                 if (!then_goto || !then_goto->getLabel()) { continue; }
                 clang::LabelDecl *then_label = then_goto->getLabel();
-                auto then_ref                = refs.find(then_label);
-                if (then_ref == refs.end() || then_ref->second != 1) { continue; }
+                auto then_ref                = cur_refs.find(then_label);
+                if (then_ref == cur_refs.end() || then_ref->second != 1) { continue; }
 
                 size_t then_label_idx = body.size();
                 for (size_t j = if_idx + 1; j < body.size(); ++j) {
@@ -6277,11 +6381,34 @@ namespace patchestry::ast {
                     StmtFromSeq(ctx, false_region)
                 );
 
-                body.erase(
-                    body.begin() + static_cast< ptrdiff_t >(if_idx),
-                    body.begin() + static_cast< ptrdiff_t >(join_label_idx)
+                std::vector< clang::Stmt * > tentative(body);
+                tentative.erase(
+                    tentative.begin() + static_cast< ptrdiff_t >(if_idx),
+                    tentative.begin() + static_cast< ptrdiff_t >(join_label_idx)
                 );
-                body.insert(body.begin() + static_cast< ptrdiff_t >(if_idx), new_if);
+                tentative.insert(tentative.begin() + static_cast< ptrdiff_t >(if_idx), new_if);
+                // Decline the fold if the result strands any goto (the erased
+                // range may hold intermediate labels beyond then/join).
+                {
+                    std::unordered_set< std::string > labels, gotos;
+                    std::function< void(clang::Stmt *) > w = [&](clang::Stmt *st) {
+                        if (!st) { return; }
+                        if (auto *gg = llvm::dyn_cast< clang::GotoStmt >(st)) {
+                            gotos.insert(gg->getLabel()->getName().str());
+                        }
+                        if (auto *ll = llvm::dyn_cast< clang::LabelStmt >(st)) {
+                            labels.insert(ll->getDecl()->getName().str());
+                        }
+                        for (auto *c : st->children()) { w(c); }
+                    };
+                    for (auto *bs : tentative) { w(bs); }
+                    bool orphan = false;
+                    for (const auto &gn : gotos) {
+                        if (!labels.count(gn)) { orphan = true; break; }
+                    }
+                    if (orphan) { continue; }
+                }
+                body = std::move(tentative);
                 changed = true;
                 break;
             }
@@ -7350,10 +7477,102 @@ namespace patchestry::ast {
     // via Stmt::Profile, since RemoveDeadLabels/RemoveEmptyBlocks
     // always rebuild their CompoundStmts even when nothing changed.
     // ---------------------------------------------------------------
+    // Record the first LabelStmt seen for each label name (the canonical decl).
+    void CollectCanonicalLabelDecls(
+        clang::Stmt *s, std::unordered_map< std::string, clang::LabelDecl * > &canon
+    ) {
+        if (!s) { return; }
+        if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
+            canon.emplace(ls->getDecl()->getName().str(), ls->getDecl());
+        }
+        for (auto *child : s->children()) {
+            if (child) { CollectCanonicalLabelDecls(child, canon); }
+        }
+    }
+
+    // Collapse clone-induced duplicate same-named labels: re-point every goto
+    // onto the canonical (first) same-named LabelStmt and unwrap non-canonical
+    // duplicates (keeping their body), leaving one LabelStmt per name so
+    // decl-keyed liveness can't desync and strand a goto. No-op when names are
+    // unique.
+    clang::Stmt *DedupSameNameLabels(
+        clang::ASTContext &ctx, clang::Stmt *s,
+        const std::unordered_map< std::string, clang::LabelDecl * > &canon
+    ) {
+        if (!s) { return s; }
+        auto safe = [&](clang::Stmt *r) -> clang::Stmt * {
+            return r ? r : new (ctx) clang::NullStmt(VirtualLoc(ctx));
+        };
+
+        if (auto *gs = llvm::dyn_cast< clang::GotoStmt >(s)) {
+            auto it = canon.find(gs->getLabel()->getName().str());
+            if (it != canon.end() && it->second != gs->getLabel()) {
+                gs->setLabel(it->second);
+            }
+            return s;
+        }
+        if (auto *ls = llvm::dyn_cast< clang::LabelStmt >(s)) {
+            auto *sub = DedupSameNameLabels(ctx, ls->getSubStmt(), canon);
+            auto it   = canon.find(ls->getDecl()->getName().str());
+            // Non-canonical same-named duplicate: drop the label, keep its body.
+            if (it != canon.end() && it->second != ls->getDecl()) { return safe(sub); }
+            ls->setSubStmt(safe(sub));
+            return ls;
+        }
+        if (auto *cs = llvm::dyn_cast< clang::CompoundStmt >(s)) {
+            std::vector< clang::Stmt * > children;
+            for (auto *child : cs->body()) {
+                if (auto *c = DedupSameNameLabels(ctx, child, canon)) { children.push_back(c); }
+            }
+            return detail::MakeCompound(ctx, children);
+        }
+        if (auto *ifs = llvm::dyn_cast< clang::IfStmt >(s)) {
+            ifs->setThen(safe(DedupSameNameLabels(ctx, ifs->getThen(), canon)));
+            if (ifs->getElse()) { ifs->setElse(safe(DedupSameNameLabels(ctx, ifs->getElse(), canon))); }
+            return s;
+        }
+        if (auto *ws = llvm::dyn_cast< clang::WhileStmt >(s)) {
+            ws->setBody(safe(DedupSameNameLabels(ctx, ws->getBody(), canon)));
+            return s;
+        }
+        if (auto *ds = llvm::dyn_cast< clang::DoStmt >(s)) {
+            ds->setBody(safe(DedupSameNameLabels(ctx, ds->getBody(), canon)));
+            return s;
+        }
+        if (auto *fs = llvm::dyn_cast< clang::ForStmt >(s)) {
+            fs->setBody(safe(DedupSameNameLabels(ctx, fs->getBody(), canon)));
+            return s;
+        }
+        if (auto *sw = llvm::dyn_cast< clang::SwitchStmt >(s)) {
+            sw->setBody(safe(DedupSameNameLabels(ctx, sw->getBody(), canon)));
+            return s;
+        }
+        if (auto *cse = llvm::dyn_cast< clang::CaseStmt >(s)) {
+            cse->setSubStmt(safe(DedupSameNameLabels(ctx, cse->getSubStmt(), canon)));
+            return s;
+        }
+        if (auto *def = llvm::dyn_cast< clang::DefaultStmt >(s)) {
+            def->setSubStmt(safe(DedupSameNameLabels(ctx, def->getSubStmt(), canon)));
+            return s;
+        }
+        return s;
+    }
+
+    clang::Stmt *DedupSameNameLabels(clang::ASTContext &ctx, clang::Stmt *body) {
+        if (!body) { return body; }
+        std::unordered_map< std::string, clang::LabelDecl * > canon;
+        CollectCanonicalLabelDecls(body, canon);
+        return DedupSameNameLabels(ctx, body, canon);
+    }
+
     clang::Stmt *
     RemoveDeadControlFlow(clang::ASTContext &ctx, clang::Stmt *body, bool &mutated) {
         mutated = false;
         if (!body) { return nullptr; }
+
+        // Collapse duplicate same-named labels before any decl-keyed liveness
+        // check, so a surviving label isn't mistaken for dead and its goto stranded.
+        body = DedupSameNameLabels(ctx, body);
 
         llvm::FoldingSetNodeID before;
         body->Profile(before, ctx, /*Canonical=*/false);

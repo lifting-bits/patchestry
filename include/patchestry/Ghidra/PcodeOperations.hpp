@@ -29,6 +29,11 @@ namespace patchestry::ghidra {
 } // namespace patchestry::ghidra
 
 namespace patchestry::ghidra {
+    // ARM EXC_RETURN magic values occupy 0xFFFFFFE0..0xFFFFFFFF; a constant
+    // BRANCHIND target at or above this is an exception return (emitters
+    // loud-fail on it). Mirrors util.firmware.InterruptAnalysis.EXC_RETURN_LOW.
+    inline constexpr std::uint32_t kArmExcReturnLow = 0xFFFFFFE0U;
+
     using TypeMap = std::unordered_map< std::string, std::shared_ptr< VarnodeType > >;
 
     using FunctionMap = std::unordered_map< std::string, Function >;
@@ -260,6 +265,13 @@ namespace patchestry::ghidra {
         // Optional schema fields; empty on older serializer outputs.
         std::string entry_point;
         std::vector< AddressRange > address_ranges;
+
+        // Interrupt-handler metadata from the Ghidra InterruptAnalysis pass.
+        // When set, the function is emitted void(void) with an interrupt
+        // attribute. interrupt_kind: "" (Generic/M-profile) or IRQ/FIQ/SWI/
+        // ABORT/UNDEF (classic A/R).
+        bool is_interrupt = false;
+        std::optional< std::string > interrupt_kind;
 
         // Absent when Ghidra didn't produce one; consumers fall back
         // to CFG-based structuring.

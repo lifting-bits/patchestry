@@ -171,6 +171,49 @@ namespace patchestry::ast {
             std::vector<std::shared_ptr<FunctionBuilder>> func_builders;
             const auto &program_arch = get_program().arch.value_or(std::string{});
 
+            // Disambiguate distinct definitions sharing a C name (e.g. several
+            // file-local `static` copies of one source function). Two top-level
+            // defs of one symbol make CIR reject the second ("Duplicate function
+            // definition"). Suffix each colliding display_name with its address.
+            // Lossless: the asm label uses raw `name` and calls resolve by key.
+            {
+                auto cname_of = [](const Function &f) -> const std::string & {
+                    return f.display_name.empty() ? f.name : f.display_name;
+                };
+                std::unordered_map<std::string, int> def_name_count;
+                std::unordered_set<std::string> all_names;
+                for (auto &[key, function] : get_program().serialized_functions) {
+                    const auto &cname = cname_of(function);
+                    if (cname.empty()) { continue; }
+                    all_names.insert(cname);
+                    if (!function.basic_blocks.empty()) { def_name_count[cname]++; }
+                }
+                for (auto &[key, function] : get_program().serialized_functions) {
+                    if (function.basic_blocks.empty()) { continue; }
+                    const auto &cname = cname_of(function);
+                    if (cname.empty() || def_name_count[cname] < 2) { continue; }
+                    std::string suffix = key;
+                    if (auto colon = suffix.find(':'); colon != std::string::npos) {
+                        suffix = suffix.substr(colon + 1);
+                    }
+                    for (char &c : suffix) {
+                        const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+                            || (c >= 'A' && c <= 'Z') || c == '_';
+                        if (!ok) { c = '_'; }
+                    }
+                    // Bump until unique in case the suffixed name already exists.
+                    std::string base    = cname + "_" + suffix;
+                    std::string renamed = base;
+                    for (unsigned bump = 1; !all_names.insert(renamed).second; ++bump) {
+                        renamed = base + "_" + std::to_string(bump);
+                    }
+                    LOG(WARNING) << "Duplicate definition name '" << cname << "' at "
+                                 << key << "; renaming to '" << renamed
+                                 << "' to avoid a colliding C symbol.\n";
+                    function.display_name = renamed;
+                }
+            }
+
             // For C names shared by >1 function with distinct return types
             // (e.g. intrinsic variants VectorSignedToFloat:tb / :t12), record a
             // canonical (widest) return type that FunctionBuilder normalizes

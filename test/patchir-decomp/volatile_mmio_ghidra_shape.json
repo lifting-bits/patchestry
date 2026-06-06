@@ -1,0 +1,88 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=TU %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+
+// Locks down the *Ghidra-produced* shape of read_volatile / write_volatile
+// (as emitted by util.PcodeSerializer.serializeVolatileOp): the access address
+// is a typed pointer constant (the operand is a direct memory location, e.g.
+// an MMIO register), and a volatile_read feeding a return is serialized with a
+// self-referential `local` output (no separate declaration). The read must NOT
+// recurse trying to materialise itself, and volatile must survive to CIR/LLVM.
+// Regression for the serializer address fix + the self-referential-output and
+// op.type result-type fallbacks in handle_volatile_read.
+
+// TU-DAG: *(volatile unsigned int *){{.*}} = param_1
+// TU-DAG: return *(volatile unsigned int *)
+
+// CIR-DAG: cir.store volatile
+// CIR-DAG: cir.load volatile
+
+// LL-DAG: store volatile i32
+// LL-DAG: load volatile i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000000": {
+      "name": "mmio_write_reg",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_uint"] },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "wp0": { "mnemonic": "DECLARE_PARAMETER", "name": "param_1", "type": "type_uint", "kind": "parameter", "index": 0 },
+            "wbr": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:b" }
+          },
+          "ordered_operations": ["wp0", "wbr"]
+        },
+        "ram:20000000:0:b": {
+          "operations": {
+            "vw": {
+              "mnemonic": "CALLOTHER",
+              "target": { "kind": "intrinsic", "function": "volatile_write:type_void", "is_variadic": true, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_ptr_uint", "kind": "constant", "value": 1073872896 },
+                { "type": "type_uint", "size": 4, "kind": "parameter", "operation": "wp0" }
+              ]
+            },
+            "wret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["vw", "wret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    },
+    "ram:20000100": {
+      "name": "mmio_read_reg",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_uint", "is_variadic": false, "is_noreturn": false, "parameter_types": [] },
+      "basic_blocks": {
+        "ram:20000100:0:b": {
+          "operations": {
+            "vr": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_uint",
+              "size": 4,
+              "output": { "kind": "local", "operation": "vr" },
+              "target": { "kind": "intrinsic", "function": "volatile_read:type_uint", "is_variadic": true, "is_noreturn": false },
+              "inputs": [ { "type": "type_ptr_uint", "kind": "constant", "value": 1073872896 } ]
+            },
+            "cp": { "mnemonic": "COPY", "type": "type_uint", "size": 4, "inputs": [ { "type": "type_uint", "size": 4, "kind": "local", "operation": "vr" } ] },
+            "rt": { "mnemonic": "RETURN", "inputs": [ { "type": "type_uint", "size": 4, "kind": "temporary", "operation": "cp" } ] }
+          },
+          "ordered_operations": ["vr", "cp", "rt"]
+        }
+      },
+      "entry_block": "ram:20000100:0:b"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_uint": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_ptr_uint": { "kind": "pointer", "size": 4, "element_type": "type_uint" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

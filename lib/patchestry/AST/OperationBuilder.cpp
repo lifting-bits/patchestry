@@ -98,6 +98,19 @@ namespace patchestry::ast {
             if (auto *expr = clang::dyn_cast< clang::Expr >(result)) {
                 auto storage_type = expr->getType();
                 if (storage_type->isArrayType() || storage_type->isRecordType()) {
+                    // If the varnode's own type is a pointer, the value wanted
+                    // is the aggregate's address, not its contents (e.g. a COPY
+                    // of `&__hexdig` where storage is char[256] but the varnode
+                    // is char*). Decay to that pointer rather than reinterpreting
+                    // the first N bytes, which would corrupt `base[index]`.
+                    if (!vnode.type_key.empty()) {
+                        auto declared = type_builder().GetSerializedType(vnode.type_key);
+                        if (!declared.isNull() && declared->isPointerType()) {
+                            if (auto *decayed = make_cast(ctx, expr, declared, loc)) {
+                                return decayed;
+                            }
+                        }
+                    }
                     auto *narrowed = narrow_aggregate_to_integer(
                         ctx, expr, loc, vnode.size);
                     if (narrowed) {

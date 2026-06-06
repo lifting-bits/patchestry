@@ -1,0 +1,90 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=TU %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+
+// MMIO / peripheral register accesses must keep volatile end-to-end, including
+// for CONSTANT register addresses (the common case, e.g. 0x40020000). An
+// implicit volatile-pointer cast survives to CIR/LLVM but is dropped by the C
+// pretty-printer; the handlers force an explicit cast so recompiled patch
+// output cannot silently lose volatile and let the optimizer fold/reorder
+// peripheral accesses.
+
+// Emitted C keeps the volatile-qualified pointer for both the write and read:
+// TU-DAG: *(volatile unsigned int *){{.*}} = 1U
+// TU-DAG: *(volatile unsigned int *)
+
+// ClangIR keeps the volatile flag on the load and store:
+// CIR-DAG: cir.store volatile
+// CIR-DAG: cir.load volatile
+
+// LLVM IR keeps the volatile load/store (the optimizer must not elide/reorder):
+// LL-DAG: store volatile i32
+// LL-DAG: load volatile i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000000": {
+      "name": "mmio_write_reg",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": [] },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": { "wbr": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:b" } },
+          "ordered_operations": ["wbr"]
+        },
+        "ram:20000000:0:b": {
+          "operations": {
+            "vw": {
+              "mnemonic": "CALLOTHER",
+              "target": { "kind": "intrinsic", "function": "volatile_write:type_void", "is_variadic": true, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_ptr_uint", "kind": "constant", "value": 1073741824 },
+                { "type": "type_uint", "kind": "constant", "value": 1 }
+              ]
+            },
+            "wret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["vw", "wret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    },
+    "ram:20000100": {
+      "name": "mmio_read_reg",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_uint", "is_variadic": false, "is_noreturn": false, "parameter_types": [] },
+      "basic_blocks": {
+        "ram:20000100:entry": {
+          "operations": {
+            "t0": { "mnemonic": "DECLARE_TEMPORARY", "name": "val", "kind": "temporary", "type": "type_uint", "address": "ram:20000100:0:b:vr" },
+            "rbr": { "mnemonic": "BRANCH", "target_block": "ram:20000100:0:b" }
+          },
+          "ordered_operations": ["t0", "rbr"]
+        },
+        "ram:20000100:0:b": {
+          "operations": {
+            "vr": {
+              "mnemonic": "CALLOTHER",
+              "output": { "kind": "temporary", "operation": "t0", "type": "type_uint" },
+              "target": { "kind": "intrinsic", "function": "volatile_read:type_uint", "is_variadic": true, "is_noreturn": false },
+              "inputs": [ { "type": "type_ptr_uint", "kind": "constant", "value": 1073741824 } ]
+            },
+            "rret": { "mnemonic": "RETURN", "inputs": [ { "type": "type_uint", "kind": "temporary", "operation": "vr" } ] }
+          },
+          "ordered_operations": ["vr", "rret"]
+        }
+      },
+      "entry_block": "ram:20000100:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_uint": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_ptr_uint": { "kind": "pointer", "size": 4, "element_type": "type_uint" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

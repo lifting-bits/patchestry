@@ -1,0 +1,55 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check %s --input-file %t.c
+
+// Implicit Cortex-M (M-profile) interrupt handler: is_interrupt with an empty
+// interrupt_kind (Generic). Expect a void(void) prototype, a Generic interrupt
+// attribute, a clean return, and no goto to a magic address. The hardware
+// exception entry/exit is delegated to the attribute on recompile.
+
+// CHECK: void TIM2_IRQHandler(void) __attribute__((interrupt("")))
+// CHECK: return;
+// CHECK-NOT: goto
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000000": {
+      "name": "TIM2_IRQHandler",
+      "is_intrinsic": false,
+      "is_interrupt": true,
+      "interrupt_kind": "",
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": [] },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "e_br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" }
+          },
+          "ordered_operations": ["e_br"]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "vw": {
+              "mnemonic": "CALLOTHER",
+              "target": { "kind": "intrinsic", "function": "volatile_write:type_void", "is_variadic": true, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_ptr_int", "kind": "constant", "value": 1073741824 },
+                { "type": "type_int", "kind": "constant", "value": 1 }
+              ]
+            },
+            "ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["vw", "ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_ptr_int": { "kind": "pointer", "size": 4, "element_type": "type_int" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

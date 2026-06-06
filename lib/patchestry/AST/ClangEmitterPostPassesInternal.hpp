@@ -97,6 +97,9 @@ namespace patchestry::ast {
     );
 
     // --- remove dead control flow -------------------------------------------
+    // Collapse clone-induced duplicate same-named labels so decl-keyed liveness
+    // can't desync. No-op when names are unique.
+    clang::Stmt *DedupSameNameLabels(clang::ASTContext &ctx, clang::Stmt *body);
     clang::Stmt *RemoveDeadControlFlow(
         clang::ASTContext &ctx, clang::Stmt *body, bool &mutated
     );

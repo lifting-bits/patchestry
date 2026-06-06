@@ -1,0 +1,58 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check %s --input-file %t.c
+
+// Explicit exception-return handlers. The exception return cannot be modeled
+// in P-Code, so the serializer emits a synthetic CALLOTHER `exception_return`
+// (M-profile, carrying the EXC_RETURN magic 0xFFFFFFFD) or
+// `exception_return_cpsr` (classic A/R, CPSR/SPSR restore). Each is emitted as
+// an opaque, non-foldable __patchestry_ call so the control-flow side effect is
+// preserved rather than collapsed to a plain return. The classic handler also
+// carries the IRQ interrupt kind.
+
+// CHECK-DAG: void irq_handler(void) __attribute__((interrupt("IRQ")))
+// CHECK-DAG: __patchestry_exception_return_cpsr()
+// CHECK-DAG: __patchestry_exception_return(4294967293
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000000": {
+      "name": "PendSV_Handler", "is_intrinsic": false, "is_interrupt": true, "interrupt_kind": "",
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": [] },
+      "basic_blocks": {
+        "ram:20000000:entry": { "operations": { "e_br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" } }, "ordered_operations": ["e_br"] },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "excr": { "mnemonic": "CALLOTHER", "target": { "kind": "intrinsic", "function": "exception_return:type_void", "is_variadic": true, "is_noreturn": false },
+              "inputs": [ { "type": "type_uint", "kind": "constant", "value": 4294967293 } ] },
+            "ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["excr", "ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    },
+    "ram:20000100": {
+      "name": "irq_handler", "is_intrinsic": false, "is_interrupt": true, "interrupt_kind": "IRQ",
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": [] },
+      "basic_blocks": {
+        "ram:20000100:entry": { "operations": { "e2_br": { "mnemonic": "BRANCH", "target_block": "ram:20000100:0:basic" } }, "ordered_operations": ["e2_br"] },
+        "ram:20000100:0:basic": {
+          "operations": {
+            "excr2": { "mnemonic": "CALLOTHER", "target": { "kind": "intrinsic", "function": "exception_return_cpsr:type_void", "is_variadic": true, "is_noreturn": false }, "inputs": [] },
+            "ret2": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["excr2", "ret2"]
+        }
+      },
+      "entry_block": "ram:20000100:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_uint": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

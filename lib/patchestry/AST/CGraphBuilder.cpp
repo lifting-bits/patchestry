@@ -377,6 +377,21 @@ namespace patchestry::ast {
                         node.switch_cases.push_back(SwitchCaseEntry{
                             static_cast<int64_t>(*addr), succ_idx, false});
                     }
+                } else {
+                    // Constant BRANCHIND target in the EXC_RETURN range: an
+                    // exception return that escaped InterruptAnalysis. Diagnose
+                    // here; the goto refusal is in create_branchind.
+                    if (!term->inputs.empty()
+                        && term->inputs[0].kind == ghidra::Varnode::VARNODE_CONSTANT
+                        && term->inputs[0].value
+                        && *term->inputs[0].value >= ghidra::kArmExcReturnLow)
+                    {
+                        LOG(ERROR)
+                            << "BRANCHIND target " << *term->inputs[0].value
+                            << " is an un-reclassified ARM EXC_RETURN value; "
+                            << "InterruptAnalysis should have rewritten this "
+                            << "exception return. key: " << term->key << "\n";
+                    }
                 }
 
             } else if (term->mnemonic == M::OP_RETURN

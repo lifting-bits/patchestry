@@ -324,13 +324,40 @@ namespace patchestry::ast {
                 return {};
             }
 
-            // Determine result type from output
+            // Result type: output -> op.type -> int. Must stay non-null
+            // (getVolatileType(null) would abort).
             clang::QualType result_type = ctx.IntTy;
-            if (op.output) { result_type = b.get_varnode_type(ctx, *op.output); }
+            clang::QualType from_output;
+            if (op.output) { from_output = b.get_varnode_type(ctx, *op.output); }
+            if (!from_output.isNull()) {
+                result_type = from_output;
+            } else if (op.type) {
+                auto t = b.type_builder().GetSerializedType(*op.type);
+                if (!t.isNull()) { result_type = t; }
+            }
 
             // Cast to volatile pointer and dereference: *(volatile T*)addr
             auto vol_ptr = ctx.getPointerType(ctx.getVolatileType(result_type));
-            auto *cast   = b.make_cast(ctx, addr, vol_ptr, op_loc);
+            // Explicit C-style cast (make_cast's implicit cast is dropped by the
+            // pretty-printer, losing `volatile` in the emitted source). A global
+            // operand is the datum at the address, so take its address:
+            // *(volatile T *)&DAT_xxxx (keyed on kind, not pointer-ness).
+            if (op.inputs[0].kind == ghidra::Varnode::VARNODE_GLOBAL) {
+                auto addr_of = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_AddrOf, addr);
+                if (addr_of.isInvalid()) {
+                    LOG(ERROR) << "volatile access: could not take address of "
+                                  "global operand; refusing to emit a wrong MMIO "
+                                  "access. key: " << op.key << "\n";
+                    return {};
+                }
+                addr = addr_of.getAs< clang::Expr >();
+            }
+            auto *cast   = b.make_explicit_cast(ctx, addr, vol_ptr, op_loc);
+            if (cast == nullptr) {
+                LOG(ERROR) << "volatile_read: volatile-pointer cast failed. key: "
+                           << op.key << "\n";
+                return {};
+            }
             auto deref   = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, cast);
 
             if (deref.isInvalid()) {
@@ -342,8 +369,23 @@ namespace patchestry::ast {
             // If no output, return the deref expression directly
             if (!op.output) { return { deref.getAs< clang::Stmt >(), true }; }
 
-            // Assign result to output
-            auto *out = clang::dyn_cast< clang::Expr >(b.create_varnode(ctx, fn, *op.output));
+            // Self-referential output (operation points back at this op): return
+            // the read as a mergeable value; resolving it as an assignment target
+            // would recurse into create_varnode and stack-overflow.
+            if (op.output->operation && *op.output->operation == op.key) {
+                return { deref.getAs< clang::Stmt >(), true };
+            }
+
+            // Assign to output; if it won't resolve to an lvalue, loud-fail and
+            // emit just the read rather than assigning through null.
+            auto *out = clang::dyn_cast_or_null< clang::Expr >(
+                b.create_varnode(ctx, fn, *op.output));
+            if (out == nullptr) {
+                LOG(ERROR) << "volatile_read output could not be resolved to an "
+                              "lvalue; emitting the read without assignment. key: "
+                           << op.key << "\n";
+                return { deref.getAs< clang::Stmt >(), true };
+            }
             return { b.create_assign_operation(ctx, deref.getAs< clang::Expr >(), out, op_loc),
                      false };
         }
@@ -374,7 +416,26 @@ namespace patchestry::ast {
 
             // Cast to volatile pointer: (volatile T*)addr
             auto vol_ptr = ctx.getPointerType(ctx.getVolatileType(val->getType()));
-            auto *cast   = b.make_cast(ctx, addr, vol_ptr, op_loc);
+            // Explicit C-style cast (make_cast's implicit cast is dropped by the
+            // pretty-printer, losing `volatile` in the emitted source). A global
+            // operand is the datum at the address, so take its address:
+            // *(volatile T *)&DAT_xxxx (keyed on kind, not pointer-ness).
+            if (op.inputs[0].kind == ghidra::Varnode::VARNODE_GLOBAL) {
+                auto addr_of = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_AddrOf, addr);
+                if (addr_of.isInvalid()) {
+                    LOG(ERROR) << "volatile access: could not take address of "
+                                  "global operand; refusing to emit a wrong MMIO "
+                                  "access. key: " << op.key << "\n";
+                    return {};
+                }
+                addr = addr_of.getAs< clang::Expr >();
+            }
+            auto *cast   = b.make_explicit_cast(ctx, addr, vol_ptr, op_loc);
+            if (cast == nullptr) {
+                LOG(ERROR) << "volatile_write: volatile-pointer cast failed. key: "
+                           << op.key << "\n";
+                return {};
+            }
 
             // Dereference and assign: *(volatile T*)addr = val
             auto deref = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, cast);
@@ -450,6 +511,16 @@ namespace patchestry::ast {
             return { decayed ? decayed : lit, true };
         }
 
+        // Opaque exception return (M-profile EXC_RETURN bx, or A/R CPSR-restoring
+        // subs pc,lr / ldm^ / rfe). The unstack/mode-switch isn't modelable in
+        // P-Code, so emit an extern __patchestry_<name> call no pass folds away.
+        std::pair< clang::Stmt *, bool > handle_exception_return(
+            OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
+            const ghidra::Operation &op, const std::string &name
+        ) {
+            return b.create_intrinsic_call(ctx, fn, op, "__patchestry_" + name);
+        }
+
     } // anonymous namespace
 
     std::string parse_intrinsic_name(std::string_view arch, std::string_view label) {
@@ -492,6 +563,10 @@ namespace patchestry::ast {
                 {        "builtin_strncpy",        handle_builtin_memcpy }, // Same impl as memcpy
                 {        "builtin_wcsncpy",        handle_builtin_memcpy },
                 {             "stringdata",            handle_stringdata },
+                // Exception returns (ARM EXC_RETURN / CPSR-restoring return).
+                // Emitted opaque so the control-flow side effect is preserved.
+                {       "exception_return",      handle_exception_return },
+                {  "exception_return_cpsr",      handle_exception_return },
                 // Bare-named synchronization primitives that have no C11
                 // memory-ordering parameter. ClearExclusiveLocal resets the
                 // local exclusive monitor; ISB is a pipeline sync, not a

@@ -524,6 +524,15 @@ public class PatchestryDecompileFunctions extends GhidraScript {
                 println("[tailcall] analysis failed: " + e.getMessage());
             }
         }
+
+        // Detect interrupt/exception handlers (ARM M-profile + classic A/R):
+        // tag ISRs, reclassify exception-return terminators, and record kind /
+        // EXC_RETURN metadata for the serializer. No-op on non-ARM targets.
+        try {
+            util.firmware.InterruptAnalysis.run(program, monitor);
+        } catch (Exception e) {
+            println("[interrupt] analysis failed: " + e.getMessage());
+        }
     }
 
     void runHeadless() throws Exception {

@@ -259,6 +259,19 @@ namespace patchestry::ast {
             return expr;
         }
 
+        // Widen a sub-pointer-width integer to uintptr first so the final
+        // int->pointer cast is width-exact (avoids -Wint-to-pointer-cast).
+        if (to_type->isPointerType() && from_type->isIntegerType()) {
+            auto uintptr_ty = ctx.getUIntPtrType();
+            if (ctx.getTypeSize(from_type) < ctx.getTypeSize(uintptr_ty)) {
+                expr = make_cast(ctx, expr, uintptr_ty, loc);
+                if (!expr) {
+                    return nullptr;
+                }
+                from_type = expr->getType();
+            }
+        }
+
         // CIRGen's emitCallee rejects implicit BitCast on a callee;
         // emit an explicit CStyleCastExpr instead.
         if (to_type->isPointerType()
@@ -467,6 +480,29 @@ namespace patchestry::ast {
             }
         }
         LOG_FATAL("cast_pointer_to_int: unhandled PtrToIntExtension value");
+    }
+
+    // INT_ZEXT/INT_SEXT produce integers, but Ghidra sometimes types the result
+    // as a same-width record (e.g. a one-field `struct CRC32`); casting an
+    // int/enum to it hard-fails Sema. Substitute a same-width unsigned integer
+    // when the target is not arithmetic/pointer; the write side reinterprets
+    // back to the record if needed. (Serializer #250 demotion also fixes this at
+    // the source; this keeps already-captured JSON working.)
+    clang::QualType OpBuilder::integer_target_for_int_ext(
+        clang::ASTContext &ctx, clang::QualType target_type, unsigned op_bytes
+    ) {
+        if (target_type.isNull()) {
+            return target_type;
+        }
+        if (target_type->isIntegerType() || target_type->isPointerType()
+            || target_type->isEnumeralType() || target_type->isBooleanType())
+        {
+            return target_type;
+        }
+        unsigned bits = op_bytes ? op_bytes * 8u
+                                 : static_cast< unsigned >(ctx.getTypeSize(target_type));
+        auto widened = ctx.getIntTypeForBitwidth(bits, /*Signed=*/false);
+        return widened.isNull() ? target_type : widened;
     }
 
     clang::Expr *OpBuilder::narrow_aggregate_to_integer(
@@ -1381,6 +1417,20 @@ namespace patchestry::ast {
                 clang::CompoundStmt::Create(ctx, sw_body, clang::FPOptionsOverride(), loc, loc)
             );
             return { switch_stmt, false };
+        }
+
+        // Loud-fail: a constant BRANCHIND target in the ARM EXC_RETURN range is
+        // an exception return InterruptAnalysis should have reclassified; a goto
+        // to that unmapped address is junk. Read the raw constant varnode.
+        if (op.inputs[0].kind == Varnode::VARNODE_CONSTANT && op.inputs[0].value
+            && *op.inputs[0].value >= ghidra::kArmExcReturnLow)
+        {
+            LOG(ERROR)
+                << "BRANCHIND target " << *op.inputs[0].value
+                << " is an un-reclassified ARM EXC_RETURN value; InterruptAnalysis "
+                << "should have rewritten this exception return. Refusing to emit a "
+                << "goto to an unmapped address. key: " << op.key << "\n";
+            return { nullptr, false };
         }
 
         // Priority 3: no successor info at all — emit IndirectGotoStmt as the only
@@ -2744,6 +2794,7 @@ namespace patchestry::ast {
             return {};
         }
         auto target_type = *target_type_opt;
+        target_type = integer_target_for_int_ext(ctx, target_type, op.output ? op.output->size : 0u);
 
         if (input_expr->getType()->isPointerType()) {
             // PerformImplicitConversion asserts inside clang 22 (SemaExprCXX.cpp:4681)
@@ -2807,6 +2858,7 @@ namespace patchestry::ast {
             return {};
         }
         auto target_type = *target_type_opt;
+        target_type = integer_target_for_int_ext(ctx, target_type, op.output ? op.output->size : 0u);
 
         if (input_expr->getType()->isPointerType()) {
             // Sign-extension over a pointer requires the intptr_t intermediate;
@@ -3129,6 +3181,25 @@ namespace patchestry::ast {
         // arithmetic and bitwise operators are valid.
         lhs = coerce_record_to_integer(ctx, lhs, op_loc);
         rhs = coerce_record_to_integer(ctx, rhs, op_loc);
+
+        // The CIR backend can't lower void*/function-pointer arithmetic (and
+        // crashes on the failed lowering). For additive ops, reinterpret such
+        // operands as char* (byte arithmetic), as create_ptradd does for bases.
+        if (kind == clang::BO_Add || kind == clang::BO_Sub) {
+            auto char_ptr_ty = ctx.getPointerType(ctx.CharTy);
+            auto to_byte_ptr = [&](clang::Expr *e) -> clang::Expr * {
+                auto t = e->getType();
+                if (t->isPointerType()
+                    && (t->getPointeeType()->isVoidType()
+                        || t->getPointeeType()->isFunctionType()))
+                {
+                    if (auto *c = make_cast(ctx, e, char_ptr_ty, op_loc)) { return c; }
+                }
+                return e;
+            };
+            lhs = to_byte_ptr(lhs);
+            rhs = to_byte_ptr(rhs);
+        }
 
         auto make_paren_expr = [&](clang::ASTContext &ctx, clang::Expr *expr,
                                    clang::SourceLocation loc) -> clang::Expr * {
@@ -3772,6 +3843,12 @@ namespace patchestry::ast {
                            || base->getType()->getPointeeType()->isVoidType()))
             {
                 arith_base = make_cast(ctx, base, char_ptr_ty, op_loc);
+            } else if (base->getType()->isArrayType()) {
+                // An array base (e.g. a string-literal global) decays implicitly
+                // inside the `+`, leaving a StringLiteral operand that trips
+                // -Wstring-plus-int. An explicit char* cast (not looked through
+                // by the diagnostic) keeps byte arithmetic well-defined.
+                arith_base = make_explicit_cast(ctx, base, char_ptr_ty, op_loc);
             }
             if (!arith_base) {
                 LOG(ERROR) << "PTRADD: failed to reinterpret base for "

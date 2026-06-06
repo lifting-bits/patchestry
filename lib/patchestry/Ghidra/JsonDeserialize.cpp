@@ -781,6 +781,13 @@ namespace patchestry::ghidra {
             }
         }
 
+        // Optional interrupt-handler metadata (InterruptAnalysis pass); absent
+        // on non-firmware / older outputs.
+        function.is_interrupt = func_obj.getBoolean("is_interrupt").value_or(false);
+        if (auto kind = get_string_if_valid(func_obj, "interrupt_kind")) {
+            function.interrupt_kind = *kind;
+        }
+
         if (const auto *blocks_array = func_obj.getObject("basic_blocks")) {
             deserialize_blocks(*blocks_array, function.basic_blocks, function.entry_block);
         }

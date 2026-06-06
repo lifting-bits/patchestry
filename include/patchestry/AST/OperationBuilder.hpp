@@ -195,6 +195,16 @@ namespace patchestry::ast {
             clang::SourceLocation loc
         );
 
+        // Public for intrinsic handlers: a *visible* C-style cast (e.g. the MMIO
+        // volatile-pointer cast) where make_cast would emit a dropped implicit one.
+        clang::Expr *make_explicit_cast(
+            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
+            clang::SourceLocation loc
+        );
+
+        // Public for intrinsic handlers: resolve a serialized type key.
+        TypeBuilder &type_builder(void) { return builder->type_builder.get(); }
+
         clang::Stmt *create_assign_operation(
             clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
             clang::SourceLocation loc = clang::SourceLocation()
@@ -250,11 +260,6 @@ namespace patchestry::ast {
             clang::SourceLocation loc = clang::SourceLocation()
         );
 
-        clang::Expr *make_explicit_cast(
-            clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
-            clang::SourceLocation loc
-        );
-
         clang::Expr *make_implicit_cast(
             clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
             clang::CastKind kind
@@ -293,6 +298,13 @@ namespace patchestry::ast {
         clang::Expr *narrow_aggregate_to_integer(
             clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc,
             unsigned target_bytes = 0
+        );
+
+        // Coerce a non-arithmetic INT_ZEXT/INT_SEXT target (e.g. a wrapper
+        // struct on a scalar temp) to a same-width unsigned integer; unchanged
+        // when already integer/pointer/enum/bool.
+        clang::QualType integer_target_for_int_ext(
+            clang::ASTContext &ctx, clang::QualType target_type, unsigned op_bytes
         );
 
         /// Materialize a non-void call result into a temporary variable.
@@ -337,8 +349,6 @@ namespace patchestry::ast {
 
         std::optional< clang::QualType >
         lookup_op_type(const Operation &op);
-
-        TypeBuilder &type_builder(void) { return builder->type_builder.get(); }
 
         FunctionBuilder &function_builder(void) { return *builder; }
 

@@ -199,6 +199,15 @@ public class PcodeSerializer {
 		public static final int BUILTIN_MEMCPY = 0x10000003;
 		public static final int BUILTIN_STRNCPY = 0x10000004;
 		public static final int BUILTIN_WCSNCPY = 0x10000005;
+		// Patchestry-synthesized userops, in their own band clear of Ghidra's
+		// builtin range (0x10000000-0x1FFFFFFF) so a future Ghidra builtin can't
+		// collide. Stays >= BUILTIN_STRINGDATA, so these still route through the
+		// generic intrinsic path, not the synthetic special-case skip.
+		public static final int PATCHESTRY_BUILTIN_BASE = 0x20000000;
+		// Synthetic exception-return intrinsics injected from the
+		// InterruptAnalysis EXC_RETURN property map.
+		public static final int BUILTIN_EXCEPTION_RETURN = PATCHESTRY_BUILTIN_BASE + 0;
+		public static final int BUILTIN_EXCEPTION_RETURN_CPSR = PATCHESTRY_BUILTIN_BASE + 1;
 
 		protected Program currentProgram;
 
@@ -327,6 +336,11 @@ public class PcodeSerializer {
 		// string preserves overlay/EXTERNAL/harvard spaces.
 		private ghidra.program.model.util.StringPropertyMap tailCallSiteMap;
 		private boolean tailCallSiteMapInitialized = false;
+
+		// InterruptAnalysis exception-return sites: return-instruction address ->
+		// "form|value". Lazily loaded; null when absent (non-firmware targets).
+		private ghidra.program.model.util.StringPropertyMap excReturnSiteMap;
+		private boolean excReturnSiteMapInitialized = false;
 
 		// Mirrors --[no-]repair-function-boundaries: suppresses TAIL_CALL
 		// rewrites and boundary_repairs even if prior state survives.
@@ -842,6 +856,33 @@ public class PcodeSerializer {
 			return surrogate != null ? surrogate : t;
 		}
 
+		// Demote a Composite (struct/union) DataType of exactly `varBytes`
+		// bytes (after peeling TypeDefs) to a same-width scalar surrogate; else
+		// return `t` as-is.  Companion to demoteArrayIfMatching (#250): a
+		// strictly-scalar p-code op (INT_ZEXT, INT_NEGATE, ...) can never yield a
+		// record value, but Ghidra's type propagation occasionally attaches a
+		// single-field wrapper struct (e.g. `struct CRC32 {uint m_state;}`) to
+		// such a varnode.  Left intact it reaches the emitter as `(struct CRC32)x`
+		// and hard-fails Sema ("used type 'struct X' where arithmetic or pointer
+		// type is required").
+		static DataType demoteRecordIfMatching(
+				DataType t, int varBytes, DataTypeManager dtm) {
+			if (t == null) {
+				return t;
+			}
+			DataType base = t;
+			for (int depth = 0;
+				depth < TYPEDEF_PEEL_MAX_DEPTH && base instanceof TypeDef;
+				++depth) {
+				base = ((TypeDef) base).getBaseDataType();
+			}
+			if (!(base instanceof Composite) || t.getLength() != varBytes) {
+				return t;
+			}
+			DataType surrogate = sizedSurrogate(varBytes, dtm);
+			return surrogate != null ? surrogate : t;
+		}
+
 		// 1-byte `undefined`/`DefaultDataType` only — char/uint8 carry user intent.
 		private static boolean isUndefinedAtom(DataType t) {
 			if (t == null) {
@@ -1220,7 +1261,7 @@ public class PcodeSerializer {
 				case ADDRESS_OF: return "ADDRESS_OF";
 			}
 
-			// Category 3: Ghidra decompiler built-ins (0x10000000+)
+			// Category 3: Ghidra decompiler built-ins (0x10000000 - 0x1FFFFFFF)
 			switch (index) {
 				case BUILTIN_STRINGDATA: return "stringdata";
 				case BUILTIN_VOLATILE_READ: return "volatile_read";
@@ -1228,6 +1269,12 @@ public class PcodeSerializer {
 				case BUILTIN_MEMCPY: return "builtin_memcpy";
 				case BUILTIN_STRNCPY: return "builtin_strncpy";
 				case BUILTIN_WCSNCPY: return "builtin_wcsncpy";
+			}
+
+			// Category 4: Patchestry-synthesized userops (PATCHESTRY_BUILTIN_BASE+)
+			switch (index) {
+				case BUILTIN_EXCEPTION_RETURN: return "exception_return";
+				case BUILTIN_EXCEPTION_RETURN_CPSR: return "exception_return_cpsr";
 			}
 
 			return null;  // Unknown userop
@@ -1698,9 +1745,9 @@ public class PcodeSerializer {
 				// COPY output and as scalar when it's a PIECE input.
 				DataType emitted = chooseEmittedType(node, highVariable);
 				if (isScalarPcodeOp(pcodeOp.getOpcode())) {
-					emitted = demoteArrayIfMatching(
-						emitted, node.getSize(),
-						currentProgram.getDataTypeManager());
+					DataTypeManager dtm = currentProgram.getDataTypeManager();
+					emitted = demoteArrayIfMatching(emitted, node.getSize(), dtm);
+					emitted = demoteRecordIfMatching(emitted, node.getSize(), dtm);
 				}
 				writer.name("type").value(label(emitted));
 				writer.name("size").value(node.getSize());
@@ -1782,7 +1829,17 @@ public class PcodeSerializer {
 					if (node.isConstant()) {
 						Data dataReferencedAsConstant = apiUtil.getDataReferencedAsConstant(node);
 						if (dataReferencedAsConstant != null) {
-							if (dataReferencedAsConstant.hasStringValue()) {
+							// A char-pointer constant whose target begins with a NUL byte reads
+							// back as an *empty* string. This is the signature of a byte lookup
+							// table (e.g. newlib's __hexdig[], whose entry [0] is 0x00) referenced
+							// by its base address, not a real string literal. Emitting
+							// string_value:"" here destroys the table: downstream base[index]
+							// PTRADDs degrade to "" + index, which both mis-decompiles and
+							// over-reads the 1-byte literal. Emit the underlying global instead so
+							// the access stays table[index].
+							boolean hasNonEmptyString = dataReferencedAsConstant.hasStringValue()
+								&& !dataReferencedAsConstant.getValue().toString().isEmpty();
+							if (hasNonEmptyString) {
 								writer.name("kind").value("string");
 								writer.name("string_value").value(dataReferencedAsConstant.getValue().toString());
 							} else {
@@ -1792,13 +1849,18 @@ public class PcodeSerializer {
 						} else if (isCharPointer(node) && highVariable != null
 							&& !node.getAddress().equals(constantSpace.getAddress(0))) {
 							String string = apiUtil.findNullTerminatedString(node.getAddress(), ((Pointer) highVariable.getDataType()));
-							if (string != null) {
+							if (string != null && !string.isEmpty()) {
 								writer.name("kind").value("string");
 								writer.name("string_value").value(string);
 							} else {
-								// No valid string found at address - treat as constant value.
-								// This happens when a small constant (e.g., 0x3) has a char pointer
-								// type but doesn't point to valid mapped memory.
+								// Either no valid string at the address, or an *empty* string (a
+								// char-pointer constant aimed at data whose first byte is NUL -- a
+								// lookup table such as __hexdig[], not a literal). A small constant
+								// (e.g. 0x3) with a char-pointer type also lands here. None is a
+								// usable string: keep the operand as the real pointer constant so
+								// base[index] arithmetic stays well-defined instead of indexing
+								// into "". (No defined Data symbol here, so a named global ref is
+								// unavailable; the raw address is the faithful value.)
 								writer.name("kind").value("constant");
 								writer.name("value").value(node.getOffset());
 							}
@@ -2421,6 +2483,78 @@ public class PcodeSerializer {
 				prefixOperationsMap.put(pcodeOp, ops);
 			}
 			return ops;
+		}
+
+		// Lazily resolve the InterruptAnalysis exception-return property map.
+		private ghidra.program.model.util.StringPropertyMap excReturnSiteMap() {
+			if (!excReturnSiteMapInitialized) {
+				ghidra.program.model.util.PropertyMapManager pmm =
+					currentProgram.getUsrPropertyManager();
+				excReturnSiteMap = pmm == null ? null
+					: pmm.getStringPropertyMap(
+						util.firmware.InterruptAnalysis.EXC_RETURN_PROPMAP);
+				excReturnSiteMapInitialized = true;
+			}
+			return excReturnSiteMap;
+		}
+
+		// Build a synthetic, void-returning CALLOTHER for an exception return.
+		// `value` is the M-profile EXC_RETURN magic (carried as a constant
+		// input) or null for the classic CPSR-restoring form.
+		private PcodeOp buildExceptionReturnOp(int useropIndex, Long value) throws Exception {
+			Varnode[] inputs = new Varnode[value == null ? 1 : 2];
+			inputs[0] = new Varnode(constantSpace.getAddress(useropIndex), 4);
+			if (value != null) {
+				inputs[1] = new Varnode(
+					constantSpace.getAddress(value.longValue() & 0xFFFFFFFFL), 4);
+			}
+			SequenceNumber seq = new SequenceNumber(nextUniqueAddress(), nextSeqNum++);
+			return new PcodeOp(seq, PcodeOp.CALLOTHER, inputs, null);
+		}
+
+		// Inject a synthetic exception_return CALLOTHER as a prefix to each
+		// RETURN that InterruptAnalysis flagged as a non-standard exception
+		// return (M-profile EXC_RETURN magic, or A/R CPSR-restoring), so the
+		// side effect survives. Inert unless the propmap has entries.
+		void injectExceptionReturns() throws Exception {
+			ghidra.program.model.util.StringPropertyMap map = excReturnSiteMap();
+			if (map == null || currentFunction == null) {
+				return;
+			}
+			for (PcodeBlockBasic block : currentFunction.getBasicBlocks()) {
+				Iterator<PcodeOp> it = block.getIterator();
+				while (it.hasNext()) {
+					PcodeOp op = it.next();
+					if (op.getOpcode() != PcodeOp.RETURN) {
+						continue;
+					}
+					Address site = op.getSeqnum().getTarget();
+					if (site == null || !map.hasProperty(site)) {
+						continue;
+					}
+					String encoded = map.getString(site);
+					String form = encoded;
+					Long value = null;
+					int bar = encoded.indexOf('|');
+					if (bar >= 0) {
+						form = encoded.substring(0, bar);
+						String v = encoded.substring(bar + 1);
+						if (!v.isEmpty()) {
+							try {
+								value = Long.valueOf(Long.parseLong(v));
+							} catch (NumberFormatException e) {
+								value = null;
+							}
+						}
+					}
+					int idx = "exception_return_cpsr".equals(form)
+						? BUILTIN_EXCEPTION_RETURN_CPSR : BUILTIN_EXCEPTION_RETURN;
+					PcodeOp synth = buildExceptionReturnOp(idx, value);
+					getOrCreatePrefixOperations(op).add(synth);
+					// Register so serializeIntrinsics emits its declaration.
+					callotherUsePcodeOps.add(synth);
+				}
+			}
 		}
 
 		// Try to fixup direct stack pointer references in `op`.
@@ -3263,9 +3397,9 @@ public class PcodeSerializer {
 				// #250: scalar-op output must not carry an Array type.
 				DataType emitted = chooseEmittedType(output, outputHighVariable);
 				if (isScalarPcodeOp(pcodeOp.getOpcode())) {
-					emitted = demoteArrayIfMatching(
-						emitted, output.getSize(),
-						currentProgram.getDataTypeManager());
+					DataTypeManager dtm = currentProgram.getDataTypeManager();
+					emitted = demoteArrayIfMatching(emitted, output.getSize(), dtm);
+					emitted = demoteRecordIfMatching(emitted, output.getSize(), dtm);
 				}
 				writer.name("type").value(label(emitted));
 				writer.name("size").value(output.getSize());
@@ -4749,6 +4883,76 @@ public class PcodeSerializer {
 			writer.endArray();
 		}
 
+		// Serialize a decompiler read_volatile/write_volatile CALLOTHER.
+		// Layout: input[0]=userop index, input[1]=access location (a direct
+		// memory varnode, e.g. an MMIO register), input[2]=stored value (writes).
+		// The generic path renders the location as kind:"unknown", so the C++
+		// handler loses the address and the access silently drops `volatile`.
+		// Emit it as a typed pointer constant (like serializeLoadStoreAddress)
+		// the handler can cast to `volatile T*` and deref.
+		void serializeVolatileOp(PcodeOp pcodeOp) throws Exception {
+			serializeOutput(pcodeOp);
+
+			writer.name("target").beginObject();
+			writer.name("kind").value("intrinsic");
+			writer.name("function").value(intrinsicLabel(pcodeOp));
+			writer.name("is_variadic").value(true);
+			writer.name("is_noreturn").value(false);
+			writer.endObject();
+
+			boolean isWrite =
+				(int) pcodeOp.getInput(0).getOffset() == BUILTIN_VOLATILE_WRITE;
+
+			// Pointee type: the stored-value type for writes, the result type
+			// for reads. Used to give the address a `T *` type so the handler
+			// derefs at the right width.
+			DataType accessType = null;
+			DataTypeManager dtm = currentProgram.getDataTypeManager();
+			if (isWrite && pcodeOp.getNumInputs() > 2) {
+				HighVariable vh = variableOf(pcodeOp.getInput(2).getHigh());
+				if (vh != null) { accessType = vh.getDataType(); }
+			} else if (pcodeOp.getOutput() != null) {
+				HighVariable oh = variableOf(pcodeOp.getOutput().getHigh());
+				if (oh != null) { accessType = oh.getDataType(); }
+			}
+
+			writer.name("inputs").beginArray();
+			Varnode addr = pcodeOp.getNumInputs() > 1 ? pcodeOp.getInput(1) : null;
+			if (addr != null && addr.isAddress()) {
+				Address a = addr.getAddress();
+				// Prefer the recovered data symbol (e.g. DAT_xxxx / a named
+				// global) so the access ties to the program's data object --
+				// mirrors serializeLoadStoreAddress. The C++ handler takes the
+				// address-of this lvalue before the volatile cast.
+				HighVariable globalVar = seenGlobalsMap.get(a);
+				if (globalVar != null) {
+					writer.beginObject();
+					writer.name("type").value(label(globalVar.getDataType()));
+					writer.name("kind").value("global");
+					writer.name("global").value(label(a));
+					writer.endObject();
+				} else {
+					// No recovered data object (raw MMIO): emit (T *)address.
+					writer.beginObject();
+					if (accessType != null) {
+						writer.name("type").value(label(dtm.getPointer(accessType)));
+					} else {
+						writer.name("size").value(addr.getSize());
+					}
+					writer.name("kind").value("constant");
+					writer.name("value").value(a.getOffset());
+					writer.endObject();
+				}
+			} else if (addr != null) {
+				// Already a pointer value (register / temporary / computed).
+				serializeInput(pcodeOp, addr);
+			}
+			if (isWrite && pcodeOp.getNumInputs() > 2) {
+				serializeInput(pcodeOp, pcodeOp.getInput(2));
+			}
+			writer.endArray();
+		}
+
 		// Resolve the literal that a BUILTIN_STRINGDATA pcode loads.
 		// Four fallbacks, in order: refs-from, operand refs, raw read at
 		// the input varnode's constant address, defined-string index.
@@ -4931,6 +5135,10 @@ public class PcodeSerializer {
 				break;
 			case ADDRESS_OF:
 				serializeAddressOfOp(pcodeOp);
+				break;
+			case BUILTIN_VOLATILE_READ:
+			case BUILTIN_VOLATILE_WRITE:
+				serializeVolatileOp(pcodeOp);
 				break;
 			default:
 				serializeIntrinsicCallOp(pcodeOp);
@@ -5286,6 +5494,34 @@ public class PcodeSerializer {
 			writer.name("display_name").value(displayName);
 			writer.name("is_intrinsic").value(false);
 
+			// Interrupt handler metadata from InterruptAnalysis (the "ISR" tag,
+			// auto-applied or analyst-added, plus a kind propmap). Drives the
+			// void(void) prototype + interrupt attribute on the C++ side.
+			boolean isInterrupt = false;
+			for (ghidra.program.model.listing.FunctionTag tag
+					: functionToSerialize.getTags()) {
+				if (util.firmware.InterruptAnalysis.ISR_TAG.equals(tag.getName())) {
+					isInterrupt = true;
+					break;
+				}
+			}
+			if (isInterrupt) {
+				writer.name("is_interrupt").value(true);
+				String interruptKind = "";
+				ghidra.program.model.util.PropertyMapManager pmm =
+					currentProgram.getUsrPropertyManager();
+				if (pmm != null) {
+					ghidra.program.model.util.StringPropertyMap kindMap =
+						pmm.getStringPropertyMap(
+							util.firmware.InterruptAnalysis.KIND_PROPMAP);
+					Address entry = functionToSerialize.getEntryPoint();
+					if (kindMap != null && kindMap.hasProperty(entry)) {
+						interruptKind = kindMap.getString(entry);
+					}
+				}
+				writer.name("interrupt_kind").value(interruptKind);
+			}
+
 			writer.name("entry_point")
 				.value(functionToSerialize.getEntryPoint().toString(true));
 			serializeAddressRanges(functionToSerialize);
@@ -5338,6 +5574,11 @@ public class PcodeSerializer {
 								new SequenceNumber(jt.getSwitchAddress(), 0), jt);
 						}
 					}
+
+					// Inject exception_return CALLOTHERs ahead of RETURN
+					// terminators flagged by InterruptAnalysis. Must run before
+					// block serialization consumes the prefix-operation map.
+					injectExceptionReturns();
 
 					writer.name("basic_blocks").beginObject();
 					for (PcodeBlockBasic basicBlock : highFunction.getBasicBlocks()) {
