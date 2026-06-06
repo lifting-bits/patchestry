@@ -139,8 +139,11 @@ namespace patchestry::ast {
 
             auto param_type = param->getType();
             if (param_type->isIntegerType()) {
-                return new (ctx) clang::IntegerLiteral(
-                    ctx, llvm::APInt(ctx.getIntWidth(param_type), 0), param_type,
+                // param_type may be _Bool/enum/char8_t (isIntegerType() is true
+                // for them) — those crash StmtPrinter, so route through the
+                // printable-literal helper.
+                return make_int_literal_printable(
+                    ctx, 0, param_type, param_type->isSignedIntegerType(),
                     VirtualLoc(ctx)
                 );
             } else if (param_type->isFloatingType()) {
