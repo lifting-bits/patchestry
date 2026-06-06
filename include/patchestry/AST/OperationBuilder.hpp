@@ -195,16 +195,14 @@ namespace patchestry::ast {
             clang::SourceLocation loc
         );
 
-        // Public for intrinsic handlers: forces a *visible* C-style cast (e.g.
-        // the MMIO volatile-pointer cast) where make_cast would emit an implicit
-        // cast the pretty-printer drops.
+        // Public for intrinsic handlers: a *visible* C-style cast (e.g. the MMIO
+        // volatile-pointer cast) where make_cast would emit a dropped implicit one.
         clang::Expr *make_explicit_cast(
             clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
             clang::SourceLocation loc
         );
 
-        // Public for intrinsic handlers: resolves a serialized type key (e.g. an
-        // op-level type when a `local` volatile_read output has no inline type).
+        // Public for intrinsic handlers: resolve a serialized type key.
         TypeBuilder &type_builder(void) { return builder->type_builder.get(); }
 
         clang::Stmt *create_assign_operation(
@@ -302,10 +300,9 @@ namespace patchestry::ast {
             unsigned target_bytes = 0
         );
 
-        // Coerce a non-arithmetic INT_ZEXT/INT_SEXT target (e.g. a same-width
-        // wrapper struct Ghidra mis-propagated onto a scalar temp) to a
-        // same-width unsigned integer so the extension is valid C.  Returns the
-        // type unchanged when it is already integer/pointer/enum/bool.
+        // Coerce a non-arithmetic INT_ZEXT/INT_SEXT target (e.g. a wrapper
+        // struct on a scalar temp) to a same-width unsigned integer; unchanged
+        // when already integer/pointer/enum/bool.
         clang::QualType integer_target_for_int_ext(
             clang::ASTContext &ctx, clang::QualType target_type, unsigned op_bytes
         );

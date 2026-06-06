@@ -781,8 +781,8 @@ namespace patchestry::ghidra {
             }
         }
 
-        // Optional: interrupt/exception handler metadata (set by the Ghidra
-        // InterruptAnalysis pass). Absent on non-firmware / older outputs.
+        // Optional interrupt-handler metadata (InterruptAnalysis pass); absent
+        // on non-firmware / older outputs.
         function.is_interrupt = func_obj.getBoolean("is_interrupt").value_or(false);
         if (auto kind = get_string_if_valid(func_obj, "interrupt_kind")) {
             function.interrupt_kind = *kind;

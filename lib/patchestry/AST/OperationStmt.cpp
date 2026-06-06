@@ -259,10 +259,8 @@ namespace patchestry::ast {
             return expr;
         }
 
-        // Casting a sub-pointer-width integer straight to a pointer trips
-        // -Wint-to-pointer-cast ("cast to 'T*' from smaller integer type").
-        // Widen through a pointer-width unsigned integer first so the final
-        // integer->pointer cast is width-exact and warning-free.
+        // Widen a sub-pointer-width integer to uintptr first so the final
+        // int->pointer cast is width-exact (avoids -Wint-to-pointer-cast).
         if (to_type->isPointerType() && from_type->isIntegerType()) {
             auto uintptr_ty = ctx.getUIntPtrType();
             if (ctx.getTypeSize(from_type) < ctx.getTypeSize(uintptr_ty)) {
@@ -484,15 +482,12 @@ namespace patchestry::ast {
         LOG_FATAL("cast_pointer_to_int: unhandled PtrToIntExtension value");
     }
 
-    // INT_ZEXT / INT_SEXT are inherently integer-producing, but Ghidra's type
-    // propagation occasionally labels the result with a same-width record (e.g.
-    // a single-field wrapper `struct CRC32`).  Casting an enum/int to that
-    // struct hard-fails Sema ("converting 'enum X' to incompatible type 'struct
-    // Y'").  When the declared target is not a usable arithmetic/pointer type,
-    // substitute a same-width unsigned integer so the extension is valid C; the
-    // write side reinterprets back into the record if the output truly needs it.
-    // (The serializer's #250 scalar-op demotion now prevents this at the source;
-    // this keeps already-captured JSON working and is defence-in-depth.)
+    // INT_ZEXT/INT_SEXT produce integers, but Ghidra sometimes types the result
+    // as a same-width record (e.g. a one-field `struct CRC32`); casting an
+    // int/enum to it hard-fails Sema. Substitute a same-width unsigned integer
+    // when the target is not arithmetic/pointer; the write side reinterprets
+    // back to the record if needed. (Serializer #250 demotion also fixes this at
+    // the source; this keeps already-captured JSON working.)
     clang::QualType OpBuilder::integer_target_for_int_ext(
         clang::ASTContext &ctx, clang::QualType target_type, unsigned op_bytes
     ) {
@@ -1425,9 +1420,8 @@ namespace patchestry::ast {
         }
 
         // Loud-fail: a constant BRANCHIND target in the ARM EXC_RETURN range is
-        // an exception return InterruptAnalysis should have reclassified. A goto
-        // to that unmapped address would be junk; refuse. Read from the raw
-        // constant varnode, not the (already pointer-cast) input_expr.
+        // an exception return InterruptAnalysis should have reclassified; a goto
+        // to that unmapped address is junk. Read the raw constant varnode.
         if (op.inputs[0].kind == Varnode::VARNODE_CONSTANT && op.inputs[0].value
             && *op.inputs[0].value >= ghidra::kArmExcReturnLow)
         {
@@ -3188,12 +3182,9 @@ namespace patchestry::ast {
         lhs = coerce_record_to_integer(ctx, lhs, op_loc);
         rhs = coerce_record_to_integer(ctx, rhs, op_loc);
 
-        // void*/function-pointer arithmetic is a GCC extension the CIR backend
-        // cannot lower ("Not Yet Implemented: void* or function pointer
-        // arithmetic"), and the failed lowering then dereferences a null value
-        // and crashes.  For additive ops, reinterpret such operands as char*
-        // (byte arithmetic) -- well-defined C the backend accepts.  Mirrors the
-        // void*/func-ptr base handling in create_ptradd.
+        // The CIR backend can't lower void*/function-pointer arithmetic (and
+        // crashes on the failed lowering). For additive ops, reinterpret such
+        // operands as char* (byte arithmetic), as create_ptradd does for bases.
         if (kind == clang::BO_Add || kind == clang::BO_Sub) {
             auto char_ptr_ty = ctx.getPointerType(ctx.CharTy);
             auto to_byte_ptr = [&](clang::Expr *e) -> clang::Expr * {
@@ -3853,13 +3844,10 @@ namespace patchestry::ast {
             {
                 arith_base = make_cast(ctx, base, char_ptr_ty, op_loc);
             } else if (base->getType()->isArrayType()) {
-                // Array bases (e.g. string-literal `const char[N]` globals)
-                // decay to a pointer inside the `+`.  Letting that decay stay
-                // implicit leaves a StringLiteral as the additive operand,
-                // which trips -Wstring-plus-int ("adding 'int' to a string
-                // does not append to the string").  Emit an explicit char*
-                // cast so byte arithmetic is well-defined and the diagnostic
-                // (which only looks through implicit casts) does not fire.
+                // An array base (e.g. a string-literal global) decays implicitly
+                // inside the `+`, leaving a StringLiteral operand that trips
+                // -Wstring-plus-int. An explicit char* cast (not looked through
+                // by the diagnostic) keeps byte arithmetic well-defined.
                 arith_base = make_explicit_cast(ctx, base, char_ptr_ty, op_loc);
             }
             if (!arith_base) {

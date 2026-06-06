@@ -2151,13 +2151,10 @@ namespace patchestry::ast {
         std::unordered_set< clang::Stmt * > seen;
         CountGotoDeclRefs(stmt, refs, seen);
 
-        // Coalesce by label name.  A clone pass can leave same-named gotos on
-        // distinct LabelDecls; a decl-keyed count then under-counts a label's
-        // true references, so a refs-based fold (e.g. FoldGuardedJoinLabelChains
-        // requiring exactly 1 or 2 refs) erases the label while a same-named
-        // goto on the other decl survives -- an orphaned goto.  Give every decl
-        // the combined count of all same-named decls so such folds stay
-        // conservative and leave the cross-referenced label in place.
+        // Coalesce counts by label name: a clone pass can split same-named gotos
+        // across distinct LabelDecls, so a decl-keyed count under-counts a label
+        // and a refs-based fold would erase it while a same-named goto survives.
+        // Give every decl the combined count so such folds stay conservative.
         std::unordered_map< std::string, unsigned > by_name;
         for (const auto &kv : refs) { by_name[kv.first->getName().str()] += kv.second; }
         for (auto &kv : refs) { kv.second = by_name[kv.first->getName().str()]; }
@@ -5250,11 +5247,8 @@ namespace patchestry::ast {
 
         clang::LabelDecl *alt_label = LeadingLabelDecl(body[if_idx + 1]);
         if (!alt_label) { return false; }
-        // This fold relocates the alt block into the else arm and drops its
-        // leading label.  Only safe when nothing jumps to that label: `refs` is
-        // name-coalesced, so a non-zero count means a (possibly cross-scope,
-        // possibly clone-duplicated) goto still targets it -- folding would
-        // strand that goto as an orphan.  Reached here purely by fall-through.
+        // This fold drops the alt label, so only proceed when nothing jumps to
+        // it (refs is name-coalesced; a non-zero count would strand a goto).
         if (auto it = refs.find(alt_label); it != refs.end() && it->second > 0) {
             return false;
         }
@@ -5425,11 +5419,9 @@ namespace patchestry::ast {
             auto alt_ref = refs.find(alt_label);
             if (alt_ref == refs.end() || alt_ref->second != alt_gotos) { continue; }
 
-            // `refs` is computed once per FoldGotoDiamonds call and goes stale as
-            // this loop folds successive diamonds.  This fold drops the alt
-            // label, so re-count gotos to it by name in the *current* body and
-            // bail unless every reference is the alt_gotos being folded here --
-            // otherwise a surviving same-named goto is stranded as an orphan.
+            // refs goes stale as this loop folds; re-count gotos to the alt
+            // label in the current body and bail unless all are the ones folded
+            // here (else a surviving same-named goto is stranded).
             {
                 unsigned live = 0;
                 llvm::StringRef an = alt_label->getName();
@@ -5444,10 +5436,8 @@ namespace patchestry::ast {
                 if (live != alt_gotos) { continue; }
             }
 
-            // The fold also drops the join label.  `refs` is name-coalesced, so
-            // join_ref > join_gotos means a goto outside this `then` (possibly
-            // cross-scope or clone-duplicated) still targets the join -- dropping
-            // it would strand that goto as an orphan.  Skip in that case.
+            // The fold also drops the join label; join_ref > join_gotos means a
+            // goto outside this `then` still targets it, so skip (would orphan).
             auto join_ref = refs.find(join_label);
             if (join_ref != refs.end() && join_ref->second > join_gotos) { continue; }
 
@@ -5479,11 +5469,9 @@ namespace patchestry::ast {
                 body.begin() + static_cast< ptrdiff_t >(alt_block.begin),
                 body.begin() + static_cast< ptrdiff_t >(alt_block.end)
             );
-            // Post-fold safety: an internal relocation helper can leave a goto to
-            // the dropped alt (or join) label.  If the folded body now references
-            // either dropped label name without a surviving LabelStmt, the fold
-            // would strand an orphan -- revert to the original (`stmt` is intact,
-            // we worked on a copy) rather than emit an orphaned goto.
+            // Post-fold safety: if the folded body references a dropped label
+            // name with no surviving LabelStmt, revert (stmt is intact) rather
+            // than emit an orphaned goto.
             for (clang::LabelDecl *dl : { alt_label, join_label }) {
                 bool g = false, l = false;
                 llvm::StringRef dn = dl->getName();
@@ -6179,9 +6167,8 @@ namespace patchestry::ast {
         if (!compound) { return stmt; }
 
         std::vector< clang::Stmt * > body(compound->body_begin(), compound->body_end());
-        // Recompute refs over the current body before each child so a goto a
-        // prior sibling's fold just created is counted -- otherwise a later
-        // fold drops its target label using a stale count and strands it.
+        // Recompute refs over the current body before each child so gotos a
+        // prior sibling's fold created are counted (else a stale count strands them).
         for (size_t ci = 0; ci < body.size(); ++ci) {
             std::unordered_map< clang::LabelDecl *, unsigned > child_refs;
             CountGotoDeclRefs(detail::MakeCompound(ctx, body), child_refs);
@@ -6216,14 +6203,9 @@ namespace patchestry::ast {
                         auto alt_ref                 = cur_refs.find(alt_label);
                         if (alt_ref == cur_refs.end() || alt_ref->second != 1) { return false; }
 
-                        // `refs` is computed once per FoldGotoDiamonds call and
-                        // goes stale as this loop folds successive diamonds (a
-                        // prior fold can clone a second same-named goto to
-                        // alt_label).  This fold consumes exactly one goto and
-                        // erases the label, so re-count gotos to alt_label by
-                        // name in the *current* body and bail unless it is still
-                        // the sole reference -- otherwise the surviving same-named
-                        // goto is stranded as an orphan.
+                        // refs goes stale as this loop folds; this fold erases
+                        // alt_label, so re-count gotos to it by name now and bail
+                        // unless it is still the sole reference (else orphaned).
                         unsigned live_alt_gotos = 0;
                         llvm::StringRef alt_name = alt_label->getName();
                         std::function< void(clang::Stmt *) > count_alt =
@@ -6301,11 +6283,8 @@ namespace patchestry::ast {
                         tentative.insert(
                             tentative.begin() + static_cast< ptrdiff_t >(if_idx), new_if
                         );
-                        // Post-fold safety: an internal relocation can leave a
-                        // goto to the dropped alt label.  If the tentative result
-                        // references the dropped label name without a surviving
-                        // LabelStmt, committing would strand an orphan -- decline
-                        // the fold (body is left unchanged).
+                        // Post-fold safety: decline the fold if the tentative
+                        // result strands any goto (target name with no LabelStmt).
                         {
                             std::unordered_set< std::string > labels, gotos;
                             std::function< void(clang::Stmt *) > w = [&](clang::Stmt *st) {
@@ -6408,11 +6387,9 @@ namespace patchestry::ast {
                     tentative.begin() + static_cast< ptrdiff_t >(join_label_idx)
                 );
                 tentative.insert(tentative.begin() + static_cast< ptrdiff_t >(if_idx), new_if);
-                // Decline the fold if it would strand a goto to the dropped
-                // then label (a same-named goto elsewhere references it).
+                // Decline the fold if the result strands any goto (the erased
+                // range may hold intermediate labels beyond then/join).
                 {
-                    // The erased range may contain intermediate labels beyond
-                    // then/join; decline the fold if the result strands ANY goto.
                     std::unordered_set< std::string > labels, gotos;
                     std::function< void(clang::Stmt *) > w = [&](clang::Stmt *st) {
                         if (!st) { return; }
@@ -7513,15 +7490,11 @@ namespace patchestry::ast {
         }
     }
 
-    // Collapse clone-induced duplicate same-named labels.  A clone pass can mint
-    // a second LabelDecl with the same spelling; a later asymmetric fold then
-    // leaves a goto and its label referencing *different* same-named decls, so
-    // decl-keyed liveness drops the surviving label and strands the goto (an
-    // ORPHANED GOTO).  This re-points every goto onto the canonical (first)
-    // same-named LabelStmt and unwraps any non-canonical duplicate LabelStmt
-    // (keeping its body inline), leaving exactly one LabelStmt per name with all
-    // gotos pointing at it -- so the decl-keyed passes can't desync.  A no-op
-    // when no duplicate names exist, so it does not perturb clean functions.
+    // Collapse clone-induced duplicate same-named labels: re-point every goto
+    // onto the canonical (first) same-named LabelStmt and unwrap non-canonical
+    // duplicates (keeping their body), leaving one LabelStmt per name so
+    // decl-keyed liveness can't desync and strand a goto. No-op when names are
+    // unique.
     clang::Stmt *DedupSameNameLabels(
         clang::ASTContext &ctx, clang::Stmt *s,
         const std::unordered_map< std::string, clang::LabelDecl * > &canon
@@ -7597,9 +7570,8 @@ namespace patchestry::ast {
         mutated = false;
         if (!body) { return nullptr; }
 
-        // Collapse clone-induced duplicate same-named labels before any
-        // decl-keyed liveness check, so a surviving label is never mistaken for
-        // dead and its goto stranded.
+        // Collapse duplicate same-named labels before any decl-keyed liveness
+        // check, so a surviving label isn't mistaken for dead and its goto stranded.
         body = DedupSameNameLabels(ctx, body);
 
         llvm::FoldingSetNodeID before;

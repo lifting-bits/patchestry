@@ -380,8 +380,7 @@ namespace patchestry::ast {
                 } else {
                     // Constant BRANCHIND target in the EXC_RETURN range: an
                     // exception return that escaped InterruptAnalysis. Diagnose
-                    // here (CGraph construction can't drop the terminator); the
-                    // actual goto refusal is in OperationStmt::create_branchind.
+                    // here; the goto refusal is in create_branchind.
                     if (!term->inputs.empty()
                         && term->inputs[0].kind == ghidra::Varnode::VARNODE_CONSTANT
                         && term->inputs[0].value

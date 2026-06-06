@@ -33,11 +33,9 @@ namespace patchestry::ast {
 
     namespace {
 
-        // Attach a Clang ARMInterruptAttr from interrupt_kind: "" / unset ->
-        // Generic (M-profile); "IRQ"/"FIQ"/"SWI"/"ABORT"/"UNDEF" -> the matching
-        // classic A/R kind; anything else is a serializer contract violation
-        // (loud warning, Generic). Attached regardless of target triple to
-        // document intent and drive the round-trip exception entry/exit.
+        // Attach an ARMInterruptAttr from interrupt_kind: ""/unset -> Generic
+        // (M-profile); IRQ/FIQ/SWI/ABORT/UNDEF -> the classic A/R kind; anything
+        // else loud-warns and falls back to Generic.
         void attach_interrupt_attribute(
             clang::ASTContext &ctx, clang::FunctionDecl *func_decl,
             const std::optional< std::string > &interrupt_kind
@@ -260,11 +258,9 @@ namespace patchestry::ast {
             }
         }
 
-        // Interrupt handlers take the hardware-stacked frame, not C arguments.
-        // Force void(void) (dropping any phantom r0-r3 params Ghidra inferred),
-        // attach the interrupt attribute, and return before parameter synthesis.
-        // A non-void/parametered prototype here means upstream didn't normalize
-        // the ISR -- override loudly rather than emit phantom parameters.
+        // Interrupt handlers take the hardware-stacked frame, not C arguments:
+        // force void(void) (dropping phantom r0-r3 params), attach the attribute,
+        // and return before parameter synthesis. Loud-warn if it wasn't void().
         if (function.get().is_interrupt) {
             const auto *ft  = fn_type->getAs< clang::FunctionType >();
             const auto *fpt = fn_type->getAs< clang::FunctionProtoType >();

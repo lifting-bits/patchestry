@@ -324,9 +324,8 @@ namespace patchestry::ast {
                 return {};
             }
 
-            // Result type: a `local` read output has no inline type (it lives on
-            // the op), so fall back output -> op.type -> int. Must stay non-null;
-            // getVolatileType(null) below would abort.
+            // Result type: output -> op.type -> int. Must stay non-null
+            // (getVolatileType(null) would abort).
             clang::QualType result_type = ctx.IntTy;
             clang::QualType from_output;
             if (op.output) { from_output = b.get_varnode_type(ctx, *op.output); }
@@ -339,13 +338,10 @@ namespace patchestry::ast {
 
             // Cast to volatile pointer and dereference: *(volatile T*)addr
             auto vol_ptr = ctx.getPointerType(ctx.getVolatileType(result_type));
-            // Explicit C-style cast (not make_cast): make_cast emits an implicit
-            // cast the C pretty-printer drops, silently losing `volatile` on the
-            // recompiled access (CIR/LLVM keep it, the emitted source doesn't).
-            // A `global` operand is the datum at the access address (e.g.
-            // DAT_xxxx), so take its address: *(volatile T *)&DAT_xxxx. Keyed on
-            // operand kind, not pointer-ness, so a pointer-typed global still
-            // gets &global; a constant/computed pointer is already the address.
+            // Explicit C-style cast (make_cast's implicit cast is dropped by the
+            // pretty-printer, losing `volatile` in the emitted source). A global
+            // operand is the datum at the address, so take its address:
+            // *(volatile T *)&DAT_xxxx (keyed on kind, not pointer-ness).
             if (op.inputs[0].kind == ghidra::Varnode::VARNODE_GLOBAL) {
                 auto addr_of = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_AddrOf, addr);
                 if (addr_of.isInvalid()) {
@@ -368,10 +364,9 @@ namespace patchestry::ast {
             // If no output, return the deref expression directly
             if (!op.output) { return { deref.getAs< clang::Stmt >(), true }; }
 
-            // Self-referential output (its `operation` points back at this op,
-            // as for a read feeding a return): return the read as a mergeable
-            // value. Resolving it as an assignment target would recurse into
-            // create_varnode re-materializing this op -- stack overflow.
+            // Self-referential output (operation points back at this op): return
+            // the read as a mergeable value; resolving it as an assignment target
+            // would recurse into create_varnode and stack-overflow.
             if (op.output->operation && *op.output->operation == op.key) {
                 return { deref.getAs< clang::Stmt >(), true };
             }
@@ -416,13 +411,10 @@ namespace patchestry::ast {
 
             // Cast to volatile pointer: (volatile T*)addr
             auto vol_ptr = ctx.getPointerType(ctx.getVolatileType(val->getType()));
-            // Explicit C-style cast (not make_cast): make_cast emits an implicit
-            // cast the C pretty-printer drops, silently losing `volatile` on the
-            // recompiled access (CIR/LLVM keep it, the emitted source doesn't).
-            // A `global` operand is the datum at the access address (e.g.
-            // DAT_xxxx), so take its address: *(volatile T *)&DAT_xxxx. Keyed on
-            // operand kind, not pointer-ness, so a pointer-typed global still
-            // gets &global; a constant/computed pointer is already the address.
+            // Explicit C-style cast (make_cast's implicit cast is dropped by the
+            // pretty-printer, losing `volatile` in the emitted source). A global
+            // operand is the datum at the address, so take its address:
+            // *(volatile T *)&DAT_xxxx (keyed on kind, not pointer-ness).
             if (op.inputs[0].kind == ghidra::Varnode::VARNODE_GLOBAL) {
                 auto addr_of = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_AddrOf, addr);
                 if (addr_of.isInvalid()) {
@@ -509,10 +501,9 @@ namespace patchestry::ast {
             return { decayed ? decayed : lit, true };
         }
 
-        // Opaque, side-effecting exception return (M-profile EXC_RETURN `bx`, or
-        // A/R CPSR-restoring `subs pc,lr` / `ldm^` / `rfe`). The unstack/mode-
-        // switch can't be modeled in P-Code, so emit an extern __patchestry_<name>
-        // call that no pass folds or elides; serializer inputs ride as args.
+        // Opaque exception return (M-profile EXC_RETURN bx, or A/R CPSR-restoring
+        // subs pc,lr / ldm^ / rfe). The unstack/mode-switch isn't modelable in
+        // P-Code, so emit an extern __patchestry_<name> call no pass folds away.
         std::pair< clang::Stmt *, bool > handle_exception_return(
             OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
             const ghidra::Operation &op, const std::string &name
