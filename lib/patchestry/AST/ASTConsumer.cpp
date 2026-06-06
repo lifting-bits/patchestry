@@ -187,10 +187,12 @@ namespace patchestry::ast {
                     return f.display_name.empty() ? f.name : f.display_name;
                 };
                 std::unordered_map<std::string, int> def_name_count;
+                std::unordered_set<std::string> all_names;
                 for (auto &[key, function] : get_program().serialized_functions) {
-                    if (function.basic_blocks.empty()) { continue; }
                     const auto &cname = cname_of(function);
-                    if (!cname.empty()) { def_name_count[cname]++; }
+                    if (cname.empty()) { continue; }
+                    all_names.insert(cname);
+                    if (!function.basic_blocks.empty()) { def_name_count[cname]++; }
                 }
                 for (auto &[key, function] : get_program().serialized_functions) {
                     if (function.basic_blocks.empty()) { continue; }
@@ -205,7 +207,15 @@ namespace patchestry::ast {
                             || (c >= 'A' && c <= 'Z') || c == '_';
                         if (!ok) { c = '_'; }
                     }
-                    std::string renamed = cname + "_" + suffix;
+                    // Address suffixes make this practically unique, but guard
+                    // against the renamed symbol coinciding with an existing one
+                    // (which would just reintroduce the collision): bump until
+                    // unique and record it so later renames stay distinct too.
+                    std::string base    = cname + "_" + suffix;
+                    std::string renamed = base;
+                    for (unsigned bump = 1; !all_names.insert(renamed).second; ++bump) {
+                        renamed = base + "_" + std::to_string(bump);
+                    }
                     LOG(WARNING) << "Duplicate definition name '" << cname << "' at "
                                  << key << "; renaming to '" << renamed
                                  << "' to avoid a colliding C symbol.\n";
