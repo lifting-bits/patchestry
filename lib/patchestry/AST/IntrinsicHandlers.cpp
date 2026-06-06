@@ -353,6 +353,11 @@ namespace patchestry::ast {
                 addr = addr_of.getAs< clang::Expr >();
             }
             auto *cast   = b.make_explicit_cast(ctx, addr, vol_ptr, op_loc);
+            if (cast == nullptr) {
+                LOG(ERROR) << "volatile_read: volatile-pointer cast failed. key: "
+                           << op.key << "\n";
+                return {};
+            }
             auto deref   = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, cast);
 
             if (deref.isInvalid()) {
@@ -426,6 +431,11 @@ namespace patchestry::ast {
                 addr = addr_of.getAs< clang::Expr >();
             }
             auto *cast   = b.make_explicit_cast(ctx, addr, vol_ptr, op_loc);
+            if (cast == nullptr) {
+                LOG(ERROR) << "volatile_write: volatile-pointer cast failed. key: "
+                           << op.key << "\n";
+                return {};
+            }
 
             // Dereference and assign: *(volatile T*)addr = val
             auto deref = b.sema().CreateBuiltinUnaryOp(op_loc, clang::UO_Deref, cast);
