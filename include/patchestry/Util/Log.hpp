@@ -13,15 +13,30 @@
 
 enum LogLevel { DEBUG, INFO, WARNING, ERROR, FATAL };
 
+namespace patchestry::logging {
+    // Global minimum level a LOG() must meet to be emitted (glog-style).
+    // Default WARNING: DEBUG/INFO are suppressed unless `--verbose` lowers it.
+    inline LogLevel &MinLogLevel() {
+        static LogLevel level = WARNING;
+        return level;
+    }
+    // Sink for suppressed levels — discards everything written to it.
+    inline llvm::raw_ostream &NullLogStream() {
+        static llvm::raw_null_ostream stream;
+        return stream;
+    }
+} // namespace patchestry::logging
+
 #define LOG(level) \
-    (((level) == DEBUG)         ? llvm::outs() << "[DEBUG] " \
-         : ((level) == INFO)    ? llvm::outs() << "[INFO] " \
-         : ((level) == WARNING) ? llvm::outs() << "[WARNING] " \
-         : ((level) == FATAL)   ? llvm::errs() << "[FATAL] " \
-         : ((level) == ERROR)   ? llvm::errs() << "[ERROR] " \
-                                : llvm::outs() \
-    ) << "(" \
-      << __FILE__ << ":" << __LINE__ << ") "
+    (((level) < ::patchestry::logging::MinLogLevel()) \
+         ? ::patchestry::logging::NullLogStream() \
+         : ((((level) == DEBUG)     ? llvm::outs() << "[DEBUG] " \
+              : ((level) == INFO)    ? llvm::outs() << "[INFO] " \
+              : ((level) == WARNING) ? llvm::outs() << "[WARNING] " \
+              : ((level) == FATAL)   ? llvm::errs() << "[FATAL] " \
+              : ((level) == ERROR)   ? llvm::errs() << "[ERROR] " \
+                                     : llvm::outs()) \
+            << "(" << __FILE__ << ":" << __LINE__ << ") "))
 
 #define LOG_FATAL(...) \
     do { \
