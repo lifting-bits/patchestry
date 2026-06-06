@@ -89,9 +89,7 @@ namespace patchestry::ast {
 
             auto param_type = param->getType();
             if (param_type->isIntegerType()) {
-                // param_type may be _Bool/enum/char8_t (isIntegerType() is true
-                // for them) — those crash StmtPrinter, so route through the
-                // printable-literal helper.
+                // param_type may be _Bool/enum (crash StmtPrinter).
                 return MakeIntLiteralPrintable(
                     ctx, 0, param_type, param_type->isSignedIntegerType(),
                     VirtualLoc(ctx)
@@ -1242,9 +1240,7 @@ namespace patchestry::ast {
             }
 
             auto create_case = [&](const SwitchCase &sc) -> clang::CaseStmt * {
-                // disc_type may be _Bool/char32_t (enum is already lowered to
-                // its underlying type above) — route through the printable
-                // helper so the case value never trips StmtPrinter.
+                // disc_type may be _Bool/char32_t (enum lowered above).
                 auto *case_val = MakeIntLiteralPrintable(
                     ctx, static_cast< uint64_t >(sc.value), disc_type,
                     /*is_signed=*/true, loc

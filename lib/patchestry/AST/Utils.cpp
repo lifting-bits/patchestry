@@ -353,8 +353,7 @@ namespace patchestry::ast {
                     return false;
             }
         };
-        // getIntWidth() asserts on non-integer/enum types, so only consult it
-        // when the operand is genuinely integral; otherwise fall back to int.
+        // getIntWidth() asserts on non-integer types; fall back to int.
         const bool integral =
             !operand_type.isNull() && operand_type->isIntegralOrEnumerationType();
         clang::QualType lit_type = operand_type;

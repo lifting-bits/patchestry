@@ -14,13 +14,13 @@
 enum LogLevel { DEBUG, INFO, WARNING, ERROR, FATAL };
 
 namespace patchestry::logging {
-    // Global minimum level a LOG() must meet to be emitted (glog-style).
-    // Default WARNING: DEBUG/INFO are suppressed unless `--verbose` lowers it.
+    // Min level a LOG() must meet to emit (glog-style); default suppresses
+    // DEBUG/INFO. Set via --verbose.
     inline LogLevel &MinLogLevel() {
         static LogLevel level = WARNING;
         return level;
     }
-    // Sink for suppressed levels — discards everything written to it.
+    // Sink for suppressed levels.
     inline llvm::raw_ostream &NullLogStream() {
         static llvm::raw_null_ostream stream;
         return stream;
