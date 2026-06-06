@@ -2121,7 +2121,7 @@ namespace patchestry::ast {
 
         // System userops the Ghidra IntrinsicClassifier tagged with an
         // `intrinsic_class` map to a compiler intrinsic via the per-architecture
-        // speller selected by program_arch() (ARM -> CMSIS/ACLE: __disable_irq,
+        // emitter selected by program_arch() (ARM -> CMSIS/ACLE: __disable_irq,
         // __get_BASEPRI, __arm_ldc, ...). Returns nullopt for unhandled classes
         // / architectures, which then fall through unchanged.
         if (auto sys = emit_system_intrinsic(

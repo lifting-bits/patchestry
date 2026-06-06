@@ -616,14 +616,14 @@ namespace patchestry::ast {
             return b.create_intrinsic_call(ctx, fn, reordered, name);
         }
 
-        // === Per-architecture speller registry =============================
+        // === Per-architecture emitter registry =============================
         //
         // The taxonomy (intrinsic_class) is architecture-neutral; each arch
-        // plugs in a SpellFn that turns a classified op into a compiler
-        // intrinsic. The speller is selected by the program's processor string
+        // plugs in a IntrinsicEmitFn that turns a classified op into a compiler
+        // intrinsic. The emitter is selected by the program's processor string
         // (program_arch() == the JSON `architecture`). To add an architecture:
-        // write a SpellFn and add one registry row.
-        using SpellFn = std::optional< std::pair< clang::Stmt *, bool > > (*)(
+        // write a IntrinsicEmitFn and add one registry row.
+        using IntrinsicEmitFn = std::optional< std::pair< clang::Stmt *, bool > > (*)(
             OpBuilder &, clang::ASTContext &, const ghidra::Function &,
             const ghidra::Operation &
         );
@@ -659,7 +659,7 @@ namespace patchestry::ast {
         }
 
         // AArch64: extension point. Returns nullopt (all classes fall through)
-        // until an AArch64 speller is implemented.
+        // until an AArch64 emitter is implemented.
         std::optional< std::pair< clang::Stmt *, bool > > aarch64_emit_system_intrinsic(
             OpBuilder &, clang::ASTContext &, const ghidra::Function &,
             const ghidra::Operation &
@@ -667,25 +667,26 @@ namespace patchestry::ast {
             return std::nullopt;
         }
 
-        struct ArchSpeller
+        // Intrinsics are emitted as extern declarations (create_intrinsic_call ->
+        // get_or_create_intrinsic_decl, SC_Extern); the emitted C carries its own
+        // extern prototypes rather than #include-ing arch headers, so the emitter
+        // carries no header info.
+        struct ArchIntrinsicEmitter
         {
             std::string_view arch; // matches program_arch() (case-insensitive)
-            SpellFn emit;          // classified op -> compiler intrinsic
-            // Reserved for the header-emission follow-up (TU `#include` +
-            // extern suppression); not consumed yet.
-            std::string_view primary_header;
+            IntrinsicEmitFn emit;          // classified op -> compiler intrinsic
         };
 
-        constexpr std::array< ArchSpeller, 2 > arch_spellers = { {
-            { "ARM",     &arm_emit_system_intrinsic,     "<arm_acle.h>" },
-            { "AARCH64", &aarch64_emit_system_intrinsic, "<arm_acle.h>" },
+        constexpr std::array< ArchIntrinsicEmitter, 2 > arch_intrinsic_emitters = { {
+            { "ARM",     &arm_emit_system_intrinsic     },
+            { "AARCH64", &aarch64_emit_system_intrinsic },
         } };
 
-        const ArchSpeller *get_speller(std::string_view arch) {
+        const ArchIntrinsicEmitter *get_intrinsic_emitter(std::string_view arch) {
             auto lowered = to_lower_ascii(arch);
-            for (const auto &speller : arch_spellers) {
-                if (to_lower_ascii(speller.arch) == lowered) {
-                    return &speller;
+            for (const auto &emitter : arch_intrinsic_emitters) {
+                if (to_lower_ascii(emitter.arch) == lowered) {
+                    return &emitter;
                 }
             }
             return nullptr;
@@ -775,13 +776,13 @@ namespace patchestry::ast {
         if (!op.target || !op.target->intrinsic_class) {
             return std::nullopt;
         }
-        // Select the speller for this program's architecture. Unknown arch (or
-        // an arch whose speller does not cover this class) falls through.
-        const auto *speller = get_speller(arch);
-        if (speller == nullptr) {
+        // Select the emitter for this program's architecture. Unknown arch (or
+        // an arch whose emitter does not cover this class) falls through.
+        const auto *emitter = get_intrinsic_emitter(arch);
+        if (emitter == nullptr) {
             return std::nullopt;
         }
-        return speller->emit(b, ctx, fn, op);
+        return emitter->emit(b, ctx, fn, op);
     }
 
 } // namespace patchestry::ast

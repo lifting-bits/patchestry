@@ -41,11 +41,11 @@ namespace patchestry::ast {
     const std::unordered_map< std::string, IntrinsicHandler > &get_intrinsic_handlers();
 
     // System-userop emission. When the Ghidra IntrinsicClassifier tagged the
-    // CALLOTHER target with an `intrinsic_class`, the per-architecture speller
+    // CALLOTHER target with an `intrinsic_class`, the per-architecture emitter
     // selected by `arch` (the program's processor string) maps it to a compiler
     // builtin (ACLE) / CMSIS-Core spelling and emits the call. Returns
     // std::nullopt to fall through to the existing name-based dispatch -- the
-    // class is unset, the arch has no registered speller, or the speller
+    // class is unset, the arch has no registered emitter, or the emitter
     // intentionally leaves this class to another path (e.g. barriers handled by
     // the C11-fence mapping). Read/write/return shape is driven by
     // `op.output`/`op.inputs` exactly as the generic handlers.
