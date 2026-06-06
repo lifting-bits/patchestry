@@ -98,6 +98,22 @@ namespace patchestry::ast {
             if (auto *expr = clang::dyn_cast< clang::Expr >(result)) {
                 auto storage_type = expr->getType();
                 if (storage_type->isArrayType() || storage_type->isRecordType()) {
+                    // When the varnode's *own* declared type is a pointer, the
+                    // value wanted here is the aggregate's address, not its
+                    // contents.  This happens when a COPY loads the base address
+                    // of an array global (e.g. `r8 = &__hexdig`): the storage is
+                    // `unsigned char[256]` but the varnode type is `unsigned
+                    // char *`.  Decay to that pointer instead of reinterpreting
+                    // the first N bytes as an integer (`*(unsigned int*)&table`),
+                    // which would corrupt the subsequent `base[index]` lookup.
+                    if (!vnode.type_key.empty()) {
+                        auto declared = type_builder().GetSerializedType(vnode.type_key);
+                        if (!declared.isNull() && declared->isPointerType()) {
+                            if (auto *decayed = make_cast(ctx, expr, declared, loc)) {
+                                return decayed;
+                            }
+                        }
+                    }
                     auto *narrowed = narrow_aggregate_to_integer(
                         ctx, expr, loc, vnode.size);
                     if (narrowed) {

@@ -259,6 +259,21 @@ namespace patchestry::ast {
             return expr;
         }
 
+        // Casting a sub-pointer-width integer straight to a pointer trips
+        // -Wint-to-pointer-cast ("cast to 'T*' from smaller integer type").
+        // Widen through a pointer-width unsigned integer first so the final
+        // integer->pointer cast is width-exact and warning-free.
+        if (to_type->isPointerType() && from_type->isIntegerType()) {
+            auto uintptr_ty = ctx.getUIntPtrType();
+            if (ctx.getTypeSize(from_type) < ctx.getTypeSize(uintptr_ty)) {
+                expr = make_cast(ctx, expr, uintptr_ty, loc);
+                if (!expr) {
+                    return nullptr;
+                }
+                from_type = expr->getType();
+            }
+        }
+
         // CIRGen's emitCallee rejects implicit BitCast on a callee;
         // emit an explicit CStyleCastExpr instead.
         if (to_type->isPointerType()
@@ -3787,6 +3802,15 @@ namespace patchestry::ast {
                            || base->getType()->getPointeeType()->isVoidType()))
             {
                 arith_base = make_cast(ctx, base, char_ptr_ty, op_loc);
+            } else if (base->getType()->isArrayType()) {
+                // Array bases (e.g. string-literal `const char[N]` globals)
+                // decay to a pointer inside the `+`.  Letting that decay stay
+                // implicit leaves a StringLiteral as the additive operand,
+                // which trips -Wstring-plus-int ("adding 'int' to a string
+                // does not append to the string").  Emit an explicit char*
+                // cast so byte arithmetic is well-defined and the diagnostic
+                // (which only looks through implicit casts) does not fire.
+                arith_base = make_explicit_cast(ctx, base, char_ptr_ty, op_loc);
             }
             if (!arith_base) {
                 LOG(ERROR) << "PTRADD: failed to reinterpret base for "

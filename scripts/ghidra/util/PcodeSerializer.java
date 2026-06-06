@@ -1802,7 +1802,17 @@ public class PcodeSerializer {
 					if (node.isConstant()) {
 						Data dataReferencedAsConstant = apiUtil.getDataReferencedAsConstant(node);
 						if (dataReferencedAsConstant != null) {
-							if (dataReferencedAsConstant.hasStringValue()) {
+							// A char-pointer constant whose target begins with a NUL byte reads
+							// back as an *empty* string. This is the signature of a byte lookup
+							// table (e.g. newlib's __hexdig[], whose entry [0] is 0x00) referenced
+							// by its base address, not a real string literal. Emitting
+							// string_value:"" here destroys the table: downstream base[index]
+							// PTRADDs degrade to "" + index, which both mis-decompiles and
+							// over-reads the 1-byte literal. Emit the underlying global instead so
+							// the access stays table[index].
+							boolean hasNonEmptyString = dataReferencedAsConstant.hasStringValue()
+								&& !dataReferencedAsConstant.getValue().toString().isEmpty();
+							if (hasNonEmptyString) {
 								writer.name("kind").value("string");
 								writer.name("string_value").value(dataReferencedAsConstant.getValue().toString());
 							} else {
@@ -1812,13 +1822,18 @@ public class PcodeSerializer {
 						} else if (isCharPointer(node) && highVariable != null
 							&& !node.getAddress().equals(constantSpace.getAddress(0))) {
 							String string = apiUtil.findNullTerminatedString(node.getAddress(), ((Pointer) highVariable.getDataType()));
-							if (string != null) {
+							if (string != null && !string.isEmpty()) {
 								writer.name("kind").value("string");
 								writer.name("string_value").value(string);
 							} else {
-								// No valid string found at address - treat as constant value.
-								// This happens when a small constant (e.g., 0x3) has a char pointer
-								// type but doesn't point to valid mapped memory.
+								// Either no valid string at the address, or an *empty* string (a
+								// char-pointer constant aimed at data whose first byte is NUL -- a
+								// lookup table such as __hexdig[], not a literal). A small constant
+								// (e.g. 0x3) with a char-pointer type also lands here. None is a
+								// usable string: keep the operand as the real pointer constant so
+								// base[index] arithmetic stays well-defined instead of indexing
+								// into "". (No defined Data symbol here, so a named global ref is
+								// unavailable; the raw address is the faithful value.)
 								writer.name("kind").value("constant");
 								writer.name("value").value(node.getOffset());
 							}
