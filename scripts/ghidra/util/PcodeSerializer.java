@@ -364,26 +364,6 @@ public class PcodeSerializer {
 		// the `PcodeOp`s representing those `CALLOTHER`s.
 		private List<PcodeOp> callotherUsePcodeOps;
 
-		// Missing-intrinsic inventory: distinct userop name -> manifest entry.
-		// Populated by the low-pcode instruction walk (origin "low") and
-		// upgraded to "high"/"synthetic" for userops that reach serialization.
-		// Emitted as the top-level `intrinsic_manifest`.
-		private java.util.LinkedHashMap<String, ManifestEntry> intrinsicManifest;
-
-		private static final class ManifestEntry {
-			final String klass;
-			final int index;
-			final boolean mapped;
-			int count;
-			String origin;
-			ManifestEntry(String klass, int index, boolean mapped, String origin) {
-				this.klass  = klass;
-				this.index  = index;
-				this.mapped = mapped;
-				this.origin = origin;
-				this.count  = 0;
-			}
-		}
 
 		// Maps external function label → mangled name discovered at the call
 		// site (thunk/PLT stub) before dethunking.  Populated by
@@ -483,7 +463,6 @@ public class PcodeSerializer {
 			this.prefixOperationsMap = new HashMap<>();
 			this.addressOfGlobalMap = new HashMap<>();
 			this.callotherUsePcodeOps = new ArrayList<>();
-			this.intrinsicManifest = new java.util.LinkedHashMap<>();
 			this.seenDataMap = new HashMap<>();
 
 			// Extraout sanitizer wiring.
@@ -5882,114 +5861,6 @@ public class PcodeSerializer {
 			System.out.println("Total serialized intrinsics: " + Integer.toString(numIntrinsics));
 		}
 
-		// Layer 2 of the missing-intrinsic discovery: walk the raw (low) p-code
-		// of every instruction in the program. This sees every SLEIGH CALLOTHER
-		// userop actually present -- including ones in functions the decompiler
-		// skipped and ops it later eliminated -- which a high-p-code-only walk
-		// would miss. Synthetic decompiler builtins (>= BUILTIN_STRINGDATA) do
-		// not appear here; they are added by finalizeManifestOrigins() from the
-		// high pass.
-		private void discoverIntrinsicManifest() {
-			InstructionIterator it = currentProgram.getListing().getInstructions(true);
-			while (it.hasNext()) {
-				Instruction insn = it.next();
-				PcodeOp[] ops;
-				try {
-					ops = insn.getPcode();
-				} catch (Exception e) {
-					continue;
-				}
-				if (ops == null) { continue; }
-				for (PcodeOp op : ops) {
-					if (op.getOpcode() != PcodeOp.CALLOTHER || op.getNumInputs() < 1) {
-						continue;
-					}
-					int index = (int) op.getInput(0).getOffset();
-					String name = resolveUseropName(index);
-					if (name == null) { name = unknownUseropName(index); }
-					recordManifestLow(name, index);
-				}
-			}
-		}
-
-		private void recordManifestLow(String name, int index) {
-			ManifestEntry e = intrinsicManifest.get(name);
-			if (e == null) {
-				util.firmware.IntrinsicClassifier.Result r =
-					util.firmware.IntrinsicClassifier.classify(this.architecture, name);
-				e = new ManifestEntry(r.klass, index, r.mapped, "low");
-				intrinsicManifest.put(name, e);
-			}
-			e.count++;
-		}
-
-		// Mark userops that reached serialization: present at high p-code level
-		// (origin "high") or decompiler-synthesized builtins (origin "synthetic",
-		// which the low-pcode walk cannot see).
-		private void finalizeManifestOrigins() {
-			for (PcodeOp pcodeOp : callotherUsePcodeOps) {
-				int index = (int) pcodeOp.getInput(0).getOffset();
-				String resolved = resolveUseropName(index);
-				boolean known = (resolved != null);
-				String name = known ? resolved : unknownUseropName(index);
-				boolean synthetic = index >= BUILTIN_STRINGDATA;
-				ManifestEntry e = intrinsicManifest.get(name);
-				if (e == null) {
-					// A synthetic/builtin op with a RESOLVED name (a Ghidra
-					// decompiler builtin like volatile_read/builtin_memcpy, or a
-					// patchestry-injected op like exception_return) has a
-					// dedicated C++ handler -> "builtin"/mapped. An UNRESOLVED
-					// index in the synthetic range -- e.g. a future Ghidra
-					// builtin (0x10000006+) we don't yet recognize -- stays
-					// unmapped so the manifest flags it instead of silently
-					// marking it handled.
-					util.firmware.IntrinsicClassifier.Result r =
-						util.firmware.IntrinsicClassifier.classify(this.architecture, name);
-					boolean builtin = synthetic && known;
-					String klass  = builtin ? "builtin" : r.klass;
-					boolean mapped = builtin ? true : r.mapped;
-					e = new ManifestEntry(klass, index, mapped,
-						synthetic ? "synthetic" : "high");
-					e.count = 1;
-					intrinsicManifest.put(name, e);
-				} else {
-					e.origin = synthetic ? "synthetic" : "high";
-				}
-			}
-		}
-
-		// Emit the missing-intrinsic inventory at top level.
-		private void serializeManifest() throws Exception {
-			discoverIntrinsicManifest();
-			finalizeManifestOrigins();
-
-			int unmapped = 0;
-			for (ManifestEntry e : intrinsicManifest.values()) {
-				if (!e.mapped) { unmapped++; }
-			}
-
-			writer.name("intrinsic_manifest").beginObject();
-			writer.name("total_distinct").value(intrinsicManifest.size());
-			writer.name("unmapped_count").value(unmapped);
-			writer.name("entries").beginArray();
-			for (java.util.Map.Entry<String, ManifestEntry> kv : intrinsicManifest.entrySet()) {
-				ManifestEntry e = kv.getValue();
-				writer.beginObject();
-				writer.name("name").value(kv.getKey());
-				writer.name("index").value(e.index);
-				writer.name("class").value(e.klass);
-				writer.name("count").value(e.count);
-				writer.name("mapped").value(e.mapped);
-				writer.name("origin").value(e.origin);
-				writer.endObject();
-			}
-			writer.endArray();
-			writer.endObject();
-
-			System.out.println("Intrinsic manifest: " + intrinsicManifest.size()
-				+ " distinct userops, " + unmapped + " unmapped.");
-		}
-		
 
 		// Ghidra exposes its structured region tree only via
 		// DecompInterface.structureGraph(BlockGraph, ...), which expects an
@@ -6364,9 +6235,6 @@ public class PcodeSerializer {
 
 			// TailCallAnalysis findings (empty when pass disabled / no hits).
 			serializeBoundaryRepairs();
-
-			// Missing-intrinsic inventory (layered low/high p-code discovery).
-			serializeManifest();
 
 			writer.endObject();
 
