@@ -905,9 +905,6 @@ namespace patchestry::ghidra {
         {
             target.system_register = reg->str();
         }
-        if (auto mapped = maybe_target->getBoolean("mapped"); mapped.has_value()) {
-            target.mapped = *mapped;
-        }
 
         op.target           = std::move(target);
         op.has_return_value = call_obj.getBoolean("has_return_value").value_or(false);

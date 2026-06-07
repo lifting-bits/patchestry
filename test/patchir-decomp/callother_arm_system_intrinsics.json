@@ -54,8 +54,7 @@
               "target": {
                 "kind": "intrinsic", "function": "disableIRQinterrupts",
                 "is_variadic": false, "is_noreturn": false,
-                "intrinsic_class": "irq_mask_set", "system_register": "PRIMASK", "mapped": true
-              },
+                "intrinsic_class": "irq_mask_set", "system_register": "PRIMASK"              },
               "inputs": []
             },
             "set_basepri": {
@@ -63,8 +62,7 @@
               "target": {
                 "kind": "intrinsic", "function": "setBasePriority",
                 "is_variadic": false, "is_noreturn": false,
-                "intrinsic_class": "sysreg_write", "system_register": "BASEPRI", "mapped": true
-              },
+                "intrinsic_class": "sysreg_write", "system_register": "BASEPRI"              },
               "inputs": [{ "type": "type_int", "kind": "parameter", "operation": "p0" }]
             },
             "read_ipsr": {
@@ -74,8 +72,7 @@
               "target": {
                 "kind": "intrinsic", "function": "getCurrentExceptionNumber",
                 "is_variadic": false, "is_noreturn": false,
-                "intrinsic_class": "sysreg_read", "system_register": "IPSR", "mapped": true
-              },
+                "intrinsic_class": "sysreg_read", "system_register": "IPSR"              },
               "inputs": []
             },
             "ldc": {
@@ -83,8 +80,7 @@
               "target": {
                 "kind": "intrinsic", "function": "coprocessor_load",
                 "is_variadic": false, "is_noreturn": false,
-                "intrinsic_class": "coproc_load", "mapped": true
-              },
+                "intrinsic_class": "coproc_load"              },
               "inputs": [
                 { "type": "type_int", "size": 4, "kind": "constant", "value": 11 },
                 { "type": "type_int", "size": 4, "kind": "constant", "value": 0 },
@@ -96,8 +92,7 @@
               "target": {
                 "kind": "intrinsic", "function": "coprocessor_moveto",
                 "is_variadic": false, "is_noreturn": false,
-                "intrinsic_class": "coproc_write", "mapped": true
-              },
+                "intrinsic_class": "coproc_write"              },
               "inputs": [
                 { "type": "type_int", "size": 4, "kind": "constant", "value": 15 },
                 { "type": "type_int", "size": 4, "kind": "constant", "value": 2 },
@@ -114,8 +109,7 @@
               "target": {
                 "kind": "intrinsic", "function": "coprocessor_movefromRt",
                 "is_variadic": false, "is_noreturn": false,
-                "intrinsic_class": "coproc_read", "mapped": true
-              },
+                "intrinsic_class": "coproc_read"              },
               "inputs": [
                 { "type": "type_int", "size": 4, "kind": "constant", "value": 15 },
                 { "type": "type_int", "size": 4, "kind": "constant", "value": 2 },
@@ -129,8 +123,7 @@
               "target": {
                 "kind": "intrinsic", "function": "WaitForInterrupt",
                 "is_variadic": false, "is_noreturn": false,
-                "intrinsic_class": "hint_wfi", "mapped": true
-              },
+                "intrinsic_class": "hint_wfi"              },
               "inputs": []
             },
             "cpsie": {
@@ -138,8 +131,7 @@
               "target": {
                 "kind": "intrinsic", "function": "enableIRQinterrupts",
                 "is_variadic": false, "is_noreturn": false,
-                "intrinsic_class": "irq_mask_clear", "system_register": "PRIMASK", "mapped": true
-              },
+                "intrinsic_class": "irq_mask_clear", "system_register": "PRIMASK"              },
               "inputs": []
             },
             "ret": {

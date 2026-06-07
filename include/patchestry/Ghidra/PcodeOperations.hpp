@@ -160,11 +160,10 @@ namespace patchestry::ghidra {
         // ARM system-userop classification from the Ghidra UseropClassifier
         // pre-pass (optional; absent on older serializer output).
         // `intrinsic_class`: arch-neutral tag ("irq_mask_set", "sysreg_read",
-        // "coproc_load", ...). `system_register`: decoded register if resolvable
-        // ("BASEPRI", "PRIMASK"). `mapped`: false if no class was assigned.
+        // "coproc_load", ...); its presence is the "is classified" signal.
+        // `system_register`: decoded register if resolvable ("BASEPRI", "PRIMASK").
         std::optional< std::string > intrinsic_class;
         std::optional< std::string > system_register;
-        std::optional< bool > mapped;
     };
 
     // One arm of a BRANCHIND switch. `value` is meaningful only when

@@ -41,7 +41,11 @@ public final class Arm32IntrinsicClassifier implements ArchIntrinsicClassifier {
         m.put("disableDataAbortInterrupts", new Entry("irq_mask_set",   null));
         m.put("enableDataAbortInterrupts",  new Entry("irq_mask_clear", null));
 
-        // Cortex-M special registers -> CMSIS __get_<R>()/__set_<R>().
+        // Cortex-M special registers: classify structurally (sysreg_read/write +
+        // raw register). The register -> CMSIS accessor spelling and the
+        // read-only/write-only validity are owned solely by the C++ cmsis_sysregs
+        // table (lib/patchestry/AST/IntrinsicHandlers.cpp); a register named here
+        // that is absent there is logged as drift, not silently dropped.
         m.put("getBasePriority",             new Entry("sysreg_read",  "BASEPRI"));
         m.put("setBasePriority",             new Entry("sysreg_write", "BASEPRI"));
         m.put("getMainStackPointer",         new Entry("sysreg_read",  "MSP"));

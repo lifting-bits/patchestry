@@ -528,10 +528,13 @@ namespace patchestry::ast {
         // (caller falls through to name-based dispatch).
 
         // Cortex-M special registers -> exact CMSIS-Core accessor spellings.
-        // Listed explicitly, not built by "__get_"/"__set_" concatenation:
-        // CMSIS is asymmetric (BASEPRI_MAX write-only, IPSR/APSR/xPSR read-only)
-        // and the PSR getter is __get_xPSR, not __get_XPSR. An empty spelling
-        // means no accessor in that direction -> fall through.
+        // This is the single source of truth for register -> accessor: the Java
+        // IntrinsicClassifier stays structural (classifies sysreg_read/write and
+        // passes the raw register), and the spelling + direction validity live
+        // only here. Listed explicitly, not built by "__get_"/"__set_"
+        // concatenation: CMSIS is asymmetric (BASEPRI_MAX write-only,
+        // IPSR/APSR/xPSR read-only) and the PSR getter is __get_xPSR, not
+        // __get_XPSR. An empty spelling means no accessor in that direction.
         struct CmsisSysreg
         {
             std::string_view reg;
@@ -563,6 +566,31 @@ namespace patchestry::ast {
             return nullptr;
         }
 
+        // Spell a classified sysreg access against cmsis_sysregs (the single
+        // source of truth). Two distinct fall-through cases:
+        //   - register present but no accessor for this direction (read-only /
+        //     write-only): intentional, quiet.
+        //   - register absent from the table: the Java classifier and this
+        //     table have drifted -- log loudly so the missing row surfaces
+        //     instead of silently degrading to an opaque placeholder.
+        std::optional< std::string >
+        cmsis_sysreg_accessor(std::string_view klass, std::string_view reg) {
+            const CmsisSysreg *entry = find_cmsis_sysreg(reg);
+            if (entry == nullptr) {
+                LOG(WARNING)
+                    << "IntrinsicClassifier produced " << klass << " for register '"
+                    << reg << "' not covered by cmsis_sysregs; falling through. "
+                    << "Add a cmsis_sysregs row to spell it.\n";
+                return std::nullopt;
+            }
+            std::string_view accessor =
+                (klass == "sysreg_read") ? entry->getter : entry->setter;
+            if (accessor.empty()) {
+                return std::nullopt; // read-only / write-only: by design
+            }
+            return std::string(accessor);
+        }
+
         std::optional< std::string >
         arm_canonical_for(std::string_view klass, const std::optional< std::string > &reg) {
             // Interrupt masking (CPSID/CPSIE): only PRIMASK and FAULTMASK have
@@ -577,23 +605,10 @@ namespace patchestry::ast {
                 }
                 return std::nullopt;
             }
-            // Named Cortex-M special registers -> CMSIS accessors; an absent
-            // getter/setter for that direction falls through.
-            if (klass == "sysreg_read" && reg) {
-                if (const auto *entry = find_cmsis_sysreg(*reg);
-                    entry && !entry->getter.empty())
-                {
-                    return std::string(entry->getter);
-                }
-                return std::nullopt;
-            }
-            if (klass == "sysreg_write" && reg) {
-                if (const auto *entry = find_cmsis_sysreg(*reg);
-                    entry && !entry->setter.empty())
-                {
-                    return std::string(entry->setter);
-                }
-                return std::nullopt;
+            // Named Cortex-M special registers -> CMSIS accessors (spelled by
+            // the cmsis_sysregs single source of truth).
+            if ((klass == "sysreg_read" || klass == "sysreg_write") && reg) {
+                return cmsis_sysreg_accessor(klass, *reg);
             }
             // Hints -> ACLE nullary builtins.
             if (klass == "hint_wfi") { return "__wfi"; }

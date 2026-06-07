@@ -4876,6 +4876,8 @@ public class PcodeSerializer {
 		// AST layer can spell recognized ARM/AArch64 system userops as ACLE /
 		// CMSIS intrinsics. Only recognized (mapped) ops get the fields; others
 		// are left untagged and flow through the existing name-based dispatch.
+		// The presence of `intrinsic_class` is itself the "is classified" signal,
+		// so no separate `mapped` flag is serialized.
 		void serializeIntrinsicClass(PcodeOp pcodeOp) throws Exception {
 			int index = (int) pcodeOp.getInput(0).getOffset();
 			String name = resolveUseropName(index);
@@ -4887,7 +4889,6 @@ public class PcodeSerializer {
 			if (r.register != null && !r.register.isEmpty()) {
 				writer.name("system_register").value(r.register);
 			}
-			writer.name("mapped").value(true);
 		}
 
 		// Serialize a `CALLOTHER` as a call to an intrinsic.
