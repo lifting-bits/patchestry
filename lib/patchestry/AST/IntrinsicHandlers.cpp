@@ -14,6 +14,7 @@
 #include <llvm/Support/Casting.h>
 
 #include <array>
+#include <cassert>
 #include <cctype>
 #include <optional>
 
@@ -583,6 +584,8 @@ namespace patchestry::ast {
                     << "Add a cmsis_sysregs row to spell it.\n";
                 return std::nullopt;
             }
+            assert((klass == "sysreg_read" || klass == "sysreg_write")
+                   && "cmsis_sysreg_accessor: unexpected sysreg class");
             std::string_view accessor =
                 (klass == "sysreg_read") ? entry->getter : entry->setter;
             if (accessor.empty()) {
@@ -671,9 +674,15 @@ namespace patchestry::ast {
                 return emit_arm_coproc(b, ctx, fn, op, klass);
             }
             // LDC/STC: address (input 2) is `const void *` in the ACLE prototype.
+            // All four ACLE prototypes take exactly 3 args (coproc, CRd, addr);
+            // a wrong-arity op falls through rather than emit a bad-shape call
+            // (mirrors the arity guards in emit_arm_coproc).
             if (klass == "coproc_load" || klass == "coproc_loadl"
                 || klass == "coproc_store" || klass == "coproc_storel")
             {
+                if (op.inputs.size() != 3) {
+                    return std::nullopt;
+                }
                 const std::string ldc_name = (klass == "coproc_load")  ? "__arm_ldc"
                                            : (klass == "coproc_loadl") ? "__arm_ldcl"
                                            : (klass == "coproc_store") ? "__arm_stc"
