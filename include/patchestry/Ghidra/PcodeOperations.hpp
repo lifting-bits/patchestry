@@ -157,12 +157,11 @@ namespace patchestry::ghidra {
         std::optional< std::string > address;
         bool is_noreturn;
 
-        // ARM system-userop classification, set by the Ghidra UseropClassifier
-        // pre-pass (absent on older serializer output, so all optional).
-        // `intrinsic_class` is the arch-neutral taxonomy tag (e.g.
-        // "irq_mask_set", "sysreg_read", "coproc_load"); `system_register` names
-        // the decoded register where resolvable (e.g. "BASEPRI", "PRIMASK");
-        // `mapped` is false when the classifier could not assign a class.
+        // ARM system-userop classification from the Ghidra UseropClassifier
+        // pre-pass (optional; absent on older serializer output).
+        // `intrinsic_class`: arch-neutral tag ("irq_mask_set", "sysreg_read",
+        // "coproc_load", ...). `system_register`: decoded register if resolvable
+        // ("BASEPRI", "PRIMASK"). `mapped`: false if no class was assigned.
         std::optional< std::string > intrinsic_class;
         std::optional< std::string > system_register;
         std::optional< bool > mapped;

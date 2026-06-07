@@ -894,8 +894,7 @@ namespace patchestry::ghidra {
 
         target.is_noreturn  = maybe_target->getBoolean("is_noreturn").value_or(false);
 
-        // ARM system-userop classification from the Ghidra UseropClassifier
-        // pre-pass (optional; older JSON omits these).
+        // ARM system-userop classification (optional; older JSON omits these).
         if (auto klass = maybe_target->getString("intrinsic_class");
             klass.has_value() && !klass->empty())
         {

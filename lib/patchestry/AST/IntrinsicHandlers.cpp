@@ -522,36 +522,51 @@ namespace patchestry::ast {
         }
 
         // === ARM system-userop class -> compiler-intrinsic spelling ==========
-        //
-        // Maps the arch-neutral `intrinsic_class` (assigned by the Ghidra
-        // UseropClassifier pre-pass) to the name the compiler understands:
-        // CMSIS-Core for Cortex-M special registers and interrupt masking, ACLE
-        // builtins for hints and the directly-mappable coprocessor LDC/STC. The
-        // read/write/return shape is carried by the serialized op, so once the
-        // name is known a plain create_intrinsic_call is enough (as for the
-        // atomic_* families). Returns nullopt for any class this layer does not
-        // spell, so the caller falls through to the existing dispatch.
+        // Maps the arch-neutral `intrinsic_class` to a CMSIS-Core / ACLE name.
+        // The op carries the read/write/return shape, so create_intrinsic_call
+        // suffices once the name is known. Returns nullopt for unspelled classes
+        // (caller falls through to name-based dispatch).
 
-        // Cortex-M special registers exposed by CMSIS as __get_<R>()/__set_<R>().
-        bool is_known_cmsis_sysreg(std::string_view reg) {
-            static constexpr std::array< std::string_view, 12 > regs = {
-                "BASEPRI", "BASEPRI_MAX", "PRIMASK", "FAULTMASK", "CONTROL", "IPSR",
-                "MSP",     "PSP",         "MSPLIM",  "PSPLIM",     "APSR",    "XPSR"
-            };
-            for (auto candidate : regs) {
-                if (reg == candidate) {
-                    return true;
+        // Cortex-M special registers -> exact CMSIS-Core accessor spellings.
+        // Listed explicitly, not built by "__get_"/"__set_" concatenation:
+        // CMSIS is asymmetric (BASEPRI_MAX write-only, IPSR/APSR/xPSR read-only)
+        // and the PSR getter is __get_xPSR, not __get_XPSR. An empty spelling
+        // means no accessor in that direction -> fall through.
+        struct CmsisSysreg
+        {
+            std::string_view reg;
+            std::string_view getter; // empty => not readable via CMSIS
+            std::string_view setter; // empty => not writable via CMSIS
+        };
+
+        constexpr std::array< CmsisSysreg, 12 > cmsis_sysregs = { {
+            { "BASEPRI",     "__get_BASEPRI",   "__set_BASEPRI"     },
+            { "BASEPRI_MAX", "",                "__set_BASEPRI_MAX" },
+            { "PRIMASK",     "__get_PRIMASK",   "__set_PRIMASK"     },
+            { "FAULTMASK",   "__get_FAULTMASK", "__set_FAULTMASK"   },
+            { "CONTROL",     "__get_CONTROL",   "__set_CONTROL"     },
+            { "IPSR",        "__get_IPSR",      ""                  },
+            { "MSP",         "__get_MSP",       "__set_MSP"         },
+            { "PSP",         "__get_PSP",       "__set_PSP"         },
+            { "MSPLIM",      "__get_MSPLIM",    "__set_MSPLIM"      },
+            { "PSPLIM",      "__get_PSPLIM",    "__set_PSPLIM"      },
+            { "APSR",        "__get_APSR",      ""                  },
+            { "XPSR",        "__get_xPSR",      ""                  },
+        } };
+
+        const CmsisSysreg *find_cmsis_sysreg(std::string_view reg) {
+            for (const auto &entry : cmsis_sysregs) {
+                if (entry.reg == reg) {
+                    return &entry;
                 }
             }
-            return false;
+            return nullptr;
         }
 
         std::optional< std::string >
         arm_canonical_for(std::string_view klass, const std::optional< std::string > &reg) {
-            // Interrupt masking (CPSID/CPSIE). Only PRIMASK (CPS i) and FAULTMASK
-            // (CPS f, == __*_fault_irq on M) have a CMSIS spelling; other CPS
-            // forms (e.g. the A/R abort-mask `a` bit) fall through rather than
-            // mis-spell as __disable_irq.
+            // Interrupt masking (CPSID/CPSIE): only PRIMASK and FAULTMASK have
+            // CMSIS spellings; other CPS forms (e.g. A/R abort-mask) fall through.
             if (klass == "irq_mask_set" || klass == "irq_mask_clear") {
                 bool set = (klass == "irq_mask_set");
                 if (reg && *reg == "PRIMASK") {
@@ -562,12 +577,23 @@ namespace patchestry::ast {
                 }
                 return std::nullopt;
             }
-            // Named Cortex-M special registers -> CMSIS accessors.
-            if (klass == "sysreg_read" && reg && is_known_cmsis_sysreg(*reg)) {
-                return "__get_" + *reg;
+            // Named Cortex-M special registers -> CMSIS accessors; an absent
+            // getter/setter for that direction falls through.
+            if (klass == "sysreg_read" && reg) {
+                if (const auto *entry = find_cmsis_sysreg(*reg);
+                    entry && !entry->getter.empty())
+                {
+                    return std::string(entry->getter);
+                }
+                return std::nullopt;
             }
-            if (klass == "sysreg_write" && reg && is_known_cmsis_sysreg(*reg)) {
-                return "__set_" + *reg;
+            if (klass == "sysreg_write" && reg) {
+                if (const auto *entry = find_cmsis_sysreg(*reg);
+                    entry && !entry->setter.empty())
+                {
+                    return std::string(entry->setter);
+                }
+                return std::nullopt;
             }
             // Hints -> ACLE nullary builtins.
             if (klass == "hint_wfi") { return "__wfi"; }
@@ -575,25 +601,18 @@ namespace patchestry::ast {
             if (klass == "hint_sev") { return "__sev"; }
             if (klass == "hint_yield") { return "__yield"; }
             if (klass == "hint_nop") { return "__nop"; }
-            // (coproc LDC/STC are handled in arm_emit_system_intrinsic, which
-            // casts the address arg to a pointer — not via this name map.)
-            // Fall through (caller keeps existing behavior):
-            //   - barrier_* : handled by the C11 atomic-fence mapping.
-            //   - coproc_read/write/cdp : handled by emit_arm_coproc (operand
-            //     reorder), not here.
-            //   - un-named sysreg, trap, mode_switch, query, unknown.
+            // Fall through: barrier_* (C11 fence map), coproc_* (emit_arm_coproc
+            // / LDC-STC pointer cast in arm_emit_system_intrinsic), and
+            // un-named sysreg / trap / mode_switch / query / unknown.
             return std::nullopt;
         }
 
-        // Coprocessor MCR/MRC/CDP: Ghidra's SLEIGH operand order differs from
-        // ACLE, which puts opc2 last. Reorder the serialized inputs (the userop
-        // index is already stripped) before emitting, reusing create_intrinsic_call
-        // for decl synthesis + output assignment. Single-register forms only;
-        // the *2 (MCRR/MRRC) classes and odd-arity movefromRt variants fall
-        // through (nullopt) rather than emit a wrong-shape ACLE call.
-        //   coprocessor_moveto(cpn,op1,op2,Rt,CRn,CRm)    -> __arm_mcr(cpn,op1,Rt,CRn,CRm,op2)
-        //   coprocessor_movefromRt(cpn,op1,op2,CRn,CRm)   -> __arm_mrc(cpn,op1,CRn,CRm,op2)
-        //   coprocessor_function(cpn,op1,op2,CRd,CRn,CRm) -> __arm_cdp(cpn,op1,CRd,CRn,CRm,op2)
+        // Coprocessor MCR/MRC/CDP: SLEIGH operand order differs from ACLE (opc2
+        // last), so reorder the inputs. Single-register forms only; wrong-arity
+        // (MCRR/MRRC, odd movefromRt) falls through rather than emit a bad call.
+        //   moveto(cpn,op1,op2,Rt,CRn,CRm)    -> __arm_mcr(cpn,op1,Rt,CRn,CRm,op2)
+        //   movefromRt(cpn,op1,op2,CRn,CRm)   -> __arm_mrc(cpn,op1,CRn,CRm,op2)
+        //   function(cpn,op1,op2,CRd,CRn,CRm) -> __arm_cdp(cpn,op1,CRd,CRn,CRm,op2)
         std::optional< std::pair< clang::Stmt *, bool > > emit_arm_coproc(
             OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
             const ghidra::Operation &op, std::string_view klass
@@ -617,31 +636,26 @@ namespace patchestry::ast {
         }
 
         // === Per-architecture emitter registry =============================
-        //
-        // The taxonomy (intrinsic_class) is architecture-neutral; each arch
-        // plugs in a IntrinsicEmitFn that turns a classified op into a compiler
-        // intrinsic. The emitter is selected by the program's processor string
-        // (program_arch() == the JSON `architecture`). To add an architecture:
-        // write a IntrinsicEmitFn and add one registry row.
+        // intrinsic_class is arch-neutral; each arch plugs in an IntrinsicEmitFn
+        // selected by program_arch(). To add an arch: write the fn, add a row.
         using IntrinsicEmitFn = std::optional< std::pair< clang::Stmt *, bool > > (*)(
             OpBuilder &, clang::ASTContext &, const ghidra::Function &,
             const ghidra::Operation &
         );
 
-        // ARM (32-bit): CMSIS interrupt masking / M-profile special registers,
-        // ACLE hints + coprocessor (MCR/MRC/CDP reorder, LDC/STC pointer cast).
-        // Precondition: op.target->intrinsic_class is set (the dispatcher guards).
+        // ARM (32-bit): CMSIS irq-mask / special registers, ACLE hints, and
+        // coprocessor (MCR/MRC/CDP reorder, LDC/STC pointer cast).
+        // Precondition: op.target->intrinsic_class is set (dispatcher guards).
         std::optional< std::pair< clang::Stmt *, bool > > arm_emit_system_intrinsic(
             OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
             const ghidra::Operation &op
         ) {
             const std::string &klass = *op.target->intrinsic_class;
-            // Coprocessor MCR/MRC/CDP need an operand reorder vs ACLE.
+            // MCR/MRC/CDP: operand reorder vs ACLE.
             if (klass == "coproc_write" || klass == "coproc_read" || klass == "coproc_cdp") {
                 return emit_arm_coproc(b, ctx, fn, op, klass);
             }
-            // Coprocessor LDC/STC: the address (input 2) is `const void *` in
-            // the ACLE prototype, so cast it to keep the call recompilable.
+            // LDC/STC: address (input 2) is `const void *` in the ACLE prototype.
             if (klass == "coproc_load" || klass == "coproc_loadl"
                 || klass == "coproc_store" || klass == "coproc_storel")
             {
@@ -658,8 +672,7 @@ namespace patchestry::ast {
             return b.create_intrinsic_call(ctx, fn, op, *canonical);
         }
 
-        // AArch64: extension point. Returns nullopt (all classes fall through)
-        // until an AArch64 emitter is implemented.
+        // AArch64: extension point; all classes fall through until implemented.
         std::optional< std::pair< clang::Stmt *, bool > > aarch64_emit_system_intrinsic(
             OpBuilder &, clang::ASTContext &, const ghidra::Function &,
             const ghidra::Operation &
@@ -667,14 +680,12 @@ namespace patchestry::ast {
             return std::nullopt;
         }
 
-        // Intrinsics are emitted as extern declarations (create_intrinsic_call ->
-        // get_or_create_intrinsic_decl, SC_Extern); the emitted C carries its own
-        // extern prototypes rather than #include-ing arch headers, so the emitter
-        // carries no header info.
+        // Intrinsics are emitted as extern decls (the C carries its own
+        // prototypes, no arch-header include), so no header info is needed.
         struct ArchIntrinsicEmitter
         {
             std::string_view arch; // matches program_arch() (case-insensitive)
-            IntrinsicEmitFn emit;          // classified op -> compiler intrinsic
+            IntrinsicEmitFn emit;  // classified op -> compiler intrinsic
         };
 
         constexpr std::array< ArchIntrinsicEmitter, 2 > arch_intrinsic_emitters = { {
@@ -771,13 +782,11 @@ namespace patchestry::ast {
         OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
         const ghidra::Operation &op, std::string_view arch
     ) {
-        // Only classified system userops participate; everything else falls
-        // through to the existing name-based dispatch.
+        // Only classified system userops participate; the rest fall through.
         if (!op.target || !op.target->intrinsic_class) {
             return std::nullopt;
         }
-        // Select the emitter for this program's architecture. Unknown arch (or
-        // an arch whose emitter does not cover this class) falls through.
+        // Unknown arch (or one not covering this class) falls through.
         const auto *emitter = get_intrinsic_emitter(arch);
         if (emitter == nullptr) {
             return std::nullopt;

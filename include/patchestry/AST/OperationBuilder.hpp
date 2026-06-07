@@ -213,10 +213,9 @@ namespace patchestry::ast {
         clang::Sema &sema(void) { return function_builder().sema(); }
 
         // CALLOTHER intrinsic helper - exposed for custom handlers.
-        // `pointer_arg_index`, when set, forces an explicit cast of that input
-        // to `const void *` so an ACLE intrinsic whose prototype takes a pointer
-        // (e.g. __arm_ldc/__arm_stc address operand) recompiles against
-        // <arm_acle.h> instead of failing int->pointer conversion.
+        // `pointer_arg_index`, when set, casts that input to `const void *` so a
+        // pointer-typed ACLE prototype (e.g. __arm_ldc/__arm_stc address) does
+        // not fail int->pointer conversion.
         std::pair< clang::Stmt *, bool > create_intrinsic_call(
             clang::ASTContext &ctx, const Function &function, const Operation &op,
             const std::string &name,

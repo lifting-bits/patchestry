@@ -2119,11 +2119,9 @@ namespace patchestry::ast {
         const auto &label = *op.target->function;
         auto name         = parse_intrinsic_name(function_builder().program_arch(), label);
 
-        // System userops the Ghidra IntrinsicClassifier tagged with an
-        // `intrinsic_class` map to a compiler intrinsic via the per-architecture
-        // emitter selected by program_arch() (ARM -> CMSIS/ACLE: __disable_irq,
-        // __get_BASEPRI, __arm_ldc, ...). Returns nullopt for unhandled classes
-        // / architectures, which then fall through unchanged.
+        // Classified system userops map to a compiler intrinsic via the
+        // per-arch emitter (ARM -> CMSIS/ACLE: __disable_irq, __arm_ldc, ...).
+        // Unhandled classes/arches return nullopt and fall through unchanged.
         if (auto sys = emit_system_intrinsic(
                 *this, ctx, function, op, function_builder().program_arch()))
         {
@@ -4175,8 +4173,8 @@ namespace patchestry::ast {
                 AS_EXPR_OR_NULL(create_varnode(ctx, function, input), op.key);
             if (e) {
                 if (pointer_arg_index && *pointer_arg_index == input_index) {
-                    // Force `(const void *)` so a pointer-typed ACLE prototype
-                    // recompiles even when the operand resolves to an integer.
+                    // Force `(const void *)` for a pointer-typed ACLE prototype
+                    // even when the operand resolves to an integer.
                     auto void_ptr = ctx.getPointerType(ctx.VoidTy.withConst());
                     if (auto *casted = make_explicit_cast(ctx, e, void_ptr, op_loc)) {
                         e = casted;
