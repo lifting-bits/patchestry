@@ -104,6 +104,9 @@ namespace {
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
         );
 
+        // --verbose enables DEBUG/INFO; otherwise only WARNING/ERROR/FATAL.
+        ::patchestry::logging::MinLogLevel() = verbose.getValue() ? DEBUG : WARNING;
+
         return {
             .emit_cir                   = emit_cir.getValue(),
             .emit_mlir                  = emit_mlir.getValue(), // It is set to true by default

@@ -322,6 +322,52 @@ namespace patchestry::ast {
         );
     }
 
+    clang::Expr *MakeIntLiteralPrintable(
+        clang::ASTContext &ctx, uint64_t value, clang::QualType operand_type,
+        bool is_signed, clang::SourceLocation loc
+    ) {
+        auto printable = [](clang::QualType t) -> bool {
+            const auto *bt = t->getAs< clang::BuiltinType >();
+            if (bt == nullptr) {
+                return false;
+            }
+            switch (bt->getKind()) {
+                case clang::BuiltinType::Char_S:
+                case clang::BuiltinType::Char_U:
+                case clang::BuiltinType::SChar:
+                case clang::BuiltinType::UChar:
+                case clang::BuiltinType::Short:
+                case clang::BuiltinType::UShort:
+                case clang::BuiltinType::Int:
+                case clang::BuiltinType::UInt:
+                case clang::BuiltinType::Long:
+                case clang::BuiltinType::ULong:
+                case clang::BuiltinType::LongLong:
+                case clang::BuiltinType::ULongLong:
+                case clang::BuiltinType::Int128:
+                case clang::BuiltinType::UInt128:
+                case clang::BuiltinType::WChar_S:
+                case clang::BuiltinType::WChar_U:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+        // getIntWidth() asserts on non-integer types; fall back to int.
+        const bool integral =
+            !operand_type.isNull() && operand_type->isIntegralOrEnumerationType();
+        clang::QualType lit_type = operand_type;
+        if (!integral || !printable(operand_type)) {
+            unsigned w = integral ? ctx.getIntWidth(operand_type) : 32U;
+            auto t     = ctx.getIntTypeForBitwidth(w <= 1U ? 32U : w, is_signed);
+            lit_type   = t.isNull() ? (is_signed ? ctx.IntTy : ctx.UnsignedIntTy) : t;
+        }
+        unsigned lw = ctx.getIntWidth(lit_type);
+        return clang::IntegerLiteral::Create(
+            ctx, llvm::APInt(lw, value, is_signed), lit_type, loc
+        );
+    }
+
     clang::Expr *CloneExpr(clang::ASTContext &ctx, clang::Expr *expr) {
         if (!expr) return nullptr;
 

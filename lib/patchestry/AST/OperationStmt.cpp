@@ -89,8 +89,9 @@ namespace patchestry::ast {
 
             auto param_type = param->getType();
             if (param_type->isIntegerType()) {
-                return new (ctx) clang::IntegerLiteral(
-                    ctx, llvm::APInt(ctx.getIntWidth(param_type), 0), param_type,
+                // param_type may be _Bool/enum (crash StmtPrinter).
+                return MakeIntLiteralPrintable(
+                    ctx, 0, param_type, param_type->isSignedIntegerType(),
                     VirtualLoc(ctx)
                 );
             } else if (param_type->isFloatingType()) {
@@ -1237,13 +1238,12 @@ namespace patchestry::ast {
                 disc_type = disc_type->castAs< clang::EnumType >()
                     ->getDecl()->getIntegerType();
             }
-            const auto disc_width = ctx.getIntWidth(disc_type);
 
             auto create_case = [&](const SwitchCase &sc) -> clang::CaseStmt * {
-                auto *case_val = clang::IntegerLiteral::Create(
-                    ctx,
-                    llvm::APInt(disc_width, static_cast< uint64_t >(sc.value), /*isSigned=*/true),
-                    disc_type, loc
+                // disc_type may be _Bool/char32_t (enum lowered above).
+                auto *case_val = MakeIntLiteralPrintable(
+                    ctx, static_cast< uint64_t >(sc.value), disc_type,
+                    /*is_signed=*/true, loc
                 );
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
@@ -1392,7 +1392,6 @@ namespace patchestry::ast {
                 clang::SwitchStmt::Create(ctx, nullptr, nullptr, disc_expr, loc, loc);
 
             std::vector< clang::Stmt * > sw_body;
-            const auto disc_width = ctx.getIntWidth(disc_type);
             for (const auto &block_key : op.successor_blocks) {
                 if (!function_builder().labels_declaration.contains(block_key)) {
                     continue;
@@ -1401,8 +1400,8 @@ namespace patchestry::ast {
                 if (!maybe_addr) {
                     continue;
                 }
-                auto *case_val = clang::IntegerLiteral::Create(
-                    ctx, llvm::APInt(disc_width, *maybe_addr), disc_type, loc
+                auto *case_val = MakeIntLiteralPrintable(
+                    ctx, *maybe_addr, disc_type, /*is_signed=*/false, loc
                 );
                 auto *case_stmt =
                     clang::CaseStmt::Create(ctx, case_val, nullptr, loc, loc, loc);
@@ -2672,8 +2671,8 @@ namespace patchestry::ast {
         // getIntWidth(type).
         unsigned operand_bits = ctx.getIntWidth(expr->getType());
         if (operand_bits != 0 && shift_bits >= operand_bits) {
-            result_expr = clang::IntegerLiteral::Create(
-                ctx, llvm::APInt(operand_bits, 0), expr->getType(), op_location
+            result_expr = MakeIntLiteralPrintable(
+                ctx, 0, expr->getType(), /*is_signed=*/false, op_location
             );
         } else if (shift_bits != 0) {
             // Apply right-shift only when byte_offset > 0 (skip ">> 0").
@@ -2996,9 +2995,8 @@ namespace patchestry::ast {
         assert(!and_result.isInvalid() && "Failed to create and operation");
 
         // scarry = and_result < 0
-        auto *zero = clang::IntegerLiteral::Create(
-            ctx, llvm::APInt(ctx.getIntWidth(input0->getType()), 0, true), input0->getType(),
-            op_loc
+        auto *zero = MakeIntLiteralPrintable(
+            ctx, 0, input0->getType(), /*is_signed=*/true, op_loc
         );
         auto scarry = sema().BuildBinOp(
             sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
@@ -3067,9 +3065,8 @@ namespace patchestry::ast {
         assert(!and_result.isInvalid() && "Failed to create and operation");
 
         // sborrow = and_result < 0
-        auto *zero = clang::IntegerLiteral::Create(
-            ctx, llvm::APInt(ctx.getIntWidth(input0->getType()), 0, true), input0->getType(),
-            op_loc
+        auto *zero = MakeIntLiteralPrintable(
+            ctx, 0, input0->getType(), /*is_signed=*/true, op_loc
         );
         auto sborrow = sema().BuildBinOp(
             sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),

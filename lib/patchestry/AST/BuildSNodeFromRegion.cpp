@@ -480,7 +480,6 @@ namespace patchestry::ast {
             case_type = case_type->castAs< clang::EnumType >()
                             ->getDecl()->getIntegerType();
         }
-        unsigned case_width = ctx_.getIntWidth(case_type);
 
         auto *sw = factory_.Make< SSwitch >(disp.branch_cond);
 
@@ -527,10 +526,9 @@ namespace patchestry::ast {
             const size_t body_pos = total_labels - 1;
             size_t pos = 0;
             for (std::int64_t v : arm.values) {
-                auto *val = clang::IntegerLiteral::Create(
-                    ctx_,
-                    llvm::APInt(case_width, static_cast< uint64_t >(v), true),
-                    case_type, VirtualLoc(ctx_));
+                auto *val = MakeIntLiteralPrintable(
+                    ctx_, static_cast< uint64_t >(v), case_type,
+                    /*is_signed=*/true, VirtualLoc(ctx_));
                 if (pos == body_pos) {
                     sw->AddCase(val, *body_seq);
                 } else {
@@ -572,10 +570,9 @@ namespace patchestry::ast {
             const size_t body_pos = total_labels - 1;
             size_t pos = 0;
             for (std::int64_t v : arm.values) {
-                auto *val = clang::IntegerLiteral::Create(
-                    ctx_,
-                    llvm::APInt(case_width, static_cast< uint64_t >(v), true),
-                    case_type, VirtualLoc(ctx_));
+                auto *val = MakeIntLiteralPrintable(
+                    ctx_, static_cast< uint64_t >(v), case_type,
+                    /*is_signed=*/true, VirtualLoc(ctx_));
                 if (pos == body_pos) {
                     sw->AddCase(val, std::vector< SNode * >{terminator});
                 } else {

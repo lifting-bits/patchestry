@@ -42,7 +42,15 @@ namespace patchestry::ast {
     /// leaving the subtree shared — acceptable because subtree sharing
     /// is then handled by downstream ClangEmitter cloning).
     clang::Expr *CloneExpr(clang::ASTContext &ctx, clang::Expr *expr);
-    
+
+    /// IntegerLiteral whose type StmtPrinter can print. _Bool/char8_16_32/enum
+    /// (or any non-builtin) crash StmtPrinter; for those, a same-width standard
+    /// integer is used (callers convert as usual, so semantics are unchanged).
+    clang::Expr *MakeIntLiteralPrintable(
+        clang::ASTContext &ctx, uint64_t value, clang::QualType operand_type,
+        bool is_signed, clang::SourceLocation loc
+    );
+
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key);
 
     /// Returns a valid SourceLocation backed by a virtual "<patchestry-virtual>"
