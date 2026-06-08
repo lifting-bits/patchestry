@@ -1,10 +1,23 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -emit-cir -output %t1 >> /dev/null 2>&1
 
-// RUN: %patchir-transform %t1.cir --spec %S/device_process_entry.yaml -o %t2.cir
+// RUN: %patchir-transform %t1.cir --spec %S/device_process_entry.yaml -o %t2.cir --emit-patch-map %t.patchmap.json
 // RUN: %file-check -vv -check-prefix=CHECK %s --input-file %t2.cir
 // CHECK: %[[ID:[0-9]+]] = cir.call @patch__replace__sprintf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) {contract.static = #contracts.static<pre = [#contracts.pre<id = "dest_size_nonzero", {{.*}}relation = neq, {{.*}}value = 0 : i64>>], post = [#contracts.post<id = "return_value_range", {{.*}}max = 32 : i64>>>]>, patchestry_operation = "cir.call"} : (!cir.ptr<!s8i>, !u32i, !cir.ptr<!s8i>, !cir.ptr<!s8i>) -> !s32i
 // CHECK: cir.call @patch__after__sprintf_bounds(%{{[0-9]+}}, %{{[0-9]+}}) {patchestry_operation = "cir.call"}
+
+// The patched CIR must preserve the Ghidra address-key location on the patch
+// op so the binary address survives downstream (Phase B).
+// RUN: %file-check -vv -check-prefix=LOC %s --input-file %t2.cir
+// LOC: loc("ram:0002302c
+
+// The patch-location map must record the matched site and enclosing function
+// addresses so tooling can relay the patch back to the binary (Phase A).
+// RUN: %file-check -vv -check-prefix=MAP %s --input-file %t.patchmap.json
+// MAP-DAG: "binary_address": "0x2302c"
+// MAP-DAG: "function_address": "0x22fe0"
+// MAP-DAG: "function": "bl_device__process_entry"
+// MAP-DAG: "callee": "sprintf"
 
 // RUN: %patchir-transform %t1.cir --spec %S/all_predicates.yaml -o %t3.cir
 // RUN: %file-check -vv -check-prefix=PRED %s --input-file %t3.cir

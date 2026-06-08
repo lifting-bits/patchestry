@@ -15,6 +15,7 @@
 #include <mlir/Dialect/LLVMIR/Transforms/Passes.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/Operation.h>
+#include <mlir/IR/OperationSupport.h>
 #include <mlir/InitAllDialects.h>
 #include <mlir/Parser/Parser.h>
 #include <mlir/Pass/PassManager.h>
@@ -59,6 +60,13 @@ namespace patchestry::cl {
         llvm::cl::init(false), llvm::cl::cat(category)
     );
 
+    const cl::opt< std::string > patch_map_file( // NOLINT(cert-err58-cpp)
+        "emit-patch-map",
+        llvm::cl::desc("Write a JSON patch-location map (applied patch -> binary "
+                       "address) to this file"),
+        llvm::cl::value_desc("filename"), llvm::cl::init(""), cl::cat(category)
+    );
+
 } // namespace patchestry::cl
 
 using namespace patchestry::cl;
@@ -84,7 +92,9 @@ namespace patchestry::instrumentation {
         // CIR is still inspectable; exit code stays non-zero. #244
         bool pass_failed = false;
         if (enable_instrumentation.getValue()) {
-            patchestry::passes::InstrumentationOptions inline_options = { enable_inlining.getValue() };
+            patchestry::passes::InstrumentationOptions inline_options = {
+                enable_inlining.getValue(), patch_map_file.getValue()
+            };
             mlir::PassManager pm(&context);
             pm.addPass(patchestry::passes::CreateInstrumentationPass(
                 spec_filename.getValue(), inline_options
@@ -105,7 +115,13 @@ namespace patchestry::instrumentation {
             }
             return llvm::failure();
         }
-        module->print(os);
+        // Print with debug info enabled so the Ghidra address-key MLIR
+        // locations (e.g. loc("ram:00022ff8:28:0")) survive into the patched
+        // CIR text and downstream into the lowered LLVM IR. Mirrors the decomp
+        // serializer (lib/patchestry/Codegen/Serializer.cpp).
+        auto print_flags = mlir::OpPrintingFlags();
+        print_flags.enableDebugInfo(/*enable=*/true, /*prettyForm=*/false);
+        module->print(os, print_flags);
         os.flush();
         return pass_failed ? mlir::failure() : mlir::success();
     }

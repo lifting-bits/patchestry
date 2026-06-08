@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/MLIRContext.h>
@@ -75,6 +76,35 @@ namespace patchestry::passes { // NOLINT
     {
         /** @brief Flag to enable or disable function inlining of instrumentation functions */
         bool enable_inlining;
+
+        /**
+         * @brief When non-empty, write the patch-location map to this path as JSON
+         * after the pass runs. The map records, per applied patch, the binary
+         * address of the matched site (recovered from the Ghidra address-key MLIR
+         * location on the target op) so downstream tooling can relay patches back
+         * to the original binary. Empty disables emission.
+         */
+        std::string patch_map_file = {};
+    };
+
+    /**
+     * @brief One entry in the patch-location map: an applied patch and the binary
+     * location it landed on. Produced at apply time in
+     * `InstrumentationPass::apply_patch_action_to_targets`, where the matched
+     * `target_op` still carries the Ghidra address-key location stamped by the
+     * decomp pipeline.
+     */
+    struct PatchLocationRecord
+    {
+        std::string patch;            ///< patch / action name from the spec
+        std::string mode;             ///< instrumentation mode (APPLY_BEFORE, REPLACE, ...)
+        std::string function;         ///< enclosing function symbol
+        std::string function_address; ///< enclosing function entry address, e.g. "0x22fe0"
+        std::string callee;           ///< matched callee (function-kind) or op name
+        std::string op_kind;          ///< MLIR op name of the matched target
+        std::string address_space;    ///< Ghidra address space, e.g. "ram"
+        std::string binary_address;   ///< matched-site address, e.g. "0x2302c" ("" if unresolved)
+        std::string loc_key;          ///< raw address-key location, e.g. "ram:0002302c:157:6"
     };
 
     struct PatchInformation
@@ -135,6 +165,10 @@ namespace patchestry::passes { // NOLINT
 
         // Sticky flag: patch failed to load or its symbol was missing. #244
         bool patch_failed = false;
+
+        /** @brief Accumulated patch-location records, emitted as JSON at end of
+         * run when `options.patch_map_file` is set. */
+        std::vector< PatchLocationRecord > patch_location_map;
 
       public:
         /**
@@ -450,6 +484,27 @@ namespace patchestry::passes { // NOLINT
         void set_instrumentation_func_attributes(
             cir::FuncOp target, llvm::StringRef patch_function_name
         );
+
+        /**
+         * @brief Records one patch-location entry for `target_op`.
+         *
+         * No-op unless `options.patch_map_file` is set. Reads the Ghidra
+         * address-key MLIR location from `target_op->getLoc()` (the decomp
+         * pipeline stamps each op with a virtual-file location whose filename is
+         * the address key, e.g. "ram:00022ff8:28:0") and parses the binary
+         * address out of it. Emits a loud WARNING when the address cannot be
+         * resolved, but still records the patch as unresolved.
+         */
+        void record_patch_location(
+            mlir::Operation *target_op, llvm::StringRef patch_name,
+            InstrumentationMode mode, llvm::StringRef callee
+        );
+
+        /**
+         * @brief Serializes `patch_location_map` to `options.patch_map_file` as
+         * JSON. No-op when the path is empty.
+         */
+        void emit_patch_location_map(mlir::ModuleOp mod);
     };
 
 } // namespace patchestry::passes

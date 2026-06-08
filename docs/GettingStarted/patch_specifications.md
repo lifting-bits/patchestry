@@ -137,6 +137,40 @@ field is needed — reorder the entries in the file to reorder execution.
 
 ---
 
+## Relaying patches back to the binary (patch-location map)
+
+`patchir-transform` can emit a **patch-location map** that records, for every
+applied patch, the binary address of the matched site. Pass
+`--emit-patch-map <file>`:
+
+```sh
+patchir-transform input.cir -spec patch.yaml -o patched.cir \
+    --emit-patch-map patched.patchmap.json
+```
+
+Each entry carries the patch name, mode, enclosing `function` and its
+`function_address`, the matched `callee`, and the matched-site `binary_address`
+— all recovered from the Ghidra address-key location the decomp pipeline stamps
+on every op (e.g. `ram:0002302c:157:6`). When `--emit-patch-map` is set, the
+patched CIR/LLVM-IR also preserves these `loc("ram:...")` locations so the
+address is visible in the IR itself (and survives into the lowered `.ll` as a
+`!mlir_loc` metadata node).
+
+To turn the map into confirmed ELF addresses (rebased onto the original binary
+and cross-checked against its disassembly), run the locator script:
+
+```sh
+scripts/locate_patches.sh --map patched.patchmap.json \
+    --binary path/to/original.elf --out patch_report
+```
+
+It writes `patch_report.json` (machine-readable) and `patch_report.md` (a table
+of patch → address with an `objdump` evidence line). The script can also work
+from the patched `.ll` (`--ll`) and the Ghidra P-Code JSON (`--json`) as
+fallbacks when no map is available. See `scripts/patch_locator.py --help`.
+
+---
+
 ## Contracts: Static Only
 
 `contracts:` describes **static** contracts — declarative

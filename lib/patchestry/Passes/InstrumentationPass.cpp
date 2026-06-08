@@ -27,7 +27,11 @@
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/StringExtras.h>
 #include <llvm/Support/Error.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/FormatVariadic.h>
+#include <llvm/Support/JSON.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/YAMLTraits.h>
 #include <llvm/Support/raw_ostream.h>
@@ -39,6 +43,7 @@
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Dialect.h>
 #include <mlir/IR/IRMapping.h>
+#include <mlir/IR/Location.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/OwningOpRef.h>
@@ -426,6 +431,11 @@ namespace patchestry::passes {
         }
         }
 
+        // Emit the patch-location map (applied patch → binary address) so
+        // downstream tooling can relay patches back to the original binary.
+        // Done even on partial failure so the map reflects what was applied.
+        emit_patch_location_map(mod);
+
         // #244: propagate any dropped patch / failed YAML parse to exit code.
         if (patch_failed) {
             LOG(ERROR) << "patchir-transform: one or more patches were not applied "
@@ -490,6 +500,127 @@ namespace patchestry::passes {
         }
     }
 
+    // Unwrap an MLIR location to its FileLineColLoc filename, mirroring the
+    // logic in patchir-cir2llvm's collectAttributes. The decomp pipeline stamps
+    // each op with a virtual-file location whose filename is the Ghidra address
+    // key (see AST/Utils.cpp::SourceLocation). Returns "" if none is present.
+    static std::string loc_filename(mlir::Location loc) {
+        if (auto floc = mlir::dyn_cast< mlir::FileLineColLoc >(loc)) {
+            return floc.getFilename().str();
+        }
+        if (auto fused = mlir::dyn_cast< mlir::FusedLoc >(loc)) {
+            for (auto sub : fused.getLocations()) {
+                if (auto floc = mlir::dyn_cast< mlir::FileLineColLoc >(sub)) {
+                    return floc.getFilename().str();
+                }
+            }
+        }
+        return {};
+    }
+
+    // Parse a Ghidra address key "space:hexaddr[:time:order]" into its space and
+    // binary address (the time:order suffix refines within a single instruction,
+    // not the address). Returns false if `key` is not an address key.
+    static bool parse_address_key(
+        llvm::StringRef key, std::string &space, std::string &address
+    ) {
+        auto [sp, rest] = key.split(':');
+        if (rest.empty()) {
+            return false;
+        }
+        llvm::StringRef hex = rest.split(':').first;
+        unsigned long long addr = 0;
+        if (hex.empty() || hex.getAsInteger(16, addr)) {
+            return false;
+        }
+        space   = sp.str();
+        address = "0x" + llvm::utohexstr(addr, /*LowerCase=*/true);
+        return true;
+    }
+
+    void InstrumentationPass::record_patch_location(
+        mlir::Operation *target_op, llvm::StringRef patch_name, InstrumentationMode mode,
+        llvm::StringRef callee
+    ) {
+        // Only do the work when a map was requested.
+        if (options.patch_map_file.empty() || target_op == nullptr) {
+            return;
+        }
+
+        PatchLocationRecord rec;
+        rec.patch   = patch_name.str();
+        rec.mode    = std::string(patch::infoModeToString(mode));
+        rec.callee  = callee.str();
+        rec.op_kind = target_op->getName().getStringRef().str();
+
+        // REPLACE_DEFINITION targets the cir.func itself; all other modes target
+        // an op nested inside a function. Record the enclosing function's symbol
+        // and its own entry address (so downstream tooling can compute the
+        // in-function offset and rebase onto the stripped/loaded binary).
+        cir::FuncOp func = target_op->getParentOfType< cir::FuncOp >();
+        if (!func) {
+            func = mlir::dyn_cast< cir::FuncOp >(target_op);
+        }
+        if (func) {
+            rec.function = func.getSymName().str();
+            std::string fspace;
+            std::string faddr;
+            if (parse_address_key(loc_filename(func->getLoc()), fspace, faddr)) {
+                rec.function_address = faddr;
+            }
+        }
+
+        rec.loc_key = loc_filename(target_op->getLoc());
+        parse_address_key(rec.loc_key, rec.address_space, rec.binary_address);
+
+        if (rec.binary_address.empty()) {
+            LOG(WARNING) << "patch-map: could not resolve a binary address for patch '"
+                         << rec.patch << "' on " << rec.op_kind << " in function '"
+                         << rec.function << "' (loc='" << rec.loc_key
+                         << "'); recording as unresolved\n";
+        }
+
+        patch_location_map.push_back(std::move(rec));
+    }
+
+    void InstrumentationPass::emit_patch_location_map(mlir::ModuleOp mod) {
+        if (options.patch_map_file.empty()) {
+            return;
+        }
+
+        llvm::json::Array patches;
+        for (const auto &rec : patch_location_map) {
+            patches.push_back(llvm::json::Object{
+                { "patch", rec.patch },
+                { "mode", rec.mode },
+                { "function", rec.function },
+                { "function_address", rec.function_address },
+                { "callee", rec.callee },
+                { "op_kind", rec.op_kind },
+                { "address_space", rec.address_space },
+                { "binary_address", rec.binary_address },
+                { "address_source", rec.binary_address.empty() ? "unresolved" : "map" },
+                { "loc_key", rec.loc_key },
+            });
+        }
+
+        llvm::json::Object root{
+            { "module", mod.getName() ? mod.getName()->str() : std::string("module") },
+            { "patches", std::move(patches) },
+        };
+
+        std::error_code ec;
+        llvm::raw_fd_ostream os(options.patch_map_file, ec, llvm::sys::fs::OF_Text);
+        if (ec) {
+            LOG(ERROR) << "patch-map: cannot open '" << options.patch_map_file
+                       << "': " << ec.message() << "\n";
+            return;
+        }
+        os << llvm::formatv("{0:2}", llvm::json::Value(std::move(root))) << "\n";
+        LOG(INFO) << "patch-map: wrote " << patch_location_map.size()
+                  << " record(s) to " << options.patch_map_file << "\n";
+    }
+
     /**
      * @brief Applies a specific patch action to target functions and operations.
      *
@@ -551,6 +682,10 @@ namespace patchestry::passes {
                     LOG(INFO) << "Replacing definition of '"
                               << func.getSymName().str() << "' with patch '"
                               << patch_to_apply.spec->name << "'\n";
+                    record_patch_location(
+                        func.getOperation(), patch_to_apply.spec->name,
+                        InstrumentationMode::REPLACE_DEFINITION, func.getSymName()
+                    );
                     PatchOperationImpl::replaceFunctionDefinition(
                         *this, func, patch_to_apply, patch_module.get()
                     );
@@ -582,6 +717,10 @@ namespace patchestry::passes {
                     if (action.mode == InstrumentationMode::ERASE) {
                         LOG(INFO) << "Erasing call '" << callee_name
                                   << "' (patch action '" << patch_action.action_id << "')\n";
+                        record_patch_location(
+                            call_op.getOperation(), patch_action.action_id,
+                            InstrumentationMode::ERASE, callee_name
+                        );
                         to_erase.push_back(call_op.getOperation());
                         return;
                     }
@@ -604,6 +743,10 @@ namespace patchestry::passes {
                         << "Applying patch '" << patch_to_apply.spec->name << "' in mode '"
                         << patchestry::passes::patch::infoModeToString(action.mode)
                         << "' \n";
+                    record_patch_location(
+                        call_op.getOperation(), patch_to_apply.spec->name, action.mode,
+                        callee_name
+                    );
                     switch (action.mode) {
                         case InstrumentationMode::APPLY_BEFORE:
                             PatchOperationImpl::applyBeforePatch(
@@ -679,6 +822,10 @@ namespace patchestry::passes {
                     LOG(INFO) << "Erasing operation '"
                               << op->getName().getStringRef().str()
                               << "' (patch action '" << patch_action.action_id << "')\n";
+                    record_patch_location(
+                        op, patch_action.action_id, InstrumentationMode::ERASE,
+                        op->getName().getStringRef()
+                    );
                     to_erase.push_back(op);
                     continue;
                 }
@@ -696,6 +843,9 @@ namespace patchestry::passes {
                 PatchInformation patch_site = patch_to_apply;
                 patch_site.captures        = std::move(match_captures);
 
+                record_patch_location(
+                    op, patch_to_apply.spec->name, action.mode, match.name
+                );
                 switch (action.mode) {
                     case InstrumentationMode::APPLY_BEFORE:
                         PatchOperationImpl::applyBeforePatch(
