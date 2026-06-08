@@ -192,20 +192,27 @@ public class PcodeSerializer {
     	// architecture allowlist above; ON and OFF override it.
     	public enum AnalyticalTierMode { AUTO, ON, OFF }
 
-		// Ghidra decompiler built-in userop indices (from userop.cc)
+		// Ghidra decompiler built-in userop indices (from
+		// Ghidra/Features/Decompiler/src/decompile/cpp/userop.cc). This is the
+		// COMPLETE set Ghidra mints in registerBuiltin() -- 6 contiguous ids,
+		// 0x10000000..0x10000005, unchanged on Ghidra 12.0.4 and HEAD.
 		public static final int BUILTIN_STRINGDATA = 0x10000000;
 		public static final int BUILTIN_VOLATILE_READ = 0x10000001;
 		public static final int BUILTIN_VOLATILE_WRITE = 0x10000002;
 		public static final int BUILTIN_MEMCPY = 0x10000003;
 		public static final int BUILTIN_STRNCPY = 0x10000004;
 		public static final int BUILTIN_WCSNCPY = 0x10000005;
-		// Patchestry-synthesized userops, in their own band clear of Ghidra's
-		// builtin range (0x10000000-0x1FFFFFFF) so a future Ghidra builtin can't
-		// collide. Stays >= BUILTIN_STRINGDATA, so these still route through the
-		// generic intrinsic path, not the synthetic special-case skip.
+		// Highest Ghidra-minted builtin id (inclusive). Anything in the builtin
+		// range above this is either patchestry-synthetic or an unrecognized
+		// future Ghidra builtin (flagged in the manifest, never silently mapped).
+		public static final int GHIDRA_BUILTIN_MAX = BUILTIN_WCSNCPY;
+		// Patchestry-synthetic builtin userops, injected by analysis passes
+		// (here: exception-return, from the InterruptAnalysis EXC_RETURN property
+		// map). Parked well ABOVE Ghidra's builtin range so a future Ghidra
+		// builtin (the next free slot is 0x10000006) cannot collide. Still
+		// >= BUILTIN_STRINGDATA, so they route through the generic intrinsic
+		// serialization path rather than the synthetic special-case.
 		public static final int PATCHESTRY_BUILTIN_BASE = 0x20000000;
-		// Synthetic exception-return intrinsics injected from the
-		// InterruptAnalysis EXC_RETURN property map.
 		public static final int BUILTIN_EXCEPTION_RETURN = PATCHESTRY_BUILTIN_BASE + 0;
 		public static final int BUILTIN_EXCEPTION_RETURN_CPSR = PATCHESTRY_BUILTIN_BASE + 1;
 
@@ -356,6 +363,7 @@ public class PcodeSerializer {
 		// A mapping of `CALLOTHER` locations operating with named intrinsics to
 		// the `PcodeOp`s representing those `CALLOTHER`s.
 		private List<PcodeOp> callotherUsePcodeOps;
+
 
 		// Maps external function label → mangled name discovered at the call
 		// site (thunk/PLT stub) before dethunking.  Populated by
@@ -1280,6 +1288,12 @@ public class PcodeSerializer {
 			return null;  // Unknown userop
 		}
 
+		// Opaque, clearly-named placeholder for a CALLOTHER whose userop index
+		// the language doesn't name. Used instead of dropping the whole function.
+		static String unknownUseropName(int index) {
+			return "__patchestry_unknown_0x" + Integer.toHexString(index);
+		}
+
 		// Return the label of an intrinsic with `CALLOTHER`. This is based
 		// off of the return value.
 		String intrinsicLabel(PcodeOp pcodeOp) throws Exception {
@@ -1287,8 +1301,9 @@ public class PcodeSerializer {
 				int index = (int) pcodeOp.getInput(0).getOffset();
 				String name = resolveUseropName(index);
 				if (name == null) {
-					throw new UnsupportedOperationException(
-						"Unknown CALLOTHER index: 0x" + Integer.toHexString(index));
+					// Unknown userop index: emit an opaque placeholder rather
+					// than aborting; the manifest flags it as unmapped.
+					name = unknownUseropName(index);
 				}
 				return intrinsicLabel(name, intrinsicReturnType(pcodeOp));
 			} else {
@@ -3283,13 +3298,16 @@ public class PcodeSerializer {
 							if (callotherIndex >= MIN_CALLOTHER && callotherIndex < BUILTIN_STRINGDATA) {
 								break;
 							}
-							// Process SLEIGH userops and decompiler built-ins as intrinsics
+							// Process SLEIGH userops and decompiler built-ins as
+							// intrinsics. An unknown index is kept as an opaque
+							// __patchestry_unknown placeholder (flagged in the
+							// manifest) rather than dropping the whole function.
 							String userDefinedOpName = resolveUseropName(callotherIndex);
-							if (userDefinedOpName != null) {
-								callotherUsePcodeOps.add(pcodeOp);
-							} else {
-								System.out.println("Unsupported CALLOTHER at " + label(pcodeOp) + ": " + pcodeOp.toString());
-								return false;
+							callotherUsePcodeOps.add(pcodeOp);
+							if (userDefinedOpName == null) {
+								System.out.println("Unknown CALLOTHER (kept opaque) at "
+									+ label(pcodeOp) + ": index 0x"
+									+ Integer.toHexString(callotherIndex));
 							}
 							break;
 						case PcodeOp.CALL:
@@ -4854,6 +4872,25 @@ public class PcodeSerializer {
 			writer.endArray();
 		}
 		
+		// Emit the IntrinsicClassifier taxonomy on a CALLOTHER target so the C++
+		// AST layer can spell recognized ARM/AArch64 system userops as ACLE /
+		// CMSIS intrinsics. Only recognized (mapped) ops get the fields; others
+		// are left untagged and flow through the existing name-based dispatch.
+		// The presence of `intrinsic_class` is itself the "is classified" signal,
+		// so no separate `mapped` flag is serialized.
+		void serializeIntrinsicClass(PcodeOp pcodeOp) throws Exception {
+			int index = (int) pcodeOp.getInput(0).getOffset();
+			String name = resolveUseropName(index);
+			if (name == null) { name = unknownUseropName(index); }
+			util.firmware.IntrinsicClassifier.Result r =
+				util.firmware.IntrinsicClassifier.classify(this.architecture, name);
+			if (!r.mapped) { return; }
+			writer.name("intrinsic_class").value(r.klass);
+			if (r.register != null && !r.register.isEmpty()) {
+				writer.name("system_register").value(r.register);
+			}
+		}
+
 		// Serialize a `CALLOTHER` as a call to an intrinsic.
 		void serializeIntrinsicCallOp(PcodeOp pcodeOp) throws Exception {
 			serializeOutput(pcodeOp);
@@ -4863,6 +4900,7 @@ public class PcodeSerializer {
 			writer.name("function").value(intrinsicLabel(pcodeOp));
 			writer.name("is_variadic").value(true);
 			writer.name("is_noreturn").value(false);
+			serializeIntrinsicClass(pcodeOp);
 			writer.endObject();  // End of `target`.
 
 			// For BUILTIN_STRINGDATA, look up the actual string literal
@@ -5792,15 +5830,24 @@ public class PcodeSerializer {
 			for (PcodeOp pcodeOp : callotherUsePcodeOps) {
 				int index = (int) pcodeOp.getInput(0).getOffset();
 				String name = resolveUseropName(index);
+				if (name == null) { name = unknownUseropName(index); }
 				DataType returnType = intrinsicReturnType(pcodeOp);
 				String label = intrinsicLabel(name, returnType);
 				if (!seenIntrinsics.add(label)) {
 					continue;
 				}
-				
+
 				writer.name(label).beginObject();
 				writer.name("name").value(name);
 				writer.name("is_intrinsic").value(true);
+				util.firmware.IntrinsicClassifier.Result rc =
+					util.firmware.IntrinsicClassifier.classify(this.architecture, name);
+				if (rc.mapped) {
+					writer.name("intrinsic_class").value(rc.klass);
+					if (rc.register != null && !rc.register.isEmpty()) {
+						writer.name("system_register").value(rc.register);
+					}
+				}
 				writer.name("type").beginObject();
 				writer.name("return_type").value(label(returnType));
 				writer.name("is_variadic").value(true);
@@ -5814,7 +5861,7 @@ public class PcodeSerializer {
 			
 			System.out.println("Total serialized intrinsics: " + Integer.toString(numIntrinsics));
 		}
-		
+
 
 		// Ghidra exposes its structured region tree only via
 		// DecompInterface.structureGraph(BlockGraph, ...), which expects an

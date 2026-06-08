@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -38,6 +39,16 @@ namespace patchestry::ast {
 
     // Returns the map of intrinsic name -> handler function
     const std::unordered_map< std::string, IntrinsicHandler > &get_intrinsic_handlers();
+
+    // System-userop emission. For a CALLOTHER target tagged with an
+    // `intrinsic_class`, the per-arch emitter selected by `arch` maps it to an
+    // ACLE / CMSIS-Core spelling and emits the call. Returns std::nullopt to
+    // fall through to name-based dispatch (class unset, no emitter for the arch,
+    // or the class is left to another path). Shape follows op.output/op.inputs.
+    std::optional< std::pair< clang::Stmt *, bool > > emit_system_intrinsic(
+        OpBuilder &b, clang::ASTContext &ctx, const ghidra::Function &fn,
+        const ghidra::Operation &op, std::string_view arch
+    );
 
     // Parse intrinsic name from label (strips type suffix like _void, _int, _uint8_t)
     // and applies arch-specific normalization (e.g. AArch64 ldadd -> atomic_fetch_add_*).

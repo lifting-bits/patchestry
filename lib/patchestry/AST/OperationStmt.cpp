@@ -2119,6 +2119,15 @@ namespace patchestry::ast {
         const auto &label = *op.target->function;
         auto name         = parse_intrinsic_name(function_builder().program_arch(), label);
 
+        // Classified system userops map to a compiler intrinsic via the
+        // per-arch emitter (ARM -> CMSIS/ACLE: __disable_irq, __arm_ldc, ...).
+        // Unhandled classes/arches return nullopt and fall through unchanged.
+        if (auto sys = emit_system_intrinsic(
+                *this, ctx, function, op, function_builder().program_arch()))
+        {
+            return *sys;
+        }
+
         // Custom-semantics handlers (volatile_read → *(volatile T*)addr
         // deref, etc.) take precedence so they can rewrite the op
         // instead of building a call.
@@ -4140,7 +4149,7 @@ namespace patchestry::ast {
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_intrinsic_call(
         clang::ASTContext &ctx, const Function &function, const Operation &op,
-        const std::string &name
+        const std::string &name, std::optional< std::size_t > pointer_arg_index
     ) {
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
@@ -4158,12 +4167,22 @@ namespace patchestry::ast {
 
         // Build arguments from inputs
         std::vector< clang::Expr * > args;
+        std::size_t input_index = 0;
         for (const auto &input : op.inputs) {
             auto *e =
                 AS_EXPR_OR_NULL(create_varnode(ctx, function, input), op.key);
             if (e) {
+                if (pointer_arg_index && *pointer_arg_index == input_index) {
+                    // Force `(const void *)` for a pointer-typed ACLE prototype
+                    // even when the operand resolves to an integer.
+                    auto void_ptr = ctx.getPointerType(ctx.VoidTy.withConst());
+                    if (auto *casted = make_explicit_cast(ctx, e, void_ptr, op_loc)) {
+                        e = casted;
+                    }
+                }
                 args.push_back(e);
             }
+            ++input_index;
         }
 
         // Build the function prototype from the actual argument types so the
