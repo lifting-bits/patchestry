@@ -169,7 +169,8 @@ if stage_le patch "$stage_target"; then
     banner "stage 3/8: apply patch + contract specs"
     "$PATCHIR_TRANSFORM" "$out_dir/attribute_modified_cb.cir" \
         --spec "${repo_root}/test/patchir-klee-verifier/secpump_klee_spec.yaml" \
-        -o "$out_dir/secpump_e2e.cir"
+        -o "$out_dir/secpump_e2e.cir" \
+        --emit-patch-map "$out_dir/secpump_e2e.patchmap.json"
 fi
 
 # ---- stage: lower ----------------------------------------------------------

@@ -46,6 +46,11 @@ namespace patchestry::klee_verifier {
     // if (!cond) klee_abort() to implement postcondition assertions.
     extern llvm::FunctionCallee getKleeAbort(llvm::Module &M);
 
+    // Get or declare klee_silent_exit: void klee_silent_exit(int status).
+    // Terminates the current state without an error or test case — models a
+    // patch's own defensive halt (a safe fail-stop, not a property failure).
+    extern llvm::FunctionCallee getKleeSilentExit(llvm::Module &M);
+
     // Get or declare malloc: i8* malloc(size_t). KLEE intercepts this at
     // runtime and returns a tracked heap allocation that survives the
     // caller's stack frame.
@@ -305,6 +310,39 @@ namespace patchestry::klee_verifier {
             "__patchestry_assert_fail",
         };
 
+        auto isAbortLike = [&](llvm::StringRef name) {
+            for (auto known : kAbortLikeNames) {
+                if (name == known)
+                    return true;
+            }
+            return false;
+        };
+
+        // Patch-authored defensive halts are a *separate* category from the
+        // abort family above. Patch authors routinely write a per-TU halt
+        // helper (e.g. `secpump_assert_fail`) marked
+        // __attribute__((noreturn)) { for(;;){} } and call it from a bounds
+        // guard before an unsafe store. The patch lowering keeps only the
+        // patched entry function and leaves such helpers as bare externs, so
+        // the body (and its noreturn semantics) never reaches this module —
+        // otherwise stubExternalFunctions below would hand the helper a plain
+        // `ret void` body, the guard would "fire" but return, execution would
+        // fall through to the very store it was meant to prevent, and KLEE
+        // would report a false memory error.
+        //
+        // Unlike a contract/libc assertion (a property *failure* that must
+        // surface loudly), reaching such a guard means the patch did its job:
+        // it refused to corrupt memory and fail-stopped. The faithful KLEE
+        // model is therefore `klee_silent_exit(0)` — terminate the path with
+        // no error and no test case — NOT klee_abort, which would record a
+        // `.abort.err` and read as a violation. We match these by the
+        // `assert_fail` suffix, but only after the explicit (loud) list has
+        // had first refusal, so `__assert_fail` / `__patchestry_assert_fail`
+        // keep their klee_abort semantics.
+        auto isDefensiveHalt = [](llvm::StringRef name) {
+            return name.ends_with("assert_fail");
+        };
+
         // Names we must never redirect — KLEE intercepts these natively,
         // or they are our own synthesized hooks.
         auto isExcluded = [](llvm::StringRef name) {
@@ -313,36 +351,41 @@ namespace patchestry::klee_verifier {
                 || name.starts_with("__klee_");
         };
 
-        // Give each abort-like declaration a body that calls klee_abort.
-        // All existing call sites (direct and indirect through function
-        // pointers) route through the new body automatically — no per-
-        // call-site IR surgery needed.
+        auto klee_silent_exit = getKleeSilentExit(M);
+
+        // Give each matching declaration a body. All existing call sites
+        // (direct and indirect through function pointers) route through the
+        // new body automatically — no per-call-site IR surgery needed.
         for (auto &F : M) {
             if (!F.isDeclaration())
                 continue;
             if (isExcluded(F.getName()))
                 continue;
 
-            bool is_abort_like = false;
-            for (auto name : kAbortLikeNames) {
-                if (F.getName() == name) {
-                    is_abort_like = true;
-                    break;
-                }
-            }
-            if (!is_abort_like)
-                continue;
-
             auto &Ctx = M.getContext();
-            auto *BB = llvm::BasicBlock::Create(Ctx, "entry", &F);
-            llvm::IRBuilder<> B(BB);
-            B.CreateCall(klee_abort, {});
-            B.CreateUnreachable();
 
-            ++count;
-            if (verbose) {
-                llvm::outs() << "  Redirected " << F.getName()
-                             << " to klee_abort\n";
+            if (isAbortLike(F.getName())) {
+                auto *BB = llvm::BasicBlock::Create(Ctx, "entry", &F);
+                llvm::IRBuilder<> B(BB);
+                B.CreateCall(klee_abort, {});
+                B.CreateUnreachable();
+                ++count;
+                if (verbose) {
+                    llvm::outs() << "  Redirected " << F.getName()
+                                 << " to klee_abort\n";
+                }
+            } else if (isDefensiveHalt(F.getName())) {
+                auto *BB = llvm::BasicBlock::Create(Ctx, "entry", &F);
+                llvm::IRBuilder<> B(BB);
+                B.CreateCall(
+                    klee_silent_exit,
+                    { llvm::ConstantInt::get(llvm::Type::getInt32Ty(Ctx), 0) });
+                B.CreateUnreachable();
+                ++count;
+                if (verbose) {
+                    llvm::outs() << "  Redirected " << F.getName()
+                                 << " to klee_silent_exit\n";
+                }
             }
         }
 

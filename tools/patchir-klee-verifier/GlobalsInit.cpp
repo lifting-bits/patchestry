@@ -459,6 +459,17 @@ namespace patchestry::klee_verifier {
             return materialized;
         }
 
+        // True if `name` was passed via --keep-global-concrete: the caller
+        // wants this global left at its static initializer rather than
+        // symbolized. Matched by exact mangled name.
+        bool isKeptConcrete(llvm::StringRef name) {
+            for (const auto &keep : keep_globals_concrete) {
+                if (name == keep)
+                    return true;
+            }
+            return false;
+        }
+
         void collectModuleGlobals(
             llvm::Module &M, std::vector< llvm::GlobalVariable * > &out
         ) {
@@ -472,6 +483,16 @@ namespace patchestry::klee_verifier {
                     continue;
                 if (isToolSynthesizedGlobal(&GV))
                     continue;
+                // Caller asked to keep this global concrete (e.g. a static
+                // iterator whose full symbolic range would explode KLEE's
+                // state space); leave it at its static initializer.
+                if (isKeptConcrete(GV.getName())) {
+                    if (verbose) {
+                        llvm::outs() << "[globals] keeping concrete (not symbolized): "
+                                     << GV.getName().str() << "\n";
+                    }
+                    continue;
+                }
                 llvm::Type *VT = GV.getValueType();
                 if (!VT->isSized())
                     continue;

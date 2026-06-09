@@ -23,5 +23,6 @@ namespace patchestry::klee_verifier {
     extern llvm::cl::opt< unsigned > klee_init_max_depth;
     extern llvm::cl::opt< unsigned > klee_init_array_expand_limit;
     extern llvm::cl::opt< bool > strict_contracts;
+    extern llvm::cl::list< std::string > keep_globals_concrete;
 
 } // namespace patchestry::klee_verifier

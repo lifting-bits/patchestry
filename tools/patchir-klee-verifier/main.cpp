@@ -98,6 +98,20 @@ namespace patchestry::klee_verifier {
         llvm::cl::init(true)
     );
 
+    // Globals listed here are left at their static LLVM initializer instead
+    // of being handed to klee_make_symbolic. Use for a global whose full
+    // symbolic range is both unrealistic and ruinous for KLEE — e.g. a
+    // static loop iterator that the firmware only ever advances from 0:
+    // symbolizing it over its entire integer range turns an in-bounds
+    // array write into a symbolic-index store and explodes the state
+    // space (KLEE OOMs) without modeling any reachable behavior. Repeatable;
+    // match is by exact mangled global name.
+    llvm::cl::list< std::string > keep_globals_concrete(
+        "keep-global-concrete",
+        llvm::cl::desc("Global to leave at its static initializer (not symbolized); repeatable"),
+        llvm::cl::value_desc("global-name")
+    );
+
 } // namespace patchestry::klee_verifier
 
 int main(int argc, char **argv) {

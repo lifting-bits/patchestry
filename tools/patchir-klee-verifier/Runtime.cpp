@@ -41,6 +41,18 @@ namespace patchestry::klee_verifier {
         return M.getOrInsertFunction("klee_abort", FT);
     }
 
+    llvm::FunctionCallee getKleeSilentExit(llvm::Module &M) {
+        auto &Ctx    = M.getContext();
+        auto *voidTy = llvm::Type::getVoidTy(Ctx);
+        auto *i32Ty  = llvm::Type::getInt32Ty(Ctx);
+        // void klee_silent_exit(int status): terminate the current state
+        // without recording an error or emitting a test case. Used to model
+        // a patch's own defensive halt — the path reached a safe fail-stop,
+        // so KLEE should stop exploring it rather than flag a violation.
+        auto *FT     = llvm::FunctionType::get(voidTy, { i32Ty }, false);
+        return M.getOrInsertFunction("klee_silent_exit", FT);
+    }
+
     llvm::FunctionCallee getMalloc(llvm::Module &M) {
         auto &Ctx    = M.getContext();
         auto *ptrTy  = llvm::PointerType::getUnqual(Ctx);
