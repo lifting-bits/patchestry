@@ -454,6 +454,36 @@ namespace patchestry::ast {
         return function_def;
     }
 
+    /**
+     * @brief Detects whether an operation is part of compiler-inserted stack canary
+     * boilerplate (__stack_chk_guard load/compare, __stack_chk_fail call).
+     */
+    bool FunctionBuilder::is_stack_canary_operation(const Operation &op) const {
+        auto is_canary_global = [this](const std::optional< std::string > &key) -> bool {
+            if (!key.has_value()) { return false; }
+            auto it = global_var_list.get().find(*key);
+            if (it == global_var_list.get().end()) { return false; }
+            const auto &name = it->second->getNameAsString();
+            return name == "__stack_chk_guard" || name == "___stack_chk_guard";
+        };
+
+        for (const auto &input : op.inputs) {
+            if (is_canary_global(input.global)) { return true; }
+        }
+
+        if (op.output.has_value() && is_canary_global(op.output->global)) { return true; }
+
+        if (op.target.has_value() && op.target->function.has_value()) {
+            auto it = function_list.get().find(*op.target->function);
+            if (it != function_list.get().end()) {
+                const auto &name = it->second->getNameAsString();
+                if (name == "__stack_chk_fail" || name == "___stack_chk_fail") { return true; }
+            }
+        }
+
+        return false;
+    }
+
     std::vector<clang::Stmt *>
     FunctionBuilder::create_block_stmts(clang::ASTContext &ctx, const BasicBlock &block) {
         if (block.ordered_operations.empty()) {
@@ -480,6 +510,10 @@ namespace patchestry::ast {
                 || operation.mnemonic == Mnemonic::OP_BRANCHIND) {
                 continue;
             }
+
+            // Skip compiler-inserted stack canary boilerplate
+            // (__stack_chk_guard load/compare, __stack_chk_fail call).
+            if (is_stack_canary_operation(operation)) { continue; }
 
             auto saved_pending = std::move(pending_materialized);
             pending_materialized.clear();

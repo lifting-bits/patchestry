@@ -1271,6 +1271,10 @@ namespace patchestry::ast {
                                 const auto &target_op = tb.operations.at(op_key);
                                 // Skip the terminal BRANCH — break replaces it.
                                 if (target_op.mnemonic == Mnemonic::OP_BRANCH) { continue; }
+                                // Skip compiler-inserted stack canary boilerplate so the
+                                // inlined case body matches what create_block_stmts emits
+                                // for non-inlined blocks.
+                                if (function_builder().is_stack_canary_operation(target_op)) { continue; }
                                 auto [stmt, merge] =
                                     function_builder().create_operation(ctx, target_op);
                                 for (auto *p : function_builder().pending_materialized) {

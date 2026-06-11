@@ -192,6 +192,8 @@ namespace patchestry::ast {
         // return-type suffix on the C identifier.
         std::reference_wrapper< const std::unordered_set< std::string > > suffix_names;
 
+        bool is_stack_canary_operation(const Operation &op) const;
+
         std::unordered_map< std::string, clang::VarDecl * > local_variables;
         std::unordered_map< std::string, clang::LabelDecl * > labels_declaration;
         std::unordered_map< std::string, clang::Stmt * > operation_stmts;

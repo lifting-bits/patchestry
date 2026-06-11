@@ -1,6 +1,13 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=CGEN %s --input-file %t.c
+// CGEN-LABEL: bl_device__process_entry(
+// The CALL to __stack_chk_fail is stripped from the function body. The
+// __stack_chk_guard exit comparison is a known unstripped case (issue #161):
+// the structuring pass re-materializes it from the CBRANCH, so it survives
+// the operation-level filter. Value-level taint tracking would be required.
+// CGEN-NOT: __stack_chk_fail
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // CIR: cir.func dso_local @bl_device__process_entry
 // RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir
