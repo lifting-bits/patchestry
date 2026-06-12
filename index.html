@@ -1,0 +1,1513 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+      
+        <link rel="next" href="GettingStarted/build/">
+      
+      <link rel="icon" href="assets/img/favicon.ico">
+      <meta name="generator" content="mkdocs-1.4.2, mkdocs-material-9.0.6">
+    
+    
+      
+        <title>Patchestry</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.558e4712.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.2505c338.min.css">
+      
+      
+
+    
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&"object"==typeof palette.color)for(var key of Object.keys(palette.color))document.body.setAttribute("data-md-color-"+key,palette.color[key])</script>
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#patchestry-multi-layered-binary-lifting-and-patching-framework" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="." title="Patchestry" class="md-header__button md-logo" aria-label="Patchestry" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Patchestry
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Introduction
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      <form class="md-header__option" data-md-component="palette">
+        
+          
+          <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+          
+            <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_3" hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9h-1.9M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69m-9.15 3.96h2.3L12 9l-1.15 3.65Z"/></svg>
+            </label>
+          
+        
+          
+          <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_2">
+          
+            <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+            </label>
+          
+        
+          
+          <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_3">
+          
+            <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_2" hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12c0-2.42-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+            </label>
+          
+        
+      </form>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7 0-.24-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91 1.61 0 2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08Z"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lifting-bits/patchestry" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="." title="Patchestry" class="md-nav__button md-logo" aria-label="Patchestry" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    Patchestry
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lifting-bits/patchestry" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+      
+
+  
+  
+    
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" data-md-toggle="toc" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          Introduction
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="." class="md-nav__link md-nav__link--active">
+        Introduction
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#technical-rationale" class="md-nav__link">
+    Technical Rationale
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-goals" class="md-nav__link">
+    Project Goals
+  </a>
+  
+    <nav class="md-nav" aria-label="Project Goals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unified-tooling-integration" class="md-nav__link">
+    Unified Tooling Integration
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#incremental-decompilation" class="md-nav__link">
+    Incremental Decompilation
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unifying-representations-for-contracts-patches-and-software" class="md-nav__link">
+    Unifying Representations for Contracts, Patches, and Software
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#declarative-patching-and-contracts-description" class="md-nav__link">
+    Declarative Patching and Contracts Description
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-approach" class="md-nav__link">
+    Why This Approach
+  </a>
+  
+    <nav class="md-nav" aria-label="Why This Approach">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-not-edit-ghidras-output-directly" class="md-nav__link">
+    Why Not Edit Ghidra's Output Directly?
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-clang-ast" class="md-nav__link">
+    Why Clang AST?
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-mlir" class="md-nav__link">
+    Why MLIR?
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decompilation-pipeline" class="md-nav__link">
+    Decompilation Pipeline
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#developer-workflow" class="md-nav__link">
+    Developer Workflow
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#patching-interface" class="md-nav__link">
+    Patching Interface
+  </a>
+  
+    <nav class="md-nav" aria-label="Patching Interface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#patch-specification" class="md-nav__link">
+    Patch Specification
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#patch-dispatch" class="md-nav__link">
+    Patch Dispatch
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration-file" class="md-nav__link">
+    Configuration File
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contracts-interface" class="md-nav__link">
+    Contracts Interface
+  </a>
+  
+    <nav class="md-nav" aria-label="Contracts Interface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#contract-specification" class="md-nav__link">
+    Contract Specification
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#contract-dispatch" class="md-nav__link">
+    Contract Dispatch
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    Architecture
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-cve-2021-22156-patching" class="md-nav__link">
+    Example: CVE-2021-22156 Patching
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+  
+    
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+      
+      
+      
+        
+      
+      <input class="md-nav__toggle md-toggle md-toggle--indeterminate" data-md-toggle="__nav_2" type="checkbox" id="__nav_2" >
+      
+      
+        
+          
+        
+          
+        
+          
+        
+      
+      
+        <label class="md-nav__link" for="__nav_2" tabindex="0" aria-expanded="false">
+          Getting Started
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <nav class="md-nav" aria-label="Getting Started" data-md-level="1">
+        <label class="md-nav__title" for="__nav_2">
+          <span class="md-nav__icon md-icon"></span>
+          Getting Started
+        </label>
+        <ul class="md-nav__list" data-md-scrollfix>
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="GettingStarted/build/" class="md-nav__link">
+        Build & Run
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="GettingStarted/ghidra/" class="md-nav__link">
+        Ghidra Integration
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="CONTRIBUTING/" class="md-nav__link">
+        How to contribute
+      </a>
+    </li>
+  
+
+            
+          
+        </ul>
+      </nav>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+  
+    
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+      
+      
+      
+        
+      
+      <input class="md-nav__toggle md-toggle md-toggle--indeterminate" data-md-toggle="__nav_3" type="checkbox" id="__nav_3" >
+      
+      
+        
+          
+        
+      
+      
+        <label class="md-nav__link" for="__nav_3" tabindex="0" aria-expanded="false">
+          Dialects
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <nav class="md-nav" aria-label="Dialects" data-md-level="1">
+        <label class="md-nav__title" for="__nav_3">
+          <span class="md-nav__icon md-icon"></span>
+          Dialects
+        </label>
+        <ul class="md-nav__list" data-md-scrollfix>
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="Dialects/Pcode/" class="md-nav__link">
+        Pcode
+      </a>
+    </li>
+  
+
+            
+          
+        </ul>
+      </nav>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+  
+    
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+      
+      
+      
+        
+      
+      <input class="md-nav__toggle md-toggle md-toggle--indeterminate" data-md-toggle="__nav_4" type="checkbox" id="__nav_4" >
+      
+      
+        
+          
+        
+      
+      
+        <label class="md-nav__link" for="__nav_4" tabindex="0" aria-expanded="false">
+          About
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <nav class="md-nav" aria-label="About" data-md-level="1">
+        <label class="md-nav__title" for="__nav_4">
+          <span class="md-nav__icon md-icon"></span>
+          About
+        </label>
+        <ul class="md-nav__list" data-md-scrollfix>
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="statement/" class="md-nav__link">
+        License
+      </a>
+    </li>
+  
+
+            
+          
+        </ul>
+      </nav>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#technical-rationale" class="md-nav__link">
+    Technical Rationale
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-goals" class="md-nav__link">
+    Project Goals
+  </a>
+  
+    <nav class="md-nav" aria-label="Project Goals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unified-tooling-integration" class="md-nav__link">
+    Unified Tooling Integration
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#incremental-decompilation" class="md-nav__link">
+    Incremental Decompilation
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unifying-representations-for-contracts-patches-and-software" class="md-nav__link">
+    Unifying Representations for Contracts, Patches, and Software
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#declarative-patching-and-contracts-description" class="md-nav__link">
+    Declarative Patching and Contracts Description
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-approach" class="md-nav__link">
+    Why This Approach
+  </a>
+  
+    <nav class="md-nav" aria-label="Why This Approach">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-not-edit-ghidras-output-directly" class="md-nav__link">
+    Why Not Edit Ghidra's Output Directly?
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-clang-ast" class="md-nav__link">
+    Why Clang AST?
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-mlir" class="md-nav__link">
+    Why MLIR?
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decompilation-pipeline" class="md-nav__link">
+    Decompilation Pipeline
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#developer-workflow" class="md-nav__link">
+    Developer Workflow
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#patching-interface" class="md-nav__link">
+    Patching Interface
+  </a>
+  
+    <nav class="md-nav" aria-label="Patching Interface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#patch-specification" class="md-nav__link">
+    Patch Specification
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#patch-dispatch" class="md-nav__link">
+    Patch Dispatch
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration-file" class="md-nav__link">
+    Configuration File
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contracts-interface" class="md-nav__link">
+    Contracts Interface
+  </a>
+  
+    <nav class="md-nav" aria-label="Contracts Interface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#contract-specification" class="md-nav__link">
+    Contract Specification
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#contract-dispatch" class="md-nav__link">
+    Contract Dispatch
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    Architecture
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-cve-2021-22156-patching" class="md-nav__link">
+    Example: CVE-2021-22156 Patching
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+  
+
+
+
+<h1 id="patchestry-multi-layered-binary-lifting-and-patching-framework">Patchestry: Multi-Layered Binary Lifting and Patching Framework</h1>
+<p>Patchestry aims to make the same impact to binary patching as compilers and high
+level languages did to early software development. Its main goal is to enable
+developers without extensive knowledge of the deployment platform of the binary
+to patch the binary. To do this, the developer has to be confident that what
+they're patching is functionally equivalent to what is deployed and also that
+the patch they write will integrate into the deployed binary without issue.</p>
+<p>Patchestry leverages MLIR as the foundational technology instead of LLVM IR.
+MLIR is an emerging compiler development technology allowing for the
+specification, transformation, and mixing of IR dialects. The MLIR approach has
+significant industry momentum, and has been adopted by companies such as Google
+(in TensorFlow) and Meta (ClangIR). With MLIR, the decompilation process could
+be stratified into a Tower of IRs (IR dialects). Each IR represents the same
+program, but at a different level of abstraction.</p>
+<p>MLIR brings a notable advantage by enabling the creation of representations to
+streamline communication between diverse state-of-the-art tools. For instance,
+ClangIR provides an MLIR dialect that closely mirrors the Clang AST, preserving
+high-level C/C++ semantics and enabling precise source-level analysis and
+transformation. From there, an LLVM IR dialect can be employed to compile back
+to the executable, and MLIR can support LLVM-based contract validation through a
+symbolic executor such as KLEE. Moreover, MLIR provides flexibility to
+devise our own dialects for representing contracts in specialized logic, such as
+SMT. Our compiler stacks empower us to compile C into any of the previously mentioned
+representations, promoting seamless interconnection between them.  The repository also 
+includes an opt-in QEMU firmware runtime validation flow that lowers patched functions to ARM32 code,
+rewrites the original ELF with <code>Patcherex2</code>, and validates execution under
+QEMU.</p>
+<h2 id="technical-rationale">Technical Rationale</h2>
+<p>Our experience on AMP, as well as our performance on other DARPA binary
+analysis programs (PACE, CFAR, LOGAN, CGC, Cyber Fast Track), have led us to
+four guiding principles that we believe patching solutions for legacy software
+must follow in order to be successful.</p>
+<ol>
+<li>
+<p><strong>Fully automated approaches are doomed to failure.</strong> The process of
+decompilation is an inherently intractable problem. However, developers are
+often capable of distinguishing between decompilation outcomes deemed 'good' or
+'bad', but encoding that kind of heuristic logic into a system invariably yields
+unpredictability and unsoundness. Hence, we assert that the involvement of
+semi-skilled or skilled human developers is essential in the process. The
+best-case scenario is that a developer can use an existing source code patch as
+a guide. Given this patch, they can locate the corresponding vulnerable machine
+code within a binary using binary function symbol names. The worst-case scenario
+involves the ad hoc application of tools (e.g. BinDiff, BSim) and reverse
+engineering skills to an opaque binary blob that is without symbols or debugging
+information.</p>
+</li>
+<li>
+<p><strong>Developers must be able to leverage pre-existing software development
+experience</strong> and not have to concern themselves with low level details. They
+should be able to operate as if the original source code and build
+process/environments were available, and not be expected to have expert
+knowledge of every machine code language that may be encountered.</p>
+</li>
+<li>
+<p><strong>From-scratch development efforts do not scale.</strong> As much as possible,
+pre-existing tooling that already handles the inherent scalability challenges in
+(de)compiling code for such a wide variety of platforms should be leveraged. For
+example the Ghidra decompiler can decompile over 100 machine code languages to
+C, and the Clang compiler can generate machine code for over 20 machine code
+languages. Rolling new solutions from scratch is impractical.</p>
+</li>
+<li>
+<p><strong>There is no one-size-fits-all way of representing code.</strong> A "complete"
+solution to machine code decompilation only exists at the end of a long tail of
+special cases. Patchestry aims to provide decompilation to a familiar, C-like
+language. Patchestry will not, however, decompile to C or a specific ISO dialect
+thereof because some machine code constructs have no equivalents in C, while
+others are only loosely equivalent given non-conforming dialect extensions.</p>
+</li>
+</ol>
+<h2 id="project-goals">Project Goals</h2>
+<p>Patchestry accomplishes its goals by integrating various innovative concepts
+guided by the four principles described in <a href="#technical-rationale">technical rationale</a>:</p>
+<h3 id="unified-tooling-integration">Unified Tooling Integration</h3>
+<p>Guided by the third principle—recognizing the limitations of from-scratch
+development efforts—Patchestry seamlessly integrates existing tooling for
+decompilation and recompilation in the binary patching process. Patchestry
+advocates a unified tooling integration approach using an MLIR Tower of
+Intermediate Representations (IRs) as a mediator between tools. This strategy
+enables the incorporation of cutting-edge (de)compiler tools into a cohesive
+system, allowing the utilization of specialized tools for each task and ensuring
+effectiveness and optimal outcomes across all desired functionalities.</p>
+<h3 id="incremental-decompilation">Incremental Decompilation</h3>
+<p>Patchestry's innovative approach involves leveraging multiple program
+representations simultaneously across various layers of the Tower of IRs. While
+state-of-the-art decompilers already offer diverse representations, what sets
+the Tower of IRs apart is its capability to create custom user-defined
+abstractions (layers) while preserving relationships between these layers. This
+modular approach facilitates seamless incremental decompilation and
+recompilation processes. This is crucial for effortlessly devising specific
+abstractions tailored to unique platforms.</p>
+<h3 id="unifying-representations-for-contracts-patches-and-software">Unifying Representations for Contracts, Patches, and Software</h3>
+<p>The Tower of IRs also aligns with the fourth guiding principle: There is no
+one-size-fits-all way of representing code. Maintaining multiple
+representations simultaneously in the Tower of IRs allows us to establish
+meaningful relationships between them and innovate in how we connect tools and
+conduct analyses. Additionally, this approach allows us to consolidate all
+necessary components for patching within the same representation: patch
+description, contract description and the software. This unified strategy
+streamlines tooling for analysis and facilitates the recompilation of patched
+software, resulting in a single artifact that can undergo desired formal
+analyses, such as LLVM-based analysis.</p>
+<h3 id="declarative-patching-and-contracts-description">Declarative Patching and Contracts Description</h3>
+<p>To address our second guiding principle, which emphasizes the importance of
+allowing developers to leverage their existing software development experience,
+we mandate that all interactions with patching occur in a language commonly
+understood by developers. Patches are written as C functions, and the
+meta-programming layer for describing <em>where</em> and <em>how</em> patches and contracts
+are applied is specified declaratively in YAML. This separates patch logic
+(familiar C code) from patch orchestration (structured YAML configuration),
+keeping both accessible to developers without requiring expertise in compiler
+internals or custom DSLs. Contracts are declarative predicates expressed as
+YAML and attached as MLIR attributes for static verification — runtime
+validators that used to be called "runtime contracts" live under <code>patches:</code>
+now, since mechanically they were just patches.</p>
+<h2 id="why-this-approach">Why This Approach</h2>
+<h3 id="why-not-edit-ghidras-output-directly">Why Not Edit Ghidra's Output Directly?</h3>
+<p>Patchestry's workflow does not allow the developer to modify Ghidra's
+decompilation output and then re-compile it. There are two reasons:</p>
+<ol>
+<li>Ghidra's decompilation is not guaranteed to be syntactically correct or
+   compilable. The effort to fix it increases with the complexity of the target
+   function(s).</li>
+<li>Ghidra's heuristic decompilation pipeline has been proven to be unfaithful
+   with respect to the execution semantics of the machine code. This could
+   result in a developer inadvertently introducing new vulnerabilities during the
+   patching process.</li>
+</ol>
+<p>Despite this, Ghidra's decompilation is good enough to be a productivity
+multiplier for developers trying to locate functions that need patching.</p>
+<h3 id="why-clang-ast">Why Clang AST?</h3>
+<p>Patchestry lifts Ghidra's P-Code representation into a Clang AST. This choice
+is driven by pragmatic considerations:</p>
+<ul>
+<li><strong>Recompilation for free.</strong> The Clang compiler can already target over 20
+  machine code languages. By producing a valid Clang AST, Patchestry gets
+  recompilation to any Clang-supported target architecture without building a
+  custom compiler backend.</li>
+<li><strong>Function-level granularity.</strong> Functions are the smallest compilable unit of
+  code in compilers like Clang. Function granularity patches also enable
+  Patchestry to leverage stronger ABI guarantees: it is only at the entry and
+  exit points of a compiled function that higher-level, human-readable types can
+  be reliably mapped to low level machine locations (registers, memory).</li>
+<li><strong>Familiar output.</strong> The decompiled C output looks approximately similar
+  regardless of the platform/architecture, improving developer productivity.
+  Developers can read and modify the output using standard C knowledge.</li>
+<li><strong>Integration with MLIR.</strong> Clang's CIR (ClangIR) dialect provides a bridge
+  into the MLIR ecosystem, enabling instrumentation, patching, and contract
+  verification using MLIR-based passes before lowering to LLVM IR.</li>
+</ul>
+<h3 id="why-mlir">Why MLIR?</h3>
+<p>Patchestry leverages MLIR as the foundational technology for its intermediate
+representations instead of LLVM IR directly. MLIR allows for the specification,
+transformation, and mixing of IR dialects. With MLIR, the decompilation and
+patching process is stratified into a Tower of IRs (IR dialects), where each IR
+represents the same program at a different level of abstraction. This enables:</p>
+<ul>
+<li>Creation of an MLIR dialect specifically for P-Code to optimize integration
+  with the Ghidra decompiler.</li>
+<li>Use of an LLVM IR dialect to compile back to the executable.</li>
+<li>LLVM-based contract validation through symbolic executors such as KLEE or
+  SeaHorn.</li>
+<li>Custom dialects for representing contracts in specialized logic (e.g., SMT).</li>
+</ul>
+<h2 id="decompilation-pipeline">Decompilation Pipeline</h2>
+<p>Patchestry's decompilation pipeline converts binary functions into editable,
+recompilable C code through the following stages:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Binary --&gt; Ghidra --&gt; P-Code (JSON) --&gt; Clang AST --&gt; C Output
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>                                           |
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                                      CIR (MLIR) --&gt; Instrumentation --&gt; LLVM IR --&gt; Machine Code
+</span></code></pre></div>
+<ol>
+<li>
+<p><strong>Ghidra P-Code serialization.</strong> A Ghidra plugin serializes the decompiled
+   P-Code representation of target function(s) to JSON format. This
+   serialization captures types, control flow, operations, and variable
+   information from Ghidra's analysis database.</p>
+</li>
+<li>
+<p><strong>Lifting to Clang AST.</strong> The <code>patchir-decomp</code> tool reads the serialized
+   P-Code JSON and constructs a Clang AST. This involves type reconstruction,
+   control flow structuring (recovering if/else, loops, and switch statements
+   from the flat P-Code graph), and mapping P-Code operations to C statements.</p>
+</li>
+<li>
+<p><strong>C output.</strong> The Clang AST is emitted as human-readable C code that the
+   developer can inspect and edit.</p>
+</li>
+<li>
+<p><strong>CIR and MLIR lowering.</strong> The Clang AST is lowered through ClangIR (CIR)
+   into the MLIR Tower of IRs. At this level, patches and contracts are applied
+   via the instrumentation engine. The result is lowered to LLVM IR for
+   recompilation.</p>
+</li>
+</ol>
+<h2 id="developer-workflow">Developer Workflow</h2>
+<p>Patchestry's technical approach enables the following workflow:</p>
+<ol>
+<li>
+<p>A developer is tasked with patching a vulnerability in a program binary
+   running on a device.</p>
+</li>
+<li>
+<p>The developer loads the binary into Ghidra and locates the function(s) to
+   patch using Ghidra's features, plugins, symbol names, or tools such as
+   BinDiff or BSim. Previous binary analysis expertise is not required.</p>
+</li>
+<li>
+<p>The Patchestry Ghidra plugin serializes the target function(s) to P-Code
+   JSON. The <code>patchir-decomp</code> tool then produces an editable C decompilation
+   that is sound and precise with respect to the available information in
+   Ghidra's analysis database.</p>
+</li>
+<li>
+<p>The developer edits the decompiled function(s) to patch the vulnerability.
+   Alternatively, the developer defines patches declaratively using YAML
+   specifications (see <a href="#patching-interface">Patching Interface</a>).</p>
+</li>
+<li>
+<p>Contracts are verified. Patchestry generates output compatible with LLVM-based
+   analysis tools such as KLEE or SeaHorn to ensure that the patched code
+   satisfies developer-defined contracts (see
+   <a href="#contracts-interface">Contracts Interface</a>).</p>
+</li>
+<li>
+<p>Patchestry recompiles the patched function(s) through the MLIR pipeline to
+   LLVM IR, then to machine code. The resulting binary patch is packaged for
+   insertion into the original binary using a tool such as Patcherex or OFRAK.</p>
+</li>
+<li>
+<p>The developer loads the patched binary onto the device.</p>
+</li>
+</ol>
+<h2 id="patching-interface">Patching Interface</h2>
+<p>Patchestry provides a declarative YAML-based interface for specifying patches
+and their application. This separates <em>what</em> the patch does (the C code) from
+<em>where</em> and <em>how</em> it is applied (the patch entry in the top-level YAML).</p>
+<h3 id="patch-specification">Patch Specification</h3>
+<p>Patches are defined in a YAML library file. Each patch references a C source
+file containing the patch implementation:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">patchestry.io/v1</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">metadata</span><span class="p">:</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">usb-security-patches</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1.0.0&quot;</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">patches</span><span class="p">:</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">usb_endpoint_write_validation</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;USB-PATCH-001&quot;</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Validate</span><span class="nv"> </span><span class="s">USB</span><span class="nv"> </span><span class="s">endpoint</span><span class="nv"> </span><span class="s">write</span><span class="nv"> </span><span class="s">operations&quot;</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">category</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">usb_security</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">high</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="nt">code_file</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;patches/patch_usbd_ep_write_packet.c&quot;</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="nt">function_name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;patch::before::usbd_ep_write_packet&quot;</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="nt">parameters</span><span class="p">:</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">usb_device</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;usb_device_t*&quot;</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">buffer</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;const</span><span class="nv"> </span><span class="s">void*&quot;</span>
+</span></code></pre></div>
+<h3 id="patch-dispatch">Patch Dispatch</h3>
+<p>Each entry under the top-level <code>patches:</code> list pairs a <code>match:</code> block
+(where to find the target) with an <code>action:</code> block (what to do there),
+enabling automated, declarative patching across the codebase:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">patches</span><span class="p">:</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;usb_security_precheck&quot;</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;USB-PATCH-001&quot;</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Pre-validation</span><span class="nv"> </span><span class="s">security</span><span class="nv"> </span><span class="s">check&quot;</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">match</span><span class="p">:</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;usbd_ep_write_packet&quot;</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;function&quot;</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">      </span><span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;bl_usb__send_message&quot;</span><span class="p p-Indicator">]</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">action</span><span class="p">:</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">      </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;apply_before&quot;</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">      </span><span class="nt">patch</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;usb_security_precheck&quot;</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">      </span><span class="nt">optimization</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;inline-patches&quot;</span><span class="p p-Indicator">]</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">      </span><span class="nt">arguments</span><span class="p">:</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;operand_0&quot;</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">          </span><span class="nt">source</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;operand&quot;</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">          </span><span class="nt">index</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+</span></code></pre></div>
+<p>The instrumentation engine supports three action modes:</p>
+<ul>
+<li><strong><code>apply_before</code></strong>: Insert the patch function call before the matched
+  operation.</li>
+<li><strong><code>apply_after</code></strong>: Insert the patch function call after the matched operation.</li>
+<li><strong><code>replace</code></strong>: Replace the matched operation entirely with the patch function.</li>
+</ul>
+<p>Arguments to the patch function can be sourced from:</p>
+<ul>
+<li><strong><code>operand</code></strong>: An operand of the matched call or operation by index.</li>
+<li><strong><code>variable</code></strong>: A local variable by name.</li>
+<li><strong><code>symbol</code></strong>: A global symbol (variable or function) by name.</li>
+<li><strong><code>constant</code></strong>: A literal constant value.</li>
+<li><strong><code>return_value</code></strong>: The return value of the matched call.</li>
+</ul>
+<h3 id="configuration-file">Configuration File</h3>
+<p>A top-level YAML configuration file ties together the target binary, patch
+libraries, contract libraries, and the <code>patches:</code> / <code>contracts:</code> dispatch
+entries. Entries apply in YAML declaration order — patches first, then
+contracts:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">patchestry.io/v1</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">metadata</span><span class="p">:</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;usb-security-deployment&quot;</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="nt">target</span><span class="p">:</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;firmware.bin&quot;</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">arch</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ARM:LE:32&quot;</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="nt">libraries</span><span class="p">:</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;patches/usb_security_patches.yaml&quot;</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;contracts/usb_security_contracts.yaml&quot;</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="nt">patches</span><span class="p">:</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;usb_security_precheck&quot;</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">    </span><span class="c1"># ... match + action ...</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="nt">contracts</span><span class="p">:</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;usb_security_static&quot;</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="w">    </span><span class="c1"># ... match + action ...</span>
+</span></code></pre></div>
+<h2 id="contracts-interface">Contracts Interface</h2>
+<p>Patchestry provides contracts as a mechanism for specifying and verifying
+correctness properties of patched code. Unlike patches, contracts do not alter
+program state. Contracts are <strong>static-only</strong>: they are declarative predicates
+(preconditions / postconditions) that the instrumentation pass attaches to the
+matched op as MLIR attributes. They emit no runtime code and produce no runtime
+overhead; downstream verifiers such as KLEE or SeaHorn consume the attributes
+to check that the predicates hold.</p>
+<p>The "runtime contract" concept that previously lived here — a C function called
+at the matched site to validate a condition — was mechanically the same as a
+patch, so those cases have been merged into <code>patches:</code>. Write the runtime check
+as a patch whose body asserts (or traps) on failure; attach a <code>contracts:</code> entry
+alongside it to encode the same property for the verifier.</p>
+<h3 id="contract-specification">Contract Specification</h3>
+<p>Contracts are declarative, static-only predicates expressed as YAML and
+attached to the matched op as MLIR attributes for the verifier to consume.
+If you need runtime validation (a C function called at the match site),
+write it as a patch with <code>apply_before</code> / <code>apply_after</code> /
+<code>apply_at_entrypoint</code>.</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">contracts</span><span class="p">:</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;nonnull_pointer&quot;</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">critical</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">preconditions</span><span class="p">:</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;pre-001&quot;</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">        </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Pointer</span><span class="nv"> </span><span class="s">argument</span><span class="nv"> </span><span class="s">must</span><span class="nv"> </span><span class="s">not</span><span class="nv"> </span><span class="s">be</span><span class="nv"> </span><span class="s">null&quot;</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">        </span><span class="nt">pred</span><span class="p">:</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">          </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nonnull</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">          </span><span class="nt">target</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">arg0</span>
+</span></code></pre></div>
+<p>Static contract predicates support:</p>
+<ul>
+<li><strong><code>nonnull</code></strong>: Assert that a target is not null.</li>
+<li><strong><code>relation</code></strong>: Assert a relational constraint (e.g., <code>arg0 &lt;= value</code>).</li>
+<li><strong><code>alignment</code></strong>: Assert pointer alignment.</li>
+<li><strong><code>range</code></strong>: Assert that a value falls within a min/max range.</li>
+<li><strong><code>expr</code></strong>: Assert an arbitrary expression.</li>
+</ul>
+<h3 id="contract-dispatch">Contract Dispatch</h3>
+<p>Each entry under the top-level <code>contracts:</code> list pairs a <code>match:</code> block
+(the call site the contract applies to) with an <code>action:</code> block
+(<code>mode</code> + <code>contract:</code> reference). Contracts support two modes; both
+attach the same <code>contract.static</code> attribute and differ only in which op
+the attribute lands on:</p>
+<ul>
+<li><strong><code>apply_before</code></strong>: Attach the predicate to the matched op (or the op
+  immediately preceding the match site).</li>
+<li><strong><code>apply_after</code></strong>: Attach the predicate to the op immediately following the
+  match site.</li>
+</ul>
+<p><code>apply_at_entrypoint</code>, <code>replace</code>, and <code>erase</code> are patch-only. For a check that
+needs to run at the caller's entry block, write a patch with
+<code>mode: apply_at_entrypoint</code>.</p>
+<h2 id="architecture">Architecture</h2>
+<p>The Patchestry design places a strong emphasis on modularity and seamless
+developer interaction. The developer plays a key role, providing the binary
+pieces to be patched, a patch description, and instructions on how to apply
+these patches via the declarative YAML surface. Contracts are specified and
+applied by instrumentation using the same declarative language.</p>
+<p>A significant architectural innovation is the MLIR Tower of IRs, which serves as
+the connecting element. This tower facilitates the association of
+representations between decompiled programs, such as from P-Code and compilable
+and structured representations like LLVM IR. The tower's modularity allows for
+the specification of any DSL for the decompiled program, with the only
+requirement being the translation of this DSL to a layer of the tower. In our
+case, Ghidra's P-Code serves as a suitable starting point layer. This modular
+design allows new decompilers to be integrated into Patchestry in the future
+while preserving the rest of the architecture.</p>
+<p>Utilizing the same representation (MLIR dialects) for both the decompiled binary
+and the compiled patched version facilitates seamless instrumentation and
+inlining of patches, ultimately producing a patched MLIR (Tower of IRs). The
+tower's various abstraction layers enable precise specification of points of
+interest, surpassing the limitations of a single representation.</p>
+<p>In the verification phase, Patchestry is designed to accommodate various
+verification methods. The Tower can produce a customized representation for the
+analysis, but it is advisable to stick to the same representation as the
+compilation (such as LLVM IR) to prevent errors during translation. Slicing the
+codebase into independent parts influenced by the patch makes LLVM-based static
+analysis tractable. Since most patches are local and influence only a small part
+of the program, dependency analysis can isolate the part of the program that
+needs to be verified.</p>
+<h2 id="example-cve-2021-22156-patching">Example: CVE-2021-22156 Patching</h2>
+<p>An example of patching the CVE-2021-22156 vulnerability, addressing an integer
+overflow within the <code>calloc()</code> function of the C standard library. This
+vulnerability affects versions of the BlackBerry QNX Software Development
+Platform (SDP) up to version 6.5.0SP1, QNX OS for Medical up to version 1.1,
+and QNX OS for Safety up to version 1.0.1.</p>
+<p>Vulnerable code in which <code>calloc()</code> may allocate a zeroed buffer of
+insufficient size:</p>
+<div class="language-c highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kt">size_t</span><span class="w"> </span><span class="n">num_elements</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_num_elements</span><span class="p">();</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="kt">long</span><span class="w"> </span><span class="o">*</span><span class="n">buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="n">calloc</span><span class="p">(</span><span class="n">num_elements</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span><span class="p">));</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">buffer</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">NULL</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="cm">/* Handle error condition */</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>The desired result after applying the patch:</p>
+<div class="language-c highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kt">size_t</span><span class="w"> </span><span class="n">num_elements</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_num_elements</span><span class="p">();</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="cm">/* Patch start */</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">num_elements</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">SIZE_MAX</span><span class="o">/</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="cm">/* Handle error condition */</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="p">}</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="cm">/* Patch end */</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="kt">long</span><span class="w"> </span><span class="o">*</span><span class="n">buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="n">calloc</span><span class="p">(</span><span class="n">num_elements</span><span class="p">,</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span><span class="p">));</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">buffer</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">NULL</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="cm">/* Handle error condition */</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">    </span><span class="k">return</span><span class="p">;</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>The patch is written as a C function:</p>
+<div class="language-c highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1">// patches/cve_2021_22156_patch.c</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="kt">void</span><span class="w"> </span><span class="nf">patch_calloc_overflow</span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">num_elements</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">num_elements</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">SIZE_MAX</span><span class="o">/</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">long</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">        </span><span class="cm">/* Handle error condition */</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>The YAML spec describes where and how to apply it, with a patch library
+(defining the C patch function) and a deployment spec (dispatching it):</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># patches/cve_2021_22156_library.yaml</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nt">patches</span><span class="p">:</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">calloc_overflow_check</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;CVE-2021-22156&quot;</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Integer</span><span class="nv"> </span><span class="s">overflow</span><span class="nv"> </span><span class="s">check</span><span class="nv"> </span><span class="s">before</span><span class="nv"> </span><span class="s">calloc&quot;</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">high</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">    </span><span class="nt">code_file</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;patches/cve_2021_22156_patch.c&quot;</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">    </span><span class="nt">function_name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;patch_calloc_overflow&quot;</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">    </span><span class="nt">parameters</span><span class="p">:</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">num_elements</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;size_t&quot;</span>
+</span></code></pre></div>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># deployment.yaml — apply before every calloc in process_command</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nt">libraries</span><span class="p">:</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;patches/cve_2021_22156_library.yaml&quot;</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="nt">patches</span><span class="p">:</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;cve_2021_22156_precheck&quot;</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;CVE-2021-22156-ACTION&quot;</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="nt">match</span><span class="p">:</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calloc&quot;</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;function&quot;</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">      </span><span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;process_command&quot;</span><span class="p p-Indicator">]</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">    </span><span class="nt">action</span><span class="p">:</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">      </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;apply_before&quot;</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">      </span><span class="nt">patch</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calloc_overflow_check&quot;</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">      </span><span class="nt">arguments</span><span class="p">:</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;num_elements&quot;</span>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="w">          </span><span class="nt">source</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;operand&quot;</span>
+</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">          </span><span class="nt">index</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+</span></code></pre></div>
+<p>To express the same property declaratively for the verifier, attach a
+static contract. The predicate is carried as an MLIR attribute and
+produces no runtime overhead. The contract definition lives in its own
+library file that the deployment spec references via <code>libraries:</code>, and
+the deployment spec dispatches it at the match site:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># contracts/cve_2021_22156_library.yaml</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nt">contracts</span><span class="p">:</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">calloc_bounds_contract</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="nt">severity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">high</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="nt">preconditions</span><span class="p">:</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;num_elements_bounded&quot;</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">        </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calloc</span><span class="nv"> </span><span class="s">count</span><span class="nv"> </span><span class="s">must</span><span class="nv"> </span><span class="s">not</span><span class="nv"> </span><span class="s">overflow</span><span class="nv"> </span><span class="s">a</span><span class="nv"> </span><span class="s">32-bit</span><span class="nv"> </span><span class="s">size_t&quot;</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">        </span><span class="nt">pred</span><span class="p">:</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">          </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">range</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">          </span><span class="nt">target</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">arg0</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">          </span><span class="c1"># min/max are string-encoded integer literals parsed with</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">          </span><span class="c1"># std::stoll — C macros and expressions like</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">          </span><span class="c1"># &quot;SIZE_MAX/sizeof(long)&quot; are not supported. Compute the</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="w">          </span><span class="c1"># bound in the spec author&#39;s environment and inline the</span>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="w">          </span><span class="c1"># integer.</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="w">          </span><span class="nt">range</span><span class="p">:</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="w">            </span><span class="nt">min</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;0&quot;</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="w">            </span><span class="nt">max</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1073741823&quot;</span><span class="w">   </span><span class="c1"># (2^32 - 1) / 4, i.e. SIZE_MAX/sizeof(long)</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="w">                                </span><span class="c1"># on a 32-bit target with 4-byte long</span>
+</span></code></pre></div>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># deployment.yaml (contract dispatch)</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nt">libraries</span><span class="p">:</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;contracts/cve_2021_22156_library.yaml&quot;</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="nt">contracts</span><span class="p">:</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;cve_2021_22156_contract_at_calloc&quot;</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">    </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;CVE-2021-22156-CONTRACT&quot;</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">    </span><span class="nt">match</span><span class="p">:</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calloc&quot;</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">      </span><span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;process_command&quot;</span><span class="p p-Indicator">]</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">    </span><span class="nt">action</span><span class="p">:</span>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="w">      </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;apply_before&quot;</span>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="w">      </span><span class="nt">contract</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calloc_bounds_contract&quot;</span>
+</span></code></pre></div>
+<blockquote>
+<p>Contract library definitions (with <code>preconditions:</code> / <code>postconditions:</code>)
+belong in a dedicated <code>libraries:</code> file; the deployment spec only
+dispatches them via its top-level <code>contracts:</code> list.</p>
+</blockquote>
+<p>If you want a runtime check that traps on violation, write it as a
+patch (the old "runtime contract" shape) — same <code>code_file</code> /
+<code>function_name</code> fields, just under <code>patches:</code> instead.</p>
+<p>A contract is similar to a regression test or a behavioral assertion that an
+analysis tool like KLEE or SeaHorn would check.</p>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        <div class="md-social">
+  
+    
+    
+      
+      
+    
+    <a href="https://slack.empirehacking.nyc/" target="_blank" rel="noopener" title="slack.empirehacking.nyc" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc.--><path d="M94.12 315.1c0 25.9-21.16 47.06-47.06 47.06S0 341 0 315.1c0-25.9 21.16-47.06 47.06-47.06h47.06v47.06zm23.72 0c0-25.9 21.16-47.06 47.06-47.06s47.06 21.16 47.06 47.06v117.84c0 25.9-21.16 47.06-47.06 47.06s-47.06-21.16-47.06-47.06V315.1zm47.06-188.98c-25.9 0-47.06-21.16-47.06-47.06S139 32 164.9 32s47.06 21.16 47.06 47.06v47.06H164.9zm0 23.72c25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06H47.06C21.16 243.96 0 222.8 0 196.9s21.16-47.06 47.06-47.06H164.9zm188.98 47.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06h-47.06V196.9zm-23.72 0c0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06V79.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06V196.9zM283.1 385.88c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06v-47.06h47.06zm0-23.72c-25.9 0-47.06-21.16-47.06-47.06 0-25.9 21.16-47.06 47.06-47.06h117.84c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06H283.1z"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-consent" data-md-component="consent" id="__consent" hidden>
+        <div class="md-consent__overlay"></div>
+        <aside class="md-consent__inner">
+          <form class="md-consent__form md-grid md-typeset" name="consent">
+            
+
+
+  
+    
+  
+
+
+
+  
+
+
+<h4>Cookie consent</h4>
+<p>We use cookies to recognize your repeated visits and preferences, as well as to measure the effectiveness of our documentation and whether users find what they're searching for. With your consent, you're helping us to make our documentation better.</p>
+<input class="md-toggle" type="checkbox" id="__settings" >
+<div class="md-consent__settings">
+  <ul class="task-list">
+    
+      
+      
+        
+        
+      
+      <li class="task-list-item">
+        <label class="task-list-control">
+          <input type="checkbox" name="github" checked>
+          <span class="task-list-indicator"></span>
+          GitHub
+        <label>
+      </li>
+    
+  </ul>
+</div>
+<div class="md-consent__controls">
+  
+    
+      <button class="md-button md-button--primary">Accept</button>
+    
+    
+    
+  
+    
+    
+    
+      <label class="md-button" for="__settings">Manage settings</label>
+    
+  
+</div>
+          </form>
+        </aside>
+      </div>
+      <script>var consent=__md_get("__consent");if(consent)for(var input of document.forms.consent.elements)input.name&&(input.checked=consent[input.name]||!1);else"file:"!==location.protocol&&setTimeout(function(){document.querySelector("[data-md-component=consent]").hidden=!1},250);var action,form=document.forms.consent;for(action of["submit","reset"])form.addEventListener(action,function(e){if(e.preventDefault(),"reset"===e.type)for(var n of document.forms.consent.elements)n.name&&(n.checked=!1);__md_set("__consent",Object.fromEntries(Array.from(new FormData(form).keys()).map(function(e){return[e,!0]}))),location.hash="",location.reload()})</script>
+    
+    <script id="__config" type="application/json">{"base": ".", "features": ["navigation.instant", "navigation.instant.prefetch", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.path", "navigation.indexes", "search.suggest", "search.highlight", "search.share"], "search": "assets/javascripts/workers/search.e5c33ebb.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="assets/javascripts/bundle.51d95adb.min.js"></script>
+      
+    
+  </body>
+</html>
