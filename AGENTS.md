@@ -68,6 +68,7 @@ not attempt to document LLVM/MLIR internals or vendored dependency internals.
 |---|---|---|
 | Ghidra automation | `scripts/ghidra/` | build headless container, run decompilation, serialize functions/P-Code |
 | JSON rendering helper | `scripts/render_json.py` | utility script for rendering/inspecting JSON artifacts |
+| LLM refinement | `scripts/llm/` | `patchestry-refine`: out-of-process LLM refinement of decompiler output (Tier 1 names/comments/types into a refined JSON copy); official `anthropic`/`openai` SDKs, `uv` project |
 
 ### Module interface map
 
@@ -198,6 +199,9 @@ patchir-decomp -input func.json -emit-flat-baseline -print-tu -output func
 # Re-enter refined C, check it against the P-Code, and lower it to CIR
 patchir-decomp -from-c func.c -input func.json -validate-pcode -emit-cir -output func.rt
 
+# LLM Tier 1 refinement (names, comments, types) into a re-lifted JSON copy
+uv run --project scripts/llm patchestry-refine tier1 --input func.json --output func.refined.json
+
 # Apply patches from YAML to CIR
 patchir-transform input.cir -spec patch.yaml -o patched.cir
 
@@ -227,6 +231,9 @@ The repository currently registers four top-level LIT/CTest suites:
 | `pcode-translation-tests` | `test/pcode-translate/` | standalone `pcode-translate` behavior and P-Code translation wiring |
 | `patchir-decomp-tests` | `test/patchir-decomp/` | JSON-to-CIR/LLVM decompilation behavior across operations and control flow |
 | `patchir-transform-tests` | `test/patchir-transform/` | YAML parsing, patch insertion/replacement, and contract workflows |
+
+The LLM refinement package has its own pytest suite: `uv run --project scripts/llm pytest`
+(tests that need `patchir-decomp` skip when it is not built).
 
 ## Dependencies
 

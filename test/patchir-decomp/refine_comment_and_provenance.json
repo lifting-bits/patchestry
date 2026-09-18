@@ -4,7 +4,8 @@
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 //
 // Refined JSON may carry a per-function `comment`, a top-level `refinement`
-// provenance object and a per-function `instructions` export.  The comment
+// provenance object (written by scripts/llm) and the per-function
+// `instructions` map of the serializer's --emit-instructions.  The comment
 // prints above the definition; the other two are ignored by the lifter.
 //
 // C: // patchestry:tu format=1 target=ARM:LE:32:Cortex arch=ARM
@@ -18,19 +19,20 @@
   "id": "ARM:LE:32:Cortex",
   "format": "Executable and Linking Format (ELF)",
   "refinement": {
-    "provider": "fake",
-    "model": "none",
-    "generated_at": "2026-09-17T00:00:00Z"
+    "tool": "patchestry-refine 0.1.0", "tier": 1,
+    "provider": "fake", "model": "none",
+    "generated_at": "2026-09-17T00:00:00Z", "source": "subpiece.json",
+    "functions": { "ram:10000000": { "status": "applied", "accepted": 1, "rejected": 0 } }
   },
   "functions": {
     "ram:10000000": {
       "name": "subpiece_test",
       "is_intrinsic": false,
       "comment": "Returns the low byte of its argument. Escaped: */",
-      "instructions": [
-        { "address": "ram:10000000", "bytes": "c0b2", "mnemonic": "uxtb",
-          "text": "uxtb r0,r0", "raw_pcode": ["r0 = INT_ZEXT r0:1"] }
-      ],
+      "instructions": {
+        "ram:10000000": { "text": "uxtb r0,r0", "length": 2,
+                          "pcode": ["(register, 0x20, 4) INT_ZEXT (register, 0x20, 1)"] }
+      },
       "type": {
         "return_type": "type_byte",
         "is_variadic": false,
