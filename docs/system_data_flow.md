@@ -132,6 +132,26 @@ The flow is layered:
 7. `patchestry_codegen` lowers the unit's `ASTContext` to CIR and emits
    CIR / MLIR / LLVM.  It does not depend on how the unit was produced.
 
+### Frontend and lowering contracts
+
+`FrontendConfig` requires an explicit `CompilationPolicy`: `LiftedCode` disables
+strict-return assumptions and uses the lifter's language settings; `PatchCode`
+retains the existing patch compiler settings. Both frontend factories apply the
+selected policy, so parsing C does not implicitly select patch-code semantics.
+
+Ghidra language-to-target interpretation belongs to `patchestry_ghidra`
+(`Ghidra/Target.hpp`). The lifter explicitly ignores subarchitecture variants and
+uses the Program architecture; patch compilation preserves the existing variant
+mapping from the language id. The generic frontend consumes only the resulting
+LLVM triple and compilation policy.
+
+`CodeGenerator::lower_ast_to_mlir()` returns no module on new codegen errors
+or failed verification.
+`emit_outputs()` returns failure for invalid modules, failed conversion or LLVM
+translation, and file open/write/close failures. The decompiler exits nonzero for
+these failures and for failed C output. LLVM emission continues to lower the
+supplied CIR module in place; callers must finish CIR inspection first.
+
 ### Mechanical vs semantic recovery
 
 - Mechanical recovery:

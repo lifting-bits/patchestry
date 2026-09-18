@@ -23,6 +23,7 @@ target_link_libraries(patchestry_passes
     PRIVATE
         patchestry_settings
         patchestry_yaml
+        patchestry_ghidra
         patchestry_frontend
         patchestry_codegen
         MLIRSupport

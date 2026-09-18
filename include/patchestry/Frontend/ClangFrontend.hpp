@@ -14,20 +14,27 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace patchestry::frontend {
 
-    /// How to set up a clang frontend.
-    struct FrontendConfig
-    {
-        /// Target triple, typically derived from a Ghidra language id.
-        std::string triple;
+    /// Compilation semantics, independent of how the AST is produced.
+    enum class CompilationPolicy {
+        /// C99, no GNU mode, no strict-return assumptions, no optimization.
+        LiftedCode,
+        /// C99 with GNU mode and strict-return assumptions, no optimization.
+        PatchCode
     };
 
-    /// LLVM target triple for a Ghidra language id (`arch:endianness:size:variant`)
-    /// and architecture name.  Empty, after logging, when the id is malformed.
-    std::string ghidraLangToTriple(const std::string &arch, const std::string &lang);
+    struct FrontendConfig
+    {
+        FrontendConfig(std::string target_triple, CompilationPolicy compilation_policy)
+            : triple(std::move(target_triple)), policy(compilation_policy) {}
+
+        std::string triple;
+        CompilationPolicy policy;
+    };
 
     /// Clang's resource directory, from `CLANG_RESOURCE_DIR` or
     /// `clang --print-resource-dir`.
@@ -49,12 +56,11 @@ namespace patchestry::frontend {
     using ConsumerFactory =
         llvm::function_ref< std::unique_ptr< clang::ASTConsumer >(clang::CompilerInstance &) >;
 
-    /// A CompilerInstance whose main file is an in-memory placeholder, for
+    /// A CompilerInstance whose main file is a placeholder, for
     /// building a translation unit programmatically instead of parsing one
     /// (the P-Code lifter).  Installs the consumer from `make_consumer`, then
-    /// creates Sema, so the returned instance is fully wired.  The decompiler's
-    /// codegen options are applied (no optimization, no strict return/enum
-    /// assumptions).  Null (after logging) on setup failure.
+    /// creates Sema, so the returned instance is fully wired. Both factories apply
+    /// the explicitly selected compilation policy. Null (after logging) on setup failure.
     std::unique_ptr< clang::CompilerInstance > createSyntheticCompilerInstance(
         const FrontendConfig &config, ConsumerFactory make_consumer
     );
