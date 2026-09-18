@@ -1,0 +1,26 @@
+[project]
+name = "patchestry-llm"
+version = "0.1.0"
+description = "Out-of-process LLM refinement stage for patchir-decomp"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=1.0",
+    "openai>=2.0",
+]
+
+[project.scripts]
+patchestry-refine = "patchestry_llm.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["patchestry_llm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -34,8 +34,9 @@ internals of LLVM, MLIR, or vendored dependencies.
 C re-entry path (LLM refinement stage):
 [Pretty-printed C TU from -emit-flat-baseline -print-tu]
     |
-    | out-of-process refinement: renames, types, structuring
-    | (scripts/llm, not yet in tree)
+    | out-of-process refinement (scripts/llm, `patchestry-refine`):
+    |   Tier 1 today: names, comments, types as edits to a JSON copy,
+    |   re-lifted by patchir-decomp; Tier 2 (structured C) pending
     v
 [Refined C TU, patchestry:tu header and function markers intact]
     +
@@ -250,6 +251,22 @@ The lifter also emits `refine:`-prefixed warnings when the JSON disagrees with
 itself: `DECLARE_PARAMETER` count or type versus the prototype, and record
 field offsets or size versus the C layout.  An out-of-process refinement
 driver can grep for them.
+
+### The refinement stage (`scripts/llm`)
+
+`patchestry-refine tier1` (package `patchestry_llm`, run with `uv`) prints
+the input with `patchir-decomp -print-tu`, prompts a model once per
+function with that function's C, its declared parameters and locals (by
+index and op key), the globals and types in reach and, when present, the
+`--emit-instructions` disassembly, and applies the reply as plain edits to a
+copy of the JSON: `display_name`, `comment`, `DECLARE_*` names, global
+names, same-size retypes and new `types` entries.  Every edit is validated
+first (C identifiers, unique names, byte sizes, struct layouts); rejected
+edits go to `<output>.report.json`.  The refined JSON gets a top-level
+`refinement` provenance object and is lifted once more so `refine:`
+warnings and hard failures land in the report and the exit code.  Providers
+are the official `anthropic` and `openai` SDKs plus a `fake` provider that
+replays canned proposals; no network code lives in C++.
 
 ### Mechanical vs semantic recovery
 
