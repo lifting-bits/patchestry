@@ -618,6 +618,9 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
                 String text = line.getAsString();
                 assertFalse(text.contains("(register, "),
                     "raw varnode tuple leaked into " + key + ": " + text);
+                // LOAD/STORE name their address space, never the raw space id.
+                assertFalse(text.matches(".*\\b(LOAD|STORE) 0x.*"),
+                    "LOAD/STORE space id not resolved to a name in " + key + ": " + text);
                 if (text.matches(".*\\b(r[0-9]+|sp|lr|pc)\\b.*")) {
                     sawRegisterName = true;
                 }

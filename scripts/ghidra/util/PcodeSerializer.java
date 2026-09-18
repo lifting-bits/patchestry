@@ -5763,18 +5763,36 @@ public class PcodeSerializer {
 		// Varnode.toString(Language) names registers, spells uniques as
 		// `u_<offset>:<size>`, constants as `0x<value>` and other memory as
 		// `A_<address>:<size>`; an LLM reader does not have to know the
-		// register file layout. Constants carry no size in this form.
+		// register file layout. Constants carry no size in this form. The
+		// first input of LOAD and STORE is the address space id as a
+		// constant; it prints as the space name (`STORE ram, sp, r0`), the
+		// way Ghidra's own listing formatter resolves it.
 		static String renderPcodeOp(PcodeOp op, Language language) {
 			StringBuilder sb = new StringBuilder();
 			Varnode output = op.getOutput();
 			if (output != null) {
 				sb.append(output.toString(language)).append(" = ");
 			}
+			int opcode = op.getOpcode();
 			sb.append(op.getMnemonic());
 			Varnode[] inputs = op.getInputs();
 			for (int i = 0; i < inputs.length; ++i) {
 				sb.append(i == 0 ? " " : ", ");
-				sb.append(inputs[i] == null ? "null" : inputs[i].toString(language));
+				Varnode input = inputs[i];
+				if (input == null) {
+					sb.append("null");
+					continue;
+				}
+				if (i == 0 && (opcode == PcodeOp.LOAD || opcode == PcodeOp.STORE)
+						&& input.isConstant()) {
+					AddressSpace space = language.getAddressFactory()
+						.getAddressSpace((int) input.getOffset());
+					if (space != null) {
+						sb.append(space.getName());
+						continue;
+					}
+				}
+				sb.append(input.toString(language));
 			}
 			return sb.toString();
 		}
