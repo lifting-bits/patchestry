@@ -1,6 +1,14 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: test -e %t.c
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// Unions complete as unions (not structs); enumerators and narrow literals
+// print as plain ints, never with the MS-only i8/Ui16 suffixes.
+// C-NOT: {{[0-9]U?i8}}
+// C: BL_ACQ_PD1 = 0,
+// C: union anon_union_60_2_2ab491bb_for_bl_msg_sample_data_t_4 {
+// C-NOT: {{[0-9]U?i8}}
+// C-NOT: {{[0-9]U?i16}}
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // CIR: cir.func dso_local @bl_acq_channel_configure
 // RUN: %file-check -vv -check-prefix=MLIR %s --input-file %t.mlir

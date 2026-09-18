@@ -159,7 +159,7 @@ namespace patchestry::ast {
             // can't allocate a virtual buffer; reuse the caller-provided loc
             // which is already valid by contract.
             auto *decl_ref = clang::DeclRefExpr::Create(
-                ctx, clang::NestedNameSpecifierLoc(), loc, builtin_decl,
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), builtin_decl,
                 false, loc, builtin_decl->getType(), clang::VK_PRValue
             );
 

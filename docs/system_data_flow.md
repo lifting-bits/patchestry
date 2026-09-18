@@ -152,6 +152,34 @@ translation, and file open/write/close failures. The decompiler exits nonzero fo
 these failures and for failed C output. LLVM emission continues to lower the
 supplied CIR module in place; callers must finish CIR inspection first.
 
+`-emit-flat-baseline` is the lean lift: steps 1-3 only, with one label and
+one `goto` per CFG edge and no structuring or cleanup.  It is the parity
+baseline for `/patchir-inspect --debug` and the input of the out-of-process
+LLM structuring stage.
+
+### What the printed C is
+
+`-print-tu` writes `<output>.c` through `lib/patchestry/AST/TUPrinter.cpp`,
+not `TranslationUnitDecl::print`.  The file is meant to be re-parsed, by an
+LLM stage and by clang, so:
+
+- top-level declarations come out in dependency order: tag forward
+  declarations, type definitions, globals, prototypes, definitions;
+- expressions are reparenthesized before printing (the lifted AST has no
+  `ParenExpr`, and clang's printer never inserts parentheses);
+- integer literals narrower than `int` print as plain decimals and NaN/Inf
+  as `__builtin_nan*`; unions print as unions; C++ type, field and
+  enumerator spellings are sanitized to C identifiers;
+- the file starts with `// patchestry:tu format=1 target=<ghidra-id>
+  arch=<arch>` and every definition is wrapped in
+  `// patchestry:function-begin <key> name=<c-name> symbol=<linker-symbol>`
+  and `// patchestry:function-end <key>`; a `comment` field on the JSON
+  function prints as a block comment above the definition.
+
+`test/patchir-decomp/zz-roundtrip.test` re-parses every fixture's `.c` with
+clang under its target triple; `roundtrip-known-failures.txt` lists the
+fixtures whose lifted AST is itself not valid C.
+
 ### Mechanical vs semantic recovery
 
 - Mechanical recovery:

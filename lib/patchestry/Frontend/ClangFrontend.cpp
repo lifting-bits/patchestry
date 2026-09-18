@@ -10,7 +10,6 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -76,13 +75,18 @@ namespace patchestry::frontend {
 
             // Create fake file to support real file system needed for vast
             // location translation
+            // The main file is virtual: back it with an in-memory buffer instead
+            // of writing under /tmp, so diagnostics work in sandboxes and when
+            // several instances run concurrently.
             std::string data      = "// temporary patchestry data";
             std::string file_name = "/tmp/patchestry.c";
-            std::ofstream(file_name) << data;
             llvm::ErrorOr< clang::FileEntryRef > file_entry_ref_or_err =
                 ci.getFileManager().getVirtualFileRef(
                     file_name, static_cast< off_t >(data.size()), 0
                 );
+            sm.overrideFileContents(
+                *file_entry_ref_or_err, llvm::MemoryBuffer::getMemBufferCopy(data, file_name)
+            );
             clang::FileID file_id = sm.createFileID(
                 *file_entry_ref_or_err, clang::SourceLocation(), clang::SrcMgr::C_User, 0
             );

@@ -1,0 +1,15 @@
+# Fixtures whose `-print-tu` output is known not to re-parse yet.
+# One fixture basename per line; `#` starts a comment.  check-roundtrip.sh
+# fails when a listed fixture starts passing, so remove entries as they fix.
+#
+# All three are lifter bugs, not printer bugs: the AST itself is not valid C.
+
+# Two prototypes for the same callee: Ghidra's `void builtin_strncpy(...)`
+# plus a call-site-rebuilt `void builtin_strncpy(signed char *, const char *, int)`.
+cve_2016_6563_fun_00011708
+
+# Address-of applied to an rvalue: `*(struct QString *)&(&shared_null)`.
+cwe22_init_logger
+
+# Pointer-typed switch discriminant: `switch ((void *)0U)`.
+switch_successor_blocks

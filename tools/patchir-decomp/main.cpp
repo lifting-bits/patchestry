@@ -15,6 +15,7 @@
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
 
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/JSON.h>
@@ -23,6 +24,7 @@
 
 #include <patchestry/AST/LiftOptions.hpp>
 #include <patchestry/AST/PcodeLifter.hpp>
+#include <patchestry/AST/TUPrinter.hpp>
 #include <patchestry/AST/TranslationUnit.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
@@ -64,13 +66,13 @@ namespace {
     const llvm::cl::opt< bool > emit_flat_baseline( // NOLINT(cert-err58-cpp)
         "emit-flat-baseline",
         llvm::cl::desc(
-            "Emit the raw flat CGraph with goto-based control flow "
-            "(skips the structuring pass and all post-pass cleanup). "
-            "Debug-only — used by /patchir-inspect --debug for parity "
-            "diffs against the structured output."
+            "Lean lift: emit the flat CGraph with goto-based control flow "
+            "(mechanical opcode lifting plus one label/goto per CFG edge; "
+            "skips the structuring pass and all post-pass cleanup).  Input "
+            "for the out-of-process LLM structuring stage and the parity "
+            "baseline for /patchir-inspect --debug."
         ),
-        llvm::cl::init(false),
-        llvm::cl::Hidden
+        llvm::cl::init(false)
     );
 
     const llvm::cl::opt< bool > emit_dot_cfg( // NOLINT(cert-err58-cpp)
@@ -195,13 +197,25 @@ namespace {
         return program;
     }
 
-    // `-print-tu`: write the unit as C to `<prefix>.c`, or to stdout when no
-    // output prefix was given.  Runs before lowering so the C file is produced
-    // even when CIR lowering later fails.
+    // `-print-tu`: write the unit as re-parseable C to `<prefix>.c`, or to
+    // stdout when no output prefix was given.  Runs before lowering so the C
+    // file is produced even when CIR lowering later fails.  ParenExpr is
+    // transparent to CIRGen, so reparenthesizing here leaves the lowered IR
+    // unchanged.
     bool printTranslationUnit(
         patchestry::ast::TranslationUnit &unit, const std::string &output_file
     ) {
         auto &ctx = unit.context();
+        for (auto *decl : ctx.getTranslationUnitDecl()->decls()) {
+            if (auto *fn = llvm::dyn_cast< clang::FunctionDecl >(decl);
+                fn != nullptr && fn->doesThisDeclarationHaveABody())
+            {
+                patchestry::ast::ReparenthesizeForPrint(ctx, fn->getBody());
+            }
+        }
+        patchestry::ast::TUPrintOptions print_opts;
+        print_opts.lang_id = unit.lang_id;
+        print_opts.arch    = unit.arch;
         if (!output_file.empty()) {
             std::error_code ec;
             llvm::raw_fd_ostream out(output_file + ".c", ec, llvm::sys::fs::OF_Text);
@@ -209,7 +223,7 @@ namespace {
                 LOG(ERROR) << "Failed to write C output: " << ec.message() << "\n";
                 return false;
             }
-            ctx.getTranslationUnitDecl()->print(out, ctx.getPrintingPolicy(), 0);
+            patchestry::ast::PrintTranslationUnit(out, ctx, unit.definitions, print_opts);
             out.close();
             if (out.has_error()) {
                 LOG(ERROR) << "Failed to write C output: " << out.error().message() << "\n";
@@ -217,8 +231,8 @@ namespace {
                 return false;
             }
         } else {
-            ctx.getTranslationUnitDecl()->print(
-                llvm::outs(), ctx.getPrintingPolicy(), /*Indentation=*/0
+            patchestry::ast::PrintTranslationUnit(
+                llvm::outs(), ctx, unit.definitions, print_opts
             );
         }
         return true;

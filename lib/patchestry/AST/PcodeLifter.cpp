@@ -33,8 +33,15 @@ namespace patchestry::ast {
         );
         if (!ci) { return nullptr; }
 
-        ci->getASTConsumer().HandleTranslationUnit(ci->getASTContext());
-        return std::make_unique< TranslationUnit >(TranslationUnit{ std::move(ci) });
+        auto &consumer = static_cast< PcodeASTConsumer & >(ci->getASTConsumer());
+        consumer.HandleTranslationUnit(ci->getASTContext());
+
+        auto unit         = std::make_unique< TranslationUnit >();
+        unit->definitions = consumer.get_definitions();
+        unit->lang_id     = lang;
+        unit->arch        = arch;
+        unit->ci          = std::move(ci);
+        return unit;
     }
 
 } // namespace patchestry::ast

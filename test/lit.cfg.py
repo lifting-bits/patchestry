@@ -127,6 +127,7 @@ def get_compiler_command(arch):
 # Define tool substitutions
 tools = [
     ToolSubst('%file-check', command=FindTool('FileCheck')),
+    ToolSubst('%clang', command=FindTool('clang')),
     ToolSubst('%cc-x86_64', command=get_compiler_command('x86_64'), 
               extra_args=get_target_flags('x86_64', platform.system())),
     ToolSubst('%cc-aarch64', command=get_compiler_command('aarch64'),

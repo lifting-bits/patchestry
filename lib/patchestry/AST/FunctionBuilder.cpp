@@ -244,6 +244,11 @@ namespace patchestry::ast {
                     ctx, original_name, func_decl->getSourceRange()
                 ))
             {
+                // C allows an asm label on a declaration only.  DeclPrinter
+                // skips inherited attributes, so the definition prints
+                // without it while getAttr<AsmLabelAttr>() still drives the
+                // CIR symbol name.
+                asm_attr->setInherited(is_definition);
                 func_decl->addAttr(asm_attr);
             }
         }

@@ -296,6 +296,7 @@ namespace patchestry::ast {
                 if (!fn) continue;
 
                 const auto &func = builder->get_function();
+                definitions[fn]                        = &func;
                 std::string fn_name = func.display_name.empty()
                     ? func.name : func.display_name;
                 bool seeded_from_ghidra                = false;

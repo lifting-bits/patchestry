@@ -23,6 +23,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <patchestry/AST/LiftOptions.hpp>
+#include <patchestry/AST/TUPrinter.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
@@ -50,6 +51,11 @@ namespace patchestry::ast {
 
         Program &get_program(void) const { return program; }
 
+      public:
+        /// Emitted definition -> lifted function, for `-print-tu` markers.
+        const DefinitionMap &get_definitions(void) const { return definitions; }
+
+      private:
         Program &program;
         clang::CompilerInstance &ci;
 
@@ -59,6 +65,10 @@ namespace patchestry::ast {
         std::unordered_map< std::string, clang::FunctionDecl * > function_declarations;
         std::unordered_map< std::string, clang::VarDecl * > global_variable_declarations;
         std::unordered_map< std::string, clang::FunctionDecl * > intrinsic_declarations;
+
+        // Emitted definition -> lifted function, for `-print-tu` markers
+        // and comments.
+        DefinitionMap definitions;
     };
 
 } // namespace patchestry::ast

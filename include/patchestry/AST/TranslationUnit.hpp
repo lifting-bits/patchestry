@@ -8,11 +8,14 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/Basic/CodeGenOptions.h>
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Frontend/CompilerInstance.h>
+
+#include <patchestry/AST/TUPrinter.hpp>
 
 namespace patchestry::ast {
 
@@ -23,6 +26,13 @@ namespace patchestry::ast {
     struct TranslationUnit
     {
         std::unique_ptr< clang::CompilerInstance > ci;
+
+        /// Provenance for `-print-tu`: emitted definition -> lifted function
+        /// (markers and comments), and the Ghidra language id / architecture
+        /// for the `// patchestry:tu` header.  Either string may be empty.
+        DefinitionMap definitions;
+        std::string lang_id;
+        std::string arch;
 
         clang::ASTContext &context() { return ci->getASTContext(); }
 

@@ -1,7 +1,8 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL  %s --input-file %t.ll
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
 // CIR-DAG: cir.func dso_local @popcount_test
 // CIR-DAG: cir.func dso_local @lzcount_test
 // CIR-DAG: cir.popcount
@@ -10,6 +11,10 @@
 // LL-DAG: define dso_local i32 @lzcount_test
 // LL-DAG: call i32 @llvm.ctpop.i32
 // LL-DAG: call i32 @llvm.ctlz.i32
+// A builtin DeclRefExpr printed with a stray `template` keyword before.
+// C-NOT: template
+// C: __builtin_popcount(
+// C-NOT: template
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",
