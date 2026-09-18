@@ -116,6 +116,52 @@ namespace patchestry::ghidra {
         return program;
     }
 
+    // Defined below, next to the function-name sanitizer.
+    static std::string sanitize_to_c_identifier(const std::string &input);
+
+    // Type names are printed verbatim as C tag/typedef identifiers, but Ghidra
+    // exports C++ spellings such as `atomic<int>`.  Sanitize them like function
+    // names and suffix duplicates so two distinct types never print as one
+    // redefinition.  Tags (struct/union/enum) and typedefs live in different C
+    // namespaces, so each gets its own table; anonymous types are left alone.
+    static void sanitize_type_name(
+        VarnodeType &vnode_type, std::unordered_map< std::string, unsigned > &used_tag_names,
+        std::unordered_map< std::string, unsigned > &used_typedef_names
+    ) {
+        std::unordered_map< std::string, unsigned > *used = nullptr;
+        switch (vnode_type.kind) {
+            case VarnodeType::Kind::VT_STRUCT:
+            case VarnodeType::Kind::VT_UNION:
+            case VarnodeType::Kind::VT_ENUM:
+                used = &used_tag_names;
+                break;
+            case VarnodeType::Kind::VT_TYPEDEF:
+            case VarnodeType::Kind::VT_UNDEFINED:
+                used = &used_typedef_names;
+                break;
+            default:
+                return;
+        }
+        if (vnode_type.name.empty()) { return; }
+
+        const auto base       = sanitize_to_c_identifier(vnode_type.name);
+        std::string candidate = base;
+        if (used->contains(base)) {
+            unsigned n = (*used)[base];
+            do {
+                candidate = base + "_" + std::to_string(++n);
+            } while (used->contains(candidate));
+            (*used)[base] = n;
+        }
+        used->emplace(candidate, 0U);
+
+        if (candidate != vnode_type.name) {
+            LOG(INFO) << "Type name '" << vnode_type.name << "' emitted as '" << candidate
+                      << "'\n";
+            vnode_type.name = candidate;
+        }
+    }
+
     // Deserialize types from the json object
     void JsonParser::deserialize_types(const JsonObject &type_obj, TypeMap &serialized_types) {
         if (type_obj.empty()) {
@@ -124,6 +170,8 @@ namespace patchestry::ghidra {
         }
 
         std::unordered_map< std::string, const JsonValue * > types_value_map;
+        std::unordered_map< std::string, unsigned > used_tag_names;
+        std::unordered_map< std::string, unsigned > used_typedef_names;
 
         for (const auto &type : type_obj) {
             const auto &type_value = type.getSecond();
@@ -140,6 +188,7 @@ namespace patchestry::ghidra {
 
             const auto type_key = type.getFirst().str();
             vnode_type->SetKey(type_key);
+            sanitize_type_name(*vnode_type, used_tag_names, used_typedef_names);
             serialized_types.emplace(type_key, std::move(vnode_type));
             types_value_map.emplace(type_key, &type_value);
         }
@@ -412,7 +461,8 @@ namespace patchestry::ghidra {
             std::string field_name;
             auto maybe_name = get_string_if_valid(*field_obj, "name");
             if (maybe_name) {
-                field_name = *maybe_name;
+                // Field names print verbatim; Ghidra may export C++ spellings.
+                field_name = sanitize_to_c_identifier(std::string(*maybe_name));
             } else {
                 field_name = "field_" + std::to_string(field_index);
                 LOG(WARNING) << "Field #" << field_index
@@ -456,6 +506,8 @@ namespace patchestry::ghidra {
                 ++entry_index;
                 continue;
             }
+            // Enumerator names print verbatim; Ghidra may export C++ spellings.
+            const auto entry_name = sanitize_to_c_identifier(std::string(*maybe_name));
 
             auto maybe_value = entry_obj->getInteger("value");
             if (!maybe_value) {
@@ -465,7 +517,7 @@ namespace patchestry::ghidra {
                 continue;
             }
 
-            varnode.AddConstant(*maybe_name, *maybe_value);
+            varnode.AddConstant(entry_name, *maybe_value);
             ++entry_index;
         }
     }
@@ -731,6 +783,13 @@ namespace patchestry::ghidra {
 
         function.name = *function_name;
         function.is_intrinsic = func_obj.getBoolean("is_intrinsic").value_or(false);
+
+        // Optional analyst/LLM summary; printed above the definition.
+        if (auto comment = stripNull(func_obj.getString("comment"));
+            comment && !comment->empty())
+        {
+            function.comment = std::string(*comment);
+        }
 
         // Use display_name from JSON if the serializer provided one;
         // otherwise compute it by demangling/sanitizing the binary name.

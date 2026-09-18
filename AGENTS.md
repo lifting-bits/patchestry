@@ -188,6 +188,9 @@ The `scripts/ghidra/` tree is part of the project interface surface:
 # Decompile a function from P-Code JSON to CIR
 patchir-decomp -input func.json -emit-cir -output func
 
+# Lean lift: goto CFG only (no structuring), re-parseable C with function markers
+patchir-decomp -input func.json -emit-flat-baseline -print-tu -output func
+
 # Apply patches from YAML to CIR
 patchir-transform input.cir -spec patch.yaml -o patched.cir
 

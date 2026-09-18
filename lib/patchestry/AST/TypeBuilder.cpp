@@ -9,6 +9,8 @@
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/StringRef.h>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
 #include <patchestry/Ghidra/PcodeTypes.hpp>
@@ -31,6 +33,79 @@ namespace patchestry::ast {
      *   corresponding `clang::QualType` for each type, storing the result in the
      * `serialized_types` map.
      */
+
+    namespace {
+
+        // Typedef names that collide with a C keyword when the translation
+        // unit is printed and re-parsed (`typedef _Bool _Bool;`, Ghidra's
+        // `bool`).  C23 keywords are included because that is the standard
+        // `patchir-decomp -from-c` parses.
+        bool IsCKeyword(llvm::StringRef name) {
+            static constexpr llvm::StringLiteral kKeywords[] = {
+                "alignas",
+                "alignof",
+                "auto",
+                "bool",
+                "break",
+                "case",
+                "char",
+                "const",
+                "constexpr",
+                "continue",
+                "default",
+                "do",
+                "double",
+                "else",
+                "enum",
+                "extern",
+                "false",
+                "float",
+                "for",
+                "goto",
+                "if",
+                "inline",
+                "int",
+                "long",
+                "nullptr",
+                "register",
+                "restrict",
+                "return",
+                "short",
+                "signed",
+                "sizeof",
+                "static",
+                "static_assert",
+                "struct",
+                "switch",
+                "thread_local",
+                "true",
+                "typedef",
+                "typeof",
+                "typeof_unqual",
+                "union",
+                "unsigned",
+                "void",
+                "volatile",
+                "while",
+                "_Alignas",
+                "_Alignof",
+                "_Atomic",
+                "_BitInt",
+                "_Bool",
+                "_Complex",
+                "_Decimal128",
+                "_Decimal32",
+                "_Decimal64",
+                "_Generic",
+                "_Imaginary",
+                "_Noreturn",
+                "_Static_assert",
+                "_Thread_local",
+            };
+            return llvm::is_contained(kKeywords, name);
+        }
+
+    } // namespace
 
     void TypeBuilder::create_types(clang::ASTContext &ctx, TypeMap &lifted_types) {
         lifted_types_ = &lifted_types;
@@ -255,6 +330,14 @@ namespace patchestry::ast {
         auto underlying_type = create_type(ctx, base_type);
         serialized_types.emplace(base_type->key, underlying_type);
 
+        // A keyword-named typedef cannot be re-parsed.  Typedefs are sugar,
+        // so use the underlying type directly; CIR is unchanged.
+        if (IsCKeyword(typedef_type.name)) {
+            LOG(INFO) << "Dropping typedef named after C keyword: " << typedef_type.name
+                      << "\n";
+            return underlying_type;
+        }
+
         auto *tinfo        = ctx.getTrivialTypeSourceInfo(underlying_type);
         auto tydef_loc     = SourceLocation(ctx.getSourceManager(), typedef_type.key);
         auto *typedef_decl = clang::TypedefDecl::Create(
@@ -367,10 +450,14 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const CompositeType &varnode, clang::Decl *prev_decl,
         const SerializedTypeMap &clang_types
     ) {
+        // Keep the tag kind of the forward declaration: completing a union
+        // as a struct lays its members out sequentially and prints `struct`.
+        auto *prev_record = llvm::dyn_cast< clang::RecordDecl >(prev_decl);
+        auto tag_kind     = prev_record != nullptr ? prev_record->getTagKind()
+                                                   : clang::TagDecl::TagKind::Struct;
         auto *record_decl = clang::RecordDecl::Create(
-            ctx, clang::TagDecl::TagKind::Struct, ctx.getTranslationUnitDecl(),
-            prev_decl->getBeginLoc(), prev_decl->getLocation(), &ctx.Idents.get(varnode.name),
-            llvm::dyn_cast< clang::RecordDecl >(prev_decl)
+            ctx, tag_kind, ctx.getTranslationUnitDecl(), prev_decl->getBeginLoc(),
+            prev_decl->getLocation(), &ctx.Idents.get(varnode.name), prev_record
         );
 
         record_decl->completeDefinition();
@@ -511,9 +598,24 @@ namespace patchestry::ast {
                     /*isSigned=*/true, /*implicitTrunc=*/true
                 );
             };
-            auto *val = clang::IntegerLiteral::Create(
-                ctx, make_apint(), underlying_type, loc
-            );
+            // A literal narrower than int prints with the MS-only i8/i16
+            // suffix, which is not valid C.  Build narrow initializers as int;
+            // the enumerator keeps its APSInt value and underlying type, so
+            // CIR is unchanged.
+            const unsigned int_width   = ctx.getIntWidth(ctx.IntTy);
+            clang::IntegerLiteral *val = nullptr;
+            if (bit_width < int_width) {
+                val = clang::IntegerLiteral::Create(
+                    ctx,
+                    llvm::APInt(
+                        int_width, static_cast< uint64_t >(c.value),
+                        /*isSigned=*/true, /*implicitTrunc=*/true
+                    ),
+                    ctx.IntTy, loc
+                );
+            } else {
+                val = clang::IntegerLiteral::Create(ctx, make_apint(), underlying_type, loc);
+            }
             auto *ecd = clang::EnumConstantDecl::Create(
                 ctx, enum_decl, loc, &ctx.Idents.get(c.name), underlying_type, val,
                 llvm::APSInt(make_apint(), /*isUnsigned=*/false)

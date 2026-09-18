@@ -21,6 +21,7 @@ add_library(patchestry_ast STATIC
   CGraphBuilder.cpp
   SNodePostPasses.cpp
   BuildSNodeFromRegion.cpp
+  TUPrinter.cpp
 )
 
 add_library(patchestry::ast ALIAS patchestry_ast)

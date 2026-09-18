@@ -168,7 +168,7 @@ namespace patchestry::ast {
             auto *fn_decl = function_builder().function_list.get().at(*vnode.global);
             auto location = SourceLocation(ctx.getSourceManager(), *vnode.global);
             return clang::DeclRefExpr::Create(
-                ctx, clang::NestedNameSpecifierLoc(), location, fn_decl, false,
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), fn_decl, false,
                 location, fn_decl->getType(), clang::VK_PRValue
             );
         }

@@ -76,11 +76,21 @@ The batch run checks:
 
 If `/patchir-inspect` is not installed, skip structuring validation.
 
+## Printed C round trip
+
+`-print-tu` output must re-parse with clang: `test/patchir-decomp/zz-roundtrip.test`
+runs every fixture through `check-roundtrip.sh`.  A new failure means the
+printer (`lib/patchestry/AST/TUPrinter.cpp`) or the lifted AST regressed; a
+fixture that starts passing must be removed from `roundtrip-known-failures.txt`.
+
 ## Inspection
 
 ```sh
 # Decompile P-Code JSON to C (full AST pipeline output)
 patchir-decomp -input func.json -print-tu -output /tmp/out -verbose
+
+# Lean lift only: goto CFG, no structuring, no cleanup (LLM-stage input)
+patchir-decomp -input func.json -emit-flat-baseline -print-tu -output /tmp/out
 
 # Decompile to CIR
 patchir-decomp -input func.json -emit-cir -output /tmp/out

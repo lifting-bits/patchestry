@@ -284,6 +284,10 @@ namespace patchestry::ghidra {
         // Absent when Ghidra didn't produce one; consumers fall back
         // to CFG-based structuring.
         std::optional< RegionNode > region;
+
+        // Optional analyst or LLM summary (JSON `comment`); `-print-tu`
+        // prints it above the definition.  Empty when absent.
+        std::string comment;
     };
 
     struct Program

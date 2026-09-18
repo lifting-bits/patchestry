@@ -23,7 +23,7 @@
 //
 // LIFTED:      FUN_00023f78(struct CodedInputStream *param_1
 // LIFTED:      if (iVar1 != 0)
-// LIFTED:      if ((*(int *)param_1 + 48
+// LIFTED:      if ((*(int *)(param_1 + 48
 //
 // And no null-Stmt / failed-CBRANCH errors fire on the stripped fixture:
 //

@@ -1,0 +1,7 @@
+# C printer round-trip guard.
+#
+# Every fixture's `-print-tu` output must re-parse with clang under its target
+# triple, except the fixtures listed in roundtrip-known-failures.txt.  Keeps
+# the emitted C valid for the LLM refinement stage and `patchir-decomp -from-c`.
+#
+# RUN: bash %S/check-roundtrip.sh %patchir-decomp %strip-json-comments %clang %S
