@@ -172,6 +172,12 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     // --[no-]repair-function-boundaries (default on): run TailCallAnalysis.
     private boolean repairFunctionBoundaries = true;
 
+    // --[no-]emit-instructions (default off): add a per-function
+    // `instructions` map (disassembly text, length and raw P-Code per
+    // instruction, keyed by address) to the JSON. Input for the
+    // out-of-process refinement stage; patchir-decomp ignores it.
+    private boolean emitInstructions = false;
+
     // Script args with all recognized flags stripped out. The positional
     // command processors (decompileSingleFunction / decompileAllFunctions)
     // index into this rather than getScriptArgs() so flags and positional
@@ -207,6 +213,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         sanitizeExtraout = true;
         analyticalMode = util.PcodeSerializer.AnalyticalTierMode.AUTO;
         repairFunctionBoundaries = true;
+        emitInstructions = false;
         positionalArgs = new String[0];
 
         String[] raw = getScriptArgs();
@@ -254,6 +261,19 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             if (arg.startsWith("--repair-function-boundaries=")) {
                 repairFunctionBoundaries = parseBoolFlag(arg,
                     arg.substring("--repair-function-boundaries=".length()));
+                continue;
+            }
+            if (arg.equals("--emit-instructions")) {
+                emitInstructions = true;
+                continue;
+            }
+            if (arg.equals("--no-emit-instructions")) {
+                emitInstructions = false;
+                continue;
+            }
+            if (arg.startsWith("--emit-instructions=")) {
+                emitInstructions = parseBoolFlag(arg,
+                    arg.substring("--emit-instructions=".length()));
                 continue;
             }
             positional.add(arg);
@@ -352,6 +372,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             analyticalMode
         );
         serializer.setRepairFunctionBoundaries(repairFunctionBoundaries);
+        serializer.setEmitInstructions(emitInstructions);
         serializer.serialize();
     }
 

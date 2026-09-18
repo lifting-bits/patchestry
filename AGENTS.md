@@ -179,6 +179,7 @@ The `scripts/ghidra/` tree is part of the project interface surface:
 
 - `build-headless-docker.sh` builds the headless Ghidra environment used by tests.
 - `decompile-headless.sh` and `decompile-entrypoint.sh` run repository-supported decomp flows.
+- `--emit-instructions` on either wrapper adds per-instruction disassembly text and raw P-Code (register names, not varnode tuples) to the JSON as input for LLM decompilation; off by default.
 - `PatchestryDecompileFunctions.java` and `PatchestryListFunctions.java` are the main script entrypoints.
 - `scripts/ghidra/domain/` and `scripts/ghidra/util/` define the serialization boundary used to generate JSON consumed by patchestry tools.
 
