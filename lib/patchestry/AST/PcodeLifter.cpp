@@ -15,6 +15,7 @@
 
 #include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/Frontend/ClangFrontend.hpp>
+#include <patchestry/Ghidra/Target.hpp>
 
 namespace patchestry::ast {
 
@@ -23,7 +24,9 @@ namespace patchestry::ast {
         const std::string arch = program.arch.value_or("");
         const std::string lang = program.lang.value_or("");
         auto ci                = frontend::createSyntheticCompilerInstance(
-            frontend::FrontendConfig{ .triple = frontend::ghidraLangToTriple(arch, lang) },
+            frontend::FrontendConfig{
+                ghidra::targetTriple(lang, ghidra::VariantPolicy::Ignore, arch),
+                frontend::CompilationPolicy::LiftedCode },
             [&](clang::CompilerInstance &instance) -> std::unique_ptr< clang::ASTConsumer > {
                 return std::make_unique< PcodeASTConsumer >(instance, program, options);
             }

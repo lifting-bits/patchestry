@@ -5,9 +5,10 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include <fstream>
+#include <system_error>
 
 #include <llvm/IR/Module.h>
+#include <llvm/Support/FileSystem.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/IR/BuiltinOps.h>
@@ -19,26 +20,38 @@
 
 namespace patchestry::codegen {
 
-    bool Serializer::SerializeToFile(mlir::ModuleOp mod, const std::string &filename) {
-        std::ofstream outfile(filename, std::ios::binary);
-        if (!outfile) {
-            return false;
+    namespace {
+        template< typename Print >
+        bool writeFile(const std::string &filename, Print print) {
+            std::error_code ec;
+            llvm::raw_fd_ostream out(filename, ec, llvm::sys::fs::OF_None);
+            if (ec) {
+                LOG(ERROR) << "Failed to write output '" << filename << "': " << ec.message()
+                           << "\n";
+                return false;
+            }
+            print(out);
+            out.close();
+            if (out.has_error()) {
+                LOG(ERROR) << "Failed to write output '" << filename
+                           << "': " << out.error().message() << "\n";
+                out.clear_error();
+                return false;
+            }
+            return true;
         }
+    } // namespace
 
-        std::string module_string = Serializer::ConvertModuleToString(mod);
-        outfile << module_string;
-        outfile.close();
-        return true;
+    bool Serializer::SerializeToFile(mlir::ModuleOp mod, const std::string &filename) {
+        return writeFile(filename, [&](llvm::raw_ostream &out) {
+            auto flags = mlir::OpPrintingFlags();
+            flags.enableDebugInfo(true, false);
+            mod.print(out, flags);
+        });
     }
 
     bool Serializer::SerializeToFile(llvm::Module *mod, const std::string &filename) {
-        std::string mod_string;
-        llvm::raw_string_ostream os(mod_string);
-        mod->print(os, nullptr);
-        std::ofstream outfile(filename, std::ios::binary);
-        outfile << mod_string;
-        outfile.close();
-        return true;
+        return writeFile(filename, [&](llvm::raw_ostream &out) { mod->print(out, nullptr); });
     }
 
     mlir::ModuleOp Serializer::
